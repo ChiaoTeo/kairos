@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.trader/schemas/backtest-dataset-v1.json",
+  "title": "Trader HistoricalDataset v1",
+  "type": "object",
+  "required": ["manifest", "definitions", "contracts", "slices"],
+  "properties": {
+    "manifest": {
+      "type": "object",
+      "required": ["schema_version", "dataset_id", "start", "end", "sampling_seconds", "slice_count", "contract_coverage", "quote_coverage", "greeks_coverage", "stale_rate", "source", "content_hash", "split", "synthetic"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "dataset_id": {"type": "string", "minLength": 1},
+        "sampling_seconds": {"type": "integer", "minimum": 1},
+        "slice_count": {"type": "integer", "minimum": 1},
+        "content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "split": {"enum": ["development", "validation", "test"]},
+        "synthetic": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    },
+    "definitions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["instrument_id", "product_type", "product_spec", "listings", "effective_from"],
+        "additionalProperties": true
+      }
+    },
+    "contracts": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object",
+        "required": ["instrument_id", "last_trade_at", "settlement_at", "settlement_type", "official_settlement"],
+        "properties": {"settlement_type": {"enum": ["am", "pm"]}},
+        "additionalProperties": true
+      }
+    },
+    "slices": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["timestamp", "instruments", "reference_prices", "quality_issues", "snapshot_span_seconds", "sequence"],
+        "properties": {
+          "instruments": {"type": "array", "minItems": 1},
+          "quality_issues": {"type": "array"},
+          "sequence": {"type": "integer", "minimum": 0}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": false
+}

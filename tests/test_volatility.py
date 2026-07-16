@@ -1,0 +1,66 @@
+from __future__ import annotations
+
+import unittest
+import tempfile
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+
+from trading.domain.identity import InstrumentId
+from trading.domain.product import OptionRight
+from trading.volatility import CalibrationStatus, SurfaceRepository, SviParameters, VolObservation, build_surface, surface_implied_volatility, total_variance
+
+
+NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
+UNDERLYING = InstrumentId("index:spx")
+
+
+def observations(expiry, maturity, parameters):
+    result = []
+    forward = Decimal("6000")
+    from math import exp, sqrt
+    for index, k in enumerate((Decimal("-0.20"), Decimal("-0.10"), Decimal("0"), Decimal("0.10"), Decimal("0.20"))):
+        strike = forward * Decimal(str(exp(float(k))))
+        variance = total_variance(k, parameters)
+        iv = Decimal(str(sqrt(float(variance / maturity))))
+        result.append(VolObservation(InstrumentId(f"option:{expiry.date()}:{index}"), UNDERLYING, NOW, expiry, strike, forward, maturity, OptionRight.CALL, Decimal("10"), iv))
+    return result
+
+
+class VolatilityTests(unittest.TestCase):
+    def test_svi_calibration_is_deterministic_and_queryable(self) -> None:
+        first_expiry, second_expiry = NOW + timedelta(days=30), NOW + timedelta(days=60)
+        first = SviParameters(Decimal("0.005"), Decimal("0.08"), Decimal("-0.3"), Decimal("0"), Decimal("0.1"))
+        second = SviParameters(Decimal("0.01"), Decimal("0.10"), Decimal("-0.2"), Decimal("0"), Decimal("0.12"))
+        data = tuple(observations(first_expiry, Decimal("0.08219178"), first) + observations(second_expiry, Decimal("0.16438356"), second))
+        surface = build_surface(UNDERLYING, NOW, data)
+        replay = build_surface(UNDERLYING, NOW, tuple(reversed(data)))
+        self.assertEqual(surface.surface_id, replay.surface_id)
+        self.assertTrue(all(item.status is CalibrationStatus.CALIBRATED for item in surface.smiles))
+        self.assertEqual(surface.calibration_status, CalibrationStatus.CALIBRATED)
+        self.assertGreater(surface_implied_volatility(surface, first_expiry, Decimal("0")), 0)
+        between = surface_implied_volatility(surface, NOW + timedelta(days=45), Decimal("0"))
+        self.assertGreater(between, 0)
+
+    def test_insufficient_smile_is_reported_not_silently_fitted(self) -> None:
+        expiry = NOW + timedelta(days=30)
+        params = SviParameters(Decimal("0.005"), Decimal("0.08"), Decimal("-0.3"), Decimal("0"), Decimal("0.1"))
+        surface = build_surface(UNDERLYING, NOW, tuple(observations(expiry, Decimal("0.08"), params)[:4]))
+        self.assertEqual(surface.smiles[0].status, CalibrationStatus.INSUFFICIENT_DATA)
+        self.assertEqual(surface.calibration_status, CalibrationStatus.INSUFFICIENT_DATA)
+        with self.assertRaises(LookupError):
+            surface_implied_volatility(surface, expiry, Decimal("0"))
+
+    def test_surface_repository_round_trip(self) -> None:
+        expiry = NOW + timedelta(days=30)
+        params = SviParameters(Decimal("0.005"), Decimal("0.08"), Decimal("-0.3"), Decimal("0"), Decimal("0.1"))
+        surface = build_surface(UNDERLYING, NOW, tuple(observations(expiry, Decimal("0.08"), params)))
+        with tempfile.TemporaryDirectory() as directory:
+            repository = SurfaceRepository(directory)
+            path = repository.save(surface)
+            self.assertTrue(path.exists())
+            self.assertEqual(repository.list(UNDERLYING.value), (surface.surface_id,))
+            self.assertEqual(repository.load(UNDERLYING.value, surface.surface_id), surface)
+
+
+if __name__ == "__main__":
+    unittest.main()

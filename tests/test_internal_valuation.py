@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+import unittest
+from dataclasses import replace
+from decimal import Decimal
+
+from trading.backtest.engine import BacktestEngine
+from trading.backtest.mock import make_mock_dataset
+from trading.backtest.result import BacktestConfig
+from trading.catalog.service import InstrumentCatalog
+from trading.pricing import SolverStatus, ValuationService
+from trading.research.snapshot import InstrumentSnapshot
+from trading.risk.limits import RiskLimits
+from trading.research.features import FeatureEngine
+from trading.strategies.bull_put_spread import BullPutSpreadStrategy
+
+
+class InternalValuationTests(unittest.TestCase):
+    def test_missing_vendor_greeks_are_replaced_by_internal_values(self) -> None:
+        dataset = make_mock_dataset()
+        catalog = InstrumentCatalog()
+        for definition in dataset.definitions:
+            catalog.add(definition)
+        raw = dataset.slices[0]
+        without_vendor = replace(
+            raw,
+            instruments=tuple(replace(item, greeks=None, greeks_time=None) for item in raw.instruments),
+            reference_prices=((dataset.definitions[0].instrument_id, raw.reference_prices[0][1]),),
+        )
+        # Use an arbitrage-consistent spot for this valuation contract test.
+        without_vendor = replace(without_vendor, reference_prices=((raw.reference_prices[0][0], raw.reference_prices[0][1] + 50),))
+        valued, snapshot = ValuationService(catalog).value(without_vendor)
+        self.assertTrue(all(item.greeks is not None for item in valued.instruments))
+        self.assertTrue(all(item.implied_vol.status is SolverStatus.CONVERGED for item in snapshot.instruments))
+        self.assertIsNotNone(snapshot.surface)
+
+    def test_static_arbitrage_price_is_rejected_with_diagnostic(self) -> None:
+        dataset = make_mock_dataset()
+        catalog = InstrumentCatalog()
+        for definition in dataset.definitions:
+            catalog.add(definition)
+        market = replace(dataset.slices[0], instruments=tuple(replace(item, greeks=None, greeks_time=None) for item in dataset.slices[0].instruments))
+        valued, snapshot = ValuationService(catalog).value(market)
+        self.assertTrue(any("price_out_of_bounds" in failure for failure in snapshot.failures))
+        self.assertTrue(any(item.greeks is None for item in valued.instruments))
+
+    def test_feature_engine_uses_only_accumulated_history(self) -> None:
+        dataset = make_mock_dataset()
+        catalog = InstrumentCatalog()
+        for definition in dataset.definitions:
+            catalog.add(definition)
+        valuation_service, features = ValuationService(catalog), FeatureEngine()
+        first = features.update(valuation_service.value(dataset.slices[0])[1])
+        second = features.update(valuation_service.value(dataset.slices[1])[1])
+        self.assertEqual(first.iv_rank, Decimal("0.5"))
+        self.assertIsNotNone(second.iv_percentile)
+        self.assertIsNotNone(first.put_skew)
+
+    def test_strategy_backtest_runs_without_vendor_greeks(self) -> None:
+        dataset = make_mock_dataset()
+        slices = tuple(replace(market, instruments=tuple(replace(item, greeks=None, greeks_time=None) for item in market.instruments)) for market in dataset.slices)
+        dataset = replace(dataset, slices=slices)
+        config = BacktestConfig(dataset.manifest.start, dataset.manifest.end, minimum_data_coverage=0)
+        result = BacktestEngine(dataset, config, BullPutSpreadStrategy(), RiskLimits()).run()
+        self.assertTrue(result.intents)
+        self.assertTrue(any(decision.action == "open" for decision in result.strategy_decisions))
+        self.assertTrue(any("delta_source=internal" in decision.reason for decision in result.strategy_decisions))
+        self.assertGreater(result.metrics["scenario_observations"], 0)
+        self.assertIn("scenario_expected_shortfall_95", result.metrics)
+        self.assertGreater(result.metrics["internal_valuation_coverage"], 0)
+        self.assertIn("surface_calibration_rate", result.metrics)
+
+
+if __name__ == "__main__":
+    unittest.main()

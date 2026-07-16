@@ -1,0 +1,23 @@
+{
+  "dataset_id": "mock-profit_target-development",
+  "min_dte": 7,
+  "max_dte": 45,
+  "target_short_delta": -0.25,
+  "target_long_delta": -0.10,
+  "evaluation_time": "15:30:00",
+  "forward_horizon_days": 5,
+  "minimum_rank_history": 252,
+  "high_skew_percentile": 0.80,
+  "minimum_observations": 252,
+  "minimum_trading_days": 60,
+  "minimum_quote_coverage": 0.95,
+  "maximum_stale_rate": 0.05,
+  "minimum_surface_calibration_rate": 0.80,
+  "profit_target": 0.50,
+  "stop_loss_multiple": 2.0,
+  "exit_dte": 3,
+  "commission_per_contract": 0.68,
+  "bootstrap_samples": 2000,
+  "bootstrap_block_size": 5,
+  "random_seed": 7
+}

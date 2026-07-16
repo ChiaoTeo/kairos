@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "scenarios": {
+    "no_trade": {"purpose": "No eligible trade", "expected_fills": 0},
+    "profit_target": {"purpose": "Entry and profitable exit", "expected_fills": 2, "expected_status": "valid", "expected_conservative_final_equity": "100207.28"},
+    "stop_loss": {"purpose": "Entry and stop-loss exit", "expected_fills": 2},
+    "never_filled": {"purpose": "Limit remains unreachable", "expected_open_positions": 0},
+    "missing_quote": {"purpose": "Missing critical quote is explicit", "expected_status_not": "valid"},
+    "fee_turns_profit_to_loss": {"purpose": "Fees dominate gross edge", "expected_net_pnl_sign": "negative"},
+    "expiry_all_otm": {"purpose": "Both legs settle at zero intrinsic", "official_settlement": "6100"},
+    "expiry_short_itm": {"purpose": "Short leg ITM and long leg OTM", "official_settlement": "5975"},
+    "expiry_both_itm": {"purpose": "Both legs ITM and loss capped", "official_settlement": "5875"},
+    "force_close_failure": {"purpose": "Terminal liquidation cannot be priced", "expected_status_not": "valid"}
+  }
+}
