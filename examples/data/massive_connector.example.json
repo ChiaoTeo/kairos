@@ -1,0 +1,17 @@
+{
+  "massive_option_products": [
+    {
+      "logical_key": "market.events.options.us.spxw",
+      "title": "SPXW option market events from OPRA",
+      "underlying": "SPX",
+      "underlying_reference_ticker": "I:SPX",
+      "option_tickers": ["O:SPXW260717C06000000", "O:SPXW260717P06000000"],
+      "dimensions": {
+        "asset_class": "option", "region": "us", "underlying": "SPX",
+        "contract_family": "SPXW", "venue": "opra", "frequency": "event"
+      },
+      "primary_time": "available_time",
+      "source_policy_version": "priority-v1"
+    }
+  ]
+}

@@ -6,8 +6,8 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from trading.adapters.massive.decoder import decode_option_snapshots
-from trading.catalog.external import ExternalInstrumentMapping, ExternalMappingRepository
 from trading.domain.identity import InstrumentId
+from trading.reference import MappingTargetType, ProviderId, ProviderSymbolMapping, ReferenceCatalog
 
 
 NOW = datetime(2026, 7, 15, tzinfo=timezone.utc)
@@ -15,9 +15,12 @@ NOW = datetime(2026, 7, 15, tzinfo=timezone.utc)
 
 class MassiveDecoderTests(unittest.TestCase):
     def test_snapshot_keeps_vendor_analytics_separate(self):
-        mappings = ExternalMappingRepository("/tmp/nonexistent-massive-decoder-test.json")
+        mappings = ReferenceCatalog()
         ticker = "O:SPXW260717P06000000"
-        mappings.add(ExternalInstrumentMapping("massive", "options", ticker, InstrumentId("option:us:SPXW"), NOW))
+        mappings.add_mapping(ProviderSymbolMapping(
+            ProviderId("massive"), "options", ticker, MappingTargetType.INSTRUMENT,
+            InstrumentId("option:us:SPXW").value, NOW,
+        ))
         timestamp = int(NOW.timestamp() * 1_000_000_000)
         event = decode_option_snapshots(({
             "details": {"ticker": ticker, "strike_price": 6000},

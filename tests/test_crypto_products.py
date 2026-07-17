@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from trading.domain.identity import InstitutionId
+
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+import tempfile
 from uuid import uuid4
 
 from trading.accounting.ledger import LedgerService
-from trading.adapters.base import Environment, OrderRequest, ReferenceDataRequest
+from trading.adapters.base import Environment, OrderRequest, ReferenceDataRequest, VenueOrderStatus
 from trading.adapters.binance.adapter import (
     BINANCE_FUTURES_EXECUTION_CAPABILITIES, BINANCE_FUTURES_MARKET_DATA_CAPABILITIES,
     BINANCE_OPTIONS_EXECUTION_CAPABILITIES, BINANCE_OPTIONS_MARKET_DATA_CAPABILITIES,
@@ -17,7 +21,6 @@ from trading.adapters.binance.adapter import (
     BinanceUserDataStreamService, parse_market_stream_event, parse_option_market_snapshot, parse_user_stream_event,
     synchronize_clock, websocket_url,
 )
-from trading.catalog.service import InstrumentCatalog
 from trading.domain.capability import MarginMode, OrderType
 from trading.domain.execution import TradeExecution, TradeSide
 from trading.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
@@ -25,15 +28,38 @@ from trading.domain.ledger import Ledger, LedgerBook
 from trading.domain.order import ExecutionInstructions, TimeInForce
 from trading.domain.market_data import DerivativeMarketState, OrderBookDelta, Quote, Trade
 from trading.domain.product import ProductType
-from trading.execution.ingestion import ExecutionIngestionService
+from trading.reference import ReferenceCatalog
+from trading.reference.access import contract_spec
+from trading.execution.ingestion import DurableAccountingIngestionService, ExecutionIngestionService
 from trading.execution.strategy_planner import plan_strategy_intent
-from trading.products.crypto_option.settlement import CryptoOptionSettlementService
+from trading.products.crypto_option.settlement import (
+    CryptoOptionSettlementService, DurableCryptoOptionSettlementService,
+)
+from trading.orchestration.runtime_store import SQLiteRuntimeStore
 from trading.products.perpetual.funding import FundingEngine
 from trading.risk.margin import CryptoCrossMarginPolicy
 from trading.strategies.cash_and_carry import CashAndCarryConfig, CashAndCarryStrategy
 
 
 NOW = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+
+def _merge_reference(target: ReferenceCatalog, source: ReferenceCatalog) -> None:
+    for name in (
+        "assets", "entities", "venues", "benchmarks", "products", "series", "instruments", "listings",
+        "routes", "networks", "network_assets", "rails", "locations", "settlements",
+    ):
+        destination = getattr(target, name)
+        for value in getattr(source, name).values():
+            try:
+                destination.add(value)
+            except ValueError as error:
+                if "overlapping reference definition" not in str(error):
+                    raise
+    for value in source.mappings():
+        target.add_mapping(value)
+    for value in source.all_references():
+        target.add_reference(value)
 
 
 class FakeTransport:
@@ -140,16 +166,16 @@ class CryptoProductTests(unittest.TestCase):
             BinanceMarketDataAdapter(self.transport, ProductType.EQUITY)
 
     def test_binance_reference_market_execution_and_account_adapters(self):
-        spot = BinanceSpotReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_SPOT, ("BTCUSDT",)))[0]
-        perpetual = BinanceFuturesReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.PERPETUAL, ("BTCUSDT",)))[0]
-        option = BinanceOptionsReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_OPTION, ("BTC-250628-60000-C",)))[0]
-        self.assertEqual(spot.product_type.value, "crypto_spot")
-        self.assertEqual(perpetual.product_type.value, "perpetual")
-        self.assertEqual(option.product_type.value, "crypto_option")
+        spot = BinanceSpotReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_SPOT, ("BTCUSDT",))).instruments.values()[0]
+        perpetual = BinanceFuturesReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.PERPETUAL, ("BTCUSDT",))).instruments.values()[0]
+        option = BinanceOptionsReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_OPTION, ("BTC-250628-60000-C",))).instruments.values()[0]
+        self.assertEqual(spot.instrument_type.value, "crypto_spot")
+        self.assertEqual(perpetual.instrument_type.value, "perpetual")
+        self.assertEqual(option.instrument_type.value, "crypto_option")
         quote = BinanceMarketDataAdapter(self.transport).snapshot((spot,))[0]
         self.assertEqual(quote.bid, Decimal("50000"))
         signer = BinanceSigner("key", "secret")
-        account = AccountKey(VenueId("binance"), "test", AccountType.CRYPTO_SPOT)
+        account = AccountKey(InstitutionId("binance"), "test", AccountType.CRYPTO_SPOT)
         request = OrderRequest(
             "order-1", "client-1", "strategy-1", "intent-1", "correlation-1",
             account, spot.instrument_id, TradeSide.BUY, Decimal("0.01"),
@@ -175,14 +201,53 @@ class CryptoProductTests(unittest.TestCase):
         self.assertEqual(update.execution_id, "7")
         self.assertEqual(update.commission_asset, AssetId("BNB"))
 
+    def test_binance_rest_order_and_fill_recovery_returns_durable_execution_facts(self):
+        spot = BinanceSpotReferenceAdapter(self.transport).sync(
+            ReferenceDataRequest(ProductType.CRYPTO_SPOT, ("BTCUSDT",)),
+        ).instruments.values()[0]
+        self.transport.responses["/api/v3/order"] = {
+            "symbol": "BTCUSDT",
+            "orderId": 123,
+            "clientOrderId": "client-recovery",
+            "status": "FILLED",
+            "transactTime": 1735689599000,
+        }
+        account = AccountKey(InstitutionId("binance"), "test", AccountType.CRYPTO_SPOT)
+        request = OrderRequest(
+            "order-recovery", "client-recovery", "strategy-1", "intent-1", "correlation-1",
+            account, spot.instrument_id, TradeSide.BUY, Decimal("0.01"),
+            ExecutionInstructions(OrderType.LIMIT, TimeInForce.GTC, Decimal("50000")),
+        )
+        adapter = BinanceExecutionAdapter(
+            self.transport,
+            BinanceSigner("key", "secret"),
+            Environment.TESTNET,
+            instrument_symbols={spot.instrument_id: "BTCUSDT"},
+        )
+
+        recovered = adapter.recover_order(account, request)
+
+        self.assertEqual(recovered.status, VenueOrderStatus.FILLED)
+        self.assertEqual(recovered.acknowledgement.venue_order_id, "123")  # type: ignore[union-attr]
+        self.assertEqual(len(recovered.executions), 1)
+        self.assertTrue(recovered.executions[0].fully_filled)
+        self.assertEqual(recovered.executions[0].execution.quantity, Decimal("0.01"))
+        self.assertEqual(recovered.executions[0].execution.fee_asset, AssetId("BNB"))
+        self.assertEqual(recovered.executions[0].cursor_value, "1735689600000:7")
+        order_call, trades_call = self.transport.calls[-2:]
+        self.assertEqual(order_call[:2], ("GET", "/api/v3/order"))
+        self.assertEqual(order_call[2]["origClientOrderId"], "client-recovery")
+        self.assertEqual(trades_call[:2], ("GET", "/api/v3/myTrades"))
+        self.assertEqual(trades_call[2]["orderId"], "123")
+
     def test_rate_limit_clock_sync_private_dedup_recovery_and_futures_configuration(self):
         limiter = CountingLimiter()
-        spot = BinanceSpotReferenceAdapter(self.transport, limiter).sync(ReferenceDataRequest(ProductType.CRYPTO_SPOT, ("BTCUSDT",)))[0]
+        spot = BinanceSpotReferenceAdapter(self.transport, limiter).sync(ReferenceDataRequest(ProductType.CRYPTO_SPOT, ("BTCUSDT",))).instruments.values()[0]
         self.assertEqual(limiter.count, 1)
         signer = BinanceSigner("key", "secret")
         self.assertEqual(synchronize_clock(self.transport, signer, limiter, local_time_ms=1000), 100)
         self.assertEqual(limiter.count, 2)
-        account = AccountKey(VenueId("binance"), "test", AccountType.CRYPTO_SPOT)
+        account = AccountKey(InstitutionId("binance"), "test", AccountType.CRYPTO_SPOT)
         processor = BinanceUserStreamProcessor(account, {"BTCUSDT": spot.instrument_id})
         row = {"e": "executionReport", "x": "TRADE", "s": "BTCUSDT", "t": 7, "i": 123, "S": "BUY", "l": "0.01", "L": "50000", "n": "0.1", "N": "BNB", "E": 1735689600000}
         self.assertIsNotNone(processor.process(row))
@@ -199,14 +264,14 @@ class CryptoProductTests(unittest.TestCase):
         self.assertEqual([call[1] for call in self.transport.calls[-3:]], ["/fapi/v1/leverage", "/fapi/v1/marginType", "/fapi/v1/positionSide/dual"])
 
     def test_option_greeks_parser_and_futures_stream_normalization(self):
-        option = BinanceOptionsReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_OPTION, ("BTC-250628-60000-C",)))[0]
+        option = BinanceOptionsReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_OPTION, ("BTC-250628-60000-C",))).instruments.values()[0]
         snapshot = parse_option_market_snapshot({
             "symbol": "BTC-250628-60000-C", "bidPrice": "100", "askPrice": "101", "markPrice": "100.5",
             "indexPrice": "60000", "volatility": "0.55", "delta": "0.4", "gamma": "0.01",
             "theta": "-2", "vega": "10", "eventTime": 1735689600000,
         }, {"BTC-250628-60000-C": option.instrument_id})
         self.assertEqual(snapshot.implied_volatility, Decimal("0.55"))
-        account = AccountKey(VenueId("binance"), "futures", AccountType.DERIVATIVES)
+        account = AccountKey(InstitutionId("binance"), "futures", AccountType.DERIVATIVES)
         processor = BinanceUserStreamProcessor(account, {"BTCUSDT": InstrumentId("crypto:binance:perpetual:BTCUSDT")})
         update = processor.process({
             "e": "ORDER_TRADE_UPDATE", "E": 1735689600000,
@@ -253,9 +318,9 @@ class CryptoProductTests(unittest.TestCase):
         self.assertTrue(all(call[3]["X-MBX-APIKEY"] == "key" for call in self.transport.calls[-3:]))
 
     def test_crypto_option_execution_and_account_are_explicitly_live_only(self):
-        option = BinanceOptionsReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_OPTION, ("BTC-250628-60000-C",)))[0]
+        option = BinanceOptionsReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_OPTION, ("BTC-250628-60000-C",))).instruments.values()[0]
         signer = BinanceSigner("key", "secret")
-        account = AccountKey(VenueId("binance"), "options", AccountType.DERIVATIVES)
+        account = AccountKey(InstitutionId("binance"), "options", AccountType.DERIVATIVES)
         with self.assertRaisesRegex(ValueError, "live-only"):
             BinanceOptionsExecutionAdapter(self.transport, signer, Environment.TESTNET)
         execution = BinanceOptionsExecutionAdapter(self.transport, signer, Environment.LIVE, instrument_symbols={option.instrument_id: "BTC-250628-60000-C"})
@@ -276,9 +341,9 @@ class CryptoProductTests(unittest.TestCase):
         self.assertEqual(state.open_order_ids, ("789",))
 
     def test_futures_reduce_only_order_and_cancel_use_the_futures_contract(self):
-        perpetual = BinanceFuturesReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.PERPETUAL, ("BTCUSDT",)))[0]
+        perpetual = BinanceFuturesReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.PERPETUAL, ("BTCUSDT",))).instruments.values()[0]
         signer = BinanceSigner("key", "secret")
-        account = AccountKey(VenueId("binance"), "futures", AccountType.DERIVATIVES)
+        account = AccountKey(InstitutionId("binance"), "futures", AccountType.DERIVATIVES)
         request = OrderRequest(
             "order-f", "client-f", "carry", "intent-f", "correlation-f", account,
             perpetual.instrument_id, TradeSide.BUY, Decimal("0.01"),
@@ -292,9 +357,9 @@ class CryptoProductTests(unittest.TestCase):
         self.assertEqual(self.transport.calls[-1][0:2], ("DELETE", "/fapi/v1/order"))
 
     def test_normalized_private_fills_use_the_same_idempotent_ledger_reducer(self):
-        spot = BinanceSpotReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_SPOT, ("BTCUSDT",)))[0]
-        catalog = InstrumentCatalog(); catalog.add(spot)
-        ledger, account = Ledger(), AccountKey(VenueId("binance"), "test", AccountType.CRYPTO_SPOT)
+        catalog = BinanceSpotReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_SPOT, ("BTCUSDT",)))
+        spot = catalog.instruments.values()[0]
+        ledger, account = Ledger(), AccountKey(InstitutionId("binance"), "test", AccountType.CRYPTO_SPOT)
         service = LedgerService(ledger, catalog)
         start = spot.effective_from + timedelta(seconds=1)
         service.deposit(account, AssetId("USDT"), Decimal("1000"), start, "capital")
@@ -319,11 +384,13 @@ class CryptoProductTests(unittest.TestCase):
         self.assertEqual(messages[0]["s"], "BTCUSDT")
 
     def test_linear_perpetual_realized_pnl_funding_margin_and_carry(self):
-        spot = BinanceSpotReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_SPOT, ("BTCUSDT",)))[0]
-        perpetual = BinanceFuturesReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.PERPETUAL, ("BTCUSDT",)))[0]
-        catalog = InstrumentCatalog(); catalog.add(spot); catalog.add(perpetual)
+        spot_catalog = BinanceSpotReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_SPOT, ("BTCUSDT",)))
+        perpetual_catalog = BinanceFuturesReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.PERPETUAL, ("BTCUSDT",)))
+        spot, perpetual = spot_catalog.instruments.values()[0], perpetual_catalog.instruments.values()[0]
+        catalog = ReferenceCatalog()
+        _merge_reference(catalog, spot_catalog); _merge_reference(catalog, perpetual_catalog)
         ledger = Ledger(); service = LedgerService(ledger, catalog)
-        account = AccountKey(VenueId("binance"), "futures", AccountType.DERIVATIVES)
+        account = AccountKey(InstitutionId("binance"), "futures", AccountType.DERIVATIVES)
         start = max(spot.effective_from, perpetual.effective_from) + timedelta(seconds=1)
         service.deposit(account, AssetId("USDT"), Decimal("10000"), start, "margin")
         service.trade(TradeExecution(uuid4(), start + timedelta(seconds=1), account, perpetual.instrument_id, TradeSide.BUY, Decimal("1"), Decimal("50000"), AssetId("USDT"), Decimal("2"), "open"))
@@ -349,24 +416,60 @@ class CryptoProductTests(unittest.TestCase):
         self.assertEqual(tuple(item.side for item in plan.orders), (TradeSide.BUY, TradeSide.SELL))
 
     def test_crypto_option_cash_settlement(self):
-        option = BinanceOptionsReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_OPTION, ("BTC-250628-60000-C",)))[0]
-        catalog = InstrumentCatalog(); catalog.add(option)
+        catalog = BinanceOptionsReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.CRYPTO_OPTION, ("BTC-250628-60000-C",)))
+        option = catalog.instruments.values()[0]
         ledger = Ledger(); service = LedgerService(ledger, catalog)
-        account = AccountKey(VenueId("binance"), "options", AccountType.DERIVATIVES)
+        account = AccountKey(InstitutionId("binance"), "options", AccountType.DERIVATIVES)
         start = option.effective_from + timedelta(seconds=1)
         service.deposit(account, AssetId("USDT"), Decimal("10000"), start, "options")
         service.trade(TradeExecution(uuid4(), start + timedelta(seconds=1), account, option.instrument_id, TradeSide.BUY, Decimal("1"), Decimal("100"), AssetId("USDT"), Decimal("1"), "option-open"))
-        expiry = option.product_spec.expiry
+        expiry = contract_spec(option).expiry
         CryptoOptionSettlementService(service).settle(account, option.instrument_id, Decimal("61000"), expiry)
         self.assertEqual(ledger.book_balance(account, LedgerBook.CASH, AssetId("USDT")), Decimal("10899"))
         position_asset = AssetId(f"POSITION:{option.instrument_id.value}")
         self.assertEqual(ledger.book_balance(account, LedgerBook.POSITION, position_asset), Decimal("0"))
 
+    def test_crypto_option_settlement_is_durable_across_restart(self):
+        catalog = BinanceOptionsReferenceAdapter(self.transport).sync(
+            ReferenceDataRequest(ProductType.CRYPTO_OPTION, ("BTC-250628-60000-C",)),
+        )
+        option = catalog.instruments.values()[0]
+        ledger = Ledger(); service = LedgerService(ledger, catalog)
+        account = AccountKey(InstitutionId("binance"), "options", AccountType.DERIVATIVES)
+        start = option.effective_from + timedelta(seconds=1)
+        service.deposit(account, AssetId("USDT"), Decimal("10000"), start, "options-durable")
+        service.trade(TradeExecution(
+            uuid4(), start + timedelta(seconds=1), account, option.instrument_id, TradeSide.BUY,
+            Decimal("1"), Decimal("100"), AssetId("USDT"), Decimal("1"), "option-open-durable",
+        ))
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRuntimeStore(Path(directory) / "runtime.sqlite3")
+            store.import_ledger(ledger)
+            expiry = contract_spec(option).expiry
+            durable = DurableCryptoOptionSettlementService(
+                CryptoOptionSettlementService(service),
+                DurableAccountingIngestionService(service, store),
+            )
+            self.assertIsNotNone(durable.settle(account, option.instrument_id, Decimal("61000"), expiry))
+            rebuilt = store.load_ledger()
+            position_asset = AssetId(f"POSITION:{option.instrument_id.value}")
+            self.assertEqual(rebuilt.book_balance(account, LedgerBook.POSITION, position_asset), Decimal("0"))
+            self.assertEqual(rebuilt.book_balance(account, LedgerBook.CASH, AssetId("USDT")), Decimal("10899"))
+
+            restarted_ledger = SQLiteRuntimeStore(Path(directory) / "runtime.sqlite3").load_ledger()
+            restarted_service = LedgerService(restarted_ledger, catalog)
+            duplicate = DurableCryptoOptionSettlementService(
+                CryptoOptionSettlementService(restarted_service),
+                DurableAccountingIngestionService(restarted_service, SQLiteRuntimeStore(Path(directory) / "runtime.sqlite3")),
+            ).settle(account, option.instrument_id, Decimal("61000"), expiry)
+            self.assertIsNone(duplicate)
+            self.assertEqual(len(restarted_ledger.transactions), len(rebuilt.transactions))
+
     def test_venue_funding_history_replays_idempotently_into_ledger(self):
-        perpetual = BinanceFuturesReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.PERPETUAL, ("BTCUSDT",)))[0]
-        catalog = InstrumentCatalog(); catalog.add(perpetual)
+        catalog = BinanceFuturesReferenceAdapter(self.transport).sync(ReferenceDataRequest(ProductType.PERPETUAL, ("BTCUSDT",)))
+        perpetual = catalog.instruments.values()[0]
         ledger = Ledger()
-        account = AccountKey(VenueId("binance"), "futures", AccountType.DERIVATIVES)
+        account = AccountKey(InstitutionId("binance"), "futures", AccountType.DERIVATIVES)
         service = LedgerService(ledger, catalog)
         service.deposit(account, AssetId("USDT"), Decimal("1000"), NOW, "margin")
         adapter = BinanceFundingAdapter(
@@ -375,16 +478,24 @@ class CryptoProductTests(unittest.TestCase):
         )
         payments = adapter.funding_history(account, NOW, NOW + timedelta(days=1))
         self.assertEqual((len(payments), payments[0].amount), (1, Decimal("-5")))
-        ingestion = ExecutionIngestionService(service)
-        self.assertIsNotNone(ingestion.ingest_funding(payments[0]))
-        self.assertIsNone(ExecutionIngestionService(service).ingest_funding(payments[0]))
-        self.assertEqual(ledger.book_balance(account, LedgerBook.CASH, AssetId("USDT")), Decimal("995"))
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRuntimeStore(Path(directory) / "runtime.sqlite3")
+            store.import_ledger(ledger)
+            ingestion = DurableAccountingIngestionService(service, store)
+            self.assertEqual(ingestion.ingest_funding_history(payments, source="binance"), 1)
+            self.assertEqual(ingestion.ingest_funding_history(payments, source="binance"), 0)
+            rebuilt = store.load_ledger()
+            self.assertEqual(rebuilt.book_balance(account, LedgerBook.CASH, AssetId("USDT")), Decimal("995"))
+            self.assertEqual(
+                store.cursor(f"binance:funding:{account.value}"),
+                f"{payments[0].timestamp.isoformat()}:{payments[0].payment_id}",
+            )
 
     def test_binance_delivery_future_has_explicit_expiry_and_future_spec(self):
         transport = FakeTransport({"/fapi/v1/exchangeInfo": DELIVERY_INFO})
-        future = BinanceFuturesReferenceAdapter(transport).sync(ReferenceDataRequest(ProductType.FUTURE, ("BTCUSDT_260925",)))[0]
-        self.assertEqual(future.product_type, ProductType.FUTURE)
-        self.assertEqual(future.product_spec.expiry, datetime.fromtimestamp(1790294400, timezone.utc))
+        future = BinanceFuturesReferenceAdapter(transport).sync(ReferenceDataRequest(ProductType.FUTURE, ("BTCUSDT_260925",))).instruments.values()[0]
+        self.assertEqual(future.instrument_type, ProductType.FUTURE)
+        self.assertEqual(contract_spec(future).expiry, datetime.fromtimestamp(1790294400, timezone.utc))
 
 
 if __name__ == "__main__": unittest.main()

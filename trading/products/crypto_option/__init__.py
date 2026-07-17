@@ -1,3 +1,3 @@
-from .settlement import CryptoOptionSettlementService
+from .settlement import CryptoOptionSettlementService, DurableCryptoOptionSettlementService
 
-__all__ = ["CryptoOptionSettlementService"]
+__all__ = ["CryptoOptionSettlementService", "DurableCryptoOptionSettlementService"]

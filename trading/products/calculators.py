@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
-from trading.domain.instrument import InstrumentDefinition
+from trading.reference.models import InstrumentDefinition
 from trading.domain.product import ContractType, FutureSpec, ListedOptionSpec, PerpetualSpec, ProductType
 
 
@@ -30,7 +30,7 @@ class SpotCalculator:
 
 class OptionCalculator:
     def _multiplier(self, definition):
-        spec = definition.product_spec
+        spec = _spec(definition)
         return spec.multiplier if isinstance(spec, ListedOptionSpec) else spec.contract_size
 
     def market_value(self, definition, quantity, mark, average_price):
@@ -45,7 +45,7 @@ class OptionCalculator:
 
 class LinearContractCalculator:
     def _size(self, definition):
-        return definition.product_spec.contract_size
+        return _spec(definition).contract_size
 
     def market_value(self, definition, quantity, mark, average_price):
         return self.unrealized_pnl(definition, quantity, mark, average_price)
@@ -59,7 +59,7 @@ class LinearContractCalculator:
 
 class InverseContractCalculator:
     def _value(self, definition):
-        return definition.product_spec.contract_size
+        return _spec(definition).contract_size
 
     def market_value(self, definition, quantity, mark, average_price):
         return self.unrealized_pnl(definition, quantity, mark, average_price)
@@ -73,7 +73,7 @@ class InverseContractCalculator:
 
 class QuantoContractCalculator(LinearContractCalculator):
     def _size(self, definition):
-        spec = definition.product_spec
+        spec = _spec(definition)
         if spec.quanto_multiplier is None or spec.quanto_multiplier <= 0:
             raise ValueError("quanto contract requires a positive quanto_multiplier")
         return spec.contract_size * spec.quanto_multiplier
@@ -88,14 +88,23 @@ class PositionCalculatorRegistry:
         self.quanto = QuantoContractCalculator()
 
     def for_definition(self, definition: InstrumentDefinition) -> PositionCalculator:
-        if definition.product_type in {ProductType.EQUITY, ProductType.ETF, ProductType.CRYPTO_SPOT, ProductType.TOKENIZED_EQUITY, ProductType.INDEX}:
+        product_type = _product_type(definition)
+        if product_type in {ProductType.EQUITY, ProductType.ETF, ProductType.CRYPTO_SPOT, ProductType.TOKENIZED_EQUITY, ProductType.INDEX}:
             return self.spot
-        if definition.product_type in {ProductType.LISTED_OPTION, ProductType.CRYPTO_OPTION}:
+        if product_type in {ProductType.LISTED_OPTION, ProductType.CRYPTO_OPTION}:
             return self.option
-        if definition.product_type in {ProductType.FUTURE, ProductType.PERPETUAL}:
-            if definition.product_spec.contract_type is ContractType.INVERSE:
+        if product_type in {ProductType.FUTURE, ProductType.PERPETUAL}:
+            if _spec(definition).contract_type is ContractType.INVERSE:
                 return self.inverse
-            if definition.product_spec.contract_type is ContractType.QUANTO:
+            if _spec(definition).contract_type is ContractType.QUANTO:
                 return self.quanto
             return self.linear
-        raise ValueError(f"no position calculator for {definition.product_type}")
+        raise ValueError(f"no position calculator for {product_type}")
+
+
+def _spec(definition):
+    return definition.contract_spec
+
+
+def _product_type(definition):
+    return definition.instrument_type

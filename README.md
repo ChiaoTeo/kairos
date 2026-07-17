@@ -95,10 +95,15 @@ export MASSIVE_API_KEY='...'
 ./pyenv/bin/python -m trading data massive-fetch \
   --resource option-contracts --underlying SPX --start 2026-07-15
 
-./pyenv/bin/python -m trading data prepare-massive-options \
-  --dataset-id options.us.massive.spxw.20260715.v1 \
-  --underlying SPX \
-  --option-tickers O:SPXW260717C06000000,O:SPXW260717P06000000 \
+./pyenv/bin/python -m trading data plan \
+  --connector-config examples/data/massive_connector.example.json \
+  --dataset market.events.options.us.spxw --provider massive --venue opra \
+  --start 2026-07-15T13:30:00+00:00 \
+  --end 2026-07-15T20:00:00+00:00
+
+./pyenv/bin/python -m trading data acquire \
+  --connector-config examples/data/massive_connector.example.json \
+  --dataset market.events.options.us.spxw --provider massive --venue opra \
   --start 2026-07-15T13:30:00+00:00 \
   --end 2026-07-15T20:00:00+00:00
 
@@ -205,32 +210,35 @@ IV Feature Dataset 对所有输入行保留 `solver_status`；到期日收盘或
 删除。当前 303,007 条 NVDA 期权日聚合中有 279,782 条收敛，覆盖率约 92.3%。该 IV 使用固定
 利率/股息率和 Black-Scholes European approximation，适合探索，不等同于 vendor IV 或可执行报价 IV。
 
-### 历史 K 线与 Notebook
+### 治理 OHLCV、Notebook 与 SMA 回测
 
-下载并保存无需 API key 的 Binance 历史 OHLCV（`--end` 为开区间，时间必须包含时区）：
+历史 OHLCV 统一通过 Dataset Catalog 和 `ResearchDataClient` 使用，不再写入独立的
+`data/history` CSV。先发现、诊断并准备达到 Q3 的不可变 Release：
 
 ```bash
 ./pyenv/bin/pip install -e '.[notebook]'
-./pyenv/bin/python -m trading history download \
-  --dataset-id btcusdt-1h-2026h1 \
-  --instrument crypto:binance:spot:BTCUSDT --symbol BTCUSDT \
-  --interval 1h --start 2026-01-01T00:00:00+00:00 --end 2026-07-01T00:00:00+00:00
-
-./pyenv/bin/python -m trading history show --dataset-id btcusdt-1h-2026h1
+./pyenv/bin/python -m trading data search --dimension instrument=BTC-USDT --dimension frequency=1h
+./pyenv/bin/python -m trading data describe --dataset market.ohlcv.crypto.binance.btc-usdt.1h
+./pyenv/bin/python -m trading data prepare \
+  --dataset market.ohlcv.crypto.binance.btc-usdt.1h \
+  --start 2026-01-01T00:00:00+00:00 --end 2026-07-01T00:00:00+00:00 --quality Q3
 ```
 
-数据保存在 `data/history/<dataset-id>/metadata.json` 和 `bars.csv`。Notebook 中加载、计算指标和叠加展示：
+Notebook 按逻辑产品或冻结 Release 读取，不接触物理路径：
 
 ```python
-from trading.history import BarRepository
+from trading.data import OutputFormat, ResearchDataClient
 
-data = BarRepository().load("btcusdt-1h-2026h1")
-df = data.frame()
+data = ResearchDataClient("data")
+df = data.get(
+    "market.ohlcv.crypto.binance.btc-usdt.1h",
+    start="2026-01-01T00:00:00Z",
+    end="2026-07-01T00:00:00Z",
+).collect(OutputFormat.PANDAS).set_index("period_start")
 indicators = {
     "SMA 20": df.close.rolling(20).mean(),
     "EMA 50": df.close.ewm(span=50).mean(),
 }
-figure, axes = data.plot(indicators=indicators)
 ```
 
 完整示例见 `examples/history_analysis.ipynb`。
@@ -238,8 +246,8 @@ figure, axes = data.plot(indicators=indicators)
 在同一份历史数据上运行简单的 `SMA(20, 50)` 多头交叉策略：
 
 ```bash
-./pyenv/bin/python -m trading history backtest-sma \
-  --dataset-id btcusdt-1h --fast 20 --slow 50 --fee-bps 10
+./pyenv/bin/python -m trading backtest sma \
+  --dataset market.ohlcv.crypto.binance.btc-usdt.1h --fast 20 --slow 50 --fee-bps 10
 ```
 
 信号使用当前 K 线收盘价计算，并在下一根 K 线开盘成交；回测不会使用尚未发生的价格。
@@ -296,6 +304,8 @@ SPX/SPXW 是一个专用研究切片；它不会限制 IBKR 的股票能力：
 提现能力未实现，API key 不应带提现权限。建议 Venue 分离只读/交易 key，并使用独立子账户。
 
 ## 测试
+
+异步数据流、治理回测、公共实时 Quote/OrderBook、Live-vs-Replay 策略审计、运行模式组合和 Adapter 接入示例见 [`examples/README.md`](examples/README.md)。
 
 ```bash
 ./pyenv/bin/python -m unittest discover -s tests -v

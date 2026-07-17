@@ -10,7 +10,8 @@ from trading.domain.execution import TradeSide
 from trading.domain.intent import CloseStructureIntent, LegIntent, OpenStructureIntent
 from trading.domain.order import Fill, TimeInForce
 from trading.domain.product import CryptoOptionSpec, ListedOptionSpec, OptionRight, ProductType
-from trading.domain.strategy import StrategyContext, StrategyDecision
+from trading.reference.access import contract_spec, definition_at
+from trading.strategies.base import StrategyContext, StrategyDecision
 from trading.domain.strategy_contract import StrategyLifecycle, StrategySpec
 
 
@@ -88,7 +89,7 @@ class BtcIronCondorStrategy:
     def _open(self,context):
         candidates=[]
         for item in context.market.instruments:
-            definition=context.catalog.get(item.instrument_id,context.now);option=definition.product_spec
+            definition=definition_at(context.catalog,item.instrument_id,context.now);option=contract_spec(definition)
             if not isinstance(option,(ListedOptionSpec,CryptoOptionSpec)): continue
             dte=(option.expiry.date()-context.now.date()).days
             delta=self._delta(context,item)

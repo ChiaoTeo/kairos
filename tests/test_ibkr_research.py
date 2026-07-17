@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 
 from trading.adapters.ibkr.research import IbkrSpxwResearchAdapter
 from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, VenueListing
 from trading.domain.product import (
     ExerciseStyle,
     ListedOptionSpec,
@@ -18,18 +17,17 @@ from trading.domain.product import (
     SettlementType,
 )
 from trading.research.spec import ResearchSpec
+from trading.reference import ReferenceCatalog
+from trading.reference.models import InstrumentDefinition
+from tests.reference_support import publish_test_instrument
 
 
-def option_definition(strike: str) -> InstrumentDefinition:
+def option_definition(catalog: ReferenceCatalog, strike: str) -> InstrumentDefinition:
     expiry = date(2026, 8, 4)
     expiry_at = datetime.combine(expiry, time(16), ZoneInfo("America/New_York"))
     instrument_id = InstrumentId(f"listed-option:spxw:{expiry.isoformat()}:{strike}:put")
-    return InstrumentDefinition(
-        instrument_id,
-        ProductType.LISTED_OPTION,
-        "SPXW",
-        None,
-        AssetId("USD"),
+    return publish_test_instrument(
+        catalog, instrument_id, ProductType.LISTED_OPTION, "SPXW",
         ListedOptionSpec(
             InstrumentId("index:spx"),
             expiry_at,
@@ -41,8 +39,8 @@ def option_definition(strike: str) -> InstrumentDefinition:
             Decimal("100"),
             expiry_at,
         ),
-        (VenueListing(VenueId("ibkr"), instrument_id.value, instrument_id.value, Decimal("0.05"), Decimal("1"), Decimal("1")),),
-        datetime(1970, 1, 1, tzinfo=timezone.utc),
+        AssetId("USD"), VenueId("ibkr"), instrument_id.value, datetime(1970, 1, 1, tzinfo=timezone.utc),
+        price_increment=Decimal("0.05"),
     )
 
 
@@ -72,6 +70,7 @@ class IbkrResearchAdapterTests(unittest.TestCase):
         adapter = object.__new__(IbkrSpxwResearchAdapter)
         adapter._ib = TransientTimeoutIb()
         adapter._contracts = {}
+        adapter.catalog = ReferenceCatalog()
 
         with patch("trading.adapters.ibkr.research.sleep"):
             result = adapter.underlying(ResearchSpec())
@@ -83,12 +82,12 @@ class IbkrResearchAdapterTests(unittest.TestCase):
         adapter = object.__new__(IbkrSpxwResearchAdapter)
         adapter._ib = PartialQualificationIb()
         adapter._contracts = {}
-        missing, available = option_definition("7250"), option_definition("7300")
+        adapter.catalog = ReferenceCatalog()
+        missing, available = option_definition(adapter.catalog, "7250"), option_definition(adapter.catalog, "7300")
 
         result = adapter.qualify((missing, available))
 
         self.assertEqual([item.instrument_id for item in result], [available.instrument_id])
-        self.assertEqual(result[0].listing(VenueId("ibkr")).external_id, "12345")
         self.assertNotIn(missing.instrument_id, adapter._contracts)
         self.assertEqual(adapter._contracts[available.instrument_id].conId, 12345)
 

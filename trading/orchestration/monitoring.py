@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+
+from trading.application.clock import Clock, SystemClock
 
 
 class AlertSeverity(StrEnum):
@@ -22,9 +24,11 @@ class OperationalAlert:
 
 
 class OperationalMonitor:
-    def __init__(self, maximum_clock_skew_ms: int = 1000, rate_limit_warning_fraction: Decimal = Decimal("0.80")) -> None:
+    def __init__(self, maximum_clock_skew_ms: int = 1000,
+                 rate_limit_warning_fraction: Decimal = Decimal("0.80"), clock: Clock | None = None) -> None:
         self.maximum_clock_skew_ms = maximum_clock_skew_ms
         self.rate_limit_warning_fraction = rate_limit_warning_fraction
+        self.clock = clock or SystemClock()
         self._alerts: list[OperationalAlert] = []
 
     @property
@@ -48,4 +52,4 @@ class OperationalMonitor:
         self._add("authentication", AlertSeverity.CRITICAL, reason, venue)
 
     def _add(self, code: str, severity: AlertSeverity, message: str, venue: str | None) -> None:
-        self._alerts.append(OperationalAlert(code, severity, message, datetime.now(timezone.utc), venue))
+        self._alerts.append(OperationalAlert(code, severity, message, self.clock.now(), venue))

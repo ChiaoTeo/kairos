@@ -6,7 +6,22 @@ from decimal import Decimal
 from math import sqrt
 from statistics import mean, pstdev
 
-from trading.history import BarDataset
+from trading.domain.market_data import Bar
+from trading.market_data.projections import CanonicalBarSeriesProjection
+from trading.market_data.stream import EventSource
+from trading.contracts import CanonicalEventEnvelope
+
+
+@dataclass(frozen=True, slots=True)
+class BarSeries:
+    dataset_id: str
+    bars: tuple[Bar, ...]
+
+    def __post_init__(self) -> None:
+        if not self.dataset_id.strip():
+            raise ValueError("bar series dataset id cannot be empty")
+        if any(current.start < previous.start for previous, current in zip(self.bars, self.bars[1:])):
+            raise ValueError("bar series must be ordered by start time")
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +94,7 @@ class SmaCrossResult:
         } for trade in self.trades)).set_index("time")
 
 
-def backtest_sma_cross(dataset: BarDataset, config: SmaCrossConfig | None = None) -> SmaCrossResult:
+def backtest_sma_cross(dataset: BarSeries, config: SmaCrossConfig | None = None) -> SmaCrossResult:
     """Run a long-only SMA crossover with signals filled at the next bar open."""
     config = config or SmaCrossConfig()
     if len(dataset.bars) <= config.slow_window:
@@ -133,7 +148,20 @@ def backtest_sma_cross(dataset: BarDataset, config: SmaCrossConfig | None = None
         )
 
     metrics = _metrics(tuple(equity), tuple(trades), config.initial_cash, fee_rate)
-    return SmaCrossResult(dataset.metadata.dataset_id, config, tuple(trades), tuple(equity), metrics)
+    return SmaCrossResult(dataset.dataset_id, config, tuple(trades), tuple(equity), metrics)
+
+
+async def backtest_sma_cross_events(
+    source: EventSource[CanonicalEventEnvelope],
+    dataset_id: str,
+    config: SmaCrossConfig | None = None,
+) -> SmaCrossResult:
+    """Run the governed SMA implementation from the shared asynchronous event port."""
+
+    projection = CanonicalBarSeriesProjection()
+    async for event in source.events():
+        projection.apply(event)
+    return backtest_sma_cross(BarSeries(dataset_id, tuple(projection.bars)), config)
 
 
 def _rolling_mean(values: list[Decimal], window: int) -> list[Decimal | None]:

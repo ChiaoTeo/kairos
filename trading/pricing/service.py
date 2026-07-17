@@ -5,13 +5,14 @@ from datetime import datetime
 from decimal import Decimal
 
 from trading.backtest.feed import MarketSlice
-from trading.catalog.service import InstrumentCatalog
 from trading.domain.identity import InstrumentId
 from trading.domain.market_data import Greeks
 from trading.domain.product import ListedOptionSpec, ProductType, SettlementType
 from trading.market_data import OptionMarketObservation, blocking_issues, validate_option_observation
 from trading.research.snapshot import InstrumentSnapshot
 from trading.volatility import SurfaceSnapshot, VolObservation, build_surface, surface_implied_volatility
+from trading.reference.catalog import ReferenceCatalog
+from trading.reference.models import ReferenceRole
 
 from .black import price_with_volatility
 from .implied_vol import implied_volatility
@@ -47,7 +48,7 @@ class ValuationSnapshot:
 class ValuationService:
     def __init__(
         self,
-        catalog: InstrumentCatalog,
+        catalog: ReferenceCatalog,
         *,
         risk_free_rate: Decimal = Decimal("0"),
         dividend_yield: Decimal = Decimal("0"),
@@ -68,13 +69,14 @@ class ValuationService:
         enriched: list[InstrumentSnapshot] = []
         underlying_ids: set[InstrumentId] = set()
         for item in market.instruments:
-            definition = self.catalog.get(item.instrument_id, market.timestamp)
-            spec = definition.product_spec
+            definition = self._definition(item.instrument_id, market.timestamp)
+            spec = _contract_spec(definition)
             if not isinstance(spec, ListedOptionSpec):
                 enriched.append(item)
                 continue
-            underlying_ids.add(spec.underlying)
-            spot = references.get(spec.underlying)
+            underlying_id = self._pricing_underlying(item.instrument_id, spec, market.timestamp)
+            underlying_ids.add(underlying_id)
+            spot = references.get(underlying_id)
             quote = item.quote
             if spot is None or quote is None:
                 failures.append(f"{item.instrument_id.value}:missing_valid_quote_or_underlying")
@@ -95,8 +97,8 @@ class ValuationService:
                 failures.append(f"{item.instrument_id.value}:expired")
                 enriched.append(item)
                 continue
-            underlying_definition = self.catalog.get(spec.underlying, market.timestamp)
-            model = PricingModel.BLACK_76 if underlying_definition.product_type is ProductType.INDEX and spec.settlement_type is SettlementType.CASH else PricingModel.BLACK_SCHOLES
+            underlying_definition = self._definition(underlying_id, market.timestamp)
+            model = PricingModel.BLACK_76 if _product_type(underlying_definition) is ProductType.INDEX and spec.settlement_type is SettlementType.CASH else PricingModel.BLACK_SCHOLES
             inputs = PricingInput(
                 spot, spec.strike, maturity, self.risk_free_rate, Decimal("0.2"), spec.right,
                 Decimal("0") if model is PricingModel.BLACK_76 else self.dividend_yield,
@@ -118,7 +120,7 @@ class ValuationService:
             )
             enriched.append(item if item.greeks is not None else replace(item, greeks=internal_greeks, greeks_time=market.timestamp))
             observations.append(VolObservation(
-                item.instrument_id, spec.underlying, market.timestamp, spec.expiry, spec.strike,
+                item.instrument_id, underlying_id, market.timestamp, spec.expiry, spec.strike,
                 spot, maturity, spec.right, market_price, solved.volatility, quote.bid, quote.ask,
             ))
         surface = None
@@ -127,8 +129,8 @@ class ValuationService:
         if surface is not None:
             surface_valuations = []
             for valuation in valuations:
-                definition = self.catalog.get(valuation.instrument_id, market.timestamp)
-                spec = definition.product_spec
+                definition = self._definition(valuation.instrument_id, market.timestamp)
+                spec = _contract_spec(definition)
                 try:
                     from math import log
                     log_moneyness = Decimal(str(log(float(valuation.inputs.strike / valuation.inputs.underlying))))
@@ -144,3 +146,21 @@ class ValuationService:
             valuations = surface_valuations
         valued_market = replace(market, instruments=tuple(enriched))
         return valued_market, ValuationSnapshot(market.timestamp, tuple(valuations), surface, tuple(failures))
+
+    def _definition(self, instrument_id: InstrumentId, at: datetime):
+        return self.catalog.instruments.get(instrument_id, at)
+
+    def _pricing_underlying(self, instrument_id: InstrumentId, spec: ListedOptionSpec, at: datetime) -> InstrumentId:
+        references = self.catalog.references(instrument_id, ReferenceRole.PRICING_UNDERLYING, at)
+        matches = [item.target.instrument_id for item in references if item.target.instrument_id is not None]
+        if len(matches) != 1:
+            raise LookupError(f"expected one pricing underlying: {instrument_id} at {at}")
+        return matches[0]
+
+
+def _contract_spec(definition):
+    return definition.contract_spec
+
+
+def _product_type(definition):
+    return definition.instrument_type

@@ -42,7 +42,7 @@ Risk Analytics
 下列边界已经具备正确方向，应扩展而不是替换：
 
 - `trading.domain`：Instrument、ProductSpec、MarketEvent、Intent；
-- `trading.catalog`：内部 InstrumentId 与 VenueListing 的 point-in-time 映射；
+- `trading.reference`：内部 InstrumentId 与 ListingDefinition 的 point-in-time 映射；
 - `trading.research`：snapshot、series capture、数据质量问题；
 - `trading.backtest`：确定性 feed/clock、无同 slice 成交、fill model、结算和 replay；
 - `trading.accounting`：Ledger 与 Portfolio；

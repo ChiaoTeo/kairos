@@ -8,6 +8,7 @@ from trading.accounting.ledger import LedgerService
 from trading.domain.execution import FundingPayment
 from trading.domain.identity import AccountKey, InstrumentId
 from trading.domain.product import ContractType, PerpetualSpec
+from trading.reference.access import contract_spec, definition_at
 
 
 class FundingEngine:
@@ -15,8 +16,8 @@ class FundingEngine:
         self.ledger_service = ledger_service
 
     def apply(self, account: AccountKey, instrument_id: InstrumentId, position_quantity: Decimal, mark_price: Decimal, funding_rate: Decimal, timestamp: datetime):
-        definition = self.ledger_service.catalog.get(instrument_id, timestamp)
-        spec = definition.product_spec
+        definition = definition_at(self.ledger_service.catalog, instrument_id, timestamp)
+        spec = contract_spec(definition)
         if not isinstance(spec, PerpetualSpec):
             raise ValueError("funding requires a perpetual instrument")
         if position_quantity == 0 or funding_rate == 0:

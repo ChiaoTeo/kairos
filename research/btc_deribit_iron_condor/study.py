@@ -7,8 +7,10 @@ import math
 from pathlib import Path
 import statistics
 
+from trading import __version__
 from research.btc_options_stats import block_bootstrap_ci, percentile
-from trading.data import CanonicalDatasetRepository, DataCatalog
+from trading.data import ResearchDataClient
+from trading.data.products import BTC_DERIBIT_OPTION_TRADES, BTC_DERIBIT_TERM_SKEW_DAILY
 from trading.storage.data_lake import write_json
 from trading.research.validation import (
     CapitalSpec, DataCapabilities, EvidenceStatus, ExecutionArchetype,
@@ -26,8 +28,8 @@ STRUCTURES = ("symmetric", "delta_neutral_skewed")
 
 
 def execute(root: str | Path = "data", commission_per_contract_leg_usd: float = 5.0):
-    repository = CanonicalDatasetRepository(root)
-    features = sorted(repository.load_rows(DataCatalog.BTC_DERIBIT_TERM_SKEW_DAILY.dataset_id),
+    repository = ResearchDataClient(root)
+    features = sorted(repository.load_rows(BTC_DERIBIT_TERM_SKEW_DAILY.product),
                       key=lambda row: row["period_start"])
     split = int(len(features) * .70)
     development, test = features[:split], features[split:]
@@ -41,7 +43,7 @@ def execute(root: str | Path = "data", commission_per_contract_leg_usd: float = 
     signals = _signals(test, thresholds, development[-365:])
     needed = {day for values in signals.values() for entry, exit_ in values for day in (entry, exit_)}
     daily = {day: [] for day in needed}
-    for trade in repository.iter_rows(DataCatalog.BTC_DERIBIT_OPTION_TRADES.dataset_id):
+    for trade in repository.iter_rows(BTC_DERIBIT_OPTION_TRADES.product):
         day = date.fromisoformat(trade["event_time"][:10])
         if day in daily:
             daily[day].append(trade)
@@ -268,6 +270,8 @@ def main(argv=None):
     parser.add_argument("--commission-per-contract-leg-usd", type=float, default=5.0); args = parser.parse_args(argv)
     trades, result = execute(args.data_root, args.commission_per_contract_leg_usd)
     output = args.data_root / "studies" / result["study_id"]; output.mkdir(parents=True, exist_ok=True)
+    ResearchDataClient(args.data_root).freeze_products(output / "data_snapshot.json", result["study_id"],
+        (BTC_DERIBIT_OPTION_TRADES.product, BTC_DERIBIT_TERM_SKEW_DAILY.product), code_version=__version__)
     write_json(output / "study_spec.json", {key: result[key] for key in ("study_id", "hypotheses", "split", "holding_rule")})
     write_json(output / "trades.json", trades); write_json(output / "results.json", result)
     (output / "REPORT.md").write_text(_report(result), encoding="utf-8")
@@ -292,8 +296,10 @@ def _write_governed_artifacts(root, result, trades=None):
         "mean_return_on_max_loss", required_samples, "conditional mean return > unconditional with CI above zero",
         "conditional upper confidence bound <= 0", ("synchronous_quotes", "quote_size", "settlement_price"), capital,
     )
+    data = ResearchDataClient(root)
     capabilities = DataCapabilities(
-        ("derivatives.option_trades.crypto.deribit.btc.v1", "features.volatility_surface.btc.deribit-trade-term-skew.1d.v1"),
+        (data.catalog.release(BTC_DERIBIT_OPTION_TRADES.key).release_id,
+         data.catalog.release(BTC_DERIBIT_TERM_SKEW_DAILY.key).release_id),
         event_time=True, point_in_time_universe=True, trade_events=True, trade_direction=True,
         supported_products=(ProductProtocol.OPTION,), maximum_validation_level=ValidationLevel.L3_MAPPING,
     )
@@ -309,7 +315,7 @@ def _write_governed_artifacts(root, result, trades=None):
             ("high_skew", "high_skew_high_iv", "fear_cooling"), 0),
         OutOfSampleEvidence.TIME,
         {"groups": result["groups"], "conditional_comparisons": result["conditional_comparisons"],
-         "legacy_conclusion": result["conclusion"]}, tuple(result["limitations"]), gaps,
+         "source_conclusion": result["conclusion"]}, tuple(result["limitations"]), gaps,
     )
     execution_spec = {
         "execution_archetype": "taker_proxy", "entry": "direction-filtered daily trades",
@@ -324,7 +330,7 @@ def _write_governed_artifacts(root, result, trades=None):
         extra_artifacts={"execution_spec.json": execution_spec, "test_usage.json": test_usage,
             "trades.json": trades if trades is not None else [], "risk_decomposition.json":risk_decomposition,
             "equity_curve.json":equity_curve},
-        extra_audit={"legacy_study_directory": f"studies/{result['study_id']}"})
+        extra_audit={"source_study_directory": f"studies/{result['study_id']}"})
     TestWindowRegistry(Path(root)/"studies"/"test_window_registry.jsonl").register(
         TestWindowUse(result["study_id"],"1.0.0",periods["test"][0],periods["test"][1],"time_oos_trade_proxy",False))
 

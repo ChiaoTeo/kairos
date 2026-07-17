@@ -7,14 +7,16 @@ import math
 from pathlib import Path
 import statistics
 
+from trading import __version__
 from research.btc_options_stats import block_bootstrap_ci, percentile
-from trading.data import CanonicalDatasetRepository, DataCatalog
+from trading.data import ResearchDataClient
+from trading.data.products import BTC_DERIBIT_OPTION_TRADES, BTC_DERIBIT_TERM_SKEW_DAILY
 from trading.storage.data_lake import write_json
 
 
 def execute(root: str | Path = "data", holding_days=7, commission_per_leg_usd=5.0):
-    repository=CanonicalDatasetRepository(root)
-    features=sorted(repository.load_rows(DataCatalog.BTC_DERIBIT_TERM_SKEW_DAILY.dataset_id),key=lambda row:row["period_start"])
+    repository=ResearchDataClient(root)
+    features=sorted(repository.load_rows(BTC_DERIBIT_TERM_SKEW_DAILY.product),key=lambda row:row["period_start"])
     split=int(len(features)*.70); threshold=percentile([_float(row["put_skew25_30d"]) for row in features[:split]],.80)
     signals=[]; last_exit=None
     for row in features[split:]:
@@ -22,7 +24,7 @@ def execute(root: str | Path = "data", holding_days=7, commission_per_leg_usd=5.
         if skew>=threshold and (last_exit is None or day>last_exit):
             signals.append((day,day+timedelta(days=holding_days),skew)); last_exit=day+timedelta(days=holding_days)
     needed={day for entry,exit_,_ in signals for day in (entry,exit_)}; daily={day:[] for day in needed}
-    for trade in repository.iter_rows(DataCatalog.BTC_DERIBIT_OPTION_TRADES.dataset_id):
+    for trade in repository.iter_rows(BTC_DERIBIT_OPTION_TRADES.product):
         day=date.fromisoformat(trade["event_time"][:10])
         if day in daily: daily[day].append(trade)
     trades=[]
@@ -93,6 +95,8 @@ def _float(value):
 def main(argv=None):
     parser=argparse.ArgumentParser();parser.add_argument("--data-root",type=Path,default=Path("data"));args=parser.parse_args(argv)
     trades,result=execute(args.data_root);output=args.data_root/"studies"/"btc_deribit_skew_spread_trade_proxy_v1";output.mkdir(parents=True,exist_ok=True)
+    ResearchDataClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_deribit_skew_spread_trade_proxy_v1",
+        (BTC_DERIBIT_OPTION_TRADES.product, BTC_DERIBIT_TERM_SKEW_DAILY.product), code_version=__version__)
     write_json(output/"trades.json",trades);write_json(output/"results.json",result);print(json.dumps(result,ensure_ascii=False,indent=2))
 
 

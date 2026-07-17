@@ -4,7 +4,6 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from trading.catalog.service import InstrumentCatalog
 from trading.domain.execution import DividendPayment, FundingPayment, TradeExecution
 from trading.domain.identity import AccountKey, AssetId
 from trading.domain.ledger import Ledger, LedgerBook, LedgerEntry, LedgerEntryType, LedgerTransaction
@@ -12,10 +11,12 @@ from trading.domain.product import (
     CryptoOptionSpec, CryptoSpotSpec, EquitySpec, ListedOptionSpec, ProductType,
 )
 from trading.products.calculators import PositionCalculatorRegistry
+from trading.reference import ReferenceCatalog
+from trading.reference.access import contract_spec, definition_at, product_type, settlement_asset, trade_cash_asset
 
 
 class LedgerService:
-    def __init__(self, ledger: Ledger, catalog: InstrumentCatalog) -> None:
+    def __init__(self, ledger: Ledger, catalog: ReferenceCatalog) -> None:
         self.ledger = ledger
         self.catalog = catalog
         self.calculators = PositionCalculatorRegistry()
@@ -99,42 +100,53 @@ class LedgerService:
         return transaction
 
     def trade(self, execution: TradeExecution) -> LedgerTransaction:
-        definition = self.catalog.get(execution.instrument_id, execution.timestamp)
+        transaction = self.build_trade(execution)
+        self.ledger.post(transaction)
+        return transaction
+
+    def build_trade(self, execution: TradeExecution) -> LedgerTransaction:
+        """Build a balanced trade transaction without mutating the Ledger.
+
+        Runtime ingestion can persist this transaction atomically with the external
+        execution event and order state before applying it to an in-memory projection.
+        """
+        definition = definition_at(self.catalog, execution.instrument_id, execution.timestamp)
+        spec = contract_spec(definition)
+        kind = product_type(definition)
         signed_quantity = execution.quantity * execution.side.sign
         position_asset = AssetId(f"POSITION:{execution.instrument_id.value}")
         entries = [
             (execution.account, LedgerBook.POSITION, position_asset, signed_quantity, LedgerEntryType.TRADE_POSITION, execution.instrument_id, execution.price, None),
             (execution.account, LedgerBook.CLEARING, position_asset, -signed_quantity, LedgerEntryType.TRADE_POSITION, execution.instrument_id, execution.price, None),
         ]
-        if definition.product_type in {ProductType.EQUITY, ProductType.ETF, ProductType.CRYPTO_SPOT, ProductType.LISTED_OPTION, ProductType.CRYPTO_OPTION, ProductType.TOKENIZED_EQUITY}:
-            multiplier = _premium_multiplier(definition.product_spec)
+        if kind in {ProductType.EQUITY, ProductType.ETF, ProductType.CRYPTO_SPOT, ProductType.LISTED_OPTION, ProductType.CRYPTO_OPTION, ProductType.TOKENIZED_EQUITY}:
+            multiplier = _premium_multiplier(spec)
             cash_amount = -signed_quantity * execution.price * multiplier
+            cash_asset = trade_cash_asset(self.catalog, definition, execution.timestamp)
             entries.extend((
-                (execution.account, LedgerBook.CASH, definition.quote_asset, cash_amount, LedgerEntryType.TRADE_CASH, execution.instrument_id, execution.price, None),
-                (execution.account, LedgerBook.CLEARING, definition.quote_asset, -cash_amount, LedgerEntryType.TRADE_CASH, execution.instrument_id, execution.price, None),
+                (execution.account, LedgerBook.CASH, cash_asset, cash_amount, LedgerEntryType.TRADE_CASH, execution.instrument_id, execution.price, None),
+                (execution.account, LedgerBook.CLEARING, cash_asset, -cash_amount, LedgerEntryType.TRADE_CASH, execution.instrument_id, execution.price, None),
             ))
-        elif definition.product_type in {ProductType.FUTURE, ProductType.PERPETUAL}:
+        elif kind in {ProductType.FUTURE, ProductType.PERPETUAL}:
             quantity, average = self._position_state(execution.account, execution.instrument_id)
             if quantity and quantity * signed_quantity < 0:
                 closing = min(abs(quantity), abs(signed_quantity))
                 calculator = self.calculators.for_definition(definition)
                 realized = calculator.realized_pnl(definition, closing, execution.price, average, 1 if quantity > 0 else -1)
-                settlement_asset = definition.product_spec.settlement_asset
+                realized_asset = settlement_asset(self.catalog, definition, execution.timestamp)
                 if realized:
                     entries.extend((
-                        (execution.account, LedgerBook.CASH, settlement_asset, realized, LedgerEntryType.REALIZED_PNL, execution.instrument_id, execution.price, None),
-                        (execution.account, LedgerBook.REALIZED_PNL, settlement_asset, -realized, LedgerEntryType.REALIZED_PNL, execution.instrument_id, execution.price, None),
+                        (execution.account, LedgerBook.CASH, realized_asset, realized, LedgerEntryType.REALIZED_PNL, execution.instrument_id, execution.price, None),
+                        (execution.account, LedgerBook.REALIZED_PNL, realized_asset, -realized, LedgerEntryType.REALIZED_PNL, execution.instrument_id, execution.price, None),
                     ))
         if execution.fee:
             entries.extend((
                 (execution.account, LedgerBook.CASH, execution.fee_asset, -execution.fee, LedgerEntryType.COMMISSION, execution.instrument_id, None, None),
                 (execution.account, LedgerBook.FEE_EXPENSE, execution.fee_asset, execution.fee, LedgerEntryType.COMMISSION, execution.instrument_id, None, None),
             ))
-        transaction = self._transaction(
+        return self._transaction(
             f"execution:{execution.execution_id}", execution.timestamp, execution.order_id, tuple(entries)
         )
-        self.ledger.post(transaction)
-        return transaction
 
     def _position_state(self, account: AccountKey, instrument_id):
         quantity = Decimal("0")
@@ -158,17 +170,25 @@ class LedgerService:
         return quantity, average
 
     def funding(self, payment: FundingPayment) -> LedgerTransaction:
+        transaction = self.build_funding(payment)
+        self.ledger.post(transaction)
+        return transaction
+
+    def build_funding(self, payment: FundingPayment) -> LedgerTransaction:
         if payment.amount == 0:
             raise ValueError("zero funding payment is not allowed")
-        transaction = self._transaction(
+        return self._transaction(
             f"funding:{payment.payment_id}", payment.timestamp, str(payment.payment_id),
             ((payment.account, LedgerBook.CASH, payment.settlement_asset, payment.amount, LedgerEntryType.FUNDING, payment.instrument_id, None, None),
              (payment.account, LedgerBook.FUNDING_INCOME, payment.settlement_asset, -payment.amount, LedgerEntryType.FUNDING, payment.instrument_id, None, None)),
         )
+
+    def dividend(self, payment: DividendPayment) -> LedgerTransaction:
+        transaction = self.build_dividend(payment)
         self.ledger.post(transaction)
         return transaction
 
-    def dividend(self, payment: DividendPayment) -> LedgerTransaction:
+    def build_dividend(self, payment: DividendPayment) -> LedgerTransaction:
         net = payment.gross_amount - payment.withholding_tax
         if net <= 0:
             raise ValueError("dividend net amount must be positive")
@@ -178,25 +198,24 @@ class LedgerService:
         ]
         if payment.withholding_tax:
             items.append((payment.account, LedgerBook.FEE_EXPENSE, payment.cash_asset, payment.withholding_tax, LedgerEntryType.DIVIDEND, payment.instrument_id, None, None))
-        transaction = self._transaction(f"dividend:{payment.payment_id}", payment.timestamp, str(payment.payment_id), tuple(items))
-        self.ledger.post(transaction)
-        return transaction
+        return self._transaction(f"dividend:{payment.payment_id}", payment.timestamp, str(payment.payment_id), tuple(items))
 
     def settle_position(self, account: AccountKey, instrument_id, position_quantity: Decimal, price: Decimal, timestamp: datetime, reference_id: str) -> LedgerTransaction:
         if position_quantity == 0 or price < 0:
             raise ValueError("settlement requires a non-zero position and non-negative price")
-        definition = self.catalog.get(instrument_id, timestamp)
+        definition = definition_at(self.catalog, instrument_id, timestamp)
         closing_quantity = -position_quantity
         position_asset = AssetId(f"POSITION:{instrument_id.value}")
-        multiplier = _premium_multiplier(definition.product_spec)
+        multiplier = _premium_multiplier(contract_spec(definition))
         cash_amount = -closing_quantity * price * multiplier
+        cash_asset = settlement_asset(self.catalog, definition, timestamp)
         transaction = self._transaction(
             f"settlement:{reference_id}", timestamp, reference_id,
             (
                 (account, LedgerBook.POSITION, position_asset, closing_quantity, LedgerEntryType.SETTLEMENT, instrument_id, price, None),
                 (account, LedgerBook.CLEARING, position_asset, -closing_quantity, LedgerEntryType.SETTLEMENT, instrument_id, price, None),
-                (account, LedgerBook.CASH, definition.quote_asset, cash_amount, LedgerEntryType.SETTLEMENT, instrument_id, price, None),
-                (account, LedgerBook.CLEARING, definition.quote_asset, -cash_amount, LedgerEntryType.SETTLEMENT, instrument_id, price, None),
+                (account, LedgerBook.CASH, cash_asset, cash_amount, LedgerEntryType.SETTLEMENT, instrument_id, price, None),
+                (account, LedgerBook.CLEARING, cash_asset, -cash_amount, LedgerEntryType.SETTLEMENT, instrument_id, price, None),
             ),
         )
         self.ledger.post(transaction)

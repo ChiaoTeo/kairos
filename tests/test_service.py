@@ -12,22 +12,25 @@ from uuid import UUID
 
 from trading.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
 from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, OptionChain, VenueListing
+from trading.domain.market_data import OptionChain
 from trading.domain.market_data import Greeks, Quote
 from trading.domain.product import IndexSpec, ProductType
 from trading.__main__ import main
 from trading.research.service import ResearchService
 from trading.research.spec import ResearchSpec
 from trading.storage.repository import FileResearchRepository
+from trading.reference import ReferenceCatalog
+from trading.reference.models import InstrumentDefinition
+from tests.reference_support import publish_test_instrument
 
 
 class FakeProvider:
     def __init__(self) -> None:
         self.connected = False
-        self.underlying_id = InstrumentDefinition(
-            InstrumentId("index:spx"), ProductType.INDEX, "SPX", None, AssetId("USD"), IndexSpec(AssetId("USD")),
-            (VenueListing(VenueId("ibkr"), "100", "SPX", Decimal("0.01"), Decimal("1"), Decimal("1")),),
-            datetime(1970, 1, 1, tzinfo=timezone.utc),
+        self.catalog = ReferenceCatalog()
+        self.underlying_id = publish_test_instrument(
+            self.catalog, InstrumentId("index:spx"), ProductType.INDEX, "SPX", IndexSpec(AssetId("USD")),
+            AssetId("USD"), VenueId("ibkr"), "SPX", datetime(1970, 1, 1, tzinfo=timezone.utc),
         )
 
     def connect(self) -> None:
@@ -43,7 +46,7 @@ class FakeProvider:
         return OptionChain(underlying.instrument_id, VenueId("ibkr"), "SMART", "SPXW", Decimal("100"), (date(2099, 1, 2),), (Decimal("5950"), Decimal("6000"), Decimal("6050")))
 
     def qualify(self, instruments):
-        return tuple(replace(item, listings=(replace(item.listings[0], external_id=str(index + 200)),)) for index, item in enumerate(instruments))
+        return tuple(instruments)
 
     def snapshot(self, instruments, correlation_id: UUID):
         now = datetime.now(timezone.utc)

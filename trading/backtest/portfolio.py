@@ -6,12 +6,13 @@ from decimal import Decimal
 from uuid import UUID, uuid5, NAMESPACE_URL
 
 from trading.accounting.ledger import LedgerService
-from trading.catalog.service import InstrumentCatalog
 from trading.domain.execution import TradeExecution, TradeSide
 from trading.domain.identity import AccountKey, AssetId, InstrumentId
 from trading.domain.ledger import Ledger, LedgerBook
 from trading.domain.order import Fill, Settlement
 from trading.domain.product import CryptoOptionSpec,ListedOptionSpec
+from trading.reference import ReferenceCatalog
+from trading.reference.access import contract_spec, definition_at, trade_cash_asset
 from trading.risk.option_structure import maximum_expiry_loss,option_multiplier
 
 ZERO = Decimal("0")
@@ -77,7 +78,7 @@ class PortfolioSnapshot:
 class BacktestPortfolio:
     """Ledger-backed portfolio used by research backtests and simulation."""
 
-    def __init__(self, initial_cash: Decimal, catalog: InstrumentCatalog, account: AccountKey, cash_asset: AssetId = AssetId("USD")) -> None:
+    def __init__(self, initial_cash: Decimal, catalog: ReferenceCatalog, account: AccountKey, cash_asset: AssetId = AssetId("USD")) -> None:
         if initial_cash <= 0:
             raise ValueError("initial cash must be positive")
         self.initial_cash = initial_cash
@@ -109,11 +110,11 @@ class BacktestPortfolio:
         if fill.fill_id in self.applied_fills:
             raise ValueError(f"duplicate fill: {fill.fill_id}")
         for index, leg in enumerate(fill.legs):
-            definition = self.catalog.get(leg.instrument_id, fill.timestamp)
+            definition = definition_at(self.catalog, leg.instrument_id, fill.timestamp)
             self.ledger_service.trade(TradeExecution(
                 uuid5(NAMESPACE_URL, f"fill:{fill.fill_id}:{index}"), fill.timestamp, self.account,
                 leg.instrument_id, leg.side, Decimal(leg.ratio * fill.quantity), leg.price,
-                definition.quote_asset, fill.commission if index == 0 else ZERO, str(fill.order_id),
+                trade_cash_asset(self.catalog, definition, fill.timestamp), fill.commission if index == 0 else ZERO, str(fill.order_id),
             ))
         self.applied_fills.add(fill.fill_id)
         self.slippage += fill.slippage
@@ -176,8 +177,8 @@ class BacktestPortfolio:
                 fallback_count += 1
             elif mid is None:
                 mark_source = "unpriced"
-            definition = self.catalog.get(instrument_id, market.timestamp)
-            multiplier = _multiplier(definition.product_spec)
+            definition = definition_at(self.catalog, instrument_id, market.timestamp)
+            multiplier = _multiplier(contract_spec(definition))
             mv_mid = position.quantity * mid * multiplier if mid is not None else None
             mv_liq = position.quantity * liquidation * multiplier if liquidation is not None else None
             cost_value = position.quantity * position.average_price * multiplier
@@ -221,7 +222,7 @@ class BacktestPortfolio:
         for entry in self.ledger.entries:
             if entry.account != self.account or entry.book is not LedgerBook.POSITION or entry.instrument_id != instrument_id or entry.unit_price is None:
                 continue
-            definition = definition or self.catalog.get(instrument_id, entry.timestamp)
+            definition = definition or definition_at(self.catalog, instrument_id, entry.timestamp)
             trade_quantity = entry.amount
             if quantity == 0 or quantity * trade_quantity > 0:
                 total = abs(quantity) + abs(trade_quantity)
@@ -229,7 +230,7 @@ class BacktestPortfolio:
                 quantity += trade_quantity
             else:
                 closing = min(abs(quantity), abs(trade_quantity))
-                realized += closing * (entry.unit_price - average) * (Decimal("1") if quantity > 0 else Decimal("-1")) * _multiplier(definition.product_spec)
+                realized += closing * (entry.unit_price - average) * (Decimal("1") if quantity > 0 else Decimal("-1")) * _multiplier(contract_spec(definition))
                 new_quantity = quantity + trade_quantity
                 if new_quantity == 0:
                     quantity = average = ZERO
@@ -242,9 +243,9 @@ class BacktestPortfolio:
     def _structure_max_risk(self, structure: StructurePosition, at: datetime) -> Decimal:
         options = []
         for instrument_id, sign in structure.legs:
-            definition = self.catalog.get(instrument_id, at)
-            if isinstance(definition.product_spec,(ListedOptionSpec,CryptoOptionSpec)):
-                options.append((definition.product_spec,sign))
+            definition = definition_at(self.catalog, instrument_id, at)
+            if isinstance(contract_spec(definition),(ListedOptionSpec,CryptoOptionSpec)):
+                options.append((contract_spec(definition),sign))
         if options:
             return maximum_expiry_loss(tuple(options),structure.entry_net_price,structure.quantity)
         return Decimal("Infinity")

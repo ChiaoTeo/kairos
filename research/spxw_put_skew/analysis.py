@@ -8,14 +8,13 @@ import numpy as np
 import pandas as pd
 
 from trading.backtest.feed import HistoricalDataset
-from trading.catalog.service import InstrumentCatalog
+from trading.reference import ReferenceCatalog
 from trading.domain.product import ListedOptionSpec
 from trading.pricing import ValuationService
-from trading.research.data_store import ResearchDatasetStore
 
 
 def load_study_context(root):
-    from trading.backtest.feed import DatasetRepository
+    from trading.data import ResearchDataClient
     from research.spxw_put_skew.study import ResearchConfig, execute_research
     study_dir = root / "research" / "spxw_put_skew"
     raw = json.loads((study_dir / "config.json").read_text(encoding="utf-8"))
@@ -26,9 +25,10 @@ def load_study_context(root):
         "stop_loss_multiple", "commission_per_contract",
     }
     config = ResearchConfig(**{key: Decimal(str(value)) if key in decimal_fields else value for key, value in raw.items()})
-    repository = DatasetRepository(root / "data" / "datasets")
-    dataset = repository.load(dataset_id)
-    collection = ResearchDatasetStore(repository).load_collection(dataset_id)
+    data = ResearchDataClient(root / "data")
+    feed = data.replay_slices(dataset_id)
+    dataset = feed.dataset
+    collection = data.collection(dataset_id)
     panel, readiness, conclusion = execute_research(dataset, config, collection)
     return dataset, config, collection, panel, readiness, conclusion
 
@@ -85,8 +85,8 @@ def surface_observations(dataset: HistoricalDataset) -> pd.DataFrame:
         for item in valuation.instruments:
             if item.pricing is None or item.implied_vol.volatility is None:
                 continue
-            definition = catalog.get(item.instrument_id, market.timestamp)
-            spec = definition.product_spec
+            definition = catalog.instruments.get(item.instrument_id, market.timestamp)
+            spec = definition.contract_spec
             if not isinstance(spec, ListedOptionSpec):
                 continue
             rows.append({
@@ -299,8 +299,5 @@ def _max_drawdown_duration(equity: pd.Series) -> int:
     return longest
 
 
-def _catalog(dataset: HistoricalDataset) -> InstrumentCatalog:
-    catalog = InstrumentCatalog()
-    for definition in dataset.definitions:
-        catalog.add(definition)
-    return catalog
+def _catalog(dataset: HistoricalDataset) -> ReferenceCatalog:
+    return dataset.reference_catalog()

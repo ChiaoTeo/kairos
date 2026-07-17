@@ -7,21 +7,23 @@ import math
 from pathlib import Path
 import statistics
 
+from trading import __version__
 from research.btc_options_stats import block_bootstrap_ci
-from trading.data import CanonicalDatasetRepository, DataCatalog
+from trading.data import ResearchDataClient
+from trading.data.products import BTC_DERIBIT_OPTION_TRADES, BTC_SPOT_DAILY
 from trading.storage.data_lake import write_json
 
 
 def execute(root: str | Path = "data", hedge_cost_bps=7.0):
-    root=Path(root);repository=CanonicalDatasetRepository(root)
+    root=Path(root);repository=ResearchDataClient(root)
     base=json.loads((root/"studies"/"btc_deribit_skew_spread_trade_proxy_v1"/"trades.json").read_text())
-    spot={date.fromisoformat(row["period_start"][:10]):float(row["close"]) for row in repository.load_rows(DataCatalog.BTC_SPOT_DAILY.dataset_id)}
+    spot={date.fromisoformat(row["period_start"][:10]):float(row["close"]) for row in repository.load_rows(BTC_SPOT_DAILY.product)}
     wanted={trade[leg] for trade in base for leg in ("short","long")}; windows={}
     for trade in base:
         start,end=date.fromisoformat(trade["entry_date"]),date.fromisoformat(trade["exit_date"])
         for instrument in (trade["short"],trade["long"]): windows.setdefault(instrument,[]).append((start,end))
     observations={}
-    for row in repository.iter_rows(DataCatalog.BTC_DERIBIT_OPTION_TRADES.dataset_id):
+    for row in repository.iter_rows(BTC_DERIBIT_OPTION_TRADES.product):
         instrument=row["instrument_id"]
         if instrument not in wanted:continue
         day=date.fromisoformat(row["event_time"][:10])
@@ -102,6 +104,8 @@ def _weighted(values):
 def main(argv=None):
     parser=argparse.ArgumentParser();parser.add_argument("--data-root",type=Path,default=Path("data"));parser.add_argument("--hedge-cost-bps",type=float,default=7);args=parser.parse_args(argv)
     details,result=execute(args.data_root,args.hedge_cost_bps);output=args.data_root/"studies"/"btc_deribit_skew_spread_daily_delta_hedged_v1";output.mkdir(parents=True,exist_ok=True)
+    ResearchDataClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_deribit_skew_spread_daily_delta_hedged_v1",
+        (BTC_SPOT_DAILY.product, BTC_DERIBIT_OPTION_TRADES.product), code_version=__version__)
     write_json(output/"trades.json",details);write_json(output/"results.json",result);print(json.dumps(result,ensure_ascii=False,indent=2))
 
 

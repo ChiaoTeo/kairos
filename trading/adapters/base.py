@@ -8,18 +8,29 @@ from typing import Protocol
 
 from trading.domain.capability import ExecutionCapabilities, MarketDataCapabilities, ReferenceCapabilities
 from trading.domain.execution import TradeExecution, TradeSide
-from trading.domain.identity import AccountKey, AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition
+from trading.domain.identity import AccountKey, AssetId, InstitutionId, InstrumentId, VenueId
+from trading.reference.models import InstrumentDefinition
 from trading.domain.market_data import Quote
 from trading.domain.corporate_action import CashDividendEvent, SplitEvent
 from trading.domain.order import ExecutionInstructions
 from trading.domain.product import ProductType
+from trading.reference.catalog import ReferenceCatalog
 
 
 class Environment(StrEnum):
     PAPER = "paper"
     TESTNET = "testnet"
     LIVE = "live"
+
+
+class VenueOrderStatus(StrEnum):
+    ACKNOWLEDGED = "acknowledged"
+    REJECTED = "rejected"
+    PARTIALLY_FILLED = "partially_filled"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +99,23 @@ class AccountState:
 
 
 @dataclass(frozen=True, slots=True)
+class RecoveredExecution:
+    external_key: str
+    execution: TradeExecution
+    fully_filled: bool
+    cursor_name: str | None = None
+    cursor_value: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class VenueOrderRecovery:
+    status: VenueOrderStatus
+    proof: str
+    acknowledgement: OrderAck | None = None
+    executions: tuple[RecoveredExecution, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class ReferenceDataRequest:
     product_type: ProductType
     symbols: tuple[str, ...]
@@ -96,7 +124,7 @@ class ReferenceDataRequest:
 class ReferenceDataAdapter(Protocol):
     venue_id: VenueId
     capabilities: ReferenceCapabilities
-    def sync(self, request: ReferenceDataRequest) -> tuple[InstrumentDefinition, ...]: ...
+    def sync(self, request: ReferenceDataRequest) -> ReferenceCatalog: ...
 
 
 class MarketDataAdapter(Protocol):
@@ -106,6 +134,7 @@ class MarketDataAdapter(Protocol):
 
 
 class ExecutionAdapter(Protocol):
+    institution_id: InstitutionId
     venue_id: VenueId
     environment: Environment
     capabilities: ExecutionCapabilities
@@ -121,9 +150,22 @@ class ComboExecutionAdapter(Protocol):
 
 
 class AccountAdapter(Protocol):
+    institution_id: InstitutionId
     venue_id: VenueId
     environment: Environment
     def account_state(self, account: AccountKey) -> AccountState: ...
+
+
+class OrderRecoveryAdapter(Protocol):
+    institution_id: InstitutionId
+    venue_id: VenueId
+    environment: Environment
+    def recover_order(
+        self,
+        account: AccountKey,
+        request: OrderRequest | ComboOrderRequest,
+        venue_order_id: str | None,
+    ) -> VenueOrderRecovery: ...
 
 
 class CorporateActionAdapter(Protocol):

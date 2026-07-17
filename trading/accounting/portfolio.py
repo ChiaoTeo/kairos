@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from trading.catalog.service import InstrumentCatalog
 from trading.domain.identity import AccountKey, AssetId, InstrumentId
 from trading.domain.ledger import Ledger, LedgerBook
 from trading.products.calculators import PositionCalculatorRegistry
+from trading.reference import ReferenceCatalog, ReferenceRole
 
 from .conversion import AssetConversionGraph
 
@@ -26,7 +26,7 @@ class AssetBalance:
 
 
 @dataclass(frozen=True, slots=True)
-class PositionV2:
+class Position:
     account: AccountKey
     instrument_id: InstrumentId
     quantity: Decimal
@@ -39,19 +39,19 @@ class PositionV2:
 
 
 @dataclass(frozen=True, slots=True)
-class PortfolioSnapshotV2:
+class PortfolioSnapshot:
     timestamp: datetime
     reporting_asset: AssetId
     balances: tuple[AssetBalance, ...]
-    positions: tuple[PositionV2, ...]
+    positions: tuple[Position, ...]
     net_asset_value: Decimal
     status: str
     unpriced_assets: tuple[str, ...]
     unpriced_positions: tuple[str, ...]
 
 
-class PortfolioV2:
-    def __init__(self, ledger: Ledger, catalog: InstrumentCatalog, reporting_asset: AssetId, calculators: PositionCalculatorRegistry | None = None) -> None:
+class Portfolio:
+    def __init__(self, ledger: Ledger, catalog: ReferenceCatalog, reporting_asset: AssetId, calculators: PositionCalculatorRegistry | None = None) -> None:
         self.ledger = ledger
         self.catalog = catalog
         self.reporting_asset = reporting_asset
@@ -64,7 +64,7 @@ class PortfolioV2:
         conversions: AssetConversionGraph,
         *,
         max_conversion_age: timedelta = timedelta(minutes=5),
-    ) -> PortfolioSnapshotV2:
+    ) -> PortfolioSnapshot:
         balance_map = defaultdict(lambda: defaultdict(Decimal))
         for entry in self.ledger.entries:
             if entry.timestamp > timestamp:
@@ -91,7 +91,7 @@ class PortfolioV2:
             if entry.timestamp <= timestamp and entry.book is LedgerBook.POSITION:
                 grouped[(entry.account, entry.instrument_id)].append(entry)
         for (account, instrument_id), entries in sorted(grouped.items(), key=lambda item: (item[0][0].value, item[0][1].value)):
-            definition = self.catalog.get(instrument_id, timestamp)
+            definition = _definition(self.catalog, instrument_id, timestamp)
             quantity, average, realized = _position_cost(entries, definition, self.calculators)
             if quantity == 0:
                 continue
@@ -110,9 +110,9 @@ class PortfolioV2:
                     nav += market_value_reporting
                 except LookupError:
                     unpriced_positions.append(instrument_id.value)
-            positions.append(PositionV2(account, instrument_id, quantity, average, mark, market_value_reporting, unrealized_reporting, realized, valuation_asset))
+            positions.append(Position(account, instrument_id, quantity, average, mark, market_value_reporting, unrealized_reporting, realized, valuation_asset))
         status = "complete" if not unpriced_assets and not unpriced_positions else "partial"
-        return PortfolioSnapshotV2(timestamp, self.reporting_asset, tuple(balances), tuple(positions), nav, status, tuple(unpriced_assets), tuple(unpriced_positions))
+        return PortfolioSnapshot(timestamp, self.reporting_asset, tuple(balances), tuple(positions), nav, status, tuple(unpriced_assets), tuple(unpriced_positions))
 
 
 def _position_cost(entries, definition, calculators):
@@ -151,7 +151,15 @@ def _position_cost(entries, definition, calculators):
 
 
 def _valuation_asset(definition):
-    spec = definition.product_spec
+    spec = definition.contract_spec
     if hasattr(spec, "settlement_asset"):
         return spec.settlement_asset
-    return definition.quote_asset
+    if hasattr(spec, "quote_asset"):
+        return spec.quote_asset
+    if hasattr(spec, "trading_currency"):
+        return spec.trading_currency
+    raise ValueError(f"definition has no valuation asset: {definition.instrument_id}")
+
+
+def _definition(catalog, instrument_id, at):
+    return catalog.instruments.get(instrument_id, at)

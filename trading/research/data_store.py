@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 
-from trading.backtest.feed import DatasetRepository, HistoricalDataset, build_manifest
+from trading.backtest.feed import HistoricalDataset, build_manifest
+from trading.data.market_slice_storage import MarketSliceStorageDriver
 from trading.storage.codec import from_primitive, to_primitive
 
 
@@ -31,10 +32,10 @@ class CollectionManifest:
         return sum(not item.synthetic for item in self.sessions)
 
 
-class ResearchDatasetStore:
-    """Append-only session store over the canonical DatasetRepository format."""
+class MarketSliceCollectionPublisher:
+    """Append-only collection publisher over the internal MarketSlice storage driver."""
 
-    def __init__(self, repository: DatasetRepository) -> None:
+    def __init__(self, repository: MarketSliceStorageDriver) -> None:
         self.repository = repository
 
     def save_session(
@@ -94,6 +95,9 @@ def merge_datasets(existing: HistoricalDataset, chunk: HistoricalDataset) -> His
             raise ValueError(f"conflicting instrument definition: {item.instrument_id}")
         definitions[key] = item
     ordered_definitions = tuple(sorted(definitions.values(), key=lambda item: (item.instrument_id.value, item.effective_from)))
+    products = tuple(sorted(set((*existing.products, *chunk.products)), key=lambda item: (item.product_id.value, item.effective_from)))
+    references = tuple(sorted(set((*existing.references, *chunk.references)), key=lambda item: (item.source_instrument_id.value, item.role.value, item.effective_from)))
+    settlements = tuple(sorted(set((*existing.settlements, *chunk.settlements)), key=lambda item: (item.settlement_terms_id, item.effective_from)))
 
     contracts = {item.instrument_id: item for item in existing.contracts}
     for item in chunk.contracts:
@@ -115,5 +119,8 @@ def merge_datasets(existing: HistoricalDataset, chunk: HistoricalDataset) -> His
         left.dataset_id, ordered_slices, ordered_contracts, ordered_definitions,
         sampling_seconds=left.sampling_seconds, source=source, market_data_type=left.market_data_type,
         code_version=right.code_version, split=left.split, synthetic=left.synthetic,
+        products=products, references=references, settlements=settlements,
     )
-    return HistoricalDataset(manifest, ordered_slices, ordered_contracts, ordered_definitions)
+    return HistoricalDataset(
+        manifest, ordered_slices, ordered_contracts, ordered_definitions, products, references, settlements,
+    )

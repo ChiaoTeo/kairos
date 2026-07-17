@@ -6,8 +6,10 @@ import math
 from pathlib import Path
 import statistics
 
+from trading import __version__
 from research.btc_options_stats import block_bootstrap_ci, percentile
-from trading.data import CanonicalDatasetRepository, DataCatalog
+from trading.data import ResearchDataClient
+from trading.data.products import BTC_DERIBIT_TERM_SKEW_DAILY, BTC_SPOT_DAILY
 from trading.storage.data_lake import write_json
 
 
@@ -15,9 +17,9 @@ HORIZONS = (7, 14, 30, 60, 90)
 
 
 def execute(root: str | Path = "data"):
-    repository = CanonicalDatasetRepository(root)
-    rows = repository.load_rows(DataCatalog.BTC_DERIBIT_TERM_SKEW_DAILY.dataset_id)
-    spot = {row["period_start"][:10]: float(row["close"]) for row in repository.load_rows(DataCatalog.BTC_SPOT_DAILY.dataset_id)}
+    repository = ResearchDataClient(root)
+    rows = repository.load_rows(BTC_DERIBIT_TERM_SKEW_DAILY.product)
+    spot = {row["period_start"][:10]: float(row["close"]) for row in repository.load_rows(BTC_SPOT_DAILY.product)}
     rows = sorted(rows, key=lambda row: row["period_start"]); split = int(len(rows)*0.70); development, test = rows[:split], rows[split:]
     results = {}
     for horizon in HORIZONS:
@@ -45,7 +47,8 @@ def execute(root: str | Path = "data"):
             "h1_high_skew_mean_reverts": bool(enough and ci[1] < 0),
             "status": "TESTED" if enough else "DATA_NOT_READY"}
     ready = all(item["status"] == "TESTED" for item in results.values())
-    return {"study_id": "btc_skew_predictability_v1", "input_dataset": DataCatalog.BTC_DERIBIT_TERM_SKEW_DAILY.dataset_id,
+    return {"study_id": "btc_skew_predictability_v1",
+            "input_dataset": repository.catalog.release(BTC_DERIBIT_TERM_SKEW_DAILY.key).release_id,
             "metric": "25delta put IV minus ATM IV", "horizons": results,
             "conclusion_status": "TESTED" if ready else "DATA_NOT_READY"}
 
@@ -58,6 +61,8 @@ def _float(value):
 def main(argv=None):
     parser=argparse.ArgumentParser(); parser.add_argument("--data-root",type=Path,default=Path("data")); args=parser.parse_args(argv)
     result=execute(args.data_root); output=args.data_root/"studies"/"btc_skew_predictability_v1"; output.mkdir(parents=True,exist_ok=True)
+    ResearchDataClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_skew_predictability_v1",
+        (BTC_DERIBIT_TERM_SKEW_DAILY.product, BTC_SPOT_DAILY.product), code_version=__version__)
     write_json(output/"study_spec.json", {"study_id":"btc_skew_predictability_v1","metric":"put_skew25","horizons":list(HORIZONS),
         "high_skew_threshold":"development 80th percentile","minimum_test_observations":20})
     write_json(output/"results.json",result); print(json.dumps(result,ensure_ascii=False,indent=2))

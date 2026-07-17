@@ -13,7 +13,7 @@
 本文基于项目现有的统一事实模型和四层数据湖：
 
 ```text
-InstrumentDefinition + VenueListing + Catalog
+InstrumentDefinition + ListingDefinition + Catalog
                          |
               normalized market events
                          |
@@ -99,7 +99,7 @@ Frozen study datasets and deterministic backtests
 项目当前已有以下正确边界，应扩展而不是替换：
 
 - `trading.domain` 中统一的 `InstrumentDefinition`、Quote、Trade、Bar 和 OrderBook 类型；
-- `trading.catalog` 中内部 `InstrumentId` 与外部 listing 的映射；
+- `trading.reference` 中内部 `InstrumentId` 与外部 listing 的映射；
 - `trading.data` 中 Dataset Catalog、canonical pipeline 和 metadata；
 - `trading.storage` 中原子写入、SHA-256、coverage 和 manifest；
 - `trading.research` 中 snapshot、series capture、追加式 session 和质量问题；
@@ -272,7 +272,7 @@ Curated datasets and features
 Frozen research dataset
         |
         v
-Streaming HistoricalEventFeed
+Streaming ReplayEventFeed
         |
         v
 Backtest / feature / study
@@ -491,7 +491,7 @@ MarketEventRepository.metadata(...)
 新增流式历史 feed：
 
 ```text
-HistoricalEventFeed.scan(
+ReplayEventFeed
   start,
   end,
   instruments,
@@ -585,7 +585,7 @@ HistoricalEventFeed.scan(
 
 交付：
 
-- Parquet-backed `HistoricalEventFeed`；
+- Parquet-backed `ReplayEventFeed`；
 - `available_time` clock；
 - `[start,end)` 边界修正；
 - curated bars/snapshots；

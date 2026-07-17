@@ -9,13 +9,13 @@ from typing import Any, Iterable
 from uuid import UUID
 
 from trading.domain.event import EventEnvelope
-from trading.domain.instrument import OptionChain
+from trading.domain.market_data import OptionChain
 from trading.research.analyzer import ResearchResult
 from trading.research.report import write_csv
 from trading.research.snapshot import ResearchSnapshot
 from trading.research.spec import ResearchSpec
 
-from .codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, to_primitive
+from .codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, snapshot_to_primitive, to_primitive
 
 
 class RunStatus(StrEnum):
@@ -96,7 +96,7 @@ class FileResearchRepository:
 
     def save_snapshot(self, snapshot: ResearchSnapshot) -> Path:
         target = self.run_dir(snapshot.run_id) / "snapshot.json"
-        self._write_json(target, to_primitive(snapshot))
+        self._write_json(target, snapshot_to_primitive(snapshot))
         return target
 
     def load_snapshot(self, run_id: UUID | str) -> ResearchSnapshot:

@@ -7,24 +7,26 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from trading.backtest.feed import DatasetRepository
+from trading.data.market_slice_storage import MarketSliceStorageDriver
 from trading.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
 from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, OptionChain, VenueListing
+from trading.domain.market_data import OptionChain
 from trading.domain.market_data import Greeks, Quote
 from trading.domain.product import IndexSpec, OptionRight, ProductType
 from trading.research.series import SeriesCaptureService, SeriesCaptureSpec
-from trading.research.data_store import ResearchDatasetStore
+from trading.research.data_store import MarketSliceCollectionPublisher
 from trading.research.spec import ResearchSpec
+from trading.reference import ReferenceCatalog
+from tests.reference_support import publish_test_instrument
 
 
 class SeriesProvider:
     def __init__(self) -> None:
         self.connected = False
-        self.underlying_id = InstrumentDefinition(
-            InstrumentId("index:spx"), ProductType.INDEX, "SPX", None, AssetId("USD"), IndexSpec(AssetId("USD")),
-            (VenueListing(VenueId("ibkr"), "1", "SPX", Decimal("0.01"), Decimal("1"), Decimal("1")),),
-            datetime(1970, 1, 1, tzinfo=timezone.utc),
+        self.catalog = ReferenceCatalog()
+        self.underlying_id = publish_test_instrument(
+            self.catalog, InstrumentId("index:spx"), ProductType.INDEX, "SPX", IndexSpec(AssetId("USD")),
+            AssetId("USD"), VenueId("ibkr"), "SPX", datetime(1970, 1, 1, tzinfo=timezone.utc),
         )
 
     def connect(self): self.connected = True
@@ -35,13 +37,13 @@ class SeriesProvider:
         return OptionChain(underlying.instrument_id, VenueId("ibkr"), "SMART", "SPXW", Decimal("100"), (date(2099, 1, 2),), (Decimal("5950"), Decimal("6000"), Decimal("6050")))
 
     def qualify(self, instruments):
-        return tuple(replace(item, listings=(replace(item.listings[0], external_id=str(index + 10)),)) for index, item in enumerate(instruments))
+        return tuple(instruments)
 
     def snapshot(self, instruments, correlation_id):
         now = datetime(2099, 1, 1, 12, tzinfo=timezone.utc)
         events = []
         for definition in instruments:
-            if definition.product_type is ProductType.INDEX:
+            if definition.instrument_type is ProductType.INDEX:
                 events.append(envelope(UnderlyingPriceUpdated(definition.instrument_id, Decimal("6000")), source="fake.series", event_time=now, correlation_id=correlation_id))
             else:
                 events.extend((
@@ -67,7 +69,7 @@ class SeriesCaptureTests(unittest.TestCase):
         times = iter(datetime(2099, 1, 1, 12, minute, tzinfo=timezone.utc) for minute in range(3))
         with tempfile.TemporaryDirectory() as directory:
             SeriesCaptureService(
-                DatasetRepository(directory), wait=lambda _: None, now=lambda: next(times),
+                MarketSliceStorageDriver(directory), wait=lambda _: None, now=lambda: next(times),
                 on_progress=progress.append,
             ).capture(
                 provider, ResearchSpec(strikes_each_side=1, rights=(OptionRight.PUT,)),
@@ -83,7 +85,7 @@ class SeriesCaptureTests(unittest.TestCase):
         times = iter(datetime(2099, 1, 1, 12, minute, tzinfo=timezone.utc) for minute in range(3))
         waits = []
         with tempfile.TemporaryDirectory() as directory:
-            repository = DatasetRepository(directory)
+            repository = MarketSliceStorageDriver(directory)
             service = SeriesCaptureService(repository, wait=waits.append, now=lambda: next(times))
             dataset = service.capture(
                 provider,
@@ -114,7 +116,7 @@ class SeriesCaptureTests(unittest.TestCase):
         provider = DynamicProvider()
         times = iter((datetime(2099, 1, 1, 12, tzinfo=timezone.utc), datetime(2099, 1, 1, 12, 1, tzinfo=timezone.utc)))
         with tempfile.TemporaryDirectory() as directory:
-            dataset = SeriesCaptureService(DatasetRepository(directory), wait=lambda _: None, now=lambda: next(times)).capture(
+            dataset = SeriesCaptureService(MarketSliceStorageDriver(directory), wait=lambda _: None, now=lambda: next(times)).capture(
                 provider, ResearchSpec(strikes_each_side=1), SeriesCaptureSpec("dynamic-series", 2, 60),
             )
         self.assertEqual(provider.discovery_count, 2)
@@ -124,7 +126,7 @@ class SeriesCaptureTests(unittest.TestCase):
 
     def test_independent_gateway_sessions_append_to_one_research_dataset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            repository = DatasetRepository(directory)
+            repository = MarketSliceStorageDriver(directory)
             first_times = iter(datetime(2099, 1, 1, 12, minute, tzinfo=timezone.utc) for minute in range(2))
             first = SeriesCaptureService(repository, wait=lambda _: None, now=lambda: next(first_times)).capture(
                 SeriesProvider(), ResearchSpec(strikes_each_side=1), SeriesCaptureSpec("gateway-resume", 2, 60), append=True,
@@ -133,7 +135,7 @@ class SeriesCaptureTests(unittest.TestCase):
             merged = SeriesCaptureService(repository, wait=lambda _: None, now=lambda: next(second_times)).capture(
                 SeriesProvider(), ResearchSpec(strikes_each_side=1), SeriesCaptureSpec("gateway-resume", 2, 60), append=True,
             )
-            collection = ResearchDatasetStore(repository).load_collection("gateway-resume")
+            collection = MarketSliceCollectionPublisher(repository).load_collection("gateway-resume")
         self.assertEqual(len(first.slices), 2)
         self.assertEqual(len(merged.slices), 4)
         self.assertEqual(len(collection.sessions), 2)
@@ -154,7 +156,7 @@ class SeriesCaptureTests(unittest.TestCase):
         provider = FailingProvider()
         times = iter(datetime(2099, 1, 1, 12, minute, tzinfo=timezone.utc) for minute in range(3))
         with tempfile.TemporaryDirectory() as directory:
-            repository = DatasetRepository(directory)
+            repository = MarketSliceStorageDriver(directory)
             service = SeriesCaptureService(repository, wait=lambda _: None, now=lambda: next(times))
             with self.assertRaisesRegex(RuntimeError, "gateway disconnect"):
                 service.capture(
@@ -162,7 +164,7 @@ class SeriesCaptureTests(unittest.TestCase):
                     SeriesCaptureSpec("checkpoint-recovery", 4, 60, checkpoint_samples=1), append=True,
                 )
             recovered = repository.load("checkpoint-recovery")
-            collection = ResearchDatasetStore(repository).load_collection("checkpoint-recovery")
+            collection = MarketSliceCollectionPublisher(repository).load_collection("checkpoint-recovery")
         self.assertFalse(provider.connected)
         self.assertEqual(len(recovered.slices), 2)
         self.assertEqual(len(collection.sessions), 2)

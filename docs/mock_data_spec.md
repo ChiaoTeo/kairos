@@ -39,7 +39,7 @@ HistoricalDataset
 
 ### InstrumentDefinition 与 ContractMetadata
 
-每个数据集必须带历史有效的 `InstrumentDefinition`，其中 `InstrumentId` 只保存稳定内部身份，产品字段位于 tagged `ProductSpec`，Venue symbol/tick/lot/min notional 位于 `VenueListing`。
+每个数据集必须带历史有效的 `InstrumentDefinition`，其中 `InstrumentId` 只保存稳定内部身份，产品字段位于 tagged `ProductSpec`，Venue symbol/tick/lot/min notional 位于 `ListingDefinition`。
 
 每个可交易合约必须提供：
 

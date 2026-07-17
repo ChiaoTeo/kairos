@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from trading.domain.identity import InstitutionId
+
 import unittest
 from decimal import Decimal
 from uuid import uuid4
@@ -7,7 +9,6 @@ from uuid import uuid4
 from trading.backtest.mock import MockScenario, make_mock_dataset
 from trading.backtest.portfolio import BacktestPortfolio
 from trading.backtest.settlement import due_settlements, intrinsic_value
-from trading.catalog.service import InstrumentCatalog
 from trading.domain.execution import TradeSide
 from trading.domain.identity import AccountKey, AccountType, VenueId
 from trading.domain.order import Fill, LegFill
@@ -29,11 +30,10 @@ class SettlementTests(unittest.TestCase):
         for scenario, expected_cash in expectations.items():
             with self.subTest(scenario=scenario):
                 dataset = make_mock_dataset(scenario)
-                catalog = InstrumentCatalog()
-                for definition in dataset.definitions: catalog.add(definition)
-                by_strike = {definition.product_spec.strike: definition.instrument_id for definition in dataset.definitions if isinstance(definition.product_spec, ListedOptionSpec)}
+                catalog = dataset.reference_catalog()
+                by_strike = {definition.contract_spec.strike: definition.instrument_id for definition in dataset.definitions if isinstance(definition.contract_spec, ListedOptionSpec)}
                 short, long = by_strike[Decimal("6000")], by_strike[Decimal("5950")]
-                portfolio = BacktestPortfolio(Decimal("100000"), catalog, AccountKey(VenueId("backtest"), scenario.value, AccountType.SECURITIES_MARGIN))
+                portfolio = BacktestPortfolio(Decimal("100000"), catalog, AccountKey(InstitutionId("backtest"), scenario.value, AccountType.SECURITIES_MARGIN))
                 structure_id = uuid4()
                 fill = Fill(
                     uuid4(), uuid4(), uuid4(), "test", structure_id, dataset.slices[1].timestamp,
@@ -54,11 +54,10 @@ class SettlementTests(unittest.TestCase):
         # The explicit missing-settlement failure is exercised by removing the official value.
         from dataclasses import replace
         contracts = tuple(replace(item, official_settlement=None) for item in dataset.contracts)
-        catalog = InstrumentCatalog()
-        for definition in dataset.definitions: catalog.add(definition)
-        by_strike = {definition.product_spec.strike: definition.instrument_id for definition in dataset.definitions if isinstance(definition.product_spec, ListedOptionSpec)}
+        catalog = dataset.reference_catalog()
+        by_strike = {definition.contract_spec.strike: definition.instrument_id for definition in dataset.definitions if isinstance(definition.contract_spec, ListedOptionSpec)}
         short, long = by_strike[Decimal("6000")], by_strike[Decimal("5950")]
-        portfolio = BacktestPortfolio(Decimal("100000"), catalog, AccountKey(VenueId("backtest"), "missing", AccountType.SECURITIES_MARGIN))
+        portfolio = BacktestPortfolio(Decimal("100000"), catalog, AccountKey(InstitutionId("backtest"), "missing", AccountType.SECURITIES_MARGIN))
         structure_id = uuid4()
         portfolio.apply_fill(Fill(uuid4(), uuid4(), uuid4(), "test", structure_id, dataset.slices[1].timestamp, (LegFill(short, TradeSide.SELL, 1, Decimal("5")), LegFill(long, TradeSide.BUY, 1, Decimal("2.2"))), Decimal("2.8"), 1, Decimal("1"), Decimal("0"), False))
         with self.assertRaisesRegex(ValueError, "missing official settlement"):

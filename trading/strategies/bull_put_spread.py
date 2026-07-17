@@ -11,7 +11,8 @@ from trading.domain.execution import TradeSide
 from trading.domain.intent import CloseStructureIntent, LegIntent, OpenStructureIntent
 from trading.domain.order import Fill, TimeInForce
 from trading.domain.product import ListedOptionSpec, OptionRight
-from trading.domain.strategy import StrategyContext, StrategyDecision
+from trading.reference.access import contract_spec, definition_at
+from trading.strategies.base import StrategyContext, StrategyDecision
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,10 +66,10 @@ class BullPutSpreadStrategy:
         local_date = context.now.astimezone(self.calendar.timezone).date()
         candidates = []
         for item in context.market.instruments:
-            definition = context.catalog.get(item.instrument_id, context.now)
-            if not isinstance(definition.product_spec, ListedOptionSpec):
+            definition = definition_at(context.catalog, item.instrument_id, context.now)
+            if not isinstance(contract_spec(definition), ListedOptionSpec):
                 continue
-            option = definition.product_spec
+            option = contract_spec(definition)
             if option.right is not OptionRight.PUT:
                 continue
             dte = self.calendar.dte(local_date, option.expiry.date())
@@ -104,8 +105,9 @@ class BullPutSpreadStrategy:
             self._record(context, "hold", "cannot price exit")
             return ()
         close_debit = -quote.natural
-        definition = context.catalog.get(structure.legs[0][0], context.now)
-        expiry = definition.product_spec.expiry.date() if isinstance(definition.product_spec, ListedOptionSpec) else None
+        definition = definition_at(context.catalog, structure.legs[0][0], context.now)
+        spec = contract_spec(definition)
+        expiry = spec.expiry.date() if isinstance(spec, ListedOptionSpec) else None
         local_date = context.now.astimezone(self.calendar.timezone).date()
         dte = self.calendar.dte(local_date, expiry) if expiry else 999
         reason = None

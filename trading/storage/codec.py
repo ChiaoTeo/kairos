@@ -19,13 +19,8 @@ from trading.domain.event import (
     TradeUpdated,
     UnderlyingPriceUpdated,
 )
-from trading.domain.identity import InstrumentId
-from trading.domain.instrument import InstrumentDefinition, OptionChain
-from trading.domain.market_data import FundingRate, Greeks, IndexPrice, MarkPrice, OpenInterest, Quote, Trade, TradingStatus, VolatilitySurfacePoint
-from trading.domain.product import (
-    CryptoOptionSpec, CryptoSpotSpec, EquitySpec, FutureSpec, IndexSpec, ListedOptionSpec,
-    OptionRight, PerpetualSpec, ProductType, TokenizedEquitySpec,
-)
+from trading.domain.identity import AccountKey, InstitutionId, InstrumentId
+from trading.domain.market_data import FundingRate, Greeks, IndexPrice, MarkPrice, OpenInterest, OptionChain, Quote, Trade, TradingStatus, VolatilitySurfacePoint
 from trading.research.snapshot import DataQualityIssue, InstrumentSnapshot, ResearchSnapshot
 from trading.research.spec import MarketDataType, ResearchSpec
 
@@ -65,11 +60,17 @@ def to_primitive(value: Any) -> Any:
         return {"$uuid": str(value)}
     if isinstance(value, Enum):
         return value.value
+    if isinstance(value, AccountKey):
+        return {
+            "institution_id": to_primitive(value.institution_id),
+            "account_id": value.account_id,
+            "account_type": to_primitive(value.account_type),
+        }
     if is_dataclass(value):
         return {field.name: to_primitive(getattr(value, field.name)) for field in fields(value)}
     if isinstance(value, dict):
         return {str(key): to_primitive(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, (list, tuple, set, frozenset)):
         return [to_primitive(item) for item in value]
     raise TypeError(f"cannot serialize {type(value).__name__}")
 
@@ -98,13 +99,19 @@ def from_primitive(value: Any, target: Any) -> Any:
         candidates = [arg for arg in args if arg is not type(None)]
         if len(candidates) == 1:
             return from_primitive(value, candidates[0])
-    if origin in (tuple, list):
+    if origin in (tuple, list, set, frozenset):
         if origin is tuple and len(args) > 1 and args[-1] is not Ellipsis:
             decoded = [from_primitive(item, item_type) for item, item_type in zip(value, args)]
         else:
             item_type = args[0] if args else Any
             decoded = [from_primitive(item, item_type) for item in value]
-        return tuple(decoded) if origin is tuple else decoded
+        if origin is tuple:
+            return tuple(decoded)
+        if origin is set:
+            return set(decoded)
+        if origin is frozenset:
+            return frozenset(decoded)
+        return decoded
     if target in (Decimal, datetime, date, time, UUID) or isinstance(target, type) and issubclass(target, Enum):
         return _decode_scalar(value, target)
     if isinstance(target, type) and is_dataclass(target):
@@ -120,6 +127,7 @@ def from_primitive(value: Any, target: Any) -> Any:
 
 
 def snapshot_from_primitive(value: dict[str, Any]) -> ResearchSnapshot:
+    from trading.reference.repository import instrument_from_primitive
     return ResearchSnapshot(
         schema_version=value["schema_version"],
         run_id=from_primitive(value["run_id"], UUID),
@@ -129,7 +137,7 @@ def snapshot_from_primitive(value: dict[str, Any]) -> ResearchSnapshot:
         underlying_price=from_primitive(value["underlying_price"], Decimal),
         underlying_price_time=from_primitive(value["underlying_price_time"], datetime),
         option_chain=from_primitive(value["option_chain"], OptionChain),
-        definitions=tuple(_definition_from_primitive(item) for item in value["definitions"]),
+        definitions=tuple(instrument_from_primitive(item) for item in value["definitions"]),
         instruments=tuple(from_primitive(item, InstrumentSnapshot) for item in value["instruments"]),
         sources=tuple(value["sources"]),
         quality_issues=tuple(from_primitive(item, DataQualityIssue) for item in value["quality_issues"]),
@@ -138,20 +146,11 @@ def snapshot_from_primitive(value: dict[str, Any]) -> ResearchSnapshot:
     )
 
 
-def _definition_from_primitive(item) -> InstrumentDefinition:
-    product_type = ProductType(item["product_type"])
-    spec_type = {
-        ProductType.INDEX: IndexSpec,
-        ProductType.EQUITY: EquitySpec,
-        ProductType.ETF: EquitySpec,
-        ProductType.LISTED_OPTION: ListedOptionSpec,
-        ProductType.CRYPTO_SPOT: CryptoSpotSpec,
-        ProductType.FUTURE: FutureSpec,
-        ProductType.PERPETUAL: PerpetualSpec,
-        ProductType.CRYPTO_OPTION: CryptoOptionSpec,
-        ProductType.TOKENIZED_EQUITY: TokenizedEquitySpec,
-    }[product_type]
-    return from_primitive({**item, "product_spec": from_primitive(item["product_spec"], spec_type)}, InstrumentDefinition)
+def snapshot_to_primitive(snapshot: ResearchSnapshot) -> dict[str, Any]:
+    from trading.reference.repository import instrument_to_primitive
+    value = to_primitive(snapshot)
+    value["definitions"] = [instrument_to_primitive(item) for item in snapshot.definitions]
+    return value
 
 
 def restore_primitives(value: Any) -> Any:

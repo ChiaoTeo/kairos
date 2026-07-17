@@ -45,7 +45,7 @@ class ResearchService:
             chain_event = envelope(OptionChainDiscovered(chain), source="ibkr.definition", correlation_id=run_id)
             apply_market_event(state, chain_event)
             events.append(chain_event)
-            selected = select_instruments(chain, price_entry[0], spec)
+            selected = select_instruments(provider.catalog, chain, price_entry[0], spec)
             qualified = tuple(provider.qualify(selected))
             if not qualified:
                 raise RuntimeError("no selected option contract could be qualified")
@@ -61,6 +61,7 @@ class ResearchService:
                 underlying=underlying,
                 chain=chain,
                 selected=qualified,
+                catalog=provider.catalog,
                 state=state,
                 code_version=__version__,
             )

@@ -8,6 +8,7 @@ from trading.domain.execution import TradeExecution, TradeSide
 from trading.domain.identity import AssetId
 from trading.domain.ledger import LedgerBook
 from trading.domain.product import FutureSpec, PerpetualSpec
+from trading.reference.access import contract_spec, definition_at
 
 
 class DerivativeLifecycleService:
@@ -15,8 +16,8 @@ class DerivativeLifecycleService:
         self.ledger_service = ledger_service
 
     def apply(self, event: DerivativePositionEvent) -> None:
-        definition = self.ledger_service.catalog.get(event.instrument_id, event.timestamp)
-        if not isinstance(definition.product_spec, (FutureSpec, PerpetualSpec)):
+        definition = definition_at(self.ledger_service.catalog, event.instrument_id, event.timestamp)
+        if not isinstance(contract_spec(definition), (FutureSpec, PerpetualSpec)):
             raise ValueError("derivative lifecycle requires future or perpetual")
         position_asset = AssetId(f"POSITION:{event.instrument_id.value}")
         current = self.ledger_service.ledger.book_balance(event.account, LedgerBook.POSITION, position_asset)

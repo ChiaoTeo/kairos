@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from trading.domain.identity import InstitutionId
+
 import unittest
 from datetime import timedelta
 from decimal import Decimal
@@ -10,7 +12,6 @@ from trading.backtest.clock import BacktestClock
 from trading.backtest.fill import FillModelType, FixedCommissionModel, ListedOptionComboFillModel
 from trading.backtest.mock import make_mock_dataset
 from trading.backtest.portfolio import BacktestPortfolio
-from trading.catalog.service import InstrumentCatalog
 from trading.domain.execution import TradeSide
 from trading.domain.identity import AccountKey, AccountType, VenueId
 from trading.domain.intent import LegIntent, OpenStructureIntent
@@ -26,19 +27,17 @@ class BacktestModelTests(unittest.TestCase):
     def setUp(self) -> None:
         self.dataset = make_mock_dataset()
         self.first, self.second = self.dataset.slices[:2]
-        self.catalog = InstrumentCatalog()
-        for definition in self.dataset.definitions:
-            self.catalog.add(definition)
+        self.catalog = self.dataset.reference_catalog()
         by_strike = {
-            definition.product_spec.strike: definition.instrument_id
+            definition.contract_spec.strike: definition.instrument_id
             for definition in self.dataset.definitions
-            if isinstance(definition.product_spec, ListedOptionSpec)
+            if isinstance(definition.contract_spec, ListedOptionSpec)
         }
         self.short = by_strike[Decimal("6000")]
         self.long = by_strike[Decimal("5950")]
         self.legs = (LegIntent(self.short, TradeSide.SELL), LegIntent(self.long, TradeSide.BUY))
         self.intent = OpenStructureIntent("test", self.legs, 1, Decimal("0.50"), TimeInForce.DAY, "test")
-        self.account = AccountKey(VenueId("backtest"), "unit", AccountType.SECURITIES_MARGIN)
+        self.account = AccountKey(InstitutionId("backtest"), "unit", AccountType.SECURITIES_MARGIN)
 
     def test_models_serialize_and_order_state_machine_rejects_illegal_transition(self) -> None:
         self.assertEqual(from_primitive(to_primitive(self.intent), OpenStructureIntent), self.intent)

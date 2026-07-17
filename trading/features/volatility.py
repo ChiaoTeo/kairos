@@ -6,10 +6,21 @@ import math
 import statistics
 from pathlib import Path
 
-from trading.data.catalog import DataCatalog
-from trading.data.repository import CanonicalDatasetRepository
-from trading.data.capabilities import capabilities_payload
+from trading.data.client import ResearchDataClient
+from trading.data.models import QualityLevel
+from trading.data.products import (
+    BTC_DERIBIT_OPTION_TRADES, BTC_DERIBIT_TERM_SKEW_DAILY, BTC_DVOL_DAILY, BTC_IV_RV_DAILY,
+    BTC_OPTION_QUOTES_HOURLY, BTC_SPOT_DAILY, BTC_TERM_SKEW_HOURLY, capabilities_payload,
+)
+from trading.data.publishing import content_release_id, publish_release, release_path
 from trading.storage.data_lake import write_daily_dataset, write_intraday_dataset
+
+
+def _input(release):
+    if release.content_hash is None:
+        raise ValueError(f"feature input release {release.release_id!r} has no frozen content hash")
+    return {"release_id": release.release_id, "logical_key": str(release.product_key),
+            "content_hash": release.content_hash, "schema_version": release.schema_version}
 
 
 def build_iv_rv_panel(spot_rows, dvol_rows, lookback=30):
@@ -30,19 +41,21 @@ def build_iv_rv_panel(spot_rows, dvol_rows, lookback=30):
 
 class BtcIvRvFeatureBuilder:
     def __init__(self, root: str | Path = "data") -> None:
-        self.repository, self.catalog = CanonicalDatasetRepository(root), DataCatalog(root)
+        self.root, self.data = Path(root), ResearchDataClient(root)
 
     def build(self):
-        spot = self.repository.load_rows(DataCatalog.BTC_SPOT_DAILY.dataset_id)
-        dvol = self.repository.load_rows(DataCatalog.BTC_DVOL_DAILY.dataset_id)
+        spot_release = self.data.catalog.release(BTC_SPOT_DAILY.key)
+        dvol_release = self.data.catalog.release(BTC_DVOL_DAILY.key)
+        spot = self.data.load_rows(spot_release.release_id)
+        dvol = self.data.load_rows(dvol_release.release_id)
         rows = build_iv_rv_panel(spot, dvol)
-        inputs = [{"dataset_id": dataset_id, "dataset_sha256": self.repository.metadata(dataset_id)["manifest"]["dataset_sha256"]}
-                  for dataset_id in (DataCatalog.BTC_SPOT_DAILY.dataset_id, DataCatalog.BTC_DVOL_DAILY.dataset_id)]
-        lineage = {"lineage_version": 1, "dataset_id": DataCatalog.BTC_IV_RV_DAILY.dataset_id,
-                   "producer": {"name": "trading.features.volatility", "transform": "btc_iv_rv_features", "version": 1},
+        inputs = [_input(item) for item in (spot_release, dvol_release)]
+        release_id = content_release_id(BTC_IV_RV_DAILY, {"inputs": inputs, "rows": rows, "transform_version": 2})
+        lineage = {"lineage_version": 2, "dataset_id": release_id,
+                   "producer": {"name": "trading.features.volatility", "transform": "btc_iv_rv_features", "version": 2},
                    "inputs": inputs, "parameters": {"rv_lookback": "P30D", "annualization_days": 365},
                    "point_in_time_safe": True, "contains_forward_labels": False}
-        schema = {"schema_id": DataCatalog.BTC_IV_RV_DAILY.schema_id, "schema_version": 1, "time_boundary": "[period_start,period_end)",
+        schema = {"schema_id": BTC_IV_RV_DAILY.schema_id, "schema_version": 1, "time_boundary": "[period_start,period_end)",
                   "primary_key": ["period_start"], "point_in_time_safe": True, "contains_forward_labels": False,
                   "columns": {
                       "period_start": {"type": "datetime", "timezone": "UTC"}, "period_end": {"type": "datetime", "timezone": "UTC"},
@@ -51,25 +64,29 @@ class BtcIvRvFeatureBuilder:
                       "dvol_close": {"type": "number", "unit": "annualized_volatility_percent"},
                       "rv30": {"type": "number", "unit": "annualized_volatility_percent", "lookback": "P30D"},
                       "iv_rv_spread": {"type": "number", "unit": "volatility_points"}}}
-        return write_daily_dataset(self.catalog.path(DataCatalog.BTC_IV_RV_DAILY.dataset_id), rows,
-                                   dataset_id=DataCatalog.BTC_IV_RV_DAILY.dataset_id, schema=schema, lineage=lineage,
-                                   capabilities=capabilities_payload(DataCatalog.BTC_IV_RV_DAILY.dataset_id))
+        manifest = write_daily_dataset(self.root / release_path(BTC_IV_RV_DAILY, release_id), rows,
+                                       dataset_id=release_id, schema=schema, lineage=lineage,
+                                       capabilities=capabilities_payload(BTC_IV_RV_DAILY, release_id))
+        return publish_release(self.root, BTC_IV_RV_DAILY, release_id, manifest, provider="internal", venue=None,
+                               transform_id="btc_iv_rv_features", transform_version="2",
+                               quality_level=QualityLevel.RESEARCH)
 
 
 class BtcTermSkewFeatureBuilder:
     TARGETS = (7, 14, 30, 60, 90)
 
     def __init__(self, root: str | Path = "data") -> None:
-        self.repository, self.catalog = CanonicalDatasetRepository(root), DataCatalog(root)
+        self.root, self.data = Path(root), ResearchDataClient(root)
 
     def build(self):
-        quotes = self.repository.load_rows(DataCatalog.BTC_OPTION_QUOTES_HOURLY.dataset_id)
+        source_release = self.data.catalog.release(BTC_OPTION_QUOTES_HOURLY.key)
+        quotes = self.data.load_rows(source_release.release_id)
         rows = build_term_skew_panel(quotes, self.TARGETS)
-        source_manifest = self.repository.metadata(DataCatalog.BTC_OPTION_QUOTES_HOURLY.dataset_id)["manifest"]
-        lineage = {"lineage_version": 1, "dataset_id": DataCatalog.BTC_TERM_SKEW_HOURLY.dataset_id,
-                   "producer": {"name": "trading.features.volatility", "transform": "fixed_maturity_delta_skew", "version": 1},
-                   "inputs": [{"dataset_id": DataCatalog.BTC_OPTION_QUOTES_HOURLY.dataset_id,
-                               "dataset_sha256": source_manifest["dataset_sha256"]}],
+        inputs = [_input(source_release)]
+        release_id = content_release_id(BTC_TERM_SKEW_HOURLY, {"inputs": inputs, "rows": rows, "transform_version": 2})
+        lineage = {"lineage_version": 2, "dataset_id": release_id,
+                   "producer": {"name": "trading.features.volatility", "transform": "fixed_maturity_delta_skew", "version": 2},
+                   "inputs": inputs,
                    "parameters": {"target_dte": list(self.TARGETS), "delta_nodes": [0.10, 0.25, 0.50],
                                   "term_interpolation": "linear_total_variance", "extrapolation": "none",
                                   "iv_source": "binance_mark_iv", "delta_source": "binance_vendor_delta"},
@@ -80,29 +97,34 @@ class BtcTermSkewFeatureBuilder:
         for dte in self.TARGETS:
             for name in ("atm_iv", "put25_iv", "call25_iv", "put10_iv", "call10_iv", "put_skew25", "rr25", "bf25", "put_skew10", "rr10"):
                 columns[f"{name}_{dte}d"] = {"type": "nullable_number", "unit": "absolute_volatility"}
-        schema = {"schema_id": DataCatalog.BTC_TERM_SKEW_HOURLY.schema_id, "schema_version": 1,
+        schema = {"schema_id": BTC_TERM_SKEW_HOURLY.schema_id, "schema_version": 1,
                   "time_boundary": "[period_start,period_end)", "primary_key": ["period_start"],
                   "point_in_time_safe": True, "contains_forward_labels": False, "columns": columns}
-        return write_intraday_dataset(self.catalog.path(DataCatalog.BTC_TERM_SKEW_HOURLY.dataset_id), rows,
-            dataset_id=DataCatalog.BTC_TERM_SKEW_HOURLY.dataset_id, schema=schema, lineage=lineage, interval=timedelta(hours=1),
-            capabilities=capabilities_payload(DataCatalog.BTC_TERM_SKEW_HOURLY.dataset_id))
+        manifest = write_intraday_dataset(self.root / release_path(BTC_TERM_SKEW_HOURLY, release_id), rows,
+            dataset_id=release_id, schema=schema, lineage=lineage, interval=timedelta(hours=1),
+            capabilities=capabilities_payload(BTC_TERM_SKEW_HOURLY, release_id))
+        return publish_release(self.root, BTC_TERM_SKEW_HOURLY, release_id, manifest, provider="internal", venue=None,
+                               transform_id="fixed_maturity_delta_skew", transform_version="2",
+                               quality_level=QualityLevel.RESEARCH)
 
 
 class BtcDeribitTradeSkewFeatureBuilder:
     TARGETS = (7, 14, 30, 60, 90)
 
     def __init__(self, root: str | Path = "data") -> None:
-        self.repository, self.catalog = CanonicalDatasetRepository(root), DataCatalog(root)
+        self.root, self.data = Path(root), ResearchDataClient(root)
 
     def build(self):
-        stream = self.repository.iter_rows(DataCatalog.BTC_DERIBIT_OPTION_TRADES.dataset_id)
+        source_release = self.data.catalog.release(BTC_DERIBIT_OPTION_TRADES.key)
+        stream = self.data.iter_rows(source_release.release_id)
         rows = []
         for _, daily_trades in groupby(stream, key=lambda row: row["event_time"][:10]):
             rows.extend(build_deribit_trade_skew_panel(daily_trades, self.TARGETS))
-        source = self.repository.metadata(DataCatalog.BTC_DERIBIT_OPTION_TRADES.dataset_id)["manifest"]
-        lineage = {"lineage_version": 1, "dataset_id": DataCatalog.BTC_DERIBIT_TERM_SKEW_DAILY.dataset_id,
-            "producer": {"name": "trading.features.volatility", "transform": "deribit_trade_fixed_maturity_skew", "version": 1},
-            "inputs": [{"dataset_id": DataCatalog.BTC_DERIBIT_OPTION_TRADES.dataset_id, "dataset_sha256": source["dataset_sha256"]}],
+        inputs = [_input(source_release)]
+        release_id = content_release_id(BTC_DERIBIT_TERM_SKEW_DAILY, {"inputs": inputs, "rows": rows, "transform_version": 2})
+        lineage = {"lineage_version": 2, "dataset_id": release_id,
+            "producer": {"name": "trading.features.volatility", "transform": "deribit_trade_fixed_maturity_skew", "version": 2},
+            "inputs": inputs,
             "parameters": {"target_dte": list(self.TARGETS), "delta_nodes": [0.10, 0.25, 0.50],
                 "delta_model": "Black-76, zero rate, trade index as forward proxy", "maximum_delta_distance": 0.12,
                 "minimum_trades_per_node": 2, "node_estimator": "amount-weighted median", "term_interpolation": "linear_total_variance",
@@ -115,12 +137,15 @@ class BtcDeribitTradeSkewFeatureBuilder:
         for dte in self.TARGETS:
             for name in ("atm_iv", "put25_iv", "call25_iv", "put10_iv", "call10_iv", "put_skew25", "rr25", "bf25", "put_skew10", "rr10"):
                 columns[f"{name}_{dte}d"] = {"type": "nullable_number", "unit": "absolute_volatility"}
-        schema = {"schema_id": DataCatalog.BTC_DERIBIT_TERM_SKEW_DAILY.schema_id, "schema_version": 1,
+        schema = {"schema_id": BTC_DERIBIT_TERM_SKEW_DAILY.schema_id, "schema_version": 1,
                   "time_boundary": "[period_start,period_end)", "primary_key": ["period_start"],
                   "point_in_time_safe": True, "contains_forward_labels": False, "columns": columns}
-        return write_daily_dataset(self.catalog.path(DataCatalog.BTC_DERIBIT_TERM_SKEW_DAILY.dataset_id), rows,
-            dataset_id=DataCatalog.BTC_DERIBIT_TERM_SKEW_DAILY.dataset_id, schema=schema, lineage=lineage,
-            capabilities=capabilities_payload(DataCatalog.BTC_DERIBIT_TERM_SKEW_DAILY.dataset_id))
+        manifest = write_daily_dataset(self.root / release_path(BTC_DERIBIT_TERM_SKEW_DAILY, release_id), rows,
+            dataset_id=release_id, schema=schema, lineage=lineage,
+            capabilities=capabilities_payload(BTC_DERIBIT_TERM_SKEW_DAILY, release_id))
+        return publish_release(self.root, BTC_DERIBIT_TERM_SKEW_DAILY, release_id, manifest,
+                               provider="internal", venue=None, transform_id="deribit_trade_fixed_maturity_skew",
+                               transform_version="2", quality_level=QualityLevel.RESEARCH)
 
 
 def build_deribit_trade_skew_panel(trades, target_dtes=(7, 14, 30, 60, 90)):

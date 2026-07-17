@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from trading.domain.identity import InstitutionId
+
 import os
 import unittest
 
@@ -36,7 +38,7 @@ class IbkrIntegrationTests(unittest.TestCase):
         try:
             session.connect()
             account_id = os.getenv("IBKR_ACCOUNT") or session.ib.managedAccounts()[0]
-            account = AccountKey(VenueId("ibkr"), account_id, AccountType.SECURITIES_MARGIN)
+            account = AccountKey(InstitutionId("ibkr"), account_id, AccountType.SECURITIES_MARGIN)
             state = IbkrAccountAdapter(session, Environment.PAPER).account_state(account)
             self.assertEqual(state.account, account)
         finally:

@@ -4,3 +4,5 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 /data
+/example-output/
+.ipynb_checkpoints/

@@ -12,6 +12,8 @@ from trading.domain.corporate_action import (
 from trading.domain.execution import DividendPayment
 from trading.domain.identity import AccountKey, AssetId
 from trading.domain.ledger import LedgerBook, LedgerEntryType
+from trading.reference import ReferenceCatalog
+from trading.reference.access import definition_at
 
 
 class CorporateActionService:
@@ -19,20 +21,24 @@ class CorporateActionService:
         self.ledger_service = ledger_service
 
     def apply_split(self, account: AccountKey, event: SplitEvent) -> None:
+        transaction = self.build_split(account, event)
+        if transaction is not None:
+            self.ledger_service.ledger.post(transaction)
+
+    def build_split(self, account: AccountKey, event: SplitEvent):
         if event.ratio <= 0 or event.ratio == 1:
             raise ValueError("split ratio must be positive and not one")
         position_asset = AssetId(f"POSITION:{event.instrument_id.value}")
         current = self.ledger_service.ledger.book_balance(account, LedgerBook.POSITION, position_asset)
         if current == 0:
-            return
+            return None
         delta = current * event.ratio - current
         namespace = f"corporate-action:{event.action_id}"
-        transaction = self.ledger_service._transaction(
+        return self.ledger_service._transaction(
             namespace, event.effective_at, str(event.action_id),
             ((account, LedgerBook.POSITION, position_asset, delta, LedgerEntryType.CORPORATE_ACTION, event.instrument_id, None, event.ratio),
              (account, LedgerBook.CLEARING, position_asset, -delta, LedgerEntryType.CORPORATE_ACTION, event.instrument_id, None, event.ratio)),
         )
-        self.ledger_service.ledger.post(transaction)
 
     def apply_dividend(self, account: AccountKey, event: CashDividendEvent) -> None:
         position_asset = AssetId(f"POSITION:{event.instrument_id.value}")
@@ -54,6 +60,11 @@ class CorporateActionService:
         ))
 
     def apply_exchange(self, account: AccountKey, event: InstrumentExchangeEvent) -> None:
+        transaction = self.build_exchange(account, event)
+        if transaction is not None:
+            self.ledger_service.ledger.post(transaction)
+
+    def build_exchange(self, account: AccountKey, event: InstrumentExchangeEvent):
         if event.action_type not in {CorporateActionType.MERGER, CorporateActionType.SPINOFF}:
             raise ValueError("instrument exchange must be a merger or spinoff")
         if event.target_shares_per_source_share <= 0:
@@ -62,7 +73,7 @@ class CorporateActionService:
         target_asset = AssetId(f"POSITION:{event.target_instrument_id.value}")
         source_quantity = self.ledger_service.ledger.book_balance(account, LedgerBook.POSITION, source_asset)
         if source_quantity <= 0:
-            return
+            return None
         target_quantity = source_quantity * event.target_shares_per_source_share
         source_delta = -source_quantity if event.action_type is CorporateActionType.MERGER else Decimal("0")
         items = []
@@ -75,19 +86,17 @@ class CorporateActionService:
             (account, LedgerBook.POSITION, target_asset, target_quantity, LedgerEntryType.CORPORATE_ACTION, event.target_instrument_id, None, None),
             (account, LedgerBook.CLEARING, target_asset, -target_quantity, LedgerEntryType.CORPORATE_ACTION, event.target_instrument_id, None, None),
         ))
-        transaction = self.ledger_service._transaction(
+        return self.ledger_service._transaction(
             f"corporate-action:{event.action_id}", event.effective_at, str(event.action_id), tuple(items),
         )
-        self.ledger_service.ledger.post(transaction)
 
     def apply_symbol_change(self, event: SymbolChangeEvent) -> None:
-        current = self.ledger_service.catalog.get(event.instrument_id, event.effective_at)
-        replacement = replace(
-            current, symbol=event.new_symbol, effective_from=event.effective_at, effective_to=None,
-            listings=tuple(replace(item, symbol=event.new_external_symbol, listed_at=event.effective_at, delisted_at=None) for item in current.listings),
-            schema_version=current.schema_version + 1,
-        )
-        self.ledger_service.catalog.supersede(replacement, event.effective_at)
+        current = definition_at(self.ledger_service.catalog, event.instrument_id, event.effective_at)
+        catalog = self.ledger_service.catalog
+        catalog.instruments.supersede(replace(current, display_name=event.new_symbol, effective_from=event.effective_at, effective_to=None), event.effective_at)
+        for listing in catalog.active_listings(event.instrument_id, event.effective_at):
+            catalog.listings.supersede(replace(listing, trading_symbol=event.new_external_symbol, effective_from=event.effective_at, effective_to=None), event.effective_at)
 
     def apply_delisting(self, event: DelistingEvent) -> None:
-        self.ledger_service.catalog.end_listing(event.instrument_id, event.effective_at)
+        for listing in self.ledger_service.catalog.active_listings(event.instrument_id, event.effective_at):
+            self.ledger_service.catalog.listings.end(listing.listing_id, event.effective_at)

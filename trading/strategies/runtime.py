@@ -6,8 +6,9 @@ from decimal import Decimal
 import hashlib
 import json
 
-from trading.domain.strategy import Strategy, StrategyContext
 from trading.domain.strategy_contract import EconomicIntent, StrategySpec
+
+from .base import Strategy, StrategyContext
 
 
 class GovernedStrategyRuntime:

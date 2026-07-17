@@ -8,7 +8,6 @@ from random import Random
 import pandas as pd
 
 from trading.backtest.feed import HistoricalDataset
-from trading.catalog.service import InstrumentCatalog
 from trading.domain.product import ListedOptionSpec, OptionRight
 from trading.pricing import ValuationService
 from trading.research.data_store import CollectionManifest
@@ -144,9 +143,7 @@ def build_panel(dataset: HistoricalDataset, config: ResearchConfig = ResearchCon
     Contract selection and internal valuation use only the current slice. Forward
     labels are attached in a separate pass and are never used to form the signal.
     """
-    catalog = InstrumentCatalog()
-    for definition in dataset.definitions:
-        catalog.add(definition)
+    catalog = dataset.reference_catalog()
     valuation_service = ValuationService(
         catalog,
         max_quote_age_seconds=Decimal(str(max(5, dataset.manifest.sampling_seconds))),
@@ -157,8 +154,8 @@ def build_panel(dataset: HistoricalDataset, config: ResearchConfig = ResearchCon
         references = dict(market.reference_prices)
         candidates_by_expiry: dict[object, list] = {}
         for item in valuation.instruments:
-            definition = catalog.get(item.instrument_id, market.timestamp)
-            spec = definition.product_spec
+            definition = catalog.instruments.get(item.instrument_id, market.timestamp)
+            spec = definition.contract_spec
             if not isinstance(spec, ListedOptionSpec) or spec.right is not OptionRight.PUT or item.pricing is None or item.implied_vol.volatility is None:
                 continue
             dte = (spec.expiry.date() - market.timestamp.date()).days

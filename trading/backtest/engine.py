@@ -1,16 +1,17 @@
 from __future__ import annotations
 
+from trading.domain.identity import InstitutionId
+
 from dataclasses import replace
 from decimal import Decimal
 import json
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from trading.catalog.service import InstrumentCatalog
+from trading.reference.access import contract_spec, definition_at
 from trading.domain.execution import TradeSide
-from trading.domain.identity import AccountKey, AccountType, VenueId
+from trading.domain.identity import AccountKey, AccountType, AssetId, VenueId
 from trading.domain.intent import CloseStructureIntent, LegIntent
 from trading.domain.order import Fill, Order, OrderStatus, TimeInForce
-from trading.domain.strategy import Strategy, StrategyContext
 from trading.pricing.service import ValuationService
 from trading.research.features import FeatureEngine, build_features
 from trading.risk.engine import RiskDecisionType, RiskEngine
@@ -18,10 +19,11 @@ from trading.risk.limits import RiskLimits
 from trading.risk.analytics import historical_var_es
 from trading.risk.scenarios import RevaluationPosition, ScenarioEngine, standard_scenario_grid
 from trading.storage.codec import to_primitive
+from trading.strategies.base import Strategy, StrategyContext
 
 from .clock import BacktestClock
 from .execution import ExecutionPlanner
-from .feed import HistoricalDataset, HistoricalFeed, MarketSlice
+from .feed import HistoricalDataset, HistoricalFeed, MarketSlice, MarketSliceFeed
 from .fill import FillModelType, FixedCommissionModel, ListedOptionComboFillModel
 from .metrics import calculate_metrics
 from .portfolio import BacktestPortfolio
@@ -40,8 +42,10 @@ class DeterministicIds:
 
 
 class BacktestEngine:
-    def __init__(self, dataset: HistoricalDataset, config: BacktestConfig, strategy: Strategy, risk_limits: RiskLimits = RiskLimits()) -> None:
-        self.dataset = dataset
+    def __init__(self, dataset: HistoricalDataset | MarketSliceFeed, config: BacktestConfig, strategy: Strategy,
+                 risk_limits: RiskLimits = RiskLimits()) -> None:
+        self.feed = dataset if isinstance(dataset, HistoricalFeed) or hasattr(dataset, "between") else HistoricalFeed(dataset)
+        self.dataset = dataset.dataset if hasattr(dataset, "dataset") else dataset
         self.config = config
         self.strategy = strategy
         self.risk_limits = risk_limits
@@ -57,16 +61,14 @@ class BacktestEngine:
         }, sort_keys=True)
         run_id = uuid5(NAMESPACE_URL, run_material)
         ids = DeterministicIds(str(run_id))
-        catalog = InstrumentCatalog()
-        for definition in self.dataset.definitions:
-            catalog.add(definition)
+        catalog = self.dataset.reference_catalog()
         planner = ExecutionPlanner(catalog, id_factory=ids.next)
         commission = FixedCommissionModel(self.config.commission_per_contract, Decimal("1"), self.config.regulatory_fee_per_contract)
         fill_model = ListedOptionComboFillModel(FillModelType(self.config.fill_model), commission, catalog, id_factory=ids.next)
         risk = RiskEngine(self.risk_limits, catalog, ids.next)
         valuation_service = ValuationService(catalog)
         feature_engine = FeatureEngine()
-        account = AccountKey(VenueId("backtest"), str(run_id), AccountType.SECURITIES_MARGIN)
+        account = AccountKey(InstitutionId("backtest"), str(run_id), AccountType.SECURITIES_MARGIN)
         portfolio = BacktestPortfolio(self.config.initial_cash, catalog, account)
         clock = BacktestClock()
         orders: dict[UUID, Order] = {}
@@ -79,8 +81,7 @@ class BacktestEngine:
         scenario_pnls = []
         valuation_total = valuation_success = surface_total = surface_calibrated = surface_arbitrage_passed = 0
         vendor_internal_delta_errors = []
-        feed = HistoricalFeed(self.dataset)
-        for market in feed.between(self.config.start, self.config.end):
+        for market in self.feed.between(self.config.start, self.config.end):
             clock.advance(market.timestamp)
             market, valuation = valuation_service.value(market)
             features = feature_engine.update(valuation)
@@ -261,8 +262,9 @@ class BacktestEngine:
         cash = initial_cash
         for fill in fills:
             for leg in fill.legs:
-                definition = catalog.get(leg.instrument_id, fill.timestamp)
-                multiplier = getattr(definition.product_spec, "multiplier", getattr(definition.product_spec, "contract_size", Decimal("1")))
+                definition = definition_at(catalog, leg.instrument_id, fill.timestamp)
+                spec = contract_spec(definition)
+                multiplier = getattr(spec, "multiplier", getattr(spec, "contract_size", Decimal("1")))
                 signed_quantity = leg.side.sign * leg.ratio * fill.quantity
                 cash -= Decimal(signed_quantity) * leg.price * multiplier
             cash -= fill.commission
@@ -279,8 +281,9 @@ class BacktestEngine:
             item = valuation.get(instrument_id)
             if item is None or item.pricing is None:
                 continue
-            definition = catalog.get(instrument_id, at)
-            multiplier = getattr(definition.product_spec, "multiplier", getattr(definition.product_spec, "contract_size", Decimal("1")))
+            definition = definition_at(catalog, instrument_id, at)
+            spec = contract_spec(definition)
+            multiplier = getattr(spec, "multiplier", getattr(spec, "contract_size", Decimal("1")))
             structure_id = next((str(structure.structure_id) for structure in portfolio.structures.values() if any(leg_id == instrument_id for leg_id, _ in structure.legs)), None)
             positions.append(RevaluationPosition(
                 instrument_id, position.quantity, multiplier, item.inputs, item.model,

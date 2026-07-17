@@ -5,12 +5,12 @@ import unittest
 from datetime import datetime, time, timezone
 from decimal import Decimal
 
-from trading.catalog.repository import CatalogRepository
-from trading.catalog.service import InstrumentCatalog
 from trading.domain.capability import ExecutionCapabilities, MarketDataCapabilities, MarketDataKind, OrderType, ReferenceCapabilities
 from trading.domain.identity import Amount, AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, VenueListing
 from trading.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from trading.reference import ReferenceCatalog
+from trading.reference.repository import ReferenceCatalogRepository
+from tests.reference_support import publish_test_instrument
 
 
 class MultiAssetDomainTests(unittest.TestCase):
@@ -33,42 +33,39 @@ class MultiAssetDomainTests(unittest.TestCase):
 
     def test_spxw_option_is_explicit_european_cash_settlement(self) -> None:
         expiry = datetime(2026, 7, 16, 16, tzinfo=timezone.utc)
-        definition = InstrumentDefinition(
-            InstrumentId("option:spxw:20260716:6300:c"), ProductType.LISTED_OPTION, "SPXW",
-            None, AssetId("USD"),
+        catalog = ReferenceCatalog()
+        definition = publish_test_instrument(
+            catalog, InstrumentId("option:spxw:20260716:6300:c"), ProductType.LISTED_OPTION, "SPXW",
             ListedOptionSpec(
                 InstrumentId("index:spx"), expiry, Decimal("6300"), OptionRight.CALL,
                 ExerciseStyle.EUROPEAN, SettlementType.CASH, SettlementSession.PM,
                 Decimal("100"), expiry,
             ),
-            (VenueListing(VenueId("ibkr"), "42", "SPXW  260716C06300000", Decimal("0.05"), Decimal("1"), Decimal("1")),),
-            datetime(2025, 1, 1, tzinfo=timezone.utc),
+            AssetId("USD"), VenueId("ibkr"), "SPXW  260716C06300000", datetime(2025, 1, 1, tzinfo=timezone.utc),
+            price_increment=Decimal("0.05"),
         )
-        self.assertEqual(definition.product_type, ProductType.LISTED_OPTION)
-        self.assertIsInstance(definition.product_spec, ListedOptionSpec)
-        self.assertEqual(definition.product_spec.exercise_style, ExerciseStyle.EUROPEAN)
-        self.assertEqual(definition.product_spec.settlement_type, SettlementType.CASH)
-        self.assertEqual(definition.listing(VenueId("ibkr")).external_id, "42")
+        self.assertEqual(definition.instrument_type, ProductType.LISTED_OPTION)
+        self.assertIsInstance(definition.contract_spec, ListedOptionSpec)
+        self.assertEqual(definition.contract_spec.exercise_style, ExerciseStyle.EUROPEAN)
+        self.assertEqual(definition.contract_spec.settlement_type, SettlementType.CASH)
+        self.assertEqual(catalog.active_listings(definition.instrument_id, expiry)[0].trading_symbol, "SPXW  260716C06300000")
 
     def test_catalog_is_time_versioned_and_round_trips(self) -> None:
-        first = InstrumentDefinition(
-            InstrumentId("index:spx"), ProductType.INDEX, "SPX", None, AssetId("USD"),
-            IndexSpec(AssetId("USD")),
-            (VenueListing(VenueId("ibkr"), "1", "SPX", Decimal("0.01"), Decimal("1"), Decimal("1")),),
-            datetime(1970, 1, 1, tzinfo=timezone.utc),
+        catalog = ReferenceCatalog()
+        first = publish_test_instrument(
+            catalog, InstrumentId("index:spx"), ProductType.INDEX, "SPX", IndexSpec(AssetId("USD")),
+            AssetId("USD"), VenueId("ibkr"), "SPX", datetime(1970, 1, 1, tzinfo=timezone.utc),
         )
-        catalog = InstrumentCatalog()
-        catalog.add(first)
         at = datetime(2025, 1, 1, tzinfo=timezone.utc)
-        self.assertEqual(catalog.get(first.instrument_id, at), first)
-        self.assertEqual(catalog.resolve(VenueId("ibkr"), "1", at), first)
-        with self.assertRaises(ValueError):
-            catalog.add(first)
+        self.assertEqual(catalog.instruments.get(first.instrument_id, at), first)
+        self.assertEqual(catalog.active_listings(first.instrument_id, at)[0].trading_symbol, "SPX")
+        catalog.instruments.add(first)
+        self.assertEqual(catalog.instruments.values(), (first,))
         with tempfile.TemporaryDirectory() as directory:
-            repository = CatalogRepository(f"{directory}/catalog.json")
+            repository = ReferenceCatalogRepository(f"{directory}/catalog.json")
             repository.save(catalog)
             loaded = repository.load()
-            self.assertEqual(loaded.definitions(), catalog.definitions())
+            self.assertEqual(loaded.instruments.values(), catalog.instruments.values())
 
 
 if __name__ == "__main__":

@@ -6,20 +6,24 @@ from decimal import Decimal
 import hashlib
 import hmac
 import json
+from pathlib import Path
+from threading import Event, Lock
 from time import monotonic, sleep, time
 from typing import Any, Protocol
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from uuid import NAMESPACE_URL, uuid5
 
-from trading.adapters.base import AccountState, Environment, OrderAck, OrderRequest, ReferenceDataRequest, VenueBalance
+from trading.adapters.base import (
+    AccountState, Environment, OrderAck, OrderRequest, RecoveredExecution, ReferenceDataRequest,
+    VenueBalance, VenueOrderRecovery, VenueOrderStatus,
+)
 from trading.domain.capability import (
     ExecutionCapabilities, MarketDataCapabilities, MarketDataKind, MarginMode,
     OrderType, PositionMode, ReferenceCapabilities,
 )
-from trading.domain.execution import FundingPayment
-from trading.domain.identity import AccountKey, AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, VenueListing
+from trading.domain.execution import FundingPayment, TradeExecution, TradeSide
+from trading.domain.identity import AccountKey, AssetId, InstitutionId, InstrumentId, VenueId
 from trading.domain.market_data import (
     DerivativeMarketState, OrderBookDelta, OrderBookLevel, Quote, Trade,
 )
@@ -27,6 +31,11 @@ from trading.domain.product import (
     ContractType, CryptoOptionSpec, CryptoSpotSpec, ExerciseStyle, OptionRight,
     FutureSpec, PerpetualSpec, ProductType,
 )
+from trading.reference import (
+    AssetDefinition, AssetType, InstrumentDefinition, ListingDefinition, ListingId,
+    ReferenceCatalog, TradingRules, VenueDefinition, VenueType,
+)
+from trading.reference.factory import publish_instrument
 
 
 BINANCE_SPOT_REFERENCE_CAPABILITIES = ReferenceCapabilities(
@@ -85,6 +94,7 @@ _BINANCE_MARKET_DATA_CAPABILITIES = {
 class UserFillUpdate:
     execution_id: str
     order_id: str
+    client_order_id: str
     account: AccountKey
     instrument_id: InstrumentId
     side: str
@@ -214,14 +224,18 @@ class BinanceSpotReferenceAdapter:
     def __init__(self, transport: BinanceTransport, limiter: RateLimiter | None = None) -> None:
         self.transport, self.limiter = transport, limiter or RateLimiter(1200, 60)
 
-    def sync(self, request: ReferenceDataRequest) -> tuple[InstrumentDefinition, ...]:
+    def sync(self, request: ReferenceDataRequest) -> ReferenceCatalog:
         if request.product_type is not ProductType.CRYPTO_SPOT:
             raise ValueError("Binance spot reference adapter requires crypto_spot request")
         symbols = request.symbols
         self.limiter.acquire()
         data = self.transport.request("GET", "/api/v3/exchangeInfo")
         wanted = set(symbols)
-        return tuple(_spot_definition(item) for item in data["symbols"] if item["symbol"] in wanted and item.get("status") == "TRADING")
+        catalog = ReferenceCatalog()
+        for item in data["symbols"]:
+            if item["symbol"] in wanted and item.get("status") == "TRADING":
+                _spot_definition(catalog, item)
+        return catalog
 
 
 class BinanceFuturesReferenceAdapter:
@@ -231,7 +245,7 @@ class BinanceFuturesReferenceAdapter:
     def __init__(self, transport: BinanceTransport, *, inverse: bool = False, limiter: RateLimiter | None = None) -> None:
         self.transport, self.inverse, self.limiter = transport, inverse, limiter or RateLimiter(1200, 60)
 
-    def sync(self, request: ReferenceDataRequest) -> tuple[InstrumentDefinition, ...]:
+    def sync(self, request: ReferenceDataRequest) -> ReferenceCatalog:
         if request.product_type not in {ProductType.PERPETUAL, ProductType.FUTURE}:
             raise ValueError("Binance futures reference adapter requires future/perpetual request")
         symbols = request.symbols
@@ -240,9 +254,16 @@ class BinanceFuturesReferenceAdapter:
         data = self.transport.request("GET", path)
         wanted = set(symbols)
         rows = [item for item in data["symbols"] if item["symbol"] in wanted]
+        catalog = ReferenceCatalog()
         if request.product_type is ProductType.PERPETUAL:
-            return tuple(_perpetual_definition(item, inverse=self.inverse) for item in rows if item.get("contractType") == "PERPETUAL")
-        return tuple(_future_definition(item, inverse=self.inverse) for item in rows if item.get("contractType") != "PERPETUAL")
+            for item in rows:
+                if item.get("contractType") == "PERPETUAL":
+                    _perpetual_definition(catalog, item, inverse=self.inverse)
+        else:
+            for item in rows:
+                if item.get("contractType") != "PERPETUAL":
+                    _future_definition(catalog, item, inverse=self.inverse)
+        return catalog
 
 
 class BinanceOptionsReferenceAdapter:
@@ -252,14 +273,18 @@ class BinanceOptionsReferenceAdapter:
     def __init__(self, transport: BinanceTransport, limiter: RateLimiter | None = None) -> None:
         self.transport, self.limiter = transport, limiter or RateLimiter(1200, 60)
 
-    def sync(self, request: ReferenceDataRequest) -> tuple[InstrumentDefinition, ...]:
+    def sync(self, request: ReferenceDataRequest) -> ReferenceCatalog:
         if request.product_type is not ProductType.CRYPTO_OPTION:
             raise ValueError("Binance options reference adapter requires crypto_option request")
         symbols = request.symbols
         self.limiter.acquire()
         data = self.transport.request("GET", "/eapi/v1/exchangeInfo")
         wanted = set(symbols)
-        return tuple(_option_definition(item) for item in data.get("optionSymbols", []) if item["symbol"] in wanted)
+        catalog = ReferenceCatalog()
+        for item in data.get("optionSymbols", []):
+            if item["symbol"] in wanted:
+                _option_definition(catalog, item)
+        return catalog
 
 
 class BinanceMarketDataAdapter:
@@ -287,14 +312,14 @@ class BinanceMarketDataAdapter:
         now = datetime.now(timezone.utc)
         result = []
         for definition in instruments:
-            self.capabilities.require_product(definition.product_type)
-            listing = definition.listing(self.venue_id)
-            row = by_symbol[listing.symbol]
+            self.capabilities.require_product(definition.instrument_type)
+            row = by_symbol[definition.display_name]
             result.append(Quote(definition.instrument_id, _decimal(row.get("bidPrice")), _decimal(row.get("askPrice")), _decimal(row.get("bidQty")), _decimal(row.get("askQty")), now))
         return tuple(result)
 
 
 class BinanceExecutionAdapter:
+    institution_id = InstitutionId("binance")
     venue_id = VenueId("binance")
 
     def __init__(self, transport: BinanceTransport, signer: BinanceSigner, environment: Environment, *, futures: bool = False, inverse: bool = False, limiter: RateLimiter | None = None, instrument_symbols: dict[InstrumentId, str] | None = None) -> None:
@@ -368,6 +393,37 @@ class BinanceExecutionAdapter:
         rows = self.transport.request("GET", self._path("/openOrders"), signed, headers)
         return tuple(str(item["orderId"]) for item in rows)
 
+    def recover_order(self, account, request, venue_order_id=None):
+        if not isinstance(request, OrderRequest):
+            raise ValueError("Binance does not support native combo order recovery")
+        symbol = self._symbol(request.instrument_id)
+        params = {"symbol": symbol}
+        if venue_order_id is not None:
+            params["orderId"] = venue_order_id
+        else:
+            params["origClientOrderId"] = request.client_order_id
+        signed, headers = self.signer.signed(params)
+        self.limiter.acquire()
+        row = self.transport.request("GET", self._path("/order"), signed, headers)
+        status = _binance_order_status(str(row.get("status", "UNKNOWN")))
+        ack = _binance_recovery_ack(request, row)
+        executions = ()
+        if status in {VenueOrderStatus.PARTIALLY_FILLED, VenueOrderStatus.FILLED}:
+            trade_params = {"symbol": symbol, "orderId": str(row["orderId"])}
+            signed_trades, trade_headers = self.signer.signed(trade_params)
+            self.limiter.acquire()
+            trades = self.transport.request("GET", self._path("/userTrades") if self.futures else "/api/v3/myTrades", signed_trades, trade_headers)
+            executions = _binance_recovered_executions(
+                trades, account, request, status, "futures" if self.futures else "spot",
+            )
+        self._order_symbols[str(row["orderId"])] = symbol
+        return VenueOrderRecovery(
+            status,
+            f"Binance REST order query status={row.get('status')} orderId={row.get('orderId')}",
+            acknowledgement=ack,
+            executions=executions,
+        )
+
     def set_leverage(self, symbol: str, leverage: int) -> None:
         if not self.futures or not 1 <= leverage <= 125:
             raise ValueError("futures leverage must be between 1 and 125")
@@ -400,6 +456,7 @@ class BinanceExecutionAdapter:
 
 
 class BinanceOptionsExecutionAdapter:
+    institution_id = InstitutionId("binance")
     venue_id = VenueId("binance")
     capabilities = BINANCE_OPTIONS_EXECUTION_CAPABILITIES
 
@@ -450,6 +507,35 @@ class BinanceOptionsExecutionAdapter:
         rows = self.transport.request("GET", "/eapi/v1/openOrders", signed, headers)
         return tuple(str(item["orderId"]) for item in rows)
 
+    def recover_order(self, account, request, venue_order_id=None):
+        if not isinstance(request, OrderRequest):
+            raise ValueError("Binance options do not support native combo order recovery")
+        symbol = self._symbol(request.instrument_id)
+        params = {"symbol": symbol}
+        if venue_order_id is not None:
+            params["orderId"] = venue_order_id
+        else:
+            params["clientOrderId"] = request.client_order_id
+        signed, headers = self.signer.signed(params)
+        self.limiter.acquire()
+        row = self.transport.request("GET", "/eapi/v1/order", signed, headers)
+        status = _binance_order_status(str(row.get("status", "UNKNOWN")))
+        ack = _binance_recovery_ack(request, row)
+        executions = ()
+        if status in {VenueOrderStatus.PARTIALLY_FILLED, VenueOrderStatus.FILLED}:
+            trade_params = {"symbol": symbol, "orderId": str(row["orderId"])}
+            signed_trades, trade_headers = self.signer.signed(trade_params)
+            self.limiter.acquire()
+            trades = self.transport.request("GET", "/eapi/v1/userTrades", signed_trades, trade_headers)
+            executions = _binance_recovered_executions(trades, account, request, status, "options")
+        self._order_symbols[str(row["orderId"])] = symbol
+        return VenueOrderRecovery(
+            status,
+            f"Binance Options REST order query status={row.get('status')} orderId={row.get('orderId')}",
+            acknowledgement=ack,
+            executions=executions,
+        )
+
     def _symbol(self, instrument_id: InstrumentId) -> str:
         try:
             return self.instrument_symbols[instrument_id]
@@ -457,7 +543,93 @@ class BinanceOptionsExecutionAdapter:
             raise LookupError(f"Binance options symbol mapping unavailable for {instrument_id}") from error
 
 
+def _binance_order_status(value: str) -> VenueOrderStatus:
+    normalized = value.upper()
+    if normalized in {"NEW", "PENDING_NEW", "ACCEPTED"}:
+        return VenueOrderStatus.ACKNOWLEDGED
+    if normalized == "PARTIALLY_FILLED":
+        return VenueOrderStatus.PARTIALLY_FILLED
+    if normalized == "FILLED":
+        return VenueOrderStatus.FILLED
+    if normalized in {"CANCELED", "CANCELLED", "PENDING_CANCEL"}:
+        return VenueOrderStatus.CANCELLED
+    if normalized in {"EXPIRED", "EXPIRED_IN_MATCH"}:
+        return VenueOrderStatus.EXPIRED
+    if normalized in {"REJECTED", "FAILED"}:
+        return VenueOrderStatus.REJECTED
+    return VenueOrderStatus.UNKNOWN
+
+
+def _binance_recovery_ack(request: OrderRequest, row: dict[str, Any]) -> OrderAck:
+    timestamp_ms = row.get("transactTime", row.get("time", row.get("updateTime")))
+    accepted_at = (
+        datetime.fromtimestamp(int(timestamp_ms) / 1000, timezone.utc)
+        if timestamp_ms is not None
+        else datetime.now(timezone.utc)
+    )
+    return OrderAck(
+        request.internal_order_id,
+        request.client_order_id,
+        request.strategy_id,
+        request.intent_id,
+        request.correlation_id,
+        str(row["orderId"]),
+        accepted_at,
+    )
+
+
+def _binance_recovered_executions(
+    rows: list[dict[str, Any]],
+    account: AccountKey,
+    request: OrderRequest,
+    status: VenueOrderStatus,
+    product: str,
+) -> tuple[RecoveredExecution, ...]:
+    ordered = sorted(rows, key=lambda row: (int(row.get("time", 0)), str(row.get("id", row.get("tradeId", "")))))
+    recovered = []
+    for index, row in enumerate(ordered):
+        trade_id = str(row.get("id", row.get("tradeId")))
+        if not trade_id or trade_id == "None":
+            raise ValueError("Binance recovered trade is missing a stable trade id")
+        quantity = Decimal(str(row.get("qty", row.get("quantity", row.get("executedQty", "0")))))
+        price = Decimal(str(row.get("price", "0")))
+        if quantity <= 0 or price <= 0:
+            raise ValueError("Binance recovered trade requires positive quantity and price")
+        side_value = row.get("side")
+        side = (
+            TradeSide(str(side_value).lower())
+            if side_value is not None
+            else TradeSide.BUY if bool(row.get("isBuyer")) else TradeSide.SELL
+        )
+        event_ms = int(row.get("time", row.get("updateTime", 0)))
+        if event_ms <= 0:
+            raise ValueError("Binance recovered trade requires an event time")
+        fee_asset = AssetId(str(row.get("commissionAsset", row.get("feeAsset", "UNKNOWN"))))
+        fee = Decimal(str(row.get("commission", row.get("fee", "0"))))
+        execution = TradeExecution(
+            uuid5(NAMESPACE_URL, f"binance:{product}:trade:{trade_id}"),
+            datetime.fromtimestamp(event_ms / 1000, timezone.utc),
+            account,
+            request.instrument_id,
+            side,
+            quantity,
+            price,
+            fee_asset,
+            fee,
+            request.client_order_id,
+        )
+        recovered.append(RecoveredExecution(
+            f"binance:{product}:trade:{trade_id}",
+            execution,
+            status is VenueOrderStatus.FILLED and index == len(ordered) - 1,
+            f"binance:{product}:fills:{account.value}",
+            f"{event_ms}:{trade_id}",
+        ))
+    return tuple(recovered)
+
+
 class BinanceAccountAdapter:
+    institution_id = InstitutionId("binance")
     venue_id = VenueId("binance")
 
     def __init__(self, transport: BinanceTransport, signer: BinanceSigner, environment: Environment, *, futures: bool = False, inverse: bool = False, limiter: RateLimiter | None = None, instrument_lookup: dict[str, InstrumentId] | None = None) -> None:
@@ -495,6 +667,7 @@ class BinanceAccountAdapter:
 
 
 class BinanceOptionsAccountAdapter:
+    institution_id = InstitutionId("binance")
     venue_id = VenueId("binance")
 
     def __init__(self, transport: BinanceTransport, signer: BinanceSigner, environment: Environment, limiter: RateLimiter | None = None, instrument_lookup: dict[str, InstrumentId] | None = None) -> None:
@@ -534,17 +707,29 @@ class BinanceOptionsAccountAdapter:
         )
 
 
-def websocket_url(environment: Environment, stream: str, *, futures: bool = False) -> str:
+def websocket_url(environment: Environment, stream: str, *, futures: bool = False,
+                  public_only: bool = False) -> str:
     if futures:
         host = "wss://stream.binancefuture.com/ws" if environment is Environment.TESTNET else "wss://fstream.binance.com/ws"
     else:
-        host = "wss://testnet.binance.vision/ws" if environment is Environment.TESTNET else "wss://stream.binance.com:9443/ws"
+        # Binance supports both 9443 and standard TLS port 443. Prefer 443 because
+        # corporate and cloud egress policies commonly block the alternate port.
+        host = "wss://testnet.binance.vision/ws" if environment is Environment.TESTNET else (
+            "wss://data-stream.binance.vision/ws" if public_only else "wss://stream.binance.com/ws"
+        )
     return f"{host}/{stream}"
 
 
 def parse_market_stream_event(row: dict[str, Any], instrument_lookup: dict[str, InstrumentId]):
     payload = row.get("data", row)
     event_type = payload.get("e")
+    if event_type is None:
+        if all(key in payload for key in ("b", "a", "B", "A")) and not isinstance(payload.get("b"), list):
+            event_type = "bookTicker"
+        elif all(key in payload for key in ("U", "u", "b", "a")):
+            event_type = "depthUpdate"
+        elif all(key in payload for key in ("p", "q", "t")):
+            event_type = "trade"
     symbol = payload.get("s") or payload.get("symbol")
     if symbol not in instrument_lookup:
         raise LookupError(f"unknown Binance stream symbol: {symbol}")
@@ -614,7 +799,8 @@ def parse_user_stream_event(row: dict[str, Any], account, instrument_lookup: dic
     if event_type == "executionReport" and row.get("x") == "TRADE":
         symbol = row["s"]
         return UserFillUpdate(
-            str(row["t"]), str(row["i"]), account, instrument_lookup[symbol], row["S"].lower(),
+            str(row["t"]), str(row["i"]), str(row.get("c") or row["i"]),
+            account, instrument_lookup[symbol], row["S"].lower(),
             Decimal(row["l"]), Decimal(row["L"]), Decimal(row["n"]), AssetId(row["N"]),
             datetime.fromtimestamp(row["E"] / 1000, timezone.utc),
         )
@@ -627,7 +813,8 @@ def parse_user_stream_event(row: dict[str, Any], account, instrument_lookup: dic
         order = row["o"]
         symbol = order["s"]
         return UserFillUpdate(
-            str(order["t"]), str(order["i"]), account, instrument_lookup[symbol], order["S"].lower(),
+            str(order["t"]), str(order["i"]), str(order.get("c") or order["i"]),
+            account, instrument_lookup[symbol], order["S"].lower(),
             Decimal(order["l"]), Decimal(order["L"]), Decimal(order.get("n", "0")),
             AssetId(order.get("N") or order.get("ma") or "USDT"),
             datetime.fromtimestamp(row["E"] / 1000, timezone.utc),
@@ -694,6 +881,7 @@ class BinanceRecoveryService:
             normalized = {
                 "e": "executionReport", "x": "TRADE", "s": row["symbol"],
                 "t": row.get("id") or row.get("tradeId"), "i": row.get("orderId"),
+                "c": row.get("clientOrderId") or row.get("origClientOrderId") or row.get("orderId"),
                 "S": "BUY" if row.get("isBuyer", row.get("side") == "BUY") else "SELL",
                 "l": row.get("qty") or row.get("executedQty"), "L": row.get("price"),
                 "n": row.get("commission", "0"), "N": row.get("commissionAsset") or row.get("quoteAsset") or "USDT",
@@ -746,25 +934,42 @@ class BinanceFundingAdapter:
 class BinanceStreamSession:
     """Injectable reconnecting stream loop; recovery callbacks perform REST backfill."""
 
-    def __init__(self, connector: WebSocketConnector, url: str, *, maximum_reconnects: int = 5) -> None:
+    def __init__(self, connector: WebSocketConnector, url: str, *, maximum_reconnects: int = 5,
+                 journal: str | Path | None = None) -> None:
         self.connector, self.url, self.maximum_reconnects = connector, url, maximum_reconnects
+        self.journal = Path(journal) if journal is not None else None
+        self._stop = Event()
+        self._connection = None
+        self._connection_lock = Lock()
 
-    def consume(self, handler, *, message_limit: int, on_reconnect=None) -> int:
-        if message_limit < 1:
+    def consume(self, handler, *, message_limit: int | None = None, on_reconnect=None) -> int:
+        if message_limit is not None and message_limit < 1:
             raise ValueError("message_limit must be positive")
+        self._stop.clear()
         received = reconnects = 0
         connection = None
         try:
-            while received < message_limit:
+            while not self._stop.is_set() and (message_limit is None or received < message_limit):
                 if connection is None:
                     connection = self.connector.connect(self.url)
+                    with self._connection_lock:
+                        self._connection = connection
                 try:
                     raw = connection.receive()
+                    if raw is None or raw == "":
+                        raise EOFError("Binance WebSocket closed")
+                    self._journal(raw)
                     handler(json.loads(raw) if isinstance(raw, str) else raw)
                     received += 1
-                except (ConnectionError, EOFError):
+                except Exception as error:
                     connection.close()
                     connection = None
+                    with self._connection_lock:
+                        self._connection = None
+                    if self._stop.is_set():
+                        break
+                    if not isinstance(error, (ConnectionError, EOFError)):
+                        raise
                     reconnects += 1
                     if reconnects > self.maximum_reconnects:
                         raise ConnectionError("Binance stream reconnect limit exceeded")
@@ -773,38 +978,72 @@ class BinanceStreamSession:
         finally:
             if connection is not None:
                 connection.close()
+            with self._connection_lock:
+                self._connection = None
         return received
 
+    def stop(self) -> None:
+        self._stop.set()
+        with self._connection_lock:
+            connection = self._connection
+        if connection is not None:
+            connection.close()
 
-def _spot_definition(row):
+    def _journal(self, raw: str | dict[str, Any]) -> None:
+        if self.journal is None:
+            return
+        self.journal.parent.mkdir(parents=True, exist_ok=True)
+        text = raw if isinstance(raw, str) else json.dumps(
+            raw, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
+        with self.journal.open("a", encoding="utf-8") as handle:
+            handle.write(text + "\n")
+
+
+def _spot_definition(catalog: ReferenceCatalog, row):
     filters = {item["filterType"]: item for item in row["filters"]}
     lot, price = filters["LOT_SIZE"], filters["PRICE_FILTER"]
     notional = filters.get("MIN_NOTIONAL", {}).get("minNotional")
     symbol = row["symbol"]
-    return InstrumentDefinition(
-        InstrumentId(f"crypto:binance:spot:{symbol}"), ProductType.CRYPTO_SPOT, symbol,
-        AssetId(row["baseAsset"]), AssetId(row["quoteAsset"]),
-        CryptoSpotSpec(AssetId(row["baseAsset"]), AssetId(row["quoteAsset"]), _decimal(notional)),
-        (VenueListing(VenueId("binance"), symbol, symbol, Decimal(price["tickSize"]), Decimal(lot["stepSize"]), Decimal(lot["minQty"]), _decimal(notional)),),
-        datetime.now(timezone.utc),
+    instrument_id = InstrumentId(f"crypto:binance:spot:{symbol}")
+    effective_from = datetime.now(timezone.utc)
+    return publish_instrument(
+        catalog, instrument_id=instrument_id, instrument_type=ProductType.CRYPTO_SPOT,
+        display_name=symbol,
+        contract_spec=CryptoSpotSpec(AssetId(row["baseAsset"]), AssetId(row["quoteAsset"]), _decimal(notional)),
+        trading_currency=AssetId(row["quoteAsset"]),
+        listings=(ListingDefinition(
+            ListingId(f"listing:binance:{instrument_id.value}:{symbol}"), instrument_id, VenueId("binance"), symbol,
+            AssetId(row["quoteAsset"]), TradingRules(
+                Decimal(price["tickSize"]), Decimal(lot["stepSize"]), Decimal(lot["minQty"]),
+                minimum_notional=_decimal(notional),
+            ), effective_from, venue_instrument_id=symbol,
+        ),), effective_from=effective_from,
+        **_binance_reference_facts(row["baseAsset"], row["quoteAsset"], at=effective_from),
     )
 
 
-def _perpetual_definition(row, inverse=False):
+def _perpetual_definition(catalog: ReferenceCatalog, row, inverse=False):
     filters = {item["filterType"]: item for item in row["filters"]}
     lot, price = filters["LOT_SIZE"], filters["PRICE_FILTER"]
     symbol = row["symbol"]
     settlement = row.get("marginAsset") or row.get("quoteAsset")
-    return InstrumentDefinition(
-        InstrumentId(f"crypto:binance:perpetual:{symbol}"), ProductType.PERPETUAL, symbol,
-        AssetId(row["baseAsset"]), AssetId(row["quoteAsset"]),
-        PerpetualSpec(AssetId(row["baseAsset"]), AssetId(settlement), row.get("pair", symbol), Decimal(row.get("contractSize", "1")), ContractType.INVERSE if inverse else ContractType.LINEAR, 28800),
-        (VenueListing(VenueId("binance"), symbol, symbol, Decimal(price["tickSize"]), Decimal(lot["stepSize"]), Decimal(lot["minQty"])),),
-        datetime.now(timezone.utc),
+    instrument_id = InstrumentId(f"crypto:binance:perpetual:{symbol}")
+    effective_from = datetime.now(timezone.utc)
+    return publish_instrument(
+        catalog, instrument_id=instrument_id, instrument_type=ProductType.PERPETUAL, display_name=symbol,
+        contract_spec=PerpetualSpec(AssetId(row["baseAsset"]), AssetId(settlement), row.get("pair", symbol), Decimal(row.get("contractSize", "1")), ContractType.INVERSE if inverse else ContractType.LINEAR, 28800),
+        trading_currency=AssetId(row["quoteAsset"]),
+        listings=(ListingDefinition(
+            ListingId(f"listing:binance:{instrument_id.value}:{symbol}"), instrument_id, VenueId("binance"), symbol,
+            AssetId(row["quoteAsset"]), TradingRules(Decimal(price["tickSize"]), Decimal(lot["stepSize"]), Decimal(lot["minQty"])),
+            effective_from, venue_instrument_id=symbol,
+        ),), effective_from=effective_from,
+        **_binance_reference_facts(row["baseAsset"], settlement, row["quoteAsset"], at=effective_from),
     )
 
 
-def _future_definition(row, inverse=False):
+def _future_definition(catalog: ReferenceCatalog, row, inverse=False):
     filters = {item["filterType"]: item for item in row["filters"]}
     lot, price = filters["LOT_SIZE"], filters["PRICE_FILTER"]
     symbol = row["symbol"]
@@ -813,29 +1052,51 @@ def _future_definition(row, inverse=False):
     if expiry_ms is None:
         raise ValueError(f"delivery future is missing expiry: {symbol}")
     expiry = datetime.fromtimestamp(int(expiry_ms) / 1000, timezone.utc)
-    return InstrumentDefinition(
-        InstrumentId(f"crypto:binance:future:{symbol}"), ProductType.FUTURE, symbol,
-        AssetId(row["baseAsset"]), AssetId(row["quoteAsset"]),
-        FutureSpec(
+    instrument_id = InstrumentId(f"crypto:binance:future:{symbol}")
+    effective_from = datetime.now(timezone.utc)
+    return publish_instrument(
+        catalog, instrument_id=instrument_id, instrument_type=ProductType.FUTURE, display_name=symbol,
+        contract_spec=FutureSpec(
             AssetId(row["baseAsset"]), AssetId(settlement), expiry,
             Decimal(row.get("contractSize", "1")), ContractType.INVERSE if inverse else ContractType.LINEAR,
             row.get("pair", symbol),
         ),
-        (VenueListing(VenueId("binance"), symbol, symbol, Decimal(price["tickSize"]), Decimal(lot["stepSize"]), Decimal(lot["minQty"])),),
-        datetime.now(timezone.utc),
+        trading_currency=AssetId(row["quoteAsset"]),
+        listings=(ListingDefinition(
+            ListingId(f"listing:binance:{instrument_id.value}:{symbol}"), instrument_id, VenueId("binance"), symbol,
+            AssetId(row["quoteAsset"]), TradingRules(Decimal(price["tickSize"]), Decimal(lot["stepSize"]), Decimal(lot["minQty"])),
+            effective_from, venue_instrument_id=symbol,
+        ),), effective_from=effective_from,
+        **_binance_reference_facts(row["baseAsset"], settlement, row["quoteAsset"], at=effective_from),
     )
 
 
-def _option_definition(row):
+def _option_definition(catalog: ReferenceCatalog, row):
     symbol = row["symbol"]
     expiry = datetime.fromtimestamp(int(row["expiryDate"]) / 1000, timezone.utc)
-    return InstrumentDefinition(
-        InstrumentId(f"crypto:binance:option:{symbol}"), ProductType.CRYPTO_OPTION, symbol,
-        AssetId(row["underlying"]), AssetId(row["quoteAsset"]),
-        CryptoOptionSpec(AssetId(row["underlying"]), AssetId(row["quoteAsset"]), AssetId(row["settleAsset"]), AssetId(row["quoteAsset"]), expiry, Decimal(row["strikePrice"]), OptionRight.CALL if row["side"] == "CALL" else OptionRight.PUT, ExerciseStyle.EUROPEAN, Decimal(row.get("unit", "1")), row.get("underlying", "")),
-        (VenueListing(VenueId("binance"), symbol, symbol, Decimal(row.get("priceScale", "0.01")), Decimal(row.get("quantityScale", "0.01")), Decimal(row.get("minQty", "0.01"))),),
-        datetime.now(timezone.utc),
+    instrument_id = InstrumentId(f"crypto:binance:option:{symbol}")
+    effective_from = datetime.now(timezone.utc)
+    return publish_instrument(
+        catalog, instrument_id=instrument_id, instrument_type=ProductType.CRYPTO_OPTION, display_name=symbol,
+        contract_spec=CryptoOptionSpec(AssetId(row["underlying"]), AssetId(row["quoteAsset"]), AssetId(row["settleAsset"]), AssetId(row["quoteAsset"]), expiry, Decimal(row["strikePrice"]), OptionRight.CALL if row["side"] == "CALL" else OptionRight.PUT, ExerciseStyle.EUROPEAN, Decimal(row.get("unit", "1")), row.get("underlying", "")),
+        trading_currency=AssetId(row["quoteAsset"]),
+        listings=(ListingDefinition(
+            ListingId(f"listing:binance:{instrument_id.value}:{symbol}"), instrument_id, VenueId("binance"), symbol,
+            AssetId(row["quoteAsset"]), TradingRules(
+                Decimal(row.get("priceScale", "0.01")), Decimal(row.get("quantityScale", "0.01")), Decimal(row.get("minQty", "0.01")),
+            ), effective_from, venue_instrument_id=symbol,
+        ),), effective_from=effective_from,
+        **_binance_reference_facts(row["underlying"], row["quoteAsset"], row["settleAsset"], at=effective_from),
     )
+
+
+def _binance_reference_facts(*asset_codes: str, at: datetime) -> dict[str, tuple]:
+    assets = tuple(
+        AssetDefinition(AssetId(code), AssetType.CRYPTO, code, at, decimals=8)
+        for code in sorted(set(asset_codes))
+    )
+    venue = VenueDefinition(VenueId("binance"), VenueType.CRYPTO_EXCHANGE, "Binance", "UTC", at)
+    return {"asset_definitions": assets, "venue_definitions": (venue,)}
 
 
 def _decimal(value):

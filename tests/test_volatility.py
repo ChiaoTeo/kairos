@@ -4,10 +4,13 @@ import unittest
 import tempfile
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
 
+from trading.data import DataCatalog, DatasetKey, DatasetLayer, DatasetProduct, DatasetRelease
+from trading.data.surface_features import SurfaceFeaturePublisher, load_surface_features
 from trading.domain.identity import InstrumentId
 from trading.domain.product import OptionRight
-from trading.volatility import CalibrationStatus, SurfaceRepository, SviParameters, VolObservation, build_surface, surface_implied_volatility, total_variance
+from trading.volatility import CalibrationStatus, SviParameters, VolObservation, build_surface, surface_implied_volatility, total_variance
 
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
@@ -50,16 +53,26 @@ class VolatilityTests(unittest.TestCase):
         with self.assertRaises(LookupError):
             surface_implied_volatility(surface, expiry, Decimal("0"))
 
-    def test_surface_repository_round_trip(self) -> None:
+    def test_surface_feature_release_round_trip(self) -> None:
         expiry = NOW + timedelta(days=30)
         params = SviParameters(Decimal("0.005"), Decimal("0.08"), Decimal("-0.3"), Decimal("0"), Decimal("0.1"))
         surface = build_surface(UNDERLYING, NOW, tuple(observations(expiry, Decimal("0.08"), params)))
         with tempfile.TemporaryDirectory() as directory:
-            repository = SurfaceRepository(directory)
-            path = repository.save(surface)
-            self.assertTrue(path.exists())
-            self.assertEqual(repository.list(UNDERLYING.value), (surface.surface_id,))
-            self.assertEqual(repository.load(UNDERLYING.value, surface.surface_id), surface)
+            root = Path(directory)
+            product = DatasetProduct(
+                DatasetKey("curated.market_slices.test.surface"), "Surface input", DatasetLayer.CURATED,
+                "Frozen surface input", {"underlying": "SPX"}, owner="test",
+            )
+            catalog = DataCatalog(root)
+            catalog.register_product(product)
+            catalog.register_release(DatasetRelease(
+                "surface-input", product.key, "1", "historical_dataset.v2", "2", "fixture", "1",
+                "curated/input", "parquet", "input-hash",
+            ))
+            catalog.save()
+            release = SurfaceFeaturePublisher(root).publish((surface,), input_release_id="surface-input")
+            self.assertTrue((root / release.relative_path).exists())
+            self.assertEqual(load_surface_features(root, release.release_id), (surface,))
 
 
 if __name__ == "__main__":

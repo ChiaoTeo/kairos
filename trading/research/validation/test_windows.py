@@ -8,6 +8,7 @@ from pathlib import Path
 
 @dataclass(frozen=True, slots=True)
 class TestWindowUse:
+    __test__ = False
     study_id: str
     version: str
     start: str
@@ -21,6 +22,7 @@ class TestWindowUse:
 
 
 class TestWindowRegistry:
+    __test__ = False
     def __init__(self,path: str|Path="data/studies/test_window_registry.jsonl") -> None:self.path=Path(path)
     def uses(self) -> tuple[TestWindowUse,...]:
         if not self.path.exists():return ()

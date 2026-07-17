@@ -6,6 +6,7 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from trading.domain.product import ListedOptionSpec, OptionRight
+from trading.reference.access import contract_spec
 
 from .snapshot import ResearchSnapshot
 
@@ -96,9 +97,9 @@ def analyze(snapshot: ResearchSnapshot) -> ResearchResult:
     definitions = {item.instrument_id: item for item in snapshot.definitions}
     for item in snapshot.instruments:
         definition, quote, greeks = definitions[item.instrument_id], item.quote, item.greeks
-        if not isinstance(definition.product_spec, ListedOptionSpec):
+        if not isinstance(contract_spec(definition), ListedOptionSpec):
             continue
-        option = definition.product_spec
+        option = contract_spec(definition)
         bid, ask = (quote.bid, quote.ask) if quote else (None, None)
         mid = (bid + ask) / 2 if bid is not None and ask is not None else None
         spread = ask - bid if bid is not None and ask is not None else None
@@ -110,7 +111,7 @@ def analyze(snapshot: ResearchSnapshot) -> ResearchResult:
         vega = greeks.vega if greeks else None
         rows.append(
             ResearchRow(
-                definition.symbol,
+                getattr(definition, "display_name", None) or getattr(definition, "symbol", definition.instrument_id.value),
                 option.expiry.date().isoformat(),
                 option.strike,
                 "C" if option.right is OptionRight.CALL else "P",

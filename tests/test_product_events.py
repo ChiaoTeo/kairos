@@ -7,16 +7,14 @@ from uuid import uuid4
 
 from trading.accounting.conversion import AssetConversionGraph, ConversionRate
 from trading.accounting.ledger import LedgerService
-from trading.accounting.portfolio import PortfolioV2
-from trading.catalog.service import InstrumentCatalog
+from trading.accounting.portfolio import Portfolio
 from trading.domain.corporate_action import (
     CorporateActionType, DelistingEvent, InstrumentExchangeEvent, StockDividendEvent, SymbolChangeEvent,
 )
 from trading.domain.derivative_event import DerivativeEventType, DerivativePositionEvent
 from trading.domain.event import EventEnvelope
 from trading.domain.execution import TradeExecution, TradeSide
-from trading.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, VenueListing
+from trading.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
 from trading.domain.ledger import Ledger, LedgerBook
 from trading.domain.market_data import IndexPrice, VolatilitySurfacePoint
 from trading.domain.market_state import MarketState, apply_market_event
@@ -28,28 +26,30 @@ from trading.products.equity.corporate_actions import CorporateActionService
 from trading.products.future.settlement import DerivativeLifecycleService
 from trading.products.listed_option.lifecycle import OptionLifecycleService
 from trading.risk.margin import CryptoCrossMarginPolicy, CryptoIsolatedMarginPolicy, CryptoSpotPolicy
+from trading.reference import ReferenceCatalog
+from trading.reference.models import InstrumentDefinition
+from tests.reference_support import publish_test_instrument
 
 
 NOW = datetime(2026, 7, 14, 8, tzinfo=timezone.utc)
 VENUE = VenueId("test")
-ACCOUNT = AccountKey(VENUE, "main", AccountType.SECURITIES_MARGIN)
+ACCOUNT = AccountKey(InstitutionId("xnas"), "main", AccountType.SECURITIES_MARGIN)
 
 
-def equity(instrument_id: str, symbol: str) -> InstrumentDefinition:
-    return InstrumentDefinition(
-        InstrumentId(instrument_id), ProductType.EQUITY, symbol, AssetId(symbol), AssetId("USD"),
-        EquitySpec("NASDAQ", "US", AssetId("USD")),
-        (VenueListing(VENUE, symbol, symbol, Decimal("0.01"), Decimal("1"), Decimal("1")),),
+def equity(catalog: ReferenceCatalog, instrument_id: str, symbol: str) -> InstrumentDefinition:
+    return publish_test_instrument(
+        catalog, InstrumentId(instrument_id), ProductType.EQUITY, symbol,
+        EquitySpec("NASDAQ", "US", AssetId("USD")), AssetId("USD"), VENUE, symbol,
         datetime(2020, 1, 1, tzinfo=timezone.utc),
     )
 
 
 class ProductEventTests(unittest.TestCase):
     def test_transfers_locked_balance_borrow_interest_and_stablecoin_depeg(self) -> None:
-        ledger, catalog = Ledger(), InstrumentCatalog()
+        ledger, catalog = Ledger(), ReferenceCatalog()
         service = LedgerService(ledger, catalog)
-        source = AccountKey(VENUE, "source", AccountType.CRYPTO_SPOT)
-        destination = AccountKey(VENUE, "destination", AccountType.DERIVATIVES)
+        source = AccountKey(InstitutionId("xnas"), "source", AccountType.CRYPTO_SPOT)
+        destination = AccountKey(InstitutionId("xnas"), "destination", AccountType.DERIVATIVES)
         service.deposit(source, AssetId("USDT"), Decimal("100"), NOW, "deposit")
         service.transfer(source, destination, AssetId("USDT"), Decimal("30"), NOW + timedelta(seconds=1), "margin-transfer")
         service.reclassify_balance(source, AssetId("USDT"), Decimal("20"), LedgerBook.CASH, LedgerBook.LOCKED, NOW + timedelta(seconds=2), "lock")
@@ -58,7 +58,7 @@ class ProductEventTests(unittest.TestCase):
         service.borrow_asset(source, AssetId("BTC"), Decimal("0.1"), NOW + timedelta(seconds=5), "short-borrow")
         graph = AssetConversionGraph()
         graph.update(ConversionRate(AssetId("USDT"), AssetId("USD"), Decimal("0.95"), NOW + timedelta(seconds=5), "depeg-fixture"))
-        snapshot = PortfolioV2(ledger, catalog, AssetId("USD")).snapshot(NOW + timedelta(seconds=5), {}, graph)
+        snapshot = Portfolio(ledger, catalog, AssetId("USD")).snapshot(NOW + timedelta(seconds=5), {}, graph)
         source_balance = next(item for item in snapshot.balances if item.account == source and item.asset == AssetId("USDT"))
         self.assertEqual(source_balance.total, Decimal("69"))
         self.assertEqual(source_balance.locked, Decimal("20"))
@@ -68,10 +68,9 @@ class ProductEventTests(unittest.TestCase):
         self.assertEqual(snapshot.net_asset_value, Decimal("89.30"))
 
     def test_stock_dividend_spinoff_merger_symbol_change_and_delisting_are_auditable(self) -> None:
-        catalog, ledger = InstrumentCatalog(), Ledger()
-        source, target = equity("equity:aaa", "AAA"), equity("equity:bbb", "BBB")
-        merger_target = equity("equity:ccc", "CCC")
-        catalog.add(source); catalog.add(target); catalog.add(merger_target)
+        catalog, ledger = ReferenceCatalog(), Ledger()
+        source, target = equity(catalog, "equity:aaa", "AAA"), equity(catalog, "equity:bbb", "BBB")
+        merger_target = equity(catalog, "equity:ccc", "CCC")
         service = LedgerService(ledger, catalog)
         actions = CorporateActionService(service)
         service.deposit(ACCOUNT, AssetId("USD"), Decimal("20000"), NOW, "capital")
@@ -85,28 +84,25 @@ class ProductEventTests(unittest.TestCase):
         self.assertEqual(ledger.book_balance(ACCOUNT, LedgerBook.POSITION, AssetId("POSITION:equity:ccc")), Decimal("55"))
         self.assertEqual(Decimal("22") * Decimal("100") + Decimal("55") * Decimal("160"), Decimal("11000"))
         graph = AssetConversionGraph(); graph.update(ConversionRate(AssetId("USD"), AssetId("USD"), Decimal("1"), NOW + timedelta(seconds=4), "identity"))
-        portfolio = PortfolioV2(ledger, catalog, AssetId("USD")).snapshot(NOW + timedelta(seconds=4), {target.instrument_id: Decimal("100"), merger_target.instrument_id: Decimal("160")}, graph)
+        portfolio = Portfolio(ledger, catalog, AssetId("USD")).snapshot(NOW + timedelta(seconds=4), {target.instrument_id: Decimal("100"), merger_target.instrument_id: Decimal("160")}, graph)
         self.assertEqual(portfolio.positions[0].instrument_id, target.instrument_id)
         self.assertEqual(portfolio.positions[0].quantity, Decimal("22"))
         change_at = NOW + timedelta(seconds=5)
         actions.apply_symbol_change(SymbolChangeEvent(uuid4(), target.instrument_id, change_at, "NEW", "NEW"))
-        self.assertEqual(catalog.get(target.instrument_id, change_at).symbol, "NEW")
+        self.assertEqual(catalog.instruments.get(target.instrument_id, change_at).display_name, "NEW")
         actions.apply_delisting(DelistingEvent(uuid4(), target.instrument_id, NOW + timedelta(seconds=6), "merger complete"))
-        with self.assertRaises(LookupError):
-            catalog.get(target.instrument_id, NOW + timedelta(seconds=6))
+        self.assertEqual(catalog.active_listings(target.instrument_id, NOW + timedelta(seconds=6)), ())
         self.assertTrue(any(entry.entry_type.value == "corporate_action" for entry in ledger.entries))
 
     def test_adjusted_option_expiration_threshold_physically_delivers_shares(self) -> None:
-        catalog, ledger = InstrumentCatalog(), Ledger()
-        stock = equity("equity:aaa", "AAA")
+        catalog, ledger = ReferenceCatalog(), Ledger()
+        stock = equity(catalog, "equity:aaa", "AAA")
         expiry = NOW + timedelta(days=1)
-        option = InstrumentDefinition(
-            InstrumentId("option:aaa:call"), ProductType.LISTED_OPTION, "AAA1", None, AssetId("USD"),
+        option = publish_test_instrument(
+            catalog, InstrumentId("option:aaa:call"), ProductType.LISTED_OPTION, "AAA1",
             ListedOptionSpec(stock.instrument_id, expiry, Decimal("100"), OptionRight.CALL, ExerciseStyle.AMERICAN, SettlementType.PHYSICAL, SettlementSession.PM, Decimal("100"), expiry),
-            (VenueListing(VENUE, "AAA1", "AAA1", Decimal("0.01"), Decimal("1"), Decimal("1")),),
-            datetime(2020, 1, 1, tzinfo=timezone.utc),
+            AssetId("USD"), VENUE, "AAA1", datetime(2020, 1, 1, tzinfo=timezone.utc),
         )
-        catalog.add(stock); catalog.add(option)
         service = LedgerService(ledger, catalog)
         lifecycle = OptionLifecycleService(service)
         adjust_at = NOW + timedelta(seconds=1)
@@ -119,14 +115,13 @@ class ProductEventTests(unittest.TestCase):
         self.assertEqual(ledger.book_balance(ACCOUNT, LedgerBook.CASH, AssetId("USD")), Decimal("5399"))
 
     def test_future_expiry_liquidation_and_adl_close_positions_through_same_ledger(self) -> None:
-        catalog, ledger = InstrumentCatalog(), Ledger()
-        future = InstrumentDefinition(
-            InstrumentId("future:btc"), ProductType.FUTURE, "BTC-FUT", AssetId("BTC"), AssetId("USDT"),
+        catalog, ledger = ReferenceCatalog(), Ledger()
+        future = publish_test_instrument(
+            catalog, InstrumentId("future:btc"), ProductType.FUTURE, "BTC-FUT",
             FutureSpec(AssetId("BTC"), AssetId("USDT"), NOW + timedelta(days=1), Decimal("1"), ContractType.LINEAR, "BTCUSDT"),
-            (VenueListing(VENUE, "BTC-FUT", "BTC-FUT", Decimal("0.1"), Decimal("1"), Decimal("1")),),
-            datetime(2020, 1, 1, tzinfo=timezone.utc),
+            AssetId("USDT"), VENUE, "BTC-FUT", datetime(2020, 1, 1, tzinfo=timezone.utc),
+            price_increment=Decimal("0.1"),
         )
-        catalog.add(future)
         service = LedgerService(ledger, catalog)
         lifecycle = DerivativeLifecycleService(service)
         service.deposit(ACCOUNT, AssetId("USDT"), Decimal("1000"), NOW, "margin")

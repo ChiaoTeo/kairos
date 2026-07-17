@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from trading.adapters.base import MarketDataAdapter
-from trading.domain.instrument import InstrumentDefinition
+from trading.reference.models import InstrumentDefinition
 from trading.domain.product import ProductType
 
 
@@ -18,9 +18,9 @@ class CompositeMarketDataAdapter:
     def snapshot(self, instruments: tuple[InstrumentDefinition, ...]):
         grouped = defaultdict(list)
         for definition in instruments:
-            adapter = self.routes.get(definition.product_type)
+            adapter = self.routes.get(definition.instrument_type)
             if adapter is None:
-                raise ValueError(f"no market data route for {definition.product_type}")
+                raise ValueError(f"no market data route for {definition.instrument_type}")
             grouped[adapter].append(definition)
         values = []
         for adapter, definitions in grouped.items():

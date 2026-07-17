@@ -7,15 +7,17 @@ import math
 from pathlib import Path
 import statistics
 
-from trading.data import CanonicalDatasetRepository, DataCatalog
+from trading import __version__
+from trading.data import ResearchDataClient
+from trading.data.products import BTC_DERIBIT_TERM_SKEW_DAILY, BTC_SPOT_DAILY
 from trading.storage.data_lake import write_json
 
 
 def analyze(root: str | Path = "data"):
-    root=Path(root); repository=CanonicalDatasetRepository(root)
+    root=Path(root); repository=ResearchDataClient(root)
     trades=json.loads((root/"studies"/"btc_deribit_skew_spread_trade_proxy_v1"/"trades.json").read_text())
-    spot={row["period_start"][:10]:float(row["close"]) for row in repository.load_rows(DataCatalog.BTC_SPOT_DAILY.dataset_id)}
-    features={row["period_start"][:10]:row for row in repository.load_rows(DataCatalog.BTC_DERIBIT_TERM_SKEW_DAILY.dataset_id)}
+    spot={row["period_start"][:10]:float(row["close"]) for row in repository.load_rows(BTC_SPOT_DAILY.product)}
+    features={row["period_start"][:10]:row for row in repository.load_rows(BTC_DERIBIT_TERM_SKEW_DAILY.product)}
     details=[]
     for trade in trades:
         entry,exit_=trade["entry_date"],trade["exit_date"]; days=_days(date.fromisoformat(entry),date.fromisoformat(exit_))
@@ -71,6 +73,8 @@ def _days(start,end):return [(start+timedelta(days=offset)).isoformat() for offs
 def main(argv=None):
     parser=argparse.ArgumentParser();parser.add_argument("--data-root",type=Path,default=Path("data"));args=parser.parse_args(argv)
     details,summary=analyze(args.data_root);output=args.data_root/"studies"/"btc_deribit_skew_spread_trade_proxy_v1"
+    ResearchDataClient(args.data_root).freeze_products(output/"analysis_data_snapshot.json", "btc_deribit_skew_spread_analysis_v1",
+        (BTC_SPOT_DAILY.product, BTC_DERIBIT_TERM_SKEW_DAILY.product), code_version=__version__)
     write_json(output/"attribution_trades.json",details);write_json(output/"risk_decomposition.json",summary);print(json.dumps(summary,ensure_ascii=False,indent=2))
 
 

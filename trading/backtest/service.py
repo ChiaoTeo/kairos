@@ -13,7 +13,7 @@ from trading.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSprea
 from trading.strategies.specs import bull_put_strategy_spec
 
 from .engine import BacktestEngine
-from .feed import HistoricalDataset
+from .feed import HistoricalDataset, MarketSliceFeed
 from .repository import BacktestRepository
 from .result import BacktestConfig, BacktestResult
 
@@ -24,18 +24,20 @@ class BacktestService:
 
     def run_suite(
         self,
-        dataset: HistoricalDataset,
+        dataset: HistoricalDataset | MarketSliceFeed,
         config: BacktestConfig,
         strategy_config: BullPutSpreadConfig,
         risk_limits: RiskLimits,
     ) -> tuple[BacktestResult, BacktestResult]:
+        feed = dataset if hasattr(dataset, "between") else None
+        historical = dataset.dataset if feed is not None else dataset
         results = []
         strategy_spec, execution_policy = bull_put_strategy_spec(strategy_config)
         for model in ("conservative", "stress"):
             model_config = replace(config, fill_model=model)
-            result = BacktestEngine(dataset, model_config, BullPutSpreadStrategy(strategy_config), risk_limits).run()
-            result.metrics["dataset_hash"] = dataset.manifest.content_hash
-            result.metrics["code_version"] = dataset.manifest.code_version
+            result = BacktestEngine(feed or historical, model_config, BullPutSpreadStrategy(strategy_config), risk_limits).run()
+            result.metrics["dataset_hash"] = historical.manifest.content_hash
+            result.metrics["code_version"] = historical.manifest.code_version
             result.metrics["strategy_spec_hash"] = strategy_spec.spec_hash
             result.metrics["execution_policy_id"] = execution_policy.policy_id
             result.metrics["execution_policy_version"] = execution_policy.version
@@ -45,26 +47,29 @@ class BacktestService:
 
     def validate_splits(
         self,
-        datasets: tuple[HistoricalDataset, HistoricalDataset, HistoricalDataset],
+        datasets: tuple[HistoricalDataset | MarketSliceFeed, HistoricalDataset | MarketSliceFeed,
+                        HistoricalDataset | MarketSliceFeed],
         config: BacktestConfig,
         strategy_config: BullPutSpreadConfig,
         risk_limits: RiskLimits,
     ) -> Path:
+        sources = datasets
+        historical = tuple(item.dataset if hasattr(item, "dataset") else item for item in sources)
         expected = ("development", "validation", "test")
-        actual = tuple(dataset.manifest.split for dataset in datasets)
+        actual = tuple(dataset.manifest.split for dataset in historical)
         if actual != expected:
             raise ValueError(f"datasets must be ordered as {expected}, got {actual}")
         material = json.dumps({
-            "datasets": [dataset.manifest.content_hash for dataset in datasets],
+            "datasets": [dataset.manifest.content_hash for dataset in historical],
             "strategy": to_primitive(strategy_config),
             "risk": to_primitive(risk_limits),
             "config": to_primitive(config),
         }, sort_keys=True)
         experiment_id = uuid5(NAMESPACE_URL, material)
         rows = []
-        for dataset in datasets:
+        for source, dataset in zip(sources, historical):
             split_config = replace(config, start=dataset.manifest.start, end=dataset.manifest.end)
-            conservative, stress = self.run_suite(dataset, split_config, strategy_config, risk_limits)
+            conservative, stress = self.run_suite(source, split_config, strategy_config, risk_limits)
             for result in (conservative, stress):
                 rows.append({
                     "split": dataset.manifest.split,
@@ -82,9 +87,9 @@ class BacktestService:
             "schema_version": 1,
             "experiment_id": str(experiment_id),
             "parameters_frozen": True,
-            "datasets": [dataset.manifest.dataset_id for dataset in datasets],
-            "synthetic": any(dataset.manifest.synthetic for dataset in datasets),
-            "warning": "Synthetic split results validate workflow only, not out-of-sample performance." if any(dataset.manifest.synthetic for dataset in datasets) else "Historical out-of-sample results do not guarantee future performance.",
+            "datasets": [dataset.manifest.dataset_id for dataset in historical],
+            "synthetic": any(dataset.manifest.synthetic for dataset in historical),
+            "warning": "Synthetic split results validate workflow only, not out-of-sample performance." if any(dataset.manifest.synthetic for dataset in historical) else "Historical out-of-sample results do not guarantee future performance.",
             "results": rows,
         }
         (directory / "validation-summary.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -9,8 +9,8 @@ from trading.adapters.massive.corporate_actions import MassiveCorporateActionDec
 from trading.adapters.massive.reference_store import MassiveReferenceStore
 from trading.adapters.massive.reference_pipeline import MassiveReferencePipeline
 from trading.adapters.massive import MassiveClient, MassiveConfig, MassiveResponse
-from trading.catalog.external import ExternalInstrumentMapping, ExternalMappingRepository
 from trading.domain.identity import InstrumentId
+from trading.reference import MappingTargetType, ProviderId, ProviderSymbolMapping, ReferenceCatalog
 
 
 NOW = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -18,8 +18,11 @@ NOW = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
 class MassiveReferenceTests(unittest.TestCase):
     def setUp(self):
-        self.mappings = ExternalMappingRepository("/tmp/nonexistent-massive-reference-test.json")
-        self.mappings.add(ExternalInstrumentMapping("massive", "stocks", "AAPL", InstrumentId("equity:us:AAPL"), NOW))
+        self.mappings = ReferenceCatalog()
+        self.mappings.add_mapping(ProviderSymbolMapping(
+            ProviderId("massive"), "stocks", "AAPL", MappingTargetType.INSTRUMENT,
+            InstrumentId("equity:us:AAPL").value, NOW,
+        ))
 
     def test_corporate_actions_are_normalized(self):
         decoder = MassiveCorporateActionDecoder(self.mappings)

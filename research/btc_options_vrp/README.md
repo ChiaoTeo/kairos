@@ -11,7 +11,8 @@
 数据由 `trading` 统一管理，研究脚本不联网。首次运行：
 
 ```bash
-python3 -m trading data prepare-btc-options --start 2021-03-24 --end 2026-07-14
+python3 -m trading data acquire --dataset market.ohlcv.crypto.binance.btc-usdt.1d --provider binance --venue binance --start 2021-03-24T00:00:00+00:00 --end 2026-07-15T00:00:00+00:00
+python3 -m trading data acquire --dataset analytics.vendor_volatility_index.deribit.btc-dvol.1d --provider deribit --venue deribit --start 2021-03-24T00:00:00+00:00 --end 2026-07-15T00:00:00+00:00
 python3 -m trading features build --feature-set btc-iv-rv-v1
 python3 -m research.btc_options_vrp.study
 ```

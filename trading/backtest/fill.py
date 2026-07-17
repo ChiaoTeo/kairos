@@ -7,7 +7,8 @@ from enum import StrEnum
 from typing import Callable, Protocol
 from uuid import UUID, uuid4
 
-from trading.catalog.service import InstrumentCatalog
+from trading.reference import ReferenceCatalog
+from trading.reference.access import contract_spec, definition_at
 from trading.domain.execution import TradeSide
 from trading.domain.identity import InstrumentId
 from trading.domain.market_data import Bar, OrderBookSnapshot, Quote, TradingState, TradingStatus
@@ -50,7 +51,7 @@ class ListedOptionComboFillModel:
         self,
         model_type: FillModelType,
         commission: CommissionModel,
-        catalog: InstrumentCatalog,
+        catalog: ReferenceCatalog,
         *,
         stress_slippage_per_leg: Decimal = Decimal("0.10"),
         max_spread: Decimal = Decimal("2.00"),
@@ -106,7 +107,7 @@ class ListedOptionComboFillModel:
         fill = Fill(
             self.id_factory(), order.order_id, order.intent_id, order.strategy_id, order.structure_id,
             market.timestamp, tuple(leg_fills), net_price, order.quantity, commission,
-            slippage * Decimal(order.quantity) * _multiplier(self.catalog.get(order.legs[0].instrument_id, market.timestamp)), order.is_closing,
+            slippage * Decimal(order.quantity) * _multiplier(definition_at(self.catalog, order.legs[0].instrument_id, market.timestamp)), order.is_closing,
         )
         return FillAttempt(order.transition(OrderStatus.FILLED, filled_quantity=order.quantity), fill, "filled")
 
@@ -118,7 +119,8 @@ class ListedOptionComboFillModel:
 
 
 def _multiplier(definition) -> Decimal:
-    return getattr(definition.product_spec, "multiplier", getattr(definition.product_spec, "contract_size", Decimal("1")))
+    spec = contract_spec(definition)
+    return getattr(spec, "multiplier", getattr(spec, "contract_size", Decimal("1")))
 
 
 @dataclass(frozen=True, slots=True)

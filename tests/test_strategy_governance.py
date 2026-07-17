@@ -1,3 +1,5 @@
+from trading.domain.identity import InstitutionId
+
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
@@ -47,6 +49,19 @@ class StrategyGovernanceTest(unittest.TestCase):
         self.assertEqual(intent.intents, (target,))
         self.assertEqual(intent.atomicity_preference,"atomic")
 
+    def test_economic_intent_decision_id_is_replay_deterministic(self):
+        strategy = spec(); now = datetime(2026, 7, 17, tzinfo=timezone.utc)
+        target = TargetPositionIntent(uuid4(), strategy.strategy_id, InstrumentId("BTC"), Decimal("1"), "test")
+        arguments = dict(
+            strategy=strategy, decision_time=now, valid_until=now+timedelta(minutes=5),
+            intents=(target,), risk_budget=Decimal("2000"), urgency="normal",
+            execution_policy_id="taker-v1", feature_snapshot_hash="feature-hash",
+        )
+        first = EconomicIntent.create(**arguments)
+        second = EconomicIntent.create(**arguments)
+        self.assertEqual(first, second)
+        self.assertEqual(first.decision_id, second.decision_id)
+
     def test_execution_policy_enforces_maker_and_legging_requirements(self):
         with self.assertRaises(ValueError):
             ExecutionPolicy("maker", "1", ExecutionMode.MAKER, TimeInForce.GTC, Decimal("5"))
@@ -74,7 +89,7 @@ class StrategyGovernanceTest(unittest.TestCase):
         policy=ExecutionPolicy("taker-v1","1",ExecutionMode.TAKER,TimeInForce.IOC,Decimal("10"))
         instructions={instrument:ExecutionInstructions(OrderType.MARKET,TimeInForce.IOC)}
         from trading.domain.identity import AccountKey,AccountType,VenueId
-        account=AccountKey(VenueId("sim"),"a",AccountType.CRYPTO_SPOT)
+        account=AccountKey(InstitutionId("sim"),"a",AccountType.CRYPTO_SPOT)
         plan=plan_economic_intent(intent,policy=policy,accounts={instrument:account},current_positions={},instructions=instructions,now=now)
         self.assertEqual(plan.strategy_spec_hash,strategy.spec_hash)
         with self.assertRaises(ValueError):

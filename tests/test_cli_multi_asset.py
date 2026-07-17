@@ -9,11 +9,10 @@ from io import StringIO
 from pathlib import Path
 
 from trading.__main__ import main
-from trading.catalog.repository import CatalogRepository
-from trading.catalog.service import InstrumentCatalog
-from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, VenueListing
+from trading.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
 from trading.domain.product import CryptoSpotSpec, ProductType
+from trading.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, ReferenceCatalogRepository, RouteId
+from tests.reference_support import publish_test_instrument
 
 
 class MultiAssetCliTests(unittest.TestCase):
@@ -24,16 +23,13 @@ class MultiAssetCliTests(unittest.TestCase):
                 self.assertEqual(main(["--backtest-root", str(root / "backtests"), "backtest", "run", "--strategy", "covered-call"]), 0)
                 self.assertIn("conservative: cash=", output.getvalue())
                 self.assertIn("stress: cash=", output.getvalue())
-            catalog = InstrumentCatalog()
-            catalog.add(InstrumentDefinition(
-                InstrumentId("crypto:sim:spot:BTCUSDT"), ProductType.CRYPTO_SPOT, "BTCUSDT", AssetId("BTC"), AssetId("USDT"),
-                CryptoSpotSpec(AssetId("BTC"), AssetId("USDT"), Decimal("10")),
-                (VenueListing(VenueId("simvenue"), "BTCUSDT", "BTCUSDT", Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("10")),),
-                datetime(2020, 1, 1, tzinfo=timezone.utc),
-            ))
+            catalog = ReferenceCatalog(); instrument_id = InstrumentId("crypto:sim:spot:BTCUSDT")
+            publish_test_instrument(catalog, instrument_id, ProductType.CRYPTO_SPOT, "BTCUSDT", CryptoSpotSpec(AssetId("BTC"), AssetId("USDT"), Decimal("10")), AssetId("USDT"), VenueId("simvenue"), "BTCUSDT", datetime(2020, 1, 1, tzinfo=timezone.utc), price_increment=Decimal("0.1"), quantity_increment=Decimal("0.001"), minimum_quantity=Decimal("0.001"))
+            account = AccountKey(InstitutionId("simulated"), "default", AccountType.CRYPTO_SPOT)
+            catalog.routes.add(ExecutionRoute(RouteId("route:simulated:default"), BrokerId("simulated"), account, ListingId(f"listing:simvenue:{instrument_id.value}"), datetime(2020, 1, 1, tzinfo=timezone.utc)))
             catalog_path = root / "catalog.json"
-            CatalogRepository(catalog_path).save(catalog)
-            common = ["--catalog-path", str(catalog_path), "--ledger-path", str(root / "ledger.json"), "--event-log-path", str(root / "events.jsonl")]
+            ReferenceCatalogRepository(catalog_path).save(catalog)
+            common = ["--reference-catalog-path", str(catalog_path), "--event-log-path", str(root / "events.jsonl")]
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([*common, "account", "reconcile", "--venue", "simulated", "--environment", "testnet"]), 0)
                 self.assertIn("Matched: True", output.getvalue())

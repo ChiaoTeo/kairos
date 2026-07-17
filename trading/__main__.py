@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+from trading.domain.identity import InstitutionId
+
 import argparse
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from trading.accounting.repository import LedgerRepository
+from trading import __version__
+
+from trading.accounting.ledger import LedgerService
 from trading.adapters.base import Environment, OrderRequest, ReferenceDataRequest
 from trading.adapters.composite import CompositeMarketDataAdapter
 from trading.adapters.binance.adapter import (
@@ -21,10 +26,10 @@ from trading.adapters.binance.adapter import (
 from trading.adapters.ibkr.adapter import IbkrAccountAdapter, IbkrExecutionAdapter, IbkrMarketDataAdapter, IbkrReferenceAdapter, IbkrSession
 from trading.adapters.ibkr.research import IbkrSpxwResearchAdapter
 from trading.adapters.simulated import SimulatedExecutionAccountAdapter
-from trading.adapters.massive import MassiveClient, MassiveConfig, MassiveCuratedSliceBuilder, MassiveEquityDayAggPipeline, MassiveFlatFileBatchDownloader, MassiveFlatFileClient, MassiveOptionDataPipeline, MassiveReadinessChecker, MassiveReferencePipeline, MassiveSourceArchive, OptionDayAggPipeline, OptionDayIvPipeline, SpxwDayAggPipeline
+from trading.adapters.massive import MassiveClient, MassiveConfig, MassiveCuratedSliceBuilder, MassiveEquityDayAggPipeline, MassiveFlatFileBatchDownloader, MassiveFlatFileClient, MassiveReadinessChecker, MassiveReferencePipeline, MassiveSourceArchive, OptionDayAggPipeline, OptionDayIvPipeline, SpxwDayAggPipeline
 from trading.backtest.reference_scenarios import run_reference_scenario
-from trading.catalog.repository import CatalogRepository
-from trading.catalog.service import InstrumentCatalog
+from trading.reference import ReferenceCatalog, ReferenceCatalogRepository
+from trading.reference.access import settlement_asset
 from trading.domain.capability import OrderType
 from trading.domain.execution import TradeSide
 from trading.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
@@ -41,24 +46,26 @@ from trading.research.service import ResearchService
 from trading.research.spec import MarketDataType, ResearchSpec
 from trading.storage.repository import FileResearchRepository
 from trading.backtest.engine import BacktestEngine
-from trading.backtest.feed import DatasetRepository
+from trading.data.market_slice_storage import MarketSliceStorageDriver
 from trading.backtest.mock import MockScenario, make_mock_dataset
 from trading.backtest.repository import BacktestRepository
 from trading.backtest.result import BacktestConfig
 from trading.backtest.service import BacktestService
 from trading.risk.limits import RiskLimits
-from trading.storage.codec import from_primitive, restore_primitives
+from trading.storage.codec import from_primitive, restore_primitives, to_primitive
 from trading.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
 from trading.research.series import SeriesCaptureProgress, SeriesCaptureService, SeriesCaptureSpec
 from trading.research.normalized_series import NormalizedSeriesCaptureService
-from trading.history import BarRepository, BinanceHistoricalBarProvider
-from trading.strategies.sma_cross import SmaCrossConfig, backtest_sma_cross
+from trading.strategies.sma_cross import BarSeries, SmaCrossConfig, backtest_sma_cross
 from trading.pricing import PricingInput, PricingModel, ValuationService, implied_volatility, price_with_volatility
 from trading.risk import RevaluationPosition, Scenario, ScenarioEngine, explain_scenario
-from trading.volatility import SurfaceRepository
-from trading.data import CanonicalDatasetRepository, DataCatalog, materialize_catalog_capabilities
-from trading.data.pipeline import BtcOptionsDataPipeline
-from trading.data.btc_options_readiness import btc_options_readiness
+from trading.data import (
+    DataCatalog, DatasetKey, DatasetLayer, DatasetProduct, DatasetStatus, OutputFormat, QualityLevel,
+    ResearchDataClient, RunMode,
+    register_historical_dataset,
+)
+from trading.data.bootstrap import default_provider_registry, register_configured_products, register_default_products
+from research.btc_options_readiness import btc_options_readiness
 from trading.market_data import ParquetMarketEventRepository
 from trading.features import BtcIvRvFeatureBuilder, BtcTermSkewFeatureBuilder, BtcDeribitTradeSkewFeatureBuilder
 
@@ -66,31 +73,115 @@ from trading.features import BtcIvRvFeatureBuilder, BtcTermSkewFeatureBuilder, B
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="trader", description="Multi-asset research, backtest, reconciliation, and trading toolkit")
     parser.add_argument("--data-root", default="data/snapshots")
-    parser.add_argument("--dataset-root", default="data/datasets")
+    parser.add_argument("--dataset-root", default="data/curated")
     parser.add_argument("--backtest-root", default="data/backtests")
     parser.add_argument("--catalog-path", default="data/catalog/instruments.json")
-    parser.add_argument("--ledger-path", default="data/ledger/ledger.json")
+    parser.add_argument("--reference-catalog-path", default="data/reference/catalog.json")
     parser.add_argument("--event-log-path", default="data/events/trading.jsonl")
-    parser.add_argument("--history-root", default="data/history")
-    parser.add_argument("--surface-root", default="data/surfaces")
+    parser.add_argument("--runtime-db", help="transactional runtime database; defaults beside --event-log-path")
     parser.add_argument("--lake-root", default="data", help="source/canonical/features/studies data lake root")
     commands = parser.add_subparsers(dest="group", required=True)
     data = commands.add_parser("data", help="prepare and inspect governed market datasets")
     data_actions = data.add_subparsers(dest="action", required=True)
-    prepare_btc = data_actions.add_parser("prepare-btc-options", help="download and canonicalize BTC spot and DVOL history")
-    prepare_btc.add_argument("--start", required=True, help="inclusive UTC date")
-    prepare_btc.add_argument("--end", required=True, help="inclusive UTC date")
-    prepare_options = data_actions.add_parser("prepare-btc-option-quotes", help="download Binance hourly BTC option EOHSummary archives")
-    prepare_options.add_argument("--start", required=True, help="inclusive UTC date; archive starts 2023-05-18")
-    prepare_options.add_argument("--end", required=True, help="inclusive UTC date; known archive ends 2023-10-23")
-    prepare_deribit = data_actions.add_parser("prepare-deribit-option-trades", help="download anonymous Deribit BTC option trade history")
-    prepare_deribit.add_argument("--start", required=True, help="inclusive UTC date")
-    prepare_deribit.add_argument("--end", required=True, help="inclusive UTC date")
-    data_actions.add_parser("capture-deribit-option-chain", help="append an anonymous current Deribit BTC option-chain snapshot")
+    live_binance = data_actions.add_parser(
+        "live-binance", help="capture public Binance WebSocket events into the canonical runtime contract",
+    )
+    live_binance.add_argument("--symbol", required=True, help="Binance venue symbol, for example BTCUSDT")
+    live_binance.add_argument("--channel", choices=("bookTicker", "trade", "aggTrade", "depth"),
+                              default="bookTicker")
+    live_binance.add_argument("--messages", type=int, default=10)
+    live_binance.add_argument("--futures", action="store_true")
+    live_binance.add_argument("--instrument", help="stable internal InstrumentId; defaults from symbol and product line")
+    live_binance.add_argument("--journal", type=Path, help="raw JSONL capture path")
+    soak_binance = data_actions.add_parser(
+        "soak-binance", help="run an audited public Binance market-data stability soak",
+    )
+    soak_binance.add_argument("--symbol", required=True)
+    soak_binance.add_argument("--channel", choices=("bookTicker", "trade", "aggTrade", "depth"),
+                              default="bookTicker")
+    soak_binance.add_argument("--duration-seconds", type=float, default=60.0)
+    soak_binance.add_argument("--minimum-events", type=int, default=100)
+    soak_binance.add_argument("--maximum-silence-seconds", type=float, default=5.0)
+    soak_binance.add_argument("--maximum-channel-utilization", type=float, default=0.9)
+    soak_binance.add_argument("--capture-segment-events", type=int, default=100000)
+    soak_binance.add_argument("--capture-segment-bytes", type=int, default=256 * 1024 * 1024)
+    soak_binance.add_argument("--capture-total-bytes", type=int, default=20 * 1024 * 1024 * 1024)
+    soak_binance.add_argument(
+        "--restart-interval-seconds", type=float, default=0,
+        help="actively restart the WebSocket session at this interval and write a campaign artifact",
+    )
+    soak_binance.add_argument("--instrument")
+    soak_binance.add_argument("--journal", type=Path)
+    soak_binance.add_argument("--artifact", type=Path)
     inspect_data = data_actions.add_parser("inspect", help="show schema, lineage and time coverage")
     inspect_data.add_argument("--dataset", required=True)
+    search_data = data_actions.add_parser("search", help="discover products by structured dimensions")
+    search_data.add_argument("--dimension", action="append", default=[], help="key=value dimension; repeatable")
+    describe_data = data_actions.add_parser("describe", help="show product semantics, sources and releases")
+    describe_data.add_argument("--dataset", required=True)
+    doctor_data = data_actions.add_parser("doctor", help="diagnose one product and suggest the next action")
+    doctor_data.add_argument("--dataset", required=True)
+    health_data = data_actions.add_parser("health", help="audit all Catalog products and releases")
+    health_data.add_argument("--strict", action="store_true", help="return non-zero when errors exist")
+    validate_data = data_actions.add_parser("validate", help="run the typed Quality Profile for a release")
+    validate_data.add_argument("--release", required=True)
+    prepare_data = data_actions.add_parser("prepare", help="plan, acquire, validate and optionally promote a product")
+    prepare_data.add_argument("--dataset", required=True)
+    prepare_data.add_argument("--start", required=True)
+    prepare_data.add_argument("--end", required=True)
+    prepare_data.add_argument("--quality", choices=tuple(item.value for item in QualityLevel), default=QualityLevel.RESEARCH.value)
+    prepare_data.add_argument("--provider")
+    prepare_data.add_argument("--venue")
+    prepare_data.add_argument("--connector-config", type=Path)
+    prepare_data.add_argument("--acquire-missing", action="store_true")
+    prepare_data.add_argument("--promote", action="store_true", help="explicitly approve promotion after quality passes")
+    prepare_data.add_argument("--actor", default="data-prepare")
+    prepare_data.add_argument("--reason", default="explicit data preparation")
+    query_data = data_actions.add_parser("query", help="query a governed product or frozen release")
+    query_data.add_argument("--dataset", required=True)
+    query_data.add_argument("--start")
+    query_data.add_argument("--end")
+    query_data.add_argument("--field", action="append", default=[])
+    query_data.add_argument("--limit", type=int, default=100)
+    freeze_data = data_actions.add_parser("freeze", help="freeze one or more dataset inputs for a study")
+    freeze_data.add_argument("--study-id", required=True)
+    freeze_data.add_argument("--dataset", action="append", required=True)
+    freeze_data.add_argument("--output", type=Path, required=True)
+    freeze_data.add_argument("--code-version", default=__version__)
+    compare_data = data_actions.add_parser("compare", help="compare two immutable dataset releases")
+    compare_data.add_argument("--first", required=True)
+    compare_data.add_argument("--second", required=True)
+    audit_artifact = data_actions.add_parser("audit-artifact", help="verify an artifact consumes frozen Q3/Q4 releases")
+    audit_artifact.add_argument("--artifact", type=Path, required=True)
+    alias_data = data_actions.add_parser("alias", help="promote an audited floating alias to an approved release")
+    alias_data.add_argument("--alias", required=True)
+    alias_data.add_argument("--release", required=True)
+    alias_data.add_argument("--actor", required=True)
+    alias_data.add_argument("--reason", required=True)
+    alias_data.add_argument("--quality-report-hash", required=True)
     data_actions.add_parser("btc-options-readiness", help="evaluate long-history surface and executable-quote gates")
-    data_actions.add_parser("materialize-capabilities", help="write governed research-capability contracts for prepared catalog datasets")
+    catalog_data = data_actions.add_parser("catalog", help="list governed logical datasets, versions, aliases and formats")
+    catalog_data.add_argument("--refresh", action="store_true", help="discover and persist existing governed datasets")
+    for action, help_text in (("plan", "show local coverage and missing-data acquisition plan"),
+                              ("acquire", "acquire missing data and publish an immutable release")):
+        command = data_actions.add_parser(action, help=help_text)
+        command.add_argument("--dataset", required=True)
+        command.add_argument("--start", required=True, help="inclusive ISO-8601 timestamp with timezone")
+        command.add_argument("--end", required=True, help="exclusive ISO-8601 timestamp with timezone")
+        command.add_argument("--provider")
+        command.add_argument("--venue")
+        command.add_argument("--connector-config", type=Path,
+                             help="explicit JSON configuration for additional provider connectors")
+        if action == "acquire":
+            command.add_argument("--refresh", action="store_true")
+    promote_data = data_actions.add_parser("promote", help="audit and promote a frozen dataset release")
+    promote_data.add_argument("--release", required=True)
+    promote_data.add_argument("--status", required=True, choices=(
+        DatasetStatus.APPROVED_FOR_RESEARCH.value, DatasetStatus.APPROVED_FOR_BACKTEST.value,
+        DatasetStatus.APPROVED_FOR_PRODUCTION.value,
+    ))
+    promote_data.add_argument("--actor", required=True)
+    promote_data.add_argument("--reason", required=True)
     massive_fetch = data_actions.add_parser("massive-fetch", help="archive a Massive REST resource through the private server")
     massive_fetch.add_argument("--resource", choices=("option-contracts", "option-quotes", "option-trades", "aggregates", "option-chain"), required=True)
     massive_fetch.add_argument("--ticker", help="option ticker for quote/trade or underlying ticker for aggregates")
@@ -129,13 +220,6 @@ def _parser() -> argparse.ArgumentParser:
     prepare_option_iv.add_argument("--equity-dataset", required=True)
     prepare_option_iv.add_argument("--risk-free-rate", type=Decimal, default=Decimal("0.04"))
     prepare_option_iv.add_argument("--dividend-yield", type=Decimal, default=Decimal("0.0003"))
-    prepare_massive = data_actions.add_parser("prepare-massive-options", help="archive, map and canonicalize explicit Massive option contracts")
-    prepare_massive.add_argument("--dataset-id", required=True)
-    prepare_massive.add_argument("--underlying", required=True, help="Massive underlying ticker, for example SPX")
-    prepare_massive.add_argument("--underlying-reference-ticker", help="reference ticker when different, for example I:SPX")
-    prepare_massive.add_argument("--option-tickers", required=True, help="comma-separated OCC option tickers including O: prefix")
-    prepare_massive.add_argument("--start", required=True, help="inclusive ISO-8601 timestamp with timezone")
-    prepare_massive.add_argument("--end", required=True, help="exclusive ISO-8601 timestamp with timezone")
     compact_massive = data_actions.add_parser("compact-market-events", help="explicitly compact immutable Parquet event partitions")
     compact_massive.add_argument("--dataset", required=True)
     massive_readiness = data_actions.add_parser("massive-readiness", help="probe private-server entitlement and historical endpoint access")
@@ -239,27 +323,8 @@ def _parser() -> argparse.ArgumentParser:
     research_readiness.add_argument("--dataset", required=True)
     research_readiness.add_argument("--study-config", type=Path, default=Path("research/spxw_put_skew/config.json"))
     actions.add_parser("governance-audit", help="audit governed datasets, study versions, and strategy registry artifacts")
-    actions.add_parser("migrate-btc-governance", help="materialize governed versions for existing BTC studies")
     actions.add_parser("register-btc-iron-condor", help="register and promote the governed BTC iron-condor StrategySpec")
     actions.add_parser("register-builtin-strategies", help="register draft StrategySpec and ExecutionPolicy contracts for reference strategies")
-    history = commands.add_parser("history", help="download and inspect notebook-friendly OHLCV data")
-    history_actions = history.add_subparsers(dest="action", required=True)
-    history_download = history_actions.add_parser("download", help="download public Binance historical bars")
-    history_download.add_argument("--dataset-id", required=True)
-    history_download.add_argument("--instrument", required=True, help="internal InstrumentId stored with every bar")
-    history_download.add_argument("--symbol", required=True, help="Binance venue symbol, for example BTCUSDT")
-    history_download.add_argument("--interval", default="1h", help="Binance kline interval, for example 1m, 1h, 1d")
-    history_download.add_argument("--start", required=True, help="ISO-8601 timestamp; timezone is required")
-    history_download.add_argument("--end", required=True, help="exclusive ISO-8601 timestamp; timezone is required")
-    history_download.add_argument("--market", choices=("spot", "usdm", "coinm"), default="spot")
-    history_show = history_actions.add_parser("show", help="show a saved OHLCV dataset")
-    history_show.add_argument("--dataset-id", required=True)
-    history_backtest = history_actions.add_parser("backtest-sma", help="run a long-only SMA crossover backtest")
-    history_backtest.add_argument("--dataset-id", required=True)
-    history_backtest.add_argument("--fast", type=int, default=20)
-    history_backtest.add_argument("--slow", type=int, default=50)
-    history_backtest.add_argument("--initial-cash", type=Decimal, default=Decimal("100000"))
-    history_backtest.add_argument("--fee-bps", type=Decimal, default=Decimal("10"))
     backtest = commands.add_parser("backtest", help="run deterministic conservative/stress strategy validation")
     backtest_actions = backtest.add_subparsers(dest="action", required=True)
     mock = backtest_actions.add_parser("mock", help="create a standardized synthetic dataset")
@@ -280,6 +345,18 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--validation", required=True)
     validate.add_argument("--test", required=True)
     validate.add_argument("--config", type=Path)
+    sma = backtest_actions.add_parser("sma", help="run SMA crossover on a frozen Q3/Q4 OHLCV release")
+    sma.add_argument("--dataset", required=True, help="logical product, alias, or immutable release ID")
+    sma.add_argument("--start")
+    sma.add_argument("--end")
+    sma.add_argument("--fast", type=int, default=20)
+    sma.add_argument("--slow", type=int, default=50)
+    sma.add_argument("--initial-cash", type=Decimal, default=Decimal("100000"))
+    sma.add_argument("--fee-bps", type=Decimal, default=Decimal("10"))
+    golden_spxw = backtest_actions.add_parser("golden-spxw", help="run the governed Massive SPXW Golden Pipeline")
+    golden_spxw.add_argument("--event-release", required=True)
+    golden_spxw.add_argument("--source-slices", required=True)
+    golden_spxw.add_argument("--curated-slices", required=True)
     account = commands.add_parser("account", help="reconcile Ledger balances and positions with a venue")
     account_actions = account.add_subparsers(dest="action", required=True)
     reconcile = account_actions.add_parser("reconcile")
@@ -306,7 +383,33 @@ def _parser() -> argparse.ArgumentParser:
     trade_run.add_argument("--post-only", action="store_true")
     trade_run.add_argument("--market-data-ready", action="store_true", help="explicit operational readiness acknowledgement for non-simulated venues")
     trade_run.add_argument("--kill-switch-drill", action="store_true")
+    trade_run.add_argument("--soak-seconds", type=int, default=0, help="run the supervised runtime for this many wall-clock seconds")
+    trade_run.add_argument("--cycle-seconds", type=float, default=5.0, help="supervisor heartbeat/reconciliation interval")
+    trade_run.add_argument("--restart-drill", action="store_true", help="restart and recover the Application after the soak")
+    trade_run.add_argument("--soak-artifact", type=Path, help="explicit L4 soak manifest path")
     trade_run.add_argument("--inverse", action="store_true")
+    runtime = commands.add_parser("runtime", help="operate and verify the durable trading runtime")
+    runtime_actions = runtime.add_subparsers(dest="action", required=True)
+    runtime_golden = runtime_actions.add_parser(
+        "golden", help="run the deterministic L2 order/fill/restart/reconciliation acceptance scenario",
+    )
+    runtime_golden.add_argument("--root", type=Path, required=True, help="isolated output root for runtime state and audit artifacts")
+    runtime_failure_matrix = runtime_actions.add_parser(
+        "failure-matrix", help="run deterministic L3 crash-window and restart acceptance drills",
+    )
+    runtime_failure_matrix.add_argument("--root", type=Path, required=True, help="isolated output root for drill state and audit artifacts")
+    runtime_orders = runtime_actions.add_parser("orders", help="inspect or explicitly resolve durable unresolved orders")
+    runtime_orders.add_argument("--db", type=Path, required=True, help="SQLite Runtime Store path")
+    runtime_orders.add_argument("--client-order-id")
+    runtime_orders.add_argument("--target", choices=("rejected", "cancelled", "expired"))
+    runtime_orders.add_argument("--actor")
+    runtime_orders.add_argument("--reason")
+    runtime_orders.add_argument("--evidence")
+    l4_preflight = runtime_actions.add_parser("l4-preflight", help="check external Paper/Testnet soak prerequisites without exposing credentials")
+    l4_preflight.add_argument("--venue", choices=("binance", "ibkr"), required=True)
+    l4_preflight.add_argument("--environment", choices=("testnet", "paper"), required=True)
+    l4_preflight.add_argument("--strategy", required=True)
+    l4_preflight.add_argument("--instrument", required=True)
     return parser
 
 
@@ -333,12 +436,50 @@ def main(argv: list[str] | None = None) -> int:
         return _account(args)
     if args.group == "trade":
         return _trade(args)
+    if args.group == "runtime":
+        if args.action == "golden":
+            from trading.application.runtime_golden import run_runtime_golden
+            result = run_runtime_golden(args.root)
+            payload = {
+                "scenario_id": result.scenario_id,
+                "audit_hash": result.audit_hash,
+                "artifact": str(result.artifact),
+            }
+        elif args.action == "failure-matrix":
+            from trading.application.runtime_failure_matrix import run_runtime_failure_matrix
+            result = run_runtime_failure_matrix(args.root)
+            payload = {
+                "matrix_id": result["matrix_id"],
+                "passed": result["passed"],
+                "audit_hash": result["audit_hash"],
+                "artifact": result["artifact"],
+            }
+        elif args.action == "orders":
+            from trading.execution.order_state import DurableOrderStatus
+            from trading.orchestration.runtime_store import SQLiteRuntimeStore
+            store = SQLiteRuntimeStore(args.db)
+            supplied = (args.client_order_id, args.target, args.actor, args.reason, args.evidence)
+            if any(value is not None for value in supplied):
+                if not all(value is not None for value in supplied):
+                    raise SystemExit("manual resolution requires --client-order-id, --target, --actor, --reason, and --evidence")
+                resolution = store.resolve_unresolved_order(
+                    args.client_order_id, DurableOrderStatus(args.target), datetime.now(timezone.utc),
+                    actor=args.actor, reason=args.reason, evidence=args.evidence,
+                )
+                payload = {"resolution": to_primitive(resolution)}
+            else:
+                payload = {
+                    "unresolved_orders": [to_primitive(item) for item in store.unresolved_orders()],
+                    "manual_resolutions": [to_primitive(item) for item in store.manual_order_resolutions()],
+                }
+        else:
+            payload = _runtime_l4_preflight(args)
+        print(json.dumps(payload, indent=2))
+        return 0 if payload.get("ready", True) else 2
     if args.group == "data":
         return _data(args)
     if args.group == "features":
         return _features(args)
-    if args.group == "history":
-        return _history(args)
     if args.group == "pricing":
         return _pricing(args)
     if args.group == "vol":
@@ -356,9 +497,6 @@ def main(argv: list[str] | None = None) -> int:
             "checked_studies":result.checked_studies,"checked_strategies":result.checked_strategies,
             "violations":result.violations},ensure_ascii=False,indent=2))
         return 0 if result.passed else 2
-    if args.action == "migrate-btc-governance":
-        from research.btc_study_governance import migrate
-        paths=migrate(args.lake_root);print(json.dumps({"count":len(paths),"paths":[str(path) for path in paths]},indent=2));return 0
     if args.action == "register-btc-iron-condor":
         from research.register_btc_iron_condor import register
         directory,spec=register(args.lake_root);print(f"{directory}: {spec.lifecycle.value} {spec.spec_hash}");return 0
@@ -385,7 +523,7 @@ def main(argv: list[str] | None = None) -> int:
             )
 
         dataset = SeriesCaptureService(
-            DatasetRepository(args.dataset_root), on_progress=report_progress,
+            MarketSliceStorageDriver(args.dataset_root), on_progress=report_progress,
         ).capture(provider, spec, series_spec, append=args.append)
         print(f"Dataset: {dataset.manifest.dataset_id}")
         print(f"Slices: {dataset.manifest.slice_count}")
@@ -419,6 +557,231 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _data(args: argparse.Namespace) -> int:
+    if args.action == "soak-binance":
+        if args.duration_seconds <= 0 or args.minimum_events <= 0 or args.maximum_silence_seconds <= 0:
+            raise SystemExit("soak duration, minimum events and maximum silence must be positive")
+        import asyncio
+        from trading.adapters.binance.adapter import (
+            BinanceStreamSession, WebSocketClientConnector, websocket_url,
+        )
+        from trading.adapters.binance.stream import BinanceCanonicalStreamService
+        from trading.market_data import (
+            BoundedEventChannel, RotatingCanonicalCaptureWriter,
+            run_binance_market_restart_campaign, run_binance_market_soak,
+        )
+
+        symbol = args.symbol.upper()
+        stream = f"{symbol.lower()}@{args.channel}"
+        instrument = InstrumentId(args.instrument or f"crypto:binance:spot:{symbol}")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        journal = args.journal or (
+            Path(args.lake_root) / "source" / "live" / "binance" / f"{symbol.lower()}-{args.channel}-{stamp}.jsonl"
+        )
+        artifact = args.artifact or journal.with_suffix(".soak.json")
+
+        async def soak():
+            def build(index: int, *, campaign: bool):
+                leg_journal = journal.with_name(
+                    f"{journal.stem}.leg-{index:03d}{journal.suffix}",
+                ) if campaign else journal
+                leg_canonical = leg_journal.with_suffix(".canonical.jsonl")
+                output = BoundedEventChannel(max(4096, args.minimum_events * 2))
+                service = BinanceCanonicalStreamService(
+                    BinanceStreamSession(
+                        WebSocketClientConnector(), websocket_url(
+                            Environment.LIVE, stream, public_only=True,
+                        ), journal=leg_journal,
+                    ),
+                    {symbol: instrument}, output, source_instance="trader-soak", stream_id=stream,
+                    canonical_capture=RotatingCanonicalCaptureWriter(
+                        leg_canonical, session_id=leg_journal.stem, source="binance",
+                        maximum_segment_events=args.capture_segment_events,
+                        maximum_segment_bytes=args.capture_segment_bytes,
+                        maximum_total_bytes=args.capture_total_bytes,
+                    ),
+                )
+                return service, output
+            if args.restart_interval_seconds:
+                return await run_binance_market_restart_campaign(
+                    lambda index: build(index, campaign=True), stream_id=stream,
+                    duration_seconds=args.duration_seconds,
+                    restart_interval_seconds=args.restart_interval_seconds,
+                    minimum_events=args.minimum_events,
+                    maximum_silence_seconds=args.maximum_silence_seconds,
+                    artifact_path=artifact,
+                    maximum_channel_utilization=args.maximum_channel_utilization,
+                )
+            service, output = build(1, campaign=False)
+            return await run_binance_market_soak(
+                service, output, duration_seconds=args.duration_seconds,
+                minimum_events=args.minimum_events,
+                maximum_silence_seconds=args.maximum_silence_seconds,
+                artifact_path=artifact,
+                maximum_channel_utilization=args.maximum_channel_utilization,
+            )
+
+        result = asyncio.run(soak())
+        print(json.dumps(to_primitive(result), ensure_ascii=False, indent=2))
+        return 0 if result.passed else 2
+    if args.action == "live-binance":
+        if args.messages <= 0:
+            raise SystemExit("--messages must be positive")
+        import asyncio
+        from trading.adapters.binance.adapter import (
+            BinanceStreamSession, WebSocketClientConnector, websocket_url,
+        )
+        from trading.adapters.binance.stream import BinanceCanonicalStreamService
+        from trading.market_data import BoundedEventChannel
+        from trading.market_data import CanonicalCaptureWriter
+
+        symbol = args.symbol.upper()
+        stream = f"{symbol.lower()}@{args.channel}"
+        instrument = InstrumentId(args.instrument or (
+            f"crypto:binance:{'futures' if args.futures else 'spot'}:{symbol}"
+        ))
+        journal = args.journal or (
+            Path(args.lake_root) / "source" / "live" / "binance"
+            / f"{symbol.lower()}-{args.channel}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
+        )
+        canonical_path = journal.with_suffix(".canonical.jsonl")
+
+        async def capture():
+            output = BoundedEventChannel(max(16, args.messages * 2))
+            service = BinanceCanonicalStreamService(
+                BinanceStreamSession(
+                    WebSocketClientConnector(), websocket_url(
+                        Environment.LIVE, stream, futures=args.futures, public_only=not args.futures,
+                    ),
+                    journal=journal,
+                ),
+                {symbol: instrument}, output,
+                source_instance="trader-cli", stream_id=stream,
+                canonical_capture=CanonicalCaptureWriter(
+                    canonical_path, session_id=journal.stem, source="binance",
+                ),
+            )
+            producer = asyncio.create_task(service.run(message_limit=args.messages))
+            events = [event async for event in output.events()]
+            await producer
+            return service, events
+
+        service, events = asyncio.run(capture())
+        print(json.dumps({
+            "provider": "binance", "stream": stream, "instrument_id": instrument.value,
+            "raw_messages": service.raw_messages, "canonical_events": service.canonical_events,
+            "reconnects": service.reconnects, "raw_journal": str(journal),
+            "canonical_journal": str(canonical_path),
+            "events": to_primitive(events),
+        }, ensure_ascii=False, indent=2))
+        return 0
+    if args.action == "search":
+        dimensions = {}
+        for item in args.dimension:
+            if "=" not in item:
+                raise SystemExit("--dimension must use key=value")
+            key, value = item.split("=", 1)
+            if not key.strip() or not value.strip():
+                raise SystemExit("--dimension key and value cannot be empty")
+            dimensions[key.strip()] = value.strip()
+        products = ResearchDataClient(args.lake_root).search(**dimensions)
+        print(json.dumps({"products": [ResearchDataClient(args.lake_root).describe(item) for item in products]},
+                         ensure_ascii=False, indent=2)); return 0
+    if args.action == "describe":
+        print(json.dumps(ResearchDataClient(args.lake_root).describe(args.dataset), ensure_ascii=False, indent=2)); return 0
+    if args.action in {"doctor", "health"}:
+        from trading.data.health import DataHealthService
+        service = DataHealthService(args.lake_root)
+        report = service.doctor(args.dataset) if args.action == "doctor" else service.audit()
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 2 if args.action == "health" and args.strict and not report["healthy"] else 0
+    if args.action == "validate":
+        from trading.data.quality import DatasetQualityService
+        assessment = DatasetQualityService(args.lake_root).assess(args.release)
+        print(json.dumps(to_primitive(assessment), ensure_ascii=False, indent=2))
+        return 0 if assessment.passed else 2
+    if args.action == "prepare":
+        register_default_products(args.lake_root)
+        if args.connector_config is not None:
+            register_configured_products(args.lake_root, args.connector_config)
+        providers = default_provider_registry(args.lake_root, connector_config=args.connector_config)
+        client = ResearchDataClient(args.lake_root, providers=providers)
+        from trading.data.preparation import DataPreparationService
+        prepared = DataPreparationService(client).prepare(
+            args.dataset, start=datetime.fromisoformat(args.start), end=datetime.fromisoformat(args.end),
+            minimum_quality=QualityLevel(args.quality), provider=args.provider, venue=args.venue,
+            acquire_missing=args.acquire_missing, promote=args.promote, actor=args.actor, reason=args.reason,
+        )
+        print(json.dumps(to_primitive(prepared), ensure_ascii=False, indent=2)); return 0
+    if args.action == "query":
+        if args.limit <= 0:
+            raise SystemExit("--limit must be positive")
+        query = ResearchDataClient(args.lake_root).get(
+            args.dataset, start=args.start, end=args.end, fields=tuple(args.field) or None,
+        )
+        rows = query.collect(OutputFormat.ROWS)
+        print(json.dumps({
+            "release_id": query.release_id, "explain": query.explain(),
+            "returned_rows": min(len(rows), args.limit), "total_rows": len(rows),
+            "rows": to_primitive(rows[:args.limit]),
+        }, ensure_ascii=False, indent=2)); return 0
+    if args.action == "freeze":
+        client = ResearchDataClient(args.lake_root)
+        queries = tuple(client.get(dataset) for dataset in args.dataset)
+        target = client.freeze_study(
+            args.output, args.study_id, queries, code_version=args.code_version,
+        )
+        print(json.dumps({
+            "study_id": args.study_id, "snapshot": str(target),
+            "release_ids": [query.release_id for query in queries],
+        }, ensure_ascii=False, indent=2)); return 0
+    if args.action == "catalog":
+        catalog = DataCatalog(args.lake_root)
+        if args.refresh:
+            catalog.discover(); catalog.save()
+        values = [{
+            "logical_key": str(product.key), "title": product.title, "layer": product.layer.value,
+            "dimensions": dict(product.dimensions), "primary_time": product.primary_time,
+            "sources": to_primitive(product.sources),
+            "releases": [{
+                "release_id": release.release_id, "version": release.release_version,
+                "provider": release.provider, "venue": release.venue, "content_hash": release.content_hash,
+                "quality_level": release.quality_level.value, "status": release.status.value,
+                "published_at": release.published_at, "aliases": list(release.aliases),
+            } for release in catalog.releases(product)],
+        } for product in catalog.products()]
+        print(json.dumps({"products": values}, ensure_ascii=False, indent=2)); return 0
+    if args.action == "compare":
+        comparison = ResearchDataClient(args.lake_root).compare(args.first, args.second)
+        print(json.dumps(comparison, ensure_ascii=False, indent=2)); return 0
+    if args.action == "audit-artifact":
+        from trading.data.artifact_audit import audit_governed_artifact
+        report = audit_governed_artifact(args.lake_root, args.artifact)
+        print(json.dumps(to_primitive(report), ensure_ascii=False, indent=2))
+        return 0 if report.passed else 2
+    if args.action == "alias":
+        catalog = DataCatalog(args.lake_root)
+        release = catalog.promote_alias(
+            args.alias, args.release, actor=args.actor, reason=args.reason,
+            quality_report_hash=args.quality_report_hash,
+        )
+        print(json.dumps({"alias": args.alias, "release_id": release.release_id}, indent=2)); return 0
+    if args.action in {"plan", "acquire"}:
+        register_default_products(args.lake_root)
+        if args.connector_config is not None:
+            register_configured_products(args.lake_root, args.connector_config)
+        providers = default_provider_registry(args.lake_root, connector_config=args.connector_config)
+        client = ResearchDataClient(args.lake_root, providers=providers)
+        start, end = datetime.fromisoformat(args.start), datetime.fromisoformat(args.end)
+        plan = client.plan(args.dataset, start=start, end=end, provider=args.provider, venue=args.venue)
+        if args.action == "plan":
+            print(json.dumps(to_primitive(plan), ensure_ascii=False, indent=2)); return 0
+        release = client.acquire(plan, refresh=args.refresh)
+        print(json.dumps(to_primitive(release), ensure_ascii=False, indent=2)); return 0
+    if args.action == "promote":
+        release = DataCatalog(args.lake_root).promote(
+            args.release, args.status, actor=args.actor, reason=args.reason,
+        )
+        print(json.dumps(to_primitive(release), ensure_ascii=False, indent=2)); return 0
     if args.action == "quarantine-insecure-massive-cache":
         moved = MassiveSourceArchive.quarantine_non_https(args.lake_root)
         print(json.dumps({"quarantined": len(moved), "paths": [str(item) for item in moved]}, ensure_ascii=False, indent=2)); return 0
@@ -431,7 +794,7 @@ def _data(args: argparse.Namespace) -> int:
             result["corporate_actions"] = pipeline.sync_corporate_actions(args.ticker, datetime.fromisoformat(args.start), datetime.fromisoformat(args.end))
         print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
     if args.action == "build-massive-slices":
-        dataset = MassiveCuratedSliceBuilder(args.lake_root, catalog_path=args.catalog_path, dataset_root=args.dataset_root).build(
+        dataset = MassiveCuratedSliceBuilder(args.lake_root, reference_catalog_path=args.reference_catalog_path, dataset_root=args.dataset_root).build(
             args.source_dataset, args.output_dataset, datetime.fromisoformat(args.start), datetime.fromisoformat(args.end),
             sampling_seconds=args.sampling_seconds, max_quote_age_seconds=args.max_quote_age_seconds,
             split=args.split, risk_free_rate=args.risk_free_rate)
@@ -451,15 +814,6 @@ def _data(args: argparse.Namespace) -> int:
     if args.action == "compact-market-events":
         result = ParquetMarketEventRepository(Path(args.lake_root) / "canonical" / "market").compact(args.dataset)
         print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
-    if args.action == "prepare-massive-options":
-        pipeline = MassiveOptionDataPipeline(args.lake_root, MassiveClient(MassiveConfig.from_env()), catalog_path=args.catalog_path)
-        manifest = pipeline.prepare_options(
-            dataset_id=args.dataset_id, underlying=args.underlying,
-            option_tickers=tuple(value.strip() for value in args.option_tickers.split(",") if value.strip()),
-            start=datetime.fromisoformat(args.start), end=datetime.fromisoformat(args.end), underlying_reference_ticker=args.underlying_reference_ticker,
-        )
-        print(f"{manifest['dataset_id']}: rows={manifest['rows']} hash={manifest['dataset_sha256']}")
-        return 0
     if args.action == "massive-fetch":
         client = MassiveClient(MassiveConfig.from_env())
         archive = MassiveSourceArchive(args.lake_root, client)
@@ -504,34 +858,10 @@ def _data(args: argparse.Namespace) -> int:
             risk_free_rate=args.risk_free_rate, dividend_yield=args.dividend_yield,
         )
         print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
-    if args.action == "prepare-btc-options":
-        manifests = BtcOptionsDataPipeline(args.lake_root).prepare(date.fromisoformat(args.start), date.fromisoformat(args.end))
-        for manifest in manifests:
-            print(f"{manifest['dataset_id']}: rows={manifest['rows']} hash={manifest['dataset_sha256']}")
-        return 0
-    if args.action == "prepare-btc-option-quotes":
-        manifest = BtcOptionsDataPipeline(args.lake_root).prepare_option_quotes(date.fromisoformat(args.start), date.fromisoformat(args.end))
-        print(f"{manifest['dataset_id']}: rows={manifest['rows']} hash={manifest['dataset_sha256']}")
-        return 0
-    if args.action == "prepare-deribit-option-trades":
-        manifest = BtcOptionsDataPipeline(args.lake_root).prepare_deribit_option_trades(date.fromisoformat(args.start), date.fromisoformat(args.end))
-        print(f"{manifest['dataset_id']}: rows={manifest['rows']} hash={manifest['dataset_sha256']}")
-        return 0
-    if args.action == "capture-deribit-option-chain":
-        manifest=BtcOptionsDataPipeline(args.lake_root).capture_deribit_option_chain()
-        print(f"{manifest['dataset_id']}: snapshots={manifest['snapshot_count']} rows={manifest['rows']} hash={manifest['dataset_sha256']}")
-        return 0
     if args.action == "btc-options-readiness":
         result = btc_options_readiness(args.lake_root); print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["signal_research_ready"] else 2
-    if args.action == "materialize-capabilities":
-        paths = materialize_catalog_capabilities(args.lake_root)
-        print(json.dumps({"written": [str(path) for path in paths], "count": len(paths)}, ensure_ascii=False, indent=2))
-        return 0
-    try:
-        metadata = CanonicalDatasetRepository(args.lake_root).metadata(args.dataset)
-    except KeyError:
-        metadata = ParquetMarketEventRepository(Path(args.lake_root) / "canonical" / "market").metadata(args.dataset)
+    metadata = ResearchDataClient(args.lake_root).metadata(args.dataset)
     print(json.dumps(metadata, ensure_ascii=False, indent=2))
     return 0
 
@@ -558,8 +888,8 @@ def _massive_request(args: argparse.Namespace) -> tuple[str, dict[str, object]]:
 def _features(args: argparse.Namespace) -> int:
     builders = {"btc-iv-rv-v1": BtcIvRvFeatureBuilder, "btc-term-skew-v1": BtcTermSkewFeatureBuilder,
                 "btc-deribit-trade-skew-v1": BtcDeribitTradeSkewFeatureBuilder}
-    manifest = builders[args.feature_set](args.lake_root).build()
-    print(f"{manifest['dataset_id']}: rows={manifest['rows']} hash={manifest['dataset_sha256']}")
+    release = builders[args.feature_set](args.lake_root).build()
+    print(f"{release.release_id}: product={release.product_key} hash={release.content_hash}")
     return 0
 
 
@@ -601,7 +931,6 @@ def _research_readiness(args: argparse.Namespace) -> int:
         from research.spxw_put_skew.study import ResearchConfig, execute_research
     except ImportError as error:
         raise SystemExit("research readiness requires: pip install -e '.[notebook]'") from error
-    from trading.research.data_store import ResearchDatasetStore
     raw = json.loads(args.study_config.read_text(encoding="utf-8"))
     raw.pop("dataset_id", None)
     decimal_fields = {
@@ -610,10 +939,32 @@ def _research_readiness(args: argparse.Namespace) -> int:
         "stop_loss_multiple", "commission_per_contract",
     }
     config = ResearchConfig(**{key: Decimal(str(value)) if key in decimal_fields else value for key, value in raw.items()})
-    repository = DatasetRepository(args.dataset_root)
-    dataset = repository.load(args.dataset)
-    collection = ResearchDatasetStore(repository).load_collection(args.dataset)
+    client = ResearchDataClient(args.lake_root, run_mode=RunMode.BACKTEST)
+    feed = client.replay_slices(args.dataset)
+    dataset = feed.dataset
+    collection = client.collection(args.dataset)
     panel, readiness, conclusion = execute_research(dataset, config, collection)
+    release = feed.release
+    artifact_payload = {
+        "artifact_schema_version": 1,
+        "study": "spxw-put-skew-readiness",
+        "consumed_inputs": [{
+            "release_id": release.release_id,
+            "content_hash": release.content_hash,
+            "quality_level": release.quality_level.value,
+        }],
+        "config": to_primitive(config),
+        "readiness": to_primitive(readiness),
+        "conclusion": to_primitive(conclusion),
+        "eligible_panel_rows": len(panel),
+    }
+    material = json.dumps(artifact_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    artifact_payload["audit_hash"] = sha256(material.encode()).hexdigest()
+    artifact = Path(args.lake_root) / "studies" / "spxw-put-skew-readiness" / artifact_payload["audit_hash"] / "manifest.json"
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    temporary = artifact.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(artifact_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(artifact)
     print(f"Dataset: {dataset.manifest.dataset_id}")
     print(f"Ready: {readiness.ready}")
     print(f"Conclusion status: {conclusion.status}")
@@ -622,23 +973,22 @@ def _research_readiness(args: argparse.Namespace) -> int:
         print(f"{key}: {value}")
     for reason in readiness.reasons:
         print(f"FAIL: {reason}")
+    print(f"Artifact: {artifact}")
     return 0 if readiness.ready else 2
 
 
 def _vol(args: argparse.Namespace) -> int:
-    dataset = DatasetRepository(args.dataset_root).load(args.dataset)
-    catalog = InstrumentCatalog()
-    for definition in dataset.definitions:
-        catalog.add(definition)
+    client = ResearchDataClient(args.lake_root, run_mode=RunMode.RESEARCH)
+    feed = client.replay_slices(args.dataset)
+    dataset = feed.dataset
+    catalog = dataset.reference_catalog()
     service = ValuationService(catalog, risk_free_rate=args.rate, dividend_yield=args.dividend_yield)
-    repository = SurfaceRepository(args.surface_root)
     surfaces, failures = [], []
     for market in dataset.slices:
         _, valuation = service.value(market)
         failures.extend(valuation.failures)
         if valuation.surface is not None:
             surfaces.append(valuation.surface)
-            repository.save(valuation.surface)
     calibrated = sum(any(smile.parameters is not None for smile in item.smiles) for item in surfaces)
     arbitrage_passed = sum(item.diagnostics.passed for item in surfaces)
     print(f"Dataset: {dataset.manifest.dataset_id}")
@@ -647,9 +997,13 @@ def _vol(args: argparse.Namespace) -> int:
     print(f"Arbitrage checks passed: {arbitrage_passed}")
     print(f"Valuation failures: {len(failures)}")
     if surfaces:
+        from trading.data.surface_features import SurfaceFeaturePublisher
+        release = SurfaceFeaturePublisher(args.lake_root).publish(
+            tuple(surfaces), input_release_id=feed.release.release_id,
+        )
         print(f"Last surface: {surfaces[-1].surface_id}")
         print(f"Last input hash: {surfaces[-1].input_hash}")
-        print(f"Surface directory: {repository.root}")
+        print(f"Feature Release: {release.release_id}")
     return 0 if surfaces else 2
 
 
@@ -683,54 +1037,74 @@ def _risk_analytics(args: argparse.Namespace) -> int:
     return 0
 
 
-def _history(args: argparse.Namespace) -> int:
-    repository = BarRepository(args.history_root)
-    if args.action == "download":
-        start, end = datetime.fromisoformat(args.start), datetime.fromisoformat(args.end)
-        dataset = repository.download(
-            BinanceHistoricalBarProvider(args.market), dataset_id=args.dataset_id,
-            instrument_id=InstrumentId(args.instrument), symbol=args.symbol, interval=args.interval,
-            start=start, end=end, source=f"binance.{args.market}",
-        )
-        print(f"Dataset: {dataset.metadata.dataset_id}")
-        print(f"Bars: {dataset.metadata.bar_count}")
-        print(f"Range: {dataset.bars[0].start.isoformat()} to {dataset.bars[-1].end.isoformat()}")
-        print(f"Directory: {repository.root / dataset.metadata.dataset_id}")
-        return 0
-    if args.action == "backtest-sma":
-        result = backtest_sma_cross(
-            repository.load(args.dataset_id),
-            SmaCrossConfig(args.fast, args.slow, args.initial_cash, args.fee_bps),
-        )
-        metrics = result.metrics
-        print(f"Strategy: SMA({args.fast}, {args.slow}) long-only")
-        print(f"Dataset: {result.dataset_id}")
-        print(f"Return: {metrics['total_return']:.2%}")
-        print(f"Buy and hold: {metrics['buy_and_hold_return']:.2%}")
-        print(f"Annualized: {metrics['annualized_return']:.2%}")
-        print(f"Max drawdown: {metrics['max_drawdown']:.2%}")
-        print(f"Sharpe: {metrics['sharpe']:.3f}")
-        print(f"Trades: {metrics['trade_count']}")
-        print(f"Commissions: {metrics['commissions']:.2f}")
-        print(f"Final equity: {metrics['final_equity']:.2f}")
-        return 0
-    dataset = repository.load(args.dataset_id)
-    print(f"Dataset: {dataset.metadata.dataset_id}")
-    print(f"Instrument: {dataset.metadata.instrument_id}")
-    print(f"Symbol: {dataset.metadata.symbol}")
-    print(f"Interval: {dataset.metadata.interval}")
-    print(f"Bars: {dataset.metadata.bar_count}")
-    print(f"Requested range: {dataset.metadata.start.isoformat()} to {dataset.metadata.end.isoformat()}")
-    print(f"Directory: {repository.root / dataset.metadata.dataset_id}")
-    return 0
-
-
 def _backtest(args: argparse.Namespace) -> int:
-    datasets = DatasetRepository(args.dataset_root)
+    if args.action == "golden-spxw":
+        from trading.backtest.golden import build_spxw_golden_pipeline
+        payload = build_spxw_golden_pipeline(
+            args.lake_root,
+            args.backtest_root,
+            event_release_id=args.event_release,
+            source_slice_release_id=args.source_slices,
+            curated_slice_release_id=args.curated_slices,
+        )
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
+    if args.action == "sma":
+        from trading.domain.market_data import Bar
+        client = ResearchDataClient(args.lake_root, run_mode=RunMode.BACKTEST)
+        query = client.get(args.dataset, start=args.start, end=args.end, fields=(
+            "instrument_id", "period_start", "period_end", "open", "high", "low", "close", "volume",
+        ))
+        rows = query.collect(OutputFormat.ROWS)
+        release_id = query.release_id
+        bars = tuple(Bar(
+            InstrumentId(str(row["instrument_id"])),
+            row["period_start"] if isinstance(row["period_start"], datetime) else datetime.fromisoformat(str(row["period_start"]).replace("Z", "+00:00")),
+            row["period_end"] if isinstance(row["period_end"], datetime) else datetime.fromisoformat(str(row["period_end"]).replace("Z", "+00:00")),
+            Decimal(str(row["open"])), Decimal(str(row["high"])), Decimal(str(row["low"])),
+            Decimal(str(row["close"])), Decimal(str(row["volume"])),
+        ) for row in rows)
+        result = backtest_sma_cross(
+            BarSeries(release_id, bars), SmaCrossConfig(args.fast, args.slow, args.initial_cash, args.fee_bps),
+        )
+        release = client.resolve(release_id)
+        payload = {
+            "artifact_schema_version": 1,
+            "strategy": f"sma-{args.fast}-{args.slow}", "release_id": release_id,
+            "input": {
+                "logical_key": str(release.product_key), "release_id": release.release_id,
+                "content_hash": release.content_hash, "schema_id": release.schema_id,
+                "schema_version": release.schema_version, "transform_id": release.transform_id,
+                "transform_version": release.transform_version, "quality_level": release.quality_level.value,
+                "start": args.start, "end": args.end, "boundary": "[start,end)",
+            },
+            "config": {
+                "fast": args.fast, "slow": args.slow, "initial_cash": str(args.initial_cash),
+                "fee_bps": str(args.fee_bps),
+            },
+            "bars": len(bars), "metrics": to_primitive(result.metrics),
+        }
+        material = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        audit_hash = sha256(material.encode()).hexdigest()
+        payload["audit_hash"] = audit_hash
+        directory = Path(args.backtest_root) / "sma" / audit_hash
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / "manifest.json"
+        temporary = target.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        temporary.replace(target)
+        payload["artifact"] = str(target)
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        return 0
     backtests = BacktestRepository(args.backtest_root)
     if args.action == "mock":
         dataset = make_mock_dataset(MockScenario(args.scenario), split=args.split)
-        directory = datasets.save(dataset)
+        directory = MarketSliceStorageDriver(args.dataset_root).save(dataset)
+        product = DatasetProduct(
+            DatasetKey(f"curated.mock.{args.scenario}.{args.split}"), f"Synthetic {args.scenario} {args.split}",
+            DatasetLayer.CURATED, dimensions={"synthetic": "true", "split": args.split}, primary_time="timestamp",
+        )
+        register_historical_dataset(args.lake_root, dataset, directory, product, provider="synthetic", venue="mock", synthetic=True)
         print(f"Dataset: {dataset.manifest.dataset_id}")
         print(f"Hash: {dataset.manifest.content_hash}")
         print(f"Directory: {directory}")
@@ -752,7 +1126,9 @@ def _backtest(args: argparse.Namespace) -> int:
             return 0
         if not args.dataset:
             raise SystemExit("--dataset is required for bull-put-spread")
-        dataset = datasets.load(args.dataset)
+        feed = ResearchDataClient(args.lake_root, dataset_root=args.dataset_root,
+                                  run_mode=RunMode.BACKTEST).replay_slices(args.dataset)
+        dataset = feed.dataset
         values = json.loads(args.config.read_text()) if args.config else {}
         strategy_config = BullPutSpreadConfig(**_coerce_decimal_fields(values.get("strategy", {}), BullPutSpreadConfig))
         risk_limits = RiskLimits(**_coerce_decimal_fields(values.get("risk", {}), RiskLimits))
@@ -760,12 +1136,14 @@ def _backtest(args: argparse.Namespace) -> int:
         backtest_values.pop("start", None)
         backtest_values.pop("end", None)
         config = BacktestConfig(dataset.manifest.start, dataset.manifest.end, **backtest_values)
-        conservative, stress = BacktestService(backtests).run_suite(dataset, config, strategy_config, risk_limits)
+        conservative, stress = BacktestService(backtests).run_suite(feed, config, strategy_config, risk_limits)
         for result in (conservative, stress):
             print(f"{result.config.fill_model}: run={result.run_id} status={result.status.value} return={result.metrics['total_return']}")
         return 0
     if args.action == "validate":
-        selected = tuple(datasets.load(value) for value in (args.development, args.validation, args.test))
+        client = ResearchDataClient(args.lake_root, dataset_root=args.dataset_root, run_mode=RunMode.BACKTEST)
+        selected_feeds = tuple(client.replay_slices(value) for value in (args.development, args.validation, args.test))
+        selected = tuple(feed.dataset for feed in selected_feeds)
         values = json.loads(args.config.read_text()) if args.config else {}
         strategy_config = BullPutSpreadConfig(**_coerce_decimal_fields(values.get("strategy", {}), BullPutSpreadConfig))
         risk_limits = RiskLimits(**_coerce_decimal_fields(values.get("risk", {}), RiskLimits))
@@ -773,7 +1151,7 @@ def _backtest(args: argparse.Namespace) -> int:
         bt_values.pop("start", None)
         bt_values.pop("end", None)
         config = BacktestConfig(selected[0].manifest.start, selected[0].manifest.end, **bt_values)
-        directory = BacktestService(backtests).validate_splits(selected, config, strategy_config, risk_limits)
+        directory = BacktestService(backtests).validate_splits(selected_feeds, config, strategy_config, risk_limits)
         print(f"Validation: {directory}")
         print("Parameters were frozen across development, validation, and test splits.")
         return 0
@@ -801,7 +1179,9 @@ def _backtest(args: argparse.Namespace) -> int:
     config, raw_strategy, raw_risk = backtests.load_config(args.run_id)
     strategy_config = from_primitive(raw_strategy, BullPutSpreadConfig)
     risk_limits = from_primitive(raw_risk, RiskLimits)
-    dataset = datasets.load(manifest["dataset_id"])
+    dataset = ResearchDataClient(args.lake_root, run_mode=RunMode.BACKTEST).replay_slices(
+        manifest["dataset_id"],
+    ).dataset
     replayed = BacktestEngine(dataset, config, BullPutSpreadStrategy(strategy_config), risk_limits).run()
     replayed.metrics["dataset_hash"] = dataset.manifest.content_hash
     replayed.metrics["code_version"] = dataset.manifest.code_version
@@ -824,12 +1204,12 @@ def _backtest(args: argparse.Namespace) -> int:
 
 def _capture_normalized_series(args: argparse.Namespace) -> int:
     environment = Environment(args.environment)
-    repository = CatalogRepository(args.catalog_path)
+    repository = ReferenceCatalogRepository(args.reference_catalog_path)
     if not repository.path.exists():
         raise SystemExit("catalog is missing; run 'trader catalog sync' first")
     catalog = repository.load()
     now = datetime.now(timezone.utc)
-    definitions = tuple(catalog.get(InstrumentId(value.strip()), now) for value in args.instruments.split(",") if value.strip())
+    definitions = tuple(catalog.instruments.get(InstrumentId(value.strip()), now) for value in args.instruments.split(",") if value.strip())
     session = None
     if args.venue == "ibkr":
         if environment not in {Environment.PAPER, Environment.LIVE}:
@@ -855,14 +1235,14 @@ def _capture_normalized_series(args: argparse.Namespace) -> int:
         provider = CompositeMarketDataAdapter(routes)
     series_spec = SeriesCaptureSpec(args.dataset_id, args.samples, args.interval_seconds, args.split)
     try:
-        dataset = NormalizedSeriesCaptureService(DatasetRepository(args.dataset_root)).capture(
-            provider, definitions, series_spec, source=f"{args.venue}.normalized-series", market_data_type=environment.value,
+        dataset = NormalizedSeriesCaptureService(MarketSliceStorageDriver(args.dataset_root)).capture(
+            provider, catalog, definitions, series_spec, source=f"{args.venue}.normalized-series", market_data_type=environment.value,
         )
     finally:
         if session is not None:
             session.disconnect()
     print(f"Dataset: {dataset.manifest.dataset_id}")
-    print(f"Products: {','.join(sorted({item.product_type.value for item in definitions}))}")
+    print(f"Products: {','.join(sorted({item.instrument_type.value for item in definitions}))}")
     print(f"Slices: {dataset.manifest.slice_count}")
     print(f"Hash: {dataset.manifest.content_hash}")
     return 0
@@ -872,9 +1252,11 @@ def _catalog(args: argparse.Namespace) -> int:
     environment = Environment(args.environment)
     products = {item.strip() for item in args.products.split(",") if item.strip()}
     symbols = tuple(item.strip() for item in args.symbols.split(",") if item.strip())
-    repository = CatalogRepository(args.catalog_path)
-    catalog = repository.load() if repository.path.exists() else InstrumentCatalog()
-    definitions = []
+    from trading.reference import ReferenceCatalog
+    from trading.reference.repository import ReferenceCatalogRepository
+    repository = ReferenceCatalogRepository(args.reference_catalog_path)
+    catalog = repository.load() if repository.path.exists() else ReferenceCatalog()
+    before = len(catalog.instruments.values())
     if args.venue == "ibkr":
         if environment not in {Environment.PAPER, Environment.LIVE}:
             raise SystemExit("IBKR catalog sync requires paper or live environment")
@@ -882,9 +1264,9 @@ def _catalog(args: argparse.Namespace) -> int:
         adapter = IbkrReferenceAdapter(session)
         try:
             if "equity" in products:
-                definitions.extend(adapter.sync(ReferenceDataRequest(ProductType.EQUITY, tuple(item for item in symbols if ":" not in item))))
+                catalog.merge(adapter.sync(ReferenceDataRequest(ProductType.EQUITY, tuple(item for item in symbols if ":" not in item))))
             if "option" in products:
-                definitions.extend(adapter.sync(ReferenceDataRequest(ProductType.LISTED_OPTION, tuple(item for item in symbols if ":" in item))))
+                catalog.merge(adapter.sync(ReferenceDataRequest(ProductType.LISTED_OPTION, tuple(item for item in symbols if ":" in item))))
         finally:
             session.disconnect()
     else:
@@ -892,35 +1274,39 @@ def _catalog(args: argparse.Namespace) -> int:
             raise SystemExit("Binance catalog sync requires testnet or live environment")
         if "spot" in products:
             transport = UrllibBinanceTransport("https://testnet.binance.vision" if environment is Environment.TESTNET else "https://api.binance.com")
-            definitions.extend(BinanceSpotReferenceAdapter(transport).sync(ReferenceDataRequest(ProductType.CRYPTO_SPOT, symbols)))
+            catalog.merge(BinanceSpotReferenceAdapter(transport).sync(ReferenceDataRequest(ProductType.CRYPTO_SPOT, symbols)))
         if "perpetual" in products:
             transport = UrllibBinanceTransport("https://testnet.binancefuture.com" if environment is Environment.TESTNET else "https://dapi.binance.com" if args.inverse else "https://fapi.binance.com")
-            definitions.extend(BinanceFuturesReferenceAdapter(transport, inverse=args.inverse).sync(ReferenceDataRequest(ProductType.PERPETUAL, symbols)))
+            catalog.merge(BinanceFuturesReferenceAdapter(transport, inverse=args.inverse).sync(ReferenceDataRequest(ProductType.PERPETUAL, symbols)))
         if "future" in products:
             transport = UrllibBinanceTransport("https://testnet.binancefuture.com" if environment is Environment.TESTNET else "https://dapi.binance.com" if args.inverse else "https://fapi.binance.com")
-            definitions.extend(BinanceFuturesReferenceAdapter(transport, inverse=args.inverse).sync(ReferenceDataRequest(ProductType.FUTURE, symbols)))
+            catalog.merge(BinanceFuturesReferenceAdapter(transport, inverse=args.inverse).sync(ReferenceDataRequest(ProductType.FUTURE, symbols)))
         if "option" in products:
             if environment is Environment.TESTNET:
                 raise SystemExit("Binance options do not provide the same public testnet contract; use live public reference data only")
-            definitions.extend(BinanceOptionsReferenceAdapter(UrllibBinanceTransport("https://eapi.binance.com")).sync(ReferenceDataRequest(ProductType.CRYPTO_OPTION, symbols)))
-    for definition in definitions:
-        try:
-            catalog.add(definition)
-        except ValueError:
-            catalog.supersede(definition, definition.effective_from)
+            catalog.merge(BinanceOptionsReferenceAdapter(UrllibBinanceTransport("https://eapi.binance.com")).sync(ReferenceDataRequest(ProductType.CRYPTO_OPTION, symbols)))
     repository.save(catalog)
-    print(f"Catalog: {repository.path}")
-    print(f"Synced: {len(definitions)} instruments from {args.venue} ({environment.value})")
+    print(f"Reference Catalog: {repository.path}")
+    print(f"Synced: {len(catalog.instruments.values()) - before} instruments from {args.venue} ({environment.value})")
     return 0
+
+
+def _authoritative_runtime_store(args: argparse.Namespace):
+    from trading.orchestration.runtime_store import SQLiteRuntimeStore
+
+    runtime_path = Path(args.runtime_db) if args.runtime_db else Path(args.event_log_path).parent / "runtime.sqlite3"
+    store = SQLiteRuntimeStore(runtime_path)
+    return store, runtime_path
 
 
 def _account(args: argparse.Namespace) -> int:
     environment = Environment(args.environment)
     if args.venue == "binance" and args.product == "options" and environment is not Environment.LIVE:
         raise SystemExit("Binance options account is live-only; no equivalent options testnet is available")
-    ledger = LedgerRepository(args.ledger_path).load()
-    catalog_repository = CatalogRepository(args.catalog_path)
-    catalog = catalog_repository.load() if catalog_repository.path.exists() else InstrumentCatalog()
+    runtime_store, _ = _authoritative_runtime_store(args)
+    ledger = runtime_store.load_ledger()
+    catalog_repository = ReferenceCatalogRepository(args.reference_catalog_path)
+    catalog = catalog_repository.load() if catalog_repository.path.exists() else ReferenceCatalog()
     account = _account_key(args.venue, args.account_id, args.product)
     adapter = _account_adapter(args.venue, environment, account, ledger, args.product, catalog, args.inverse)
     report = ReconciliationService(ledger, adapter).reconcile(account)
@@ -930,6 +1316,67 @@ def _account(args: argparse.Namespace) -> int:
     for difference in report.differences:
         print(f"{difference.kind} {difference.key}: local={difference.local} venue={difference.venue}")
     return 0 if report.matched else 2
+
+
+def _runtime_l4_preflight(args: argparse.Namespace) -> dict[str, object]:
+    import socket
+    from trading.strategies.deployment import StrategyDeploymentGate
+    environment = Environment(args.environment)
+    compatible_environment = (
+        args.venue == "binance" and environment is Environment.TESTNET
+        or args.venue == "ibkr" and environment is Environment.PAPER
+    )
+    strategy_id = {"covered-call": "covered-call-v1", "spot-perp-carry": "spot-perpetual-carry-v1"}.get(args.strategy, args.strategy)
+    deployment = StrategyDeploymentGate(Path(args.lake_root) / "strategies").evaluate(
+        strategy_id, environment, simulated_venue=False,
+    )
+    instrument_ready = False
+    instrument_reason = "instrument catalog is missing"
+    catalog_path = Path(args.reference_catalog_path)
+    if catalog_path.exists():
+        try:
+            catalog = ReferenceCatalogRepository(catalog_path).load()
+            definition = catalog.instruments.get(InstrumentId(args.instrument), datetime.now(timezone.utc))
+            if not catalog.active_listings(definition.instrument_id, datetime.now(timezone.utc)):
+                raise LookupError("no active listing")
+            instrument_ready = True
+            instrument_reason = "active Venue listing found"
+        except (LookupError, ValueError) as error:
+            instrument_reason = str(error)
+    if args.venue == "binance":
+        external_ready = bool(os.getenv("BINANCE_TESTNET_API_KEY") and os.getenv("BINANCE_TESTNET_API_SECRET"))
+        external_reason = "testnet credentials present" if external_ready else "BINANCE_TESTNET_API_KEY/API_SECRET are missing"
+    else:
+        host = os.getenv("IBKR_HOST", "127.0.0.1")
+        port = int(os.getenv("IBKR_PORT", "4001"))
+        connection = socket.socket(); connection.settimeout(0.25)
+        try:
+            connection.connect((host, port)); external_ready = True
+            external_reason = f"IBKR Paper Gateway reachable at {host}:{port}"
+        except OSError:
+            external_ready = False
+            external_reason = f"IBKR Paper Gateway unreachable at {host}:{port}"
+        finally:
+            connection.close()
+    checks = {
+        "environment_compatible": compatible_environment,
+        "external_connection_ready": external_ready,
+        "strategy_paper_approved": deployment.allowed,
+        "instrument_listing_ready": instrument_ready,
+    }
+    return {
+        "ready": all(checks.values()),
+        "venue": args.venue,
+        "environment": args.environment,
+        "strategy": strategy_id,
+        "instrument": args.instrument,
+        "checks": checks,
+        "reasons": {
+            "external": external_reason,
+            "strategy": deployment.reason,
+            "instrument": instrument_reason,
+        },
+    }
 
 
 def _trade(args: argparse.Namespace) -> int:
@@ -943,18 +1390,23 @@ def _trade(args: argparse.Namespace) -> int:
     if args.venue == "binance" and args.product == "options" and environment is not Environment.LIVE:
         raise SystemExit("Binance options execution is live-only; no equivalent options testnet is available")
     from trading.strategies.deployment import StrategyDeploymentGate
+    if args.venue == "simulated":
+        from trading.strategies.specs import register_builtin_strategies
+        register_builtin_strategies(Path(args.lake_root) / "strategies")
     strategy_id={"covered-call":"covered-call-v1","spot-perp-carry":"spot-perpetual-carry-v1"}.get(args.strategy,args.strategy)
     deployment=StrategyDeploymentGate(Path(args.lake_root)/"strategies").evaluate(strategy_id,environment,simulated_venue=args.venue=="simulated")
     if not deployment.allowed:raise SystemExit(f"strategy deployment rejected: {deployment.reason}")
     print(f"Strategy lifecycle: {deployment.lifecycle.value} ({deployment.strategy_directory})")
-    catalog_repository = CatalogRepository(args.catalog_path)
+    catalog_repository = ReferenceCatalogRepository(args.reference_catalog_path)
     if not catalog_repository.path.exists():
         raise SystemExit("catalog is missing; run 'trader catalog sync' first")
     catalog = catalog_repository.load()
-    definition = catalog.get(InstrumentId(args.instrument), datetime.now(timezone.utc))
-    ledger = LedgerRepository(args.ledger_path).load()
-    venue = definition.listings[0].venue_id if args.venue == "simulated" else VenueId(args.venue)
-    account = AccountKey(venue, args.account_id, _account_type(args.product))
+    definition = catalog.instruments.get(InstrumentId(args.instrument), datetime.now(timezone.utc))
+    runtime_store, runtime_path = _authoritative_runtime_store(args)
+    ledger = runtime_store.load_ledger()
+    listings = catalog.active_listings(definition.instrument_id, datetime.now(timezone.utc))
+    venue = listings[0].venue_id if args.venue == "simulated" else VenueId(args.venue)
+    account = AccountKey(InstitutionId(args.venue), args.account_id, _account_type(args.product))
     if args.venue == "simulated":
         balances, positions = _local_state(ledger, account)
         adapter = SimulatedExecutionAccountAdapter(venue, account, balances, positions, environment)
@@ -962,27 +1414,137 @@ def _trade(args: argparse.Namespace) -> int:
     else:
         adapter = _execution_account_adapter(args.venue, environment, args.product, definition, catalog, args.inverse)
         market_ready = args.market_data_ready
-    reconciliation = ReconciliationService(ledger, adapter)
+    reconciliation = ReconciliationService(ledger, adapter, runtime_store=runtime_store)
     event_log = PersistentEventLog(args.event_log_path)
-    kill_switch = KillSwitch((adapter,))
-    coordinator = TradingCoordinator(ExecutionRouter(catalog, (adapter,)), {account: reconciliation}, kill_switch, event_log)
-    print(f"Environment: {environment.value.upper()}")
-    coordinator.start((account,), catalog_ready=True, market_data_ready=market_ready, execution_ready=True)
-    order_type = OrderType(args.order_type)
-    if order_type is OrderType.LIMIT and args.limit_price is None:
-        raise SystemExit("limit orders require --limit-price")
-    correlation = str(uuid5(NAMESPACE_URL, f"cli:{strategy_id}:{args.instrument}:{datetime.now(timezone.utc).date()}"))
-    request = OrderRequest(
-        f"internal-{correlation}", f"client-{correlation}", strategy_id, f"intent-{correlation}", correlation,
-        account, definition.instrument_id, TradeSide(args.side), args.quantity,
-        ExecutionInstructions(order_type, TimeInForce.DAY, args.limit_price, post_only=args.post_only, reduce_only=args.reduce_only),
+    from trading.execution.ingestion import DurableExecutionIngestionService
+    from trading.execution.recovery import VenueOrderRecoveryService
+    order_recovery = None
+    if callable(getattr(adapter, "recover_order", None)):
+        order_recovery = VenueOrderRecoveryService(
+            runtime_store,
+            {account: adapter},
+            DurableExecutionIngestionService(
+                LedgerService(ledger, catalog),
+                runtime_store,
+            ),
+        )
+    kill_switch = KillSwitch((adapter,), runtime_store=runtime_store)
+    from trading.application import (
+        ApplicationConfig, FunctionProbe, RuntimePaths, RuntimeRecoveryService, TradingApplication,
     )
-    ack = coordinator.submit(request, datetime.now(timezone.utc))
-    print(f"Accepted: client={ack.client_order_id} venue_order={ack.venue_order_id} intent={ack.intent_id}")
-    if args.kill_switch_drill:
-        result = kill_switch.trigger((account,), "CLI drill")
-        print(f"Kill switch: cancelled={len(result.cancelled_orders)} failures={len(result.failures)} reduce_only={kill_switch.reduce_only}")
-    return 0
+    runtime_root = runtime_path.parent
+    paths = RuntimePaths(runtime_root, Path(args.reference_catalog_path), Path(args.lake_root), runtime_path, runtime_root / "artifacts")
+    application = TradingApplication(
+        ApplicationConfig(environment, paths), runtime_store, runtime_id=f"cli-{uuid4()}", accounts=(account,),
+        order_recovery=order_recovery,
+        recovery=RuntimeRecoveryService(
+            runtime_store,
+            catalog,
+            settlement_asset(catalog, definition, datetime.now(timezone.utc)),
+            {account: adapter},
+            marks={definition.instrument_id: args.limit_price} if args.limit_price is not None else {},
+        ),
+        probes=(
+            FunctionProbe("instrument_catalog", lambda: (True, f"loaded {definition.instrument_id}")),
+            FunctionProbe("market_data", lambda: (market_ready, "ready" if market_ready else "not confirmed")),
+            FunctionProbe("account", lambda: (adapter.account_state(account).account == account, "account query passed")),
+            FunctionProbe("reconciliation", lambda: (
+                (report := reconciliation.reconcile(account)).matched,
+                "matched" if report.matched else f"{len(report.differences)} differences",
+            )),
+        ),
+    )
+    coordinator = TradingCoordinator(
+        ExecutionRouter(catalog, (adapter,)), {account: reconciliation}, kill_switch, event_log,
+        runtime_store=runtime_store, application=application,
+    )
+    print(f"Environment: {environment.value.upper()}")
+    if args.soak_seconds < 0 or args.cycle_seconds <= 0:
+        raise SystemExit("--soak-seconds cannot be negative and --cycle-seconds must be positive")
+    supervisor = None
+    soak_started = None
+    if args.soak_seconds:
+        from trading.application import RecoveryBackgroundService, RuntimeSupervisor
+        from trading.orchestration.monitoring import OperationalMonitor
+        background_services = [RecoveryBackgroundService(order_recovery)] if order_recovery is not None else []
+        if args.venue == "ibkr" and order_recovery is not None:
+            from trading.adapters.ibkr.ingestion import IbkrDurableFillIngestion
+            execution = getattr(adapter, "execution", None)
+            session = getattr(execution, "session", None)
+            if session is not None:
+                background_services = [IbkrDurableFillIngestion(session, order_recovery)]
+        if args.venue == "binance" and args.product == "futures":
+            from trading.adapters.binance.adapter import BinanceFundingAdapter
+            from trading.adapters.binance.funding_ingestion import BinanceDurableFundingBackfill
+            from trading.execution.ingestion import DurableAccountingIngestionService
+            execution = getattr(adapter, "execution", None)
+            if execution is not None:
+                symbols = getattr(execution, "instrument_symbols", {})
+                funding_adapter = BinanceFundingAdapter(
+                    execution.transport, execution.signer, environment,
+                    inverse=bool(getattr(execution, "inverse", False)),
+                    instrument_lookup={symbol: instrument for instrument, symbol in symbols.items()},
+                )
+                background_services.append(BinanceDurableFundingBackfill(
+                    account, funding_adapter,
+                    DurableAccountingIngestionService(LedgerService(ledger, catalog), runtime_store),
+                ))
+        supervisor = RuntimeSupervisor(
+            application, {account: reconciliation}, kill_switch,
+            OperationalMonitor(application.config.maximum_clock_skew_ms),
+            background_services=tuple(background_services), activate=coordinator.activate,
+        )
+        soak_started = datetime.now(timezone.utc)
+        supervisor.start()
+    else:
+        application.start()
+    try:
+        if supervisor is None:
+            coordinator.activate()
+            application.run()
+        order_type = OrderType(args.order_type)
+        if order_type is OrderType.LIMIT and args.limit_price is None:
+            raise SystemExit("limit orders require --limit-price")
+        correlation = str(uuid5(NAMESPACE_URL, f"cli:{strategy_id}:{args.instrument}:{datetime.now(timezone.utc).date()}"))
+        request = OrderRequest(
+            f"internal-{correlation}", f"client-{correlation}", strategy_id, f"intent-{correlation}", correlation,
+            account, definition.instrument_id, TradeSide(args.side), args.quantity,
+            ExecutionInstructions(order_type, TimeInForce.DAY, args.limit_price, post_only=args.post_only, reduce_only=args.reduce_only),
+        )
+        ack = coordinator.submit(request, datetime.now(timezone.utc))
+        print(f"Accepted: client={ack.client_order_id} venue_order={ack.venue_order_id} intent={ack.intent_id}")
+        if supervisor is not None:
+            supervisor.run_for(args.soak_seconds, interval_seconds=args.cycle_seconds)
+        if args.kill_switch_drill:
+            result = kill_switch.trigger((account,), "CLI drill")
+            application.degrade("CLI kill-switch drill")
+            print(f"Kill switch: cancelled={len(result.cancelled_orders)} failures={len(result.failures)} reduce_only={kill_switch.reduce_only}")
+        if supervisor is not None:
+            supervisor.stop()
+            restart_passed = False
+            if args.restart_drill:
+                application.start()
+                restart_passed = application.status.value == "ready"
+                application.stop()
+            from trading.application import write_soak_artifact
+            ended = datetime.now(timezone.utc)
+            target = args.soak_artifact or (
+                paths.artifacts / "soak" / f"{environment.value}-{account.account_id}-{int(soak_started.timestamp())}.json"
+            )
+            soak = write_soak_artifact(
+                supervisor, target, started_at=soak_started, ended_at=ended,
+                target_duration_seconds=args.soak_seconds, environment=environment.value,
+                restart_drill_passed=restart_passed,
+                kill_switch_drill_passed=args.kill_switch_drill and kill_switch.triggered,
+            )
+            print(json.dumps(soak, ensure_ascii=False, indent=2))
+            return 0 if soak["passed"] else 2
+        return 0
+    finally:
+        if supervisor is not None and supervisor.started:
+            supervisor.stop()
+        elif application.status.value != "stopped":
+            application.stop()
 
 
 def _ibkr_session(*, readonly: bool) -> IbkrSession:
@@ -1003,20 +1565,19 @@ def _credentials(environment: Environment) -> tuple[str, str]:
 def _account_adapter(venue: str, environment: Environment, account: AccountKey, ledger, product: str, catalog, inverse: bool):
     if venue == "simulated":
         balances, positions = _local_state(ledger, account)
-        return SimulatedExecutionAccountAdapter(account.venue_id, account, balances, positions, environment)
+        return SimulatedExecutionAccountAdapter(VenueId("simulated"), account, balances, positions, environment)
     if venue == "ibkr":
         session = _ibkr_session(readonly=True)
         reference = IbkrReferenceAdapter(session)
-        for definition in catalog.definitions(datetime.now(timezone.utc)):
-            if definition.product_type.value in {"equity", "etf", "listed_option"}:
+        for definition in catalog.instruments.values(datetime.now(timezone.utc)):
+            if definition.instrument_type.value in {"equity", "etf", "listed_option"}:
                 reference.bind_definition(definition, catalog)
         return IbkrAccountAdapter(session, environment)
     key, secret = _credentials(environment)
     if product == "options":
         lookup = {
-            listing.symbol: definition.instrument_id
-            for definition in catalog.definitions(datetime.now(timezone.utc))
-            for listing in definition.listings if listing.venue_id == VenueId("binance")
+            listing.trading_symbol: listing.instrument_id
+            for listing in catalog.listings.values(datetime.now(timezone.utc)) if listing.venue_id == VenueId("binance")
         }
         return BinanceOptionsAccountAdapter(
             UrllibBinanceTransport("https://eapi.binance.com"), BinanceSigner(key, secret),
@@ -1024,9 +1585,8 @@ def _account_adapter(venue: str, environment: Environment, account: AccountKey, 
         )
     base = "https://testnet.binancefuture.com" if product == "futures" and environment is Environment.TESTNET else "https://dapi.binance.com" if product == "futures" and inverse else "https://fapi.binance.com" if product == "futures" else "https://testnet.binance.vision" if environment is Environment.TESTNET else "https://api.binance.com"
     lookup = {
-        listing.symbol: definition.instrument_id
-        for definition in catalog.definitions(datetime.now(timezone.utc))
-        for listing in definition.listings if listing.venue_id == VenueId("binance")
+        listing.trading_symbol: listing.instrument_id
+        for listing in catalog.listings.values(datetime.now(timezone.utc)) if listing.venue_id == VenueId("binance")
     }
     return BinanceAccountAdapter(UrllibBinanceTransport(base), BinanceSigner(key, secret), environment, futures=product == "futures", inverse=inverse, instrument_lookup=lookup)
 
@@ -1040,24 +1600,24 @@ def _execution_account_adapter(venue: str, environment: Environment, product: st
     if product == "options":
         transport, signer = UrllibBinanceTransport("https://eapi.binance.com"), BinanceSigner(key, secret)
         lookup = {
-            listing.symbol: item.instrument_id
-            for item in catalog.definitions(datetime.now(timezone.utc))
-            for listing in item.listings if listing.venue_id == VenueId("binance")
+            listing.trading_symbol: listing.instrument_id
+            for listing in catalog.listings.values(datetime.now(timezone.utc)) if listing.venue_id == VenueId("binance")
         }
+        symbol = next(item.trading_symbol for item in catalog.active_listings(definition.instrument_id, datetime.now(timezone.utc)) if item.venue_id == VenueId("binance"))
         return _CombinedExecutionAccount(
-            BinanceOptionsExecutionAdapter(transport, signer, environment, instrument_symbols={definition.instrument_id: definition.listing(VenueId("binance")).symbol}),
+            BinanceOptionsExecutionAdapter(transport, signer, environment, instrument_symbols={definition.instrument_id: symbol}),
             BinanceOptionsAccountAdapter(transport, signer, environment, instrument_lookup=lookup),
         )
     base = "https://testnet.binancefuture.com" if product == "futures" and environment is Environment.TESTNET else "https://dapi.binance.com" if product == "futures" and inverse else "https://fapi.binance.com" if product == "futures" else "https://testnet.binance.vision" if environment is Environment.TESTNET else "https://api.binance.com"
     transport, signer = UrllibBinanceTransport(base), BinanceSigner(key, secret)
+    symbol = next(item.trading_symbol for item in catalog.active_listings(definition.instrument_id, datetime.now(timezone.utc)) if item.venue_id == VenueId("binance"))
     execution = BinanceExecutionAdapter(
         transport, signer, environment, futures=product == "futures", inverse=inverse,
-        instrument_symbols={definition.instrument_id: definition.listing(VenueId("binance")).symbol},
+        instrument_symbols={definition.instrument_id: symbol},
     )
     lookup = {
-        listing.symbol: item.instrument_id
-        for item in catalog.definitions(datetime.now(timezone.utc))
-        for listing in item.listings if listing.venue_id == VenueId("binance")
+        listing.trading_symbol: listing.instrument_id
+        for listing in catalog.listings.values(datetime.now(timezone.utc)) if listing.venue_id == VenueId("binance")
     }
     account = BinanceAccountAdapter(transport, signer, environment, futures=product == "futures", inverse=inverse, instrument_lookup=lookup)
     return _CombinedExecutionAccount(execution, account)
@@ -1066,15 +1626,21 @@ def _execution_account_adapter(venue: str, environment: Environment, product: st
 class _CombinedExecutionAccount:
     def __init__(self, execution, account) -> None:
         self.execution, self.account = execution, account
+        self.institution_id = execution.institution_id
         self.venue_id, self.environment, self.capabilities = execution.venue_id, execution.environment, execution.capabilities
     def place_order(self, request): return self.execution.place_order(request)
     def cancel_order(self, account, venue_order_id): return self.execution.cancel_order(account, venue_order_id)
     def open_orders(self, account): return self.execution.open_orders(account)
     def account_state(self, account): return self.account.account_state(account)
+    def recover_order(self, account, request, venue_order_id=None):
+        recovery = getattr(self.execution, "recover_order", None)
+        if not callable(recovery):
+            raise NotImplementedError(f"{self.venue_id} execution adapter does not support order recovery")
+        return recovery(account, request, venue_order_id)
 
 
 def _account_key(venue: str, account_id: str, product: str) -> AccountKey:
-    return AccountKey(VenueId(venue), account_id, _account_type(product))
+    return AccountKey(InstitutionId(venue), account_id, _account_type(product))
 
 
 def _account_type(product: str) -> AccountType:

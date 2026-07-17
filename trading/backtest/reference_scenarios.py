@@ -9,16 +9,19 @@ from uuid import NAMESPACE_URL, uuid5
 
 from trading.accounting.ledger import LedgerService
 from trading.backtest.fill import CryptoOrderBookFillModel, EquityTopOfBookFillModel, SingleAssetOrder, StressWrapperFillModel
-from trading.catalog.service import InstrumentCatalog
 from trading.domain.execution import TradeExecution, TradeSide
-from trading.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, VenueListing
+from trading.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
 from trading.domain.ledger import Ledger, LedgerBook
 from trading.domain.market_data import OrderBookLevel, OrderBookSnapshot, Quote
 from trading.domain.product import (
     ContractType, CryptoSpotSpec, EquitySpec, ExerciseStyle, ListedOptionSpec, OptionRight,
     PerpetualSpec, ProductType, SettlementSession, SettlementType,
 )
+from trading.reference import (
+    AssetDefinition, AssetType, ListingDefinition, ListingId, ReferenceCatalog,
+    TradingRules, VenueDefinition, VenueType,
+)
+from trading.reference.factory import publish_instrument
 from trading.products.equity.corporate_actions import CorporateActionService
 from trading.products.listed_option.lifecycle import OptionLifecycleService, PhysicalOptionEvent, PhysicalOptionEventType
 from trading.products.perpetual.funding import FundingEngine
@@ -39,6 +42,40 @@ class ReferenceScenarioResult:
     execution_policy_id: str
 
 
+def _publish(catalog, instrument_id, product_type, name, spec, currency, venue, symbol, effective_from, *, minimum_notional=None, deliverable_asset=None):
+    equity_like = product_type in {ProductType.EQUITY, ProductType.LISTED_OPTION}
+    asset_ids = {currency}
+    for field in ("base_asset", "quote_asset", "underlying_asset", "settlement_asset", "premium_asset"):
+        value = getattr(spec, field, None)
+        if isinstance(value, AssetId):
+            asset_ids.add(value)
+    if deliverable_asset is not None:
+        asset_ids.add(deliverable_asset)
+    assets = tuple(AssetDefinition(
+        asset, AssetType.SECURITY if asset == deliverable_asset else AssetType.FIAT if asset.value == "USD" else AssetType.CRYPTO,
+        asset.value, effective_from, decimals=2 if asset.value == "USD" else 8,
+    ) for asset in asset_ids if not any(item.asset_id == asset for item in catalog.assets.values()))
+    return publish_instrument(
+        catalog, instrument_id=instrument_id, instrument_type=product_type, display_name=name,
+        contract_spec=spec, trading_currency=currency,
+        listings=(ListingDefinition(
+            ListingId(f"listing:{venue.value}:{instrument_id.value}"), instrument_id, venue, symbol, currency,
+            TradingRules(
+                Decimal("0.01") if equity_like else Decimal("0.1"),
+                Decimal("1") if equity_like else Decimal("0.001"),
+                Decimal("1") if equity_like else Decimal("0.001"),
+                minimum_notional=minimum_notional,
+            ), effective_from,
+        ),), effective_from=effective_from,
+        asset_definitions=assets,
+        venue_definitions=() if catalog.venues.values() else (VenueDefinition(
+            venue, VenueType.EXCHANGE if equity_like else VenueType.CRYPTO_EXCHANGE,
+            venue.value, "UTC", effective_from,
+        ),),
+        physical_deliverable_asset=deliverable_asset,
+    )
+
+
 def run_reference_scenario(strategy: str, model: str) -> ReferenceScenarioResult:
     if model not in {"conservative", "stress"}:
         raise ValueError("reference scenario model must be conservative or stress")
@@ -53,22 +90,12 @@ def _covered_call(model: str) -> ReferenceScenarioResult:
     now, venue = datetime(2026, 7, 14, 14, tzinfo=timezone.utc), VenueId("simulation")
     stock_id, option_id = InstrumentId("equity:aapl"), InstrumentId("option:aapl:call")
     expiry = now + timedelta(days=30)
-    stock = InstrumentDefinition(
-        stock_id, ProductType.EQUITY, "AAPL", AssetId("AAPL"), AssetId("USD"),
-        EquitySpec("NASDAQ", "US", AssetId("USD")),
-        (VenueListing(venue, "AAPL", "AAPL", Decimal("0.01"), Decimal("1"), Decimal("1")),),
-        datetime(2020, 1, 1, tzinfo=timezone.utc),
-    )
-    option = InstrumentDefinition(
-        option_id, ProductType.LISTED_OPTION, "AAPL-CALL", None, AssetId("USD"),
-        ListedOptionSpec(stock_id, expiry, Decimal("105"), OptionRight.CALL, ExerciseStyle.AMERICAN, SettlementType.PHYSICAL, SettlementSession.PM, Decimal("100"), expiry),
-        (VenueListing(venue, "AAPL-CALL", "AAPL-CALL", Decimal("0.01"), Decimal("1"), Decimal("1")),),
-        datetime(2020, 1, 1, tzinfo=timezone.utc),
-    )
-    catalog, ledger = InstrumentCatalog(), Ledger()
-    catalog.add(stock); catalog.add(option)
+    catalog, ledger = ReferenceCatalog(), Ledger()
+    effective_from = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    _publish(catalog, stock_id, ProductType.EQUITY, "AAPL", EquitySpec("NASDAQ", "US", AssetId("USD")), AssetId("USD"), venue, "AAPL", effective_from)
+    _publish(catalog, option_id, ProductType.LISTED_OPTION, "AAPL-CALL", ListedOptionSpec(stock_id, expiry, Decimal("105"), OptionRight.CALL, ExerciseStyle.AMERICAN, SettlementType.PHYSICAL, SettlementSession.PM, Decimal("100"), expiry), AssetId("USD"), venue, "AAPL-CALL", effective_from, deliverable_asset=AssetId("AAPL"))
     service = LedgerService(ledger, catalog)
-    account = AccountKey(venue, "covered-call", AccountType.SECURITIES_MARGIN)
+    account = AccountKey(InstitutionId("backtest"), "covered-call", AccountType.SECURITIES_MARGIN)
     service.deposit(account, AssetId("USD"), Decimal("20000"), now, "initial")
     strategy = CoveredCallStrategy(stock_id, option_id)
     stock_intent = strategy.intents(Decimal("0"), Decimal("0"))[0]
@@ -96,23 +123,13 @@ def _covered_call(model: str) -> ReferenceScenarioResult:
 def _spot_perp_carry(model: str) -> ReferenceScenarioResult:
     now, venue = datetime(2026, 7, 14, 14, tzinfo=timezone.utc), VenueId("simulation")
     spot_id, perp_id = InstrumentId("crypto:spot:btcusdt"), InstrumentId("crypto:perp:btcusdt")
-    spot = InstrumentDefinition(
-        spot_id, ProductType.CRYPTO_SPOT, "BTCUSDT", AssetId("BTC"), AssetId("USDT"),
-        CryptoSpotSpec(AssetId("BTC"), AssetId("USDT"), Decimal("10")),
-        (VenueListing(venue, "BTCUSDT", "BTCUSDT", Decimal("0.1"), Decimal("0.001"), Decimal("0.001"), Decimal("10")),),
-        datetime(2020, 1, 1, tzinfo=timezone.utc),
-    )
-    perp = InstrumentDefinition(
-        perp_id, ProductType.PERPETUAL, "BTCUSDT-PERP", AssetId("BTC"), AssetId("USDT"),
-        PerpetualSpec(AssetId("BTC"), AssetId("USDT"), "BTCUSDT", Decimal("1"), ContractType.LINEAR, 28800),
-        (VenueListing(venue, "BTCUSDT-PERP", "BTCUSDT-PERP", Decimal("0.1"), Decimal("0.001"), Decimal("0.001")),),
-        datetime(2020, 1, 1, tzinfo=timezone.utc),
-    )
-    catalog, ledger = InstrumentCatalog(), Ledger()
-    catalog.add(spot); catalog.add(perp)
+    catalog, ledger = ReferenceCatalog(), Ledger()
+    effective_from = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    _publish(catalog, spot_id, ProductType.CRYPTO_SPOT, "BTCUSDT", CryptoSpotSpec(AssetId("BTC"), AssetId("USDT"), Decimal("10")), AssetId("USDT"), venue, "BTCUSDT", effective_from, minimum_notional=Decimal("10"))
+    _publish(catalog, perp_id, ProductType.PERPETUAL, "BTCUSDT-PERP", PerpetualSpec(AssetId("BTC"), AssetId("USDT"), "BTCUSDT", Decimal("1"), ContractType.LINEAR, 28800), AssetId("USDT"), venue, "BTCUSDT-PERP", effective_from)
     service = LedgerService(ledger, catalog)
-    spot_account = AccountKey(venue, "spot", AccountType.CRYPTO_SPOT)
-    derivative_account = AccountKey(venue, "perp", AccountType.DERIVATIVES)
+    spot_account = AccountKey(InstitutionId("backtest"), "spot", AccountType.CRYPTO_SPOT)
+    derivative_account = AccountKey(InstitutionId("backtest"), "perp", AccountType.DERIVATIVES)
     service.deposit(spot_account, AssetId("USDT"), Decimal("10000"), now, "initial")
     service.transfer(spot_account, derivative_account, AssetId("USDT"), Decimal("2000"), now + timedelta(seconds=1), "collateral")
     base = CryptoOrderBookFillModel(Decimal("0.001"))

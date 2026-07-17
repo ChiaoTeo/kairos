@@ -7,15 +7,17 @@ import math
 from pathlib import Path
 import statistics
 
+from trading import __version__
 from research.btc_options_stats import block_bootstrap_ci, percentile
-from trading.data import CanonicalDatasetRepository, DataCatalog
+from trading.data import ResearchDataClient
+from trading.data.products import BTC_OPTION_QUOTES_HOURLY, BTC_TERM_SKEW_HOURLY
 from trading.storage.data_lake import write_json
 
 
 def execute(root: str | Path = "data", target_dte=30, holding_days=7, lookback=60, commission=1.0):
-    repository = CanonicalDatasetRepository(root)
-    quotes = repository.load_rows(DataCatalog.BTC_OPTION_QUOTES_HOURLY.dataset_id)
-    features = repository.load_rows(DataCatalog.BTC_TERM_SKEW_HOURLY.dataset_id)
+    repository = ResearchDataClient(root)
+    quotes = repository.load_rows(BTC_OPTION_QUOTES_HOURLY.product)
+    features = repository.load_rows(BTC_TERM_SKEW_HOURLY.product)
     books = {}
     for quote in quotes:
         books.setdefault(quote["period_start"], {})[quote["instrument_id"]] = quote
@@ -85,6 +87,8 @@ def _nonnegative(value):
 def main(argv=None):
     parser=argparse.ArgumentParser(); parser.add_argument("--data-root",type=Path,default=Path("data")); args=parser.parse_args(argv)
     trades,result=execute(args.data_root); output=args.data_root/"studies"/"btc_skew_spread_backtest_v1"; output.mkdir(parents=True,exist_ok=True)
+    ResearchDataClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_skew_spread_backtest_v1",
+        (BTC_OPTION_QUOTES_HOURLY.product, BTC_TERM_SKEW_HOURLY.product), code_version=__version__)
     write_json(output/"study_spec.json", {"study_id":"btc_skew_spread_backtest_v1","short_delta":-.25,"long_delta":-.10,
         "target_dte":30,"holding_days":7,"signal":"30D put skew above trailing 60-day 80th percentile"})
     write_json(output/"trades.json",trades); write_json(output/"results.json",result); print(json.dumps(result,ensure_ascii=False,indent=2))

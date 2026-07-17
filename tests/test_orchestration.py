@@ -4,16 +4,15 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from uuid import UUID
 
 from trading.accounting.ledger import LedgerService
 from trading.adapters.base import ComboLegRequest, ComboOrderRequest, Environment, OrderRequest
 from trading.adapters.simulated import SimulatedExecutionAccountAdapter
-from trading.catalog.service import InstrumentCatalog
 from trading.domain.capability import ExecutionCapabilities, OrderType
 from trading.domain.execution import TradeSide
-from trading.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, VenueListing
+from trading.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
 from trading.domain.ledger import Ledger
 from trading.domain.order import ExecutionInstructions, TimeInForce
 from trading.domain.intent import (
@@ -28,22 +27,22 @@ from trading.orchestration.event_log import PersistentEventLog
 from trading.orchestration.kill_switch import KillSwitch
 from trading.orchestration.monitoring import AlertSeverity, OperationalMonitor
 from trading.orchestration.reconciliation import ReconciliationService
+from trading.orchestration.runtime_store import SQLiteRuntimeStore
+from tests.runtime_support import operational_application
+from trading.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, RouteId
+from tests.reference_support import publish_test_instrument
 
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
 VENUE = VenueId("sim")
-ACCOUNT = AccountKey(VENUE, "test", AccountType.CRYPTO_SPOT)
+ACCOUNT = AccountKey(InstitutionId("sim"), "test", AccountType.CRYPTO_SPOT)
 INSTRUMENT = InstrumentId("BTC-USDT")
 
 
-def make_catalog() -> InstrumentCatalog:
-    catalog = InstrumentCatalog()
-    catalog.add(InstrumentDefinition(
-        INSTRUMENT, ProductType.CRYPTO_SPOT, "BTC-USDT", AssetId("BTC"), AssetId("USDT"),
-        CryptoSpotSpec(AssetId("BTC"), AssetId("USDT"), Decimal("10")),
-        (VenueListing(VENUE, "BTCUSDT", "BTCUSDT", Decimal("0.10"), Decimal("0.01"), Decimal("0.01"), Decimal("10")),),
-        datetime(2020, 1, 1, tzinfo=timezone.utc),
-    ))
+def make_catalog() -> ReferenceCatalog:
+    catalog = ReferenceCatalog(); effective_from = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    publish_test_instrument(catalog, INSTRUMENT, ProductType.CRYPTO_SPOT, "BTC-USDT", CryptoSpotSpec(AssetId("BTC"), AssetId("USDT"), Decimal("10")), AssetId("USDT"), VENUE, "BTCUSDT", effective_from, price_increment=Decimal("0.10"), quantity_increment=Decimal("0.01"), minimum_quantity=Decimal("0.01"), minimum_notional=Decimal("10"))
+    catalog.routes.add(ExecutionRoute(RouteId("route:sim:test"), BrokerId("sim"), ACCOUNT, ListingId(f"listing:{VENUE.value}:{INSTRUMENT.value}"), effective_from))
     return catalog
 
 
@@ -52,6 +51,16 @@ def request(*, client_id: str = "client-1", quantity: str = "0.01", price: str =
         f"internal-{client_id}", client_id, "strategy-1", "intent-1", "correlation-1",
         ACCOUNT, INSTRUMENT, TradeSide.BUY, Decimal(quantity),
         ExecutionInstructions(OrderType.LIMIT, TimeInForce.GTC, Decimal(price), reduce_only=reduce_only),
+    )
+
+
+def coordinator(router, reconciliation, kill_switch, event_path) -> TradingCoordinator:
+    path = Path(event_path)
+    store = SQLiteRuntimeStore(path.parent / "runtime.sqlite3")
+    return TradingCoordinator(
+        router, reconciliation, kill_switch, PersistentEventLog(path),
+        runtime_store=store,
+        application=operational_application(path.parent, store),
     )
 
 
@@ -74,16 +83,28 @@ class OrchestrationTests(unittest.TestCase):
 
     def test_readiness_refuses_start_and_orders_until_every_component_is_ready(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            coordinator = TradingCoordinator(
+            path = Path(directory) / "events.jsonl"
+            store = SQLiteRuntimeStore(Path(directory) / "runtime.sqlite3")
+            from trading.application import ApplicationConfig, FunctionProbe, RuntimePaths, TradingApplication
+            blocked_application = TradingApplication(
+                ApplicationConfig(Environment.TESTNET, RuntimePaths.under(directory)), store,
+                runtime_id="blocked-readiness",
+                probes=(FunctionProbe("catalog", lambda: (False, "catalog unavailable")),),
+            )
+            blocked = TradingCoordinator(
                 self.router, {ACCOUNT: ReconciliationService(self.ledger, self.adapter)},
-                KillSwitch((self.adapter,)), PersistentEventLog(f"{directory}/events.jsonl"),
+                KillSwitch((self.adapter,)), PersistentEventLog(path),
+                runtime_store=store, application=blocked_application,
             )
             with self.assertRaises(RuntimeError):
-                coordinator.submit(request(), NOW)
+                blocked_application.start()
             with self.assertRaises(RuntimeError):
-                coordinator.start((ACCOUNT,), catalog_ready=False, market_data_ready=True, execution_ready=True)
-            coordinator.start((ACCOUNT,), catalog_ready=True, market_data_ready=True, execution_ready=True)
-            self.assertEqual(coordinator.submit(request(), NOW).client_order_id, "client-1")
+                blocked.submit(request(), NOW)
+            ready = coordinator(
+                self.router, {ACCOUNT: ReconciliationService(self.ledger, self.adapter)},
+                KillSwitch((self.adapter,)), path,
+            )
+            self.assertEqual(ready.submit(request(), NOW).client_order_id, "client-1")
 
     def test_duplicate_client_id_is_idempotent_and_ack_links_intent(self) -> None:
         first = self.router.submit(request(), NOW)
@@ -138,19 +159,17 @@ class OrchestrationTests(unittest.TestCase):
     def test_coordinator_restart_reuses_persisted_order_ack_without_resubmission(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = f"{directory}/events.jsonl"
-            first = TradingCoordinator(
+            first = coordinator(
                 self.router, {ACCOUNT: ReconciliationService(self.ledger, self.adapter)},
-                KillSwitch((self.adapter,)), PersistentEventLog(path),
+                KillSwitch((self.adapter,)), path,
             )
-            first.start((ACCOUNT,), catalog_ready=True, market_data_ready=True, execution_ready=True)
             original = first.submit(request(), NOW)
             restarted_adapter = SimulatedExecutionAccountAdapter(VENUE, ACCOUNT)
-            restarted = TradingCoordinator(
+            restarted = coordinator(
                 ExecutionRouter(self.catalog, (restarted_adapter,)),
                 {ACCOUNT: ReconciliationService(self.ledger, restarted_adapter)},
-                KillSwitch((restarted_adapter,)), PersistentEventLog(path),
+                KillSwitch((restarted_adapter,)), path,
             )
-            restarted.start((ACCOUNT,), catalog_ready=True, market_data_ready=True, execution_ready=True)
             recovered = restarted.submit(request(), NOW)
             self.assertEqual(recovered, original)
             self.assertEqual(restarted_adapter.orders, {})
@@ -158,20 +177,19 @@ class OrchestrationTests(unittest.TestCase):
     def test_kill_switch_cancels_orders_and_allows_only_reduce_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             kill_switch = KillSwitch((self.adapter,))
-            coordinator = TradingCoordinator(
+            runtime = coordinator(
                 self.router, {ACCOUNT: ReconciliationService(self.ledger, self.adapter)},
-                kill_switch, PersistentEventLog(f"{directory}/events.jsonl"),
+                kill_switch, f"{directory}/events.jsonl",
             )
-            coordinator.start((ACCOUNT,), catalog_ready=True, market_data_ready=True, execution_ready=True)
-            coordinator.submit(request(client_id="normal"), NOW)
+            runtime.submit(request(client_id="normal"), NOW)
             result = kill_switch.trigger((ACCOUNT,), "drill")
             self.assertEqual(len(result.cancelled_orders), 1)
             self.assertTrue(kill_switch.reduce_only)
             self.assertEqual(self.adapter.open_orders(ACCOUNT), ())
             with self.assertRaisesRegex(RuntimeError, "only reduce-only"):
-                coordinator.submit(request(client_id="blocked"), NOW)
+                runtime.submit(request(client_id="blocked"), NOW)
             self.adapter.positions[INSTRUMENT] = Decimal("-0.02")
-            ack = coordinator.submit(request(client_id="reduce", reduce_only=True), NOW)
+            ack = runtime.submit(request(client_id="reduce", reduce_only=True), NOW)
             self.assertEqual(ack.intent_id, "intent-1")
 
     def test_operational_monitor_surfaces_clock_rate_disconnect_and_authentication(self) -> None:
@@ -216,7 +234,7 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(len(structure.combo_orders), 1)
         self.assertEqual(len(structure.combo_orders[0].legs), 2)
 
-        other_account = AccountKey(VENUE, "other", AccountType.CRYPTO_SPOT)
+        other_account = AccountKey(InstitutionId("sim"), "other", AccountType.CRYPTO_SPOT)
         transfer_intent = TransferIntent(intent_id, "allocator", ACCOUNT, other_account, AssetId("USDT"), Decimal("100"), "rebalance")
         transfer = plan_strategy_intent(transfer_intent, accounts={}, current_positions={}, instructions={})
         self.assertEqual(transfer.transfers, (transfer_intent,))
@@ -226,27 +244,26 @@ class OrchestrationTests(unittest.TestCase):
 
     def test_native_combo_and_cancel_intent_pass_through_coordinator_and_event_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            coordinator = TradingCoordinator(
+            runtime = coordinator(
                 self.router, {ACCOUNT: ReconciliationService(self.ledger, self.adapter)},
-                KillSwitch((self.adapter,)), PersistentEventLog(f"{directory}/events.jsonl"),
+                KillSwitch((self.adapter,)), f"{directory}/events.jsonl",
             )
-            coordinator.start((ACCOUNT,), catalog_ready=True, market_data_ready=True, execution_ready=True)
             combo = ComboOrderRequest(
                 "combo-internal", "combo-client", "spread", "combo-intent", "combo-correlation",
                 ACCOUNT,
                 (ComboLegRequest(INSTRUMENT, TradeSide.BUY, 1), ComboLegRequest(INSTRUMENT, TradeSide.SELL, 1)),
                 Decimal("1"), ExecutionInstructions(OrderType.LIMIT, TimeInForce.DAY, Decimal("10")),
             )
-            ack = coordinator.submit_combo(combo, NOW)
-            self.assertEqual(coordinator.submit_combo(combo, NOW), ack)
+            ack = runtime.submit_combo(combo, NOW)
+            self.assertEqual(runtime.submit_combo(combo, NOW), ack)
             self.assertEqual(len(self.adapter.orders), 1)
-            with self.assertRaisesRegex(ValueError, "combo order"):
-                coordinator.submit(request(client_id="combo-client"), NOW)
+            with self.assertRaisesRegex(ValueError, "different request"):
+                runtime.submit(request(client_id="combo-client"), NOW)
             cancel = CancelIntent(UUID("00000000-0000-0000-0000-000000000124"), "spread", "combo-client", "risk exit")
-            coordinator.cancel(cancel, ACCOUNT)
-            coordinator.cancel(cancel, ACCOUNT)
+            runtime.cancel(cancel, ACCOUNT)
+            runtime.cancel(cancel, ACCOUNT)
             self.assertEqual(self.adapter.orders, {})
-            event_types = [item["event_type"] for item in coordinator.event_log.read()]
+            event_types = [item["event_type"] for item in runtime.event_log.read()]
             self.assertIn("combo_order_ack", event_types)
             self.assertIn("order_cancelled", event_types)
 

@@ -9,7 +9,8 @@ from uuid import UUID, uuid4
 from trading.backtest.execution import combo_quote
 from trading.backtest.feed import MarketSlice
 from trading.backtest.portfolio import PortfolioSnapshot
-from trading.catalog.service import InstrumentCatalog
+from trading.reference import ReferenceCatalog
+from trading.reference.access import contract_spec, definition_at
 from trading.domain.execution import TradeSide
 from trading.domain.intent import Intent, OpenStructureIntent
 from trading.domain.product import CryptoOptionSpec,ListedOptionSpec
@@ -38,7 +39,7 @@ class RiskDecision:
 
 
 class RiskEngine:
-    def __init__(self, limits: RiskLimits, catalog: InstrumentCatalog, id_factory: Callable[[], UUID] = uuid4) -> None:
+    def __init__(self, limits: RiskLimits, catalog: ReferenceCatalog, id_factory: Callable[[], UUID] = uuid4) -> None:
         self.limits = limits
         self.catalog = catalog
         self.id_factory = id_factory
@@ -62,11 +63,12 @@ class RiskEngine:
         if isinstance(intent, OpenStructureIntent):
             if len(portfolio.open_structures) >= self.limits.max_open_structures:
                 return reject("open_structures", "maximum open structures reached")
-            first = self.catalog.get(intent.legs[0].instrument_id, market.timestamp)
-            expiry = first.product_spec.expiry if isinstance(first.product_spec,(ListedOptionSpec,CryptoOptionSpec)) else None
+            first = definition_at(self.catalog, intent.legs[0].instrument_id, market.timestamp)
+            first_spec = contract_spec(first)
+            expiry = first_spec.expiry if isinstance(first_spec,(ListedOptionSpec,CryptoOptionSpec)) else None
             same_expiry = sum(any(
-                isinstance(self.catalog.get(instrument_id, market.timestamp).product_spec,(ListedOptionSpec,CryptoOptionSpec))
-                and self.catalog.get(instrument_id, market.timestamp).product_spec.expiry == expiry
+                isinstance(contract_spec(definition_at(self.catalog, instrument_id, market.timestamp)),(ListedOptionSpec,CryptoOptionSpec))
+                and contract_spec(definition_at(self.catalog, instrument_id, market.timestamp)).expiry == expiry
                 for instrument_id, _ in structure.legs
             ) for structure in portfolio.open_structures)
             if same_expiry >= self.limits.max_structures_per_expiry:
@@ -76,13 +78,13 @@ class RiskEngine:
             if sells and not buys:
                 return reject("naked_option", "naked short options are prohibited")
             option_specs = [
-                definition.product_spec for leg in intent.legs
-                for definition in (self.catalog.get(leg.instrument_id, market.timestamp),)
-                if isinstance(definition.product_spec,(ListedOptionSpec,CryptoOptionSpec))
+                contract_spec(definition) for leg in intent.legs
+                for definition in (definition_at(self.catalog, leg.instrument_id, market.timestamp),)
+                if isinstance(contract_spec(definition),(ListedOptionSpec,CryptoOptionSpec))
             ]
             if len(option_specs) >= 2:
                 credit = max(Decimal("0"), quote.natural)
-                per_contract_risk = maximum_expiry_loss(tuple((self.catalog.get(leg.instrument_id,market.timestamp).product_spec,leg.side.sign*leg.ratio) for leg in intent.legs),credit)
+                per_contract_risk = maximum_expiry_loss(tuple((contract_spec(definition_at(self.catalog, leg.instrument_id,market.timestamp)),leg.side.sign*leg.ratio) for leg in intent.legs),credit)
                 allowed = min(self.limits.max_loss_per_trade, portfolio.equity_liquidation * self.limits.max_risk_fraction)
                 max_quantity = int(allowed // per_contract_risk) if per_contract_risk else intent.quantity
                 if max_quantity < 1:
@@ -99,8 +101,8 @@ class RiskEngine:
                 item = snapshots.get(leg.instrument_id)
                 if item is None or item.greeks is None:
                     return reject("projected_greeks", "Greeks unavailable for projected risk")
-                definition = self.catalog.get(leg.instrument_id, market.timestamp)
-                multiplier = getattr(definition.product_spec, "multiplier", Decimal("1"))
+                definition = definition_at(self.catalog, leg.instrument_id, market.timestamp)
+                multiplier = getattr(contract_spec(definition), "multiplier", Decimal("1"))
                 signed_quantity = Decimal(leg.side.sign * leg.ratio * intent.quantity)
                 for name in projected:
                     value = getattr(item.greeks, name)

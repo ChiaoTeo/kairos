@@ -8,7 +8,7 @@ from uuid import UUID
 
 from trading.domain.intent import Intent
 from trading.domain.order import Fill, Order, Settlement
-from trading.domain.strategy import StrategyDecision
+from trading.strategies.base import StrategyDecision
 from trading.backtest.portfolio import PortfolioSnapshot
 from trading.risk.engine import RiskDecision
 

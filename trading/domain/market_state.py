@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from .event import GreeksUpdated, MarketEvent, OptionChainDiscovered, QuoteUpdated, TradeUpdated, UnderlyingPriceUpdated
 from .identity import InstrumentId
-from .instrument import OptionChain
+from .market_data import OptionChain
 from .market_data import FundingRate, Greeks, IndexPrice, MarkPrice, OpenInterest, Quote, Trade, TradingStatus, VolatilitySurfacePoint
 
 

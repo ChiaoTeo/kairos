@@ -6,9 +6,12 @@ from time import sleep
 from typing import Callable, Protocol
 
 from trading import __version__
-from trading.backtest.feed import ContractMetadata, DatasetRepository, HistoricalDataset, MarketSlice, SettlementType, build_manifest
-from trading.domain.instrument import InstrumentDefinition
+from trading.backtest.feed import ContractMetadata, HistoricalDataset, MarketSlice, SettlementType, build_manifest
+from trading.data.market_slice_storage import MarketSliceStorageDriver
 from trading.domain.product import CryptoOptionSpec, FutureSpec, ListedOptionSpec
+from trading.reference.models import InstrumentDefinition
+from trading.reference.catalog import ReferenceCatalog
+from trading.reference.access import contract_spec
 from trading.research.snapshot import DataQualityIssue, InstrumentSnapshot
 from trading.research.series import SeriesCaptureSpec
 
@@ -18,10 +21,12 @@ class NormalizedQuoteProvider(Protocol):
 
 
 class NormalizedSeriesCaptureService:
-    def __init__(self, repository: DatasetRepository, *, wait: Callable[[float], None] = sleep, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> None:
+    def __init__(self, repository: MarketSliceStorageDriver, *, wait: Callable[[float], None] = sleep, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> None:
         self.repository, self.wait, self.now = repository, wait, now
 
-    def capture(self, provider: NormalizedQuoteProvider, definitions: tuple[InstrumentDefinition, ...], series: SeriesCaptureSpec, *, source: str, market_data_type: str) -> HistoricalDataset:
+    def capture(self, provider: NormalizedQuoteProvider, catalog: ReferenceCatalog,
+                definitions: tuple[InstrumentDefinition, ...], series: SeriesCaptureSpec, *,
+                source: str, market_data_type: str) -> HistoricalDataset:
         if not definitions:
             raise ValueError("normalized series capture requires instruments")
         slices = []
@@ -51,18 +56,30 @@ class NormalizedSeriesCaptureService:
             series.dataset_id, slice_tuple, contracts, definitions,
             sampling_seconds=series.interval_seconds, source=source, market_data_type=market_data_type,
             code_version=__version__, split=series.split, synthetic=False,
+            products=tuple(catalog.products.get(item.product_id, item.effective_from) for item in definitions),
+            references=tuple(item for item in catalog.all_references() if item.source_instrument_id in {value.instrument_id for value in definitions}),
+            settlements=tuple(catalog.settlements.get(item.settlement_terms_id, item.effective_from)
+                              for item in definitions if item.settlement_terms_id is not None),
         )
-        dataset = HistoricalDataset(manifest, slice_tuple, contracts, definitions)
+        product_ids = {item.product_id for item in definitions}
+        instrument_ids = {item.instrument_id for item in definitions}
+        dataset = HistoricalDataset(
+            manifest, slice_tuple, contracts, definitions,
+            tuple(item for item in catalog.products.values() if item.product_id in product_ids),
+            tuple(item for item in catalog.all_references() if item.source_instrument_id in instrument_ids),
+            tuple(catalog.settlements.get(item.settlement_terms_id, item.effective_from)
+                  for item in definitions if item.settlement_terms_id is not None),
+        )
         self.repository.save(dataset)
         return dataset
 
 
 def _is_expiring(definition: InstrumentDefinition) -> bool:
-    return isinstance(definition.product_spec, (ListedOptionSpec, FutureSpec, CryptoOptionSpec))
+    return isinstance(contract_spec(definition), (ListedOptionSpec, FutureSpec, CryptoOptionSpec))
 
 
 def _contract_metadata(definition: InstrumentDefinition) -> ContractMetadata:
-    spec = definition.product_spec
+    spec = contract_spec(definition)
     last_trade_at = spec.last_trade_at if isinstance(spec, ListedOptionSpec) else spec.expiry
     return ContractMetadata(
         definition.instrument_id, last_trade_at, spec.expiry,

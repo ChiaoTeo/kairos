@@ -20,17 +20,18 @@ class GovernanceAudit:
 def audit_governance(root: str | Path = "data", *, ignored_studies: tuple[str, ...] = ("btc_options_research_summary",)) -> GovernanceAudit:
     root=Path(root);violations=[];datasets=studies=strategies=0;study_versions=[]
     catalog=DataCatalog(root)
-    for definition in catalog.definitions():
-        directory=catalog.path(definition.dataset_id)
+    for release in catalog.releases():
+        directory=root/release.relative_path
         if not (directory/"manifest.json").exists():continue
         datasets+=1
-        for name in ("schema.json","lineage.json","coverage.json","manifest.json","capabilities.json"):
-            if not (directory/name).exists():violations.append(f"dataset {definition.dataset_id} missing {name}")
+        for name in ("schema.json","lineage.json","coverage.json","quality.json","manifest.json",
+                     "capabilities.json","usage.json","release.json"):
+            if not (directory/name).exists():violations.append(f"dataset {release.release_id} missing {name}")
     studies_root=root/"studies"
     if studies_root.exists():
         for directory in sorted(path for path in studies_root.iterdir() if path.is_dir() and path.name not in ignored_studies):
-            legacy=directory/"results.json"
-            if not legacy.exists():continue
+            source_result=directory/"results.json"
+            if not source_result.exists():continue
             studies+=1;versions=[path for path in directory.iterdir() if path.is_dir() and (path/"study_spec.json").exists()]
             if not versions:
                 violations.append(f"study {directory.name} has no governed version");continue

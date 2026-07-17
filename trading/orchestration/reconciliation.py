@@ -2,12 +2,18 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
+from trading.application.clock import Clock, SystemClock
 from trading.adapters.base import AccountAdapter, AccountState
 from trading.domain.identity import AccountKey, AssetId, InstrumentId
 from trading.domain.ledger import Ledger, LedgerBook
+from trading.risk.strategy_positions import StrategyPositionBook
+
+if TYPE_CHECKING:
+    from trading.orchestration.runtime_store import SQLiteRuntimeStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,14 +36,21 @@ class ReconciliationReport:
 
 
 class ReconciliationService:
-    def __init__(self, ledger: Ledger, account_adapter: AccountAdapter, tolerance: Decimal = Decimal("0.00000001")) -> None:
+    def __init__(self, ledger: Ledger, account_adapter: AccountAdapter,
+                 tolerance: Decimal = Decimal("0.00000001"), clock: Clock | None = None,
+                 runtime_store: "SQLiteRuntimeStore | None" = None,
+                 strategy_positions: StrategyPositionBook | None = None) -> None:
         self.ledger, self.account_adapter, self.tolerance = ledger, account_adapter, tolerance
+        self.clock = clock or SystemClock()
+        self.runtime_store = runtime_store
+        self.strategy_positions = strategy_positions
 
     def reconcile(self, account: AccountKey) -> ReconciliationReport:
         venue = self.account_adapter.account_state(account)
+        ledger = self.runtime_store.load_ledger() if self.runtime_store is not None else self.ledger
         local_balances = defaultdict(Decimal)
         local_positions = defaultdict(Decimal)
-        for entry in self.ledger.entries:
+        for entry in ledger.entries:
             if entry.account != account:
                 continue
             if entry.book in {LedgerBook.CASH, LedgerBook.AVAILABLE, LedgerBook.LOCKED, LedgerBook.MARGIN, LedgerBook.COLLATERAL, LedgerBook.BORROWED}:
@@ -57,4 +70,23 @@ class ReconciliationService:
         for instrument in sorted(set(local_positions) | set(venue_positions), key=lambda item: item.value):
             if abs(local_positions[instrument] - venue_positions[instrument]) > self.tolerance:
                 differences.append(ReconciliationDifference("position", instrument.value, local_positions[instrument], venue_positions[instrument]))
-        return ReconciliationReport(account, datetime.now(timezone.utc), tuple(differences))
+        if self.runtime_store is not None:
+            local_open = set(self.runtime_store.local_open_order_ids(account))
+            venue_open = set(venue.open_order_ids)
+            for order_id in sorted(local_open | venue_open):
+                if (order_id in local_open) != (order_id in venue_open):
+                    differences.append(ReconciliationDifference(
+                        "open_order", order_id,
+                        Decimal(int(order_id in local_open)), Decimal(int(order_id in venue_open)),
+                    ))
+        strategy_positions = self.strategy_positions
+        if strategy_positions is None and self.runtime_store is not None:
+            strategy_positions = self.runtime_store.load_strategy_position_book(account)
+        if strategy_positions is not None:
+            for message in strategy_positions.reconcile(dict(local_positions)):
+                instrument, values = message.split(": virtual=", 1)
+                virtual, account_value = values.split(" account=", 1)
+                differences.append(ReconciliationDifference(
+                    "strategy_position", instrument, Decimal(virtual), Decimal(account_value),
+                ))
+        return ReconciliationReport(account, self.clock.now(), tuple(differences))

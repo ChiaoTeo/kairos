@@ -4,10 +4,10 @@ from collections import defaultdict
 from dataclasses import dataclass
 from decimal import Decimal
 
-from trading.accounting.portfolio import PortfolioSnapshotV2
-from trading.catalog.service import InstrumentCatalog
+from trading.accounting.portfolio import PortfolioSnapshot
 from trading.domain.identity import AccountKey, InstrumentId
 from trading.risk.margin import MarginResult
+from trading.reference import ReferenceCatalog, ReferenceRole
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,8 +37,8 @@ class UnifiedRiskView:
 
 
 def build_risk_view(
-    snapshot: PortfolioSnapshotV2,
-    catalog: InstrumentCatalog,
+    snapshot: PortfolioSnapshot,
+    catalog: ReferenceCatalog,
     *,
     unit_greeks: dict[InstrumentId, tuple[Decimal, Decimal, Decimal, Decimal]] | None = None,
     margins: dict[AccountKey, MarginResult] | None = None,
@@ -54,18 +54,14 @@ def build_risk_view(
         value = position.market_value_reporting or Decimal("0")
         gross += abs(value)
         net += value
-        definition = catalog.get(position.instrument_id, snapshot.timestamp)
-        for dimension, key in (
-            ("venue", definition.listings[0].venue_id.value),
-            ("account", position.account.value),
-            ("product", definition.product_type.value),
-            ("asset", (definition.base_asset or definition.quote_asset).value),
-        ):
+        definition = _definition(catalog, position.instrument_id, snapshot.timestamp)
+        for dimension, key in _dimensions(catalog, definition, position.account, snapshot.timestamp):
             grouped[(dimension, key)][0] += abs(value)
             grouped[(dimension, key)][1] += value
         values = unit_greeks.get(position.instrument_id)
         if values:
-            multiplier = getattr(definition.product_spec, "multiplier", getattr(definition.product_spec, "contract_size", Decimal("1")))
+            spec = definition.contract_spec
+            multiplier = getattr(spec, "multiplier", getattr(spec, "contract_size", Decimal("1")))
             for index, amount in enumerate(values):
                 greek_totals[index] += position.quantity * multiplier * amount
         liquidation = liquidation_prices.get(position.instrument_id)
@@ -85,3 +81,35 @@ def build_risk_view(
         concentration, min(liquidation_distances) if liquidation_distances else None,
         tuple((*snapshot.unpriced_assets, *snapshot.unpriced_positions)), liquidity_flags,
     )
+
+
+def _definition(catalog, instrument_id, at):
+    return catalog.instruments.get(instrument_id, at)
+
+
+def _dimensions(catalog, definition, account, at):
+    product = catalog.products.get(definition.product_id, at)
+    values = [("account", account.value), ("product", product.product_type.value), ("product_family", product.product_id.value)]
+    try:
+        route = catalog.resolve_execution_route(account, definition.instrument_id, at)
+        listing = catalog.listings.get(route.listing_id, at)
+        values.extend((("venue", listing.venue_id.value), ("broker", route.broker_id.value)))
+    except LookupError:
+        values.append(("venue", "unlisted"))
+    references = catalog.references(definition.instrument_id, ReferenceRole.ECONOMIC_UNDERLYING, at)
+    for reference in references:
+        target = reference.target
+        if target.asset_id is not None:
+            values.append(("asset", target.asset_id.value))
+        elif target.instrument_id is not None:
+            values.append(("underlying", target.instrument_id.value))
+        elif target.product_id is not None:
+            values.append(("underlying_product", target.product_id.value))
+        elif target.benchmark_id is not None:
+            values.append(("benchmark", target.benchmark_id.value))
+    if not references:
+        spec = definition.contract_spec
+        asset = getattr(spec, "base_asset", None) or getattr(spec, "underlying_asset", None) or getattr(spec, "settlement_asset", None) or getattr(spec, "quote_asset", None)
+        if asset is not None:
+            values.append(("asset", asset.value))
+    return tuple(values)

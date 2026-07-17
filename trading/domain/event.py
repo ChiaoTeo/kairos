@@ -7,7 +7,7 @@ from typing import Generic, TypeAlias, TypeVar
 from uuid import UUID, uuid4
 
 from .identity import InstrumentId
-from .instrument import OptionChain
+from .market_data import OptionChain
 from .market_data import FundingRate, Greeks, IndexPrice, MarkPrice, OpenInterest, Quote, Trade, TradingStatus, VolatilitySurfacePoint
 
 

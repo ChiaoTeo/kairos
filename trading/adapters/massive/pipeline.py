@@ -4,9 +4,12 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 
-from trading.catalog.external import ExternalMappingRepository
-from trading.catalog.repository import CatalogRepository
-from trading.catalog.service import InstrumentCatalog
+from trading.reference import ReferenceCatalog, ReferenceCatalogRepository
+from trading.data.catalog import DataCatalog
+from trading.data.models import (
+    DatasetKey, DatasetLayer, DatasetProduct, DatasetRelease, DatasetStatus, DatasetStorageKind,
+    QualityLevel, SourceBinding,
+)
 from trading.market_data.repository import ParquetMarketEventRepository
 
 from .client import MassiveClient
@@ -21,18 +24,18 @@ class MassiveOptionDataPipeline:
                  mapping_path: str | Path | None = None, now=lambda: datetime.now(timezone.utc)) -> None:
         self.root, self.client, self.now = Path(root), client, now
         self.source = MassiveSourceArchive(root, client, now=now)
-        self.catalog_repository = CatalogRepository(catalog_path or self.root / "catalog" / "instruments.json")
-        self.mapping_repository = ExternalMappingRepository(mapping_path or self.root / "reference" / "external_mappings.json")
+        reference_path = catalog_path or mapping_path or self.root / "reference" / "catalog.json"
+        self.catalog_repository = ReferenceCatalogRepository(reference_path)
         self.events = ParquetMarketEventRepository(self.root / "canonical" / "market")
 
     def prepare_options(self, *, dataset_id: str, underlying: str, option_tickers: tuple[str, ...], start: datetime, end: datetime,
-                        underlying_reference_ticker: str | None = None) -> dict[str, object]:
+                        underlying_reference_ticker: str | None = None, register: bool = True) -> dict[str, object]:
         if start.tzinfo is None or end.tzinfo is None or not start < end:
             raise ValueError("Massive option pipeline requires timezone-aware [start,end)")
         if not option_tickers:
             raise ValueError("Massive option pipeline requires explicit option tickers")
-        catalog = self.catalog_repository.load() if self.catalog_repository.path.exists() else InstrumentCatalog()
-        importer = MassiveReferenceImporter(catalog, self.mapping_repository)
+        catalog = self.catalog_repository.load() if self.catalog_repository.path.exists() else ReferenceCatalog()
+        importer = MassiveReferenceImporter(catalog)
 
         reference_ticker = underlying_reference_ticker or _reference_ticker(underlying)
         underlying_archive = self.source.fetch_pages(f"/v3/reference/tickers/{reference_ticker}", {"date": start.date().isoformat()})
@@ -56,7 +59,7 @@ class MassiveOptionDataPipeline:
                 raise
             aggregate_error = str(error)
         underlying_events = tuple(event for event in decode_bars(
-            aggregate_rows, self.mapping_repository, ticker=reference_ticker, source_namespace=underlying_namespace,
+            aggregate_rows, catalog, ticker=reference_ticker, source_namespace=underlying_namespace,
             ingested_at=_ingested_at(aggregates_archive) if aggregates_archive is not None else self.now(), interval_seconds=60,
         ) if start <= event.available_time < end)
 
@@ -72,7 +75,7 @@ class MassiveOptionDataPipeline:
         if missing:
             raise RuntimeError(f"Massive option contracts missing requested tickers: {', '.join(missing)}")
         importer.import_option_contracts(selected, as_of=start)
-        self.catalog_repository.save(catalog); self.mapping_repository.save()
+        self.catalog_repository.save(catalog)
 
         exchanges_archive = self.source.fetch_pages("/v3/reference/exchanges", {"asset_class": "options"})
         conditions_archive = self.source.fetch_pages("/v3/reference/conditions", {"asset_class": "options"})
@@ -90,9 +93,9 @@ class MassiveOptionDataPipeline:
             trade_archive = self.source.fetch_pages(f"/v3/trades/{ticker}", params)
             quote_rows = tuple(self.source.iter_results(quote_archive)); trade_rows = tuple(self.source.iter_results(trade_archive))
             delivered_event_records += len(quote_rows) + len(trade_rows)
-            quotes = self._decode_rows(decode_quotes, quote_rows, source_order, quarantined, _ingested_at(quote_archive), ticker)
+            quotes = self._decode_rows(decode_quotes, catalog, quote_rows, source_order, quarantined, _ingested_at(quote_archive), ticker)
             source_order += len(quote_rows)
-            trades = self._decode_rows(decode_trades, trade_rows, source_order, quarantined, _ingested_at(trade_archive), ticker)
+            trades = self._decode_rows(decode_trades, catalog, trade_rows, source_order, quarantined, _ingested_at(trade_archive), ticker)
             source_order += len(trade_rows)
             events.extend(quotes); events.extend(trades); sources.extend((quote_archive, trade_archive))
         if quarantined:
@@ -115,17 +118,36 @@ class MassiveOptionDataPipeline:
                 "aggregate_error": aggregate_error,
             },
         }
-        return self.events.write_batch(dataset_id, events, lineage=lineage, reconciliation={
+        manifest = self.events.write_batch(dataset_id, events, lineage=lineage, reconciliation={
             "delivered_event_records": delivered_event_records, "decoded_event_records": len(events),
             "canonical_event_records": len(events), "filtered_outside_request_window": delivered_event_records - len(events),
             "quarantined_records": 0, "known_exchange_codes": len(exchange_codes), "known_condition_codes": len(condition_codes),
         }, known_exchange_codes=exchange_codes, known_condition_codes=condition_codes)
+        if register:
+            logical_key = DatasetKey(f"market.events.options.us.{underlying.lower()}")
+            product = DatasetProduct(
+                logical_key, f"{underlying.upper()} option market events", DatasetLayer.CANONICAL,
+                dimensions={"asset_class": "option", "region": "us", "underlying": underlying.upper(),
+                            "frequency": "event", "venue_scope": "opra"},
+                sources=(SourceBinding("massive", "opra", 100, QualityLevel.BACKTEST, ("rest",)),),
+            )
+            release = DatasetRelease(
+                dataset_id, logical_key, str(manifest["generated_at"]), "market.event_envelope.v1", "1",
+                "massive.option_events", "2", f"canonical/market/dataset={dataset_id}", "parquet",
+                str(manifest["dataset_sha256"]), "massive", "opra",
+                (f"{logical_key}@latest-validated",), DatasetStatus.APPROVED_FOR_BACKTEST,
+                QualityLevel.BACKTEST, str(manifest["generated_at"]),
+                DatasetStorageKind.MARKET_EVENTS, "1",
+            )
+            catalog = DataCatalog(self.root); catalog.register_product(product, enrich=True)
+            catalog.register_release(release); catalog.save()
+        return manifest
 
-    def _decode_rows(self, decoder, rows, source_order: int, quarantined: list[dict[str, object]], ingested_at: datetime, ticker: str):
+    def _decode_rows(self, decoder, catalog: ReferenceCatalog, rows, source_order: int, quarantined: list[dict[str, object]], ingested_at: datetime, ticker: str):
         events = []
         for offset, row in enumerate(rows):
             try:
-                events.extend(decoder((row,), self.mapping_repository, ingested_at=ingested_at, source_order_start=source_order + offset, ticker=ticker))
+                events.extend(decoder((row,), catalog, ingested_at=ingested_at, source_order_start=source_order + offset, ticker=ticker))
             except (LookupError, ValueError) as error:
                 quarantined.append({"row": row, "error_type": type(error).__name__, "error": str(error)})
         return tuple(events)

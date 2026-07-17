@@ -7,7 +7,8 @@ from math import sqrt
 from statistics import mean, pstdev
 
 from trading.backtest.portfolio import PortfolioSnapshot
-from trading.catalog.service import InstrumentCatalog
+from trading.reference import ReferenceCatalog
+from trading.reference.access import contract_spec, definition_at
 from trading.domain.order import Fill, Order, OrderStatus, Settlement
 from trading.domain.product import CryptoOptionSpec,ListedOptionSpec
 
@@ -23,7 +24,7 @@ def calculate_metrics(
     portfolio_snapshots: tuple[PortfolioSnapshot, ...],
     market_slices: tuple[MarketSlice, ...] = (),
     settlements: tuple[Settlement, ...] = (),
-    catalog: InstrumentCatalog | None = None,
+    catalog: ReferenceCatalog | None = None,
 ) -> dict[str, object]:
     if not equity:
         return {"valid": False, "reason": "no equity points"}
@@ -156,8 +157,9 @@ def _trade_groups(fills, settlements, completed_ids, market_slices, catalog):
         fill = opening.get(structure_id)
         if not fill:
             continue
-        definition = catalog.get(fill.legs[0].instrument_id, fill.timestamp) if catalog else None
-        expiry = definition.product_spec.expiry.date() if definition and isinstance(definition.product_spec,(ListedOptionSpec,CryptoOptionSpec)) else None
+        definition = definition_at(catalog, fill.legs[0].instrument_id, fill.timestamp) if catalog else None
+        spec = contract_spec(definition) if definition else None
+        expiry = spec.expiry.date() if isinstance(spec,(ListedOptionSpec,CryptoOptionSpec)) else None
         dte = str((expiry - fill.timestamp.date()).days) if expiry else "unknown"
         dte_groups[dte] += pnl
         hour_groups[fill.timestamp.strftime("%H:00")] += pnl
@@ -175,5 +177,6 @@ def _trade_groups(fills, settlements, completed_ids, market_slices, catalog):
 def _multiplier(catalog, instrument_id, at):
     if catalog is None:
         return Decimal("1")
-    definition = catalog.get(instrument_id, at)
-    return getattr(definition.product_spec, "multiplier", getattr(definition.product_spec, "contract_size", Decimal("1")))
+    definition = definition_at(catalog, instrument_id, at)
+    spec = contract_spec(definition)
+    return getattr(spec, "multiplier", getattr(spec, "contract_size", Decimal("1")))

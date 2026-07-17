@@ -14,9 +14,10 @@ from trading.backtest.service import BacktestService
 from trading.risk.limits import RiskLimits
 from trading.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
 from trading.__main__ import main
-from trading.backtest.feed import DatasetRepository
+from trading.data.market_slice_storage import MarketSliceStorageDriver
 from trading.backtest.calendar import AlwaysOpenCalendar, CalendarRegistry, TradingCalendar
 from trading.domain.product import ProductType
+from trading.data import DatasetKey, DatasetLayer, DatasetProduct, register_historical_dataset
 from datetime import date, time
 
 
@@ -93,8 +94,12 @@ class BacktestEngineTests(unittest.TestCase):
             dataset_root = f"{directory}/datasets"
             backtest_root = f"{directory}/backtests"
             dataset = make_mock_dataset()
-            DatasetRepository(dataset_root).save(dataset)
-            common = ["--dataset-root", dataset_root, "--backtest-root", backtest_root, "backtest"]
+            directory_path = MarketSliceStorageDriver(dataset_root).save(dataset)
+            register_historical_dataset(directory, dataset, directory_path,
+                DatasetProduct(DatasetKey("curated.mock.profit_target.development"), "Mock development",
+                               DatasetLayer.CURATED, primary_time="timestamp"),
+                provider="synthetic", venue="mock", synthetic=True)
+            common = ["--lake-root", directory, "--dataset-root", dataset_root, "--backtest-root", backtest_root, "backtest"]
             with io.StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([*common, "run", "--dataset", dataset.manifest.dataset_id]), 0)
                 self.assertIn("conservative:", output.getvalue())
@@ -114,8 +119,12 @@ class BacktestEngineTests(unittest.TestCase):
                 self.assertIn("slippage=", output.getvalue())
             validation = make_mock_dataset(split="validation")
             test = make_mock_dataset(split="test")
-            DatasetRepository(dataset_root).save(validation)
-            DatasetRepository(dataset_root).save(test)
+            for item in (validation, test):
+                path = MarketSliceStorageDriver(dataset_root).save(item)
+                register_historical_dataset(directory, item, path,
+                    DatasetProduct(DatasetKey(f"curated.mock.profit_target.{item.manifest.split}"),
+                                   f"Mock {item.manifest.split}", DatasetLayer.CURATED, primary_time="timestamp"),
+                    provider="synthetic", venue="mock", synthetic=True)
             with io.StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
                     *common, "validate",

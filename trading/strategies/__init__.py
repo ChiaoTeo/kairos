@@ -1,13 +1,19 @@
 """Frozen production strategy models used by backtest, paper, and live runtimes."""
 
 from .btc_iron_condor import BtcIronCondorConfig, BtcIronCondorStrategy
+from .base import Strategy, StrategyContext, StrategyDecision
 from .runtime import GovernedStrategyRuntime
+from .event_session import (
+    CanonicalQuoteSliceProjection, CanonicalStrategyEventSession, StrategyEventSessionResult,
+)
 from .registry import PromotionEvidence, StrategyRegistry
 from .specs import builtin_strategy_specs,bull_put_strategy_spec,register_builtin_strategies
 from .deployment import DeploymentDecision,StrategyDeploymentGate
 from .promotion import PromotionGateDecision,evaluate_promotion_artifacts
 
-__all__ = ["BtcIronCondorConfig", "BtcIronCondorStrategy", "GovernedStrategyRuntime",
+__all__ = ["BtcIronCondorConfig", "BtcIronCondorStrategy", "Strategy", "StrategyContext",
+           "StrategyDecision", "GovernedStrategyRuntime",
+           "CanonicalQuoteSliceProjection", "CanonicalStrategyEventSession", "StrategyEventSessionResult",
            "PromotionEvidence", "StrategyRegistry"]
 __all__ += ["builtin_strategy_specs","bull_put_strategy_spec","register_builtin_strategies"]
 __all__ += ["DeploymentDecision","StrategyDeploymentGate"]

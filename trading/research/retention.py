@@ -9,8 +9,9 @@ from zoneinfo import ZoneInfo
 
 from trading.backtest.feed import MarketSlice
 from trading.domain.identity import InstrumentId
-from trading.domain.instrument import InstrumentDefinition
+from trading.reference.models import InstrumentDefinition
 from trading.domain.product import ListedOptionSpec, OptionRight
+from trading.reference.access import contract_spec
 from trading.storage.codec import from_primitive, to_primitive
 
 
@@ -62,7 +63,7 @@ class DeltaLegWatchlist:
         snapshots = {item.instrument_id: item for item in market.instruments}
         candidates = []
         for definition in current_candidates:
-            spec = definition.product_spec
+            spec = contract_spec(definition)
             snapshot = snapshots.get(definition.instrument_id)
             if not isinstance(spec, ListedOptionSpec) or spec.right is not OptionRight.PUT:
                 continue
@@ -71,8 +72,8 @@ class DeltaLegWatchlist:
             candidates.append((definition, snapshot.greeks.delta))
         if not candidates:
             return False
-        expiry = min(item.product_spec.expiry for item, _ in candidates)
-        same_expiry = [(item, delta) for item, delta in candidates if item.product_spec.expiry == expiry]
+        expiry = min(contract_spec(item).expiry for item, _ in candidates)
+        same_expiry = [(item, delta) for item, delta in candidates if contract_spec(item).expiry == expiry]
         selected = []
         for target in self.target_deltas:
             definition, _ = min(same_expiry, key=lambda pair: abs(pair[1] - target))
@@ -104,4 +105,3 @@ class DeltaLegWatchlist:
         temporary = self.path.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(to_primitive(self.manifest), indent=2, sort_keys=True) + "\n", encoding="utf-8")
         temporary.replace(self.path)
-

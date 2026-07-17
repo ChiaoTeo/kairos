@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from trading.domain.identity import InstitutionId
+
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -7,12 +9,10 @@ from uuid import uuid4
 
 from trading.accounting.conversion import AssetConversionGraph
 from trading.accounting.ledger import LedgerService
-from trading.accounting.portfolio import PortfolioV2
-from trading.catalog.service import InstrumentCatalog
+from trading.accounting.portfolio import Portfolio
 from trading.domain.corporate_action import CashDividendEvent, SplitEvent
 from trading.domain.execution import TradeExecution, TradeSide
 from trading.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, VenueListing
 from trading.domain.ledger import Ledger, LedgerBook
 from trading.domain.product import EquitySpec, ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
 from trading.products.equity.corporate_actions import CorporateActionService
@@ -23,6 +23,8 @@ from trading.domain.capability import OrderType
 from trading.domain.order import ExecutionInstructions, TimeInForce
 from trading.strategies.covered_call import CoveredCallStrategy
 from trading.strategies.protective_put import ProtectivePutStrategy
+from trading.reference import ReferenceCatalog
+from tests.reference_support import publish_test_instrument
 
 
 NOW = datetime(2025, 1, 2, 15, 30, tzinfo=timezone.utc)
@@ -30,19 +32,21 @@ NOW = datetime(2025, 1, 2, 15, 30, tzinfo=timezone.utc)
 
 class EquityOptionTests(unittest.TestCase):
     def setUp(self):
-        self.account = AccountKey(VenueId("ibkr"), "paper", AccountType.SECURITIES_MARGIN)
+        self.account = AccountKey(InstitutionId("ibkr"), "paper", AccountType.SECURITIES_MARGIN)
         self.equity_id = InstrumentId("equity:us:aapl")
         self.option_id = InstrumentId("option:aapl:20250221:105:c")
-        listing = lambda external, symbol: (VenueListing(VenueId("ibkr"), external, symbol, Decimal("0.01"), Decimal("1"), Decimal("1")),)
-        self.equity = InstrumentDefinition(self.equity_id, ProductType.EQUITY, "AAPL", AssetId("AAPL"), AssetId("USD"), EquitySpec("NASDAQ", "US", AssetId("USD")), listing("1", "AAPL"), NOW - timedelta(days=1))
-        expiry = NOW + timedelta(days=50)
-        self.option = InstrumentDefinition(
-            self.option_id, ProductType.LISTED_OPTION, "AAPL 105C", None, AssetId("USD"),
-            ListedOptionSpec(self.equity_id, expiry, Decimal("105"), OptionRight.CALL, ExerciseStyle.AMERICAN, SettlementType.PHYSICAL, SettlementSession.PM, Decimal("100"), expiry),
-            listing("2", "AAPL  250221C00105000"), NOW - timedelta(days=1),
+        self.catalog = ReferenceCatalog()
+        self.equity = publish_test_instrument(
+            self.catalog, self.equity_id, ProductType.EQUITY, "AAPL",
+            EquitySpec("NASDAQ", "US", AssetId("USD")), AssetId("USD"), VenueId("ibkr"), "AAPL",
+            NOW - timedelta(days=1),
         )
-        self.catalog = InstrumentCatalog()
-        self.catalog.add(self.equity); self.catalog.add(self.option)
+        expiry = NOW + timedelta(days=50)
+        self.option = publish_test_instrument(
+            self.catalog, self.option_id, ProductType.LISTED_OPTION, "AAPL 105C",
+            ListedOptionSpec(self.equity_id, expiry, Decimal("105"), OptionRight.CALL, ExerciseStyle.AMERICAN, SettlementType.PHYSICAL, SettlementSession.PM, Decimal("100"), expiry),
+            AssetId("USD"), VenueId("ibkr"), "AAPL  250221C00105000", NOW - timedelta(days=1),
+        )
         self.ledger = Ledger(); self.service = LedgerService(self.ledger, self.catalog)
         self.service.deposit(self.account, AssetId("USD"), Decimal("20000"), NOW, "initial")
 
@@ -60,7 +64,7 @@ class EquityOptionTests(unittest.TestCase):
         OptionLifecycleService(self.service).apply(PhysicalOptionEvent(uuid4(), PhysicalOptionEventType.ASSIGNMENT, self.account, self.option_id, Decimal("1"), NOW + timedelta(seconds=4), Decimal("110")))
         self.assertEqual(self.ledger.book_balance(self.account, LedgerBook.CASH, AssetId("USD")), Decimal("20798.35"))
         graph = AssetConversionGraph()
-        snapshot = PortfolioV2(self.ledger, self.catalog, AssetId("USD")).snapshot(NOW + timedelta(seconds=5), {}, graph)
+        snapshot = Portfolio(self.ledger, self.catalog, AssetId("USD")).snapshot(NOW + timedelta(seconds=5), {}, graph)
         self.assertFalse(snapshot.positions)
         self.assertEqual(snapshot.net_asset_value, Decimal("20798.35"))
 
@@ -83,12 +87,11 @@ class EquityOptionTests(unittest.TestCase):
         self.assertEqual(plan.orders[0].intent_id, str(intent.intent_id))
 
     def test_protective_put_strategy_buys_put_and_exercise_delivers_stock_at_strike(self):
-        put = InstrumentDefinition(
-            InstrumentId("option:aapl:put"), ProductType.LISTED_OPTION, "AAPL PUT", None, AssetId("USD"),
-            ListedOptionSpec(self.equity.instrument_id, self.option.product_spec.expiry, Decimal("95"), OptionRight.PUT, ExerciseStyle.AMERICAN, SettlementType.PHYSICAL, SettlementSession.PM, Decimal("100"), self.option.product_spec.expiry),
-            (VenueListing(VenueId("ibkr"), "3", "AAPL PUT", Decimal("0.01"), Decimal("1"), Decimal("1")),), self.option.effective_from,
+        put = publish_test_instrument(
+            self.catalog, InstrumentId("option:aapl:put"), ProductType.LISTED_OPTION, "AAPL PUT",
+            ListedOptionSpec(self.equity.instrument_id, self.option.contract_spec.expiry, Decimal("95"), OptionRight.PUT, ExerciseStyle.AMERICAN, SettlementType.PHYSICAL, SettlementSession.PM, Decimal("100"), self.option.contract_spec.expiry),
+            AssetId("USD"), VenueId("ibkr"), "AAPL PUT", self.option.effective_from,
         )
-        self.catalog.add(put)
         self.service.deposit(self.account, AssetId("USD"), Decimal("20000"), NOW, "protective-capital")
         self.service.trade(TradeExecution(uuid4(), NOW + timedelta(seconds=1), self.account, self.equity.instrument_id, TradeSide.BUY, Decimal("100"), Decimal("100"), AssetId("USD"), Decimal("0"), "stock"))
         intent = ProtectivePutStrategy(self.equity.instrument_id, put.instrument_id).intents(Decimal("100"), Decimal("0"))[0]
@@ -102,7 +105,7 @@ class EquityOptionTests(unittest.TestCase):
         self.trade(self.equity_id, TradeSide.BUY, "100", "100", "1", 1)
         self.trade(self.option_id, TradeSide.SELL, "1", "2", "0.65", 2)
         OptionLifecycleService(self.service).apply(PhysicalOptionEvent(uuid4(), PhysicalOptionEventType.EXPIRATION, self.account, self.option_id, Decimal("1"), NOW + timedelta(seconds=3)))
-        snapshot = PortfolioV2(self.ledger, self.catalog, AssetId("USD")).snapshot(NOW + timedelta(seconds=4), {self.equity_id: Decimal("103")}, AssetConversionGraph())
+        snapshot = Portfolio(self.ledger, self.catalog, AssetId("USD")).snapshot(NOW + timedelta(seconds=4), {self.equity_id: Decimal("103")}, AssetConversionGraph())
         self.assertEqual(len(snapshot.positions), 1)
         self.assertEqual(snapshot.positions[0].instrument_id, self.equity_id)
         self.assertEqual(snapshot.positions[0].quantity, Decimal("100"))
@@ -110,7 +113,7 @@ class EquityOptionTests(unittest.TestCase):
     def test_split_preserves_economic_value_and_adjusts_cost(self):
         self.trade(self.equity_id, TradeSide.BUY, "100", "100", "1", 1)
         CorporateActionService(self.service).apply_split(self.account, SplitEvent(uuid4(), self.equity_id, NOW + timedelta(seconds=2), Decimal("2")))
-        snapshot = PortfolioV2(self.ledger, self.catalog, AssetId("USD")).snapshot(NOW + timedelta(seconds=3), {self.equity_id: Decimal("50")}, AssetConversionGraph())
+        snapshot = Portfolio(self.ledger, self.catalog, AssetId("USD")).snapshot(NOW + timedelta(seconds=3), {self.equity_id: Decimal("50")}, AssetConversionGraph())
         position = snapshot.positions[0]
         self.assertEqual(position.quantity, Decimal("200"))
         self.assertEqual(position.average_price, Decimal("50"))

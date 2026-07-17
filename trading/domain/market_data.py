@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from .identity import InstrumentId
+from .identity import InstrumentId, VenueId
+
+
+@dataclass(frozen=True, slots=True)
+class OptionChain:
+    """A discovered option universe, not a tradable instrument definition."""
+
+    underlying_id: InstrumentId
+    venue_id: VenueId
+    exchange: str
+    trading_class: str
+    multiplier: Decimal
+    expirations: tuple[date, ...]
+    strikes: tuple[Decimal, ...]
 
 
 @dataclass(frozen=True, slots=True)

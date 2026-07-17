@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from trading.adapters.massive import MassiveClient, MassiveConfig, MassiveCuratedSliceBuilder, MassiveOptionDataPipeline, MassiveResponse
-from trading.backtest.feed import DatasetRepository
+from trading.adapters.massive import MassiveClient, MassiveConfig, MassiveCuratedSliceBuilder, MassiveResponse
+from trading.adapters.massive.pipeline import MassiveOptionDataPipeline
+from trading.data.market_slice_storage import MarketSliceStorageDriver
 from trading.pricing import ValuationService
 from trading.market_data import ParquetMarketEventRepository
+from trading.adapters.massive.datasets import MassiveOptionEventsDatasetConnector, MassiveOptionProductConfig
+from trading.data import AcquisitionRequest, DataCatalog, DatasetKey, DatasetLayer, DatasetProduct, SourceBinding, TimeRange
+from trading.domain.identity import InstrumentId
+from trading.market_data import MarketEventEnvelope, MarketEventType
 
 
 class StubTransport:
@@ -27,6 +33,22 @@ class StatusStubTransport(StubTransport):
         self.urls.append(url)
         status, payload = self.payloads.pop(0)
         return MassiveResponse(status, {}, json.dumps(payload).encode())
+
+
+class ContentPipeline:
+    def __init__(self, root):
+        self.repository = ParquetMarketEventRepository(Path(root) / "canonical" / "market")
+
+    def prepare_options(self, **kwargs):
+        start, end = kwargs["start"], kwargs["end"]
+        event = MarketEventEnvelope(
+            InstrumentId("option:us:test"), start, start, start + timedelta(seconds=1), "massive",
+            "options.quotes", "O:TEST", MarketEventType.QUOTE, 1,
+            {"bid": Decimal("1"), "ask": Decimal("2"), "bid_size": Decimal("1"), "ask_size": Decimal("1")},
+        )
+        return self.repository.write_batch(kwargs["dataset_id"], (event,), lineage={
+            "request_window": {"start": start.isoformat(), "end": end.isoformat(), "boundary": "[start,end)"},
+        })
 
 
 class MassivePipelineTests(unittest.TestCase):
@@ -49,21 +71,19 @@ class MassivePipelineTests(unittest.TestCase):
             pipeline = MassiveOptionDataPipeline(temporary, MassiveClient(MassiveConfig("secret"), transport), now=lambda: end)
             manifest = pipeline.prepare_options(dataset_id="options.us.massive.spxw.test.v1", underlying="SPX", option_tickers=(ticker,), start=start, end=end)
             self.assertEqual(manifest["rows"], 3)
-            self.assertTrue((Path(temporary) / "catalog" / "instruments.json").exists())
-            self.assertTrue((Path(temporary) / "reference" / "external_mappings.json").exists())
+            self.assertTrue((Path(temporary) / "reference" / "catalog.json").exists())
             self.assertEqual(len(list((Path(temporary) / "source").rglob("receipt.json"))), 7)
             receipt_text = "".join(item.read_text() for item in (Path(temporary) / "source").rglob("receipt.json"))
             self.assertNotIn("secret", receipt_text)
             events = list(ParquetMarketEventRepository(Path(temporary) / "canonical" / "market").scan("options.us.massive.spxw.test.v1", start, end))
             self.assertEqual([item.record_type.value for item in events], ["quote", "trade", "bar"])
             self.assertEqual(events[0].available_time, datetime.fromtimestamp(sip_ns / 1_000_000_000, tz=timezone.utc))
-            curated = MassiveCuratedSliceBuilder(temporary, catalog_path=Path(temporary) / "catalog" / "instruments.json",
-                                                  dataset_root=Path(temporary) / "datasets").build(
+            curated = MassiveCuratedSliceBuilder(temporary, dataset_root=Path(temporary) / "datasets").build(
                 "options.us.massive.spxw.test.v1", "spxw.massive.slices.v1", start, end, sampling_seconds=60)
             self.assertEqual(curated.manifest.slice_count, 2)
             self.assertIsNotNone(curated.slices[1].instruments[0].quote)
             self.assertEqual(dict(curated.slices[1].reference_prices).popitem()[1], 6000)
-            _, valuation = ValuationService(MassiveCuratedSliceBuilder(temporary, catalog_path=Path(temporary) / "catalog" / "instruments.json", dataset_root=Path(temporary) / "datasets").catalog).value(curated.slices[1])
+            _, valuation = ValuationService(MassiveCuratedSliceBuilder(temporary, dataset_root=Path(temporary) / "datasets").catalog).value(curated.slices[1])
             self.assertEqual(len(valuation.instruments), 1)
             offline = MassiveOptionDataPipeline(temporary, MassiveClient(MassiveConfig("secret"), StubTransport([])), now=lambda: end + timedelta(days=1))
             rebuilt = offline.prepare_options(dataset_id="options.us.massive.spxw.test.v1", underlying="SPX", option_tickers=(ticker,), start=start, end=end)
@@ -105,8 +125,7 @@ class MassivePipelineTests(unittest.TestCase):
             self.assertEqual(lineage["underlying_reference"]["fallback"], "put_call_parity_synthetic_forward")
             self.assertFalse(any(path.is_dir() and not any(path.iterdir()) for path in (Path(temporary) / "source").rglob("*")))
             curated = MassiveCuratedSliceBuilder(
-                temporary, catalog_path=Path(temporary) / "catalog" / "instruments.json",
-                dataset_root=Path(temporary) / "datasets",
+                temporary, dataset_root=Path(temporary) / "datasets",
             ).build(
                 "options.us.massive.spxw.synthetic-forward.v1", "spxw.synthetic-forward.slices.v1",
                 start, end, sampling_seconds=60, max_quote_age_seconds=60,
@@ -117,6 +136,28 @@ class MassivePipelineTests(unittest.TestCase):
             self.assertFalse(curated.slices[2].reference_prices)
             self.assertTrue(any(issue.code == "missing_underlying" for issue in curated.slices[2].quality_issues))
             self.assertIn("reference=official_or_put_call_parity", curated.manifest.source)
+
+    def test_dataset_connector_finalizes_staging_by_actual_content_hash(self):
+        with TemporaryDirectory() as temporary:
+            key = DatasetKey("market.events.options.us.test")
+            product = DatasetProduct(key, "Test option events", DatasetLayer.CANONICAL,
+                                     sources=(SourceBinding("massive", "opra", 100),))
+            catalog = DataCatalog(temporary); catalog.register_product(product); catalog.save()
+            connector = object.__new__(MassiveOptionEventsDatasetConnector)
+            connector.root = Path(temporary)
+            connector.config = MassiveOptionProductConfig(str(key), "TEST", ("O:TEST",))
+            connector.pipeline = ContentPipeline(temporary)
+            start = datetime(2026, 1, 1, tzinfo=timezone.utc); end = start + timedelta(minutes=1)
+            release = connector.acquire(AcquisitionRequest(
+                str(key), (TimeRange(start, end),), SourceBinding("massive", "opra", 100),
+            ))
+            self.assertTrue(release.release_id.startswith("ds_"))
+            directory = Path(temporary) / release.relative_path
+            self.assertTrue(directory.exists())
+            self.assertFalse(any((Path(temporary) / "canonical" / "market").glob("dataset=staging_*")))
+            self.assertEqual(DataCatalog(temporary).release(key).content_hash, release.content_hash)
+            for name in ("quality.json", "capabilities.json", "usage.json", "release.json"):
+                self.assertTrue((directory / name).exists())
 
 
 if __name__ == "__main__":

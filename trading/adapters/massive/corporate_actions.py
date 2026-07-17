@@ -5,13 +5,13 @@ from decimal import Decimal
 from typing import Iterable, Mapping
 from uuid import NAMESPACE_URL, uuid5
 
-from trading.catalog.external import ExternalMappingRepository
 from trading.domain.corporate_action import CashDividendEvent, SplitEvent, SymbolChangeEvent
-from trading.domain.identity import AssetId
+from trading.domain.identity import AssetId, InstrumentId
+from trading.reference import ProviderId, ReferenceCatalog
 
 
 class MassiveCorporateActionDecoder:
-    def __init__(self, mappings: ExternalMappingRepository) -> None:
+    def __init__(self, mappings: ReferenceCatalog) -> None:
         self.mappings = mappings
 
     def splits(self, rows: Iterable[Mapping[str, object]]) -> tuple[SplitEvent, ...]:
@@ -19,7 +19,7 @@ class MassiveCorporateActionDecoder:
         for row in rows:
             ticker = str(row["ticker"])
             effective_at = _date(row.get("execution_date") or row.get("ex_date"))
-            instrument_id = self.mappings.resolve("massive", "stocks", ticker, effective_at)
+            instrument_id = self._resolve("stocks", ticker, effective_at)
             ratio = Decimal(str(row["split_to"])) / Decimal(str(row["split_from"]))
             if ratio <= 0:
                 raise ValueError("Massive split ratio must be positive")
@@ -33,7 +33,7 @@ class MassiveCorporateActionDecoder:
             ticker = str(row["ticker"])
             ex_date = _date(row["ex_dividend_date"])
             pay_date = _date(row.get("pay_date") or row["ex_dividend_date"])
-            instrument_id = self.mappings.resolve("massive", "stocks", ticker, ex_date)
+            instrument_id = self._resolve("stocks", ticker, ex_date)
             amount = Decimal(str(row["cash_amount"]))
             if amount < 0:
                 raise ValueError("Massive dividend cash amount cannot be negative")
@@ -51,10 +51,14 @@ class MassiveCorporateActionDecoder:
             old_ticker = str(row.get("ticker") or row.get("old_ticker"))
             new_ticker = str(row.get("new_ticker") or row.get("ticker_change", {}).get("ticker"))
             effective_at = _date(row.get("date") or row.get("effective_date"))
-            instrument_id = self.mappings.resolve("massive", "stocks", old_ticker, effective_at)
+            instrument_id = self._resolve("stocks", old_ticker, effective_at)
             source_id = str(row.get("id") or f"{old_ticker}:{new_ticker}:{effective_at.date()}")
             values.append(SymbolChangeEvent(uuid5(NAMESPACE_URL, f"massive:ticker-event:{source_id}"), instrument_id, effective_at, new_ticker, new_ticker))
         return tuple(values)
+
+    def _resolve(self, namespace: str, external_id: str, at: datetime) -> InstrumentId:
+        mapping = self.mappings.resolve_provider_symbol(ProviderId("massive"), namespace, external_id, at)
+        return InstrumentId(mapping.target_id)
 
 
 def _date(value: object) -> datetime:

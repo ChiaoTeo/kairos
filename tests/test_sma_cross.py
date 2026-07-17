@@ -6,23 +6,21 @@ from decimal import Decimal
 
 from trading.domain.identity import InstrumentId
 from trading.domain.market_data import Bar
-from trading.history import BarDataset, BarMetadata
-from trading.strategies.sma_cross import SmaCrossConfig, backtest_sma_cross
+from trading.strategies.sma_cross import BarSeries, SmaCrossConfig, backtest_sma_cross
 
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
 INSTRUMENT = InstrumentId("fixture:asset")
 
 
-def dataset(closes: tuple[str, ...], opens: tuple[str, ...] | None = None) -> BarDataset:
+def dataset(closes: tuple[str, ...], opens: tuple[str, ...] | None = None) -> BarSeries:
     opens = opens or closes
     bars = tuple(Bar(
         INSTRUMENT, NOW + timedelta(hours=index), NOW + timedelta(hours=index + 1),
         Decimal(opens[index]), max(Decimal(opens[index]), Decimal(close)),
         min(Decimal(opens[index]), Decimal(close)), Decimal(close), Decimal("1"),
     ) for index, close in enumerate(closes))
-    metadata = BarMetadata(1, "fixture", INSTRUMENT, "ASSET", "1h", "fixture", NOW, NOW + timedelta(hours=len(bars)), len(bars))
-    return BarDataset(metadata, bars)
+    return BarSeries("fixture", bars)
 
 
 class SmaCrossTests(unittest.TestCase):

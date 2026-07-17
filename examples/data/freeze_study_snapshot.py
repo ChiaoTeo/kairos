@@ -1,0 +1,18 @@
+from trading import __version__
+from trading.data import ResearchDataClient
+from trading.data.products import BTC_SPOT_DAILY
+
+
+data = ResearchDataClient("data")
+query = data.get(
+    BTC_SPOT_DAILY.product,
+    start="2025-01-01T00:00:00Z",
+    end="2025-02-01T00:00:00Z",
+    fields=("period_start", "close"),
+)
+data.freeze_study(
+    "data/studies/example/data_snapshot.json",
+    "example",
+    (query,),
+    code_version=__version__,
+)

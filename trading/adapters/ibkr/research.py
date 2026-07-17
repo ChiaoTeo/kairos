@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import math
-from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from time import sleep
@@ -10,13 +9,19 @@ from uuid import UUID
 
 from trading.domain.event import GreeksUpdated, MarketEvent, QuoteUpdated, TradeUpdated, UnderlyingPriceUpdated, envelope
 from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, OptionChain, VenueListing
-from trading.domain.market_data import Greeks, Quote, Trade
+from trading.domain.market_data import Greeks, OptionChain, Quote, Trade
 from trading.domain.product import IndexSpec, ListedOptionSpec, OptionRight, ProductType
 from trading.research.spec import ResearchSpec
+from trading.reference import (
+    AssetDefinition, AssetType, ListingDefinition, ListingId, ReferenceCatalog,
+    TradingRules, VenueDefinition, VenueType,
+)
+from trading.reference.factory import publish_instrument
+from trading.reference.models import InstrumentDefinition
 
 
 class SpxwResearchProvider(Protocol):
+    catalog: ReferenceCatalog
     def connect(self) -> None: ...
     def disconnect(self) -> None: ...
     def underlying(self, spec: ResearchSpec) -> InstrumentDefinition: ...
@@ -49,6 +54,7 @@ class IbkrSpxwResearchAdapter:
         self._ib = IB()
         self._ib.RequestTimeout = spec.quote_timeout_seconds
         self._contracts: dict[InstrumentId, Any] = {}
+        self.catalog = ReferenceCatalog()
 
     def connect(self) -> None:
         self._ib.connect(self.host, self.port, clientId=self.client_id, readonly=self.readonly)
@@ -76,11 +82,18 @@ class IbkrSpxwResearchAdapter:
         contract = qualified[0]
         instrument_id = InstrumentId(f"index:{spec.underlying.lower()}")
         self._contracts[instrument_id] = contract
-        return InstrumentDefinition(
-            instrument_id, ProductType.INDEX, spec.underlying, None, AssetId(spec.currency),
-            IndexSpec(AssetId(spec.currency), spec.underlying_exchange),
-            (VenueListing(self.venue_id, str(contract.conId), contract.localSymbol or spec.underlying, Decimal("0.01"), Decimal("1"), Decimal("1")),),
-            datetime(1970, 1, 1, tzinfo=timezone.utc),
+        effective_from = datetime(1970, 1, 1, tzinfo=timezone.utc)
+        return publish_instrument(
+            self.catalog, instrument_id=instrument_id, instrument_type=ProductType.INDEX,
+            display_name=spec.underlying, contract_spec=IndexSpec(AssetId(spec.currency), spec.underlying_exchange),
+            trading_currency=AssetId(spec.currency), listings=(ListingDefinition(
+                ListingId(f"listing:{self.venue_id.value}:{instrument_id.value}"), instrument_id, self.venue_id,
+                contract.localSymbol or spec.underlying, AssetId(spec.currency),
+                TradingRules(Decimal("0.01"), Decimal("1"), Decimal("1")), effective_from,
+                venue_instrument_id=str(contract.conId),
+            ),), effective_from=effective_from,
+            asset_definitions=(AssetDefinition(AssetId(spec.currency), AssetType.FIAT, spec.currency, effective_from, decimals=2),),
+            venue_definitions=(VenueDefinition(self.venue_id, VenueType.EXCHANGE, "IBKR SMART", "UTC", effective_from),),
         )
 
     def qualify(self, instruments: tuple[InstrumentDefinition, ...]) -> tuple[InstrumentDefinition, ...]:
@@ -100,10 +113,7 @@ class IbkrSpxwResearchAdapter:
             if contract is None:
                 continue
             self._contracts[definition.instrument_id] = contract
-            listing = definition.listing(self.venue_id)
-            results.append(replace(definition, listings=(replace(
-                listing, external_id=str(contract.conId), symbol=contract.localSymbol or listing.symbol,
-            ),)))
+            results.append(definition)
         return tuple(results)
 
     def discover_option_chain(self, underlying: InstrumentDefinition, spec: ResearchSpec) -> OptionChain:
@@ -139,7 +149,7 @@ class IbkrSpxwResearchAdapter:
             event_time = ticker.time if isinstance(ticker.time, datetime) else datetime.now(timezone.utc)
             if event_time.tzinfo is None:
                 event_time = event_time.replace(tzinfo=timezone.utc)
-            if definition.product_type is ProductType.INDEX:
+            if definition.instrument_type is ProductType.INDEX:
                 price = decimal_or_none(ticker.marketPrice())
                 if price is not None and price > 0:
                     events.append(envelope(UnderlyingPriceUpdated(definition.instrument_id, price), source=source, event_time=event_time, correlation_id=correlation_id))
@@ -161,22 +171,22 @@ class IbkrSpxwResearchAdapter:
                 )), source=source, event_time=event_time, correlation_id=correlation_id))
         return events
 
-    @staticmethod
-    def _to_contract(definition: InstrumentDefinition) -> Any:
-        if not isinstance(definition.product_spec, ListedOptionSpec):
+    def _to_contract(self, definition: InstrumentDefinition) -> Any:
+        if not isinstance(definition.contract_spec, ListedOptionSpec):
             raise ValueError("IBKR option qualification requires ListedOptionSpec")
         from ib_async import Option
-        spec = definition.product_spec
+        spec = definition.contract_spec
+        product = self.catalog.products.get(definition.product_id, definition.effective_from)
         return Option(
             symbol="SPX", lastTradeDateOrContractMonth=spec.expiry.strftime("%Y%m%d"),
             strike=float(spec.strike), right="C" if spec.right is OptionRight.CALL else "P",
-            exchange="SMART", currency=definition.quote_asset.value,
-            multiplier=format(spec.multiplier, "f"), tradingClass=definition.symbol,
+            exchange="SMART", currency=product.currency.value,
+            multiplier=format(spec.multiplier, "f"), tradingClass=definition.display_name or "SPXW",
         )
 
 
 def _definition_signature(definition: InstrumentDefinition) -> tuple[str, Decimal, str]:
-    spec = definition.product_spec
+    spec = definition.contract_spec
     if not isinstance(spec, ListedOptionSpec):
         raise ValueError("option definition required")
     return spec.expiry.strftime("%Y%m%d"), spec.strike, "C" if spec.right is OptionRight.CALL else "P"

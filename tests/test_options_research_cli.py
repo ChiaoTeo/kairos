@@ -4,13 +4,26 @@ import io
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from pathlib import Path
 
 from trading.__main__ import main
-from trading.backtest.feed import DatasetRepository
+from trading.data import DatasetKey, DatasetLayer, DatasetProduct, register_historical_dataset
+from trading.data.market_slice_storage import MarketSliceStorageDriver
 from trading.backtest.mock import make_mock_dataset
 
 
 class OptionsResearchCliTests(unittest.TestCase):
+    @staticmethod
+    def _register(root: Path, dataset):
+        path = MarketSliceStorageDriver(root / "curated").save(dataset)
+        product = DatasetProduct(
+            DatasetKey("curated.mock.options-research"), "Options research fixture", DatasetLayer.CURATED,
+            "Governed synthetic options research fixture", {"synthetic": "true"}, "timestamp", owner="test",
+        )
+        return register_historical_dataset(
+            root, dataset, path, product, provider="synthetic", venue="mock", synthetic=True,
+        )
+
     def test_pricing_option_prices_and_solves_iv(self) -> None:
         output = io.StringIO()
         with redirect_stdout(output):
@@ -27,10 +40,11 @@ class OptionsResearchCliTests(unittest.TestCase):
 
     def test_dataset_surface_calibration_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            DatasetRepository(directory).save(make_mock_dataset())
+            root = Path(directory)
+            release = self._register(root, make_mock_dataset())
             output = io.StringIO()
             with redirect_stdout(output):
-                code = main(["--dataset-root", directory, "vol", "calibrate", "--dataset", "mock-profit_target-development"])
+                code = main(["--lake-root", directory, "vol", "calibrate", "--dataset", release.release_id])
         self.assertEqual(code, 0)
         self.assertIn("Surfaces: 4", output.getvalue())
         self.assertIn("Valuation failures:", output.getvalue())
@@ -50,12 +64,12 @@ class OptionsResearchCliTests(unittest.TestCase):
     def test_research_readiness_rejects_synthetic_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             dataset = make_mock_dataset()
-            DatasetRepository(directory).save(dataset)
+            release = self._register(Path(directory), dataset)
             output = io.StringIO()
             with redirect_stdout(output):
                 code = main([
-                    "--dataset-root", directory, "research", "readiness",
-                    "--dataset", dataset.manifest.dataset_id,
+                    "--lake-root", directory, "research", "readiness",
+                    "--dataset", release.release_id,
                 ])
         self.assertEqual(code, 2)
         self.assertIn("Conclusion status: DATA_NOT_READY", output.getvalue())

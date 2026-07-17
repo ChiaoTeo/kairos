@@ -8,13 +8,15 @@ from pathlib import Path
 from uuid import UUID
 
 from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, OptionChain, VenueListing
+from trading.domain.market_data import OptionChain
 from trading.domain.market_state import MarketState, apply_market_event
 from trading.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
 from trading.research.analyzer import analyze
 from trading.research.snapshot import build_snapshot
 from trading.research.spec import ResearchSpec
 from trading.storage.codec import event_from_primitive
+from trading.reference import ReferenceCatalog
+from tests.reference_support import publish_test_instrument
 
 
 class FixtureReplayTests(unittest.TestCase):
@@ -24,17 +26,17 @@ class FixtureReplayTests(unittest.TestCase):
         state = MarketState()
         for event in events:
             apply_market_event(state, event)
-        underlying = InstrumentDefinition(
-            InstrumentId("index:spx"), ProductType.INDEX, "SPX", None, AssetId("USD"), IndexSpec(AssetId("USD")),
-            (VenueListing(VenueId("ibkr"), "1", "SPX", Decimal("0.01"), Decimal("1"), Decimal("1")),),
-            datetime(1970, 1, 1, tzinfo=timezone.utc),
+        catalog = ReferenceCatalog()
+        underlying = publish_test_instrument(
+            catalog, InstrumentId("index:spx"), ProductType.INDEX, "SPX", IndexSpec(AssetId("USD")),
+            AssetId("USD"), VenueId("ibkr"), "SPX", datetime(1970, 1, 1, tzinfo=timezone.utc),
         )
         expiry = datetime(2099, 1, 2, 16, tzinfo=timezone.utc)
-        option = InstrumentDefinition(
-            InstrumentId("listed-option:spxw:2099-01-02:6000:call"), ProductType.LISTED_OPTION, "SPXW", None, AssetId("USD"),
+        option = publish_test_instrument(
+            catalog, InstrumentId("listed-option:spxw:2099-01-02:6000:call"), ProductType.LISTED_OPTION, "SPXW",
             ListedOptionSpec(underlying.instrument_id, expiry, Decimal("6000"), OptionRight.CALL, ExerciseStyle.EUROPEAN, SettlementType.CASH, SettlementSession.PM, Decimal("100"), expiry),
-            (VenueListing(VenueId("ibkr"), "2", "SPXW", Decimal("0.05"), Decimal("1"), Decimal("1")),),
-            datetime(1970, 1, 1, tzinfo=timezone.utc),
+            AssetId("USD"), VenueId("ibkr"), "SPXW", datetime(1970, 1, 1, tzinfo=timezone.utc),
+            price_increment=Decimal("0.05"),
         )
         chain = OptionChain(underlying.instrument_id, VenueId("ibkr"), "SMART", "SPXW", Decimal("100"), (date(2099, 1, 2),), (Decimal("6000"),))
         snapshot = build_snapshot(
@@ -45,6 +47,7 @@ class FixtureReplayTests(unittest.TestCase):
             selected=(option,),
             state=state,
             now=datetime(2099, 1, 1, 12, 0, 1, tzinfo=timezone.utc),
+            catalog=catalog,
         )
         result = analyze(snapshot)
         self.assertEqual(result.rows[0].mid, Decimal("10"))

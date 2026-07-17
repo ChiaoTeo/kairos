@@ -49,12 +49,7 @@ def write_daily_dataset(
 
     files = []
     for (year, month), values in sorted(partitions.items()):
-        path = root / f"event_year={year:04d}" / f"event_month={month:02d}" / "part-00000.csv"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
-            writer.writeheader()
-            writer.writerows(values)
+        path = _write_partition(root / f"event_year={year:04d}" / f"event_month={month:02d}" / "part-00000", values)
         content = path.read_bytes()
         files.append({"path": path.relative_to(root).as_posix(), "rows": len(values), "bytes": len(content), "sha256": sha256_bytes(content)})
 
@@ -95,6 +90,9 @@ def write_daily_dataset(
     write_json(root / "coverage.json", coverage)
     write_json(root / "manifest.json", manifest)
     write_json(root / "capabilities.json", capabilities or _default_capabilities(dataset_id))
+    _write_quality(root, dataset_id, len(rows), {
+        "duplicate_primary_keys": _duplicate_primary_keys(rows, schema), "missing_ranges": len(missing),
+    })
     return manifest
 
 
@@ -114,10 +112,7 @@ def write_intraday_dataset(root: Path, rows: list[dict[str, object]], *, dataset
         partitions.setdefault((timestamp.year, timestamp.month), []).append(row)
     files = []
     for (year, month), values in sorted(partitions.items()):
-        path = root / f"event_year={year:04d}" / f"event_month={month:02d}" / "part-00000.csv"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0])); writer.writeheader(); writer.writerows(values)
+        path = _write_partition(root / f"event_year={year:04d}" / f"event_month={month:02d}" / "part-00000", values)
         content = path.read_bytes()
         files.append({"path": path.relative_to(root).as_posix(), "rows": len(values), "bytes": len(content), "sha256": sha256_bytes(content)})
     first, last = min(snapshot_times), max(snapshot_times)
@@ -139,6 +134,8 @@ def write_intraday_dataset(root: Path, rows: list[dict[str, object]], *, dataset
     write_json(root / "schema.json", schema); write_json(root / "lineage.json", lineage)
     write_json(root / "coverage.json", coverage); write_json(root / "manifest.json", manifest)
     write_json(root / "capabilities.json", capabilities or _default_capabilities(dataset_id))
+    _write_quality(root, dataset_id, len(rows), {"duplicate_primary_keys": _duplicate_primary_keys(rows, schema),
+                                                  "missing_ranges": len(missing)})
     return manifest
 
 
@@ -156,10 +153,7 @@ def write_event_dataset(root: Path, rows: list[dict[str, object]], *, dataset_id
     files = []
     for (year, month), values in sorted(partitions.items()):
         values.sort(key=lambda row: (str(row[event_time_field]), str(row.get("trade_id", ""))))
-        path = root / f"event_year={year:04d}" / f"event_month={month:02d}" / "part-00000.csv"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0])); writer.writeheader(); writer.writerows(values)
+        path = _write_partition(root / f"event_year={year:04d}" / f"event_month={month:02d}" / "part-00000", values)
         content = path.read_bytes()
         files.append({"path": path.relative_to(root).as_posix(), "rows": len(values), "bytes": len(content), "sha256": sha256_bytes(content)})
     observed_days = {value.date() for value in times}; first, last = min(times), max(times)
@@ -175,6 +169,7 @@ def write_event_dataset(root: Path, rows: list[dict[str, object]], *, dataset_id
     write_json(root / "schema.json", schema); write_json(root / "lineage.json", lineage)
     write_json(root / "coverage.json", coverage); write_json(root / "manifest.json", manifest)
     write_json(root / "capabilities.json", capabilities or _default_capabilities(dataset_id))
+    _write_quality(root, dataset_id, len(rows), {"duplicate_primary_keys": _duplicate_primary_keys(rows, schema)})
     return manifest
 
 
@@ -186,16 +181,22 @@ def append_snapshot_dataset(root: Path, rows: list[dict[str, object]], *, datase
         raise ValueError("snapshot cannot be empty")
     timestamp = datetime.fromisoformat(str(rows[0]["period_start"]).replace("Z", "+00:00"))
     directory = root / f"event_year={timestamp.year:04d}" / f"event_month={timestamp.month:02d}" / f"event_day={timestamp.day:02d}"
-    path = directory / f"part-{timestamp:%H%M%S%f}.csv"
+    stem = directory / f"part-{timestamp:%H%M%S%f}"
     directory.mkdir(parents=True, exist_ok=True)
+    path = stem.with_suffix(".parquet") if _has_pyarrow() else stem.with_suffix(".csv")
     if not path.exists():
-        with path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(rows[0])); writer.writeheader(); writer.writerows(rows)
+        path = _write_partition(stem, rows)
     files, snapshots, total_rows = [], [], 0
-    for item in sorted(root.glob("event_year=*/event_month=*/event_day=*/part-*.csv")):
+    paths = sorted(root.glob("event_year=*/event_month=*/event_day=*/part-*.parquet"))
+    paths.extend(sorted(root.glob("event_year=*/event_month=*/event_day=*/part-*.csv")))
+    for item in paths:
         content = item.read_bytes()
-        with item.open(newline="", encoding="utf-8") as handle:
-            reader = csv.DictReader(handle); first = next(reader, None); count = 1 + sum(1 for _ in reader) if first else 0
+        if item.suffix == ".parquet":
+            import pyarrow.parquet as pq
+            table = pq.read_table(item); count = table.num_rows; first = table.slice(0, 1).to_pylist()[0] if count else None
+        else:
+            with item.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle); first = next(reader, None); count = 1 + sum(1 for _ in reader) if first else 0
         if first: snapshots.append(first["period_start"])
         total_rows += count; files.append({"path": item.relative_to(root).as_posix(), "rows": count, "bytes": len(content), "sha256": sha256_bytes(content)})
     manifest = {"manifest_version": 1, "dataset_id": dataset_id,
@@ -207,6 +208,7 @@ def append_snapshot_dataset(root: Path, rows: list[dict[str, object]], *, datase
     write_json(root/"schema.json", schema); write_json(root/"lineage.json", lineage)
     write_json(root/"coverage.json", coverage); write_json(root/"manifest.json", manifest)
     write_json(root/"capabilities.json", capabilities or _default_capabilities(dataset_id))
+    _write_quality(root, dataset_id, total_rows, {"duplicate_primary_keys_in_batch": _duplicate_primary_keys(rows, schema)})
     return manifest
 
 
@@ -214,6 +216,49 @@ def _default_capabilities(dataset_id: str) -> dict[str, object]:
     return {"capability_schema_version": 1, "dataset_id": dataset_id,
             "maximum_validation_level": 1,
             "note": "conservative default; register explicit capabilities before advanced validation"}
+
+
+def _write_quality(root: Path, dataset_id: str, rows: int, metrics: dict[str, int]) -> None:
+    checks = [{"name": "non_empty", "passed": rows > 0, "value": rows, "minimum": 1}]
+    checks.extend({"name": name, "passed": value == 0, "value": value, "maximum": 0}
+                  for name, value in metrics.items() if name.startswith("duplicate"))
+    write_json(root / "quality.json", {
+        "quality_schema_version": 1, "dataset_id": dataset_id,
+        "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "passed": all(item["passed"] for item in checks), "checks": checks, "metrics": metrics,
+    })
+
+
+def _duplicate_primary_keys(rows: list[dict[str, object]], schema: dict[str, object]) -> int:
+    keys = tuple(str(item) for item in schema.get("primary_key", ()))
+    if not keys:
+        return 0
+    identities = [tuple(str(row.get(key, "")) for key in keys) for row in rows]
+    return len(identities) - len(set(identities))
+
+
+def _has_pyarrow() -> bool:
+    try:
+        import pyarrow  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _write_partition(stem: Path, rows: list[dict[str, object]]) -> Path:
+    stem.parent.mkdir(parents=True, exist_ok=True)
+    if _has_pyarrow():
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        path = stem.with_suffix(".parquet")
+        temporary = path.with_suffix(".parquet.tmp")
+        pq.write_table(pa.Table.from_pylist(rows), temporary, compression="zstd")
+        temporary.replace(path)
+        return path
+    path = stem.with_suffix(".csv")
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0])); writer.writeheader(); writer.writerows(rows)
+    return path
 
 
 def _ranges(days: Iterable[date]) -> list[dict[str, object]]:

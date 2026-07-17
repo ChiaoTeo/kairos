@@ -9,7 +9,7 @@ from uuid import uuid4
 from trading.adapters.ibkr.research import IbkrSpxwResearchAdapter, decimal_or_none
 from trading.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
 from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, OptionChain, VenueListing
+from trading.domain.market_data import OptionChain
 from trading.domain.market_data import Greeks, Quote
 from trading.domain.market_state import MarketState, apply_market_event
 from trading.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
@@ -17,23 +17,25 @@ from trading.research.analyzer import analyze
 from trading.research.selector import select_expirations, select_instruments, select_strikes
 from trading.research.snapshot import build_snapshot
 from trading.research.spec import ResearchSpec
-from trading.storage.codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, to_primitive
+from trading.storage.codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, snapshot_to_primitive
+from trading.reference import ReferenceCatalog
+from tests.reference_support import publish_test_instrument
 
 
 class DomainTests(unittest.TestCase):
     def setUp(self) -> None:
         self.now = datetime(2099, 1, 1, 12, tzinfo=timezone.utc)
-        self.underlying = InstrumentDefinition(
-            InstrumentId("index:spx"), ProductType.INDEX, "SPX", None, AssetId("USD"), IndexSpec(AssetId("USD")),
-            (VenueListing(VenueId("ibkr"), "1", "SPX", Decimal("0.01"), Decimal("1"), Decimal("1")),),
-            datetime(1970, 1, 1, tzinfo=timezone.utc),
+        self.catalog = ReferenceCatalog()
+        self.underlying = publish_test_instrument(
+            self.catalog, InstrumentId("index:spx"), ProductType.INDEX, "SPX", IndexSpec(AssetId("USD")),
+            AssetId("USD"), VenueId("ibkr"), "SPX", datetime(1970, 1, 1, tzinfo=timezone.utc),
         )
         expiry = datetime(2099, 1, 2, 16, tzinfo=timezone.utc)
-        self.option = InstrumentDefinition(
-            InstrumentId("listed-option:spxw:2099-01-02:6000:call"), ProductType.LISTED_OPTION, "SPXW", None, AssetId("USD"),
+        self.option = publish_test_instrument(
+            self.catalog, InstrumentId("listed-option:spxw:2099-01-02:6000:call"), ProductType.LISTED_OPTION, "SPXW",
             ListedOptionSpec(self.underlying.instrument_id, expiry, Decimal("6000"), OptionRight.CALL, ExerciseStyle.EUROPEAN, SettlementType.CASH, SettlementSession.PM, Decimal("100"), expiry),
-            (VenueListing(VenueId("ibkr"), "2", "SPXW", Decimal("0.05"), Decimal("1"), Decimal("1")),),
-            datetime(1970, 1, 1, tzinfo=timezone.utc),
+            AssetId("USD"), VenueId("ibkr"), "SPXW", datetime(1970, 1, 1, tzinfo=timezone.utc),
+            price_increment=Decimal("0.05"),
         )
 
     def test_decimal_normalization(self) -> None:
@@ -44,7 +46,8 @@ class DomainTests(unittest.TestCase):
         self.assertEqual(decimal_or_none(0), Decimal("0"))
 
     def test_ibkr_contract_conversion_round_trip(self) -> None:
-        converted = IbkrSpxwResearchAdapter._to_contract(self.option)
+        adapter = object.__new__(IbkrSpxwResearchAdapter); adapter.catalog = self.catalog
+        converted = adapter._to_contract(self.option)
         self.assertEqual(converted.right, "C")
         self.assertEqual(converted.lastTradeDateOrContractMonth, "20990102")
         self.assertEqual(converted.strike, 6000.0)
@@ -54,7 +57,7 @@ class DomainTests(unittest.TestCase):
         self.assertEqual(select_strikes(strikes, Decimal("6010"), 1), (Decimal("5950"), Decimal("6000"), Decimal("6050")))
         chain = OptionChain(self.underlying.instrument_id, VenueId("ibkr"), "SMART", "SPXW", Decimal("100"), (date(2098, 1, 1), date(2099, 1, 2)), strikes)
         self.assertEqual(select_expirations(chain, 1, today=date(2099, 1, 1)), (date(2099, 1, 2),))
-        selected = select_instruments(chain, Decimal("6010"), ResearchSpec(strikes_each_side=1))
+        selected = select_instruments(self.catalog, chain, Decimal("6010"), ResearchSpec(strikes_each_side=1))
         self.assertEqual(len(selected), 6)
 
     def test_selector_targets_dte_and_samples_moneyness_range(self) -> None:
@@ -92,8 +95,9 @@ class DomainTests(unittest.TestCase):
         snapshot = build_snapshot(
             run_id=uuid4(), spec=ResearchSpec(max_quote_age_seconds=60), underlying=self.underlying,
             chain=chain, selected=(self.option,), state=state, now=self.now,
+            catalog=self.catalog,
         )
-        decoded_snapshot = snapshot_from_primitive(to_primitive(snapshot))
+        decoded_snapshot = snapshot_from_primitive(snapshot_to_primitive(snapshot))
         self.assertEqual(decoded_snapshot, snapshot)
         result = analyze(snapshot)
         self.assertEqual(result.rows[0].mid, Decimal("10"))
@@ -107,6 +111,7 @@ class DomainTests(unittest.TestCase):
             run_id=uuid4(), spec=ResearchSpec(max_quote_age_seconds=1), underlying=self.underlying,
             chain=OptionChain(self.underlying.instrument_id, VenueId("ibkr"), "SMART", "SPXW", Decimal("100"), (date(2099, 1, 2),), (Decimal("6000"),)),
             selected=(self.option,), state=state, now=self.now,
+            catalog=self.catalog,
         )
         self.assertIn("missing_market_data", {issue.code for issue in snapshot.quality_issues})
 

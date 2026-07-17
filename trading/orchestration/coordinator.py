@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
+from typing import TYPE_CHECKING
 from trading.adapters.base import ComboOrderRequest, OrderAck, OrderRequest
+from trading.application.clock import Clock, SystemClock
 from trading.domain.intent import CancelIntent
 from trading.domain.identity import AccountKey
 from trading.execution.router import ExecutionRouter
+from trading.execution.order_state import DurableOrderStatus
 from trading.storage.codec import from_primitive
 
+if TYPE_CHECKING:
+    from trading.application.runtime import TradingApplication
+
 from .event_log import PersistentEventLog
+from .faults import RuntimeFaultInjector, RuntimeFaultPoint, inject
 from .kill_switch import KillSwitch
-from .readiness import Component, SystemReadiness
 from .reconciliation import ReconciliationService
+from .runtime_store import SQLiteRuntimeStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,24 +40,27 @@ class PersistedCancellationRecord:
 
 
 class TradingCoordinator:
-    def __init__(self, router: ExecutionRouter, reconciliation: dict[AccountKey, ReconciliationService], kill_switch: KillSwitch, event_log: PersistentEventLog) -> None:
+    def __init__(self, router: ExecutionRouter, reconciliation: dict[AccountKey, ReconciliationService],
+                 kill_switch: KillSwitch, event_log: PersistentEventLog, clock: Clock | None = None,
+                 runtime_store: SQLiteRuntimeStore | None = None,
+                 application: "TradingApplication | None" = None,
+                 fault_injector: RuntimeFaultInjector | None = None) -> None:
+        if application is None:
+            raise ValueError("TradingCoordinator requires the authoritative TradingApplication")
         self.router, self.reconciliation, self.kill_switch, self.event_log = router, reconciliation, kill_switch, event_log
-        self.readiness = SystemReadiness()
+        self.clock = clock or SystemClock()
+        self.runtime_store = runtime_store
+        self.application = application
+        self.fault_injector = fault_injector
 
-    def start(self, accounts: tuple[AccountKey, ...], *, catalog_ready: bool, market_data_ready: bool, execution_ready: bool) -> None:
-        self.readiness.update(Component.CATALOG, catalog_ready, "ok" if catalog_ready else "catalog unavailable")
-        self.readiness.update(Component.MARKET_DATA, market_data_ready, "ok" if market_data_ready else "market data unavailable")
-        self.readiness.update(Component.EXECUTION, execution_ready, "ok" if execution_ready else "execution unavailable")
-        reports = [self.reconciliation[account].reconcile(account) for account in accounts]
-        matched = all(report.matched for report in reports)
-        self.readiness.update(Component.ACCOUNT, True, "account adapters responding")
-        self.readiness.update(Component.RECONCILIATION, matched, "matched" if matched else "ledger differs from venue")
-        for report in reports:
-            self.event_log.append(f"reconcile:{report.account.value}:{report.checked_at.isoformat()}", "reconciliation", report)
-        self.readiness.require_ready()
+    def activate(self) -> None:
+        """Activate the formal coordinator after TradingApplication reached READY."""
+        self.application.require_operational()
 
     def submit(self, request: OrderRequest, at):
-        self.readiness.require_ready()
+        self.application.require_operational()
+        if self.application.status.value == "reduce_only" and not request.instructions.reduce_only:
+            raise RuntimeError("runtime is reduce-only: non-reducing orders are blocked")
         if self.kill_switch.triggered and not request.instructions.reduce_only:
             raise RuntimeError("kill switch active: only reduce-only orders are allowed")
         if request.instructions.reduce_only:
@@ -63,6 +72,39 @@ class TradingCoordinator:
             projected = current + request.quantity * request.side.sign
             if current == 0 or current * projected < 0 or abs(projected) >= abs(current):
                 raise ValueError("reduce-only order does not strictly reduce the current position")
+        if self.runtime_store is not None:
+            durable = self.runtime_store.order(request.client_order_id)
+            if durable is not None:
+                if durable.request != request:
+                    raise ValueError("client order id was already used for a different request")
+                if durable.ack is not None:
+                    return durable.ack
+                if durable.status in {
+                    DurableOrderStatus.SUBMITTING,
+                    DurableOrderStatus.UNKNOWN,
+                    DurableOrderStatus.CANCELLING,
+                }:
+                    raise RuntimeError(
+                        f"order {request.client_order_id} requires venue recovery from {durable.status.value}"
+                    )
+                if durable.status.terminal:
+                    raise RuntimeError(
+                        f"order {request.client_order_id} is already terminal with status {durable.status.value}"
+                    )
+            else:
+                durable = self.runtime_store.create_order(request, at)
+            if durable.status is DurableOrderStatus.PLANNED:
+                durable = self.runtime_store.transition_order(
+                    request.client_order_id, DurableOrderStatus.APPROVED, at,
+                )
+            if durable.status is DurableOrderStatus.APPROVED:
+                self.runtime_store.transition_order(
+                    request.client_order_id, DurableOrderStatus.SUBMITTING, at,
+                )
+            inject(
+                self.fault_injector, RuntimeFaultPoint.AFTER_ORDER_SUBMITTING_BEFORE_VENUE,
+                client_order_id=request.client_order_id,
+            )
         existing = self.event_log.find(f"order:{request.client_order_id}")
         if existing is not None:
             record = from_primitive(existing["payload"], PersistedOrderRecord)
@@ -71,16 +113,68 @@ class TradingCoordinator:
             return record.ack
         if self.event_log.find(f"combo:{request.client_order_id}") is not None:
             raise ValueError("client order id was already used for a combo order")
-        ack = self.router.submit(request, at)
+        try:
+            ack = self.router.submit(request, at)
+        except ValueError as error:
+            if self.runtime_store is not None:
+                self.runtime_store.transition_order(
+                    request.client_order_id, DurableOrderStatus.REJECTED, self.clock.now(), reason=str(error),
+                )
+            raise
+        except Exception as error:
+            if self.runtime_store is not None:
+                self.runtime_store.transition_order(
+                    request.client_order_id, DurableOrderStatus.UNKNOWN, self.clock.now(), reason=str(error),
+                )
+            raise
+        inject(
+            self.fault_injector, RuntimeFaultPoint.AFTER_VENUE_ACCEPT_BEFORE_ACK_PERSIST,
+            client_order_id=request.client_order_id, venue_order_id=ack.venue_order_id,
+        )
+        if self.runtime_store is not None:
+            self.runtime_store.transition_order(
+                request.client_order_id, DurableOrderStatus.ACKNOWLEDGED, ack.accepted_at, ack=ack,
+            )
         self.event_log.append(f"order:{request.client_order_id}", "order_ack", PersistedOrderRecord(request, ack))
         return ack
 
     def submit_combo(self, request: ComboOrderRequest, at):
-        self.readiness.require_ready()
+        self.application.require_operational()
+        if self.application.status.value == "reduce_only" and not request.instructions.reduce_only:
+            raise RuntimeError("runtime is reduce-only: non-reducing combo orders are blocked")
         if self.kill_switch.triggered and not request.instructions.reduce_only:
             raise RuntimeError("kill switch active: only reduce-only orders are allowed")
         if request.instructions.reduce_only:
             self._validate_combo_reduce_only(request)
+        if self.runtime_store is not None:
+            durable = self.runtime_store.order(request.client_order_id)
+            if durable is not None:
+                if durable.request != request:
+                    raise ValueError("client order id was already used for a different combo request")
+                if durable.ack is not None:
+                    return durable.ack
+                if durable.status in {
+                    DurableOrderStatus.SUBMITTING,
+                    DurableOrderStatus.UNKNOWN,
+                    DurableOrderStatus.CANCELLING,
+                }:
+                    raise RuntimeError(
+                        f"combo order {request.client_order_id} requires venue recovery from {durable.status.value}"
+                    )
+                if durable.status.terminal:
+                    raise RuntimeError(
+                        f"combo order {request.client_order_id} is already terminal with status {durable.status.value}"
+                    )
+            else:
+                durable = self.runtime_store.create_order(request, at)
+            if durable.status is DurableOrderStatus.PLANNED:
+                durable = self.runtime_store.transition_order(
+                    request.client_order_id, DurableOrderStatus.APPROVED, at,
+                )
+            if durable.status is DurableOrderStatus.APPROVED:
+                self.runtime_store.transition_order(
+                    request.client_order_id, DurableOrderStatus.SUBMITTING, at,
+                )
         event_id = f"combo:{request.client_order_id}"
         existing = self.event_log.find(event_id)
         if existing is not None:
@@ -90,26 +184,68 @@ class TradingCoordinator:
             return record.ack
         if self.event_log.find(f"order:{request.client_order_id}") is not None:
             raise ValueError("client order id was already used for a single order")
-        ack = self.router.submit_combo(request, at)
+        try:
+            ack = self.router.submit_combo(request, at)
+        except ValueError as error:
+            if self.runtime_store is not None:
+                self.runtime_store.transition_order(
+                    request.client_order_id, DurableOrderStatus.REJECTED, self.clock.now(), reason=str(error),
+                )
+            raise
+        except Exception as error:
+            if self.runtime_store is not None:
+                self.runtime_store.transition_order(
+                    request.client_order_id, DurableOrderStatus.UNKNOWN, self.clock.now(), reason=str(error),
+                )
+            raise
+        if self.runtime_store is not None:
+            self.runtime_store.transition_order(
+                request.client_order_id, DurableOrderStatus.ACKNOWLEDGED, ack.accepted_at, ack=ack,
+            )
         self.event_log.append(event_id, "combo_order_ack", PersistedComboOrderRecord(request, ack))
         return ack
 
     def cancel(self, intent: CancelIntent, account: AccountKey) -> None:
-        self.readiness.require_ready()
+        self.application.require_operational()
         cancellation_id = f"cancel:{intent.intent_id}"
         if self.event_log.find(cancellation_id) is not None:
             return
+        durable = self.runtime_store.order(intent.client_order_id) if self.runtime_store is not None else None
+        if durable is not None and durable.status is DurableOrderStatus.CANCELLED:
+            return
         existing = self.event_log.find(f"order:{intent.client_order_id}") or self.event_log.find(f"combo:{intent.client_order_id}")
-        if existing is None:
+        if durable is None and existing is None:
             raise LookupError(f"working order not found for client id {intent.client_order_id}")
-        record_type = PersistedComboOrderRecord if existing["event_type"] == "combo_order_ack" else PersistedOrderRecord
-        record = from_primitive(existing["payload"], record_type)
-        if record.request.account != account:
+        if durable is not None:
+            request, ack = durable.request, durable.ack
+            if ack is None:
+                raise RuntimeError("cannot cancel an order without a recovered venue acknowledgement")
+        else:
+            assert existing is not None
+            record_type = PersistedComboOrderRecord if existing["event_type"] == "combo_order_ack" else PersistedOrderRecord
+            record = from_primitive(existing["payload"], record_type)
+            request, ack = record.request, record.ack
+        if request.account != account:
             raise ValueError("cancel account does not match original order")
-        self.router.cancel(account, record.ack.venue_order_id)
+        if self.runtime_store is not None:
+            self.runtime_store.transition_order(
+                intent.client_order_id, DurableOrderStatus.CANCELLING, self.clock.now(), reason=intent.reason,
+            )
+        try:
+            self.router.cancel(account, ack.venue_order_id)
+        except Exception as error:
+            if self.runtime_store is not None:
+                self.runtime_store.transition_order(
+                    intent.client_order_id, DurableOrderStatus.UNKNOWN, self.clock.now(), reason=str(error),
+                )
+            raise
+        if self.runtime_store is not None:
+            self.runtime_store.transition_order(
+                intent.client_order_id, DurableOrderStatus.CANCELLED, self.clock.now(), reason=intent.reason,
+            )
         self.event_log.append(
             cancellation_id, "order_cancelled",
-            PersistedCancellationRecord(intent, account, record.ack.venue_order_id),
+            PersistedCancellationRecord(intent, account, ack.venue_order_id),
         )
 
     def _validate_combo_reduce_only(self, request: ComboOrderRequest) -> None:

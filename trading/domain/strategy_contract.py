@@ -7,7 +7,7 @@ from enum import StrEnum
 import hashlib
 import json
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from .intent import Intent
 from .product import ProductType
@@ -119,7 +119,24 @@ class EconomicIntent:
                diagnostics: tuple[tuple[str, Any], ...] = (),
                hedge_requirements: tuple[tuple[str, Any], ...] = (),
                atomicity_preference: str = "atomic") -> "EconomicIntent":
-        return cls(strategy.strategy_id, strategy.version, strategy.spec_hash, uuid4(), decision_time,
+        material = {
+            "strategy_id": strategy.strategy_id,
+            "strategy_version": strategy.version,
+            "strategy_spec_hash": strategy.spec_hash,
+            "decision_time": decision_time,
+            "valid_until": valid_until,
+            "intents": intents,
+            "risk_budget": risk_budget,
+            "urgency": urgency,
+            "execution_policy_id": execution_policy_id,
+            "feature_snapshot_hash": feature_snapshot_hash,
+            "diagnostics": diagnostics,
+            "hedge_requirements": hedge_requirements,
+            "atomicity_preference": atomicity_preference,
+        }
+        encoded = json.dumps(_jsonable(material), sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        decision_id = uuid5(NAMESPACE_URL, "trader:economic-intent:" + hashlib.sha256(encoded.encode()).hexdigest())
+        return cls(strategy.strategy_id, strategy.version, strategy.spec_hash, decision_id, decision_time,
                    valid_until, intents, risk_budget, urgency, execution_policy_id,
                    feature_snapshot_hash, diagnostics, hedge_requirements, atomicity_preference)
 
@@ -131,6 +148,8 @@ def _replace_lifecycle(spec: StrategySpec, lifecycle: StrategyLifecycle) -> Stra
 
 
 def _jsonable(value):
+    if hasattr(value, "__dataclass_fields__"):
+        return _jsonable(asdict(value))
     if isinstance(value, dict):
         return {key: _jsonable(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
@@ -138,5 +157,7 @@ def _jsonable(value):
     if isinstance(value, StrEnum):
         return value.value
     if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, (UUID, datetime)):
         return str(value)
     return value

@@ -9,17 +9,18 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from trading import __version__
-from trading.backtest.feed import ContractMetadata, DatasetRepository, HistoricalDataset, MarketSlice, SettlementType, build_manifest
+from trading.backtest.feed import ContractMetadata, HistoricalDataset, MarketSlice, SettlementType, build_manifest
+from trading.data.market_slice_storage import MarketSliceStorageDriver
 from trading.adapters.ibkr.research import SpxwResearchProvider
 from trading.domain.event import UnderlyingPriceUpdated
 from trading.domain.market_state import MarketState, apply_market_event
 from trading.domain.product import ListedOptionSpec
+from trading.reference.access import contract_spec
 from trading.research.selector import select_instruments
 from trading.research.snapshot import DataQualityIssue, InstrumentSnapshot
 from trading.research.spec import ResearchSpec
-from trading.research.data_store import ResearchDatasetStore
+from trading.research.data_store import MarketSliceCollectionPublisher
 from trading.research.retention import DeltaLegWatchlist
-from trading.catalog.service import InstrumentCatalog
 from trading.pricing import ValuationService
 from trading.market_data import OptionMarketObservation, validate_option_observation
 
@@ -57,7 +58,7 @@ class SeriesCaptureProgress:
 class SeriesCaptureService:
     def __init__(
         self,
-        repository: DatasetRepository,
+        repository: MarketSliceStorageDriver,
         *,
         wait: Callable[[float], None] = sleep,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
@@ -81,7 +82,7 @@ class SeriesCaptureService:
             pending_slices = []
             definitions_by_id = {}
             qualification_attempts = set()
-            store = ResearchDatasetStore(self.repository)
+            store = MarketSliceCollectionPublisher(self.repository)
             persisted = None
             watchlist = None
             known_definitions = {}
@@ -107,7 +108,7 @@ class SeriesCaptureService:
                     definitions_by_id.update((item.instrument_id, item) for item in provider.qualify(active))
                     restored_watchlist = True
                 chain = provider.discover_option_chain(underlying, research)
-                requested = select_instruments(chain, price, research)
+                requested = select_instruments(provider.catalog, chain, price, research)
                 missing = tuple(item for item in requested if item.instrument_id not in qualification_attempts)
                 qualification_attempts.update(item.instrument_id for item in missing)
                 definitions_by_id.update((item.instrument_id, item) for item in provider.qualify(missing))
@@ -162,11 +163,7 @@ class SeriesCaptureService:
                 if watchlist is not None:
                     selected_legs = watchlist.observe(market_slice, current)
                     if not selected_legs:
-                        valuation_catalog = InstrumentCatalog()
-                        valuation_catalog.add(underlying)
-                        for definition in selected:
-                            valuation_catalog.add(definition)
-                        valued_market, _ = ValuationService(valuation_catalog).value(market_slice)
+                        valued_market, _ = ValuationService(provider.catalog).value(market_slice)
                         watchlist.observe(valued_market, current)
                 slices.append(market_slice)
                 pending_slices.append(market_slice)
@@ -176,15 +173,15 @@ class SeriesCaptureService:
                     contracts_so_far = tuple(
                         ContractMetadata(
                             definition.instrument_id,
-                            definition.product_spec.last_trade_at,
-                            definition.product_spec.expiry + timedelta(minutes=1),
+                            contract_spec(definition).last_trade_at,
+                            contract_spec(definition).expiry + timedelta(minutes=1),
                             SettlementType.PM,
                             None,
                             False,
                             "inferred.spxw-default",
                         )
                         for definition in selected_so_far
-                        if isinstance(definition.product_spec, ListedOptionSpec)
+                        if isinstance(contract_spec(definition), ListedOptionSpec)
                     )
                     chunk_slices = tuple(pending_slices)
                     chunk_manifest = build_manifest(
@@ -192,8 +189,15 @@ class SeriesCaptureService:
                         sampling_seconds=series.interval_seconds, source="ibkr.series",
                         market_data_type=research.market_data_type.value, code_version=__version__,
                         split=series.split, synthetic=False,
+                        products=tuple(provider.catalog.products.values()),
+                        references=provider.catalog.all_references(),
+                        settlements=provider.catalog.settlements.values(),
                     )
-                    chunk = HistoricalDataset(chunk_manifest, chunk_slices, contracts_so_far, (underlying, *selected_so_far))
+                    chunk = HistoricalDataset(
+                        chunk_manifest, chunk_slices, contracts_so_far, (underlying, *selected_so_far),
+                        provider.catalog.products.values(), provider.catalog.all_references(),
+                        provider.catalog.settlements.values(),
+                    )
                     persisted = store.save_session(chunk, append=append or persisted is not None, collected_at=timestamp)
                     pending_slices.clear()
                     checkpoint_saved = True

@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from trading.data.btc_options_readiness import btc_options_readiness
+from research.btc_options_readiness import btc_options_readiness
 from trading.storage.data_lake import write_json
 
 

@@ -6,10 +6,10 @@ from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from trading.backtest.feed import DatasetRepository
+from trading.data.market_slice_storage import MarketSliceStorageDriver
 from trading.backtest.mock import make_mock_dataset
 from trading.domain.market_data import Quote
-from trading.research.data_store import ResearchDatasetStore, merge_datasets
+from trading.research.data_store import MarketSliceCollectionPublisher, merge_datasets
 
 
 class ResearchDataStoreTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class ResearchDataStoreTests(unittest.TestCase):
         first = make_mock_dataset(start_date=date(2025, 1, 6))
         second = make_mock_dataset(start_date=date(2025, 1, 8))
         with tempfile.TemporaryDirectory() as directory:
-            store = ResearchDatasetStore(DatasetRepository(directory))
+            store = MarketSliceCollectionPublisher(MarketSliceStorageDriver(directory))
             store.save_session(first, append=False, collected_at=datetime(2025, 1, 6, tzinfo=timezone.utc))
             merged = store.save_session(second, append=True, collected_at=datetime(2025, 1, 8, tzinfo=timezone.utc))
             replay = store.save_session(second, append=True, collected_at=datetime(2025, 1, 8, tzinfo=timezone.utc))

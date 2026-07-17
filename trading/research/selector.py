@@ -5,10 +5,13 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from trading.domain.identity import AssetId, InstrumentId
-from trading.domain.instrument import InstrumentDefinition, OptionChain, VenueListing
+from trading.domain.market_data import OptionChain
 from trading.domain.product import ExerciseStyle, ListedOptionSpec, ProductType, SettlementSession, SettlementType
 
 from .spec import ResearchSpec
+from trading.reference import ListingDefinition, ListingId, ReferenceCatalog, TradingRules
+from trading.reference.factory import publish_instrument
+from trading.reference.models import InstrumentDefinition
 
 
 def select_expirations(
@@ -55,7 +58,7 @@ def select_strikes(
     return tuple(ordered[start:end])
 
 
-def select_instruments(chain: OptionChain, spot: Decimal, spec: ResearchSpec) -> tuple[InstrumentDefinition, ...]:
+def select_instruments(catalog: ReferenceCatalog, chain: OptionChain, spot: Decimal, spec: ResearchSpec) -> tuple[InstrumentDefinition, ...]:
     expirations = select_expirations(
         chain, spec.expiry_count, minimum_dte_days=spec.minimum_dte_days,
         maximum_dte_days=spec.maximum_dte_days, target_dte_days=spec.target_dte_days,
@@ -75,13 +78,22 @@ def select_instruments(chain: OptionChain, spot: Decimal, spec: ResearchSpec) ->
                 instrument_id = InstrumentId(
                     f"listed-option:spxw:{expiry.isoformat()}:{format(strike, 'f')}:{right.value}"
                 )
-                definitions.append(InstrumentDefinition(
-                    instrument_id, ProductType.LISTED_OPTION, "SPXW", None, AssetId(spec.currency),
-                    ListedOptionSpec(
+                existing = tuple(item for item in catalog.instruments.values() if item.instrument_id == instrument_id)
+                if existing:
+                    definitions.append(existing[-1])
+                    continue
+                effective_from = datetime(1970, 1, 1, tzinfo=timezone.utc)
+                definitions.append(publish_instrument(
+                    catalog, instrument_id=instrument_id, instrument_type=ProductType.LISTED_OPTION,
+                    display_name="SPXW", contract_spec=ListedOptionSpec(
                         chain.underlying_id, expiry_at, strike, right, ExerciseStyle.EUROPEAN,
                         SettlementType.CASH, SettlementSession.PM, chain.multiplier, expiry_at,
                     ),
-                    (VenueListing(chain.venue_id, instrument_id.value, instrument_id.value, Decimal("0.05"), Decimal("1"), Decimal("1")),),
-                    datetime(1970, 1, 1, tzinfo=timezone.utc),
+                    trading_currency=AssetId(spec.currency), listings=(ListingDefinition(
+                        ListingId(f"listing:{chain.venue_id.value}:{instrument_id.value}"), instrument_id,
+                        chain.venue_id, instrument_id.value, AssetId(spec.currency),
+                        TradingRules(Decimal("0.05"), Decimal("1"), Decimal("1")), effective_from,
+                        venue_instrument_id=instrument_id.value,
+                    ),), effective_from=effective_from, trading_class=chain.trading_class,
                 ))
     return tuple(definitions)

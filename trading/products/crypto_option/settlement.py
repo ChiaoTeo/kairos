@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid5
 
 from trading.accounting.ledger import LedgerService
+from trading.execution.ingestion import DurableAccountingIngestionService
 from trading.domain.identity import AccountKey, AssetId, InstrumentId
 from trading.domain.ledger import LedgerBook, LedgerEntryType
 from trading.domain.product import CryptoOptionSpec, OptionRight
+from trading.reference.access import contract_spec, definition_at
+
+
+@dataclass(frozen=True, slots=True)
+class CryptoOptionSettlementEvent:
+    account: AccountKey
+    instrument_id: InstrumentId
+    settlement_price: Decimal
+    timestamp: datetime
 
 
 class CryptoOptionSettlementService:
@@ -15,8 +26,15 @@ class CryptoOptionSettlementService:
         self.ledger_service = ledger_service
 
     def settle(self, account: AccountKey, instrument_id: InstrumentId, settlement_price: Decimal, timestamp: datetime):
-        definition = self.ledger_service.catalog.get(instrument_id, timestamp)
-        spec = definition.product_spec
+        transaction = self.build_settlement(account, instrument_id, settlement_price, timestamp)
+        if transaction is None:
+            return None
+        self.ledger_service.ledger.post(transaction)
+        return transaction
+
+    def build_settlement(self, account: AccountKey, instrument_id: InstrumentId, settlement_price: Decimal, timestamp: datetime):
+        definition = definition_at(self.ledger_service.catalog, instrument_id, timestamp)
+        spec = contract_spec(definition)
         if not isinstance(spec, CryptoOptionSpec):
             raise ValueError("crypto option settlement requires CryptoOptionSpec")
         position_asset = AssetId(f"POSITION:{instrument_id.value}")
@@ -36,5 +54,29 @@ class CryptoOptionSettlementService:
                 (account, LedgerBook.REALIZED_PNL, spec.settlement_asset, -cash, LedgerEntryType.SETTLEMENT, instrument_id, settlement_price, None),
             ))
         transaction = self.ledger_service._transaction(namespace, timestamp, namespace, tuple(items))
-        self.ledger_service.ledger.post(transaction)
         return transaction
+
+
+class DurableCryptoOptionSettlementService:
+    def __init__(
+        self,
+        settlement_service: CryptoOptionSettlementService,
+        ingestion: DurableAccountingIngestionService,
+    ) -> None:
+        self.settlement_service = settlement_service
+        self.ingestion = ingestion
+
+    def settle(self, account: AccountKey, instrument_id: InstrumentId, settlement_price: Decimal, timestamp: datetime):
+        event = CryptoOptionSettlementEvent(account, instrument_id, settlement_price, timestamp)
+        transaction = self.settlement_service.build_settlement(
+            account, instrument_id, settlement_price, timestamp,
+        )
+        if transaction is None:
+            return None
+        external_key = f"crypto-option:settlement:{account.value}:{instrument_id.value}:{timestamp.isoformat()}"
+        return self.ingestion.ingest_settlement(
+            event,
+            transaction,
+            external_key=external_key,
+            occurred_at=timestamp,
+        )

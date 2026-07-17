@@ -7,20 +7,17 @@ from decimal import Decimal
 from trading.backtest.engine import BacktestEngine
 from trading.backtest.mock import make_mock_dataset
 from trading.backtest.result import BacktestConfig
-from trading.catalog.service import InstrumentCatalog
 from trading.pricing import SolverStatus, ValuationService
 from trading.research.snapshot import InstrumentSnapshot
 from trading.risk.limits import RiskLimits
-from trading.research.features import FeatureEngine
+from trading.research.features import FeatureEngine, build_features
 from trading.strategies.bull_put_spread import BullPutSpreadStrategy
 
 
 class InternalValuationTests(unittest.TestCase):
     def test_missing_vendor_greeks_are_replaced_by_internal_values(self) -> None:
         dataset = make_mock_dataset()
-        catalog = InstrumentCatalog()
-        for definition in dataset.definitions:
-            catalog.add(definition)
+        catalog = dataset.reference_catalog()
         raw = dataset.slices[0]
         without_vendor = replace(
             raw,
@@ -36,9 +33,7 @@ class InternalValuationTests(unittest.TestCase):
 
     def test_static_arbitrage_price_is_rejected_with_diagnostic(self) -> None:
         dataset = make_mock_dataset()
-        catalog = InstrumentCatalog()
-        for definition in dataset.definitions:
-            catalog.add(definition)
+        catalog = dataset.reference_catalog()
         market = replace(dataset.slices[0], instruments=tuple(replace(item, greeks=None, greeks_time=None) for item in dataset.slices[0].instruments))
         valued, snapshot = ValuationService(catalog).value(market)
         self.assertTrue(any("price_out_of_bounds" in failure for failure in snapshot.failures))
@@ -46,15 +41,24 @@ class InternalValuationTests(unittest.TestCase):
 
     def test_feature_engine_uses_only_accumulated_history(self) -> None:
         dataset = make_mock_dataset()
-        catalog = InstrumentCatalog()
-        for definition in dataset.definitions:
-            catalog.add(definition)
+        catalog = dataset.reference_catalog()
         valuation_service, features = ValuationService(catalog), FeatureEngine()
         first = features.update(valuation_service.value(dataset.slices[0])[1])
         second = features.update(valuation_service.value(dataset.slices[1])[1])
         self.assertEqual(first.iv_rank, Decimal("0.5"))
         self.assertIsNotNone(second.iv_percentile)
         self.assertIsNotNone(first.put_skew)
+
+    def test_offline_and_incremental_feature_paths_have_exact_parity(self) -> None:
+        dataset = make_mock_dataset(); catalog = dataset.reference_catalog()
+        valuations = tuple(ValuationService(catalog).value(item)[1] for item in dataset.slices)
+        engine = FeatureEngine(); online = tuple(engine.update(item) for item in valuations)
+        history, offline = [], []
+        for valuation in valuations:
+            value = build_features(valuation, tuple(history)); offline.append(value)
+            if value.average_implied_vol is not None:
+                history.append(value.average_implied_vol)
+        self.assertEqual(tuple(offline), online)
 
     def test_strategy_backtest_runs_without_vendor_greeks(self) -> None:
         dataset = make_mock_dataset()

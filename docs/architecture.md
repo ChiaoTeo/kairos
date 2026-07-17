@@ -13,19 +13,19 @@
 系统只有一套领域事实模型：
 
 ```text
-InstrumentDefinition + VenueListing + port-scoped Capabilities
+InstrumentDefinition + ListingDefinition + port-scoped Capabilities
                          |
 normalized market/order/execution/lifecycle events
                          |
                       Ledger
                          |
-          PortfolioV2 + UnifiedRiskView
+          Portfolio + UnifiedRiskView
 ```
 
 - `InstrumentId` 只保存稳定内部身份；
 - 产品字段只存在于 tagged `ProductSpec`；
-- Venue symbol、external id、tick、lot 和 min notional 只存在于 `VenueListing`；
-- execution adapter 只消费 Catalog 显式绑定的 `InstrumentId -> VenueListing.symbol`，不会从内部 ID 猜测 Venue symbol；
+- Venue symbol、external id、tick、lot 和 min notional 只存在于 `ListingDefinition`；
+- execution adapter 只消费 Catalog 显式绑定的 `InstrumentId -> ListingDefinition.symbol`，不会从内部 ID 猜测 Venue symbol；
 - IBKR/Binance 原始对象不进入 strategy、accounting、risk 或 backtest；
 - 余额、持仓、费用、Funding、公司行为和结算都由不可变 Ledger transaction 重建；
 - research、backtest、simulation、paper/testnet 和 live fill 最终进入同一个 `LedgerService` reducer。

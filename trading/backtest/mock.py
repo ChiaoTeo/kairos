@@ -8,10 +8,14 @@ from zoneinfo import ZoneInfo
 
 from trading import __version__
 from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.instrument import InstrumentDefinition, VenueListing
 from trading.domain.market_data import Greeks, Quote
 from trading.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession as ProductSettlementSession, SettlementType as ProductSettlementType
 from trading.research.snapshot import DataQualityIssue, InstrumentSnapshot
+from trading.reference import (
+    AssetDefinition, AssetType, ListingDefinition, ListingId, ReferenceCatalog,
+    TradingRules, VenueDefinition, VenueType,
+)
+from trading.reference.factory import publish_instrument
 
 from .feed import (
     ContractMetadata,
@@ -43,16 +47,22 @@ def make_mock_dataset(
 ) -> HistoricalDataset:
     tz = ZoneInfo("America/New_York")
     expiry = start_date + timedelta(days=1)
-    underlying = InstrumentDefinition(
-        InstrumentId("index:spx"), ProductType.INDEX, "SPX", None, AssetId("USD"), IndexSpec(AssetId("USD")),
-        (VenueListing(VenueId("mock"), "SPX", "SPX", Decimal("0.01"), Decimal("1"), Decimal("1")),),
-        datetime(1970, 1, 1, tzinfo=timezone.utc),
+    catalog = ReferenceCatalog()
+    effective_from = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    underlying = publish_instrument(
+        catalog, instrument_id=InstrumentId("index:spx"), instrument_type=ProductType.INDEX,
+        display_name="SPX", contract_spec=IndexSpec(AssetId("USD")), trading_currency=AssetId("USD"),
+        listings=(ListingDefinition(ListingId("listing:mock:spx"), InstrumentId("index:spx"), VenueId("mock"),
+                                    "SPX", AssetId("USD"), TradingRules(Decimal("0.01"), Decimal("1"), Decimal("1")), effective_from),),
+        effective_from=effective_from,
+        asset_definitions=(AssetDefinition(AssetId("USD"), AssetType.FIAT, "US Dollar", effective_from, decimals=2),),
+        venue_definitions=(VenueDefinition(VenueId("mock"), VenueType.EXCHANGE, "Mock Exchange", "UTC", effective_from),),
     )
     definitions = (
-        _put(expiry, "6050", "101"),
-        _put(expiry, "6000", "102"),
-        _put(expiry, "5950", "103"),
-        _put(expiry, "5900", "104"),
+        _put(catalog, expiry, "6050", "101"),
+        _put(catalog, expiry, "6000", "102"),
+        _put(catalog, expiry, "5950", "103"),
+        _put(catalog, expiry, "5900", "104"),
     )
     timestamps = [datetime.combine(start_date, time(15, 30 + minute), tz) for minute in range(4)]
     if scenario in {MockScenario.EXPIRY_ALL_OTM, MockScenario.EXPIRY_SHORT_ITM, MockScenario.EXPIRY_BOTH_ITM}:
@@ -62,7 +72,7 @@ def make_mock_dataset(
         phase = min(sequence, 3)
         snapshots = []
         for definition in definitions:
-            option = definition.product_spec
+            option = definition.contract_spec
             bid, ask, delta = _market_values(option.strike, phase, scenario)
             quote = None if scenario in {MockScenario.MISSING_QUOTE, MockScenario.FORCE_CLOSE_FAILURE} and phase == 3 and option.strike == Decimal("6000") else Quote(definition.instrument_id, bid, ask, Decimal("20"), Decimal("20"), timestamp)
             greeks = Greeks(definition.instrument_id, Decimal("0.20"), delta, Decimal("0.01"), Decimal("-1.5"), Decimal("1.2"), timestamp)
@@ -92,22 +102,31 @@ def make_mock_dataset(
     manifest = build_manifest(
         f"mock-{scenario.value}-{split}", slice_tuple, contracts, (underlying, *definitions), sampling_seconds=60,
         source="synthetic.hand_calculated", market_data_type="mock", code_version=__version__, split=split, synthetic=True,
+        products=catalog.products.values(), references=catalog.all_references(), settlements=catalog.settlements.values(),
     )
-    return HistoricalDataset(manifest, slice_tuple, contracts, (underlying, *definitions))
+    return HistoricalDataset(
+        manifest, slice_tuple, contracts, (underlying, *definitions), catalog.products.values(),
+        catalog.all_references(), catalog.settlements.values(),
+    )
 
 
-def _put(expiry: date, strike: str, external_id: str) -> InstrumentDefinition:
+def _put(catalog: ReferenceCatalog, expiry: date, strike: str, external_id: str):
     expiry_at = datetime.combine(expiry, time(16), ZoneInfo("America/New_York"))
     instrument_id = InstrumentId(f"listed-option:spxw:{expiry.isoformat()}:{strike}:put")
-    return InstrumentDefinition(
-        instrument_id, ProductType.LISTED_OPTION, "SPXW", None, AssetId("USD"),
-        ListedOptionSpec(
+    return publish_instrument(
+        catalog, instrument_id=instrument_id, instrument_type=ProductType.LISTED_OPTION,
+        display_name=f"SPXW-{expiry.isoformat()}-{strike}-P", contract_spec=ListedOptionSpec(
             InstrumentId("index:spx"), expiry_at, Decimal(strike), OptionRight.PUT,
             ExerciseStyle.EUROPEAN, ProductSettlementType.CASH, ProductSettlementSession.PM,
             Decimal("100"), expiry_at,
-        ),
-        (VenueListing(VenueId("mock"), external_id, f"SPXW-{expiry.isoformat()}-{strike}-P", Decimal("0.05"), Decimal("1"), Decimal("1")),),
-        datetime(1970, 1, 1, tzinfo=timezone.utc),
+        ), trading_currency=AssetId("USD"), listings=(ListingDefinition(
+            ListingId(f"listing:mock:{external_id}"), instrument_id, VenueId("mock"),
+            f"SPXW-{expiry.isoformat()}-{strike}-P", AssetId("USD"),
+            TradingRules(Decimal("0.05"), Decimal("1"), Decimal("1")), datetime(1970, 1, 1, tzinfo=timezone.utc),
+            venue_instrument_id=external_id,
+        ),), effective_from=datetime(1970, 1, 1, tzinfo=timezone.utc), trading_class="SPXW",
+        asset_definitions=(AssetDefinition(AssetId("USD"), AssetType.FIAT, "US Dollar", datetime(1970, 1, 1, tzinfo=timezone.utc), decimals=2),),
+        venue_definitions=(VenueDefinition(VenueId("mock"), VenueType.EXCHANGE, "Mock Exchange", "UTC", datetime(1970, 1, 1, tzinfo=timezone.utc)),),
     )
 
 
@@ -179,6 +198,6 @@ def assess_dataset(dataset: HistoricalDataset, minimum_coverage: Decimal = Decim
     if manifest.greeks_coverage < minimum_coverage:
         reasons.append("Greeks coverage below threshold")
     expiring = {ProductType.LISTED_OPTION, ProductType.FUTURE, ProductType.CRYPTO_OPTION}
-    if any(item.product_type in expiring for item in dataset.definitions) and not dataset.contracts:
+    if any(item.instrument_type in expiring for item in dataset.definitions) and not dataset.contracts:
         reasons.append("contract metadata is missing for expiring products")
     return DatasetReadiness(not reasons, tuple(reasons), manifest.contract_coverage, manifest.quote_coverage, manifest.greeks_coverage, manifest.stale_rate)

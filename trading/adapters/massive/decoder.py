@@ -4,12 +4,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Iterable, Mapping
 
-from trading.catalog.external import ExternalMappingRepository
+from trading.domain.identity import InstrumentId
 from trading.market_data.events import MarketEventEnvelope, MarketEventType
+from trading.reference import ProviderId, ReferenceCatalog
 
 
 def decode_quotes(
-    rows: Iterable[Mapping[str, object]], mappings: ExternalMappingRepository, *,
+    rows: Iterable[Mapping[str, object]], mappings: ReferenceCatalog, *,
     ingested_at: datetime, source_order_start: int = 0, ticker: str | None = None,
 ) -> tuple[MarketEventEnvelope, ...]:
     events = []
@@ -17,7 +18,7 @@ def decode_quotes(
         row_ticker = _ticker(row, ticker)
         event_time = _timestamp(row, "participant_timestamp", "sip_timestamp", "timestamp")
         available_time = _timestamp(row, "sip_timestamp", "participant_timestamp", "timestamp")
-        instrument_id = mappings.resolve("massive", "options", row_ticker, event_time)
+        instrument_id = _resolve(mappings, "options", row_ticker, event_time)
         events.append(MarketEventEnvelope(
             instrument_id, event_time, max(event_time, available_time), ingested_at,
             "massive", "options.quotes", row_ticker, MarketEventType.QUOTE, source_order_start + offset,
@@ -34,7 +35,7 @@ def decode_quotes(
 
 
 def decode_trades(
-    rows: Iterable[Mapping[str, object]], mappings: ExternalMappingRepository, *,
+    rows: Iterable[Mapping[str, object]], mappings: ReferenceCatalog, *,
     ingested_at: datetime, source_order_start: int = 0, ticker: str | None = None,
 ) -> tuple[MarketEventEnvelope, ...]:
     events = []
@@ -42,7 +43,7 @@ def decode_trades(
         row_ticker = _ticker(row, ticker)
         event_time = _timestamp(row, "participant_timestamp", "sip_timestamp", "timestamp")
         available_time = _timestamp(row, "sip_timestamp", "participant_timestamp", "timestamp")
-        instrument_id = mappings.resolve("massive", "options", row_ticker, event_time)
+        instrument_id = _resolve(mappings, "options", row_ticker, event_time)
         correction = int(row.get("correction") or 0)
         flags = ("correction",) if correction else ()
         events.append(MarketEventEnvelope(
@@ -60,7 +61,7 @@ def decode_trades(
 
 
 def decode_option_snapshots(
-    rows: Iterable[Mapping[str, object]], mappings: ExternalMappingRepository, *, ingested_at: datetime,
+    rows: Iterable[Mapping[str, object]], mappings: ReferenceCatalog, *, ingested_at: datetime,
     source_order_start: int = 0,
 ) -> tuple[MarketEventEnvelope, ...]:
     events = []
@@ -73,7 +74,7 @@ def decode_option_snapshots(
         if not timestamps:
             raise ValueError(f"Massive option snapshot has no provider timestamp: {ticker}")
         available_time = max(timestamps)
-        instrument_id = mappings.resolve("massive", "options", ticker, available_time)
+        instrument_id = _resolve(mappings, "options", ticker, available_time)
         quote = row.get("last_quote") if isinstance(row.get("last_quote"), Mapping) else {}
         trade = row.get("last_trade") if isinstance(row.get("last_trade"), Mapping) else {}
         greeks = row.get("greeks") if isinstance(row.get("greeks"), Mapping) else None
@@ -93,14 +94,14 @@ def decode_option_snapshots(
 
 
 def decode_bars(
-    rows: Iterable[Mapping[str, object]], mappings: ExternalMappingRepository, *,
+    rows: Iterable[Mapping[str, object]], mappings: ReferenceCatalog, *,
     ticker: str, source_namespace: str, ingested_at: datetime, interval_seconds: int,
 ) -> tuple[MarketEventEnvelope, ...]:
     events = []
     for offset, row in enumerate(rows):
         period_start = _millis(row.get("t") or row.get("timestamp"))
         period_end = period_start.fromtimestamp(period_start.timestamp() + interval_seconds, tz=timezone.utc)
-        instrument_id = mappings.resolve("massive", source_namespace, ticker, period_start)
+        instrument_id = _resolve(mappings, source_namespace, ticker, period_start)
         events.append(MarketEventEnvelope(
             instrument_id, period_end, period_end, ingested_at, "massive", f"{source_namespace}.aggregates",
             ticker, MarketEventType.BAR, offset,
@@ -116,6 +117,11 @@ def _ticker(row: Mapping[str, object], fallback: str | None = None) -> str:
     if not value:
         raise ValueError("Massive row is missing ticker")
     return str(value)
+
+
+def _resolve(catalog: ReferenceCatalog, namespace: str, external_id: str, at: datetime) -> InstrumentId:
+    mapping = catalog.resolve_provider_symbol(ProviderId("massive"), namespace, external_id, at)
+    return InstrumentId(mapping.target_id)
 
 
 def _timestamp(row: Mapping[str, object], *keys: str) -> datetime:

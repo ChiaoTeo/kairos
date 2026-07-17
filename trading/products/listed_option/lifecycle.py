@@ -10,6 +10,9 @@ from trading.accounting.ledger import LedgerService
 from trading.domain.identity import AccountKey, AssetId, InstrumentId
 from trading.domain.ledger import LedgerBook, LedgerEntryType
 from trading.domain.product import ListedOptionSpec, OptionRight, SettlementType
+from trading.reference import ReferenceCatalog, SettlementMethod, SettlementTermsDefinition
+from trading.reference.access import contract_spec, definition_at, trade_cash_asset
+from trading.lifecycle import SettlementResolver
 
 
 class PhysicalOptionEventType(StrEnum):
@@ -34,9 +37,12 @@ class OptionLifecycleService:
         self.ledger_service = ledger_service
 
     def apply(self, event: PhysicalOptionEvent) -> None:
-        definition = self.ledger_service.catalog.get(event.option_id, event.timestamp)
-        spec = definition.product_spec
-        if not isinstance(spec, ListedOptionSpec) or spec.settlement_type is not SettlementType.PHYSICAL:
+        definition = definition_at(self.ledger_service.catalog, event.option_id, event.timestamp)
+        spec = contract_spec(definition)
+        physical = spec.settlement_type is SettlementType.PHYSICAL if isinstance(spec, ListedOptionSpec) else False
+        if definition.settlement_terms_id is not None:
+            physical = self.ledger_service.catalog.settlements.get(definition.settlement_terms_id, event.timestamp).terms.method is SettlementMethod.PHYSICAL
+        if not isinstance(spec, ListedOptionSpec) or not physical:
             raise ValueError("physical option event requires physically settled listed option")
         option_asset = AssetId(f"POSITION:{event.option_id.value}")
         current = self.ledger_service.ledger.book_balance(event.account, LedgerBook.POSITION, option_asset)
@@ -52,18 +58,20 @@ class OptionLifecycleService:
             (event.account, LedgerBook.CLEARING, option_asset, -close_quantity, _entry_type(event.event_type), event.option_id, Decimal("0"), None),
         ]
         if event.event_type is not PhysicalOptionEventType.EXPIRATION:
-            shares = close_contracts * spec.multiplier
-            if spec.right is OptionRight.CALL:
-                underlying_quantity = shares if event.event_type is PhysicalOptionEventType.EXERCISE else -shares
-            else:
-                underlying_quantity = -shares if event.event_type is PhysicalOptionEventType.EXERCISE else shares
-            underlying_asset = AssetId(f"POSITION:{spec.underlying.value}")
-            cash_amount = -underlying_quantity * spec.strike
+            signed_contracts = close_contracts if event.event_type is PhysicalOptionEventType.EXERCISE else -close_contracts
+            resolution = SettlementResolver(self.ledger_service.catalog).resolve(event.option_id, signed_contracts, event.underlying_price if event.underlying_price is not None else spec.strike, event.timestamp)
+            position_flow = resolution.position_flows[0]
+            underlying_quantity = position_flow.quantity
+            underlying_id = position_flow.instrument_id
+            cash_flow = next(item for item in resolution.flows if item.asset_id == trade_cash_asset(self.ledger_service.catalog, definition, event.timestamp))
+            cash_amount = cash_flow.amount
+            cash_asset = cash_flow.asset_id
+            underlying_asset = AssetId(f"POSITION:{underlying_id.value}")
             items.extend((
-                (event.account, LedgerBook.POSITION, underlying_asset, underlying_quantity, _entry_type(event.event_type), spec.underlying, spec.strike, None),
-                (event.account, LedgerBook.CLEARING, underlying_asset, -underlying_quantity, _entry_type(event.event_type), spec.underlying, spec.strike, None),
-                (event.account, LedgerBook.CASH, definition.quote_asset, cash_amount, _entry_type(event.event_type), event.option_id, spec.strike, None),
-                (event.account, LedgerBook.CLEARING, definition.quote_asset, -cash_amount, _entry_type(event.event_type), event.option_id, spec.strike, None),
+                (event.account, LedgerBook.POSITION, underlying_asset, underlying_quantity, _entry_type(event.event_type), underlying_id, spec.strike, None),
+                (event.account, LedgerBook.CLEARING, underlying_asset, -underlying_quantity, _entry_type(event.event_type), underlying_id, spec.strike, None),
+                (event.account, LedgerBook.CASH, cash_asset, cash_amount, _entry_type(event.event_type), event.option_id, spec.strike, None),
+                (event.account, LedgerBook.CLEARING, cash_asset, -cash_amount, _entry_type(event.event_type), event.option_id, spec.strike, None),
             ))
         transaction = self.ledger_service._transaction(
             f"option-lifecycle:{event.event_id}", event.timestamp, str(event.event_id), tuple(items)
@@ -71,8 +79,8 @@ class OptionLifecycleService:
         self.ledger_service.ledger.post(transaction)
 
     def expire(self, account: AccountKey, option_id: InstrumentId, underlying_price: Decimal, timestamp: datetime) -> None:
-        definition = self.ledger_service.catalog.get(option_id, timestamp)
-        spec = definition.product_spec
+        definition = definition_at(self.ledger_service.catalog, option_id, timestamp)
+        spec = contract_spec(definition)
         if not isinstance(spec, ListedOptionSpec):
             raise ValueError("expiration requires ListedOptionSpec")
         option_asset = AssetId(f"POSITION:{option_id.value}")
@@ -90,16 +98,21 @@ class OptionLifecycleService:
         ))
 
     def adjust_contract(self, option_id: InstrumentId, effective_at: datetime, *, strike: Decimal, multiplier: Decimal, symbol: str) -> None:
-        current = self.ledger_service.catalog.get(option_id, effective_at)
-        spec = current.product_spec
+        current = definition_at(self.ledger_service.catalog, option_id, effective_at)
+        spec = contract_spec(current)
         if not isinstance(spec, ListedOptionSpec) or strike <= 0 or multiplier <= 0:
             raise ValueError("adjusted option requires positive strike and multiplier")
-        replacement = replace(
-            current, symbol=symbol, product_spec=replace(spec, strike=strike, multiplier=multiplier),
-            effective_from=effective_at, effective_to=None, schema_version=current.schema_version + 1,
-            listings=tuple(replace(item, symbol=symbol, listed_at=effective_at, delisted_at=None) for item in current.listings),
-        )
-        self.ledger_service.catalog.supersede(replacement, effective_at)
+        catalog = self.ledger_service.catalog
+        replacement = replace(current, contract_spec=replace(spec, strike=strike, multiplier=multiplier), display_name=symbol, effective_from=effective_at, effective_to=None)
+        catalog.instruments.supersede(replacement, effective_at)
+        for listing in catalog.active_listings(option_id, effective_at):
+            catalog.listings.supersede(replace(listing, trading_symbol=symbol, effective_from=effective_at, effective_to=None), effective_at)
+        if current.settlement_terms_id is not None:
+            settlement = catalog.settlements.get(current.settlement_terms_id, effective_at)
+            terms = settlement.terms
+            if terms.deliverables:
+                deliverables = tuple(replace(item, quantity=item.quantity * multiplier / spec.multiplier) for item in terms.deliverables)
+                catalog.settlements.supersede(SettlementTermsDefinition(current.settlement_terms_id, replace(terms, deliverables=deliverables), effective_at), effective_at)
 
 
 def _entry_type(event_type):

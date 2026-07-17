@@ -7,8 +7,10 @@ import math
 from pathlib import Path
 import statistics
 
+from trading import __version__
 from research.btc_options_stats import block_bootstrap_ci, hac_mean_t
-from trading.data import CanonicalDatasetRepository, DataCatalog
+from trading.data import ResearchDataClient
+from trading.data.products import BTC_DERIBIT_TERM_SKEW_DAILY, BTC_SPOT_DAILY
 from trading.storage.data_lake import write_json
 
 
@@ -16,9 +18,9 @@ HORIZONS = (7, 14, 30, 60, 90)
 
 
 def execute(root: str | Path = "data"):
-    repository = CanonicalDatasetRepository(root)
-    surface = repository.load_rows(DataCatalog.BTC_DERIBIT_TERM_SKEW_DAILY.dataset_id)
-    spot = repository.load_rows(DataCatalog.BTC_SPOT_DAILY.dataset_id)
+    repository = ResearchDataClient(root)
+    surface = repository.load_rows(BTC_DERIBIT_TERM_SKEW_DAILY.product)
+    spot = repository.load_rows(BTC_SPOT_DAILY.product)
     closes = {row["period_start"][:10]: float(row["close"]) for row in spot}
     rows = sorted(surface, key=lambda row: row["period_start"])
     dates = [row["period_start"][:10] for row in rows]
@@ -36,7 +38,9 @@ def execute(root: str | Path = "data"):
             item[f"vrp_{horizon}d"] = iv_percent-rv if math.isfinite(iv_percent) and math.isfinite(rv) else math.nan
             item[f"variance_vrp_{horizon}d"] = (iv_percent/100)**2-(rv/100)**2 if math.isfinite(iv_percent) and math.isfinite(rv) else math.nan
         panel.append(item)
-    return panel, summarize(panel)
+    summary = summarize(panel)
+    summary["input_dataset"] = repository.catalog.release(BTC_DERIBIT_TERM_SKEW_DAILY.key).release_id
+    return panel, summary
 
 
 def summarize(panel):
@@ -56,7 +60,8 @@ def summarize(panel):
             "h1_iv_exceeds_forward_rv": bool(enough and ci[0] > 0),
             "status": "TESTED" if enough else "DATA_NOT_READY"}
     ready = all(item["status"] == "TESTED" for item in results.values())
-    return {"study_id": "btc_term_vrp_v1", "input_dataset": DataCatalog.BTC_DERIBIT_TERM_SKEW_DAILY.dataset_id,
+    return {"study_id": "btc_term_vrp_v1", "input_logical_key": str(BTC_DERIBIT_TERM_SKEW_DAILY.key),
+            "input_dataset": None,
             "split": {"method": "chronological", "development_fraction": 0.70},
             "horizons": results, "conclusion_status": "TESTED" if ready else "DATA_NOT_READY"}
 
@@ -74,6 +79,8 @@ def _mean(values):
 def main(argv=None):
     parser = argparse.ArgumentParser(); parser.add_argument("--data-root", type=Path, default=Path("data")); args = parser.parse_args(argv)
     panel, result = execute(args.data_root); output = args.data_root/"studies"/"btc_term_vrp_v1"; output.mkdir(parents=True, exist_ok=True)
+    ResearchDataClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_term_vrp_v1",
+        (BTC_DERIBIT_TERM_SKEW_DAILY.product, BTC_SPOT_DAILY.product), code_version=__version__)
     write_json(output/"study_spec.json", {"study_id": "btc_term_vrp_v1", "horizons": list(HORIZONS),
         "hypothesis": "fixed-maturity ATM IV exceeds same-horizon forward realized volatility", "test_fraction": 0.30})
     write_json(output/"results.json", result); print(json.dumps(result, ensure_ascii=False, indent=2))

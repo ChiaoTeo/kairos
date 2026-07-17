@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-from trading.catalog.external import ExternalMappingRepository
+from trading.reference import ReferenceCatalog, ReferenceCatalogRepository
 from trading.storage.codec import to_primitive
 from trading.storage.data_lake import write_json
 
@@ -20,7 +20,8 @@ class MassiveReferencePipeline:
         self.root = Path(root)
         self.source = MassiveSourceArchive(root, client)
         self.store = MassiveReferenceStore(self.root / "reference" / "provider=massive")
-        self.mappings = ExternalMappingRepository(mapping_path or self.root / "reference" / "external_mappings.json")
+        reference_path = Path(mapping_path) if mapping_path is not None else self.root / "reference" / "catalog.json"
+        self.mappings = ReferenceCatalogRepository(reference_path).load() if reference_path.exists() else ReferenceCatalog()
 
     def sync_code_tables(self) -> tuple[dict[str, object], ...]:
         requests = (

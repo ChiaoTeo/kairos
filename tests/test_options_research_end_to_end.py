@@ -20,14 +20,15 @@ def internally_priceable_spxw_dataset() -> HistoricalDataset:
     base = make_mock_dataset()
     underlying = base.definitions[0]
     existing = base.definitions[1:]
-    expiry_date = existing[0].product_spec.expiry.date()
-    options = tuple(sorted((*existing, _put(expiry_date, "6100", "105")), key=lambda item: item.product_spec.strike))
+    catalog = base.reference_catalog()
+    expiry_date = existing[0].contract_spec.expiry.date()
+    options = tuple(sorted((*existing, _put(catalog, expiry_date, "6100", "105")), key=lambda item: item.contract_spec.strike))
     spot = Decimal("6000")
     slices = []
     for sequence, market in enumerate(base.slices):
         snapshots = []
         for definition in options:
-            spec = definition.product_spec
+            spec = definition.contract_spec
             maturity = Decimal(str((spec.expiry - market.timestamp).total_seconds())) / Decimal("31557600")
             volatility = Decimal("0.45") + (Decimal("6000") - spec.strike) / Decimal("10000")
             price = black76(PricingInput(spot, spec.strike, maturity, Decimal("0"), volatility, spec.right)).price
@@ -45,8 +46,12 @@ def internally_priceable_spxw_dataset() -> HistoricalDataset:
         "spxw-internal-golden", tuple(slices), tuple(contracts), definitions,
         sampling_seconds=60, source="synthetic.internal-pricing-golden", market_data_type="mock",
         code_version=__version__, split="test", synthetic=True,
+        products=catalog.products.values(), references=catalog.all_references(), settlements=catalog.settlements.values(),
     )
-    return HistoricalDataset(manifest, tuple(slices), tuple(contracts), definitions)
+    return HistoricalDataset(
+        manifest, tuple(slices), tuple(contracts), definitions, catalog.products.values(),
+        catalog.all_references(), catalog.settlements.values(),
+    )
 
 
 class OptionsResearchEndToEndTests(unittest.TestCase):

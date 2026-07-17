@@ -2,12 +2,23 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
-from trading.adapters.base import AccountState, ComboOrderRequest, Environment, OrderAck, OrderRequest, VenueBalance
+from trading.adapters.base import (
+    AccountState, ComboOrderRequest, Environment, OrderAck, OrderRequest, VenueBalance,
+    VenueOrderRecovery, VenueOrderStatus,
+)
 from trading.domain.capability import ExecutionCapabilities, MarginMode, OrderType, PositionMode
-from trading.domain.identity import AccountKey, AssetId, InstrumentId, VenueId
+from trading.domain.identity import AccountKey, AssetId, InstitutionId, InstrumentId, VenueId
 from trading.domain.product import ProductType
+class _Clock(Protocol):
+    def now(self) -> datetime: ...
+
+
+class _SystemClock:
+    def now(self) -> datetime:
+        return datetime.now(timezone.utc)
 
 
 class SimulatedExecutionAccountAdapter:
@@ -19,11 +30,15 @@ class SimulatedExecutionAccountAdapter:
         position_modes=frozenset({PositionMode.ONE_WAY, PositionMode.HEDGE}),
     )
 
-    def __init__(self, venue_id: VenueId, account: AccountKey, balances=(), positions=(), environment=Environment.TESTNET) -> None:
-        self.venue_id, self.account, self.environment = venue_id, account, environment
+    def __init__(self, venue_id: VenueId, account: AccountKey, balances=(), positions=(), environment=Environment.TESTNET,
+                 clock: _Clock | None = None) -> None:
+        self.venue_id, self.institution_id, self.account, self.environment = (
+            venue_id, account.institution_id, account, environment,
+        )
         self.balances = dict(balances); self.positions = dict(positions)
         self.orders = {}; self.client_ids = {}
         self.connected = True
+        self.clock = clock or _SystemClock()
 
     def place_order(self, request: OrderRequest) -> OrderAck:
         if not self.connected: raise ConnectionError("simulated venue disconnected")
@@ -35,7 +50,7 @@ class SimulatedExecutionAccountAdapter:
         order_id = str(uuid5(NAMESPACE_URL, f"simulated:{self.venue_id}:{request.client_order_id}"))
         ack = OrderAck(
             request.internal_order_id, request.client_order_id, request.strategy_id,
-            request.intent_id, request.correlation_id, order_id, datetime.now(timezone.utc),
+            request.intent_id, request.correlation_id, order_id, self.clock.now(),
         )
         self.orders[order_id] = request; self.client_ids[request.client_order_id] = ack
         return ack
@@ -47,9 +62,27 @@ class SimulatedExecutionAccountAdapter:
     def open_orders(self, account):
         return tuple(self.orders)
 
+    def recover_order(self, account, request, venue_order_id=None):
+        ack = self.client_ids.get(request.client_order_id)
+        if ack is None:
+            return VenueOrderRecovery(VenueOrderStatus.UNKNOWN, "simulated client order id not found")
+        if venue_order_id is not None and venue_order_id != ack.venue_order_id:
+            return VenueOrderRecovery(VenueOrderStatus.UNKNOWN, "simulated venue order id mismatch")
+        if ack.venue_order_id in self.orders:
+            return VenueOrderRecovery(
+                VenueOrderStatus.ACKNOWLEDGED,
+                "simulated durable client-id lookup",
+                acknowledgement=ack,
+            )
+        return VenueOrderRecovery(
+            VenueOrderStatus.CANCELLED,
+            "simulated order absent after recorded cancellation",
+            acknowledgement=ack,
+        )
+
     def account_state(self, account):
         if not self.connected: raise ConnectionError("simulated venue disconnected")
-        return AccountState(account, tuple(VenueBalance(asset, amount, amount) for asset, amount in self.balances.items()), tuple(self.positions.items()), tuple(self.orders), datetime.now(timezone.utc))
+        return AccountState(account, tuple(VenueBalance(asset, amount, amount) for asset, amount in self.balances.items()), tuple(self.positions.items()), tuple(self.orders), self.clock.now())
 
     def place_combo_order(self, request: ComboOrderRequest) -> OrderAck:
         if not self.connected:
@@ -59,7 +92,7 @@ class SimulatedExecutionAccountAdapter:
         order_id = str(uuid5(NAMESPACE_URL, f"simulated-combo:{self.venue_id}:{request.client_order_id}"))
         ack = OrderAck(
             request.internal_order_id, request.client_order_id, request.strategy_id,
-            request.intent_id, request.correlation_id, order_id, datetime.now(timezone.utc),
+            request.intent_id, request.correlation_id, order_id, self.clock.now(),
         )
         self.orders[order_id] = request
         self.client_ids[request.client_order_id] = ack

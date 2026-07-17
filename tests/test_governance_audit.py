@@ -4,6 +4,8 @@ import unittest
 
 from trading.research.validation import audit_governance
 from trading.storage.data_lake import write_daily_dataset
+from trading.data import DatasetRelease
+from trading.data.products import BTC_SPOT_DAILY
 
 
 class GovernanceAuditTest(unittest.TestCase):
@@ -11,8 +13,9 @@ class GovernanceAuditTest(unittest.TestCase):
         with TemporaryDirectory() as directory:
             # Unknown catalog datasets are intentionally ignored; create a known prepared path.
             from trading.data import DataCatalog
-            root=Path(directory);path=DataCatalog(root).path(DataCatalog.BTC_SPOT_DAILY.dataset_id)
-            write_daily_dataset(path,[{"period_start":"2026-01-01T00:00:00Z","x":1}],dataset_id=DataCatalog.BTC_SPOT_DAILY.dataset_id,
+            release=DatasetRelease(str(BTC_SPOT_DAILY.key),BTC_SPOT_DAILY.key,"1",BTC_SPOT_DAILY.schema_id,"1","test","1",BTC_SPOT_DAILY.relative_path,"parquet","test-hash")
+            root=Path(directory);catalog=DataCatalog(root);catalog.register_product(BTC_SPOT_DAILY.product);catalog.register_release(release);catalog.save();path=catalog.path(str(BTC_SPOT_DAILY.key))
+            write_daily_dataset(path,[{"period_start":"2026-01-01T00:00:00Z","x":1}],dataset_id=str(BTC_SPOT_DAILY.key),
                 schema={"schema_id":"x","columns":{}},lineage={"source":"test"})
             (path/"capabilities.json").unlink()
             audit=audit_governance(root)

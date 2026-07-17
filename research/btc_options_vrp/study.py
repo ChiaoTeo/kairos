@@ -8,7 +8,9 @@ from pathlib import Path
 import random
 import statistics
 
-from trading.data import CanonicalDatasetRepository, DataCatalog
+from trading import __version__
+from trading.data import ResearchDataClient
+from trading.data.products import BTC_IV_RV_DAILY
 from trading.storage.data_lake import write_json
 
 
@@ -43,7 +45,7 @@ def analyze(rows, threshold, development, high_test, seed=20260714):
     return {"data": {"feature_window": {"start": rows[0]["period_start"], "end": rows[-1]["period_end"], "boundary": "[start,end)"},
                      "label_complete_end": test[-1]["period_start"] if test else None, "observations": len(rows),
                      "development_observations": len(development), "test_observations": len(test),
-                     "feature_dataset_id": DataCatalog.BTC_IV_RV_DAILY.dataset_id},
+                     "feature_logical_key": str(BTC_IV_RV_DAILY.key), "feature_dataset_id": None},
             "pre_registered_rule": {"rv_lookback_days": 30, "forecast_horizon_days": 7, "development_fraction": 0.70,
                                     "high_premium_percentile": 0.80, "frozen_threshold_vol_points": threshold},
             "test_results": {"high_premium_observations": len(high_test), "minimum_required_high_premium_observations": 20,
@@ -57,6 +59,8 @@ def analyze(rows, threshold, development, high_test, seed=20260714):
 
 
 def _number(value):
+    if isinstance(value, datetime):
+        return value.isoformat().replace("+00:00", "Z")
     if isinstance(value, str) and value.lower() in {"nan", ""}:
         return math.nan if value.lower() == "nan" else value
     try:
@@ -127,12 +131,16 @@ def write_report(path, result):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="BTC VRP study over a governed feature dataset")
     parser.add_argument("--data-root", type=Path, default=Path("data")); args = parser.parse_args(argv)
-    repository = CanonicalDatasetRepository(args.data_root)
-    rows = repository.load_rows(DataCatalog.BTC_IV_RV_DAILY.dataset_id)
+    repository = ResearchDataClient(args.data_root)
+    feature_release = repository.catalog.release(BTC_IV_RV_DAILY.key)
+    rows = repository.load_rows(BTC_IV_RV_DAILY.product)
     panel, threshold, development, high_test = prepare_study_panel(rows)
     result = analyze(panel, threshold, development, high_test)
+    result["data"]["feature_dataset_id"] = feature_release.release_id
     output = args.data_root / "studies" / "btc_options_vrp_v1"; output.mkdir(parents=True, exist_ok=True)
-    write_json(output / "study_spec.json", {"study_id": "btc_options_vrp_v1", "feature_dataset_id": DataCatalog.BTC_IV_RV_DAILY.dataset_id,
+    repository.freeze_products(output / "data_snapshot.json", "btc_options_vrp_v1", (BTC_IV_RV_DAILY.product,),
+                               code_version=__version__)
+    write_json(output / "study_spec.json", {"study_id": "btc_options_vrp_v1", "feature_dataset_id": feature_release.release_id,
                "feature_window": result["data"]["feature_window"], "label_horizon": "P7D", "warmup": "P30D", "test_embargo": "P7D"})
     write_json(output / "results.json", result); write_svg(output / "btc_dvol_vs_rv.svg", panel); write_report(output / "REPORT.md", result)
     print(json.dumps(result, ensure_ascii=False, indent=2))

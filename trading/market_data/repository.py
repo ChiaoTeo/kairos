@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from hashlib import sha256
 import json
@@ -108,22 +108,28 @@ class ParquetMarketEventRepository:
             raise ValueError("scan requires timezone-aware [start,end) with end after start")
         root = self.root / f"dataset={dataset_id}"
         dataset = ds.dataset(root, format="parquet", partitioning="hive", exclude_invalid_files=True)
-        expression = (ds.field("available_time") >= start) & (ds.field("available_time") < end)
+        base_expression = (ds.field("available_time") >= start) & (ds.field("available_time") < end)
         ids = [str(item) for item in instruments or ()]
         types = [item.value for item in event_types or ()]
         if ids:
-            expression &= ds.field("instrument_id").isin(ids)
+            base_expression &= ds.field("instrument_id").isin(ids)
         if types:
-            expression &= ds.field("record_type").isin(types)
-        rows = dataset.to_table(filter=expression).to_pylist()
-        events = [_event(row) for row in rows]
-        ordered = sorted(events, key=lambda item: item.event_key)
-        if view == "raw-as-received":
-            yield from ordered
-        elif view == "corrected-final":
-            yield from _corrected_final(ordered)
-        else:
+            base_expression &= ds.field("record_type").isin(types)
+        if view not in {"raw-as-received", "corrected-final"}:
             raise ValueError("view must be raw-as-received or corrected-final")
+        corrected = []
+        day = start.date()
+        while day <= (end - timedelta(microseconds=1)).date():
+            expression = base_expression & (ds.field("event_date") == day.isoformat())
+            events = [_event(row) for row in dataset.to_table(filter=expression).to_pylist()]
+            ordered = sorted(events, key=lambda item: item.event_key)
+            if view == "raw-as-received":
+                yield from ordered
+            else:
+                corrected.extend(ordered)
+            day += timedelta(days=1)
+        if view == "corrected-final":
+            yield from _corrected_final(corrected)
 
     def metadata(self, dataset_id: str) -> dict[str, object]:
         root = self.root / f"dataset={dataset_id}"
@@ -143,21 +149,27 @@ class ParquetMarketEventRepository:
         return tuple(InstrumentId(value) for value in sorted(values))
 
 
-class HistoricalEventFeed:
-    def __init__(self, repository: ParquetMarketEventRepository, dataset_id: str) -> None:
-        self.repository, self.dataset_id = repository, dataset_id
-
-    def scan(self, start: datetime, end: datetime, *, instruments: Iterable[InstrumentId] | None = None,
-             event_types: Iterable[MarketEventType] | None = None, view: str = "raw-as-received"):
-        yield from self.repository.scan(self.dataset_id, start, end, instruments=instruments, event_types=event_types, view=view)
-
-
 def _row(event: MarketEventEnvelope) -> dict[str, object]:
+    payload = event.payload
     return {"instrument_id": str(event.instrument_id), "event_time": event.event_time, "receive_time": event.receive_time,
             "available_time": event.available_time, "ingested_at": event.ingested_at, "source": event.source,
             "source_namespace": event.source_namespace, "source_instrument_id": event.source_instrument_id,
             "record_type": event.record_type.value, "source_order": event.source_order, "publisher_id": event.publisher_id,
-            "flags_json": json.dumps(event.flags), "payload_json": json.dumps(event.payload, default=_json_default, sort_keys=True, separators=(",", ":"))}
+            "flags_json": json.dumps(event.flags), "payload_json": json.dumps(payload, default=_json_default, sort_keys=True, separators=(",", ":")),
+            # Common research fields are physical columns so Arrow/DuckDB can prune and filter them.
+            "bid": _decimal_value(payload.get("bid")), "ask": _decimal_value(payload.get("ask")),
+            "bid_size": _decimal_value(payload.get("bid_size")), "ask_size": _decimal_value(payload.get("ask_size")),
+            "price": _decimal_value(payload.get("price")), "size": _decimal_value(payload.get("size")),
+            "open": _decimal_value(payload.get("open")), "high": _decimal_value(payload.get("high")),
+            "low": _decimal_value(payload.get("low")), "close": _decimal_value(payload.get("close")),
+            "volume": _decimal_value(payload.get("volume")), "vwap": _decimal_value(payload.get("vwap")),
+            "period_start": payload.get("period_start"), "period_end": payload.get("period_end"),
+            "trade_id": str(payload["trade_id"]) if payload.get("trade_id") is not None else None,
+            "sequence_number": int(payload["sequence_number"]) if payload.get("sequence_number") is not None else None,
+            "conditions_json": json.dumps(payload.get("conditions", ())),
+            "exchange": str(payload.get("exchange") or "") or None,
+            "bid_exchange": str(payload.get("bid_exchange") or "") or None,
+            "ask_exchange": str(payload.get("ask_exchange") or "") or None}
 
 
 def _event(row: dict[str, object]) -> MarketEventEnvelope:
@@ -172,7 +184,20 @@ def _schema(pa):
         ("receive_time", pa.timestamp("ns", tz="UTC")), ("available_time", pa.timestamp("ns", tz="UTC")),
         ("ingested_at", pa.timestamp("ns", tz="UTC")), ("source", pa.string()), ("source_namespace", pa.string()),
         ("source_instrument_id", pa.string()), ("record_type", pa.string()), ("source_order", pa.int64()),
-        ("publisher_id", pa.string()), ("flags_json", pa.string()), ("payload_json", pa.string())])
+        ("publisher_id", pa.string()), ("flags_json", pa.string()), ("payload_json", pa.string()),
+        ("bid", pa.decimal128(38, 12)), ("ask", pa.decimal128(38, 12)),
+        ("bid_size", pa.decimal128(38, 12)), ("ask_size", pa.decimal128(38, 12)),
+        ("price", pa.decimal128(38, 12)), ("size", pa.decimal128(38, 12)),
+        ("open", pa.decimal128(38, 12)), ("high", pa.decimal128(38, 12)),
+        ("low", pa.decimal128(38, 12)), ("close", pa.decimal128(38, 12)),
+        ("volume", pa.decimal128(38, 12)), ("vwap", pa.decimal128(38, 12)),
+        ("period_start", pa.timestamp("ns", tz="UTC")), ("period_end", pa.timestamp("ns", tz="UTC")),
+        ("trade_id", pa.string()), ("sequence_number", pa.int64()), ("conditions_json", pa.string()),
+        ("exchange", pa.string()), ("bid_exchange", pa.string()), ("ask_exchange", pa.string())])
+
+
+def _decimal_value(value: object) -> Decimal | None:
+    return None if value is None else Decimal(str(value))
 
 
 def _json_default(value: object):
