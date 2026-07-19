@@ -8,7 +8,7 @@ from typing import Callable, Protocol
 from trading import __version__
 from trading.backtest.feed import ContractMetadata, HistoricalDataset, MarketSlice, SettlementType, build_manifest
 from trading.data.market_slice_storage import MarketSliceStorageDriver
-from trading.domain.product import CryptoOptionSpec, FutureSpec, ListedOptionSpec
+from trading.domain.product import FutureSpec, ListedOptionSpec, is_option_spec
 from trading.reference.models import InstrumentDefinition
 from trading.reference.catalog import ReferenceCatalog
 from trading.reference.access import contract_spec
@@ -75,7 +75,8 @@ class NormalizedSeriesCaptureService:
 
 
 def _is_expiring(definition: InstrumentDefinition) -> bool:
-    return isinstance(contract_spec(definition), (ListedOptionSpec, FutureSpec, CryptoOptionSpec))
+    spec = contract_spec(definition)
+    return is_option_spec(spec) or isinstance(spec, FutureSpec)
 
 
 def _contract_metadata(definition: InstrumentDefinition) -> ContractMetadata:

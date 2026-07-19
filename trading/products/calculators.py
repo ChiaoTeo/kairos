@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from trading.reference.models import InstrumentDefinition
-from trading.domain.product import ContractType, FutureSpec, ListedOptionSpec, PerpetualSpec, ProductType
+from trading.domain.product import ContractType, ProductType, option_multiplier
 
 
 class PositionCalculator(Protocol):
@@ -30,8 +30,7 @@ class SpotCalculator:
 
 class OptionCalculator:
     def _multiplier(self, definition):
-        spec = _spec(definition)
-        return spec.multiplier if isinstance(spec, ListedOptionSpec) else spec.contract_size
+        return option_multiplier(_spec(definition))
 
     def market_value(self, definition, quantity, mark, average_price):
         return quantity * mark * self._multiplier(definition)

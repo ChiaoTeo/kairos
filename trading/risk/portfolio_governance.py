@@ -5,6 +5,7 @@ from decimal import Decimal
 from enum import StrEnum
 
 from trading.domain.strategy_contract import EconomicIntent
+from trading.domain.intent import TargetExposureIntent, TargetPositionIntent
 
 
 class AllocationDecisionType(StrEnum):
@@ -62,3 +63,29 @@ class PortfolioAllocator:
                                       intent.risk_budget, approved, "risk budget reduced by allocation gate")
         return AllocationDecision(AllocationDecisionType.APPROVED, intent.strategy_id,
                                   intent.risk_budget, approved, "risk budget approved")
+
+
+@dataclass(frozen=True, slots=True)
+class PositionSizingDecision:
+    approved: bool
+    intent: TargetPositionIntent | None
+    approved_capital: Decimal
+    reason: str
+
+
+class PositionSizer:
+    """Convert strategy exposure semantics into an account quantity after allocation."""
+
+    def size(self, intent: TargetExposureIntent, *, approved_capital: Decimal,
+             reference_price: Decimal, lot_size: Decimal = Decimal("0.00000001")) -> PositionSizingDecision:
+        if approved_capital <= 0:
+            return PositionSizingDecision(False, None, Decimal("0"), "approved capital is not positive")
+        if reference_price <= 0 or lot_size <= 0:
+            raise ValueError("position sizing requires positive price and lot size")
+        raw = approved_capital * intent.target_fraction / reference_price
+        quantity = (raw // lot_size) * lot_size
+        target = TargetPositionIntent(
+            intent.intent_id, intent.strategy_id, intent.instrument_id, quantity,
+            f"{intent.reason}; sized with approved_capital={approved_capital}",
+        )
+        return PositionSizingDecision(True, target, approved_capital, "target exposure sized")

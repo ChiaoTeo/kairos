@@ -8,6 +8,7 @@ from decimal import Decimal
 from hashlib import sha256
 import json
 import os
+import warnings
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -26,7 +27,7 @@ from trading.adapters.binance.adapter import (
 from trading.adapters.ibkr.adapter import IbkrAccountAdapter, IbkrExecutionAdapter, IbkrMarketDataAdapter, IbkrReferenceAdapter, IbkrSession
 from trading.adapters.ibkr.research import IbkrSpxwResearchAdapter
 from trading.adapters.simulated import SimulatedExecutionAccountAdapter
-from trading.adapters.massive import MassiveClient, MassiveConfig, MassiveCuratedSliceBuilder, MassiveEquityDayAggPipeline, MassiveFlatFileBatchDownloader, MassiveFlatFileClient, MassiveReadinessChecker, MassiveReferencePipeline, MassiveSourceArchive, OptionDayAggPipeline, OptionDayIvPipeline, SpxwDayAggPipeline
+from trading.adapters.massive import MassiveClient, MassiveConfig, MassiveCuratedSliceBuilder, MassiveEquityDayAggPipeline, MassiveEquityIdentityResolver, MassiveFlatFileBatchDownloader, MassiveFlatFileClient, MassiveReadinessChecker, MassiveReferencePipeline, MassiveSourceArchive, OptionDayAggPipeline, OptionDayIvPipeline, SpxwDayAggPipeline
 from trading.backtest.reference_scenarios import run_reference_scenario
 from trading.reference import ReferenceCatalog, ReferenceCatalogRepository
 from trading.reference.access import settlement_asset
@@ -53,6 +54,7 @@ from trading.backtest.result import BacktestConfig
 from trading.backtest.service import BacktestService
 from trading.risk.limits import RiskLimits
 from trading.storage.codec import from_primitive, restore_primitives, to_primitive
+from trading.storage.data_lake import write_json
 from trading.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
 from trading.research.series import SeriesCaptureProgress, SeriesCaptureService, SeriesCaptureSpec
 from trading.research.normalized_series import NormalizedSeriesCaptureService
@@ -60,14 +62,15 @@ from trading.strategies.sma_cross import BarSeries, SmaCrossConfig, backtest_sma
 from trading.pricing import PricingInput, PricingModel, ValuationService, implied_volatility, price_with_volatility
 from trading.risk import RevaluationPosition, Scenario, ScenarioEngine, explain_scenario
 from trading.data import (
-    DataCatalog, DatasetKey, DatasetLayer, DatasetProduct, DatasetStatus, OutputFormat, QualityLevel,
-    ResearchDataClient, RunMode,
+    DataCatalog, DatasetKey, DatasetLayer, DatasetProduct, DatasetQualityService, DatasetRelease,
+    DatasetStatus, DatasetStorageKind, OutputFormat, QualityLevel, ResearchDataClient, RunMode,
     register_historical_dataset,
 )
 from trading.data.bootstrap import default_provider_registry, register_configured_products, register_default_products
 from research.btc_options_readiness import btc_options_readiness
 from trading.market_data import ParquetMarketEventRepository
 from trading.features import BtcIvRvFeatureBuilder, BtcTermSkewFeatureBuilder, BtcDeribitTradeSkewFeatureBuilder
+from trading.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -79,7 +82,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--reference-catalog-path", default="data/reference/catalog.json")
     parser.add_argument("--event-log-path", default="data/events/trading.jsonl")
     parser.add_argument("--runtime-db", help="transactional runtime database; defaults beside --event-log-path")
-    parser.add_argument("--lake-root", default="data", help="source/canonical/features/studies data lake root")
+    parser.add_argument("--lake-root", default=os.environ.get("TRADER_LAKE_ROOT", "data"),
+                        help="data lake root; defaults to TRADER_LAKE_ROOT or data")
+    parser.add_argument("--format", choices=("text", "json"), default="text",
+                        help="output format; human-readable text is the default")
+    parser.add_argument("--lang", choices=("zh-CN", "en-US"), help="display language; defaults from the system locale")
+    parser.add_argument("--quiet", action="store_true", help="suppress successful product command output")
     commands = parser.add_subparsers(dest="group", required=True)
     data = commands.add_parser("data", help="prepare and inspect governed market datasets")
     data_actions = data.add_subparsers(dest="action", required=True)
@@ -123,6 +131,10 @@ def _parser() -> argparse.ArgumentParser:
     doctor_data.add_argument("--dataset", required=True)
     health_data = data_actions.add_parser("health", help="audit all Catalog products and releases")
     health_data.add_argument("--strict", action="store_true", help="return non-zero when errors exist")
+    us_equity_ready = data_actions.add_parser("us-equity-momentum-readiness", help="audit the local US equity momentum data package")
+    us_equity_ready.add_argument("--study-id", default="us-equity-momentum")
+    us_equity_ready.add_argument("--version", default="1.0.0")
+    us_equity_ready.add_argument("--strict", action="store_true", help="return non-zero when readiness errors exist")
     validate_data = data_actions.add_parser("validate", help="run the typed Quality Profile for a release")
     validate_data.add_argument("--release", required=True)
     prepare_data = data_actions.add_parser("prepare", help="plan, acquire, validate and optionally promote a product")
@@ -137,6 +149,35 @@ def _parser() -> argparse.ArgumentParser:
     prepare_data.add_argument("--promote", action="store_true", help="explicitly approve promotion after quality passes")
     prepare_data.add_argument("--actor", default="data-prepare")
     prepare_data.add_argument("--reason", default="explicit data preparation")
+    prepare_us_equity_momentum = data_actions.add_parser(
+        "prepare-us-equity-momentum",
+        help="one-command bounded US equity momentum data, feature, study and readiness workflow",
+    )
+    prepare_us_equity_momentum.add_argument(
+        "--raw-dataset", action="append", required=True,
+        help="configured Massive raw equity OHLCV product; repeat for a bounded multi-stock basket",
+    )
+    prepare_us_equity_momentum.add_argument("--start", required=True, help="inclusive ISO-8601 timestamp with timezone")
+    prepare_us_equity_momentum.add_argument("--end", required=True, help="exclusive ISO-8601 timestamp with timezone")
+    prepare_us_equity_momentum.add_argument("--connector-config", type=Path)
+    prepare_us_equity_momentum.add_argument("--provider", default="massive")
+    prepare_us_equity_momentum.add_argument("--venue", default="us-securities")
+    prepare_us_equity_momentum.add_argument("--dataset-id", default="us-equity-momentum.bounded.v1")
+    prepare_us_equity_momentum.add_argument("--study-id", default="us-equity-momentum")
+    prepare_us_equity_momentum.add_argument("--version", default="1.0.0")
+    prepare_us_equity_momentum.add_argument(
+        "--hypothesis",
+        default="US equities with stronger point-in-time cross-sectional momentum may outperform weaker eligible equities over subsequent holding windows",
+    )
+    prepare_us_equity_momentum.add_argument("--corporate-actions-directory")
+    prepare_us_equity_momentum.add_argument(
+        "--sync-corporate-actions", action="store_true",
+        help="archive Massive split/dividend events for the prepared bounded tickers and feed them into the feature build",
+    )
+    prepare_us_equity_momentum.add_argument("--reference-directory")
+    prepare_us_equity_momentum.add_argument("--minimum-price", type=Decimal, default=Decimal("5"))
+    prepare_us_equity_momentum.add_argument("--minimum-adv20", type=Decimal, default=Decimal("10000000"))
+    prepare_us_equity_momentum.add_argument("--minimum-history", type=int, default=252)
     query_data = data_actions.add_parser("query", help="query a governed product or frozen release")
     query_data.add_argument("--dataset", required=True)
     query_data.add_argument("--start")
@@ -209,11 +250,12 @@ def _parser() -> argparse.ArgumentParser:
     prepare_option_day_aggs.add_argument("--option-root", required=True, help="OCC root without O: prefix, for example NVDA")
     prepare_option_day_aggs.add_argument("--start", required=True)
     prepare_option_day_aggs.add_argument("--end", required=True)
-    prepare_equity_day_aggs = data_actions.add_parser("prepare-massive-equity-day-aggs", help="archive and convert adjusted Massive equity daily aggregates")
+    prepare_equity_day_aggs = data_actions.add_parser("prepare-massive-equity-day-aggs", help="archive and convert Massive equity daily aggregates")
     prepare_equity_day_aggs.add_argument("--dataset-id", required=True)
     prepare_equity_day_aggs.add_argument("--ticker", required=True)
     prepare_equity_day_aggs.add_argument("--start", required=True)
     prepare_equity_day_aggs.add_argument("--end", required=True)
+    prepare_equity_day_aggs.add_argument("--view", choices=("raw", "vendor_adjusted"), default="vendor_adjusted")
     prepare_option_iv = data_actions.add_parser("prepare-option-day-iv", help="materialize internal close-based IV for an option Day Aggregates dataset")
     prepare_option_iv.add_argument("--dataset-id", required=True)
     prepare_option_iv.add_argument("--option-dataset", required=True)
@@ -239,11 +281,25 @@ def _parser() -> argparse.ArgumentParser:
     sync_massive_reference.add_argument("--ticker")
     sync_massive_reference.add_argument("--start")
     sync_massive_reference.add_argument("--end")
+    build_equity_identity = data_actions.add_parser("build-massive-equity-identity", help="build point-in-time Massive equity symbol mappings from reference rows")
+    build_equity_identity.add_argument("--reference-rows", type=Path, required=True)
+    build_equity_identity.add_argument("--ticker-events", type=Path)
     data_actions.add_parser("quarantine-insecure-massive-cache", help="move incomplete or non-HTTPS Massive source requests out of Source")
     features = commands.add_parser("features", help="build reusable feature datasets")
     feature_actions = features.add_subparsers(dest="action", required=True)
     build_features = feature_actions.add_parser("build")
-    build_features.add_argument("--feature-set", choices=("btc-iv-rv-v1", "btc-term-skew-v1", "btc-deribit-trade-skew-v1"), required=True)
+    build_features.add_argument(
+        "--feature-set",
+        choices=("btc-iv-rv-v1", "btc-term-skew-v1", "btc-deribit-trade-skew-v1", "us-equity-momentum-v1"),
+        required=True,
+    )
+    build_features.add_argument("--source-directory", help="lake-relative or absolute OHLCV parquet directory for US equity momentum")
+    build_features.add_argument("--dataset-id", help="output dataset id for US equity derived datasets")
+    build_features.add_argument("--corporate-actions-directory", help="lake-relative or absolute Massive corporate action events directory")
+    build_features.add_argument("--reference-directory", help="lake-relative or absolute Massive equity identity/reference directory")
+    build_features.add_argument("--minimum-price", type=Decimal, default=Decimal("5"))
+    build_features.add_argument("--minimum-adv20", type=Decimal, default=Decimal("10000000"))
+    build_features.add_argument("--minimum-history", type=int, default=252)
     pricing = commands.add_parser("pricing", help="price options and solve implied volatility without a venue connection")
     pricing_actions = pricing.add_subparsers(dest="action", required=True)
     pricing_option = pricing_actions.add_parser("option")
@@ -388,6 +444,20 @@ def _parser() -> argparse.ArgumentParser:
     trade_run.add_argument("--restart-drill", action="store_true", help="restart and recover the Application after the soak")
     trade_run.add_argument("--soak-artifact", type=Path, help="explicit L4 soak manifest path")
     trade_run.add_argument("--inverse", action="store_true")
+    trade_run.set_defaults(manual_order=False)
+    order = commands.add_parser("order", help="submit an explicitly audited manual operations order")
+    order_actions=order.add_subparsers(dest="action",required=True);order_submit=order_actions.add_parser("submit")
+    order_submit.add_argument("--venue",choices=("ibkr","binance","simulated"),required=True)
+    order_submit.add_argument("--environment",choices=("paper","testnet","live"),required=True)
+    order_submit.add_argument("--confirm-live",action="store_true");order_submit.add_argument("--account-id",default="default")
+    order_submit.add_argument("--product",choices=("securities","spot","futures","options"),default="spot")
+    order_submit.add_argument("--instrument",required=True);order_submit.add_argument("--side",choices=("buy","sell"),required=True)
+    order_submit.add_argument("--quantity",type=Decimal,required=True);order_submit.add_argument("--order-type",choices=("market","limit"),default="limit")
+    order_submit.add_argument("--limit-price",type=Decimal);order_submit.add_argument("--reduce-only",action="store_true")
+    order_submit.add_argument("--post-only",action="store_true");order_submit.add_argument("--market-data-ready",action="store_true")
+    order_submit.add_argument("--actor",required=True);order_submit.add_argument("--reason",required=True)
+    order_submit.add_argument("--inverse",action="store_true");order_submit.set_defaults(strategy="manual-operations",manual_order=True,
+        kill_switch_drill=False,soak_seconds=0,cycle_seconds=5.0,restart_drill=False,soak_artifact=None)
     runtime = commands.add_parser("runtime", help="operate and verify the durable trading runtime")
     runtime_actions = runtime.add_subparsers(dest="action", required=True)
     runtime_golden = runtime_actions.add_parser(
@@ -405,12 +475,164 @@ def _parser() -> argparse.ArgumentParser:
     runtime_orders.add_argument("--actor")
     runtime_orders.add_argument("--reason")
     runtime_orders.add_argument("--evidence")
+    runtime_calibration = runtime_actions.add_parser(
+        "calibrate-execution", help="build an ExecutionCalibrationRelease from durable runtime fills",
+    )
+    runtime_calibration.add_argument("--db", type=Path, required=True)
+    runtime_calibration.add_argument("--output-root", type=Path, required=True)
+    runtime_calibration.add_argument("--venue", required=True)
+    runtime_calibration.add_argument("--environment", choices=("paper", "testnet", "live"), required=True)
+    runtime_calibration.add_argument("--strategy")
+    runtime_calibration.add_argument("--calibration-id", default="execution-calibration-v1")
     l4_preflight = runtime_actions.add_parser("l4-preflight", help="check external Paper/Testnet soak prerequisites without exposing credentials")
     l4_preflight.add_argument("--venue", choices=("binance", "ibkr"), required=True)
     l4_preflight.add_argument("--environment", choices=("testnet", "paper"), required=True)
     l4_preflight.add_argument("--strategy", required=True)
     l4_preflight.add_argument("--instrument", required=True)
+    l4_preflight.add_argument("--evidence-artifact", type=Path,
+                              help="write a promotion-ready Paper/Testnet readiness evidence artifact")
+
+    study = commands.add_parser("study", help="manage flexible research workspaces and frozen candidates")
+    study_actions = study.add_subparsers(dest="action", required=True)
+    study_create = study_actions.add_parser("create")
+    study_create.add_argument("study_id"); study_create.add_argument("--version", default="1.0.0")
+    study_create.add_argument("--hypothesis", required=True)
+    study_create.add_argument("--dataset", help="Dataset Release or alias; infers release hash, time semantics and coverage")
+    study_create.add_argument("--input-release", help="advanced/CI override")
+    study_create.add_argument("--input-hash", help="advanced/CI override")
+    study_create.add_argument("--primary-time", help="advanced/CI override")
+    study_create.add_argument("--start", help="optional range override"); study_create.add_argument("--end", help="optional range override")
+    study_start = study_actions.add_parser(
+        "start", help="acquire governed data, create a bound Study, and scaffold research in one command",
+    )
+    study_start.add_argument("study_id")
+    study_start.add_argument("--version", default="1.0.0")
+    study_start.add_argument(
+        "--dataset", default="market.ohlcv.crypto.binance.usdm-perpetual.1h",
+    )
+    study_start.add_argument("--start", required=True, help="inclusive ISO-8601 timestamp with timezone")
+    study_start.add_argument("--end", required=True, help="exclusive ISO-8601 timestamp with timezone")
+    study_start.add_argument("--symbol", action="append", default=[],
+                             help="optional Binance symbol for a bounded run; omit for full-market discovery")
+    study_start.add_argument(
+        "--hypothesis",
+        default=("At each hour, idiosyncratic moves are concentrated in a minority of crypto perpetuals, "
+                 "and activated cross-sectional momentum persists over subsequent hours"),
+    )
+    study_plan = study_actions.add_parser(
+        "plan", help="show the full-market symbol-by-month acquisition matrix without downloading bars",
+    )
+    study_plan.add_argument("study_id")
+    study_plan.add_argument("--dataset", default="market.ohlcv.crypto.binance.usdm-perpetual.1h")
+    study_plan.add_argument("--start", required=True, help="inclusive ISO-8601 timestamp with timezone")
+    study_plan.add_argument("--end", required=True, help="exclusive ISO-8601 timestamp with timezone")
+    study_plan.add_argument("--symbol", action="append", default=[])
+    study_freeze = study_actions.add_parser("freeze")
+    study_freeze.add_argument("study_id"); study_freeze.add_argument("--version", default="1.0.0")
+    study_inspect = study_actions.add_parser("inspect", help="inspect a Study and its bound Dataset Release")
+    study_inspect.add_argument("study_id"); study_inspect.add_argument("--version", default="1.0.0")
+    study_data = study_actions.add_parser("data", help="preview rows from the Study input without storage plumbing")
+    study_data.add_argument("study_id"); study_data.add_argument("--version", default="1.0.0")
+    study_data.add_argument("--head", type=int, default=10); study_data.add_argument("--column", action="append")
+    study_profile = study_actions.add_parser("profile", help="run basic point-in-time and OHLCV data checks")
+    study_profile.add_argument("study_id"); study_profile.add_argument("--version", default="1.0.0")
+    study_scaffold = study_actions.add_parser("scaffold", help="generate a minimal DataFrame research script")
+    study_scaffold.add_argument("study_id"); study_scaffold.add_argument("--version", default="1.0.0")
+
+    factor = commands.add_parser("factor", help="register and verify governed factor releases")
+    factor_actions = factor.add_subparsers(dest="action", required=True)
+    factor_register = factor_actions.add_parser("register-sma")
+    factor_register.add_argument("--input-identity", required=True); factor_register.add_argument("--fast", type=int, default=20)
+    factor_register.add_argument("--slow", type=int, default=50); factor_register.add_argument("--factor-id", default="sma-spread")
+    factor_register.add_argument("--version", default="1.0.0")
+    factor_verify = factor_actions.add_parser("verify-sma")
+    _add_sma_input_arguments(factor_verify); factor_verify.add_argument("--fast", type=int, default=20)
+    factor_verify.add_argument("--slow", type=int, default=50)
+
+    strategy_product = commands.add_parser("strategy", help="register governed runnable strategy releases")
+    strategy_actions = strategy_product.add_subparsers(dest="action", required=True)
+    strategy_register = strategy_actions.add_parser("register-sma")
+    strategy_register.add_argument("--input-identity", required=True); strategy_register.add_argument("--fast", type=int, default=20)
+    strategy_register.add_argument("--slow", type=int, default=50); strategy_register.add_argument("--fee-bps", type=Decimal, default=Decimal("10"))
+    strategy_register.add_argument("--version", default="1.2.0"); strategy_register.add_argument("--factor-id", default="sma-spread")
+    strategy_register.add_argument("--factor-version", default="1.0.0")
+    strategy_actions.add_parser("register-builtins")
+    iron_register=strategy_actions.add_parser("register-btc-iron-condor");iron_register.add_argument("--research-spec-hash",required=True)
+    strategy_inspect=strategy_actions.add_parser("inspect");strategy_inspect.add_argument("strategy_id")
+    strategy_inspect.add_argument("--version",required=True)
+    strategy_status=strategy_actions.add_parser("status");strategy_status.add_argument("strategy_id");strategy_status.add_argument("--version",required=True)
+    strategy_activate=strategy_actions.add_parser("activate");strategy_activate.add_argument("strategy_id");strategy_activate.add_argument("--version",required=True)
+    strategy_activate.add_argument("--actor",required=True);strategy_activate.add_argument("--reason",required=True)
+    strategy_rollback=strategy_actions.add_parser("rollback");strategy_rollback.add_argument("strategy_id")
+    strategy_rollback.add_argument("--actor",required=True);strategy_rollback.add_argument("--reason",required=True)
+    strategy_check=strategy_actions.add_parser("check-promotion", help="check promotion evidence without changing strategy lifecycle")
+    strategy_check.add_argument("strategy_id"); strategy_check.add_argument("--version", required=True)
+    strategy_check.add_argument("--to", required=True, choices=(
+        "RESEARCH_VALIDATED", "TRADE_PROXY_VALIDATED", "EXECUTABLE_BACKTEST_VALIDATED",
+        "ROBUSTNESS_VALIDATED", "PAPER_APPROVED", "LIVE_LIMITED", "LIVE_APPROVED",
+    ))
+    strategy_check.add_argument("--evidence", action="append", required=True, help="research, readiness or soak JSON evidence; repeatable")
+    strategy_promote=strategy_actions.add_parser("promote", help="promote a Strategy Release with hashed evidence")
+    strategy_promote.add_argument("strategy_id"); strategy_promote.add_argument("--version", required=True)
+    strategy_promote.add_argument("--to", required=True, choices=(
+        "RESEARCH_VALIDATED", "TRADE_PROXY_VALIDATED", "EXECUTABLE_BACKTEST_VALIDATED",
+        "ROBUSTNESS_VALIDATED", "PAPER_APPROVED", "LIVE_LIMITED", "LIVE_APPROVED",
+    ))
+    strategy_promote.add_argument("--evidence", action="append", required=True, help="research or run result JSON evidence; repeatable")
+    strategy_promote.add_argument("--actor", required=True); strategy_promote.add_argument("--capital-limit", type=Decimal, required=True)
+    strategy_promote.add_argument("--rollback-condition", required=True)
+
+    run_product = commands.add_parser("run", help="run one Strategy Release in backtest or historical simulation")
+    run_actions = run_product.add_subparsers(dest="action", required=True)
+    run_backtest_generic = run_actions.add_parser("backtest", help="run a Strategy Release through the unified backtest entry")
+    run_backtest_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
+    _add_sma_input_arguments(run_backtest_generic); _add_sma_run_arguments(run_backtest_generic)
+    run_backtest_generic.add_argument("--artifact-root", type=Path)
+    run_backtest_generic.add_argument("--execution-calibration", type=Path,
+                                      help="ExecutionCalibrationRelease manifest to bind into the backtest artifact")
+    run_backtest = run_actions.add_parser("backtest-sma"); _add_sma_input_arguments(run_backtest)
+    _add_sma_run_arguments(run_backtest); run_backtest.add_argument("--artifact-root",type=Path)
+    run_backtest.add_argument("--execution-calibration", type=Path,
+                              help="ExecutionCalibrationRelease manifest to bind into the backtest artifact")
+    run_simulate = run_actions.add_parser("simulate-sma"); _add_sma_input_arguments(run_simulate)
+    _add_sma_run_arguments(run_simulate); run_simulate.add_argument("--run-root", type=Path, required=True)
+    run_simulate.add_argument("--artifact-root",type=Path)
+    run_simulate.add_argument("--account-id", default="sma-simulation"); run_simulate.add_argument("--base-asset", default="BTC")
+    run_simulate.add_argument("--quote-asset", default="USDT")
+    run_paper=run_actions.add_parser("paper-sma");run_paper.add_argument("--capture",type=Path)
+    run_paper.add_argument("--fixture",action="store_true");_add_sma_run_arguments(run_paper)
+    run_paper.add_argument("--run-root",type=Path,required=True);run_paper.add_argument("--artifact-root",type=Path)
+    run_paper.add_argument("--account-id",default="sma-paper");run_paper.add_argument("--base-asset",default="BTC")
+    run_paper.add_argument("--quote-asset",default="USDT")
+    run_shadow=run_actions.add_parser("shadow-sma", help="run SMA on a capture without submitting orders")
+    run_shadow.add_argument("--capture",type=Path);run_shadow.add_argument("--fixture",action="store_true")
+    _add_sma_run_arguments(run_shadow);run_shadow.add_argument("--run-root",type=Path,required=True)
+    run_shadow.add_argument("--artifact-root",type=Path)
+    run_inspect = run_actions.add_parser("inspect"); run_inspect.add_argument("--db", type=Path)
+    run_inspect.add_argument("--artifact",type=Path);run_inspect.add_argument("--at")
+    run_replay=run_actions.add_parser("replay-sma");run_replay.add_argument("--artifact",type=Path,required=True)
+    _add_sma_input_arguments(run_replay)
+    replay_capture=run_actions.add_parser("replay-sma-capture");replay_capture.add_argument("--artifact",type=Path,required=True)
+    replay_capture.add_argument("--capture",type=Path,required=True)
+    run_reference=run_actions.add_parser("reference");run_reference.add_argument("--strategy",choices=("covered-call","spot-perp-carry"),required=True)
+
+    tutorial = commands.add_parser("tutorial", help="guided, credential-free first-use workflows")
+    tutorial_actions = tutorial.add_subparsers(dest="action", required=True)
+    tutorial_sma = tutorial_actions.add_parser("sma", help="start the deterministic SMA research tutorial")
+    tutorial_sma.add_argument("--output-root", type=Path, default=Path("example-output/first-research"))
+    tutorial_sma.add_argument("--study-id", default="btc-sma-first")
     return parser
+
+
+def _add_sma_input_arguments(parser):
+    parser.add_argument("--dataset"); parser.add_argument("--fixture", action="store_true")
+    parser.add_argument("--start"); parser.add_argument("--end")
+
+
+def _add_sma_run_arguments(parser):
+    parser.add_argument("--fast", type=int, default=20); parser.add_argument("--slow", type=int, default=50)
+    parser.add_argument("--initial-cash", type=Decimal, default=Decimal("100000"))
+    parser.add_argument("--fee-bps", type=Decimal, default=Decimal("10"))
 
 
 def _spec(args: argparse.Namespace) -> ResearchSpec:
@@ -435,6 +657,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "account":
         return _account(args)
     if args.group == "trade":
+        return _trade(args)
+    if args.group == "order":
         return _trade(args)
     if args.group == "runtime":
         if args.action == "golden":
@@ -472,10 +696,26 @@ def main(argv: list[str] | None = None) -> int:
                     "unresolved_orders": [to_primitive(item) for item in store.unresolved_orders()],
                     "manual_resolutions": [to_primitive(item) for item in store.manual_order_resolutions()],
                 }
+        elif args.action == "calibrate-execution":
+            from trading.execution import build_execution_calibration_release
+            release = build_execution_calibration_release(
+                args.db, args.output_root, venue=args.venue, environment=args.environment,
+                strategy_id=args.strategy, calibration_id=args.calibration_id,
+            )
+            payload = {
+                "release_id": release.release_id,
+                "release_hash": release.release_hash,
+                "manifest": str(release.manifest_path),
+                "sample_count": release.manifest["sample_count"],
+                "summary": release.manifest["summary"],
+                "limitations": release.manifest["limitations"],
+            }
         else:
             payload = _runtime_l4_preflight(args)
         print(json.dumps(payload, indent=2))
         return 0 if payload.get("ready", True) else 2
+    if args.group in {"study", "factor", "strategy", "run", "tutorial"}:
+        return _product_command(args)
     if args.group == "data":
         return _data(args)
     if args.group == "features":
@@ -553,6 +793,60 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Report: {report if report.exists() else 'not generated'}")
     if manifest.get("error_message"):
         print(f"Error ({manifest.get('error_stage')}): {manifest['error_message']}")
+    return 0
+
+
+def _product_command(args: argparse.Namespace) -> int:
+    import sys
+    from trading.cli_output import render_error, render_product_result, resolve_language
+    from trading.product_workflow import (
+        activate_strategy_release,create_study, freeze_study, inspect_run, inspect_strategy_release, inspect_study,
+        check_strategy_promotion,
+        promote_strategy_release,register_btc_iron_condor_candidate,register_builtin_strategy_releases,rollback_strategy_release,strategy_release_status,
+        register_sma_factor, register_sma_strategy,
+        replay_sma_capture, replay_sma_run, run_sma_backtest_workflow, run_sma_paper_workflow, run_sma_shadow_workflow,
+        run_strategy_backtest_workflow,
+        preview_study_data, profile_study, run_reference_strategy_workflow, run_sma_simulation_workflow,
+        plan_governed_study, scaffold_study, start_governed_study, start_sma_tutorial, verify_sma_factor,
+    )
+    from trading.adapters.binance.historical_archive import GracefulShutdown
+    handlers = {
+        ("study", "create"): create_study, ("study", "plan"): plan_governed_study,
+        ("study", "start"): start_governed_study,
+        ("study", "freeze"): freeze_study,
+        ("study", "inspect"): inspect_study, ("study", "data"): preview_study_data,
+        ("study", "profile"): profile_study, ("study", "scaffold"): scaffold_study,
+        ("tutorial", "sma"): start_sma_tutorial,
+        ("factor", "register-sma"): register_sma_factor, ("factor", "verify-sma"): verify_sma_factor,
+        ("strategy", "register-sma"): register_sma_strategy,
+        ("strategy","register-builtins"):register_builtin_strategy_releases,("strategy","inspect"):inspect_strategy_release,
+        ("strategy","register-btc-iron-condor"):register_btc_iron_condor_candidate,
+        ("strategy","status"):strategy_release_status,("strategy","activate"):activate_strategy_release,
+        ("strategy","rollback"):rollback_strategy_release,("strategy","promote"):promote_strategy_release,
+        ("strategy","check-promotion"):check_strategy_promotion,
+        ("run", "backtest"): run_strategy_backtest_workflow,
+        ("run", "backtest-sma"): run_sma_backtest_workflow,
+        ("run", "simulate-sma"): run_sma_simulation_workflow, ("run", "inspect"): inspect_run,
+        ("run","replay-sma"):replay_sma_run,
+        ("run","paper-sma"):run_sma_paper_workflow,("run","replay-sma-capture"):replay_sma_capture,
+        ("run","shadow-sma"):run_sma_shadow_workflow,
+        ("run","reference"):run_reference_strategy_workflow,
+    }
+    try:
+        payload = handlers[(args.group, args.action)](args)
+    except GracefulShutdown as error:
+        print(f"Stopped cleanly: {error}", file=sys.stderr)
+        return 130
+    except (KeyError, LookupError, PermissionError, ValueError, FileNotFoundError) as error:
+        language = resolve_language(args.lang)
+        print(render_error(error, language, json_output=args.format == "json"), file=sys.stderr)
+        return 2
+    if args.quiet:
+        return 0
+    if args.format == "json":
+        print(json.dumps(to_primitive(payload), ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(render_product_result(args.group, args.action, payload, resolve_language(args.lang)))
     return 0
 
 
@@ -694,6 +988,11 @@ def _data(args: argparse.Namespace) -> int:
         report = service.doctor(args.dataset) if args.action == "doctor" else service.audit()
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 2 if args.action == "health" and args.strict and not report["healthy"] else 0
+    if args.action == "us-equity-momentum-readiness":
+        from trading.features import UsEquityMomentumReadiness
+        report = UsEquityMomentumReadiness(args.lake_root).report(study_id=args.study_id, version=args.version)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 2 if args.strict and report["summary"]["errors"] else 0
     if args.action == "validate":
         from trading.data.quality import DatasetQualityService
         assessment = DatasetQualityService(args.lake_root).assess(args.release)
@@ -703,7 +1002,11 @@ def _data(args: argparse.Namespace) -> int:
         register_default_products(args.lake_root)
         if args.connector_config is not None:
             register_configured_products(args.lake_root, args.connector_config)
-        providers = default_provider_registry(args.lake_root, connector_config=args.connector_config)
+        from trading.product_workflow import _archive_progress
+        providers = default_provider_registry(
+            args.lake_root, connector_config=args.connector_config,
+            progress=None if args.quiet else _archive_progress,
+        )
         client = ResearchDataClient(args.lake_root, providers=providers)
         from trading.data.preparation import DataPreparationService
         prepared = DataPreparationService(client).prepare(
@@ -712,6 +1015,10 @@ def _data(args: argparse.Namespace) -> int:
             acquire_missing=args.acquire_missing, promote=args.promote, actor=args.actor, reason=args.reason,
         )
         print(json.dumps(to_primitive(prepared), ensure_ascii=False, indent=2)); return 0
+    if args.action == "prepare-us-equity-momentum":
+        result = _prepare_us_equity_momentum(args)
+        print(json.dumps(to_primitive(result), ensure_ascii=False, indent=2))
+        return 0 if result["readiness"]["summary"]["errors"] == 0 else 2
     if args.action == "query":
         if args.limit <= 0:
             raise SystemExit("--limit must be positive")
@@ -735,6 +1042,8 @@ def _data(args: argparse.Namespace) -> int:
             "release_ids": [query.release_id for query in queries],
         }, ensure_ascii=False, indent=2)); return 0
     if args.action == "catalog":
+        if args.refresh:
+            register_default_products(args.lake_root)
         catalog = DataCatalog(args.lake_root)
         if args.refresh:
             catalog.discover(); catalog.save()
@@ -769,7 +1078,11 @@ def _data(args: argparse.Namespace) -> int:
         register_default_products(args.lake_root)
         if args.connector_config is not None:
             register_configured_products(args.lake_root, args.connector_config)
-        providers = default_provider_registry(args.lake_root, connector_config=args.connector_config)
+        from trading.product_workflow import _archive_progress
+        providers = default_provider_registry(
+            args.lake_root, connector_config=args.connector_config,
+            progress=(None if args.quiet or args.action == "plan" else _archive_progress),
+        )
         client = ResearchDataClient(args.lake_root, providers=providers)
         start, end = datetime.fromisoformat(args.start), datetime.fromisoformat(args.end)
         plan = client.plan(args.dataset, start=start, end=end, provider=args.provider, venue=args.venue)
@@ -793,6 +1106,14 @@ def _data(args: argparse.Namespace) -> int:
                 raise SystemExit("--start and --end are required with --ticker")
             result["corporate_actions"] = pipeline.sync_corporate_actions(args.ticker, datetime.fromisoformat(args.start), datetime.fromisoformat(args.end))
         print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
+    if args.action == "build-massive-equity-identity":
+        reference_rows = json.loads(args.reference_rows.read_text(encoding="utf-8"))
+        ticker_events = json.loads(args.ticker_events.read_text(encoding="utf-8")) if args.ticker_events else []
+        resolver = MassiveEquityIdentityResolver()
+        resolved = resolver.resolve(reference_rows, ticker_events)
+        manifest = resolver.save(resolved, args.lake_root)
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        return 0 if not resolved.quarantined else 2
     if args.action == "build-massive-slices":
         dataset = MassiveCuratedSliceBuilder(args.lake_root, reference_catalog_path=args.reference_catalog_path, dataset_root=args.dataset_root).build(
             args.source_dataset, args.output_dataset, datetime.fromisoformat(args.start), datetime.fromisoformat(args.end),
@@ -850,7 +1171,10 @@ def _data(args: argparse.Namespace) -> int:
     if args.action == "prepare-massive-equity-day-aggs":
         manifest = MassiveEquityDayAggPipeline(
             args.lake_root, MassiveClient(MassiveConfig.from_env()),
-        ).prepare(args.dataset_id, args.ticker, date.fromisoformat(args.start), date.fromisoformat(args.end))
+        ).prepare(
+            args.dataset_id, args.ticker, date.fromisoformat(args.start), date.fromisoformat(args.end),
+            view=args.view,
+        )
         print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
     if args.action == "prepare-option-day-iv":
         manifest = OptionDayIvPipeline(args.lake_root).prepare(
@@ -885,7 +1209,380 @@ def _massive_request(args: argparse.Namespace) -> tuple[str, dict[str, object]]:
     return f"/v3/snapshot/options/{args.underlying}", {"limit": args.limit}
 
 
+def _prepare_us_equity_momentum(args: argparse.Namespace) -> dict[str, object]:
+    from trading.data.preparation import DataPreparationService
+    from trading.features import UsEquityMomentumReadiness
+    from trading.product_workflow import start_governed_study
+
+    start, end = datetime.fromisoformat(args.start), datetime.fromisoformat(args.end)
+    if start.tzinfo is None or end.tzinfo is None or start >= end:
+        raise ValueError("US equity momentum preparation requires timezone-aware increasing [start,end) timestamps")
+    register_default_products(args.lake_root)
+    if args.connector_config is not None:
+        register_configured_products(args.lake_root, args.connector_config)
+    providers = default_provider_registry(
+        args.lake_root, connector_config=args.connector_config,
+        progress=None if args.quiet else None,
+    )
+    client = ResearchDataClient(args.lake_root, providers=providers)
+    prepared_raw = []
+    raw_release_paths = []
+    for raw_dataset in args.raw_dataset:
+        raw = DataPreparationService(client).prepare(
+            raw_dataset,
+            start=start,
+            end=end,
+            minimum_quality=QualityLevel.RESEARCH,
+            provider=args.provider,
+            venue=args.venue,
+            acquire_missing=True,
+            promote=False,
+            actor="us-equity-momentum-one-click",
+            reason="prepare US equity momentum source data",
+        )
+        prepared_raw.append(raw)
+        raw_release_paths.append(client.catalog.release(raw.release_id).relative_path)
+    raw_source_directory = _common_lake_directory(args.lake_root, raw_release_paths)
+    corporate_actions_directory = args.corporate_actions_directory
+    corporate_action_sync = None
+    if corporate_actions_directory is None and args.sync_corporate_actions:
+        corporate_action_sync = _sync_us_equity_momentum_corporate_actions(
+            args.lake_root, raw_release_paths, start, end, dataset_id=args.dataset_id,
+        )
+        corporate_actions_directory = corporate_action_sync["directory"]
+    reference_directory = args.reference_directory
+    reference_evidence = {"directory": reference_directory, "auto_detected": False}
+    if reference_directory is None:
+        reference_evidence = _latest_us_equity_identity_reference(args.lake_root)
+        reference_directory = reference_evidence["directory"]
+    policy = UsEquityMomentumPolicy(
+        minimum_price=args.minimum_price,
+        minimum_adv20=args.minimum_adv20,
+        minimum_history=args.minimum_history,
+    )
+    features_manifest = UsEquityMomentumDatasetBuilder(args.lake_root).build_from_ohlcv_directory(
+        raw_source_directory,
+        dataset_id=args.dataset_id,
+        policy=policy,
+        corporate_actions_directory=corporate_actions_directory,
+        reference_directory=reference_directory,
+    )
+    study_args = argparse.Namespace(
+        lake_root=args.lake_root,
+        study_id=args.study_id,
+        version=args.version,
+        hypothesis=args.hypothesis,
+        dataset="features.momentum.equity.us.1d",
+        start=args.start,
+        end=args.end,
+        quiet=args.quiet,
+    )
+    study = start_governed_study(study_args)
+    readiness = UsEquityMomentumReadiness(args.lake_root).report(study_id=args.study_id, version=args.version)
+    return {
+        "workflow": "us-equity-momentum",
+        "scope": "bounded-configured-products",
+        "raw_datasets": list(args.raw_dataset),
+        "raw_source_directory": raw_source_directory,
+        "raw_releases": [to_primitive(item) for item in prepared_raw],
+        "corporate_actions": (
+            corporate_action_sync
+            if corporate_action_sync is not None
+            else {"directory": corporate_actions_directory, "synced": False}
+        ),
+        "reference": reference_evidence,
+        "features": features_manifest,
+        "study": study,
+        "readiness": readiness,
+        "ready_for_study": readiness["ready_for_study"],
+        "ready_for_backtest": readiness["ready_for_backtest"],
+        "limitations": [
+            "This command prepares configured Massive equity products, not a proven full-market active/inactive universe.",
+            "Full backtest readiness still requires complete reference, coverage, corporate action and delisting evidence.",
+        ],
+    }
+
+
+def _latest_us_equity_identity_reference(lake_root: str | Path) -> dict[str, object]:
+    root = Path(lake_root)
+    manifests = sorted((root / "reference/provider=massive/equity_identity").glob("version=*/manifest.json"))
+    if not manifests:
+        return {"directory": None, "auto_detected": False, "reason": "missing"}
+    candidates = []
+    for path in manifests:
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if int(manifest.get("quarantine_count", 0) or 0) != 0:
+            continue
+        if not (path.parent / "instruments.json").exists() or not (path.parent / "mappings.json").exists():
+            continue
+        candidates.append((path, manifest))
+    if not candidates:
+        return {"directory": None, "auto_detected": False, "reason": "no clean equity_identity manifest"}
+    path, manifest = candidates[-1]
+    release = _ensure_us_equity_identity_release(root, path.parent, manifest)
+    return {
+        "directory": str(path.parent.relative_to(root)),
+        "auto_detected": True,
+        "content_sha256": manifest.get("sha256"),
+        "release_id": release.release_id,
+        "quality_level": release.quality_level.value,
+        "instrument_count": manifest.get("instrument_count"),
+        "mapping_count": manifest.get("mapping_count"),
+    }
+
+
+def _ensure_us_equity_identity_release(root: Path, directory: Path, manifest: dict[str, object]) -> DatasetRelease:
+    digest = str(manifest.get("sha256") or "")
+    if not digest:
+        raise ValueError(f"equity identity manifest is missing sha256: {directory}")
+    register_default_products(root)
+    catalog = DataCatalog(root)
+    release_id = f"identity_{digest[:24]}"
+    try:
+        return catalog.release(release_id)
+    except KeyError:
+        pass
+    product = catalog.product("reference.identity.equity.us.massive")
+    catalog.register_release(DatasetRelease(
+        release_id,
+        product.key,
+        f"content.{digest[:16]}",
+        "reference.identity.equity.us.massive.v1",
+        "1",
+        "massive.equity_identity",
+        "1",
+        str(directory.relative_to(root)),
+        "json",
+        digest,
+        "massive",
+        "us-securities",
+        ("reference.identity.equity.us.massive@latest-research",),
+        DatasetStatus.APPROVED_FOR_RESEARCH,
+        QualityLevel.RESEARCH,
+        datetime.now(timezone.utc).isoformat(),
+        DatasetStorageKind.REFERENCE,
+        "1",
+    ))
+    catalog.save()
+    assessment = DatasetQualityService(root).assess(release_id)
+    return DataCatalog(root).release(release_id)
+
+
+def _sync_us_equity_momentum_corporate_actions(
+    lake_root: str | Path,
+    raw_release_paths: list[str],
+    start: datetime,
+    end: datetime,
+    *,
+    dataset_id: str,
+) -> dict[str, object]:
+    if start.tzinfo is None or end.tzinfo is None or start >= end:
+        raise ValueError("corporate action sync requires timezone-aware increasing [start,end) timestamps")
+    ticker_map = _raw_equity_ticker_map(lake_root, raw_release_paths)
+    if not ticker_map:
+        raise ValueError("cannot sync corporate actions because prepared raw releases contain no ticker/instrument rows")
+
+    archive = MassiveSourceArchive(lake_root, MassiveClient(MassiveConfig.from_env()))
+    events: list[dict[str, object]] = []
+    receipts: list[str] = []
+    per_ticker: dict[str, dict[str, int]] = {}
+    for ticker, instrument_id in sorted(ticker_map.items()):
+        split_archive = archive.fetch_pages("/v3/reference/splits", {
+            "ticker": ticker,
+            "execution_date.gte": start.date(),
+            "execution_date.lt": end.date(),
+            "limit": 1000,
+        })
+        dividend_archive = archive.fetch_pages("/v3/reference/dividends", {
+            "ticker": ticker,
+            "ex_dividend_date.gte": start.date(),
+            "ex_dividend_date.lt": end.date(),
+            "limit": 1000,
+        })
+        receipts.extend([
+            str((split_archive.directory / "receipt.json").relative_to(Path(lake_root))),
+            str((dividend_archive.directory / "receipt.json").relative_to(Path(lake_root))),
+        ])
+        split_count = 0
+        dividend_count = 0
+        for row in archive.iter_results(split_archive):
+            ratio = Decimal(str(row["split_to"])) / Decimal(str(row["split_from"]))
+            if ratio <= 0:
+                raise ValueError(f"Massive split ratio must be positive for {ticker}")
+            events.append({
+                "source": "massive.splits",
+                "source_id": str(row.get("id") or f"{ticker}:{row.get('execution_date') or row.get('ex_date')}:{ratio}"),
+                "ticker": ticker,
+                "instrument_id": instrument_id,
+                "effective_at": {"$datetime": _corporate_action_date(row.get("execution_date") or row.get("ex_date")).isoformat()},
+                "ratio": {"$decimal": str(ratio)},
+            })
+            split_count += 1
+        for row in archive.iter_results(dividend_archive):
+            amount = Decimal(str(row["cash_amount"]))
+            if amount < 0:
+                raise ValueError(f"Massive dividend amount cannot be negative for {ticker}")
+            events.append({
+                "source": "massive.dividends",
+                "source_id": str(row.get("id") or f"{ticker}:{row.get('ex_dividend_date')}:{amount}"),
+                "ticker": ticker,
+                "instrument_id": instrument_id,
+                "ex_date": {"$datetime": _corporate_action_date(row.get("ex_dividend_date")).isoformat()},
+                "pay_date": {"$datetime": _corporate_action_date(row.get("pay_date") or row.get("ex_dividend_date")).isoformat()},
+                "currency": str(row.get("currency") or "USD"),
+                "amount_per_share": {"$decimal": str(amount)},
+            })
+            dividend_count += 1
+        per_ticker[ticker] = {"splits": split_count, "dividends": dividend_count}
+
+    digest = sha256(json.dumps(events, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    directory = (
+        Path(lake_root)
+        / "reference/provider=massive/corporate_actions/scope=us_equity_momentum_bounded"
+        / f"dataset={_safe_dataset_component(dataset_id)}"
+        / f"version={digest}"
+    )
+    write_json(directory / "events.json", events)
+    write_json(directory / "manifest.json", {
+        "manifest_version": 1,
+        "provider": "massive",
+        "scope": "us_equity_momentum_bounded",
+        "dataset_id": dataset_id,
+        "identity_source": "prepared raw release instrument_id",
+        "boundary": "[start,end)",
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "ticker_count": len(ticker_map),
+        "event_count": len(events),
+        "sha256": digest,
+        "source_receipts": receipts,
+        "per_ticker": per_ticker,
+        "known_limitations": [
+            "bounded ticker corporate action sync; requires full point-in-time identity mapping before full-market backtest readiness",
+        ],
+    })
+    catalog = DataCatalog(lake_root)
+    product = catalog.product("reference.corporate_actions.equity.us.massive")
+    release_id = f"corpact_{digest[:24]}"
+    relative = str(directory.relative_to(Path(lake_root)))
+    catalog.register_release(DatasetRelease(
+        release_id,
+        product.key,
+        f"content.{digest[:16]}",
+        "reference.corporate_actions.equity.us.massive.v1",
+        "1",
+        "massive.corporate_actions",
+        "1",
+        relative,
+        "json",
+        digest,
+        "massive",
+        "us-securities",
+        ("reference.corporate_actions.equity.us.massive@latest-research",),
+        DatasetStatus.APPROVED_FOR_RESEARCH,
+        QualityLevel.RESEARCH,
+        datetime.now(timezone.utc).isoformat(),
+        DatasetStorageKind.REFERENCE,
+        "1",
+    ))
+    catalog.save()
+    assessment = DatasetQualityService(lake_root).assess(release_id)
+    return {
+        "synced": True,
+        "directory": str(directory.relative_to(Path(lake_root))),
+        "release_id": release_id,
+        "content_sha256": digest,
+        "quality_level": assessment.level.value,
+        "quality_passed": assessment.passed,
+        "event_count": len(events),
+        "ticker_count": len(ticker_map),
+        "per_ticker": per_ticker,
+    }
+
+
+def _raw_equity_ticker_map(lake_root: str | Path, relative_paths: list[str]) -> dict[str, str]:
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as error:
+        raise RuntimeError("US equity momentum corporate action sync requires the 'data' optional dependency") from error
+    root = Path(lake_root)
+    mapping: dict[str, str] = {}
+    for relative in relative_paths:
+        source = root / relative
+        for path in _parquet_files(source):
+            for row in pq.read_table(path, columns=["ticker", "instrument_id"]).to_pylist():
+                ticker = str(row.get("ticker") or "").strip().upper()
+                instrument_id = str(row.get("instrument_id") or "").strip()
+                if not ticker or not instrument_id:
+                    continue
+                previous = mapping.get(ticker)
+                if previous is not None and previous != instrument_id:
+                    raise ValueError(f"ticker {ticker} maps to multiple instrument IDs in prepared raw data")
+                mapping[ticker] = instrument_id
+    return mapping
+
+
+def _parquet_files(source: Path) -> list[Path]:
+    manifest_path = source / "manifest.json"
+    declared: list[Path] = []
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for key in ("file", "files"):
+            value = manifest.get(key)
+            if isinstance(value, str):
+                declared.append(source / value)
+            elif isinstance(value, list):
+                for item in value:
+                    if isinstance(item, str):
+                        declared.append(source / item)
+                    elif isinstance(item, dict) and item.get("path"):
+                        declared.append(source / str(item["path"]))
+    existing = sorted({path for path in declared if path.suffix == ".parquet" and path.exists()})
+    return existing or sorted(source.glob("**/part-*.parquet")) or sorted(source.glob("*.parquet"))
+
+
+def _corporate_action_date(value: object) -> datetime:
+    if value is None:
+        raise ValueError("Massive corporate action is missing a date")
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return datetime.combine(date.fromisoformat(str(value)), datetime.min.time(), timezone.utc)
+
+
+def _safe_dataset_component(value: str) -> str:
+    return "".join(item if item.isalnum() or item in {"-", "_", "."} else "_" for item in value)
+
+
+def _common_lake_directory(lake_root: str | Path, relative_paths: list[str]) -> str:
+    if not relative_paths:
+        raise ValueError("at least one raw release path is required")
+    if len(relative_paths) == 1:
+        return relative_paths[0]
+    root = Path(lake_root)
+    paths = [root / item for item in relative_paths]
+    common = Path(os.path.commonpath([str(item) for item in paths]))
+    return str(common.relative_to(root)) if common.is_relative_to(root) else str(common)
+
+
 def _features(args: argparse.Namespace) -> int:
+    if args.feature_set == "us-equity-momentum-v1":
+        if not args.source_directory or not args.dataset_id:
+            raise SystemExit("us-equity-momentum-v1 requires --source-directory and --dataset-id")
+        policy = UsEquityMomentumPolicy(
+            minimum_price=args.minimum_price,
+            minimum_adv20=args.minimum_adv20,
+            minimum_history=args.minimum_history,
+        )
+        manifest = UsEquityMomentumDatasetBuilder(args.lake_root).build_from_ohlcv_directory(
+            args.source_directory, dataset_id=args.dataset_id, policy=policy,
+            corporate_actions_directory=args.corporate_actions_directory,
+            reference_directory=args.reference_directory,
+        )
+        print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        return 0
     builders = {"btc-iv-rv-v1": BtcIvRvFeatureBuilder, "btc-term-skew-v1": BtcTermSkewFeatureBuilder,
                 "btc-deribit-trade-skew-v1": BtcDeribitTradeSkewFeatureBuilder}
     release = builders[args.feature_set](args.lake_root).build()
@@ -1364,7 +2061,9 @@ def _runtime_l4_preflight(args: argparse.Namespace) -> dict[str, object]:
         "strategy_paper_approved": deployment.allowed,
         "instrument_listing_ready": instrument_ready,
     }
-    return {
+    payload = {
+        "schema_version": 1,
+        "kind": "runtime_l4_preflight",
         "ready": all(checks.values()),
         "venue": args.venue,
         "environment": args.environment,
@@ -1377,9 +2076,33 @@ def _runtime_l4_preflight(args: argparse.Namespace) -> dict[str, object]:
             "instrument": instrument_reason,
         },
     }
+    if getattr(args, "evidence_artifact", None):
+        payload["artifact"] = str(_write_l4_preflight_artifact(args.evidence_artifact, payload))
+    return payload
+
+
+def _write_l4_preflight_artifact(target: str | Path, payload: dict[str, object]) -> Path:
+    path = Path(target)
+    material = {key: value for key, value in payload.items() if key not in {"artifact", "audit_hash"}}
+    audit_hash = sha256(json.dumps(
+        to_primitive(material), ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    artifact_payload = {**material, "audit_hash": audit_hash}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and json.loads(path.read_text(encoding="utf-8")) != artifact_payload:
+        raise ValueError("l4 preflight evidence artifact path already contains different content")
+    if not path.exists():
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(artifact_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                             encoding="utf-8")
+        temporary.replace(path)
+    return path
 
 
 def _trade(args: argparse.Namespace) -> int:
+    if not bool(getattr(args,"manual_order",False)):
+        warnings.warn("trade run is a compatibility facade; use order submit for manual orders or run paper/live for strategies",
+            DeprecationWarning,stacklevel=2)
     environment = Environment(args.environment)
     if environment is Environment.LIVE and not args.confirm_live:
         raise SystemExit("live trading requires --confirm-live")
@@ -1389,14 +2112,18 @@ def _trade(args: argparse.Namespace) -> int:
         raise SystemExit("Binance uses testnet rather than paper")
     if args.venue == "binance" and args.product == "options" and environment is not Environment.LIVE:
         raise SystemExit("Binance options execution is live-only; no equivalent options testnet is available")
+    manual_order=bool(getattr(args,"manual_order",False))
     from trading.strategies.deployment import StrategyDeploymentGate
-    if args.venue == "simulated":
+    if args.venue == "simulated" and not manual_order:
         from trading.strategies.specs import register_builtin_strategies
         register_builtin_strategies(Path(args.lake_root) / "strategies")
-    strategy_id={"covered-call":"covered-call-v1","spot-perp-carry":"spot-perpetual-carry-v1"}.get(args.strategy,args.strategy)
-    deployment=StrategyDeploymentGate(Path(args.lake_root)/"strategies").evaluate(strategy_id,environment,simulated_venue=args.venue=="simulated")
-    if not deployment.allowed:raise SystemExit(f"strategy deployment rejected: {deployment.reason}")
-    print(f"Strategy lifecycle: {deployment.lifecycle.value} ({deployment.strategy_directory})")
+    strategy_id="manual-operations-v1" if manual_order else {"covered-call":"covered-call-v1","spot-perp-carry":"spot-perpetual-carry-v1"}.get(args.strategy,args.strategy)
+    if not manual_order:
+        deployment=StrategyDeploymentGate(Path(args.lake_root)/"strategies").evaluate(strategy_id,environment,simulated_venue=args.venue=="simulated")
+        if not deployment.allowed:raise SystemExit(f"strategy deployment rejected: {deployment.reason}")
+        print(f"Strategy lifecycle: {deployment.lifecycle.value} ({deployment.strategy_directory})")
+    else:
+        print(f"Manual operations intent: actor={args.actor} reason={args.reason}")
     catalog_repository = ReferenceCatalogRepository(args.reference_catalog_path)
     if not catalog_repository.path.exists():
         raise SystemExit("catalog is missing; run 'trader catalog sync' first")
@@ -1506,6 +2233,12 @@ def _trade(args: argparse.Namespace) -> int:
         if order_type is OrderType.LIMIT and args.limit_price is None:
             raise SystemExit("limit orders require --limit-price")
         correlation = str(uuid5(NAMESPACE_URL, f"cli:{strategy_id}:{args.instrument}:{datetime.now(timezone.utc).date()}"))
+        if manual_order:
+            event_log.append(f"manual-intent:{correlation}","manual_order_intent",{
+                "actor":args.actor,"reason":args.reason,"strategy_id":strategy_id,
+                "instrument_id":args.instrument,"side":args.side,"quantity":str(args.quantity),
+                "environment":environment.value,"created_at":datetime.now(timezone.utc).isoformat(),
+            })
         request = OrderRequest(
             f"internal-{correlation}", f"client-{correlation}", strategy_id, f"intent-{correlation}", correlation,
             account, definition.instrument_id, TradeSide(args.side), args.quantity,

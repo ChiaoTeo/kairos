@@ -33,6 +33,14 @@ class MultiAssetCliTests(unittest.TestCase):
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([*common, "account", "reconcile", "--venue", "simulated", "--environment", "testnet"]), 0)
                 self.assertIn("Matched: True", output.getvalue())
+            manual_common=["--reference-catalog-path",str(catalog_path),"--event-log-path",str(root/"manual-events.jsonl"),
+                "--runtime-db",str(root/"manual-runtime.sqlite3")]
+            with StringIO() as output,redirect_stdout(output):
+                self.assertEqual(main([*manual_common,"order","submit","--venue","simulated","--environment","testnet",
+                    "--instrument","crypto:sim:spot:BTCUSDT","--side","buy","--quantity","0.01","--limit-price","50000",
+                    "--actor","test-operator","--reason","manual acceptance"]),0)
+                self.assertIn("Manual operations intent",output.getvalue());self.assertIn("Accepted:",output.getvalue())
+            self.assertIn("test-operator",(root/"manual-events.jsonl").read_text(encoding="utf-8"))
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
                     *common, "trade", "run", "--strategy", "spot-perp-carry", "--venue", "simulated",

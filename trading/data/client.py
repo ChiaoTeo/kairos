@@ -219,7 +219,7 @@ class ResearchDataClient:
         connector = self.providers.get(plan.selected.provider, plan.logical_key)
         request = AcquisitionRequest(
             plan.logical_key, missing, plan.selected, tuple(str(item) for item in instruments or ()),
-            tuple(str(item) for item in fields or ()), plan.local_release_id,
+            tuple(str(item) for item in fields or ()), None if refresh else plan.local_release_id,
         )
         estimate = connector.estimate(request) if hasattr(connector, "estimate") else AcquisitionEstimate(len(missing))
         self._check_acquisition_limits(request, estimate)
@@ -545,7 +545,13 @@ def _dataset_filter(ds, schema, primary_time, start, end, instruments):
 def _dataset_scalar(data_type, value):
     import pyarrow as pa
     if pa.types.is_timestamp(data_type):
-        return _datetime(value)
+        result = _datetime(value)
+        if result is None:
+            return None
+        timezone_name = getattr(data_type, "tz", None)
+        if timezone_name is None:
+            return result.astimezone(timezone.utc).replace(tzinfo=None)
+        return result.astimezone(timezone.utc)
     return str(value)
 
 

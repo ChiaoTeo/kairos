@@ -20,6 +20,18 @@ def content_release_id(product: ManagedDataset, material: object) -> str:
     return f"ds_{digest}"
 
 
+def content_release_id_from_rows(product: ManagedDataset, rows: list[dict[str, object]]) -> str:
+    digest = sha256(str(product.key).encode() + b"\0")
+    fields = tuple(sorted(rows[0])) if rows else ()
+    digest.update("\x1f".join(fields).encode())
+    for row in rows:
+        digest.update(b"\x1e")
+        for field in fields:
+            digest.update(str(row.get(field, "")).encode())
+            digest.update(b"\x1f")
+    return f"ds_{digest.hexdigest()[:24]}"
+
+
 def release_path(product: ManagedDataset, release_id: str) -> str:
     return f"{product.relative_path}/release={release_id}"
 
@@ -44,6 +56,8 @@ def merge_release_rows(root: str | Path, base_release_id: str | None, rows: list
     if primary_key:
         unique = {tuple(_primary_key_value(key, row.get(key, "")) for key in primary_key): row for row in combined}
         combined = list(unique.values())
+    if not order_by:
+        return combined
     return sorted(combined, key=lambda row: tuple(str(row.get(key, "")) for key in order_by))
 
 

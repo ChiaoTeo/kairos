@@ -9,6 +9,8 @@ from .curated import MassiveCuratedSliceBuilder
 from .reference_pipeline import MassiveReferencePipeline
 from .day_aggs import OptionDayAggPipeline, SpxwDayAggPipeline
 from .equity_day_aggs import MassiveEquityDayAggPipeline
+from .datasets import MassiveEquityDayAggDatasetConnector, MassiveEquityDayAggProductConfig
+from .equity_identity import MassiveEquityIdentityResolver, MassiveEquityIdentityResult
 from .option_iv import OptionDayIvPipeline
 
 __all__ = [
@@ -23,5 +25,7 @@ __all__ = [
     "SpxwDayAggPipeline",
     "OptionDayAggPipeline",
     "MassiveEquityDayAggPipeline",
+    "MassiveEquityDayAggDatasetConnector", "MassiveEquityDayAggProductConfig",
+    "MassiveEquityIdentityResolver", "MassiveEquityIdentityResult",
     "OptionDayIvPipeline",
 ]

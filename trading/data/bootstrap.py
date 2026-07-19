@@ -4,7 +4,11 @@ import json
 import os
 from pathlib import Path
 
-from trading.adapters.binance.datasets import BinanceOptionQuotesDatasetConnector, BinanceSpotDatasetConnector
+from trading.adapters.binance.datasets import (
+    BinanceOptionQuotesDatasetConnector, BinanceSpotDatasetConnector,
+    BinanceUsdmPerpetualHourlyDatasetConnector,
+)
+from trading.adapters.binance.historical_archive import BinanceUsdmPerpetualHourlyArchiveProvider
 from trading.adapters.deribit.datasets import (
     DeribitDvolDatasetConnector, DeribitOptionSnapshotDatasetConnector, DeribitOptionTradesDatasetConnector,
 )
@@ -16,16 +20,23 @@ from .models import (
 )
 from .products import (
     BTC_DERIBIT_OPTION_QUOTES, BTC_DERIBIT_OPTION_TRADES, BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY,
-    BTC_SPOT_DAILY, BTC_DERIBIT_TERM_SKEW_DAILY, BTC_IV_RV_DAILY, BTC_TERM_SKEW_HOURLY,
+    BTC_SPOT_DAILY, BINANCE_USDM_PERPETUAL_HOURLY, BTC_DERIBIT_TERM_SKEW_DAILY,
+    BTC_IV_RV_DAILY, BTC_TERM_SKEW_HOURLY, US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MASSIVE_RAW_DAILY,
+    US_EQUITY_MASSIVE_CORPORATE_ACTIONS, US_EQUITY_MASSIVE_IDENTITY,
+    US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
+    US_EQUITY_MOMENTUM_DAILY, US_EQUITY_RETURNS_DAILY, US_EQUITY_UNIVERSE_DAILY,
 )
 
 
 DEFAULT_ACQUIRABLE_PRODUCTS = (
-    BTC_SPOT_DAILY, BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY,
+    BTC_SPOT_DAILY, BINANCE_USDM_PERPETUAL_HOURLY, BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY,
     BTC_DERIBIT_OPTION_TRADES, BTC_DERIBIT_OPTION_QUOTES,
 )
 KNOWN_PRODUCTS = (*DEFAULT_ACQUIRABLE_PRODUCTS, BTC_IV_RV_DAILY, BTC_TERM_SKEW_HOURLY,
-                  BTC_DERIBIT_TERM_SKEW_DAILY)
+                  BTC_DERIBIT_TERM_SKEW_DAILY, US_EQUITY_MASSIVE_RAW_DAILY,
+                  US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY, US_EQUITY_MASSIVE_CORPORATE_ACTIONS,
+                  US_EQUITY_MASSIVE_IDENTITY, US_EQUITY_RETURNS_DAILY, US_EQUITY_UNIVERSE_DAILY,
+                  US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MOMENTUM_DAILY)
 
 
 def register_default_products(root: str | Path = "data") -> DataCatalog:
@@ -53,18 +64,24 @@ def register_configured_products(root: str | Path, config_path: str | Path) -> D
     return catalog
 
 
-def default_provider_registry(root: str | Path = "data", *, connector_config: str | Path | None = None) -> ProviderRegistry:
+def default_provider_registry(root: str | Path = "data", *, connector_config: str | Path | None = None,
+                              progress=None, stop_event=None) -> ProviderRegistry:
     providers = ProviderRegistry()
     specs = KNOWN_PRODUCTS
     for connector in (
-        BinanceSpotDatasetConnector(root), BinanceOptionQuotesDatasetConnector(root),
+        BinanceSpotDatasetConnector(root), BinanceUsdmPerpetualHourlyDatasetConnector(
+            root, BinanceUsdmPerpetualHourlyArchiveProvider(progress=progress, stop_event=stop_event),
+        ),
+        BinanceOptionQuotesDatasetConnector(root),
         DeribitDvolDatasetConnector(root), DeribitOptionTradesDatasetConnector(root),
         DeribitOptionSnapshotDatasetConnector(root),
     ):
         providers.register(connector, tuple(spec for spec in specs if connector.supports(str(spec.key))))
     if connector_config is not None:
-        from trading.adapters.massive.datasets import MassiveOptionProductConfig
-        for raw, spec in zip(_massive_products(connector_config), configured_product_specs(connector_config)):
+        from trading.adapters.massive.datasets import MassiveEquityDayAggProductConfig, MassiveOptionProductConfig
+        configured = {str(spec.key): spec for spec in configured_product_specs(connector_config)}
+        for raw in _massive_option_products(connector_config):
+            spec = configured[str(raw["logical_key"])]
             connector = _ConfiguredMassiveConnector(
                 root, MassiveOptionProductConfig(
                     str(raw["logical_key"]), str(raw["underlying"]),
@@ -73,12 +90,20 @@ def default_provider_registry(root: str | Path = "data", *, connector_config: st
                 ),
             )
             providers.register(connector, (spec,))
+        for raw in _massive_equity_products(connector_config):
+            spec = configured[str(raw["logical_key"])]
+            connector = _ConfiguredMassiveEquityConnector(
+                root, MassiveEquityDayAggProductConfig(
+                    str(raw["logical_key"]), str(raw["ticker"]), str(raw.get("view", "vendor_adjusted")),
+                ),
+            )
+            providers.register(connector, (spec,))
     return providers
 
 
 def configured_product_specs(config_path: str | Path) -> tuple[DatasetProductSpec, ...]:
     specs = []
-    for raw in _massive_products(config_path):
+    for raw in _massive_option_products(config_path):
         logical_key = str(raw["logical_key"])
         product = DatasetProduct(
             DatasetKey(logical_key), str(raw.get("title") or logical_key),
@@ -106,6 +131,38 @@ def configured_product_specs(config_path: str | Path) -> tuple[DatasetProductSpe
             str(raw.get("layout_version", "1")),
             str(raw.get("quality_profile", "market_event")),
             QualityLevel(str(raw.get("minimum_publication_level", QualityLevel.BACKTEST.value))),
+        ))
+    for raw in _massive_equity_products(config_path):
+        logical_key = str(raw["logical_key"])
+        view = str(raw.get("view", "vendor_adjusted"))
+        product = DatasetProduct(
+            DatasetKey(logical_key), str(raw.get("title") or logical_key), DatasetLayer.CANONICAL,
+            str(raw.get("description") or f"Massive US equity {view} daily OHLCV for {raw['ticker']}."),
+            {**{"asset_class": "equity", "region": "us", "provider": "massive", "frequency": "1d", "view": view},
+             **{str(key): str(value) for key, value in dict(raw.get("dimensions", {})).items()}},
+            str(raw.get("primary_time", "available_time")),
+            sources=(SourceBinding(
+                "massive", "us-securities", int(raw.get("priority", 100)),
+                QualityLevel(str(raw.get("source_quality_level", QualityLevel.RESEARCH.value))),
+                ("rest",),
+            ),),
+            owner=str(raw.get("owner", "data-platform")),
+            source_policy_version=str(raw.get("source_policy_version", "priority-v1")),
+        )
+        specs.append(DatasetProductSpec(
+            product,
+            str(raw.get("relative_path") or
+                f"canonical/market/ohlcv/asset_class=equity/region=us/provider=massive/interval=1d/view={view}"),
+            str(raw.get("schema_id", "market.ohlcv.equity.us.1d.v1")),
+            dict(raw.get("capabilities", {
+                "point_in_time_universe": False,
+                "supported_products": ["equity"],
+                "maximum_validation_level": 2,
+            })),
+            DatasetStorageKind(str(raw.get("storage_kind", DatasetStorageKind.TABULAR.value))),
+            str(raw.get("layout_version", "1")),
+            str(raw.get("quality_profile", "equity_ohlcv")),
+            QualityLevel(str(raw.get("minimum_publication_level", QualityLevel.RESEARCH.value))),
         ))
     return tuple(specs)
 
@@ -135,9 +192,46 @@ class _ConfiguredMassiveConnector:
         ).acquire(request)
 
 
-def _massive_products(path: str | Path) -> tuple[dict[str, object], ...]:
+class _ConfiguredMassiveEquityConnector:
+    provider = "massive"
+
+    def __init__(self, root, config) -> None:
+        self.root, self.config = root, config
+
+    def supports(self, logical_key: str) -> bool:
+        return logical_key == self.config.logical_key
+
+    def estimate(self, request):
+        from trading.data.acquisition import AcquisitionEstimate
+        days = sum(max(1, (item.end.date() - item.start.date()).days + 1) for item in request.missing)
+        return AcquisitionEstimate(days, cost_class="entitled-rest-bounded-ticker")
+
+    def acquire(self, request):
+        if not os.environ.get("MASSIVE_API_KEY"):
+            raise RuntimeError("MASSIVE_API_KEY is required to acquire this planned Massive dataset")
+        from trading.adapters.massive.client import MassiveClient
+        from trading.adapters.massive.config import MassiveConfig
+        from trading.adapters.massive.datasets import MassiveEquityDayAggDatasetConnector
+        return MassiveEquityDayAggDatasetConnector(
+            self.root, MassiveClient(MassiveConfig.from_env()), self.config,
+        ).acquire(request)
+
+
+def _massive_option_products(path: str | Path) -> tuple[dict[str, object], ...]:
     value = json.loads(Path(path).read_text(encoding="utf-8"))
     products = value.get("massive_option_products") if isinstance(value, dict) else None
-    if not isinstance(products, list) or not products:
-        raise ValueError("connector config requires a non-empty massive_option_products list")
+    if products is None:
+        return ()
+    if not isinstance(products, list):
+        raise ValueError("connector config massive_option_products must be a list")
+    return tuple(dict(item) for item in products)
+
+
+def _massive_equity_products(path: str | Path) -> tuple[dict[str, object], ...]:
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    products = value.get("massive_equity_products") if isinstance(value, dict) else None
+    if products is None:
+        return ()
+    if not isinstance(products, list):
+        raise ValueError("connector config massive_equity_products must be a list")
     return tuple(dict(item) for item in products)

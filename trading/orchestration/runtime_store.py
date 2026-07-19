@@ -39,6 +39,15 @@ class ManualOrderResolution:
     resolved_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class DurableExecutionRecord:
+    external_key: str
+    execution: TradeExecution
+    client_order_id: str
+    occurred_at: datetime
+    order: DurableOrderRecord
+
+
 class SQLiteRuntimeStore:
     """Transactional local state for one trading runtime.
 
@@ -387,6 +396,21 @@ class SQLiteRuntimeStore:
             request = from_primitive(json.loads(row["request_json"]), request_type)
             book.apply(request.strategy_id, execution.instrument_id, execution.quantity * execution.side.sign)
         return book
+
+    def execution_records(self) -> tuple[DurableExecutionRecord, ...]:
+        with self.transaction() as connection:
+            rows = connection.execute(
+                """SELECT e.external_key, e.execution_json, e.client_order_id, e.occurred_at, o.*
+                   FROM execution_events e JOIN orders o ON o.client_order_id = e.client_order_id
+                   ORDER BY e.occurred_at, e.external_key""",
+            ).fetchall()
+        return tuple(DurableExecutionRecord(
+            row["external_key"],
+            from_primitive(json.loads(row["execution_json"]), TradeExecution),
+            row["client_order_id"],
+            datetime.fromisoformat(row["occurred_at"]),
+            _order_record(row),
+        ) for row in rows)
 
     def resolve_unresolved_order(
         self, client_order_id: str, target: DurableOrderStatus, at: datetime, *,

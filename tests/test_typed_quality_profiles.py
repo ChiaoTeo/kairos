@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -9,7 +11,7 @@ from trading.data import (
     DataCatalog, DatasetKey, DatasetLayer, DatasetProduct, DatasetProductSpec, DatasetQualityService,
     DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel,
 )
-from trading.storage.data_lake import write_daily_dataset
+from trading.storage.data_lake import write_daily_dataset, write_json
 
 
 NOW = datetime(2026, 1, 2, tzinfo=timezone.utc)
@@ -116,6 +118,123 @@ class TypedQualityProfileTests(unittest.TestCase):
         self.assertTrue(self._assess("reference", row).passed)
         invalid = self._assess("reference", {**row, "effective_to": (NOW - timedelta(days=1)).isoformat()})
         self.assertFalse(next(item for item in invalid.checks if item.name == "valid_effective_range").passed)
+
+    def test_corporate_action_profile_validates_split_and_dividend_events(self) -> None:
+        events = [
+            {
+                "ticker": "NVDA",
+                "instrument_id": "equity:us:NVDA",
+                "effective_at": {"$datetime": NOW.isoformat()},
+                "ratio": {"$decimal": "2"},
+            },
+            {
+                "ticker": "NVDA",
+                "instrument_id": "equity:us:NVDA",
+                "ex_date": {"$datetime": NOW.isoformat()},
+                "amount_per_share": {"$decimal": "1"},
+            },
+        ]
+        assessment = self._assess_corporate_actions(events)
+        self.assertTrue(assessment.passed)
+        self.assertTrue(next(item for item in assessment.checks if item.name == "source_receipts").passed)
+
+        invalid = self._assess_corporate_actions([{**events[0], "ratio": {"$decimal": "0"}}])
+        self.assertFalse(invalid.passed)
+        self.assertFalse(next(item for item in invalid.checks if item.name == "positive_split_ratios").passed)
+
+    def test_equity_identity_profile_requires_clean_mappings(self) -> None:
+        assessment = self._assess_equity_identity(quarantine=[])
+        self.assertTrue(assessment.passed)
+        self.assertTrue(next(item for item in assessment.checks if item.name == "identity_quarantine_clear").passed)
+
+        invalid = self._assess_equity_identity(quarantine=[{"reason": "ticker_event_unmapped_symbol"}])
+        self.assertFalse(invalid.passed)
+        self.assertFalse(next(item for item in invalid.checks if item.name == "identity_quarantine_clear").passed)
+
+    def _assess_equity_identity(self, quarantine: list[dict[str, object]]):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        relative = "reference/provider=massive/equity_identity/version=fixture"
+        directory = root / relative
+        payload = {
+            "mappings": [{
+                "provider_id": "massive",
+                "namespace": "stocks",
+                "external_id": "NVDA",
+                "target_type": "instrument",
+                "target_id": "equity:us:NVDA",
+                "effective_from": NOW.isoformat(),
+                "effective_to": None,
+            }],
+            "instruments": [{"instrument_id": "equity:us:NVDA", "listing_date": "1999-01-22"}],
+            "quarantine": quarantine,
+        }
+        digest = sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        write_json(directory / "mappings.json", payload["mappings"])
+        write_json(directory / "instruments.json", payload["instruments"])
+        write_json(directory / "quarantine.json", payload["quarantine"])
+        write_json(directory / "manifest.json", {"sha256": digest, "mapping_count": 1, "instrument_count": 1, "quarantine_count": len(quarantine)})
+        product = DatasetProduct(
+            DatasetKey("reference.identity.fixture"),
+            "Equity identity fixture",
+            DatasetLayer.REFERENCE,
+            "Governed identity quality fixture",
+            {"profile": "equity_identity"},
+            primary_time="effective_from",
+            owner="test",
+        )
+        release = DatasetRelease(
+            "identity-release", product.key, "1", "reference.identity.v1", "1",
+            "fixture", "1", relative, "json", digest, "fixture", None, (),
+            DatasetStatus.APPROVED_FOR_RESEARCH, QualityLevel.RESEARCH,
+            storage_kind=DatasetStorageKind.REFERENCE,
+        )
+        catalog = DataCatalog(root)
+        catalog.register_product_spec(DatasetProductSpec(
+            product, "reference/provider=massive/equity_identity", release.schema_id, {},
+            DatasetStorageKind.REFERENCE, "1", "equity_identity", QualityLevel.RESEARCH,
+        ))
+        catalog.register_release(release)
+        catalog.save()
+        return DatasetQualityService(root).assess(release.release_id)
+
+    def _assess_corporate_actions(self, events: list[dict[str, object]]):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        relative = "reference/provider=massive/corporate_actions/scope=test/version=fixture"
+        directory = root / relative
+        digest = sha256(json.dumps(events, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        write_json(directory / "events.json", events)
+        write_json(directory / "manifest.json", {
+            "sha256": digest,
+            "event_count": len(events),
+            "source_receipts": ["source/provider=massive/fake/receipt.json"],
+        })
+        product = DatasetProduct(
+            DatasetKey("reference.corporate_actions.fixture"),
+            "Corporate action fixture",
+            DatasetLayer.SOURCE,
+            "Governed corporate action quality fixture",
+            {"profile": "corporate_action"},
+            primary_time="effective_at",
+            owner="test",
+        )
+        release = DatasetRelease(
+            "corporate-action-release", product.key, "1", "reference.corporate_actions.v1", "1",
+            "fixture", "1", relative, "json", digest, "fixture", None, (),
+            DatasetStatus.APPROVED_FOR_RESEARCH, QualityLevel.RESEARCH,
+            storage_kind=DatasetStorageKind.REFERENCE,
+        )
+        catalog = DataCatalog(root)
+        catalog.register_product_spec(DatasetProductSpec(
+            product, "reference/provider=massive/corporate_actions", release.schema_id, {},
+            DatasetStorageKind.REFERENCE, "1", "corporate_action", QualityLevel.RESEARCH,
+        ))
+        catalog.register_release(release)
+        catalog.save()
+        return DatasetQualityService(root).assess(release.release_id)
 
 
 if __name__ == "__main__":

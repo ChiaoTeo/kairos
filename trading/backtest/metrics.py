@@ -10,7 +10,7 @@ from trading.backtest.portfolio import PortfolioSnapshot
 from trading.reference import ReferenceCatalog
 from trading.reference.access import contract_spec, definition_at
 from trading.domain.order import Fill, Order, OrderStatus, Settlement
-from trading.domain.product import CryptoOptionSpec,ListedOptionSpec
+from trading.domain.product import is_option_spec, option_multiplier
 
 from .result import EquityPoint
 from .feed import MarketSlice
@@ -159,7 +159,7 @@ def _trade_groups(fills, settlements, completed_ids, market_slices, catalog):
             continue
         definition = definition_at(catalog, fill.legs[0].instrument_id, fill.timestamp) if catalog else None
         spec = contract_spec(definition) if definition else None
-        expiry = spec.expiry.date() if isinstance(spec,(ListedOptionSpec,CryptoOptionSpec)) else None
+        expiry = spec.expiry.date() if is_option_spec(spec) else None
         dte = str((expiry - fill.timestamp.date()).days) if expiry else "unknown"
         dte_groups[dte] += pnl
         hour_groups[fill.timestamp.strftime("%H:00")] += pnl
@@ -179,4 +179,4 @@ def _multiplier(catalog, instrument_id, at):
         return Decimal("1")
     definition = definition_at(catalog, instrument_id, at)
     spec = contract_spec(definition)
-    return getattr(spec, "multiplier", getattr(spec, "contract_size", Decimal("1")))
+    return option_multiplier(spec) if is_option_spec(spec) else getattr(spec, "contract_size", Decimal("1"))

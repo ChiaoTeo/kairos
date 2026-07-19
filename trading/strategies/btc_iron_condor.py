@@ -9,7 +9,7 @@ from trading.backtest.execution import combo_quote
 from trading.domain.execution import TradeSide
 from trading.domain.intent import CloseStructureIntent, LegIntent, OpenStructureIntent
 from trading.domain.order import Fill, TimeInForce
-from trading.domain.product import CryptoOptionSpec, ListedOptionSpec, OptionRight, ProductType
+from trading.domain.product import OptionRight, ProductType, is_option_spec
 from trading.reference.access import contract_spec, definition_at
 from trading.strategies.base import StrategyContext, StrategyDecision
 from trading.domain.strategy_contract import StrategyLifecycle, StrategySpec
@@ -32,6 +32,7 @@ class BtcIronCondorConfig:
     minimum_credit: Decimal = Decimal("0")
     risk_budget_fraction: Decimal = Decimal("0.02")
     execution_policy_id: str = "taker-combo-v1"
+    signal_factor_id:str="option-fear-cooling"
 
     def __post_init__(self) -> None:
         if self.target_dte_days < 1 or self.dte_tolerance_days < 0 or self.holding_days < 1 or self.quantity < 1:
@@ -56,11 +57,11 @@ class BtcIronCondorStrategy:
     @property
     def strategy_spec(self) -> StrategySpec:
         c=self.config
-        return StrategySpec(self.strategy_id,"1.1.0",StrategyLifecycle.DRAFT,
+        return StrategySpec(self.strategy_id,"1.2.0",StrategyLifecycle.DRAFT,
             (ProductType.CRYPTO_OPTION,), ("short_volatility","short_gamma","skew"),
             ("variance_risk_premium","skew_mean_reversion"),("gamma","vega","jump","liquidity"),
             (("underlying","BTC"),("target_dte_days",c.target_dte_days),("dte_tolerance_days",c.dte_tolerance_days)),
-            ("put_skew","iv_percentile","average_iv_change"),
+            (c.signal_factor_id,),
             (("minimum_put_skew",str(c.minimum_put_skew)),("minimum_iv_percentile",str(c.minimum_iv_percentile)),("require_iv_cooling",c.require_iv_cooling)),
             (("structure","iron_condor"),("short_put_delta",str(c.short_put_delta)),("long_put_delta",str(c.long_put_delta)),
              ("short_call_delta",str(c.short_call_delta)),("long_call_delta",str(c.long_call_delta))),
@@ -81,16 +82,22 @@ class BtcIronCondorStrategy:
         return self._open(context)
 
     def _signal_ready(self, context):
-        f=context.features;c=self.config
-        return bool(f and f.put_skew is not None and f.put_skew>=c.minimum_put_skew
-            and f.iv_percentile is not None and f.iv_percentile>=c.minimum_iv_percentile
-            and (not c.require_iv_cooling or f.average_iv_change is not None and f.average_iv_change<=0))
+        c=self.config
+        try:
+            factor=context.factor(c.signal_factor_id)
+            put_skew=factor.get("put_skew");iv_percentile=factor.get("iv_percentile");average_iv_change=factor.get("average_iv_change")
+        except LookupError:
+            f=context.features
+            put_skew=getattr(f,"put_skew",None);iv_percentile=getattr(f,"iv_percentile",None);average_iv_change=getattr(f,"average_iv_change",None)
+        return bool(put_skew is not None and put_skew>=c.minimum_put_skew
+            and iv_percentile is not None and iv_percentile>=c.minimum_iv_percentile
+            and (not c.require_iv_cooling or average_iv_change is not None and average_iv_change<=0))
 
     def _open(self,context):
         candidates=[]
         for item in context.market.instruments:
             definition=definition_at(context.catalog,item.instrument_id,context.now);option=contract_spec(definition)
-            if not isinstance(option,(ListedOptionSpec,CryptoOptionSpec)): continue
+            if not is_option_spec(option): continue
             dte=(option.expiry.date()-context.now.date()).days
             delta=self._delta(context,item)
             if abs(dte-self.config.target_dte_days)<=self.config.dte_tolerance_days and delta is not None:

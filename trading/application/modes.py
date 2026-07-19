@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+from typing import Callable
 
 from trading.data.models import RunMode
 from trading.market_data.subscriptions import CapturePolicy
@@ -49,6 +50,36 @@ class RunModeComposition:
             "safety_policy": self.safety_policy,
             "capture_policy": self.capture_policy.value,
         }
+
+    def bind(self,*,event_source:object,clock:object,execution_driver:object,persistence:object,
+             safety_policy:object,runner:Callable[[],object])->"ExecutableRunComposition":
+        return ExecutableRunComposition(self,(
+            ComponentBinding(self.event_source,event_source),ComponentBinding(self.clock,clock),
+            ComponentBinding(self.execution_driver,execution_driver),ComponentBinding(self.persistence,persistence),
+            ComponentBinding(self.safety_policy,safety_policy)),runner)
+
+
+@dataclass(frozen=True,slots=True)
+class ComponentBinding:
+    component_id:str
+    instance:object
+    def __post_init__(self):
+        if not self.component_id.strip() or self.instance is None:raise ValueError("run component binding requires id and instance")
+
+
+@dataclass(frozen=True,slots=True)
+class ExecutableRunComposition:
+    declaration:RunModeComposition
+    bindings:tuple[ComponentBinding,...]
+    runner:Callable[[],object]
+    def __post_init__(self):
+        expected={self.declaration.event_source,self.declaration.clock,self.declaration.execution_driver,
+            self.declaration.persistence,self.declaration.safety_policy};actual={item.component_id for item in self.bindings}
+        if actual!=expected:raise ValueError(f"run composition bindings differ: missing={expected-actual}, extra={actual-expected}")
+        if not callable(self.runner):raise ValueError("executable run composition requires runner")
+    def run(self):return self.runner()
+    @property
+    def composition_hash(self):return self.declaration.composition_hash
 
 
 def research_composition() -> RunModeComposition:

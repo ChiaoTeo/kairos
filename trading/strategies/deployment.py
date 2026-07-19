@@ -22,7 +22,10 @@ class StrategyDeploymentGate:
         directory=self.root/strategy_id
         versions=sorted((path for path in directory.iterdir() if path.is_dir() and (path/"strategy_spec.json").exists()),reverse=True) if directory.exists() else []
         if not versions:return DeploymentDecision(False,None,"strategy is not registered",None)
-        selected=versions[0];payload=json.loads((selected/"strategy_spec.json").read_text(encoding="utf-8"));lifecycle=StrategyLifecycle(payload["lifecycle"])
+        active=directory/"active.json"
+        selected=directory/json.loads(active.read_text(encoding="utf-8"))["version"] if active.exists() else versions[0]
+        if selected not in versions:return DeploymentDecision(False,None,"active strategy version is missing",selected)
+        payload=json.loads((selected/"strategy_spec.json").read_text(encoding="utf-8"));lifecycle=StrategyLifecycle(payload["lifecycle"])
         if simulated_venue:return DeploymentDecision(True,lifecycle,"simulation permits registered draft mechanics",selected)
         if lifecycle in (StrategyLifecycle.SUSPENDED,StrategyLifecycle.RETIRED):return DeploymentDecision(False,lifecycle,"strategy is suspended or retired",selected)
         if environment is Environment.LIVE:

@@ -24,6 +24,8 @@ from trading.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCata
 from tests.reference_support import publish_test_instrument
 from trading.strategies.specs import register_builtin_strategies
 from trading.__main__ import main
+from trading.domain.strategy_contract import StrategyLifecycle
+from trading.strategies.promotion import evaluate_promotion_artifacts
 from trading.domain.ledger import Ledger
 from trading.execution.recovery import OrderRecoveryReport
 from trading.orchestration.kill_switch import KillSwitch
@@ -122,7 +124,11 @@ class RuntimeSupervisorTests(unittest.TestCase):
                 restart_drill_passed=True, kill_switch_drill_passed=True,
             )
             self.assertTrue(payload["passed"])
+            self.assertEqual(payload["kind"], "runtime_l4_soak")
             self.assertEqual(len(payload["audit_hash"]), 64)
+            artifact_payload = json.loads((Path(directory) / "soak.json").read_text(encoding="utf-8"))
+            self.assertEqual(artifact_payload["kind"], "runtime_l4_soak")
+            self.assertTrue(evaluate_promotion_artifacts(StrategyLifecycle.LIVE_LIMITED, (artifact_payload,)).passed)
             failed = write_soak_artifact(
                 supervisor, Path(directory) / "short-soak.json",
                 started_at=NOW, ended_at=NOW + timedelta(hours=1),
@@ -164,16 +170,24 @@ class RuntimeSupervisorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
             "os.environ", {"BINANCE_TESTNET_API_KEY": "", "BINANCE_TESTNET_API_SECRET": ""}, clear=False,
         ):
+            artifact = Path(directory) / "preflight.json"
             output = StringIO()
             with redirect_stdout(output):
                 code = main([
                     "--lake-root", directory, "--catalog-path", str(Path(directory) / "missing.json"),
                     "runtime", "l4-preflight", "--venue", "binance", "--environment", "testnet",
                     "--strategy", "spot-perp-carry", "--instrument", "missing",
+                    "--evidence-artifact", str(artifact),
                 ])
             payload = json.loads(output.getvalue())
+            evidence = json.loads(artifact.read_text(encoding="utf-8"))
             self.assertEqual(code, 2)
+            self.assertEqual(payload["kind"], "runtime_l4_preflight")
             self.assertFalse(payload["ready"])
+            self.assertEqual(payload["artifact"], str(artifact))
+            self.assertEqual(evidence["kind"], "runtime_l4_preflight")
+            self.assertEqual(evidence["ready"], payload["ready"])
+            self.assertEqual(len(evidence["audit_hash"]), 64)
             self.assertFalse(payload["checks"]["external_connection_ready"])
             self.assertFalse(payload["checks"]["strategy_paper_approved"])
 

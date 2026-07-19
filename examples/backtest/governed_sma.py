@@ -14,6 +14,7 @@ from hashlib import sha256
 import json
 
 from trading.contracts import canonicalize_market_event
+from trading.application import GovernedStrategyRunLoop, run_target_backtest
 from trading.data import OutputFormat, ResearchDataClient, RunMode
 from trading.domain.identity import InstrumentId
 from trading.domain.market_data import Bar
@@ -22,6 +23,9 @@ from trading.storage.codec import to_primitive
 from trading.strategies.sma_cross import (
     BarSeries, SmaCrossConfig, backtest_sma_cross, backtest_sma_cross_events,
 )
+from trading.features import SmaFactorConfig, SmaFactorRuntime
+from trading.strategies import GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext
+from trading.strategies.specs import sma_strategy_spec
 
 
 def fixture_bars() -> tuple[Bar, ...]:
@@ -77,11 +81,47 @@ async def run(args) -> dict[str, object]:
     if batch != replay:
         raise RuntimeError("batch and canonical replay results diverged")
     material = json.dumps(to_primitive(batch), sort_keys=True, separators=(",", ":"))
+    strategy_spec, policy = sma_strategy_spec(config)
+    governed = await GovernedStrategyRunLoop(
+        IterableEventSource(tuple(canonical_events(bars))),
+        SmaFactorRuntime(
+            SmaFactorConfig(args.fast, args.slow), input_identity=dataset_id,
+        ),
+        GovernedStrategyRuntime(
+            SmaCrossStrategy(SmaCrossStrategyConfig(bars[0].instrument_id)), strategy_spec,
+            execution_policy_id=policy.policy_id,
+        ),
+        lambda market: StrategyContext(market, object(), (), object()),
+        approved_capital=config.initial_cash,
+    ).run()
+    immediate = await run_target_backtest(
+        source=IterableEventSource(tuple(canonical_events(bars))),
+        factor_runtime=SmaFactorRuntime(
+            SmaFactorConfig(args.fast, args.slow), input_identity=dataset_id,
+        ),
+        strategy_runtime=GovernedStrategyRuntime(
+            SmaCrossStrategy(SmaCrossStrategyConfig(bars[0].instrument_id)), strategy_spec,
+            execution_policy_id=policy.policy_id,
+        ),
+        instrument_id=bars[0].instrument_id, catalog=object(),
+        initial_cash=config.initial_cash, fee_bps=config.fee_bps,
+    )
     return {
         "dataset_id": dataset_id, "bars": len(bars), "trades": len(batch.trades),
         "final_equity": str(batch.metrics["final_equity"]),
         "batch_equals_canonical_replay": True,
         "audit_hash": sha256(material.encode()).hexdigest(),
+        "factor_snapshots": len(governed.factor_snapshots),
+        "economic_intents": len(governed.economic_intents),
+        "factor_hash": governed.factor_hash,
+        "decision_hash": governed.decision_hash,
+        "intent_hash": governed.intent_hash,
+        "strategy_run_audit_hash": governed.audit_hash,
+        "immediate_intent_trades": len(immediate.trades),
+        "immediate_final_equity": str(immediate.final_portfolio.equity),
+        "all_current_intents_satisfied": all(
+            item.status.value == "satisfied" for item in immediate.intent_executions
+        ),
     }
 
 

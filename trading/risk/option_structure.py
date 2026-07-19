@@ -2,14 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from trading.domain.product import CryptoOptionSpec,ListedOptionSpec,OptionRight
-
-
-OptionSpec=ListedOptionSpec|CryptoOptionSpec
-
-
-def option_multiplier(spec: OptionSpec) -> Decimal:
-    return spec.multiplier if isinstance(spec,ListedOptionSpec) else spec.contract_size
+from trading.domain.product import OptionRight, OptionSpec, option_multiplier
 
 
 def maximum_expiry_loss(legs: tuple[tuple[OptionSpec,int],...],entry_credit: Decimal,quantity: int=1) -> Decimal:

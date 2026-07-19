@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from trading.domain.execution import TradeSide
 from trading.domain.intent import CloseStructureIntent, Intent
 from trading.domain.order import Order, OrderStatus
-from trading.domain.product import CryptoOptionSpec,ListedOptionSpec
+from trading.domain.product import is_option_spec
 from trading.reference import ReferenceCatalog
 from trading.reference.access import contract_spec, definition_at
 
@@ -56,7 +56,7 @@ class ExecutionPlanner:
 
     def plan(self, intent: Intent, now: datetime) -> Order:
         definitions = tuple(definition_at(self.catalog, leg.instrument_id, now) for leg in intent.legs)
-        if not all(isinstance(contract_spec(item), (ListedOptionSpec,CryptoOptionSpec)) for item in definitions):
+        if not all(is_option_spec(contract_spec(item)) for item in definitions):
             raise ValueError("combo planner requires option legs")
         if len({contract_spec(item).expiry for item in definitions}) != 1:
             raise ValueError("combo legs must share expiry")

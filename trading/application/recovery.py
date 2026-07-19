@@ -13,7 +13,7 @@ from trading.reference import ReferenceCatalog
 from trading.reference.access import contract_spec, definition_at
 from trading.domain.identity import AccountKey, AssetId, InstrumentId
 from trading.domain.ledger import Ledger
-from trading.domain.product import CryptoOptionSpec, FutureSpec, ListedOptionSpec
+from trading.domain.product import FutureSpec, is_option_spec
 from trading.orchestration.reconciliation import ReconciliationReport, ReconciliationService
 from trading.orchestration.runtime_store import SQLiteRuntimeStore
 from trading.risk.view import UnifiedRiskView, build_risk_view
@@ -100,7 +100,7 @@ class RuntimeRecoveryService:
         for position in portfolio.positions:
             definition = definition_at(self.catalog, position.instrument_id, at)
             spec = contract_spec(definition)
-            expiry = spec.expiry if isinstance(spec, (ListedOptionSpec, CryptoOptionSpec, FutureSpec)) else None
+            expiry = spec.expiry if is_option_spec(spec) or isinstance(spec, FutureSpec) else None
             if expiry is not None and at >= expiry and position.quantity:
                 expired_positions.append(position.instrument_id.value)
         if expired_positions:

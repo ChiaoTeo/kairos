@@ -13,6 +13,7 @@ from trading.domain.execution import TradeSide
 from trading.domain.identity import InstrumentId
 from trading.domain.market_data import Bar, OrderBookSnapshot, Quote, TradingState, TradingStatus
 from trading.domain.order import Fill, LegFill, Order, OrderStatus, TimeInForce
+from trading.domain.product import is_option_spec, option_multiplier
 
 from .execution import combo_quote
 from .feed import MarketSlice
@@ -120,7 +121,7 @@ class ListedOptionComboFillModel:
 
 def _multiplier(definition) -> Decimal:
     spec = contract_spec(definition)
-    return getattr(spec, "multiplier", getattr(spec, "contract_size", Decimal("1")))
+    return option_multiplier(spec) if is_option_spec(spec) else getattr(spec, "contract_size", Decimal("1"))
 
 
 @dataclass(frozen=True, slots=True)

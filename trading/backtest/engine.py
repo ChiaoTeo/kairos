@@ -12,6 +12,7 @@ from trading.domain.execution import TradeSide
 from trading.domain.identity import AccountKey, AccountType, AssetId, VenueId
 from trading.domain.intent import CloseStructureIntent, LegIntent
 from trading.domain.order import Fill, Order, OrderStatus, TimeInForce
+from trading.domain.product import is_option_spec, option_multiplier
 from trading.pricing.service import ValuationService
 from trading.research.features import FeatureEngine, build_features
 from trading.risk.engine import RiskDecisionType, RiskEngine
@@ -43,12 +44,13 @@ class DeterministicIds:
 
 class BacktestEngine:
     def __init__(self, dataset: HistoricalDataset | MarketSliceFeed, config: BacktestConfig, strategy: Strategy,
-                 risk_limits: RiskLimits = RiskLimits()) -> None:
+                 risk_limits: RiskLimits = RiskLimits(), *, factor_runtimes: tuple[object, ...] = ()) -> None:
         self.feed = dataset if isinstance(dataset, HistoricalFeed) or hasattr(dataset, "between") else HistoricalFeed(dataset)
         self.dataset = dataset.dataset if hasattr(dataset, "dataset") else dataset
         self.config = config
         self.strategy = strategy
         self.risk_limits = risk_limits
+        self.factor_runtimes = factor_runtimes
 
     def run(self) -> BacktestResult:
         self._validate_inputs()
@@ -57,6 +59,8 @@ class BacktestEngine:
             "dataset_hash": self.dataset.manifest.content_hash,
             "split": self.dataset.manifest.split,
             "strategy": self.strategy.strategy_id,
+            "strategy_config": to_primitive(getattr(self.strategy, "config", None)),
+            "factor_specs": [runtime.spec.spec_hash for runtime in self.factor_runtimes],
             "config": to_primitive(self.config),
         }, sort_keys=True)
         run_id = uuid5(NAMESPACE_URL, run_material)
@@ -81,10 +85,15 @@ class BacktestEngine:
         scenario_pnls = []
         valuation_total = valuation_success = surface_total = surface_calibrated = surface_arbitrage_passed = 0
         vendor_internal_delta_errors = []
+        latest_factor_snapshots = ()
         for market in self.feed.between(self.config.start, self.config.end):
             clock.advance(market.timestamp)
             market, valuation = valuation_service.value(market)
             features = feature_engine.update(valuation)
+            latest_factor_snapshots = tuple(
+                snapshot for runtime in self.factor_runtimes
+                if (snapshot := runtime.update_market(market, valuation)) is not None
+            )
             valuation_total += len(valuation.instruments)
             valuation_success += sum(item.pricing is not None for item in valuation.instruments)
             if valuation.surface is not None:
@@ -115,7 +124,7 @@ class BacktestEngine:
             reduce_only = bool(post_trade)
             context = StrategyContext(
                 market, snapshot, tuple(order for order in orders.values() if not order.status.terminal), catalog,
-                valuation, valuation.surface, features,
+                valuation, valuation.surface, features, factor_snapshots=latest_factor_snapshots,
             )
             generated = []
             if not started:
@@ -151,6 +160,7 @@ class BacktestEngine:
         end_context = StrategyContext(
             last_market, portfolio.snapshot(last_market), tuple(order for order in orders.values() if not order.status.terminal), catalog,
             end_valuation, end_valuation.surface, build_features(end_valuation),
+            factor_snapshots=latest_factor_snapshots,
         )
         for intent in self.strategy.on_end(end_context):
             intents.append(intent)
@@ -264,7 +274,7 @@ class BacktestEngine:
             for leg in fill.legs:
                 definition = definition_at(catalog, leg.instrument_id, fill.timestamp)
                 spec = contract_spec(definition)
-                multiplier = getattr(spec, "multiplier", getattr(spec, "contract_size", Decimal("1")))
+                multiplier = option_multiplier(spec) if is_option_spec(spec) else getattr(spec, "contract_size", Decimal("1"))
                 signed_quantity = leg.side.sign * leg.ratio * fill.quantity
                 cash -= Decimal(signed_quantity) * leg.price * multiplier
             cash -= fill.commission
@@ -283,7 +293,7 @@ class BacktestEngine:
                 continue
             definition = definition_at(catalog, instrument_id, at)
             spec = contract_spec(definition)
-            multiplier = getattr(spec, "multiplier", getattr(spec, "contract_size", Decimal("1")))
+            multiplier = option_multiplier(spec) if is_option_spec(spec) else getattr(spec, "contract_size", Decimal("1"))
             structure_id = next((str(structure.structure_id) for structure in portfolio.structures.values() if any(leg_id == instrument_id for leg_id, _ in structure.legs)), None)
             positions.append(RevaluationPosition(
                 instrument_id, position.quantity, multiplier, item.inputs, item.model,

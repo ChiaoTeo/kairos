@@ -112,6 +112,7 @@ def write_intraday_dataset(root: Path, rows: list[dict[str, object]], *, dataset
         partitions.setdefault((timestamp.year, timestamp.month), []).append(row)
     files = []
     for (year, month), values in sorted(partitions.items()):
+        values.sort(key=lambda row: (str(row.get("period_start", "")), str(row.get("instrument_id", ""))))
         path = _write_partition(root / f"event_year={year:04d}" / f"event_month={month:02d}" / "part-00000", values)
         content = path.read_bytes()
         files.append({"path": path.relative_to(root).as_posix(), "rows": len(values), "bytes": len(content), "sha256": sha256_bytes(content)})

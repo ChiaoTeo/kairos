@@ -10,10 +10,10 @@ from trading.domain.execution import TradeExecution, TradeSide
 from trading.domain.identity import AccountKey, AssetId, InstrumentId
 from trading.domain.ledger import Ledger, LedgerBook
 from trading.domain.order import Fill, Settlement
-from trading.domain.product import CryptoOptionSpec,ListedOptionSpec
+from trading.domain.product import is_option_spec, option_multiplier
 from trading.reference import ReferenceCatalog
 from trading.reference.access import contract_spec, definition_at, trade_cash_asset
-from trading.risk.option_structure import maximum_expiry_loss,option_multiplier
+from trading.risk.option_structure import maximum_expiry_loss
 
 ZERO = Decimal("0")
 
@@ -244,7 +244,7 @@ class BacktestPortfolio:
         options = []
         for instrument_id, sign in structure.legs:
             definition = definition_at(self.catalog, instrument_id, at)
-            if isinstance(contract_spec(definition),(ListedOptionSpec,CryptoOptionSpec)):
+            if is_option_spec(contract_spec(definition)):
                 options.append((contract_spec(definition),sign))
         if options:
             return maximum_expiry_loss(tuple(options),structure.entry_net_price,structure.quantity)
@@ -252,4 +252,4 @@ class BacktestPortfolio:
 
 
 def _multiplier(spec) -> Decimal:
-    return option_multiplier(spec) if isinstance(spec,(ListedOptionSpec,CryptoOptionSpec)) else getattr(spec,"contract_size",Decimal("1"))
+    return option_multiplier(spec) if is_option_spec(spec) else getattr(spec,"contract_size",Decimal("1"))

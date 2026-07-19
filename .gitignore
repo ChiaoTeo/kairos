@@ -6,3 +6,5 @@ __pycache__/
 /data
 /example-output/
 .ipynb_checkpoints/
+.venv
+.pytest_cache/

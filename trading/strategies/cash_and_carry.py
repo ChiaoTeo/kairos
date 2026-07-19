@@ -6,6 +6,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from trading.domain.identity import InstrumentId
 from trading.domain.intent import CashAndCarryIntent
+from trading.strategies.base import StrategyContext,StrategyDecision
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +21,22 @@ class CashAndCarryStrategy:
 
     def __init__(self, spot_id: InstrumentId, perpetual_id: InstrumentId, config: CashAndCarryConfig = CashAndCarryConfig()) -> None:
         self.spot_id, self.perpetual_id, self.config = spot_id, perpetual_id, config
+        self._decisions=[]
+
+    @property
+    def decisions(self):return tuple(self._decisions)
+    def on_start(self,context):return ()
+    def on_market(self,context:StrategyContext):
+        spot=_price(context,self.spot_id);perpetual=_price(context,self.perpetual_id)
+        if spot is None or perpetual is None:
+            self._decisions.append(StrategyDecision(context.now.isoformat(),"skip","missing two-sided prices",(self.spot_id.value,self.perpetual_id.value)))
+            return ()
+        intent=self.intent(spot,perpetual,_position(context,self.spot_id),_position(context,self.perpetual_id))
+        self._decisions.append(StrategyDecision(context.now.isoformat(),"intent" if intent else "hold",
+            f"spot={spot},perpetual={perpetual}",(self.spot_id.value,self.perpetual_id.value)))
+        return (intent,) if intent else ()
+    def on_fill(self,fill,context):return ()
+    def on_end(self,context):return ()
 
     def intent(self, spot_price: Decimal, perpetual_price: Decimal, current_spot: Decimal, current_perpetual: Decimal):
         basis = perpetual_price / spot_price - 1
@@ -35,3 +52,14 @@ class CashAndCarryStrategy:
             self.spot_id, self.perpetual_id, spot_delta, perp_delta,
             f"basis={basis}",
         )
+
+
+def _position(context,instrument_id):
+    explicit=dict(context.strategy_positions).get(instrument_id)
+    if explicit is not None:return explicit
+    return next((item.quantity for item in getattr(context.portfolio,"positions",()) if item.instrument_id==instrument_id),Decimal("0"))
+def _price(context,instrument_id):
+    item=next((value for value in context.market.instruments if value.instrument_id==instrument_id),None)
+    quote=getattr(item,"quote",None)
+    if quote and quote.bid is not None and quote.ask is not None:return (quote.bid+quote.ask)/Decimal("2")
+    return dict(context.market.reference_prices).get(instrument_id)

@@ -7,9 +7,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from trading.domain.execution import DividendPayment, FundingPayment, TradeExecution
 from trading.domain.identity import AccountKey, AssetId
 from trading.domain.ledger import Ledger, LedgerBook, LedgerEntry, LedgerEntryType, LedgerTransaction
-from trading.domain.product import (
-    CryptoOptionSpec, CryptoSpotSpec, EquitySpec, ListedOptionSpec, ProductType,
-)
+from trading.domain.product import ProductType, is_option_spec, option_multiplier
 from trading.products.calculators import PositionCalculatorRegistry
 from trading.reference import ReferenceCatalog
 from trading.reference.access import contract_spec, definition_at, product_type, settlement_asset, trade_cash_asset
@@ -236,8 +234,6 @@ class LedgerService:
 
 
 def _premium_multiplier(spec) -> Decimal:
-    if isinstance(spec, ListedOptionSpec):
-        return spec.multiplier
-    if isinstance(spec, CryptoOptionSpec):
-        return spec.contract_size
+    if is_option_spec(spec):
+        return option_multiplier(spec)
     return Decimal("1")

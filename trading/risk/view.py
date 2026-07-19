@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from trading.accounting.portfolio import PortfolioSnapshot
 from trading.domain.identity import AccountKey, InstrumentId
+from trading.domain.product import is_option_spec, option_multiplier
 from trading.risk.margin import MarginResult
 from trading.reference import ReferenceCatalog, ReferenceRole
 
@@ -61,7 +62,7 @@ def build_risk_view(
         values = unit_greeks.get(position.instrument_id)
         if values:
             spec = definition.contract_spec
-            multiplier = getattr(spec, "multiplier", getattr(spec, "contract_size", Decimal("1")))
+            multiplier = option_multiplier(spec) if is_option_spec(spec) else getattr(spec, "contract_size", Decimal("1"))
             for index, amount in enumerate(values):
                 greek_totals[index] += position.quantity * multiplier * amount
         liquidation = liquidation_prices.get(position.instrument_id)

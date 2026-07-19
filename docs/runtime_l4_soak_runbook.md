@@ -11,6 +11,24 @@
 5. 凭证只通过环境变量或本地密钥管理器注入，不写入命令、配置或 Artifact。
 6. 账户资金和下单上限必须限制在专用测试账户允许的最小范围。
 
+`PAPER_APPROVED` 本身不能由本地 fixture 结果直接产生：promotion gate 要求非 fixture 的
+decision-OOS L5 稳健性证据，并额外提供 Paper/Testnet readiness evidence。完成本 Runbook 的
+passed soak artifact 之后，才可作为 `LIVE_LIMITED` / `LIVE_APPROVED` 晋级证据。
+
+readiness evidence 可由 preflight 直接写出：
+
+```bash
+trader runtime l4-preflight \
+  --venue binance --environment testnet \
+  --strategy sma-cross-v1 \
+  --instrument '<approved-instrument-id>' \
+  --evidence-artifact data/runtime/binance-testnet/preflight-readiness.json
+```
+
+该 artifact 会写入 `kind=runtime_l4_preflight`、检查项、原因和 `audit_hash`，可作为
+`strategy promote ... --to PAPER_APPROVED --evidence ...` 的 readiness evidence；`ready=false`
+的 artifact 只用于诊断，不能通过 promotion gate。
+
 ## 标准命令
 
 Binance Testnet 示例：
@@ -69,6 +87,10 @@ kill_switch_drill_passed
 ```
 
 任何 UNKNOWN Order、重复 Order、遗漏/重复 Ledger fact、未解释对账差异或 Critical Alert 都必须使验收失败。
+
+`--soak-artifact` 写出的 artifact 带 `kind=runtime_l4_soak`、acceptance 检查项和 `audit_hash`。
+只有 `passed=true` 且全部 acceptance 检查为 true 的外部 Paper/Testnet/Live artifact 才能作为
+`strategy promote ... --to LIVE_LIMITED` 或 `--to LIVE_APPROVED` 的 evidence。
 
 ## 当前环境检查（2026-07-17）
 

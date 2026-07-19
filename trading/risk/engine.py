@@ -13,7 +13,7 @@ from trading.reference import ReferenceCatalog
 from trading.reference.access import contract_spec, definition_at
 from trading.domain.execution import TradeSide
 from trading.domain.intent import Intent, OpenStructureIntent
-from trading.domain.product import CryptoOptionSpec,ListedOptionSpec
+from trading.domain.product import is_option_spec, option_multiplier
 from .option_structure import maximum_expiry_loss
 
 from .limits import RiskLimits
@@ -65,9 +65,9 @@ class RiskEngine:
                 return reject("open_structures", "maximum open structures reached")
             first = definition_at(self.catalog, intent.legs[0].instrument_id, market.timestamp)
             first_spec = contract_spec(first)
-            expiry = first_spec.expiry if isinstance(first_spec,(ListedOptionSpec,CryptoOptionSpec)) else None
+            expiry = first_spec.expiry if is_option_spec(first_spec) else None
             same_expiry = sum(any(
-                isinstance(contract_spec(definition_at(self.catalog, instrument_id, market.timestamp)),(ListedOptionSpec,CryptoOptionSpec))
+                is_option_spec(contract_spec(definition_at(self.catalog, instrument_id, market.timestamp)))
                 and contract_spec(definition_at(self.catalog, instrument_id, market.timestamp)).expiry == expiry
                 for instrument_id, _ in structure.legs
             ) for structure in portfolio.open_structures)
@@ -80,7 +80,7 @@ class RiskEngine:
             option_specs = [
                 contract_spec(definition) for leg in intent.legs
                 for definition in (definition_at(self.catalog, leg.instrument_id, market.timestamp),)
-                if isinstance(contract_spec(definition),(ListedOptionSpec,CryptoOptionSpec))
+                if is_option_spec(contract_spec(definition))
             ]
             if len(option_specs) >= 2:
                 credit = max(Decimal("0"), quote.natural)
@@ -102,7 +102,8 @@ class RiskEngine:
                 if item is None or item.greeks is None:
                     return reject("projected_greeks", "Greeks unavailable for projected risk")
                 definition = definition_at(self.catalog, leg.instrument_id, market.timestamp)
-                multiplier = getattr(contract_spec(definition), "multiplier", Decimal("1"))
+                spec = contract_spec(definition)
+                multiplier = option_multiplier(spec) if is_option_spec(spec) else Decimal("1")
                 signed_quantity = Decimal(leg.side.sign * leg.ratio * intent.quantity)
                 for name in projected:
                     value = getattr(item.greeks, name)

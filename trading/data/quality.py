@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from hashlib import sha256
 import json
@@ -42,8 +42,8 @@ class DatasetQualityService:
     def assess(self, dataset: str) -> QualityAssessment:
         release = self.catalog.release(dataset)
         profile = self._profile(release, [])
-        streaming = profile in {"trade", "market_event"} and self._has_parquet(release)
-        rows = [] if profile == "market_slice" or streaming else self.client.load_rows(release.release_id)
+        streaming = profile in {"ohlcv", "trade", "market_event"} and self._has_parquet(release)
+        rows = [] if profile in {"market_slice", "corporate_action", "equity_identity"} or streaming else self._load_rows_for_assessment(release)
         profiles = {
             "ohlcv": self._ohlcv,
             "quote": self._quote,
@@ -51,6 +51,12 @@ class DatasetQualityService:
             "market_event": self._market_event,
             "option_snapshot": self._option_snapshot,
             "feature": self._feature,
+            "equity_returns": self._equity_returns,
+            "equity_universe": self._equity_universe,
+            "equity_feature": self._equity_feature,
+            "equity_ohlcv": self._equity_ohlcv,
+            "corporate_action": self._corporate_action,
+            "equity_identity": self._equity_identity,
             "reference": self._reference,
             "generic": self._integrity,
             "integrity": self._integrity,
@@ -59,7 +65,12 @@ class DatasetQualityService:
             if profile == "market_slice":
                 checks = self._market_slice(release)
             elif streaming:
-                checks = self._streaming_trade(release) if profile == "trade" else self._streaming_market_event(release)
+                if profile == "ohlcv":
+                    checks = self._streaming_ohlcv(release)
+                elif profile == "trade":
+                    checks = self._streaming_trade(release)
+                else:
+                    checks = self._streaming_market_event(release)
             else:
                 checks = profiles[profile](rows, release)
         except KeyError as error:
@@ -69,8 +80,14 @@ class DatasetQualityService:
             level = QualityLevel.ARCHIVED
         elif profile == "market_slice":
             level = QualityLevel.BACKTEST
-        elif profile == "ohlcv" and len(rows) >= 365:
+        elif profile == "ohlcv" and (len(rows) >= 365 or _passed(checks, "backtest_history")):
             level = QualityLevel.BACKTEST
+        elif profile in {"equity_returns", "equity_universe", "equity_feature"} and passed:
+            level = QualityLevel.BACKTEST
+        elif profile == "corporate_action" and passed:
+            level = QualityLevel.RESEARCH
+        elif profile == "equity_identity" and passed:
+            level = QualityLevel.RESEARCH
         else:
             level = QualityLevel.RESEARCH
         primitive = {
@@ -85,6 +102,9 @@ class DatasetQualityService:
                 for item in checks
             ],
         }
+        existing_quality = _lineage(self.root / release.relative_path / "quality.json")
+        if isinstance(existing_quality.get("known_limitations"), list):
+            primitive["known_limitations"] = existing_quality["known_limitations"]
         report_hash = sha256(json.dumps(
             primitive, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
         ).encode()).hexdigest()
@@ -98,6 +118,18 @@ class DatasetQualityService:
 
     def _has_parquet(self, release: DatasetRelease) -> bool:
         return bool(self._parquet_paths(release))
+
+    def _load_rows_for_assessment(self, release: DatasetRelease) -> list[dict[str, object]]:
+        product = self.catalog.product(release.product_key)
+        table = ResearchDataClient._load_files(
+            self.root / release.relative_path,
+            start=None,
+            end=None,
+            instruments=None,
+            columns=None,
+            primary_time=product.primary_time,
+        )
+        return table.to_pylist()
 
     def _parquet_paths(self, release: DatasetRelease) -> list[Path]:
         directory = self.root / release.relative_path
@@ -139,6 +171,68 @@ class DatasetQualityService:
         base = list(self._integrity([], release))
         base[0] = QualityCheck("non_empty", row_count > 0, row_count, "> 0 rows")
         return base
+
+    def _streaming_ohlcv(self, release: DatasetRelease) -> tuple[QualityCheck, ...]:
+        connection, fields = self._streaming_view(release)
+        try:
+            physical_order = _physical_order(fields)
+            required = {
+                "instrument_id", "period_start", "period_end", "event_time", "available_time",
+                "open", "high", "low", "close", "volume",
+            }
+            required_ok = required <= fields
+            count = int(connection.execute("SELECT count(*) FROM quality_rows").fetchone()[0])
+            base = self._streaming_integrity(release, count)
+            base.append(QualityCheck("required_fields", required_ok, sorted(required - fields), "all OHLCV/time fields present"))
+            if not required_ok:
+                return tuple(base)
+            duplicates, invalid_ohlc, invalid_volume, invalid_time = connection.execute("""
+                SELECT
+                    count(*) - count(DISTINCT (instrument_id, period_start)),
+                    count(*) FILTER (
+                        WHERE low > least(open, close)
+                           OR high < greatest(open, close)
+                           OR low > high
+                           OR least(open, high, low, close) <= 0
+                    ),
+                    count(*) FILTER (WHERE volume < 0),
+                    count(*) FILTER (
+                        WHERE period_start >= period_end
+                           OR event_time < period_end
+                           OR available_time < event_time
+                    )
+                FROM quality_rows
+            """).fetchone()
+            unordered = int(connection.execute(f"""
+                SELECT count(*) FROM (
+                    SELECT period_start, instrument_id,
+                           lag(period_start) OVER physical AS previous_start,
+                           lag(instrument_id) OVER physical AS previous_instrument
+                    FROM quality_rows
+                    WINDOW physical AS (ORDER BY {physical_order})
+                )
+                WHERE previous_start IS NOT NULL
+                  AND (period_start, cast(instrument_id AS VARCHAR))
+                      < (previous_start, cast(previous_instrument AS VARCHAR))
+            """).fetchone()[0])
+            coverage = self.client.coverage(release.release_id).get("coverage", {})
+            coverage_body = coverage.get("coverage", {}) if isinstance(coverage, dict) else {}
+            ratio = Decimal(str(coverage_body.get("coverage_ratio", 0)))
+            missing = coverage.get("missing_ranges", []) if isinstance(coverage, dict) else []
+            base.extend((
+                QualityCheck("unique_primary_key", int(duplicates) == 0, int(duplicates), "0 duplicates"),
+                QualityCheck("valid_ohlc", int(invalid_ohlc) == 0, int(invalid_ohlc), "positive prices and low <= open/close <= high"),
+                QualityCheck("non_negative_volume", int(invalid_volume) == 0, int(invalid_volume), "0 negative volumes"),
+                QualityCheck("point_in_time_order", int(invalid_time) == 0, int(invalid_time), "start < end <= event <= available"),
+                QualityCheck("deterministic_order", unordered == 0, unordered, "physical rows ordered by time/instrument"),
+                QualityCheck("coverage_ratio", ratio >= Decimal("0.99"), str(ratio), ">= 0.99"),
+                QualityCheck("missing_ranges", not missing, len(missing), "0 missing ranges"),
+                QualityCheck("backtest_history", count >= 365, count, ">= 365 observations"),
+                QualityCheck("streaming_execution", True, count, "quality computed without materializing rows"),
+            ))
+            return tuple(base)
+        finally:
+            connection.close()
 
     def _streaming_trade(self, release: DatasetRelease) -> tuple[QualityCheck, ...]:
         connection, fields = self._streaming_view(release)
@@ -291,7 +385,7 @@ class DatasetQualityService:
             event, available = _time(row["event_time"]), _time(row["available_time"])
             if not (start < end and event >= end and available >= event):
                 invalid_time += 1
-            identity = (str(row.get("instrument_id", "")), start)
+            identity = (start, str(row.get("instrument_id", "")))
             if previous is not None and identity < previous:
                 unordered += 1
             previous = identity
@@ -304,7 +398,7 @@ class DatasetQualityService:
             QualityCheck("valid_ohlc", invalid_ohlc == 0, invalid_ohlc, "positive prices and low <= open/close <= high"),
             QualityCheck("non_negative_volume", invalid_volume == 0, invalid_volume, "0 negative volumes"),
             QualityCheck("point_in_time_order", invalid_time == 0, invalid_time, "start < end <= event <= available"),
-            QualityCheck("deterministic_order", unordered == 0, unordered, "rows ordered by instrument/time"),
+            QualityCheck("deterministic_order", unordered == 0, unordered, "rows ordered by time/instrument"),
             QualityCheck("coverage_ratio", ratio >= Decimal("0.99"), str(ratio), ">= 0.99"),
             QualityCheck("missing_ranges", not missing, len(missing), "0 missing ranges"),
             QualityCheck("backtest_history", len(rows) >= 365, len(rows), ">= 365 observations"),
@@ -529,6 +623,222 @@ class DatasetQualityService:
         ))
         return tuple(base)
 
+    def _corporate_action(self, rows: list[dict[str, object]], release: DatasetRelease) -> tuple[QualityCheck, ...]:
+        directory = self.root / release.relative_path
+        files = [directory / "events.json"] if (directory / "events.json").exists() else sorted(directory.glob("**/events.json"))
+        manifest = _lineage(directory / "manifest.json")
+        events: list[dict[str, object]] = []
+        invalid_files = 0
+        for path in files:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                invalid_files += 1
+                continue
+            if not isinstance(payload, list):
+                invalid_files += 1
+                continue
+            events.extend(item for item in payload if isinstance(item, dict))
+
+        invalid_identity = invalid_date = invalid_ratio = invalid_amount = unsupported = 0
+        identities = []
+        for event in events:
+            instrument = _instrument_value(event.get("instrument_id"))
+            ticker = str(event.get("ticker") or "").strip().upper()
+            if not instrument:
+                invalid_identity += 1
+            if "ratio" in event:
+                event_date = _event_date(event.get("effective_at"))
+                ratio = _decimal_value(event.get("ratio"))
+                if event_date is None:
+                    invalid_date += 1
+                if ratio is None or ratio <= 0:
+                    invalid_ratio += 1
+                identities.append(("split", instrument, event_date, str(ratio), ticker))
+            elif "amount_per_share" in event:
+                event_date = _event_date(event.get("ex_date"))
+                amount = _decimal_value(event.get("amount_per_share"))
+                if event_date is None:
+                    invalid_date += 1
+                if amount is None or amount < 0:
+                    invalid_amount += 1
+                identities.append(("dividend", instrument, event_date, str(amount), ticker))
+            else:
+                unsupported += 1
+
+        duplicate_keys = len(identities) - len(set(identities))
+        receipt_count = len(manifest.get("source_receipts", [])) if isinstance(manifest.get("source_receipts"), list) else 0
+        return (
+            QualityCheck("events_file_present", bool(files), len(files), "events.json exists"),
+            QualityCheck("valid_event_files", invalid_files == 0, invalid_files, "corporate action files are JSON lists"),
+            QualityCheck("event_count_declared", int(manifest.get("event_count", len(events))) == len(events), len(events), "event count matches manifest"),
+            QualityCheck("content_hash", bool(release.content_hash), release.content_hash, "frozen content hash"),
+            QualityCheck(
+                "manifest_content_hash",
+                bool(manifest.get("sha256")) and manifest.get("sha256") == release.content_hash,
+                {"manifest": manifest.get("sha256"), "release": release.content_hash},
+                "Manifest hash equals Release hash",
+            ),
+            QualityCheck("source_receipts", receipt_count > 0, receipt_count, "archived Massive source receipts are declared"),
+            QualityCheck("supported_event_types", unsupported == 0, unsupported, "only split and cash dividend events are present"),
+            QualityCheck("event_identity", invalid_identity == 0, invalid_identity, "events have instrument_id"),
+            QualityCheck("event_dates", invalid_date == 0, invalid_date, "events have effective/ex dates"),
+            QualityCheck("positive_split_ratios", invalid_ratio == 0, invalid_ratio, "split ratios are > 0"),
+            QualityCheck("non_negative_dividends", invalid_amount == 0, invalid_amount, "cash dividends are >= 0"),
+            QualityCheck("unique_corporate_action_key", duplicate_keys == 0, duplicate_keys, "0 duplicate action keys"),
+        )
+
+    def _equity_identity(self, rows: list[dict[str, object]], release: DatasetRelease) -> tuple[QualityCheck, ...]:
+        directory = self.root / release.relative_path
+        manifest = _lineage(directory / "manifest.json")
+        mappings = _json_list(directory / "mappings.json")
+        instruments = _json_list(directory / "instruments.json")
+        quarantined = _json_list(directory / "quarantine.json")
+        mapping_keys = []
+        invalid_mapping = invalid_range = 0
+        for item in mappings:
+            external = str(item.get("external_id") or "").strip()
+            target = str(item.get("target_id") or "").strip()
+            start = _event_date(item.get("effective_from"))
+            end = _event_date(item.get("effective_to")) if item.get("effective_to") else None
+            if not external or not target or start is None:
+                invalid_mapping += 1
+            if end is not None and start is not None and end <= start:
+                invalid_range += 1
+            mapping_keys.append((external, target, start, end))
+        instrument_ids = [str(item.get("instrument_id") or "").strip() for item in instruments if isinstance(item, dict)]
+        duplicate_mappings = len(mapping_keys) - len(set(mapping_keys))
+        duplicate_instruments = len(instrument_ids) - len(set(instrument_ids))
+        return (
+            QualityCheck("mappings_file_present", (directory / "mappings.json").exists(), len(mappings), "mappings.json exists"),
+            QualityCheck("instruments_file_present", (directory / "instruments.json").exists(), len(instruments), "instruments.json exists"),
+            QualityCheck("manifest_content_hash", bool(manifest.get("sha256")) and manifest.get("sha256") == release.content_hash,
+                         {"manifest": manifest.get("sha256"), "release": release.content_hash}, "Manifest hash equals Release hash"),
+            QualityCheck("identity_mapping_count", len(mappings) > 0, len(mappings), "> 0 provider symbol mappings"),
+            QualityCheck("identity_instrument_count", len(instruments) > 0, len(instruments), "> 0 stable instruments"),
+            QualityCheck("identity_quarantine_clear", len(quarantined) == 0, len(quarantined), "0 unresolved identity quarantine records"),
+            QualityCheck("valid_identity_mappings", invalid_mapping == 0, invalid_mapping, "mappings have external_id, target_id and effective_from"),
+            QualityCheck("valid_identity_ranges", invalid_range == 0, invalid_range, "effective_to is absent or after effective_from"),
+            QualityCheck("unique_identity_mappings", duplicate_mappings == 0, duplicate_mappings, "0 duplicate mapping rows"),
+            QualityCheck("unique_identity_instruments", duplicate_instruments == 0, duplicate_instruments, "0 duplicate instrument rows"),
+        )
+
+    def _equity_ohlcv(self, rows: list[dict[str, object]], release: DatasetRelease) -> tuple[QualityCheck, ...]:
+        base = list(self._equity_panel_base(rows, release, required={"open", "high", "low", "close", "volume"}))
+        if not rows:
+            return tuple(base)
+        invalid_ohlc = invalid_volume = 0
+        for row in rows:
+            open_, high, low, close = (Decimal(str(row[name])) for name in ("open", "high", "low", "close"))
+            volume = Decimal(str(row["volume"]))
+            if low > min(open_, close) or high < max(open_, close) or low > high or min(open_, high, low, close) <= 0:
+                invalid_ohlc += 1
+            if volume < 0:
+                invalid_volume += 1
+        base.extend((
+            QualityCheck("valid_ohlc", invalid_ohlc == 0, invalid_ohlc, "positive prices and low <= open/close <= high"),
+            QualityCheck("non_negative_volume", invalid_volume == 0, invalid_volume, "0 negative volumes"),
+        ))
+        return tuple(base)
+
+    def _equity_returns(self, rows: list[dict[str, object]], release: DatasetRelease) -> tuple[QualityCheck, ...]:
+        base = list(self._equity_panel_base(
+            rows, release,
+            required={"close_raw", "simple_return", "split_ratio", "cash_dividend", "split_adjusted_return", "total_return"},
+        ))
+        invalid = 0
+        for row in rows:
+            for name in ("close_raw", "simple_return", "split_ratio", "cash_dividend", "split_adjusted_return", "total_return"):
+                value = row.get(name)
+                if value is not None and _decimal(value) is None:
+                    invalid += 1
+        lineage = _lineage(self.root / release.relative_path / "lineage.json")
+        source = lineage.get("source") if isinstance(lineage, dict) else None
+        corporate_actions_declared = isinstance(source, dict) and "corporate_actions_sha256" in source
+        base.append(QualityCheck("finite_return_values", invalid == 0, invalid, "return fields are finite when present"))
+        base.append(QualityCheck(
+            "corporate_action_source_declared",
+            corporate_actions_declared,
+            source if isinstance(source, dict) else None,
+            "lineage declares whether split/dividend corporate action inputs were supplied",
+        ))
+        return tuple(base)
+
+    def _equity_universe(self, rows: list[dict[str, object]], release: DatasetRelease) -> tuple[QualityCheck, ...]:
+        base = list(self._equity_panel_base(
+            rows, release,
+            required={"exists", "eligible", "exclusion_reasons", "price_observation_status", "missing_reason", "critical_gap"},
+        ))
+        invalid_reasons = sum(1 for row in rows if not isinstance(row.get("exclusion_reasons"), list))
+        valid_statuses = {"observed", "missing_bar"}
+        valid_missing_reasons = {
+            "expected_trading_session_without_bar",
+            "not_yet_listed",
+            "delisted_after_reference_end",
+        }
+        invalid_status = sum(1 for row in rows if row.get("price_observation_status") not in valid_statuses)
+        missing_without_reason = sum(
+            1 for row in rows
+            if row.get("price_observation_status") == "missing_bar" and not row.get("missing_reason")
+        )
+        invalid_missing_reason = sum(
+            1 for row in rows
+            if row.get("price_observation_status") == "missing_bar" and row.get("missing_reason") not in valid_missing_reasons
+        )
+        base.extend((
+            QualityCheck("structured_exclusion_reasons", invalid_reasons == 0, invalid_reasons, "exclusion reasons are lists"),
+            QualityCheck("valid_price_observation_status", invalid_status == 0, invalid_status, "status is observed or missing_bar"),
+            QualityCheck("missing_bars_have_reason", missing_without_reason == 0, missing_without_reason, "missing bars declare a reason"),
+            QualityCheck("valid_missing_bar_reason", invalid_missing_reason == 0, invalid_missing_reason, "missing reason is a supported conservative classification"),
+        ))
+        return tuple(base)
+
+    def _equity_feature(self, rows: list[dict[str, object]], release: DatasetRelease) -> tuple[QualityCheck, ...]:
+        base = list(self._equity_panel_base(rows, release, required=set()))
+        invalid_numeric = 0
+        for row in rows:
+            for name, value in row.items():
+                if name in {"instrument_id", "ticker", "event_date", "available_time"} or value is None or isinstance(value, (str, bool, datetime)):
+                    continue
+                if isinstance(value, (int, float, Decimal)) and not _finite(value):
+                    invalid_numeric += 1
+        base.append(QualityCheck("finite_feature_values", invalid_numeric == 0, invalid_numeric, "no NaN or infinite numeric values"))
+        return tuple(base)
+
+    def _equity_panel_base(
+        self, rows: list[dict[str, object]], release: DatasetRelease, *, required: set[str],
+    ) -> tuple[QualityCheck, ...]:
+        base = list(self._integrity(rows, release))
+        fields = set(rows[0]) if rows else set()
+        required_fields = {"instrument_id", "event_date", "available_time", *required}
+        base.append(_required_check(required_fields, fields, "US equity panel identity, date, visibility and required fields"))
+        if not rows or not required_fields <= fields:
+            return tuple(base)
+        identities = [(str(row["instrument_id"]), str(row["event_date"])) for row in rows]
+        duplicates = len(identities) - len(set(identities))
+        invalid_time = 0
+        previous = None
+        unordered = 0
+        for row in rows:
+            available = _safe_time(row["available_time"])
+            event_date = row.get("event_date")
+            if available is None or event_date is None:
+                invalid_time += 1
+            identity = (str(row["instrument_id"]), str(row["event_date"]))
+            if previous is not None and identity < previous:
+                unordered += 1
+            previous = identity
+        lineage = _lineage(self.root / release.relative_path / "lineage.json")
+        source = lineage.get("source")
+        frozen_input = isinstance(source, dict) and bool(source.get("content_sha256"))
+        base.extend((
+            QualityCheck("unique_equity_panel_key", duplicates == 0, duplicates, "0 duplicate instrument/date rows"),
+            QualityCheck("valid_available_time", invalid_time == 0, invalid_time, "available_time is present and parseable"),
+            QualityCheck("deterministic_order", unordered == 0, unordered, "rows ordered by instrument/date"),
+            QualityCheck("frozen_source_hash", frozen_input, frozen_input, "lineage declares source content hash"),
+        ))
+        return tuple(base)
+
     def _market_slice(self, release: DatasetRelease) -> tuple[QualityCheck, ...]:
         raw_rows = self.client.load_rows(release.release_id)
         base = list(self._integrity(raw_rows, release))
@@ -631,8 +941,52 @@ def _required_check(required: set[str], fields: set[str], requirement: str) -> Q
     return QualityCheck("required_fields", required <= fields, sorted(required - fields), requirement)
 
 
+def _instrument_value(value: object) -> str | None:
+    if isinstance(value, str):
+        return value if value.strip() else None
+    if isinstance(value, dict):
+        inner = value.get("value") or value.get("instrument_id")
+        return str(inner) if inner else None
+    return None
+
+
+def _event_date(value: object) -> datetime | None:
+    if isinstance(value, dict):
+        value = value.get("$datetime") or value.get("$date")
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    if value is None:
+        return None
+    try:
+        return _time(str(value))
+    except ValueError:
+        try:
+            return datetime.fromisoformat(str(value)).replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+
+def _decimal_value(value: object) -> Decimal | None:
+    if isinstance(value, dict):
+        value = value.get("$decimal")
+    return _decimal(value)
+
+
+def _passed(checks: tuple[QualityCheck, ...], name: str) -> bool:
+    return any(item.name == name and item.passed for item in checks)
+
+
 def _lineage(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
     value = json.loads(path.read_text(encoding="utf-8"))
     return value if isinstance(value, dict) else {}
+
+
+def _json_list(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]

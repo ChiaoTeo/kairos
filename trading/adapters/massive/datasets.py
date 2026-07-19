@@ -13,6 +13,7 @@ from trading.data.models import DatasetRelease, DatasetStatus, DatasetStorageKin
 from trading.storage.data_lake import write_json
 
 from .client import MassiveClient
+from .equity_day_aggs import MassiveEquityDayAggPipeline
 from .pipeline import MassiveOptionDataPipeline
 
 
@@ -28,6 +29,78 @@ class MassiveOptionProductConfig:
             raise ValueError("Massive option connector requires product, underlying and explicit option tickers")
         if any(not ticker.startswith("O:") for ticker in self.option_tickers):
             raise ValueError("Massive option tickers must use the O: namespace")
+
+
+@dataclass(frozen=True, slots=True)
+class MassiveEquityDayAggProductConfig:
+    logical_key: str
+    ticker: str
+    view: str = "vendor_adjusted"
+
+    def __post_init__(self) -> None:
+        if not self.logical_key or not self.ticker:
+            raise ValueError("Massive equity connector requires product and ticker")
+        if self.view not in {"raw", "vendor_adjusted"}:
+            raise ValueError("Massive equity view must be 'raw' or 'vendor_adjusted'")
+
+
+class MassiveEquityDayAggDatasetConnector:
+    provider = "massive"
+
+    def __init__(self, root: str | Path, client: MassiveClient, config: MassiveEquityDayAggProductConfig) -> None:
+        self.root, self.config = Path(root), config
+        self.pipeline = MassiveEquityDayAggPipeline(root, client)
+
+    def supports(self, logical_key: str) -> bool:
+        return logical_key == self.config.logical_key
+
+    def estimate(self, request: AcquisitionRequest) -> AcquisitionEstimate:
+        days = sum(max(1, (item.end.date() - item.start.date()).days + 1) for item in request.missing)
+        return AcquisitionEstimate(days, cost_class="entitled-rest-bounded-ticker")
+
+    def acquire(self, request: AcquisitionRequest) -> DatasetRelease:
+        if not self.supports(request.logical_key) or request.source.provider != self.provider:
+            raise ValueError("Massive equity connector received an unsupported acquisition request")
+        if not request.missing:
+            raise ValueError("Massive equity connector requires a non-empty acquisition window")
+        start = min(item.start for item in request.missing).date()
+        end = max(item.end for item in request.missing).date()
+        staging_id = f"staging_{uuid4().hex}"
+        manifest = self.pipeline.prepare(
+            staging_id, self.config.ticker, start, end, view=self.config.view,
+        )
+        final_id = f"ds_{str(manifest['content_sha256'])[:24]}"
+        staging = (
+            self.root / "canonical/market/ohlcv/asset_class=equity/region=us/provider=massive/interval=1d"
+            / f"view={self.config.view}" / f"dataset={staging_id}"
+        )
+        final = staging.with_name(f"dataset={final_id}")
+        if final.exists():
+            existing = json.loads((final / "manifest.json").read_text(encoding="utf-8"))
+            if existing.get("content_sha256") != manifest["content_sha256"]:
+                raise RuntimeError("content-addressed Massive equity release collision")
+            shutil.rmtree(staging)
+        else:
+            staging.replace(final)
+            for name in ("manifest", "lineage", "coverage", "quality", "schema"):
+                path = final / f"{name}.json"
+                value = json.loads(path.read_text(encoding="utf-8"))
+                _replace_dataset_id(value, staging_id, final_id)
+                write_json(path, value)
+        catalog = DataCatalog(self.root)
+        product = catalog.product(request.logical_key)
+        published_at = str(manifest.get("generated_at") or datetime.now().astimezone().isoformat())
+        release = DatasetRelease(
+            final_id, product.key, published_at, "market.ohlcv.equity.us.1d.v1", "1",
+            "massive.equity_day_aggs", "1", str(final.relative_to(self.root)), "parquet",
+            str(manifest["content_sha256"]), "massive", "us-securities",
+            (f"{product.key}@latest-research",), DatasetStatus.APPROVED_FOR_RESEARCH,
+            QualityLevel.RESEARCH, published_at, DatasetStorageKind.TABULAR, "1",
+        )
+        catalog.register_release(release); catalog.save()
+        from trading.data.release_metadata import ensure_release_metadata
+        ensure_release_metadata(self.root, release.release_id)
+        return release
 
 
 class MassiveOptionEventsDatasetConnector:

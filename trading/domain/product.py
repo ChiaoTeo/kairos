@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import TypeAlias
+from typing import Protocol, TypeAlias, TypeGuard, runtime_checkable
 
 from .identity import AssetId, InstrumentId
 
@@ -48,6 +48,19 @@ class ContractType(StrEnum):
     QUANTO = "quanto"
 
 
+@runtime_checkable
+class OptionSpec(Protocol):
+    """Common contract shared by option products across asset classes."""
+
+    expiry: datetime
+    strike: Decimal
+    right: OptionRight
+    exercise_style: ExerciseStyle
+
+    @property
+    def quantity_multiplier(self) -> Decimal: ...
+
+
 @dataclass(frozen=True, slots=True)
 class IndexSpec:
     index_currency: AssetId
@@ -75,6 +88,10 @@ class ListedOptionSpec:
     multiplier: Decimal
     last_trade_at: datetime
     exercise_threshold: Decimal = Decimal("0.01")
+
+    @property
+    def quantity_multiplier(self) -> Decimal:
+        return self.multiplier
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +136,10 @@ class CryptoOptionSpec:
     contract_size: Decimal
     settlement_index: str
 
+    @property
+    def quantity_multiplier(self) -> Decimal:
+        return self.contract_size
+
 
 @dataclass(frozen=True, slots=True)
 class TokenizedEquitySpec:
@@ -132,3 +153,11 @@ ProductSpec: TypeAlias = (
     IndexSpec | EquitySpec | ListedOptionSpec | CryptoSpotSpec | FutureSpec
     | PerpetualSpec | CryptoOptionSpec | TokenizedEquitySpec
 )
+
+
+def is_option_spec(spec: object) -> TypeGuard[OptionSpec]:
+    return isinstance(spec, OptionSpec)
+
+
+def option_multiplier(spec: OptionSpec) -> Decimal:
+    return spec.quantity_multiplier

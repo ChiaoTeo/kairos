@@ -28,6 +28,7 @@ class SpxwPutSkewStudyTests(unittest.TestCase):
         self.assertEqual(len(panel), 1)
         self.assertTrue(panel["skew_rank"].isna().all())
         self.assertTrue(panel.iloc[-1:]["spread_pnl"].isna().all())
+        self.assertTrue((panel["evidence_level"]=="TRADE_PROXY_ONLY").all())
         conclusion = analyze_hypothesis(panel, config)
         self.assertEqual(conclusion.status, "INSUFFICIENT_DATA")
         _, readiness, guarded = execute_research(dataset, config, None)

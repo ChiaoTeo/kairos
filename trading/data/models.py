@@ -9,6 +9,7 @@ class DatasetLayer(StrEnum):
     SOURCE = "source"
     CANONICAL = "canonical"
     CURATED = "curated"
+    REFERENCE = "reference"
     FEATURES = "features"
     STUDIES = "studies"
 

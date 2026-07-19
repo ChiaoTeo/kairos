@@ -218,6 +218,7 @@ def write_soak_artifact(
     }
     payload: dict[str, object] = {
         "schema_version": 1,
+        "kind": "runtime_l4_soak",
         "runtime_id": supervisor.application.runtime_id,
         "environment": environment,
         "started_at": started_at.isoformat(),

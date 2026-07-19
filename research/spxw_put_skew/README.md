@@ -14,6 +14,10 @@
 
 任何一项不成立，假设记为 `NOT_SUPPORTED`。真实数据门禁未通过时记为 `DATA_NOT_READY`；门禁通过但统计样本不足时才记为 `INSUFFICIENT_DATA`。
 
+研究中的 spread 收益循环仅为 `TRADE_PROXY_ONLY`。即使统计条件通过，也只能返回
+`TRADE_PROXY_SUPPORTED`；正式策略证据必须来自绑定同一 `spxw-put-skew` FactorSpec 的
+`BullPutSpreadStrategy` 和 `BacktestEngine`，trade proxy 不能支持 executable、paper 或 live 晋级。
+
 ## 运行
 
 从仓库根目录启动 Jupyter：

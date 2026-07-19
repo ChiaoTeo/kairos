@@ -70,8 +70,19 @@ data/strategies/<strategy_id>/<version>/
   strategy_spec.json
   execution_policy.json
   promotions.jsonl          # DRAFT以上阶段
+  promotion-bundles/<stage>-<hash>/manifest.json
   manifest.json
 ```
+
+`strategy check-promotion` 会用同一套 promotion gate、evidence hash 和生命周期顺序检查做只读预检，
+不修改 Strategy Release。`strategy promote` 会校验输入 evidence 的 SHA-256，评估 promotion gate，并写入一个独立
+`promotion-bundles/<stage>-<hash>/manifest.json`。该 manifest 记录 from/to、StrategySpec hash、
+evidence paths/hash、审批人、资本上限、rollback 条件、gate 结果和 bundle hash；`promotions.jsonl`
+保留兼容审计记录并引用该 bundle。
+
+外部阶段的 gate 明确拒绝 fixture 冒充：`PAPER_APPROVED` 需要非 fixture 的 decision-OOS L5
+证据和 Paper/Testnet readiness evidence；`LIVE_LIMITED` / `LIVE_APPROVED` 需要通过的外部
+soak artifact。本地 deterministic acceptance、synthetic fixture 和 trade proxy 只能作为机制证据。
 
 参考策略首先注册为`DRAFT`：
 
@@ -116,7 +127,7 @@ git diff --check
 - 每个已准备Catalog数据集具有五个治理元数据文件；
 - 每个现有研究具有至少一个完整版本化产物集；
 - 每个策略注册版本具有StrategySpec、ExecutionPolicy和可验证manifest；
-- 晋级策略具有promotion evidence；
+- 晋级策略具有promotion evidence 和 promotion bundle；
 - 所有artifact hash与当前文件一致。
 
 测试文件包括：

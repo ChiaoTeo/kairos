@@ -44,6 +44,13 @@ class RunModeCompositionTests(unittest.TestCase):
                 "backtest", CapturePolicy.NONE,
             )
 
+    def test_declaration_binds_real_components_and_executes(self) -> None:
+        declaration=backtest_composition();calls=[]
+        executable=declaration.bind(event_source=object(),clock=object(),execution_driver=object(),
+            persistence=object(),safety_policy=object(),runner=lambda:calls.append("ran") or {"passed":True})
+        self.assertEqual(executable.run(),{"passed":True});self.assertEqual(calls,["ran"])
+        self.assertEqual(executable.composition_hash,declaration.composition_hash)
+
 
 if __name__ == "__main__":
     unittest.main()

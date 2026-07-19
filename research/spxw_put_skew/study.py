@@ -216,12 +216,18 @@ def build_panel(dataset: HistoricalDataset, config: ResearchConfig = ResearchCon
     panel["spread_pnl"] = _forward_spread_pnl(panel, dataset, horizon)
     panel["forward_realized_vol"] = _forward_realized_vol(panel["spot"], horizon)
     panel["forward_max_drawdown"] = _forward_max_drawdown(panel["spot"], horizon)
-    strategy = [_simulate_spread_trade(row, dataset, config, entry_delay_slices=1) for _, row in panel.iterrows()]
-    delayed_strategy = [_simulate_spread_trade(row, dataset, config, entry_delay_slices=2) for _, row in panel.iterrows()]
-    panel["strategy_pnl"] = [item[0] for item in strategy]
-    panel["exit_reason"] = [item[1] for item in strategy]
-    panel["holding_slices"] = [item[2] for item in strategy]
-    panel["strategy_pnl_delay_2"] = [item[0] for item in delayed_strategy]
+    proxy = [_simulate_trade_proxy(row, dataset, config, entry_delay_slices=1) for _, row in panel.iterrows()]
+    delayed_proxy = [_simulate_trade_proxy(row, dataset, config, entry_delay_slices=2) for _, row in panel.iterrows()]
+    panel["trade_proxy_pnl"] = [item[0] for item in proxy]
+    panel["trade_proxy_exit_reason"] = [item[1] for item in proxy]
+    panel["trade_proxy_holding_slices"] = [item[2] for item in proxy]
+    panel["trade_proxy_pnl_delay_2"] = [item[0] for item in delayed_proxy]
+    panel["evidence_level"] = "TRADE_PROXY_ONLY"
+    # Compatibility aliases for existing notebooks. These columns are not executable-backtest evidence.
+    panel["strategy_pnl"] = panel["trade_proxy_pnl"]
+    panel["exit_reason"] = panel["trade_proxy_exit_reason"]
+    panel["holding_slices"] = panel["trade_proxy_holding_slices"]
+    panel["strategy_pnl_delay_2"] = panel["trade_proxy_pnl_delay_2"]
     panel["high_skew"] = panel["skew_rank"] >= float(config.high_skew_percentile)
     panel["atm_iv_rank"] = _expanding_percentile(panel["atm_iv"], config.minimum_rank_history)
     panel["spot_trend"] = panel["spot"] / panel["spot"].rolling(20, min_periods=20).mean() - 1.0
@@ -258,8 +264,8 @@ def analyze_hypothesis(panel: pd.DataFrame, config: ResearchConfig = ResearchCon
     stats.update({"test_pnl_difference": float(difference), "bootstrap_ci_low": low, "bootstrap_ci_high": high_ci})
     supported = difference > 0 and low > 0 and test_high["forward_skew_change"].mean() < 0
     return ResearchConclusion(
-        "SUPPORTED" if supported else "NOT_SUPPORTED", len(usable), len(high),
-        "Hypothesis passed the predeclared out-of-sample conditions." if supported else "Hypothesis did not pass all predeclared out-of-sample conditions.",
+        "TRADE_PROXY_SUPPORTED" if supported else "NOT_SUPPORTED", len(usable), len(high),
+        "Signal and trade proxy passed the predeclared conditions; executable Strategy evidence is still required." if supported else "Hypothesis did not pass all predeclared out-of-sample conditions.",
         stats,
     )
 
@@ -328,9 +334,10 @@ def _forward_max_drawdown(spot: pd.Series, horizon: int) -> pd.Series:
     return pd.Series(values, index=spot.index, dtype="float64")
 
 
-def _simulate_spread_trade(
+def _simulate_trade_proxy(
     row, dataset: HistoricalDataset, config: ResearchConfig, *, entry_delay_slices: int,
 ) -> tuple[float | None, str | None, int | None]:
+    """Cheap research mapping proxy; never substitutes for BacktestEngine evidence."""
     slice_index = {market.timestamp: index for index, market in enumerate(dataset.slices)}
     decision = slice_index[row["timestamp"]]
     entry_index = decision + entry_delay_slices

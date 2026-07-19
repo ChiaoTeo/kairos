@@ -29,7 +29,7 @@ class OptionDayIvPipeline:
         dividend_yield: Decimal = Decimal("0.0003"),
     ) -> dict[str, object]:
         option_root = self.root / "curated/provider=massive" / f"dataset={option_dataset_id}"
-        equity_root = self.root / "curated/provider=massive" / f"dataset={equity_dataset_id}"
+        equity_root = _equity_dataset_root(self.root, equity_dataset_id)
         option_manifest = _read(option_root / "manifest.json")
         equity_manifest = _read(equity_root / "manifest.json")
         fingerprint = sha256(json.dumps({
@@ -133,6 +133,21 @@ def _read(path: Path) -> dict[str, object]:
     if not path.exists():
         raise FileNotFoundError(path)
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _equity_dataset_root(root: Path, dataset_id: str) -> Path:
+    legacy = root / "curated/provider=massive" / f"dataset={dataset_id}"
+    if (legacy / "manifest.json").exists():
+        return legacy
+    matches = sorted(
+        root.glob(
+            "canonical/market/ohlcv/asset_class=equity/region=us/provider=massive/"
+            f"interval=1d/view=*/dataset={dataset_id}"
+        )
+    )
+    if matches:
+        return matches[0]
+    return legacy
 
 
 def _file_hash(path: Path) -> str:

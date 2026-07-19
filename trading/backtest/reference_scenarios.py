@@ -29,6 +29,10 @@ from trading.domain.corporate_action import CashDividendEvent
 from trading.storage.codec import to_primitive
 from trading.strategies.cash_and_carry import CashAndCarryConfig, CashAndCarryStrategy
 from trading.strategies.covered_call import CoveredCallStrategy
+from trading.strategies import GovernedStrategyRuntime,StrategyContext
+from trading.strategies.specs import builtin_strategy_specs
+from trading.backtest.feed import MarketSlice
+from trading.research.snapshot import InstrumentSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,7 +102,8 @@ def _covered_call(model: str) -> ReferenceScenarioResult:
     account = AccountKey(InstitutionId("backtest"), "covered-call", AccountType.SECURITIES_MARGIN)
     service.deposit(account, AssetId("USD"), Decimal("20000"), now, "initial")
     strategy = CoveredCallStrategy(stock_id, option_id)
-    stock_intent = strategy.intents(Decimal("0"), Decimal("0"))[0]
+    runtime=_runtime(strategy);market=_slice(now,((stock_id,"100","100.10"),(option_id,"2","2.10")))
+    stock_intent = runtime.on_market(_context(market,(),catalog)).intents[0]
     base = EquityTopOfBookFillModel(Decimal("0.005"))
     fill_model = StressWrapperFillModel(base, adverse_bps=Decimal("10"), fee_multiplier=Decimal("2")) if model == "stress" else base
     stock_fill = fill_model.attempt(
@@ -106,7 +111,7 @@ def _covered_call(model: str) -> ReferenceScenarioResult:
         Quote(stock_id, Decimal("100"), Decimal("100.10"), Decimal("1000"), Decimal("1000"), now),
     ).fill
     service.trade(TradeExecution(_id("cc-stock-exec"), now + timedelta(seconds=1), account, stock_id, TradeSide.BUY, stock_fill.quantity, stock_fill.price, AssetId("USD"), stock_fill.fee, "stock-order"))
-    option_intent = strategy.intents(stock_fill.quantity, Decimal("0"))[0]
+    option_intent = runtime.on_market(_context(market,((stock_id,stock_fill.quantity),),catalog)).intents[0]
     option_fill = fill_model.attempt(
         SingleAssetOrder(_id("cc-option"), option_id, TradeSide.SELL, option_intent.contracts, now),
         Quote(option_id, Decimal("2"), Decimal("2.10"), Decimal("10"), Decimal("10"), now),
@@ -134,9 +139,11 @@ def _spot_perp_carry(model: str) -> ReferenceScenarioResult:
     service.transfer(spot_account, derivative_account, AssetId("USDT"), Decimal("2000"), now + timedelta(seconds=1), "collateral")
     base = CryptoOrderBookFillModel(Decimal("0.001"))
     fill_model = StressWrapperFillModel(base, adverse_bps=Decimal("10"), fee_multiplier=Decimal("2")) if model == "stress" else base
-    carry_intent = CashAndCarryStrategy(
+    carry_strategy = CashAndCarryStrategy(
         spot_id, perp_id, CashAndCarryConfig(minimum_annualized_basis=Decimal("0.001")),
-    ).intent(Decimal("50001"), Decimal("50100"), Decimal("0"), Decimal("0"))
+    )
+    carry_market=_slice(now,((spot_id,"49999","50001"),(perp_id,"50100","50102")))
+    carry_intent = _runtime(carry_strategy).on_market(_context(carry_market,(),catalog)).intents[0]
     events = (
         ("spot-open", spot_account, spot_id, TradeSide.BUY, _book(spot_id, now + timedelta(seconds=2), "49999", "50001")),
         ("perp-open", derivative_account, perp_id, TradeSide.SELL, _book(perp_id, now + timedelta(seconds=3), "50100", "50102")),
@@ -159,6 +166,16 @@ def _book(instrument_id, timestamp, bid, ask):
         instrument_id, (OrderBookLevel(Decimal(bid), Decimal("10")),),
         (OrderBookLevel(Decimal(ask), Decimal("10")),), 1, timestamp,
     )
+
+
+def _slice(at,values):
+    snapshots=tuple(InstrumentSnapshot(instrument,Quote(instrument,Decimal(bid),Decimal(ask),Decimal("10"),Decimal("10"),at),at,None,None,None,None)
+        for instrument,bid,ask in values)
+    return MarketSlice(at,snapshots,sequence=1,available_instruments=tuple(item[0] for item in values))
+def _context(market,positions,catalog):return StrategyContext(market,object(),(),catalog,approved_capital=Decimal("10000"),strategy_positions=positions)
+def _runtime(strategy):
+    spec,policy=next(item for item in builtin_strategy_specs() if item[0].strategy_id==strategy.strategy_id)
+    return GovernedStrategyRuntime(strategy,spec,execution_policy_id=policy.policy_id)
 
 
 def _id(value):

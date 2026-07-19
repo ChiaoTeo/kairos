@@ -60,6 +60,21 @@ class TargetPositionIntent:
 
 
 @dataclass(frozen=True, slots=True)
+class TargetExposureIntent:
+    """Strategy-level target expressed independently of account capital and price."""
+
+    intent_id: UUID
+    strategy_id: str
+    instrument_id: InstrumentId
+    target_fraction: Decimal
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not Decimal("-1") <= self.target_fraction <= Decimal("1"):
+            raise ValueError("target exposure fraction must be in [-1, 1]")
+
+
+@dataclass(frozen=True, slots=True)
 class CoveredCallIntent:
     intent_id: UUID
     strategy_id: str
@@ -126,4 +141,4 @@ def _validate_structure(legs: tuple[LegIntent, ...], quantity: int) -> None:
 
 
 StructureIntent: TypeAlias = OpenStructureIntent | CloseStructureIntent
-Intent: TypeAlias = StructureIntent | TargetPositionIntent | CoveredCallIntent | ProtectivePutIntent | HedgeIntent | CashAndCarryIntent | TransferIntent | CancelIntent
+Intent: TypeAlias = StructureIntent | TargetExposureIntent | TargetPositionIntent | CoveredCallIntent | ProtectivePutIntent | HedgeIntent | CashAndCarryIntent | TransferIntent | CancelIntent

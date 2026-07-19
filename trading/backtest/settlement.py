@@ -5,8 +5,7 @@ from decimal import Decimal
 from uuid import UUID, uuid5, NAMESPACE_URL
 
 from trading.domain.order import Settlement
-from trading.domain.product import CryptoOptionSpec,ListedOptionSpec, OptionRight
-from trading.risk.option_structure import option_multiplier
+from trading.domain.product import OptionRight, is_option_spec, option_multiplier
 from trading.reference.access import contract_spec, definition_at
 
 from .portfolio import BacktestPortfolio
@@ -36,7 +35,7 @@ def due_settlements(portfolio: BacktestPortfolio, metadata: tuple[ContractMetada
             if not contract.settlement_confirmed:
                 raise ValueError(f"unconfirmed settlement metadata: {instrument_id.value}")
             definition = definition_at(portfolio.catalog, instrument_id, now)
-            if not isinstance(contract_spec(definition), (ListedOptionSpec,CryptoOptionSpec)):
+            if not is_option_spec(contract_spec(definition)):
                 raise ValueError("option settlement requires right and strike")
             spec = contract_spec(definition)
             intrinsic = intrinsic_value(spec.right, spec.strike, contract.official_settlement)

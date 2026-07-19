@@ -13,6 +13,7 @@ from trading.domain.order import Fill, TimeInForce
 from trading.domain.product import ListedOptionSpec, OptionRight
 from trading.reference.access import contract_spec, definition_at
 from trading.strategies.base import StrategyContext, StrategyDecision
+from trading.features import FactorQuality
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +29,14 @@ class BullPutSpreadConfig:
     profit_target: Decimal = Decimal("0.50")
     stop_loss_multiple: Decimal = Decimal("2.00")
     exit_dte: int = 0
+    signal_factor_id: str | None = None
+    minimum_skew_rank: Decimal | None = None
+
+    def __post_init__(self)->None:
+        if (self.signal_factor_id is None)!=(self.minimum_skew_rank is None):
+            raise ValueError("bull put skew signal requires both factor id and threshold")
+        if self.minimum_skew_rank is not None and not Decimal("0")<=self.minimum_skew_rank<=Decimal("1"):
+            raise ValueError("minimum skew rank must be in [0,1]")
 
 
 class BullPutSpreadStrategy:
@@ -63,6 +72,15 @@ class BullPutSpreadStrategy:
         return self._maybe_open(context)
 
     def _maybe_open(self, context: StrategyContext):
+        if self.config.signal_factor_id is not None:
+            factor=context.factor(self.config.signal_factor_id)
+            rank=factor.get("skew_rank")
+            if factor.quality is not FactorQuality.READY or rank is None:
+                self._record(context,"skip",f"factor {self.config.signal_factor_id} is warming up")
+                return ()
+            if rank<self.config.minimum_skew_rank:
+                self._record(context,"skip",f"skew_rank={rank} below threshold={self.config.minimum_skew_rank}")
+                return ()
         local_date = context.now.astimezone(self.calendar.timezone).date()
         candidates = []
         for item in context.market.instruments:
