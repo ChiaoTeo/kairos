@@ -1026,6 +1026,10 @@ def replay_capture_artifact(args) -> dict[str, object]:
         "passed":all(comparisons.values()),"input_identity":identity}
 
 
+def replay_sma_capture(args) -> dict[str, object]:
+    return replay_capture_artifact(args)
+
+
 async def _governed_run(identity, bars, fast, slow, capital, fee_bps=Decimal("10")):
     return await _governed_run_from_events(identity, tuple(canonical_bar_events(bars)), bars, fast, slow, capital, fee_bps)
 

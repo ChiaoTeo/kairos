@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -8,6 +9,7 @@ import tempfile
 import unittest
 from decimal import Decimal
 
+from kairos.product_surface import DataProductApi
 from kairos.product_workflow import _write_binance_spot_bar_capture
 
 
@@ -125,6 +127,132 @@ class ProductCliTests(unittest.TestCase):
         self.assertEqual(lock["model"]["model_contract_hash"], model["model_contract_hash"])
         self.assertEqual(started["runtime_contract"]["strategy_decision_execution"]["decision_hash"], decision["decision_hash"])
         self.assertEqual(decision["decision"]["close"], "100")
+
+    def test_published_factor_can_feed_strategy_model_from_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "factor.py"
+            factor_metadata = root / "factor.metadata.json"
+            model_file = root / "model.py"
+            model_metadata = root / "model.metadata.json"
+            factor_file.write_text(
+                "def compute(inputs, params, context):\n"
+                "    rows = inputs['bars'].rows(columns=('available_time', 'close'))\n"
+                "    return [{'available_time': rows[0]['available_time'], 'signal': rows[0]['close']}]\n",
+                encoding="utf-8",
+            )
+            factor_metadata.write_text(json.dumps({
+                "inputs": ["bars"],
+                "parameters": {},
+                "primary_time": "available_time",
+                "fields": ["available_time", "signal"],
+                "point_in_time": True,
+            }), encoding="utf-8")
+            model_file.write_text(
+                "def decide(context):\n"
+                "    rows = context.input('primary').rows(columns=('signal',))\n"
+                "    return {'intent': 'factor-input', 'signal': rows[0]['signal']}\n",
+                encoding="utf-8",
+            )
+            model_metadata.write_text(json.dumps({
+                "inputs": ["primary"],
+                "intent_schema": {"kind": "factor_signal"},
+                "side_effects_allowed": False,
+            }), encoding="utf-8")
+
+            command(root, "data", "download", "tutorial-sma-data")
+            command(root, "study", "open", "cli-published-factor-study")
+            command(root, "study", "add-data", "--workspace", "cli-published-factor-study", "--name", "bars",
+                    "--dataset", "market.ohlcv.crypto.tutorial.btc-usdt.1h")
+            command(root, "study", "add-factor", "--workspace", "cli-published-factor-study", "--name", "signal",
+                    "--file", str(factor_file), "--metadata", str(factor_metadata))
+            factor_run = command(root, "study", "factor-run", "cli-published-factor-study", "signal")
+            published = command(root, "study", "publish-factor", "cli-published-factor-study", "signal",
+                                "--as", "features.cli.strategy.signal")
+            command(root, "study", "freeze", "cli-published-factor-study", "--version", "1.0.0")
+            command(root, "strategy", "open", "cli-published-factor-strategy",
+                    "--from-study", "cli-published-factor-study@1.0.0")
+            bound = command(root, "strategy", "bind-factor", "--workspace", "cli-published-factor-strategy",
+                            "--name", "primary", "--study-factor", "signal")
+            command(root, "strategy", "set-model-code", "cli-published-factor-strategy", str(model_file),
+                    "--metadata", str(model_metadata))
+            command(root, "strategy", "freeze", "cli-published-factor-strategy", "--version", "1.0.0")
+            started = command(root, "run", "start", "--snapshot", "cli-published-factor-strategy@1.0.0",
+                              "--mode", "backtest", "--execute-strategy")
+            decision = json.loads(Path(started["outputs"]["strategy_decision"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(bound["materialization_status"], "published_feature")
+        self.assertEqual(bound["release_id"], published["release_id"])
+        self.assertEqual(bound["factor_run_hash"], factor_run["run_hash"])
+        self.assertEqual(decision["decision"]["signal"], 100)
+
+    def test_registered_python_provider_download_from_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spec_dir = root / "provider"
+            spec_dir.mkdir()
+            provider = spec_dir / "provider.py"
+            contract = spec_dir / "macro.contract.json"
+            spec = spec_dir / "macro.download.json"
+            provider.write_text(
+                "from pathlib import Path\n"
+                "def acquire(product, scope, context):\n"
+                "    count_path = Path(__file__).with_name('calls.txt')\n"
+                "    count = int(count_path.read_text()) if count_path.exists() else 0\n"
+                "    count_path.write_text(str(count + 1))\n"
+                "    token = context['credentials']['KAIROS_TEST_CLI_PROVIDER_TOKEN']\n"
+                "    value = 4.2 if token == 'cli-secret-token' else -1\n"
+                "    return {'rows': [{'available_time': scope['as_of'], 'metric': product['metric'], 'value': value}]}\n",
+                encoding="utf-8",
+            )
+            contract.write_text(json.dumps({
+                "dataset_id": "reference.macro.provider",
+                "primary_time": "available_time",
+                "fields": ["available_time", "metric", "value"],
+            }), encoding="utf-8")
+            spec.write_text(json.dumps({
+                "kind": "data.download",
+                "mode": {"acquire_missing": True},
+                "source": {
+                    "kind": "python_provider",
+                    "path": "provider.py",
+                    "function": "acquire",
+                    "credentials": {"required_env": ["KAIROS_TEST_CLI_PROVIDER_TOKEN"]},
+                },
+                "scope": {"as_of": "2026-01-02T00:00:00Z"},
+                "products": [{
+                    "dataset_id": "reference.macro.provider",
+                    "metric": "cpi",
+                    "contract": "macro.contract.json",
+                }],
+            }), encoding="utf-8")
+
+            registered = command(root, "data", "register-download", "--key", "provider-macro", "--spec", str(spec))
+            original_token = os.environ.pop("KAIROS_TEST_CLI_PROVIDER_TOKEN", None)
+            try:
+                os.environ["KAIROS_TEST_CLI_PROVIDER_TOKEN"] = "cli-secret-token"
+                downloaded = command(root, "data", "download", "provider-macro")
+                rows = DataProductApi(root).dataset("reference.macro.provider").rows(columns=("metric", "value"))
+                os.environ.pop("KAIROS_TEST_CLI_PROVIDER_TOKEN", None)
+                reused = command(root, "data", "download", "provider-macro")
+                provider_calls = (spec_dir / "calls.txt").read_text(encoding="utf-8")
+            finally:
+                if original_token is None:
+                    os.environ.pop("KAIROS_TEST_CLI_PROVIDER_TOKEN", None)
+                else:
+                    os.environ["KAIROS_TEST_CLI_PROVIDER_TOKEN"] = original_token
+
+        self.assertEqual(registered["key"], "provider-macro")
+        self.assertEqual(downloaded["source"]["kind"], "python_provider")
+        self.assertEqual(downloaded["source"]["function"], "acquire")
+        self.assertEqual(len(downloaded["source"]["provider_code_hash"]), 64)
+        self.assertEqual(downloaded["source"]["credentials"]["required_env"], ["KAIROS_TEST_CLI_PROVIDER_TOKEN"])
+        self.assertEqual(rows[0]["metric"], "cpi")
+        self.assertEqual(rows[0]["value"], 4.2)
+        self.assertEqual(reused["release_id"], downloaded["release_id"])
+        self.assertEqual(reused["source"]["acquire_policy"], "reused_existing_release")
+        self.assertEqual(provider_calls, "1")
+        self.assertNotIn("cli-secret-token", json.dumps(downloaded))
 
     def test_product_cli_defaults_to_localized_text_and_keeps_json_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

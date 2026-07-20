@@ -19,6 +19,7 @@ class KairosProjectInitTests(unittest.TestCase):
 
             self.assertEqual(result.name, "alpha-desk")
             self.assertTrue((root / "kairos.toml").exists())
+            self.assertTrue((root / ".env.example").exists())
             self.assertTrue((root / "pyproject.toml").exists())
             self.assertTrue((root / "config" / "study.json").exists())
             self.assertFalse((root / "config" / "research.json").exists())
@@ -28,6 +29,10 @@ class KairosProjectInitTests(unittest.TestCase):
             metadata = json.loads((root / ".kairos" / "project.json").read_text(encoding="utf-8"))
             self.assertEqual(metadata["name"], "alpha-desk")
             self.assertEqual(metadata["root"], ".")
+            config = (root / "kairos.toml").read_text(encoding="utf-8")
+            self.assertIn("[providers.massive]", config)
+            self.assertIn('api_key = "env:MASSIVE_API_KEY"', config)
+            self.assertIn("[data]", config)
 
             readme = root / "README.md"
             readme.write_text("custom notes\n", encoding="utf-8")

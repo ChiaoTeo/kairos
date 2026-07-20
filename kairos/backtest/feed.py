@@ -116,6 +116,9 @@ class MarketReplayDataset:
         return catalog
 
 
+HistoricalDataset = MarketReplayDataset
+
+
 class MarketSnapshotReplayFeed:
     def __init__(self, dataset: MarketReplayDataset) -> None:
         self.dataset = dataset

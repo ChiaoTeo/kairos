@@ -9,6 +9,7 @@ __all__ = [
     "Kairos",
     "__version__",
     "initialize_project",
+    "study_platform",
 ]
 
 
@@ -27,4 +28,8 @@ def __getattr__(name: str):
         from kairos.project import initialize_project
 
         return initialize_project
+    if name == "study_platform":
+        from kairos import study_platform
+
+        return study_platform
     raise AttributeError(f"module 'kairos' has no attribute {name!r}")

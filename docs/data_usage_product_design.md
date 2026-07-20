@@ -760,11 +760,14 @@ data_ref = data.dataset("market.returns.equity.us.1d")
 study_data_ref = study.data("us-equity-momentum", "returns", version="1.0.0")
 study_factor_ref = study.factor("us-equity-momentum", "momentum_12_1", version="1.0.0")
 rows = study_data_ref.rows(columns=("decision_date", "instrument_id", "return_1d"))
-run_manifest = run.start("us-equity-momentum-long-only@1.0.0", mode="backtest")
+run_manifest = run.start("us-equity-momentum-long-only@1.0.0", mode="backtest", execute_strategy=True)
 ```
 
 这些入口返回冻结产物引用和 evidence；Data/Study data ref 已支持最小 `rows()` / `pandas()` / `arrow()`
-materialization。Factor output materialization、Strategy context 中 Data/Factor 统一 `InputTable` 仍属于后续目标。
+materialization。Strategy `model.py:decide(context)` 在 backtest / historical-simulation 下已能通过
+`context.input(name)` / `context.data(name)` 消费 Strategy Lock 中声明的 Data input，并把 decision artifact 写入
+Run Workspace。已发布为 Feature Data Release 的 Factor input 也会以 `InputTableRef` 暴露；未发布的
+Candidate/Frozen Factor 仍是 contract-only，不能被 `context.input(...).rows()` 直接读取。
 
 Study API 的职责是把 Dataset 和 Factor Code 组合起来：
 
@@ -958,6 +961,11 @@ universe = context.input("universe")
 - Data 输入的 `source_hash` 是 Data Release hash；
 - Factor 输入的 `source_hash` 是 Study Lock 中记录的 factor code hash；带 metadata 的 Factor 还必须记录并校验
   `factor_contract_hash` 和 `parameters_hash`；
+- 已通过 `study publish-factor` 发布为 Feature Data Release 的 Factor 输入，会在 Strategy input 中额外记录
+  `materialization_status: published_feature`、`dataset`、`release_id`、`content_hash`、`manifest_hash` 和
+  `factor_run_hash`，并可由 `context.input(name).rows()` 读取；
+- 未发布的 Factor 输入保持 `materialization_status: contract_only`，可被 Strategy Lock 引用和审计，但不能直接
+  materialize 为 InputTable；
 - `strategy_eligible: false` 的 Candidate/Frozen Factor 不能绑定为 Strategy input；
 - `artifact_ref` 指向 Data Release、Live View 或 Frozen Factor 产物，不指向物理文件路径；
 - 所有输入都有 `primary_time`、`grain` 和 schema；
@@ -1370,8 +1378,11 @@ def decide(context):
 
 - `kairos data download <data_key>`：已支持 credential-free 的 `tutorial-sma-data`，走 Data Catalog 和 Release 产物；
 - `kairos data register-download --key <data_key> --spec <spec.json|yaml>`：已支持用户注册本地 `local_csv`
-  download spec；注册阶段只保存 spec 与来源路径，`data download <key>` 发布时才读取本地文件并生成 Data Release、
-  `content_hash`、`manifest_hash`、`quality_report_hash` 和 report；
+  和 `python_provider` download spec；注册阶段只保存 spec 与来源路径，`data download <key>` 发布时才读取
+  本地文件或执行 provider `acquire(product, scope, context)`，并生成 Data Release、`content_hash`、
+  `manifest_hash`、`quality_report_hash` 和 report；provider 可声明 required env credentials，缺失时
+  fail closed，report 只记录 credential 名称和 provided 状态；`mode.acquire_missing: true` 会复用已有
+  approved Release，避免重复执行 provider；
 - `kairos data write --file ... --as <dataset_id> --contract <contract>`：已支持 CSV 时间序列按 Data Contract 写入 Release；
 - `kairos data write`、注册本地 CSV download 和 `study publish-factor` 已写出最小 `data.quality_report`：
   区分 non-empty、required fields、primary time 等 gate，以及 missing values、duplicate primary time 等 diagnostic；
@@ -1389,7 +1400,7 @@ def decide(context):
   `factor.run.profile`，包含 row count、fields、primary_time、missing values 和 point-in-time 声明状态；
 - `kairos study publish-factor <study_id> <factor_name> --as <dataset_id>` 已可把最新通过的 factor-run rows
   发布为 Feature Data Release，生成 Data Release manifest/hash/ref，并保留 factor contract、parameter 和
-  factor-run lineage；
+  factor-run lineage；CSV Feature Release 同时写出 DatasetClient 可读取的分区 `part-000.csv` 视图；
 - `kairos strategy open/bind-factor/set-risk/inspect/freeze`：已支持从 Frozen Study 创建 Strategy workspace，并复用 Study factor hash；
 - Strategy bind/freeze 已开始检查 Factor metadata 语义边界：显式 `strategy_eligible: false` 的 Factor 不能绑定到
   Strategy；带 metadata 的 Strategy input 在 freeze 时会校验 `factor_contract_hash` 和 `parameters_hash`
@@ -1400,8 +1411,12 @@ def decide(context):
   和 `order_style`；
 - `kairos strategy set-model-code <strategy_id> model.py --metadata <model.metadata.yaml>` 已把用户区 `model.py`
   作为 Strategy Model Contract 读入 workspace，校验 model metadata 声明的 inputs 必须来自 Strategy Lock 的
-  data/factor input，并在 Strategy Lock 中记录 `model_code_hash` / `model_contract_hash`；`run start` 不重新读取
-  本地 `model.py`；
+  data/factor input，并在 Strategy Lock 中记录 `model_code_hash` / `model_contract_hash`；注册时会把 `model.py`
+  复制为 Strategy workspace 受管 artifact，`run start` 不重新读取本地 Draft `model.py`；
+- `kairos run start --snapshot <strategy@version> --mode backtest --execute-strategy` 已支持用户
+  `model.py:decide(context)` 的最小执行路径：context 只暴露 Strategy Lock 声明的输入，Data input 和已发布
+  Feature Release 的 Factor input 以 `InputTableRef` 读取冻结 Data Release，decision 和 `decision_hash`
+  写入 Run Workspace；
 - Python API 的 `data.dataset(...)` / `study.data(...)` 已返回 dict-compatible `InputTableRef`，既保留
   Data Release evidence，又能通过 `rows()` / `pandas()` / `arrow()` 读取冻结 release；
 - `kairos run start/inspect/replay/compare`：已支持从 Study 或 Strategy snapshot 创建 Run Workspace 和 Run Manifest；
@@ -1489,22 +1504,28 @@ def decide(context):
    目录结构和更强 point-in-time 质量门禁还没有统一到正式模型；
 4. 本地 factor 已记录 code hash；外部 metadata 文件协议已能声明输入 alias、依赖、参数、输出 schema 和
    point-in-time 语义，并进入 Study Lock / Strategy input；factor-run 已输出最小 profile，publish-factor
-   已可发布为 Feature Data Release；但 decorator 和更完整 point-in-time 数据检查还没有完成；
+   已可发布为 Feature Data Release；已发布 Feature 可作为 Strategy `InputTableRef` 消费；但 decorator
+   和更完整 point-in-time 数据检查还没有完成；
 5. Strategy Product workspace 已最小落地；`model.py`、risk/execution policy contract/hash 已进入 Strategy Lock；
-   但完整 `strategy.decide(context)` runtime 语义、execution policy 更完整语义和 promotion evidence 还不完整；
+   backtest/historical-simulation 已支持用户 `model.py:decide(context)` 最小执行路径；但完整
+   `strategy.decide(context)` runtime 语义、execution policy 更完整语义和 promotion evidence 还不完整；
 6. Strategy 已要求从 Frozen Study 打开，并已检查 Data Release evidence、factor code hash、factor metadata
    contract hash 与 parameter hash；但 Data Release hash 与 Factor Output 的完整语义一致性还没有自动验证；
-7. Study factor 与 Strategy input 的 metadata contract/hash 一致性已最小检查；Strategy model 对 Factor Output
-   schema 的完整消费语义检查还没有自动完成；
+7. Study factor 与 Strategy input 的 metadata contract/hash 一致性已最小检查；已发布 Feature Factor 可进入
+   Strategy context 作为 InputTable；Strategy model 对未发布 Factor Output schema 的完整消费语义检查还没有自动完成；
 8. Data Product 已有最小 `data download` 和 `data write` 入口，live write 已要求 freshness contract；已注册
-   `local_csv` download spec 可通过 Python API/CLI 发布为 Data Release；CSV Data Release 已写出独立
-   `data.quality_report` 和稳定 hash；但 provider/acquire 型 download spec、更完整 YAML contract 规范和
-   richer quality profile 还没有完整实现；
+   `local_csv` 和 `python_provider` download spec 可通过 Python API/CLI 发布为 Data Release；CSV Data
+   Release 已写出独立 `data.quality_report` 和稳定 hash；provider 已支持最小 env credential gate、脱敏
+   evidence 和 `acquire_missing` 复用策略；但 provider catalog、secret backend、更完整的批量 acquire
+   planner、更完整 YAML contract 规范和 richer quality profile 还没有完整实现；
 9. 实时数据流接入已能生成 Live View manifest，并已有 provider WebSocket/canonical channel 运行基线；四产品 paper/live run 已要求 healthy Live View freshness 和 channel diagnostics，`soak-binance` 已能把审计结果写回指定 Live View manifest，Run Manifest 已记录 DataSet 到 Live View/EventSource/channel 的最小 subscription binding、runtime feed plan、feed/monitor bundle hash、execution runtime plan 和 strategy runtime plan，feed plan 已能生成 `ManagedServiceSpec` 并被 `AsyncKairosRuntime` 监督，`LiveViewFreshnessMonitor` 已能持续写回 manifest，connector service metrics 已能生成 monitor evidence，feed/monitor 已能按 binding 成对组装为 runtime bundle，Binance runtime feed factory 已能从 Live View manifest 自动生成 connector/channel/capture/monitor 运行包，Run Product 已能显式调用该 factory 执行订阅并记录 runtime execution 摘要，paper simulated execution gateway 已能作为 supervised service 同步启动，注入式 strategy runner 和 Strategy Lock 内置 SMA runner 已能进入同一个 supervised runtime，paper intent bridge 已能把 strategy TargetExposureIntent 转成 simulated execution gateway order ack、fill projection、durable runtime-store evidence 和 readiness/reconciliation evidence，canonical capture 已可归档为 DataSet identity 下的 replayable `MARKET_EVENTS` Release；但 paper/live 默认生产运行生命周期和 live execution gateway runner 还没有完整统一到 Run Product；
-10. Run Product 已有最小 `run start/inspect/replay/compare` API，但还没有接入真实 InputTable、clock、feed 和 execution gateway；
+10. Run Product 已有最小 `run start/inspect/replay/compare` API，Strategy user model backtest 已可通过
+    `InputTableRef` 消费冻结 Data Release 和已发布 Feature Factor；但完整 clock、feed 和 execution gateway
+    还没有统一接入所有 run mode；
 11. `data.dataset(name)`、`study.data(name)`、`study.factor(name)` 和 `run.start(...)` 的最小引用/启动 API
     已落地；Data/Study data 已支持最小 `rows()` / `pandas()` / `arrow()` materialization；Factor output
-    materialization、Strategy context 统一 `InputTable` 与 `strategy.decide(context)` 还没有完成；
+    发布为 Feature 后已能作为 Strategy InputTable；未发布 Factor output materialization 与完整
+    `strategy.decide(context)` runtime 还没有完成；
 12. Factor Code 外部 metadata/hash 协议已最小落地；decorator API、探索产物晋级和 Factor runtime profile 还没有完成；
 13. Exploratory/Study/Registered/Production Data 的分层门禁还没有统一实现；
 14. Exploration Artifact 与 Candidate/Frozen Factor 的边界还没有模型化；
@@ -1687,6 +1708,33 @@ quality:
 
 注册只保存 spec 和 spec 来源路径；`data download custom-bars` 执行发布时才读取 `local_csv` 和 contract，
 并生成正式 Data Release 证据。
+
+当前也已落地最小 Python provider 注册形式：
+
+```yaml
+kind: data.download
+key: provider-sentiment
+mode:
+  acquire_missing: true
+scope:
+  start: 2026-01-01T00:00:00Z
+source:
+  kind: python_provider
+  path: provider.py
+  function: acquire
+  credentials:
+    required_env: [MASSIVE_API_KEY]
+products:
+  - dataset_id: reference.sentiment.provider
+    instrument_id: equity:US:AAPL
+    contract: sentiment.contract.yaml
+```
+
+`provider.py` 需要提供 `acquire(product, scope, context)`，返回 rows 或 `{"rows": [...]}`。provider 只在
+`data download` 发布边界执行；如果声明了 credentials，缺少环境变量时 download fail closed。provider 运行时可从
+`context["credentials"]` 读取密钥；发布证据只记录 credential env 名称和 provided 状态，不写密钥值。发布后的
+Study/Strategy 只依赖 Data Release evidence，不依赖 provider 脚本路径。`mode.acquire_missing: true` 时，
+已存在 approved Release 的 product 会返回 `source.acquire_policy: reused_existing_release`，不会再次执行 provider。
 
 期望产物：
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import locale
 import os
-from typing import Mapping
+from typing import Iterable, Mapping, Sequence
 import unicodedata
 
 
@@ -296,6 +296,85 @@ def render_error(error: Exception, language: str, *, json_output: bool = False) 
         return json.dumps({"error": {"code": code, "message": str(error)}}, ensure_ascii=False, indent=2)
     messages = _TEXT[language]
     return f"{messages['error.title']}\n\n  {error}\n\n{messages['error.help']}\n\nError code: {code}"
+
+
+def render_status_table(
+    title: str,
+    rows: Sequence[Mapping[str, object]],
+    *,
+    columns: tuple[str, ...] = ("name", "status", "detail"),
+) -> str:
+    rendered = _render_rich_status_table(title, rows, columns)
+    if rendered is not None:
+        return rendered
+    headers = tuple(column.replace("_", " ").title() for column in columns)
+    table_rows = [tuple(_display_status_cell(row.get(column, "")) for column in columns) for row in rows]
+    return "\n".join(_table(title, headers, table_rows)).rstrip()
+
+
+def render_key_value_panel(title: str, rows: Sequence[tuple[str, object]]) -> str:
+    rendered = _render_rich_key_value_panel(title, rows)
+    if rendered is not None:
+        return rendered
+    return "\n".join(_section(title, [(label, _display_status_cell(value)) for label, value in rows])).rstrip()
+
+
+def render_command_success(title: str, rows: Sequence[tuple[str, object]] = ()) -> str:
+    if not rows:
+        return title
+    return render_key_value_panel(title, rows)
+
+
+def _render_rich_status_table(
+    title: str,
+    rows: Sequence[Mapping[str, object]],
+    columns: tuple[str, ...],
+) -> str | None:
+    try:
+        from rich.console import Console
+        from rich.table import Table
+    except Exception:
+        return None
+    console = Console(record=True, force_terminal=False, color_system=None, width=120)
+    table = Table(title=title, show_header=True, header_style="bold")
+    for column in columns:
+        table.add_column(column.replace("_", " ").title())
+    for row in rows:
+        table.add_row(*(_display_status_cell(row.get(column, "")) for column in columns))
+    console.print(table)
+    return console.export_text().rstrip()
+
+
+def _render_rich_key_value_panel(title: str, rows: Sequence[tuple[str, object]]) -> str | None:
+    try:
+        from rich.console import Console
+        from rich.table import Table
+    except Exception:
+        return None
+    console = Console(record=True, force_terminal=False, color_system=None, width=120)
+    table = Table(title=title, show_header=False)
+    table.add_column("Field")
+    table.add_column("Value")
+    for label, value in rows:
+        table.add_row(label, _display_status_cell(value))
+    console.print(table)
+    return console.export_text().rstrip()
+
+
+def _display_status_cell(value: object) -> str:
+    if value is None:
+        return "-"
+    text = str(value)
+    normalized = text.lower()
+    if normalized == "ok":
+        return "OK"
+    if normalized in {"warning", "warn"}:
+        return "WARN"
+    if normalized == "error":
+        return "ERROR"
+    if normalized == "locked":
+        return "LOCKED"
+    return text
 
 
 def _passed(payload: Mapping[str, object]) -> bool:

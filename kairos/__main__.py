@@ -356,6 +356,28 @@ def _parser() -> argparse.ArgumentParser:
     build_features.add_argument("--minimum-price", type=Decimal, default=Decimal("5"))
     build_features.add_argument("--minimum-adv20", type=Decimal, default=Decimal("10000000"))
     build_features.add_argument("--minimum-history", type=int, default=252)
+    config = commands.add_parser("config", help="inspect and edit the local Kairos project configuration")
+    config_actions = config.add_subparsers(dest="action", required=True)
+    config_actions.add_parser("path", help="print the discovered kairos.toml path")
+    config_show = config_actions.add_parser("show", help="print the current configuration with secrets redacted")
+    config_show.add_argument("--raw", action="store_true", help="include raw values without redaction")
+    config_validate = config_actions.add_parser("validate", help="validate the discovered configuration")
+    config_validate.add_argument("--strict", action="store_true", help="return non-zero when warnings exist")
+    config_set = config_actions.add_parser("set", help="set a TOML value by dotted path")
+    config_set.add_argument("path", help="dotted TOML path, for example providers.massive.api_key")
+    config_set.add_argument("value", help="scalar value; use env:VARIABLE_NAME for credentials")
+    config_unset = config_actions.add_parser("unset", help="remove a TOML value by dotted path")
+    config_unset.add_argument("path", help="dotted TOML path to remove")
+    doctor = commands.add_parser("doctor", help="diagnose the local Kairos project setup")
+    doctor.add_argument("--strict", action="store_true", help="return non-zero when warnings exist")
+    configure = commands.add_parser("configure", help="configure a provider in the local Kairos project")
+    configure_actions = configure.add_subparsers(dest="provider", required=True)
+    configure_massive = configure_actions.add_parser("massive", help="configure Massive credentials")
+    configure_massive.add_argument("--api-key-env", default="MASSIVE_API_KEY", help="environment variable containing the Massive API key")
+    configure_binance = configure_actions.add_parser("binance", help="configure Binance credentials")
+    configure_binance.add_argument("--environment", choices=("testnet", "live"), default="testnet")
+    configure_binance.add_argument("--api-key-env", help="environment variable containing the Binance API key")
+    configure_binance.add_argument("--api-secret-env", help="environment variable containing the Binance API secret")
     pricing = commands.add_parser("pricing", help="price options and solve implied volatility without a venue connection")
     pricing_actions = pricing.add_subparsers(dest="action", required=True)
     pricing_option = pricing_actions.add_parser("option")
@@ -694,7 +716,7 @@ def _parser() -> argparse.ArgumentParser:
     run_start.add_argument("--execute-feeds", action="store_true",
                            help="for paper/live, instantiate provider feed runtime services and run them briefly")
     run_start.add_argument("--execute-strategy", action="store_true",
-                           help="for paper/live, require a bound strategy runtime runner in the supervised runtime")
+                           help="execute a bound Strategy model: supervised runtime for paper/live, decide(context) for user model backtests")
     run_start.add_argument("--feed-runtime-seconds", type=float, default=5.0,
                            help="duration for --execute-feeds/--execute-strategy supervised runtime")
     run_backtest_generic = run_actions.add_parser("backtest", help="run a Strategy Release through the unified backtest entry")
@@ -786,6 +808,158 @@ def _spec(args: argparse.Namespace) -> OptionChainCaptureSpec:
     return OptionChainCaptureSpec(**values)
 
 
+def _has_cli_option(raw_argv: list[str], name: str) -> bool:
+    return any(item == name or item.startswith(name + "=") for item in raw_argv)
+
+
+def _apply_project_config_defaults(args: argparse.Namespace, raw_argv: list[str]) -> None:
+    from kairos.configuration import load_project_config_or_none
+
+    config = load_project_config_or_none()
+    if config is None:
+        return
+    setattr(args, "_kairos_project_config", config)
+    defaults = {
+        "--lake-root": ("lake_root", "data.lake_root", "data"),
+        "--dataset-root": ("dataset_root", "data.dataset_root", "data/curated"),
+        "--catalog-path": ("catalog_path", "data.catalog_path", "data/catalog/instruments.json"),
+        "--reference-catalog-path": ("reference_catalog_path", "data.reference_catalog_path", "data/reference/catalog.json"),
+        "--event-log-path": ("event_log_path", "data.event_log_path", "data/events/kairos.jsonl"),
+    }
+    for option, (attribute, dotted_path, default) in defaults.items():
+        if not hasattr(args, attribute) or _has_cli_option(raw_argv, option):
+            continue
+        value = config.relative_path(dotted_path, default)
+        setattr(args, attribute, str(value))
+    if hasattr(args, "data_root") and not _has_cli_option(raw_argv, "--data-root"):
+        setattr(args, "data_root", str(config.root / "data" / "snapshots"))
+
+
+def _require_project_config(args: argparse.Namespace):
+    from kairos.configuration import KairosProjectConfig
+
+    existing = getattr(args, "_kairos_project_config", None)
+    return existing if existing is not None else KairosProjectConfig.discover()
+
+
+def _config_command(args: argparse.Namespace) -> int:
+    from kairos.configuration import ConfigError, set_config_value, unset_config_value
+
+    try:
+        config = _require_project_config(args)
+        if args.action == "path":
+            print(config.path)
+            return 0
+        if args.action == "show":
+            payload = config.data if args.raw else config.to_redacted_dict()
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if args.action == "set":
+            set_config_value(config.path, args.path, args.value)
+            if not args.quiet:
+                print(f"Set {args.path}")
+            return 0
+        if args.action == "unset":
+            removed = unset_config_value(config.path, args.path)
+            if not args.quiet:
+                print(f"{'Removed' if removed else 'Not set'} {args.path}")
+            return 0
+        issues = config.validate()
+        payload = {"path": str(config.path), "valid": not issues, "issues": issues}
+        if args.format == "json":
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(f"Config: {config.path}")
+            print("Status: " + ("valid" if not issues else "needs attention"))
+            for issue in issues:
+                print(f"- {issue}")
+        return 2 if issues and args.strict else 0
+    except ConfigError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _configure_command(args: argparse.Namespace) -> int:
+    from kairos.configuration import ConfigError, set_config_value
+
+    try:
+        config = _require_project_config(args)
+        if args.provider == "massive":
+            set_config_value(config.path, "providers.massive.api_key", f"env:{args.api_key_env}")
+            message = f"Configured Massive API key from {args.api_key_env}"
+        elif args.provider == "binance":
+            key_env = args.api_key_env or (
+                "BINANCE_TESTNET_API_KEY" if args.environment == "testnet" else "BINANCE_LIVE_API_KEY"
+            )
+            secret_env = args.api_secret_env or (
+                "BINANCE_TESTNET_API_SECRET" if args.environment == "testnet" else "BINANCE_LIVE_API_SECRET"
+            )
+            base = f"providers.binance.{args.environment}"
+            set_config_value(config.path, f"{base}.api_key", f"env:{key_env}")
+            set_config_value(config.path, f"{base}.api_secret", f"env:{secret_env}")
+            message = f"Configured Binance {args.environment} credentials from {key_env}/{secret_env}"
+        else:
+            raise SystemExit(f"unsupported provider: {args.provider}")
+        if args.format == "json":
+            print(json.dumps({"configured": args.provider, "path": str(config.path)}, ensure_ascii=False, indent=2))
+        elif not args.quiet:
+            print(message)
+        return 0
+    except ConfigError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _doctor(args: argparse.Namespace) -> int:
+    from kairos.configuration import ConfigError
+
+    checks: list[dict[str, object]] = []
+    try:
+        config = _require_project_config(args)
+    except ConfigError as exc:
+        checks.append({"name": "project", "status": "error", "detail": str(exc)})
+        _print_doctor(checks, args.format)
+        return 2
+    checks.append({"name": "project", "status": "ok", "detail": str(config.path)})
+    for issue in config.validate():
+        checks.append({"name": "config", "status": "warning", "detail": issue})
+    if not any(item["name"] == "config" for item in checks):
+        checks.append({"name": "config", "status": "ok", "detail": "kairos.toml is structurally valid"})
+    try:
+        config.massive_config()
+        checks.append({"name": "massive", "status": "ok", "detail": "credentials resolved"})
+    except Exception as exc:
+        checks.append({"name": "massive", "status": "warning", "detail": str(exc)})
+    for environment in ("testnet", "live"):
+        try:
+            config.binance_credentials(environment)
+            checks.append({"name": f"binance.{environment}", "status": "ok", "detail": "credentials resolved"})
+        except Exception as exc:
+            checks.append({"name": f"binance.{environment}", "status": "warning", "detail": str(exc)})
+    _print_doctor(checks, args.format)
+    failed = any(item["status"] == "error" or (args.strict and item["status"] == "warning") for item in checks)
+    return 2 if failed else 0
+
+
+def _print_doctor(checks: list[dict[str, object]], output_format: str) -> None:
+    if output_format == "json":
+        print(json.dumps({"checks": checks}, ensure_ascii=False, indent=2))
+        return
+    for item in checks:
+        print(f"{item['status']}: {item['name']} - {item['detail']}")
+
+
+def _massive_config(args: argparse.Namespace | None = None) -> MassiveConfig:
+    from kairos.configuration import ConfigError, load_project_config_or_none
+
+    config = getattr(args, "_kairos_project_config", None) if args is not None else None
+    config = config or load_project_config_or_none()
+    if config is not None:
+        try:
+            return config.massive_config()
+        except ConfigError:
+            pass
+    return MassiveConfig.from_env()
+
+
 def main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else argv
     parser = _parser()
@@ -793,6 +967,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
     args = parser.parse_args(raw_argv)
+    if args.group != "init":
+        _apply_project_config_defaults(args, raw_argv)
+    if args.group == "config":
+        return _config_command(args)
+    if args.group == "doctor":
+        return _doctor(args)
+    if args.group == "configure":
+        return _configure_command(args)
     if args.group == "catalog":
         return _catalog(args)
     if args.group == "account":
@@ -1325,7 +1507,7 @@ def _data(args: argparse.Namespace) -> int:
         moved = MassiveVendorArchiveClient.quarantine_non_https(args.lake_root)
         print(json.dumps({"quarantined": len(moved), "paths": [str(item) for item in moved]}, ensure_ascii=False, indent=2)); return 0
     if args.action == "sync-provider-reference":
-        pipeline = MassiveReferencePipeline(args.lake_root, MassiveClient(MassiveConfig.from_env()))
+        pipeline = MassiveReferencePipeline(args.lake_root, MassiveClient(_massive_config(args)))
         result: dict[str, object] = {"code_tables": pipeline.sync_code_tables()}
         if args.equity_tickers:
             result["equity_tickers"] = pipeline.sync_equity_tickers(include_inactive=not args.active_only)
@@ -1350,7 +1532,7 @@ def _data(args: argparse.Namespace) -> int:
         print(f"{dataset.manifest.dataset_id}: slices={dataset.manifest.slice_count} hash={dataset.manifest.content_hash}")
         return 0
     if args.action == "provider-entitlement-diagnostics":
-        report = MassiveEntitlementDiagnostics(MassiveClient(MassiveConfig.from_env())).check(
+        report = MassiveEntitlementDiagnostics(MassiveClient(_massive_config(args))).check(
             underlying=args.underlying, option_ticker=args.option_ticker, date=args.date)
         print(json.dumps({
             "ready": report.ready,
@@ -1364,14 +1546,14 @@ def _data(args: argparse.Namespace) -> int:
         result = ParquetMarketEventRepository(Path(args.lake_root) / "canonical" / "market").compact(args.dataset)
         print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
     if args.action == "provider-fetch":
-        client = MassiveClient(MassiveConfig.from_env())
+        client = MassiveClient(_massive_config(args))
         archive = MassiveVendorArchiveClient(args.lake_root, client)
         resource, params = _massive_request(args)
         result = archive.fetch_pages(resource, params, max_pages=args.max_pages)
         print(json.dumps({"fingerprint": result.fingerprint, "directory": str(result.directory), "receipt": result.receipt}, ensure_ascii=False, indent=2))
         return 0
     if args.action == "provider-flat-file":
-        client = MassiveClient(MassiveConfig.from_env())
+        client = MassiveClient(_massive_config(args))
         flat = MassiveFlatFileClient(args.lake_root, client)
         if args.operation == "usage":
             print(json.dumps(flat.usage(), ensure_ascii=False, indent=2)); return 0
@@ -1381,7 +1563,7 @@ def _data(args: argparse.Namespace) -> int:
             print(json.dumps(flat.cache_status(args.key), ensure_ascii=False, indent=2)); return 0
         print(flat.download(args.key)); return 0
     if args.action == "provider-flat-file-batch":
-        flat = MassiveFlatFileClient(args.lake_root, MassiveClient(MassiveConfig.from_env()))
+        flat = MassiveFlatFileClient(args.lake_root, MassiveClient(_massive_config(args)))
         report = MassiveFlatFileBatchDownloader(flat).download_range(
             date.fromisoformat(args.start), date.fromisoformat(args.end), max_files=args.max_files, dry_run=args.dry_run,
         )
@@ -1398,7 +1580,7 @@ def _data(args: argparse.Namespace) -> int:
         print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
     if args.action == "prepare-equity-daily-ohlcv":
         manifest = MassiveEquityDailyOhlcvPipeline(
-            args.lake_root, MassiveClient(MassiveConfig.from_env()),
+            args.lake_root, MassiveClient(_massive_config(args)),
         ).prepare(
             args.dataset_id, args.ticker, date.fromisoformat(args.start), date.fromisoformat(args.end),
             view=args.view,
@@ -1614,7 +1796,7 @@ def _sync_us_equity_momentum_corporate_actions(
     if not ticker_map:
         raise ValueError("cannot sync corporate actions because prepared raw releases contain no ticker/instrument rows")
 
-    archive = MassiveVendorArchiveClient(lake_root, MassiveClient(MassiveConfig.from_env()))
+    archive = MassiveVendorArchiveClient(lake_root, MassiveClient(_massive_config()))
     events: list[dict[str, object]] = []
     receipts: list[str] = []
     per_ticker: dict[str, dict[str, int]] = {}
@@ -2512,6 +2694,16 @@ def _ibkr_session(*, readonly: bool) -> IbkrSession:
 
 
 def _credentials(environment: Environment) -> tuple[str, str]:
+    from kairos.configuration import ConfigError, load_project_config_or_none
+
+    config = load_project_config_or_none()
+    config_environment = "testnet" if environment is Environment.TESTNET else "live"
+    if config is not None:
+        try:
+            credentials = config.binance_credentials(config_environment)
+            return credentials.api_key, credentials.api_secret
+        except ConfigError:
+            pass
     prefix = "BINANCE_TESTNET" if environment is Environment.TESTNET else "BINANCE_LIVE"
     key, secret = os.getenv(f"{prefix}_API_KEY"), os.getenv(f"{prefix}_API_SECRET")
     if not key or not secret:

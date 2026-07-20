@@ -3,8 +3,9 @@
   "kairos_version": "0.1.0",
   "name": "kairos",
   "next_steps": [
-    "python studies/starter.py",
-    "kairos --help"
+    "export MASSIVE_API_KEY=...",
+    "kairos doctor",
+    "python studies/starter.py"
   ],
   "reused": [
     ".kairos/",
@@ -18,6 +19,7 @@
     "studies/",
     "strategies/",
     "kairos.toml",
+    ".env.example",
     "pyproject.toml",
     ".gitignore",
     "README.md",

@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = ["ib_async>=2.1,<3", "websocket-client>=1.8,<2"]
 
 [project.optional-dependencies]
+cli = ["rich>=13,<15", "questionary>=2,<3"]
 notebook = ["jupyterlab>=4,<5", "pandas>=2,<4", "matplotlib>=3.8,<4", "mplfinance>=0.12.10b0,<1"]
 massive = ["websockets>=12,<17"]
 data = ["pyarrow>=22,<26"]

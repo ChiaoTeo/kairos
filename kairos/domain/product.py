@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Protocol, TypeAlias, TypeGuard, runtime_checkable
+from typing import Protocol, TypeGuard, runtime_checkable
 
 from .identity import AssetId, InstrumentId
 
@@ -149,10 +149,9 @@ class TokenizedEquitySpec:
     issuer: str
 
 
-InstrumentContractSpec: TypeAlias = (
-    IndexSpec | EquitySpec | ListedOptionSpec | CryptoSpotSpec | FutureSpec
-    | PerpetualSpec | CryptoOptionSpec | TokenizedEquitySpec
-)
+@runtime_checkable
+class InstrumentContractSpec(Protocol):
+    """Runtime-checkable marker for supported instrument contract specs."""
 
 
 def is_option_spec(spec: object) -> TypeGuard[OptionSpec]:

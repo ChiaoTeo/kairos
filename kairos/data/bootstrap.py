@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from kairos.connectors.binance.datasets import (
@@ -182,13 +181,10 @@ class _ConfiguredMassiveConnector:
         return AcquisitionEstimate(days * len(self.config.option_tickers) * 3 + 6, cost_class="entitled")
 
     def acquire(self, request):
-        if not os.environ.get("MASSIVE_API_KEY"):
-            raise RuntimeError("MASSIVE_API_KEY is required to acquire this planned Massive dataset")
         from kairos.connectors.massive.client import MassiveClient
-        from kairos.connectors.massive.config import MassiveConfig
         from kairos.connectors.massive.datasets import MassiveOptionEventsDatasetConnector
         return MassiveOptionEventsDatasetConnector(
-            self.root, MassiveClient(MassiveConfig.from_env()), self.config,
+            self.root, MassiveClient(_massive_config_for_project()), self.config,
         ).acquire(request)
 
 
@@ -207,14 +203,24 @@ class _ConfiguredMassiveEquityConnector:
         return AcquisitionEstimate(days, cost_class="entitled-rest-bounded-ticker")
 
     def acquire(self, request):
-        if not os.environ.get("MASSIVE_API_KEY"):
-            raise RuntimeError("MASSIVE_API_KEY is required to acquire this planned Massive dataset")
         from kairos.connectors.massive.client import MassiveClient
-        from kairos.connectors.massive.config import MassiveConfig
         from kairos.connectors.massive.datasets import MassiveEquityDailyOhlcvDatasetConnector
         return MassiveEquityDailyOhlcvDatasetConnector(
-            self.root, MassiveClient(MassiveConfig.from_env()), self.config,
+            self.root, MassiveClient(_massive_config_for_project()), self.config,
         ).acquire(request)
+
+
+def _massive_config_for_project():
+    from kairos.configuration import ConfigError, load_project_config_or_none
+    from kairos.connectors.massive.config import MassiveConfig
+
+    config = load_project_config_or_none()
+    if config is not None:
+        try:
+            return config.massive_config()
+        except ConfigError:
+            pass
+    return MassiveConfig.from_env()
 
 
 def _massive_option_products(path: str | Path) -> tuple[dict[str, object], ...]:

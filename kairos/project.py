@@ -47,8 +47,9 @@ def initialize_project(target: str | Path = ".", *, name: str | None = None, for
         created=tuple(created),
         reused=tuple(reused),
         next_steps=(
+            "export MASSIVE_API_KEY=...",
+            "kairos doctor",
             "python studies/starter.py",
-            "kairos --help",
         ),
     )
     metadata = {**result.to_dict(), "root": ".", "kairos_version": __version__}
@@ -99,6 +100,7 @@ def _directories() -> tuple[Path, ...]:
 def _files(project_name: str) -> tuple[tuple[Path, str], ...]:
     return (
         (Path("kairos.toml"), _kairos_toml(project_name)),
+        (Path(".env.example"), _env_example()),
         (Path("pyproject.toml"), _pyproject_toml(project_name)),
         (Path(".gitignore"), _gitignore()),
         (Path("README.md"), _readme(project_name)),
@@ -154,8 +156,14 @@ def _default_project_name(root: Path) -> str:
 def _kairos_toml(project_name: str) -> str:
     return f"""[project]
 name = "{project_name}"
-data_root = "data"
 timezone = "UTC"
+
+[data]
+lake_root = "data"
+dataset_root = "data/curated"
+catalog_path = "data/catalog/instruments.json"
+reference_catalog_path = "data/reference/catalog.json"
+event_log_path = "data/events/kairos.jsonl"
 
 [study]
 default_study = "starter"
@@ -163,6 +171,33 @@ default_study = "starter"
 [execution]
 default_environment = "simulated"
 live_trading_enabled = false
+
+[providers.massive]
+api_key = "env:MASSIVE_API_KEY"
+timeout_seconds = 30
+max_retries = 4
+
+[providers.binance.testnet]
+api_key = "env:BINANCE_TESTNET_API_KEY"
+api_secret = "env:BINANCE_TESTNET_API_SECRET"
+
+[providers.binance.live]
+api_key = "env:BINANCE_LIVE_API_KEY"
+api_secret = "env:BINANCE_LIVE_API_SECRET"
+"""
+
+
+def _env_example() -> str:
+    return """# kairos.toml references these values with env:VARIABLE_NAME.
+# Keep real credentials out of version control.
+
+MASSIVE_API_KEY=
+
+BINANCE_TESTNET_API_KEY=
+BINANCE_TESTNET_API_SECRET=
+
+BINANCE_LIVE_API_KEY=
+BINANCE_LIVE_API_SECRET=
 """
 
 
@@ -199,11 +234,13 @@ This is a Kairos quantitative study, backtest, and execution project.
 ## Start
 
 ```bash
+export MASSIVE_API_KEY=...
+kairos doctor
 python studies/starter.py
-kairos --help
 ```
 
 Project data lives under `data/`. Keep study code in `studies/` and reusable strategy code in `strategies/`.
+Configure providers in `kairos.toml`; credentials should normally be referenced with `env:VARIABLE_NAME`.
 """
 
 

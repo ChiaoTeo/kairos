@@ -8,6 +8,7 @@ from decimal import Decimal
 from hashlib import sha256
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -512,12 +513,6 @@ def _write_registered_download_product(
     if not isinstance(source_spec, dict):
         raise ValueError("download spec product must declare source")
     source_kind = str(source_spec.get("kind") or source_spec.get("type") or "")
-    if source_kind not in {"local_csv", "csv", "file"}:
-        raise ValueError(f"unsupported download source kind {source_kind!r}; supported: local_csv")
-    source_value = source_spec.get("path") or source_spec.get("file")
-    if not source_value:
-        raise ValueError("download spec local_csv source requires path")
-    source = _resolve_download_spec_file(str(source_value), spec_base)
     contract = _download_product_contract(product_entry, spec, spec_base)
     dataset_id = str(
         product_entry.get("dataset_id")
@@ -532,12 +527,140 @@ def _write_registered_download_product(
     contract_dataset = str(contract.get("dataset_id") or contract.get("identity", {}).get("dataset_id") or dataset_id)
     if contract_dataset != dataset_id:
         raise ValueError(f"download spec contract dataset_id {contract_dataset!r} does not match product {dataset_id!r}")
-    release = _write_historical_file(root, dataset_id, contract, source)
+    existing = _existing_download_release(root, dataset_id, spec)
+    if existing is not None:
+        return existing
+    if source_kind in {"local_csv", "csv", "file"}:
+        source_value = source_spec.get("path") or source_spec.get("file")
+        if not source_value:
+            raise ValueError("download spec local_csv source requires path")
+        source = _resolve_download_spec_file(str(source_value), spec_base)
+        release = _write_historical_file(root, dataset_id, contract, source)
+        return {
+            **release,
+            "source": {"kind": "local_csv", "path": str(source)},
+            "contract": "DataSet Contract",
+        }
+    if source_kind in {"python_provider", "provider", "acquire"}:
+        source, provider_source = _acquire_registered_provider_source(
+            root, spec, product_entry, source_spec, spec_base, dataset_id, contract,
+        )
+        release = _write_historical_file(root, dataset_id, contract, source)
+        return {
+            **release,
+            "source": provider_source,
+            "contract": "DataSet Contract",
+        }
+    raise ValueError(
+        f"unsupported download source kind {source_kind!r}; supported: local_csv, python_provider"
+    )
+
+
+def _existing_download_release(root: Path, dataset_id: str, spec: dict[str, Any]) -> dict[str, object] | None:
+    mode = spec.get("mode") if isinstance(spec.get("mode"), dict) else {}
+    if not bool(mode.get("acquire_missing")):
+        return None
+    try:
+        release = DataCatalog(root).release(dataset_id)
+    except KeyError:
+        return None
+    evidence = _data_release_evidence(root, release)
+    manifest_path = root / release.relative_path / "manifest.json"
+    manifest = _read_json(manifest_path) if manifest_path.exists() else {}
     return {
-        **release,
-        "source": {"kind": "local_csv", "path": str(source)},
+        "dataset_id": dataset_id,
+        "release_id": release.release_id,
+        "content_hash": release.content_hash,
+        "contract_hash": evidence["contract_hash"],
+        "manifest_hash": evidence["manifest_hash"],
+        "quality_level": release.quality_level.value,
+        "primary_time": manifest.get("primary_time"),
+        "fields": manifest.get("fields", []),
+        "artifact": str(root / release.relative_path),
+        "artifact_ref": evidence["artifact_ref"],
+        "source": {"kind": "existing_release", "acquire_policy": "reused_existing_release"},
         "contract": "DataSet Contract",
     }
+
+
+def _acquire_registered_provider_source(
+    root: Path,
+    spec: dict[str, Any],
+    product_entry: dict[str, Any],
+    source_spec: dict[str, Any],
+    spec_base: Path,
+    dataset_id: str,
+    contract: dict[str, Any],
+) -> tuple[Path, dict[str, object]]:
+    source_value = source_spec.get("path") or source_spec.get("file") or source_spec.get("module")
+    if not source_value:
+        raise ValueError("download spec python_provider source requires path")
+    provider_path = _resolve_download_spec_file(str(source_value), spec_base)
+    function_name = str(source_spec.get("function") or "acquire")
+    provider_hash = sha256(provider_path.read_bytes()).hexdigest()
+    required_credentials = _provider_required_env_names(source_spec)
+    missing_credentials = [name for name in required_credentials if not os.environ.get(name)]
+    if missing_credentials:
+        raise ValueError(f"missing required provider credentials: {', '.join(missing_credentials)}")
+    credentials = {name: os.environ[name] for name in required_credentials}
+    module = _load_user_module(provider_path, f"kairos_data_provider_{provider_hash[:12]}")
+    acquire = getattr(module, function_name, None)
+    if not callable(acquire):
+        raise ValueError(f"download provider {provider_path} must define callable {function_name}(product, scope, context)")
+    scope = {
+        **(spec.get("scope") if isinstance(spec.get("scope"), dict) else {}),
+        **(product_entry.get("scope") if isinstance(product_entry.get("scope"), dict) else {}),
+    }
+    context = {
+        "dataset_id": dataset_id,
+        "contract": contract,
+        "source": _json_safe(source_spec),
+        "credentials": credentials,
+    }
+    rows = _rows_from_factor_output(acquire(_json_safe(product_entry), _json_safe(scope), context))
+    fields = _contract_fields(contract)
+    if not rows:
+        raise ValueError("download provider returned no rows")
+    staging_hash = _stable_hash({
+        "dataset_id": dataset_id,
+        "provider_hash": provider_hash,
+        "function": function_name,
+        "scope": scope,
+        "rows": rows,
+    })
+    staging = root / "downloads" / "_provider-staging" / dataset_id.replace(".", "/") / staging_hash[:12] / "rows.csv"
+    _write_rows_csv(staging, rows, fields)
+    return staging, {
+        "kind": "python_provider",
+        "path": str(provider_path),
+        "function": function_name,
+        "provider_code_hash": provider_hash,
+        "credentials": {
+            "required_env": required_credentials,
+            "provided": {name: True for name in required_credentials},
+        },
+        "row_count": len(rows),
+        "staging_hash": staging_hash,
+    }
+
+
+def _provider_required_env_names(source_spec: dict[str, Any]) -> list[str]:
+    credentials = source_spec.get("credentials")
+    raw: object = source_spec.get("credential_env")
+    if isinstance(credentials, dict):
+        raw = credentials.get("env") or credentials.get("required_env") or raw
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        names = [raw]
+    elif isinstance(raw, list):
+        names = [str(item) for item in raw]
+    else:
+        raise ValueError("download spec provider credentials must declare env as a string or list")
+    clean = sorted({name for name in names if name})
+    if len(clean) != len(names):
+        raise ValueError("download spec provider credentials env names must not be empty")
+    return clean
 
 
 def _download_spec_products(spec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -824,6 +947,10 @@ def _write_historical_file(
     copied = directory / source.name
     if not copied.exists() or copied.read_bytes() != source.read_bytes():
         copied.write_bytes(source.read_bytes())
+    readable_csv = directory / "event_year=all" / "event_month=all" / "part-000.csv"
+    readable_csv.parent.mkdir(parents=True, exist_ok=True)
+    if not readable_csv.exists() or readable_csv.read_bytes() != source.read_bytes():
+        readable_csv.write_bytes(source.read_bytes())
     manifest = DataReleaseManifest(
         dataset_id,
         release_id,
@@ -1091,9 +1218,15 @@ def study_publish_factor(args) -> dict[str, object]:
     study.setdefault("published_factors", {})[args.name] = {
         "dataset": dataset_id,
         "release_id": release["release_id"],
+        "content_hash": release["content_hash"],
+        "contract_hash": release["contract_hash"],
         "artifact_ref": release["artifact_ref"],
         "manifest_hash": release["manifest_hash"],
+        "quality_level": release["quality_level"],
+        "primary_time": release["primary_time"],
+        "fields": release["fields"],
         "factor_run_hash": profile.get("run_hash"),
+        "quality_report_hash": release.get("quality_report_hash"),
         "published_at": _now(),
     }
     _write_json(_study_file(args.lake_root, args.study_id), study)
@@ -1115,6 +1248,7 @@ def study_freeze(args) -> dict[str, object]:
         "lifecycle": "FROZEN",
         "data": study.get("data", {}),
         "factors": study.get("factors", {}),
+        "published_factors": study.get("published_factors", {}),
         "readiness": readiness,
         "evidence_chain": _study_evidence_chain(study),
         "frozen_at": _now(),
@@ -1164,6 +1298,17 @@ def strategy_bind_factor(args) -> dict[str, object]:
     study_factor = factors[args.study_factor]
     if study_factor.get("metadata_status") == "declared" and not bool(study_factor.get("strategy_eligible")):
         raise ValueError(f"study factor {args.study_factor!r} is not strategy eligible")
+    published = study_lock.get("published_factors", {}).get(args.study_factor, {})
+    materialized = {
+        key: published.get(key)
+        for key in (
+            "dataset", "release_id", "content_hash", "contract_hash", "manifest_hash",
+            "quality_level", "primary_time", "fields", "factor_run_hash", "quality_report_hash",
+        )
+        if isinstance(published, dict) and published.get(key) is not None
+    }
+    if isinstance(published, dict) and published.get("artifact_ref"):
+        materialized["feature_artifact_ref"] = published.get("artifact_ref")
     strategy.setdefault("inputs", {})[args.name] = {
         "kind": "factor",
         "from_study_factor": args.study_factor,
@@ -1175,6 +1320,8 @@ def strategy_bind_factor(args) -> dict[str, object]:
         "output_schema": study_factor.get("output_schema"),
         "metadata_status": study_factor.get("metadata_status"),
         "strategy_eligible": study_factor.get("strategy_eligible"),
+        "materialization_status": "published_feature" if materialized else "contract_only",
+        **materialized,
         "contract": study_factor.get("contract", "Factor Contract"),
         "artifact_ref": f"study://{derived['study']}/locks/{derived['version']}/factors/{args.study_factor}",
     }
@@ -1842,6 +1989,15 @@ def _run_input_artifacts(target_kind: str, target: dict[str, Any]) -> dict[str, 
             "primary_time": item.get("primary_time"),
             "point_in_time": item.get("point_in_time"),
             "output_schema": item.get("output_schema"),
+            "materialization_status": item.get("materialization_status"),
+            "dataset": item.get("dataset"),
+            "release_id": item.get("release_id"),
+            "content_hash": item.get("content_hash"),
+            "contract_hash": item.get("contract_hash"),
+            "manifest_hash": item.get("manifest_hash"),
+            "quality_level": item.get("quality_level"),
+            "factor_run_hash": item.get("factor_run_hash"),
+            "feature_artifact_ref": item.get("feature_artifact_ref"),
             "artifact_ref": item.get("artifact_ref"),
             "contract": item.get("contract"),
         }

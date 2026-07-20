@@ -1,7 +1,13 @@
 [project]
 name = "kairos"
-data_root = "data"
 timezone = "UTC"
+
+[data]
+lake_root = "data"
+dataset_root = "data/curated"
+catalog_path = "data/catalog/instruments.json"
+reference_catalog_path = "data/reference/catalog.json"
+event_log_path = "data/events/kairos.jsonl"
 
 [study]
 default_study = "starter"
@@ -9,3 +15,16 @@ default_study = "starter"
 [execution]
 default_environment = "simulated"
 live_trading_enabled = false
+
+[providers.massive]
+api_key = "env:MASSIVE_API_KEY"
+timeout_seconds = 30
+max_retries = 4
+
+[providers.binance.testnet]
+api_key = "env:BINANCE_TESTNET_API_KEY"
+api_secret = "env:BINANCE_TESTNET_API_SECRET"
+
+[providers.binance.live]
+api_key = "env:BINANCE_LIVE_API_KEY"
+api_secret = "env:BINANCE_LIVE_API_SECRET"

@@ -29,5 +29,8 @@ __all__ = [
     "StudyWorkspaceRepository",
     "StudyWorkspaceStatus",
     "ensure_sma_tutorial_dataset",
+    "option_capture",
+    "option_snapshot_analysis",
+    "option_universe_selector",
     "open_study",
 ]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -538,6 +539,82 @@ class FourProductSurfaceTests(unittest.TestCase):
         self.assertEqual(bars["manifest_hash"], downloaded["manifest_hash"])
         self.assertEqual(added["status"], "draft")
 
+    def test_registered_python_provider_download_publishes_materialized_release(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            external = root / "provider-spec"
+            external.mkdir()
+            provider = external / "provider.py"
+            contract = external / "sentiment.contract.json"
+            spec = external / "sentiment.download.json"
+            provider.write_text(
+                "from pathlib import Path\n"
+                "def acquire(product, scope, context):\n"
+                "    count_path = Path(__file__).with_name('calls.txt')\n"
+                "    count = int(count_path.read_text()) if count_path.exists() else 0\n"
+                "    count_path.write_text(str(count + 1))\n"
+                "    token = context['credentials']['KAIROS_TEST_PROVIDER_TOKEN']\n"
+                "    sentiment = 0.8 if token == 'secret-token' else -1\n"
+                "    return [{'available_time': scope['start'], 'instrument_id': product['instrument_id'], 'sentiment': sentiment}]\n",
+                encoding="utf-8",
+            )
+            contract.write_text(json.dumps({
+                "dataset_id": "reference.sentiment.provider",
+                "primary_time": "available_time",
+                "fields": ["available_time", "instrument_id", "sentiment"],
+            }), encoding="utf-8")
+            spec.write_text(json.dumps({
+                "kind": "data.download",
+                "key": "provider-sentiment",
+                "scope": {"start": "2026-01-01T00:00:00Z"},
+                "mode": {"acquire_missing": True},
+                "source": {
+                    "kind": "python_provider",
+                    "path": "provider.py",
+                    "credentials": {"env": ["KAIROS_TEST_PROVIDER_TOKEN"]},
+                },
+                "products": [{
+                    "dataset_id": "reference.sentiment.provider",
+                    "instrument_id": "equity:US:AAPL",
+                    "contract": "sentiment.contract.json",
+                }],
+            }), encoding="utf-8")
+
+            data = DataProductApi(root)
+            registered = data.register_download("provider-sentiment", spec)
+            original_token = os.environ.pop("KAIROS_TEST_PROVIDER_TOKEN", None)
+            try:
+                with self.assertRaisesRegex(ValueError, "missing required provider credentials"):
+                    data.download("provider-sentiment")
+                os.environ["KAIROS_TEST_PROVIDER_TOKEN"] = "secret-token"
+                downloaded = data.download("provider-sentiment")
+                rows = data.dataset("reference.sentiment.provider").rows(columns=("instrument_id", "sentiment"))
+                os.environ.pop("KAIROS_TEST_PROVIDER_TOKEN", None)
+                reused = data.download("provider-sentiment")
+                study = StudyProductApi(root)
+                study.open("provider-study")
+                bound = study.add_data("provider-study", name="sentiment", dataset="reference.sentiment.provider")
+                provider_calls = (external / "calls.txt").read_text(encoding="utf-8")
+            finally:
+                if original_token is None:
+                    os.environ.pop("KAIROS_TEST_PROVIDER_TOKEN", None)
+                else:
+                    os.environ["KAIROS_TEST_PROVIDER_TOKEN"] = original_token
+
+        self.assertEqual(registered["operation"], "register-download")
+        self.assertEqual(downloaded["source"]["kind"], "python_provider")
+        self.assertEqual(len(downloaded["source"]["provider_code_hash"]), 64)
+        self.assertEqual(downloaded["source"]["credentials"]["required_env"], ["KAIROS_TEST_PROVIDER_TOKEN"])
+        self.assertEqual(downloaded["source"]["row_count"], 1)
+        self.assertEqual(rows[0]["instrument_id"], "equity:US:AAPL")
+        self.assertEqual(rows[0]["sentiment"], 0.8)
+        self.assertEqual(reused["release_id"], downloaded["release_id"])
+        self.assertEqual(reused["source"]["acquire_policy"], "reused_existing_release")
+        self.assertEqual(provider_calls, "1")
+        self.assertEqual(bound["release_id"], downloaded["release_id"])
+        self.assertNotIn("provider.py", json.dumps(bound))
+        self.assertNotIn("secret-token", json.dumps(downloaded))
+
     def test_factor_metadata_contract_flows_from_study_to_strategy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -851,6 +928,66 @@ class FourProductSurfaceTests(unittest.TestCase):
         self.assertEqual(started["target"]["hash"], lock["lock_hash"])
         self.assertEqual(started["runtime_contract"]["strategy_decision_execution"]["decision_hash"], decision["decision_hash"])
         self.assertEqual(decision["decision"]["observed_close"], "100")
+
+    def test_published_factor_becomes_strategy_input_table(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "factor.py"
+            metadata_file = root / "factor.metadata.json"
+            model_file = root / "model.py"
+            model_metadata = root / "model.metadata.json"
+            factor_file.write_text(
+                "def compute(inputs, params, context):\n"
+                "    rows = inputs['bars'].rows(columns=('available_time', 'close'))\n"
+                "    return [{'available_time': rows[0]['available_time'], 'signal': rows[0]['close']}]\n",
+                encoding="utf-8",
+            )
+            metadata_file.write_text(json.dumps({
+                "inputs": ["bars"],
+                "parameters": {},
+                "primary_time": "available_time",
+                "fields": ["available_time", "signal"],
+                "point_in_time": True,
+            }), encoding="utf-8")
+            model_file.write_text(
+                "def decide(context):\n"
+                "    rows = context.input('primary').rows(columns=('available_time', 'signal'))\n"
+                "    return {'intent': 'rank', 'signal': rows[0]['signal']}\n",
+                encoding="utf-8",
+            )
+            model_metadata.write_text(json.dumps({
+                "inputs": ["primary"],
+                "intent_schema": {"kind": "ranked_signal", "fields": ["available_time", "signal"]},
+                "side_effects_allowed": False,
+            }), encoding="utf-8")
+
+            data = DataProductApi(root)
+            study = StudyProductApi(root)
+            strategy = StrategyProductApi(root)
+            data.download("tutorial-sma-data")
+            study.open("published-factor-study")
+            study.add_data("published-factor-study", name="bars", dataset="market.ohlcv.crypto.tutorial.btc-usdt.1h")
+            study.add_factor("published-factor-study", name="signal", file=factor_file, metadata=metadata_file)
+            factor_run = study.run_factor("published-factor-study", "signal")
+            published = study.publish_factor(
+                "published-factor-study",
+                "signal",
+                as_dataset="features.signal.strategy.input",
+            )
+            study_lock = study.freeze("published-factor-study", version="1.0.0")
+            strategy.open("published-factor-strategy", from_study="published-factor-study@1.0.0")
+            bound = strategy.bind_factor("published-factor-strategy", name="primary", study_factor="signal")
+            strategy.set_model_code("published-factor-strategy", model_file, metadata=model_metadata)
+            strategy.freeze("published-factor-strategy", version="1.0.0")
+            started = RunProductApi(root).start("published-factor-strategy@1.0.0", mode="backtest", execute_strategy=True)
+            decision = json.loads(Path(started["outputs"]["strategy_decision"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(study_lock["published_factors"]["signal"]["release_id"], published["release_id"])
+        self.assertEqual(bound["materialization_status"], "published_feature")
+        self.assertEqual(bound["release_id"], published["release_id"])
+        self.assertEqual(bound["factor_run_hash"], factor_run["run_hash"])
+        self.assertEqual(started["input_artifacts"]["inputs"]["primary"]["release_id"], published["release_id"])
+        self.assertEqual(decision["decision"]["signal"], 100)
 
     def test_strategy_model_metadata_rejects_undeclared_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
