@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -9,18 +9,18 @@ import tempfile
 import unittest
 from uuid import UUID
 
-from trading.adapters.base import ComboLegRequest, ComboOrderRequest, OrderAck, OrderRequest
-from trading.application.clock import FixedClock
-from trading.domain.capability import OrderType
-from trading.domain.execution import TradeSide
-from trading.domain.identity import AccountKey, AccountType, InstrumentId, VenueId
-from trading.domain.intent import CancelIntent
-from trading.domain.order import ExecutionInstructions, TimeInForce
-from trading.execution.order_state import DurableOrderStatus
-from trading.orchestration.coordinator import TradingCoordinator
-from trading.orchestration.event_log import PersistentEventLog
-from trading.orchestration.kill_switch import KillSwitch
-from trading.orchestration.runtime_store import SQLiteRuntimeStore
+from kairos.ports import ComboLegRequest, ComboOrderRequest, OrderAck, OrderRequest
+from kairos.application.clock import FixedClock
+from kairos.domain.capability import OrderType
+from kairos.domain.execution import TradeSide
+from kairos.domain.identity import AccountKey, AccountType, InstrumentId, VenueId
+from kairos.domain.intent import CancelIntent
+from kairos.domain.order import ExecutionInstructions, TimeInForce
+from kairos.execution.order_state import DurableOrderStatus
+from kairos.orchestration.coordinator import TradingCoordinator
+from kairos.orchestration.event_log import PersistentEventLog
+from kairos.orchestration.kill_switch import KillSwitch
+from kairos.orchestration.runtime_store import SQLiteRuntimeStore
 from tests.runtime_support import operational_application
 
 

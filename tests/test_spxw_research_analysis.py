@@ -10,7 +10,7 @@ except ImportError:
     np = pd = None
 
 if pd is not None:
-    from research.spxw_put_skew.analysis import (
+    from studies.spxw_put_skew.analysis import (
         data_quality_report, frozen_parameter_validation, predictability_report,
         risk_decomposition, robustness_sensitivity, strategy_comparison, surface_observations,
     )

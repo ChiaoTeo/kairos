@@ -6,14 +6,14 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from trading.data.market_slice_storage import MarketSliceStorageDriver
-from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.market_data import Quote
-from trading.domain.product import ContractType, FutureSpec, ProductType
-from trading.reference import ReferenceCatalog
+from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairos.domain.identity import AssetId, InstrumentId, VenueId
+from kairos.domain.market_data import Quote
+from kairos.domain.product import ContractType, FutureSpec, ProductType
+from kairos.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
-from trading.research.normalized_series import NormalizedSeriesCaptureService
-from trading.research.series import SeriesCaptureSpec
+from kairos.research.normalized_series import NormalizedSeriesCaptureService
+from kairos.research.series import SeriesCaptureSpec
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
@@ -35,7 +35,7 @@ class NormalizedSeriesReferenceTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             times = iter((NOW, NOW + timedelta(seconds=1)))
-            service = NormalizedSeriesCaptureService(MarketSliceStorageDriver(Path(directory)), wait=lambda _: None, now=lambda: next(times))
+            service = NormalizedSeriesCaptureService(MarketSnapshotStorageDriver(Path(directory)), wait=lambda _: None, now=lambda: next(times))
             dataset = service.capture(Provider(), catalog, (definition,), SeriesCaptureSpec("dataset", 2, 1), source="test", market_data_type="quote")
         self.assertEqual(dataset.contracts[0].instrument_id, instrument)
 

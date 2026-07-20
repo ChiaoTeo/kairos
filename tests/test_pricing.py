@@ -4,10 +4,10 @@ import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from trading.domain.identity import AssetId
-from trading.domain.product import OptionRight
-from trading.market_data import DayCount, RateCurve, RateNode, cost_of_carry_forward, parity_forward, zero_rate
-from trading.pricing import PricingInput, PricingModel, SolverStatus, black_scholes, black76, implied_volatility
+from kairos.domain.identity import AssetId
+from kairos.domain.product import OptionRight
+from kairos.market_data import DayCount, RateCurve, RateNode, cost_of_carry_forward, parity_forward, zero_rate
+from kairos.pricing import PricingInput, PricingModel, SolverStatus, black_scholes, black76, implied_volatility
 
 
 class PricingTests(unittest.TestCase):

@@ -1,4 +1,4 @@
-from trading.data import DataCatalog
+from kairos.data import DataCatalog
 
 
 catalog = DataCatalog("data")

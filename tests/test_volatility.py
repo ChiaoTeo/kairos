@@ -6,11 +6,11 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from trading.data import DataCatalog, DatasetKey, DatasetLayer, DatasetProduct, DatasetRelease
-from trading.data.surface_features import SurfaceFeaturePublisher, load_surface_features
-from trading.domain.identity import InstrumentId
-from trading.domain.product import OptionRight
-from trading.volatility import CalibrationStatus, SviParameters, VolObservation, build_surface, surface_implied_volatility, total_variance
+from kairos.data import DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease
+from kairos.data.surface_features import SurfaceFeaturePublisher, load_surface_features
+from kairos.domain.identity import InstrumentId
+from kairos.domain.product import OptionRight
+from kairos.volatility import CalibrationStatus, SviParameters, VolObservation, build_surface, surface_implied_volatility, total_variance
 
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
@@ -59,14 +59,14 @@ class VolatilityTests(unittest.TestCase):
         surface = build_surface(UNDERLYING, NOW, tuple(observations(expiry, Decimal("0.08"), params)))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            product = DatasetProduct(
-                DatasetKey("curated.market_slices.test.surface"), "Surface input", DatasetLayer.CURATED,
+            product = DataProductDefinition(
+                DatasetKey("curated.market_snapshots.test.surface"), "Surface input", DatasetLayer.CURATED,
                 "Frozen surface input", {"underlying": "SPX"}, owner="test",
             )
             catalog = DataCatalog(root)
             catalog.register_product(product)
             catalog.register_release(DatasetRelease(
-                "surface-input", product.key, "1", "historical_dataset.v2", "2", "fixture", "1",
+                "surface-input", product.key, "1", "market_replay_dataset.v2", "2", "fixture", "1",
                 "curated/input", "parquet", "input-hash",
             ))
             catalog.save()

@@ -1,4 +1,4 @@
-from trading.research import open_study
+from kairos.research_platform import open_study
 
 
 study = open_study(

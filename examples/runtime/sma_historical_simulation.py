@@ -15,9 +15,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from examples.backtest.governed_sma import canonical_events, fixture_bars
-from trading.application import build_simulated_spot_catalog, run_sma_historical_simulation
-from trading.domain.identity import AccountKey, AccountType, AssetId, InstitutionId
-from trading.features import SmaFactorConfig
+from kairos.application import build_simulated_spot_catalog, run_sma_historical_simulation
+from kairos.domain.identity import AccountKey, AccountType, AssetId, InstitutionId
+from kairos.features import SmaFactorConfig
 
 
 async def run(root: Path) -> dict[str, object]:

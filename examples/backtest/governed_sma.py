@@ -13,19 +13,19 @@ from decimal import Decimal
 from hashlib import sha256
 import json
 
-from trading.contracts import canonicalize_market_event
-from trading.application import GovernedStrategyRunLoop, run_target_backtest
-from trading.data import OutputFormat, ResearchDataClient, RunMode
-from trading.domain.identity import InstrumentId
-from trading.domain.market_data import Bar
-from trading.market_data import IterableEventSource, MarketEventEnvelope, MarketEventType
-from trading.storage.codec import to_primitive
-from trading.strategies.sma_cross import (
+from kairos.contracts import canonicalize_market_event
+from kairos.application import GovernedStrategyRunLoop, run_target_backtest
+from kairos.data import OutputFormat, ResearchDataClient, RunMode
+from kairos.domain.identity import InstrumentId
+from kairos.domain.market_data import Bar
+from kairos.market_data import IterableEventSource, MarketEventEnvelope, MarketEventType
+from kairos.storage.codec import to_primitive
+from kairos.strategies.sma_cross_research_backtest import (
     BarSeries, SmaCrossConfig, backtest_sma_cross, backtest_sma_cross_events,
 )
-from trading.features import SmaFactorConfig, SmaFactorRuntime
-from trading.strategies import GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext
-from trading.strategies.specs import sma_strategy_spec
+from kairos.features import SmaFactorConfig, SmaFactorRuntime
+from kairos.strategies import GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext
+from kairos.strategies.specs import sma_strategy_spec
 
 
 def fixture_bars() -> tuple[Bar, ...]:

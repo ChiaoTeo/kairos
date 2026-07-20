@@ -1,6 +1,6 @@
-from trading import __version__
-from trading.data import ResearchDataClient
-from trading.data.products import BTC_SPOT_DAILY
+from kairos import __version__
+from kairos.data import ResearchDataClient
+from kairos.data.products import BTC_SPOT_DAILY
 
 
 data = ResearchDataClient("data")

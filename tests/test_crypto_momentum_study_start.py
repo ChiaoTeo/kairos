@@ -5,11 +5,11 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from trading.adapters.binance.datasets import BinanceUsdmPerpetualHourlyDatasetConnector
-from trading.data.acquisition import ProviderRegistry
-from trading.data.quality import DatasetQualityService
-from trading.product_workflow import start_governed_study
-from trading.research import open_study
+from kairos.connectors.binance.datasets import BinanceUsdmPerpetualHourlyDatasetConnector
+from kairos.data.acquisition import ProviderRegistry
+from kairos.data.quality import DatasetQualityService
+from kairos.product_workflow import start_governed_study
+from kairos.research import open_study
 
 
 class _HourlyArchive:
@@ -44,7 +44,7 @@ class CryptoMomentumStudyStartTests(unittest.TestCase):
                 start="2026-01-01T00:00:00+00:00", end="2026-01-21T00:00:00+00:00",
                 symbol=[], hypothesis="Cross-sectional momentum persists after activation",
             )
-            with patch("trading.data.bootstrap.default_provider_registry", return_value=providers):
+            with patch("kairos.data.bootstrap.default_provider_registry", return_value=providers):
                 result = start_governed_study(args)
 
             self.assertTrue(result["acquired"])
@@ -69,7 +69,7 @@ class CryptoMomentumStudyStartTests(unittest.TestCase):
                 "start": "2026-01-01T00:00:00+00:00", "end": "2026-01-21T00:00:00+00:00",
                 "hypothesis": "Cross-sectional momentum persists after activation",
             }
-            with patch("trading.data.bootstrap.default_provider_registry", return_value=providers):
+            with patch("kairos.data.bootstrap.default_provider_registry", return_value=providers):
                 smoke = start_governed_study(SimpleNamespace(
                     **common, study_id="bounded-smoke", symbol=["BTCUSDT"],
                 ))
@@ -94,7 +94,7 @@ class CryptoMomentumStudyStartTests(unittest.TestCase):
                 symbol=[], hypothesis="Cross-month partitions preserve deterministic research order",
             )
 
-            with patch("trading.data.bootstrap.default_provider_registry", return_value=providers):
+            with patch("kairos.data.bootstrap.default_provider_registry", return_value=providers):
                 result = start_governed_study(args)
 
             self.assertTrue(result["quality_passed"])

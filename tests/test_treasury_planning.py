@@ -5,19 +5,19 @@ from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from trading.domain.identity import AccountKey, AccountType, AssetId, VenueId
-from trading.reference import (
+from kairos.domain.identity import AccountKey, AccountType, AssetId, VenueId
+from kairos.reference import (
     NetworkAssetDefinition, NetworkDefinition, NetworkType, RailId, RailType,
     ReferenceCatalog, SettlementRail,
 )
-from trading.reference.identity import LocationId, NetworkAssetId, NetworkId
-from trading.treasury import (
+from kairos.reference.identity import LocationId, NetworkAssetId, NetworkId
+from kairos.treasury import (
     AmountMode, AssetMovementIntent, BankAccountDestination,
     CryptoAddressDestination, FeePolicy, InternalAccountDestination,
     TransferOperationStore, TreasuryCoordinator, TreasuryPlanner,
 )
-from trading.treasury.adapter import SimulatedTransferAdapter
-from trading.treasury.policy import TransferPolicy
+from kairos.treasury.transfer_gateway import SimulatedTransferGateway
+from kairos.treasury.policy import TransferPolicy
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
@@ -54,7 +54,7 @@ class TreasuryPlanningTests(unittest.TestCase):
         intent = AssetMovementIntent(uuid4(), "fund", SOURCE, CryptoAddressDestination(NetworkAssetId("ethereum:usdt"), "0xabc"), AssetId("USDT"), Decimal("100"), AmountMode.GROSS, FeePolicy.ADD_TO_AMOUNT, "rebalance")
         instruction = self.planner.plan(intent, NOW)
         store = TransferOperationStore()
-        coordinator = TreasuryCoordinator(store, SimulatedTransferAdapter(), TransferPolicy({AssetId("USDT"): Decimal("1000")}, frozenset({"0xabc"})))
+        coordinator = TreasuryCoordinator(store, SimulatedTransferGateway(), TransferPolicy({AssetId("USDT"): Decimal("1000")}, frozenset({"0xabc"})))
         first = coordinator.create(instruction, None, AssetId("USDT"), NOW)
         second = coordinator.create(instruction, None, AssetId("USDT"), NOW)
         self.assertEqual(first.transfer_id, second.transfer_id)

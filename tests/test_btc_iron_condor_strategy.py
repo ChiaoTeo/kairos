@@ -1,9 +1,9 @@
 from decimal import Decimal
 import unittest
 
-from trading.domain.product import ProductType
-from trading.domain.strategy_contract import StrategyLifecycle
-from trading.strategies.btc_iron_condor import BtcIronCondorConfig, BtcIronCondorStrategy
+from kairos.domain.product import ProductType
+from kairos.domain.strategy_contract import StrategyLifecycle
+from kairos.strategies.btc_iron_condor import BtcIronCondorConfig, BtcIronCondorStrategy
 
 
 class BtcIronCondorStrategyTest(unittest.TestCase):

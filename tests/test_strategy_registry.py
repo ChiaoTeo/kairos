@@ -7,14 +7,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from trading.domain.capability import TimeInForce
-from trading.domain.strategy_contract import StrategyLifecycle
-from trading.execution.policy import ExecutionMode,ExecutionPolicy
-from trading.strategies.btc_iron_condor import BtcIronCondorStrategy
-from trading.strategies.registry import PromotionEvidence,StrategyImplementation,StrategyRegistry
-from trading.features import SmaFactorConfig,SmaFactorRuntime
-from trading.strategies.specs import sma_strategy_spec
-from trading.strategies.sma_cross import SmaCrossConfig
+from kairos.domain.capability import TimeInForce
+from kairos.domain.strategy_contract import StrategyLifecycle
+from kairos.execution.policy import ExecutionMode,ExecutionPolicy
+from kairos.strategies.btc_iron_condor import BtcIronCondorStrategy
+from kairos.strategies.registry import PromotionEvidence,StrategyImplementation,StrategyRegistry
+from kairos.features import SmaFactorConfig,SmaFactorRuntime
+from kairos.strategies.specs import sma_strategy_spec
+from kairos.strategies.sma_cross_research_backtest import SmaCrossConfig
 
 
 class StrategyRegistryTest(unittest.TestCase):
@@ -57,7 +57,7 @@ class StrategyRegistryTest(unittest.TestCase):
 
     def test_active_version_and_audited_rollback_are_explicit(self):
         spec,policy=sma_strategy_spec(SmaCrossConfig());factor=SmaFactorRuntime(SmaFactorConfig(),input_identity="x").spec
-        implementation=StrategyImplementation("trading.strategies.sma_strategy:SmaCrossStrategy","a"*64)
+        implementation=StrategyImplementation("kairos.strategies.sma_cross_strategy:SmaCrossStrategy","a"*64)
         with TemporaryDirectory() as directory:
             registry=StrategyRegistry(directory);registry.register(spec,policy,implementation=implementation,factor_specs=(factor,))
             newer=replace(spec,version="1.3.0");registry.register(newer,policy,implementation=implementation,factor_specs=(factor,))

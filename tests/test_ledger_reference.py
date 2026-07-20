@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from trading.accounting.ledger import LedgerService
-from trading.domain.execution import TradeExecution, TradeSide
-from trading.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from trading.domain.ledger import Ledger, LedgerBook
-from trading.domain.product import CryptoSpotSpec, ProductType
-from trading.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
+from kairos.accounting.ledger import LedgerService
+from kairos.domain.execution import TradeExecution, TradeSide
+from kairos.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairos.domain.ledger import Ledger, LedgerBook
+from kairos.domain.product import CryptoSpotSpec, ProductType
+from kairos.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)

@@ -5,14 +5,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
-from trading.backtest.fill import (
+from kairos.backtest.fill import (
     CryptoOptionFillModel, CryptoOrderBookFillModel, DeliveryFutureFillModel,
     EquityBarFillModel, EquityTopOfBookFillModel, PerpetualFillModel,
     SingleAssetOrder, StressWrapperFillModel,
 )
-from trading.domain.execution import TradeSide
-from trading.domain.identity import InstrumentId
-from trading.domain.market_data import (
+from kairos.domain.execution import TradeSide
+from kairos.domain.identity import InstrumentId
+from kairos.domain.market_data import (
     Bar, OrderBookLevel, OrderBookSnapshot, Quote, TradingState, TradingStatus,
 )
 

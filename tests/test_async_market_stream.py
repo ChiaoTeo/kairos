@@ -5,16 +5,16 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
-from trading.contracts import MarketEventKind, QuotePayload, canonicalize_market_event
-from trading.data.feed import ReplayEventFeed, ReplaySpec
-from trading.data.models import DatasetKey, DatasetRelease, DatasetStorageKind
-from trading.domain.identity import InstrumentId
-from trading.market_data import (
+from kairos.contracts import MarketEventKind, QuotePayload, canonicalize_market_event
+from kairos.data.feed import ReplayEventFeed, ReplaySpec
+from kairos.data.contracts import DatasetKey, DatasetRelease, DatasetStorageKind
+from kairos.domain.identity import InstrumentId
+from kairos.market_data import (
     BoundedEventChannel, ConflatedLatestChannel, ConsumerGap, IterableEventSource,
     MarketEventEnvelope, MarketEventType, OverflowPolicy, StreamOverflow,
 )
-from trading.strategies.sma_cross import BarSeries, SmaCrossConfig, backtest_sma_cross, backtest_sma_cross_events
-from trading.domain.market_data import Bar
+from kairos.strategies.sma_cross_research_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross, backtest_sma_cross_events
+from kairos.domain.market_data import Bar
 
 
 NOW = datetime(2026, 7, 17, 12, tzinfo=timezone.utc)

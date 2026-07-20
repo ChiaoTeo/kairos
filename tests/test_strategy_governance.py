@@ -1,21 +1,21 @@
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 import unittest
 
-from trading.domain.capability import TimeInForce
-from trading.domain.identity import InstrumentId
-from trading.domain.intent import TargetPositionIntent
-from trading.domain.product import ProductType
-from trading.domain.strategy_contract import EconomicIntent, StrategyLifecycle, StrategySpec
-from trading.execution.planner import LeggingPolicy
-from trading.execution.policy import ExecutionMode, ExecutionPolicy, PartialFillPolicy
-from trading.execution.strategy_planner import plan_economic_intent
-from trading.domain.order import ExecutionInstructions
-from trading.domain.capability import OrderType
-from trading.risk.portfolio_governance import (
+from kairos.domain.capability import TimeInForce
+from kairos.domain.identity import InstrumentId
+from kairos.domain.intent import TargetPositionIntent
+from kairos.domain.product import ProductType
+from kairos.domain.strategy_contract import EconomicIntent, StrategyLifecycle, StrategySpec
+from kairos.execution.planner import LeggingPolicy
+from kairos.execution.policy import ExecutionMode, ExecutionPolicy, PartialFillPolicy
+from kairos.execution.strategy_planner import plan_economic_intent
+from kairos.domain.order import ExecutionInstructions
+from kairos.domain.capability import OrderType
+from kairos.risk.portfolio_governance import (
     AllocationDecisionType, PortfolioAllocator, StrategyAllocation,
 )
 
@@ -88,7 +88,7 @@ class StrategyGovernanceTest(unittest.TestCase):
             intents=(target,),risk_budget=Decimal("1000"),urgency="normal",execution_policy_id="taker-v1",feature_snapshot_hash="x")
         policy=ExecutionPolicy("taker-v1","1",ExecutionMode.TAKER,TimeInForce.IOC,Decimal("10"))
         instructions={instrument:ExecutionInstructions(OrderType.MARKET,TimeInForce.IOC)}
-        from trading.domain.identity import AccountKey,AccountType,VenueId
+        from kairos.domain.identity import AccountKey,AccountType,VenueId
         account=AccountKey(InstitutionId("sim"),"a",AccountType.CRYPTO_SPOT)
         plan=plan_economic_intent(intent,policy=policy,accounts={instrument:account},current_positions={},instructions=instructions,now=now)
         self.assertEqual(plan.strategy_spec_hash,strategy.spec_hash)

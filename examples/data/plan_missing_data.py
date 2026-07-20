@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 
-from trading.data import ResearchDataClient
-from trading.data.products import BTC_SPOT_DAILY
-from trading.data.bootstrap import register_default_products
+from kairos.data import ResearchDataClient
+from kairos.data.products import BTC_SPOT_DAILY
+from kairos.data.bootstrap import register_default_products
 
 
 register_default_products("data")

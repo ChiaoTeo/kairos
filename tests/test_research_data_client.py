@@ -9,21 +9,21 @@ import json
 import io
 import unittest
 
-from trading.data import (
+from kairos.data import (
     AcquirePolicy, AcquisitionLimits, DataCatalog, DataUnavailableError, DatasetKey, DatasetLayer,
-    DatasetProduct, DatasetRelease, DatasetStatus, DatasetStorageKind, FieldRef, OutputFormat, ProviderRegistry,
+    DataProductDefinition, DatasetRelease, DatasetStatus, DatasetStorageKind, FieldRef, OutputFormat, ProviderRegistry,
     QualityLevel, ResearchDataClient, RunMode, SourceBinding, TimeRange,
     ConsolidatedTradeBuilder, ConsolidatedTradeInput, ConsolidatedTradePolicy,
 )
-from trading.domain.identity import InstrumentId
-from trading.adapters.binance.datasets import BinanceSpotDatasetConnector
-from trading.market_data import MarketEventEnvelope, MarketEventType, ParquetMarketEventRepository
-from trading.storage.data_lake import write_daily_dataset, write_event_dataset
-from trading.data.products import BTC_SPOT_DAILY
-from trading.data.publishing import content_release_id, merge_release_rows, publish_release, release_path
-from trading.data.market_slice_storage import MarketSliceStorageDriver
-from trading.backtest.mock import make_mock_dataset
-from trading.__main__ import main
+from kairos.domain.identity import InstrumentId
+from kairos.connectors.binance.datasets import BinanceSpotDatasetConnector
+from kairos.market_data import MarketEventEnvelope, MarketEventType, ParquetMarketEventRepository
+from kairos.storage.data_lake import write_daily_dataset, write_event_dataset
+from kairos.data.products import BTC_SPOT_DAILY
+from kairos.data.publishing import content_release_id, merge_release_rows, publish_release, release_path
+from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
+from kairos.__main__ import main
 
 
 NOW = datetime(2026, 7, 15, 14, 30, tzinfo=timezone.utc)
@@ -63,7 +63,7 @@ class ResearchDataClientTests(unittest.TestCase):
     def test_catalog_v3_round_trips_products_releases_and_structured_sources(self):
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(DatasetKey("market.trades.crypto.btc_usdt"), "Binance BTC trades",
+            product = DataProductDefinition(DatasetKey("market.trades.crypto.btc_usdt"), "Binance BTC trades",
                 DatasetLayer.CANONICAL, dimensions={"venue": "binance", "asset_class": "crypto"},
                 sources=(SourceBinding("binance", "binance", 100, QualityLevel.BACKTEST, ("rest",)),))
             catalog.register_product(product)
@@ -85,7 +85,7 @@ class ResearchDataClientTests(unittest.TestCase):
     def test_typed_product_resolution_is_not_shadowed_by_same_named_earlier_release(self):
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(DatasetKey("market.shadow.test"), "Shadow test", DatasetLayer.CANONICAL)
+            product = DataProductDefinition(DatasetKey("market.shadow.test"), "Shadow test", DatasetLayer.CANONICAL)
             catalog.register_product(product)
             catalog.register_release(DatasetRelease(
                 str(product.key), product.key, "1", "trade", "1", "earlier", "1", "canonical/earlier",
@@ -102,7 +102,7 @@ class ResearchDataClientTests(unittest.TestCase):
     def test_versioned_catalog_resolves_logical_name_and_alias(self):
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(DatasetKey("market.quotes.options.us.tick"), "Option quotes", DatasetLayer.CANONICAL)
+            product = DataProductDefinition(DatasetKey("market.quotes.options.us.tick"), "Option quotes", DatasetLayer.CANONICAL)
             catalog.register_product(product)
             for release_id, version, path in (("quotes.v1", "1", "canonical/q1"), ("quotes.v2", "2", "canonical/q2")):
                 catalog.register_release(DatasetRelease(
@@ -123,7 +123,7 @@ class ResearchDataClientTests(unittest.TestCase):
     def test_release_compare_reports_incompatible_schema_changes(self):
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(DatasetKey("market.schema.test"), "Schema test", DatasetLayer.CANONICAL)
+            product = DataProductDefinition(DatasetKey("market.schema.test"), "Schema test", DatasetLayer.CANONICAL)
             catalog.register_product(product)
             for release_id, columns in (("schema-v1", {"price": {"type": "number"}}),
                                         ("schema-v2", {"price": {"type": "string"}})):
@@ -269,7 +269,7 @@ class ResearchDataClientTests(unittest.TestCase):
             self.skipTest("pyarrow optional dependency is not installed")
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(DatasetKey("market.prices.test"), "Test prices", DatasetLayer.CANONICAL,
+            product = DataProductDefinition(DatasetKey("market.prices.test"), "Test prices", DatasetLayer.CANONICAL,
                                      primary_time="period_start")
             catalog.register_product(product)
             first = DatasetRelease("prices.v1", product.key, "1", "market.ohlcv.v1", "1", "test", "1",
@@ -300,7 +300,7 @@ class ResearchDataClientTests(unittest.TestCase):
             self.skipTest("pyarrow optional dependency is not installed")
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(
+            product = DataProductDefinition(
                 DatasetKey("market.trades.crypto.btc"), "BTC trades", DatasetLayer.CANONICAL,
                 sources=(SourceBinding("vendor-a", "binance", 100), SourceBinding("vendor-b", "deribit", 90)),
             )
@@ -329,7 +329,7 @@ class ResearchDataClientTests(unittest.TestCase):
     def test_automatic_source_selection_follows_versioned_product_priority(self):
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(
+            product = DataProductDefinition(
                 DatasetKey("market.trades.priority.test"), "Priority test", DatasetLayer.CANONICAL,
                 sources=(SourceBinding("preferred", "same-venue", 100),
                          SourceBinding("newer", "same-venue", 10)),
@@ -349,7 +349,7 @@ class ResearchDataClientTests(unittest.TestCase):
     def test_cross_venue_product_is_explicit_typed_and_source_traceable(self):
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(
+            product = DataProductDefinition(
                 DatasetKey("market.trades.crypto.btc_usd"), "BTC spot trades", DatasetLayer.CANONICAL,
                 sources=(SourceBinding("vendor-a", "binance", 100), SourceBinding("vendor-b", "deribit", 90)),
             ); catalog.register_product(product)
@@ -404,7 +404,7 @@ class ResearchDataClientTests(unittest.TestCase):
 
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(DatasetKey("market.trades.crypto.test"), "Test trades", DatasetLayer.CANONICAL,
+            product = DataProductDefinition(DatasetKey("market.trades.crypto.test"), "Test trades", DatasetLayer.CANONICAL,
                                      sources=(SourceBinding("test-provider", "test", 100),))
             catalog.register_product(product); catalog.save()
             connector = Connector(); providers = ProviderRegistry(); providers.register(connector)
@@ -415,7 +415,7 @@ class ResearchDataClientTests(unittest.TestCase):
             self.assertEqual(plan.selected.provider, "test-provider")
             self.assertTrue(plan.connector_available)
             self.assertEqual(plan.estimate.requests, 1)
-            with self.assertRaisesRegex(DataUnavailableError, "trader data acquire"):
+            with self.assertRaisesRegex(DataUnavailableError, "kairos data acquire"):
                 client.get(product.key, start=start, end=end, acquire=AcquirePolicy.PLAN)
             release = client.acquire(plan)
             self.assertEqual(release.release_id, "ds_test_1")
@@ -445,7 +445,7 @@ class ResearchDataClientTests(unittest.TestCase):
 
     def test_coverage_plan_preserves_internal_missing_ranges(self):
         with TemporaryDirectory() as temporary:
-            product = DatasetProduct(
+            product = DataProductDefinition(
                 DatasetKey("market.ohlcv.test.gapped"), "Gapped prices", DatasetLayer.CANONICAL,
                 primary_time="period_start", sources=(SourceBinding("test-provider", "test", 100),),
             )
@@ -559,7 +559,7 @@ class ResearchDataClientTests(unittest.TestCase):
                 "quotes.test.v1", (event,), lineage={"request_window": {
                     "start": NOW.isoformat(), "end": (NOW + timedelta(seconds=1)).isoformat()}})
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(DatasetKey("market.option_quotes.us.sql_test"), "SQL test quotes", DatasetLayer.CANONICAL)
+            product = DataProductDefinition(DatasetKey("market.option_quotes.us.sql_test"), "SQL test quotes", DatasetLayer.CANONICAL)
             catalog.register_product(product)
             catalog.register_release(DatasetRelease(
                 "quotes.test.v1", product.key, "1", "market.event_envelope", "1", "test", "1",
@@ -591,7 +591,7 @@ class ResearchDataClientTests(unittest.TestCase):
                 "quotes.replay.v1", events, lineage={"request_window": {
                     "start": NOW.isoformat(), "end": (NOW + timedelta(seconds=2)).isoformat()}})
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(DatasetKey("market.option_quotes.us.test"), "Test quotes", DatasetLayer.CANONICAL)
+            product = DataProductDefinition(DatasetKey("market.option_quotes.us.test"), "Test quotes", DatasetLayer.CANONICAL)
             catalog.register_product(product)
             catalog.register_release(DatasetRelease(
                 "quotes.replay.v1", product.key, "1", "market.event_envelope", "1", "massive.quotes", "1",
@@ -607,20 +607,20 @@ class ResearchDataClientTests(unittest.TestCase):
             self.assertEqual(feed.release_id, "quotes.replay.v1")
             self.assertEqual(feed.content_hash, manifest["dataset_sha256"])
 
-    def test_market_slice_replay_feed_is_hash_checked(self):
+    def test_market_snapshot_replay_feed_is_hash_checked(self):
         with TemporaryDirectory() as temporary:
-            dataset = make_mock_dataset()
-            MarketSliceStorageDriver(Path(temporary) / "datasets").save(dataset)
+            dataset = build_synthetic_backtest_dataset()
+            MarketSnapshotStorageDriver(Path(temporary) / "datasets").save(dataset)
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(DatasetKey("curated.option_chain.us.mock"), "Mock option chain", DatasetLayer.CURATED)
+            product = DataProductDefinition(DatasetKey("curated.option_chain.us.synthetic"), "Synthetic option chain", DatasetLayer.CURATED)
             catalog.register_product(product)
             catalog.register_release(DatasetRelease(
-                dataset.manifest.dataset_id, product.key, "1", "historical_dataset", "2", "mock", "1",
+                dataset.manifest.dataset_id, product.key, "1", "market_replay_dataset.v2", "2", "synthetic", "1",
                 f"datasets/{dataset.manifest.dataset_id}", "parquet", dataset.manifest.content_hash,
-                "synthetic", "mock", (), DatasetStatus.APPROVED_FOR_BACKTEST, QualityLevel.BACKTEST,
-                storage_kind=DatasetStorageKind.MARKET_SLICES,
+                "synthetic", "synthetic", (), DatasetStatus.APPROVED_FOR_BACKTEST, QualityLevel.BACKTEST,
+                storage_kind=DatasetStorageKind.MARKET_SNAPSHOTS,
             )); catalog.save()
-            feed = ResearchDataClient(temporary, run_mode=RunMode.BACKTEST).replay_slices(product)
+            feed = ResearchDataClient(temporary, run_mode=RunMode.BACKTEST).replay_snapshots(product)
             first = tuple(item.timestamp for item in feed.between(dataset.manifest.start, dataset.manifest.end))
             second = tuple(item.timestamp for item in feed.between(dataset.manifest.start, dataset.manifest.end))
             self.assertEqual(first, second)
@@ -629,7 +629,7 @@ class ResearchDataClientTests(unittest.TestCase):
     def test_run_modes_enforce_release_promotion_and_quality(self):
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(DatasetKey("market.events.test"), "Test events", DatasetLayer.CANONICAL)
+            product = DataProductDefinition(DatasetKey("market.events.test"), "Test events", DatasetLayer.CANONICAL)
             catalog.register_product(product)
             catalog.register_release(DatasetRelease(
                 "research-only", product.key, "1", "market.event", "1", "test", "1",
@@ -644,7 +644,7 @@ class ResearchDataClientTests(unittest.TestCase):
     def test_release_promotion_is_quality_gated_and_audited(self):
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(DatasetKey("market.events.promote"), "Promotion test", DatasetLayer.CANONICAL)
+            product = DataProductDefinition(DatasetKey("market.events.promote"), "Promotion test", DatasetLayer.CANONICAL)
             catalog.register_product(product)
             catalog.register_release(DatasetRelease(
                 "promote-v1", product.key, "1", "market.event", "1", "test", "1", "canonical/test",
@@ -667,7 +667,7 @@ class ResearchDataClientTests(unittest.TestCase):
     def test_alias_promotion_moves_pointer_without_mutating_releases_and_is_audited(self):
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary)
-            product = DatasetProduct(DatasetKey("market.events.alias-test"), "Alias test", DatasetLayer.CANONICAL)
+            product = DataProductDefinition(DatasetKey("market.events.alias-test"), "Alias test", DatasetLayer.CANONICAL)
             catalog.register_product(product)
             releases = []
             for version in ("1", "2"):

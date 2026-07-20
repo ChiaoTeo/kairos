@@ -1,5 +1,5 @@
-from trading.data import OutputFormat, ResearchDataClient
-from trading.data.products import BTC_SPOT_DAILY
+from kairos.data import OutputFormat, ResearchDataClient
+from kairos.data.products import BTC_SPOT_DAILY
 
 
 data = ResearchDataClient("data")

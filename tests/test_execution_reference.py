@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
-from trading.adapters.base import Environment, ExecutionCapabilities, OrderAck, OrderRequest
-from trading.domain.capability import OrderType
-from trading.domain.execution import TradeSide
-from trading.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from trading.domain.order import ExecutionInstructions, TimeInForce
-from trading.domain.product import EquitySpec, ProductType
-from trading.execution.router import ExecutionRouter
-from trading.reference import (
+from kairos.ports import Environment, OrderAck, OrderRequest
+from kairos.domain.capability import ExecutionCapabilities, OrderType
+from kairos.domain.execution import TradeSide
+from kairos.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairos.domain.order import ExecutionInstructions, TimeInForce
+from kairos.domain.product import EquitySpec, ProductType
+from kairos.execution.router import ExecutionRouter
+from kairos.reference import (
     BrokerId, EconomicProduct, ExecutionRoute, InstrumentDefinition,
     InstrumentLifecycle, ListingDefinition, ListingId, ProductId,
     ReferenceCatalog, RouteId, TradingRules,
@@ -23,7 +23,7 @@ from trading.reference import (
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
 
 
-class Adapter:
+class ExecutionGateway:
     institution_id = InstitutionId("ibkr")
     venue_id = VenueId("xnas")
     environment = Environment.PAPER
@@ -54,12 +54,12 @@ class ExecutionReferenceTests(unittest.TestCase):
         catalog.instruments.add(InstrumentDefinition(instrument_id, product_id, ProductType.EQUITY, EquitySpec("NASDAQ", "US", AssetId("USD")), InstrumentLifecycle(listed_at=NOW), NOW))
         catalog.listings.add(ListingDefinition(listing_id, instrument_id, VenueId("xnas"), "AAPL", AssetId("USD"), TradingRules(Decimal("0.01"), Decimal("1"), Decimal("1")), NOW))
         catalog.routes.add(ExecutionRoute(RouteId("route:ibkr:paper:AAPL"), BrokerId("ibkr"), account, listing_id, NOW, broker_contract_id="265598"))
-        adapter = Adapter()
-        router = ExecutionRouter(catalog, (adapter,))
+        gateway = ExecutionGateway()
+        router = ExecutionRouter(catalog, (gateway,))
         request = OrderRequest("internal-1", "client-1", "strategy", "intent", "correlation", account, instrument_id, TradeSide.BUY, Decimal("2"), ExecutionInstructions(OrderType.LIMIT, TimeInForce.DAY, Decimal("200.00")))
         ack = router.submit(request, NOW)
         self.assertEqual(ack.venue_order_id, "venue-order-1")
-        self.assertEqual(adapter.requests, [request])
+        self.assertEqual(gateway.requests, [request])
 
     def test_router_enforces_current_listing_rules(self) -> None:
         catalog = ReferenceCatalog()
@@ -71,7 +71,7 @@ class ExecutionReferenceTests(unittest.TestCase):
         catalog.instruments.add(InstrumentDefinition(instrument_id, product_id, ProductType.EQUITY, EquitySpec("NASDAQ", "US", AssetId("USD")), InstrumentLifecycle(), NOW))
         catalog.listings.add(ListingDefinition(listing_id, instrument_id, VenueId("xnas"), "AAPL", AssetId("USD"), TradingRules(Decimal("0.01"), Decimal("1"), Decimal("1")), NOW))
         catalog.routes.add(ExecutionRoute(RouteId("route"), BrokerId("ibkr"), account, listing_id, NOW))
-        router = ExecutionRouter(catalog, (Adapter(),))
+        router = ExecutionRouter(catalog, (ExecutionGateway(),))
         request = OrderRequest("internal-2", "client-2", "strategy", "intent", "correlation", account, instrument_id, TradeSide.BUY, Decimal("0.5"), ExecutionInstructions(OrderType.LIMIT, TimeInForce.DAY, Decimal("200")))
         with self.assertRaises(ValueError):
             router.submit(request, NOW)

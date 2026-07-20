@@ -1,7 +1,7 @@
 from datetime import date
 import unittest
 
-from trading.research.validation import (
+from kairos.research.validation import (
     assess_robustness,block_bootstrap_mean_ci,chronological_split,
     validate_predictability,walk_forward_splits,
 )

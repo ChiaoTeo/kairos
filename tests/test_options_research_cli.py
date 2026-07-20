@@ -6,22 +6,22 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from trading.__main__ import main
-from trading.data import DatasetKey, DatasetLayer, DatasetProduct, register_historical_dataset
-from trading.data.market_slice_storage import MarketSliceStorageDriver
-from trading.backtest.mock import make_mock_dataset
+from kairos.__main__ import main
+from kairos.data import DatasetKey, DatasetLayer, DataProductDefinition, register_market_replay_dataset
+from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
 
 
 class OptionsResearchCliTests(unittest.TestCase):
     @staticmethod
     def _register(root: Path, dataset):
-        path = MarketSliceStorageDriver(root / "curated").save(dataset)
-        product = DatasetProduct(
-            DatasetKey("curated.mock.options-research"), "Options research fixture", DatasetLayer.CURATED,
+        path = MarketSnapshotStorageDriver(root / "curated").save(dataset)
+        product = DataProductDefinition(
+            DatasetKey("curated.synthetic.options-research"), "Options research fixture", DatasetLayer.CURATED,
             "Governed synthetic options research fixture", {"synthetic": "true"}, "timestamp", owner="test",
         )
-        return register_historical_dataset(
-            root, dataset, path, product, provider="synthetic", venue="mock", synthetic=True,
+        return register_market_replay_dataset(
+            root, dataset, path, product, provider="synthetic", venue="synthetic", synthetic=True,
         )
 
     def test_pricing_option_prices_and_solves_iv(self) -> None:
@@ -41,7 +41,7 @@ class OptionsResearchCliTests(unittest.TestCase):
     def test_dataset_surface_calibration_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            release = self._register(root, make_mock_dataset())
+            release = self._register(root, build_synthetic_backtest_dataset())
             output = io.StringIO()
             with redirect_stdout(output):
                 code = main(["--lake-root", directory, "vol", "calibrate", "--dataset", release.release_id])
@@ -63,7 +63,7 @@ class OptionsResearchCliTests(unittest.TestCase):
 
     def test_research_readiness_rejects_synthetic_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            dataset = make_mock_dataset()
+            dataset = build_synthetic_backtest_dataset()
             release = self._register(Path(directory), dataset)
             output = io.StringIO()
             with redirect_stdout(output):

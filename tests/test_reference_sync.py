@@ -4,22 +4,22 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
-from trading.adapters.base import ReferenceDataRequest
-from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.product import CryptoSpotSpec, EquitySpec, ProductType
-from trading.reference import (
+from kairos.ports import ReferenceDataRequest
+from kairos.domain.identity import AssetId, InstrumentId, VenueId
+from kairos.domain.product import CryptoSpotSpec, EquitySpec, ProductType
+from kairos.reference import (
     AssetDefinition, AssetType, ListingDefinition, ListingId, MappingTargetType,
     ProviderId, ProviderSymbolMapping, ReferenceCatalog, TradingRules,
     VenueDefinition, VenueType,
 )
-from trading.reference.factory import publish_instrument
-from trading.reference.sync import ReferenceSyncService
+from kairos.reference.factory import publish_instrument
+from kairos.reference.sync import ReferenceSyncService
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
 
 
-class Adapter:
+class ReferenceDataClient:
     def __init__(self, catalog):
         self.catalog = catalog
 
@@ -45,8 +45,8 @@ class ReferenceSyncTests(unittest.TestCase):
         )
         catalog = ReferenceCatalog(); service = ReferenceSyncService(catalog)
         request = ReferenceDataRequest(ProductType.CRYPTO_SPOT, ("BTCUSDT",))
-        first = service.sync(Adapter(published), request)
-        second = service.sync(Adapter(published), request)
+        first = service.sync(ReferenceDataClient(published), request)
+        second = service.sync(ReferenceDataClient(published), request)
         self.assertEqual((first.instruments_added, first.listings_added), (1, 1))
         self.assertEqual((second.instruments_added, second.listings_added), (0, 0))
         self.assertEqual(catalog.active_listings(instrument_id, NOW)[0].venue_id, VenueId("binance"))
@@ -66,7 +66,7 @@ class ReferenceSyncTests(unittest.TestCase):
         published.add_mapping(ProviderSymbolMapping(
             ProviderId("ibkr"), "conid", "265598", MappingTargetType.INSTRUMENT, instrument_id.value, NOW,
         ))
-        catalog = ReferenceCatalog(); ReferenceSyncService(catalog).sync(Adapter(published), ReferenceDataRequest(ProductType.EQUITY, ("AAPL",)))
+        catalog = ReferenceCatalog(); ReferenceSyncService(catalog).sync(ReferenceDataClient(published), ReferenceDataRequest(ProductType.EQUITY, ("AAPL",)))
         self.assertEqual(catalog.active_listings(instrument_id, NOW)[0].venue_id, VenueId("xnas"))
         self.assertEqual(catalog.mappings()[0].external_id, "265598")
 

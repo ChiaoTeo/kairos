@@ -7,18 +7,18 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from trading.__main__ import main
-from trading.data import (
-    DataCatalog, DataHealthService, DatasetKey, DatasetLayer, DatasetProduct, DatasetRelease,
+from kairos.__main__ import main
+from kairos.data import (
+    DataCatalog, DataDiagnosticsService, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease,
     DatasetStatus, QualityLevel,
 )
-from trading.storage.data_lake import write_daily_dataset
+from kairos.storage.data_lake import write_daily_dataset
 
 
 class DataProductExperienceTests(unittest.TestCase):
-    def _lake(self, directory: str) -> tuple[DatasetProduct, DatasetRelease]:
+    def _lake(self, directory: str) -> tuple[DataProductDefinition, DatasetRelease]:
         root = Path(directory)
-        product = DatasetProduct(
+        product = DataProductDefinition(
             DatasetKey("market.ohlcv.crypto.test.btc-usdt.1d"), "BTC daily test data", DatasetLayer.CANONICAL,
             "Daily BTC/USDT bars for governed research and backtesting",
             {"asset_class": "crypto", "instrument": "BTC-USDT", "frequency": "1d"},
@@ -47,7 +47,7 @@ class DataProductExperienceTests(unittest.TestCase):
     def test_search_describe_doctor_and_strict_health_form_a_product_workflow(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             product, release = self._lake(directory)
-            report = DataHealthService(directory).audit()
+            report = DataDiagnosticsService(directory).audit()
             self.assertTrue(report["healthy"])
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
@@ -84,7 +84,7 @@ class DataProductExperienceTests(unittest.TestCase):
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main(["--lake-root", directory, "data", "health", "--strict"]), 2)
                 self.assertIn("missing_quality", output.getvalue())
-            doctor = DataHealthService(directory).doctor(str(product.key))
+            doctor = DataDiagnosticsService(directory).doctor(str(product.key))
             self.assertIn("reacquire", doctor["next"])
 
 

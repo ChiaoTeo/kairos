@@ -3,13 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.product import ListedOptionSpec, ProductType, SettlementType
-from trading.reference import (
+from kairos.domain.identity import AssetId, InstrumentId, VenueId
+from kairos.domain.product import ListedOptionSpec, ProductType, SettlementType
+from kairos.reference import (
     AssetDefinition, AssetType, ListingDefinition, ListingId, ReferenceCatalog,
     TradingRules, VenueDefinition, VenueType,
 )
-from trading.reference.factory import publish_instrument
+from kairos.reference.factory import publish_instrument
 
 
 def publish_test_instrument(

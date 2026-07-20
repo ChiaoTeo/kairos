@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from trading.domain.identity import AccountKey, AccountType, InstitutionId
+from kairos.domain.identity import AccountKey, AccountType, InstitutionId
 
 
 class AccountInstitutionIdentityTests(unittest.TestCase):

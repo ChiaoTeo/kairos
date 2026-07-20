@@ -4,11 +4,11 @@ from decimal import Decimal
 import unittest
 
 from examples.backtest.governed_sma import canonical_events, fixture_bars
-from trading.application import GovernedStrategyRunLoop
-from trading.features import SmaFactorConfig, SmaFactorRuntime
-from trading.market_data import IterableEventSource
-from trading.strategies import GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext
-from trading.strategies.specs import builtin_strategy_specs
+from kairos.application import GovernedStrategyRunLoop
+from kairos.features import SmaFactorConfig, SmaFactorRuntime
+from kairos.market_data import IterableEventSource
+from kairos.strategies import GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext
+from kairos.strategies.specs import builtin_strategy_specs
 
 
 class StrategyRunLoopTests(unittest.IsolatedAsyncioTestCase):

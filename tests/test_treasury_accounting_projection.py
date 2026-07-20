@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from trading.domain.identity import AccountKey, AccountType, AssetId, VenueId
-from trading.domain.ledger import Ledger, LedgerBook
-from trading.reference.identity import LocationId
-from trading.treasury import FeePolicy, TransferOperation, TransferStatus, TreasuryAccountingProjector, TreasuryService
+from kairos.domain.identity import AccountKey, AccountType, AssetId, VenueId
+from kairos.domain.ledger import Ledger, LedgerBook
+from kairos.reference.identity import LocationId
+from kairos.treasury import FeePolicy, TransferOperation, TransferStatus, TreasuryAccountingProjector, TreasuryLedgerPostingService
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
@@ -23,7 +23,7 @@ TRANSIT = AccountKey(InstitutionId("treasury"), "transit", AccountType.SUB_ACCOU
 class TreasuryAccountingProjectionTests(unittest.TestCase):
     def _projector(self):
         ledger = Ledger()
-        service = TreasuryService(ledger, {SOURCE: SOURCE_ACCOUNT, DESTINATION: DESTINATION_ACCOUNT}, TRANSIT)
+        service = TreasuryLedgerPostingService(ledger, {SOURCE: SOURCE_ACCOUNT, DESTINATION: DESTINATION_ACCOUNT}, TRANSIT)
         return ledger, TreasuryAccountingProjector(service)
 
     def test_gross_fee_is_deducted_from_in_transit_without_second_source_debit(self):

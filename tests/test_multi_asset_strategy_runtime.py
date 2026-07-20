@@ -4,15 +4,15 @@ from datetime import datetime,timezone
 from decimal import Decimal
 import unittest
 
-from trading.backtest.feed import MarketSlice
-from trading.domain.identity import InstrumentId
-from trading.domain.market_data import Quote
-from trading.research.snapshot import InstrumentSnapshot
-from trading.strategies import GovernedStrategyRuntime,StrategyContext
-from trading.strategies.cash_and_carry import CashAndCarryConfig,CashAndCarryStrategy
-from trading.strategies.covered_call import CoveredCallStrategy
-from trading.strategies.protective_put import ProtectivePutStrategy
-from trading.strategies.specs import builtin_strategy_specs
+from kairos.backtest.feed import MarketSnapshot
+from kairos.domain.identity import InstrumentId
+from kairos.domain.market_data import Quote
+from kairos.research.snapshot import InstrumentSnapshot
+from kairos.strategies import GovernedStrategyRuntime,StrategyContext
+from kairos.strategies.cash_and_carry import CashAndCarryConfig,CashAndCarryStrategy
+from kairos.strategies.covered_call import CoveredCallStrategy
+from kairos.strategies.protective_put import ProtectivePutStrategy
+from kairos.strategies.specs import builtin_strategy_specs
 
 
 NOW=datetime(2026,7,17,tzinfo=timezone.utc)
@@ -23,7 +23,7 @@ SPOT=InstrumentId("crypto:spot:btc");PERP=InstrumentId("crypto:perp:btc")
 def context(instruments,positions=()):
     snapshots=tuple(InstrumentSnapshot(i,Quote(i,Decimal(b),Decimal(a),Decimal("10"),Decimal("10"),NOW),NOW,None,None,None,None)
         for i,b,a in instruments)
-    return StrategyContext(MarketSlice(NOW,snapshots,sequence=1),object(),(),object(),approved_capital=Decimal("10000"),
+    return StrategyContext(MarketSnapshot(NOW,snapshots,sequence=1),object(),(),object(),approved_capital=Decimal("10000"),
         strategy_positions=positions)
 
 

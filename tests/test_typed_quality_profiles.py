@@ -7,11 +7,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from trading.data import (
-    DataCatalog, DatasetKey, DatasetLayer, DatasetProduct, DatasetProductSpec, DatasetQualityService,
+from kairos.data import (
+    DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DataProductContract, DatasetQualityService,
     DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel,
 )
-from trading.storage.data_lake import write_daily_dataset, write_json
+from kairos.storage.data_lake import write_daily_dataset, write_json
 
 
 NOW = datetime(2026, 1, 2, tzinfo=timezone.utc)
@@ -25,7 +25,7 @@ class TypedQualityProfileTests(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         key = DatasetKey(f"quality.{profile}.fixture")
-        product = DatasetProduct(
+        product = DataProductDefinition(
             key, f"{profile} fixture", DatasetLayer.CANONICAL,
             f"Governed {profile} quality fixture", {"profile": profile}, owner="test",
         )
@@ -50,7 +50,7 @@ class TypedQualityProfileTests(unittest.TestCase):
             storage_kind=DatasetStorageKind.TABULAR,
         )
         catalog = DataCatalog(root)
-        catalog.register_product_spec(DatasetProductSpec(
+        catalog.register_product_spec(DataProductContract(
             product, f"canonical/{profile}", release.schema_id, {}, DatasetStorageKind.TABULAR,
             "1", profile, QualityLevel.RESEARCH,
         ))
@@ -175,7 +175,7 @@ class TypedQualityProfileTests(unittest.TestCase):
         write_json(directory / "instruments.json", payload["instruments"])
         write_json(directory / "quarantine.json", payload["quarantine"])
         write_json(directory / "manifest.json", {"sha256": digest, "mapping_count": 1, "instrument_count": 1, "quarantine_count": len(quarantine)})
-        product = DatasetProduct(
+        product = DataProductDefinition(
             DatasetKey("reference.identity.fixture"),
             "Equity identity fixture",
             DatasetLayer.REFERENCE,
@@ -191,7 +191,7 @@ class TypedQualityProfileTests(unittest.TestCase):
             storage_kind=DatasetStorageKind.REFERENCE,
         )
         catalog = DataCatalog(root)
-        catalog.register_product_spec(DatasetProductSpec(
+        catalog.register_product_spec(DataProductContract(
             product, "reference/provider=massive/equity_identity", release.schema_id, {},
             DatasetStorageKind.REFERENCE, "1", "equity_identity", QualityLevel.RESEARCH,
         ))
@@ -212,7 +212,7 @@ class TypedQualityProfileTests(unittest.TestCase):
             "event_count": len(events),
             "source_receipts": ["source/provider=massive/fake/receipt.json"],
         })
-        product = DatasetProduct(
+        product = DataProductDefinition(
             DatasetKey("reference.corporate_actions.fixture"),
             "Corporate action fixture",
             DatasetLayer.SOURCE,
@@ -228,7 +228,7 @@ class TypedQualityProfileTests(unittest.TestCase):
             storage_kind=DatasetStorageKind.REFERENCE,
         )
         catalog = DataCatalog(root)
-        catalog.register_product_spec(DatasetProductSpec(
+        catalog.register_product_spec(DataProductContract(
             product, "reference/provider=massive/corporate_actions", release.schema_id, {},
             DatasetStorageKind.REFERENCE, "1", "corporate_action", QualityLevel.RESEARCH,
         ))

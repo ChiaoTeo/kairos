@@ -3,14 +3,14 @@ from decimal import Decimal
 from uuid import uuid4
 import unittest
 
-from trading.backtest.maker import (
+from kairos.backtest.maker import (
     BookEventType,FifoMakerFillModel,HybridAction,HybridExecutionStateMachine,
     IncrementalBookEvent,MakerOrderState,
 )
-from trading.domain.capability import TimeInForce
-from trading.domain.execution import TradeSide
-from trading.domain.identity import InstrumentId
-from trading.execution.policy import ExecutionMode,ExecutionPolicy,PartialFillPolicy
+from kairos.domain.capability import TimeInForce
+from kairos.domain.execution import TradeSide
+from kairos.domain.identity import InstrumentId
+from kairos.execution.policy import ExecutionMode,ExecutionPolicy,PartialFillPolicy
 
 
 class MakerExecutionTest(unittest.TestCase):

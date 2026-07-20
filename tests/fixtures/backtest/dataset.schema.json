@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://local.trader/schemas/backtest-dataset-v1.json",
-  "title": "Trader HistoricalDataset v1",
+  "$id": "https://local.kairos/schemas/backtest-dataset-v1.json",
+  "title": "Kairos MarketReplayDataset v1",
   "type": "object",
   "required": ["manifest", "definitions", "contracts", "slices"],
   "properties": {

@@ -7,18 +7,18 @@ import tempfile
 import unittest
 from uuid import UUID
 
-from trading.accounting.ledger import LedgerService
-from trading.adapters.base import (
+from kairos.accounting.ledger import LedgerService
+from kairos.ports import (
     Environment, OrderAck, RecoveredExecution, VenueOrderRecovery, VenueOrderStatus,
 )
-from trading.adapters.simulated import SimulatedExecutionAccountAdapter
-from trading.domain.execution import TradeExecution, TradeSide
-from trading.domain.identity import AssetId, VenueId
-from trading.domain.ledger import Ledger
-from trading.execution.ingestion import DurableExecutionIngestionService
-from trading.execution.order_state import DurableOrderStatus
-from trading.execution.recovery import VenueOrderRecoveryService
-from trading.orchestration.runtime_store import SQLiteRuntimeStore
+from kairos.connectors.simulated import SimulatedExecutionAccountGateway
+from kairos.domain.execution import TradeExecution, TradeSide
+from kairos.domain.identity import AssetId, VenueId
+from kairos.domain.ledger import Ledger
+from kairos.execution.ingestion import DurableExecutionIngestionService
+from kairos.execution.order_state import DurableOrderStatus
+from kairos.execution.recovery import VenueOrderRecoveryService
+from kairos.orchestration.runtime_store import SQLiteRuntimeStore
 from tests.test_durable_execution_ingestion import catalog
 from tests.test_runtime_store import request
 
@@ -26,7 +26,7 @@ from tests.test_runtime_store import request
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
 
 
-class FilledRecoveryAdapter:
+class FilledRecoveryGateway:
     venue_id = VenueId("simulated")
     environment = Environment.TESTNET
 
@@ -42,14 +42,14 @@ class VenueOrderRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteRuntimeStore(Path(directory) / "runtime.sqlite3")
             order = request()
-            adapter = SimulatedExecutionAccountAdapter(VenueId("simulated"), order.account)
-            venue_ack = adapter.place_order(order)
+            gateway = SimulatedExecutionAccountGateway(VenueId("simulated"), order.account)
+            venue_ack = gateway.place_order(order)
             store.create_order(order, NOW)
             store.transition_order(order.client_order_id, DurableOrderStatus.APPROVED, NOW)
             store.transition_order(order.client_order_id, DurableOrderStatus.SUBMITTING, NOW)
             service = VenueOrderRecoveryService(
                 store,
-                {order.account: adapter},
+                {order.account: gateway},
                 DurableExecutionIngestionService(LedgerService(Ledger(), catalog()), store),
             )
 
@@ -60,7 +60,7 @@ class VenueOrderRecoveryTests(unittest.TestCase):
             assert recovered is not None
             self.assertEqual(recovered.status, DurableOrderStatus.ACKNOWLEDGED)
             self.assertEqual(recovered.ack, venue_ack)
-            self.assertEqual(len(adapter.orders), 1)
+            self.assertEqual(len(gateway.orders), 1)
 
     def test_unknown_filled_order_recovers_execution_ledger_and_cursor_atomically(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -105,7 +105,7 @@ class VenueOrderRecoveryTests(unittest.TestCase):
             ledger = Ledger()
             service = VenueOrderRecoveryService(
                 store,
-                {order.account: FilledRecoveryAdapter(outcome)},
+                {order.account: FilledRecoveryGateway(outcome)},
                 DurableExecutionIngestionService(LedgerService(ledger, catalog()), store),
             )
 
@@ -125,10 +125,10 @@ class VenueOrderRecoveryTests(unittest.TestCase):
             store.transition_order(order.client_order_id, DurableOrderStatus.APPROVED, NOW)
             store.transition_order(order.client_order_id, DurableOrderStatus.SUBMITTING, NOW)
             store.transition_order(order.client_order_id, DurableOrderStatus.UNKNOWN, NOW)
-            adapter = SimulatedExecutionAccountAdapter(VenueId("simulated"), order.account)
+            gateway = SimulatedExecutionAccountGateway(VenueId("simulated"), order.account)
             report = VenueOrderRecoveryService(
                 store,
-                {order.account: adapter},
+                {order.account: gateway},
                 DurableExecutionIngestionService(LedgerService(Ledger(), catalog()), store),
             ).recover(NOW + timedelta(seconds=1))
             self.assertFalse(report.complete)
@@ -160,7 +160,7 @@ class VenueOrderRecoveryTests(unittest.TestCase):
                 ),),
             )
             report = VenueOrderRecoveryService(
-                store, {order.account: FilledRecoveryAdapter(outcome)},
+                store, {order.account: FilledRecoveryGateway(outcome)},
                 DurableExecutionIngestionService(LedgerService(Ledger(), catalog()), store),
             ).recover(NOW + timedelta(seconds=2))
             self.assertTrue(report.complete)
@@ -185,7 +185,7 @@ class VenueOrderRecoveryTests(unittest.TestCase):
                 )
                 store.transition_order(order.client_order_id, DurableOrderStatus.ACKNOWLEDGED, NOW, ack=ack)
                 report = VenueOrderRecoveryService(
-                    store, {order.account: FilledRecoveryAdapter(VenueOrderRecovery(
+                    store, {order.account: FilledRecoveryGateway(VenueOrderRecovery(
                         venue_status, f"venue reported {venue_status.value}", acknowledgement=ack,
                     ))},
                     DurableExecutionIngestionService(LedgerService(Ledger(), catalog()), store),

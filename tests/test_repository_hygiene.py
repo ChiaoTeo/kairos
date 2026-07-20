@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import subprocess
+import tomllib
 import unittest
 
 
@@ -10,6 +12,26 @@ SECRET = re.compile(rb"(?:ma_[A-Za-z0-9]{24,}|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9_-]{
 
 
 class RepositoryHygieneTests(unittest.TestCase):
+    def test_local_runtime_artifacts_are_not_tracked(self):
+        result = subprocess.run(
+            ["git", "ls-files"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        forbidden = []
+        for value in result.stdout.splitlines():
+            parts = value.split("/")
+            if (
+                value.startswith("pyenv/")
+                or value.startswith(".pytest_cache/")
+                or "__pycache__" in parts
+                or value.endswith(".pyc")
+            ):
+                forbidden.append(value)
+        self.assertEqual(forbidden, [])
+
     def test_notebook_checkpoints_are_not_present(self):
         files = [path for path in ROOT.rglob("*") if path.is_file() and ".ipynb_checkpoints" in path.parts]
         self.assertEqual(files, [])
@@ -24,6 +46,529 @@ class RepositoryHygieneTests(unittest.TestCase):
                 if SECRET.search(path.read_bytes()):
                     matches.append(str(path.relative_to(ROOT)))
         self.assertEqual(matches, [])
+
+    def test_studies_workspace_is_not_packaged(self):
+        config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        scripts = config["project"]["scripts"]
+        includes = config["tool"]["setuptools"]["packages"]["find"]["include"]
+        self.assertTrue((ROOT / "kairos").is_dir())
+        self.assertFalse((ROOT / "trading").exists())
+        self.assertIn("kairos", scripts)
+        self.assertNotIn("trader", scripts)
+        self.assertIn("kairos*", includes)
+        self.assertNotIn("trading*", includes)
+        self.assertNotIn("research*", includes)
+        self.assertNotIn("studies*", includes)
+
+    def test_source_workspace_study_commands_are_hidden_from_product_help(self):
+        cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
+        required = (
+            'data_actions.add_parser("btc-options-readiness", help=argparse.SUPPRESS)',
+            'actions.add_parser("register-btc-iron-condor", help=argparse.SUPPRESS)',
+            'actions.add_parser("readiness", help=argparse.SUPPRESS)',
+        )
+        for marker in required:
+            self.assertIn(marker, cli)
+        self.assertIn("is not included in the pip package", cli)
+
+    def test_packaged_modules_do_not_import_workspace_research_at_module_load(self):
+        offenders = []
+        for root in (ROOT / "kairos",):
+            for path in root.rglob("*.py"):
+                text = path.read_text(encoding="utf-8")
+                for line_number, line in enumerate(text.splitlines(), start=1):
+                    stripped = line.strip()
+                    if line == stripped and stripped.startswith(
+                        ("from research ", "from research.", "import research", "from studies ", "from studies.", "import studies")
+                    ):
+                        offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
+        self.assertEqual(offenders, [])
+
+    def test_packaged_modules_do_not_use_legacy_backtest_mock_entrypoint(self):
+        offenders = []
+        for root in (ROOT / "kairos",):
+            for path in root.rglob("*.py"):
+                if path == ROOT / "kairos" / "backtest" / "mock.py":
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for line_number, line in enumerate(text.splitlines(), start=1):
+                    stripped = line.strip()
+                    if stripped.startswith(("from kairos.backtest.mock", "import kairos.backtest.mock")):
+                        offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
+        self.assertEqual(offenders, [])
+
+    def test_packaged_modules_use_connectors_outside_legacy_adapter_layer(self):
+        offenders = []
+        allowed = {
+            ROOT / "kairos" / "connectors" / "__init__.py",
+            ROOT / "tests" / "test_naming_migration.py",
+        }
+        for root in (ROOT / "kairos", ROOT / "tests", ROOT / "examples"):
+            for path in root.rglob("*.py"):
+                if ROOT / "kairos" / "adapters" in path.parents:
+                    continue
+                if path in allowed:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for line_number, line in enumerate(text.splitlines(), start=1):
+                    stripped = line.strip()
+                    if stripped.startswith(("from kairos.adapters", "import kairos.adapters")):
+                        offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
+        self.assertEqual(offenders, [])
+
+    def test_kairos_namespace_exposes_connectors_not_adapters(self):
+        kairos_init = (ROOT / "kairos" / "__init__.py").read_text(encoding="utf-8")
+        data_init = (ROOT / "kairos" / "data" / "__init__.py").read_text(encoding="utf-8")
+        domain_init = (ROOT / "kairos" / "domain" / "__init__.py").read_text(encoding="utf-8")
+        application_init = (ROOT / "kairos" / "application" / "__init__.py").read_text(encoding="utf-8")
+        pricing_init = (ROOT / "kairos" / "pricing" / "__init__.py").read_text(encoding="utf-8")
+        treasury_init = (ROOT / "kairos" / "treasury" / "__init__.py").read_text(encoding="utf-8")
+        research_init = (ROOT / "kairos" / "research" / "__init__.py").read_text(encoding="utf-8")
+        research_platform_init = (ROOT / "kairos" / "research_platform" / "__init__.py").read_text(encoding="utf-8")
+        self.assertTrue((ROOT / "kairos" / "connectors" / "__init__.py").exists())
+        self.assertNotIn('"adapters"', kairos_init)
+        self.assertNotIn('"task_supervisor"', kairos_init)
+        self.assertNotIn('"runtime_golden"', kairos_init)
+        self.assertNotIn('"runtime_failure_matrix"', kairos_init)
+        self.assertNotIn('"market_slice_storage"', kairos_init)
+        self.assertNotIn('"market_slice_curation"', kairos_init)
+        self.assertNotIn('"research"', kairos_init)
+        self.assertIn('"research_platform"', kairos_init)
+        self.assertNotIn('"Trader"', kairos_init)
+        self.assertNotIn("TradingApplication", application_init)
+        self.assertNotIn("AsyncTradingRuntime", application_init)
+        self.assertIn("KairosApplication", application_init)
+        self.assertIn("AsyncKairosRuntime", application_init)
+        self.assertNotIn('"DatasetProduct"', data_init)
+        self.assertNotIn('"DatasetProductSpec"', data_init)
+        self.assertNotIn('"ProductSpec"', domain_init)
+        self.assertNotIn("live_paper_composition", application_init)
+        self.assertIn("paper_trading_composition", application_init)
+        self.assertNotIn('"ValuationService"', pricing_init)
+        self.assertNotIn('"TreasuryService"', treasury_init)
+        self.assertNotIn('"ResearchSpec"', research_init)
+        self.assertNotIn('"ResearchSpec"', research_platform_init)
+        self.assertNotIn('"service"', research_platform_init)
+        self.assertNotIn('"analyzer"', research_platform_init)
+        self.assertNotIn('"selector"', research_platform_init)
+        self.assertIn('"option_capture"', research_platform_init)
+        self.assertIn('"option_snapshot_analysis"', research_platform_init)
+        self.assertIn('"option_universe_selector"', research_platform_init)
+        for path in (
+            ROOT / "kairos" / "connectors" / "__init__.py",
+            ROOT / "kairos" / "connectors" / "__init__.py",
+        ):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn('"adapter"', text)
+            self.assertNotIn('"base"', text)
+            self.assertNotIn('"composite"', text)
+            self.assertNotIn('"day_aggs"', text)
+            self.assertNotIn('"equity_day_aggs"', text)
+            self.assertNotIn('"option_iv"', text)
+            self.assertNotIn('"readiness"', text)
+            self.assertNotIn("DayAgg", text)
+            self.assertNotIn("DayIv", text)
+            self.assertIn('"market_data_router"', text)
+        massive_init = (ROOT / "kairos" / "connectors" / "massive" / "__init__.py").read_text(encoding="utf-8")
+        self.assertNotIn("DayAgg", massive_init)
+        self.assertNotIn("DayIv", massive_init)
+        self.assertNotIn("Readiness", massive_init)
+        for path in (ROOT / "kairos" / "connectors" / "massive").rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("DayAgg", text)
+            self.assertNotIn("DayIv", text)
+            self.assertNotIn("Readiness", text)
+
+    def test_legacy_naming_modules_remain_thin_compatibility_shims(self):
+        legacy_modules = (
+            ROOT / "kairos" / "application" / "runtime_failure_matrix.py",
+            ROOT / "kairos" / "application" / "runtime_golden.py",
+            ROOT / "kairos" / "application" / "task_supervisor.py",
+            ROOT / "kairos" / "backtest" / "golden.py",
+            ROOT / "kairos" / "backtest" / "service.py",
+            ROOT / "kairos" / "backtest" / "mock.py",
+            ROOT / "kairos" / "features" / "us_equity_momentum_readiness.py",
+            ROOT / "kairos" / "adapters" / "binance" / "adapter.py",
+            ROOT / "kairos" / "adapters" / "ibkr" / "adapter.py",
+            ROOT / "kairos" / "adapters" / "massive" / "source.py",
+            ROOT / "kairos" / "adapters" / "composite.py",
+            ROOT / "kairos" / "data" / "models.py",
+            ROOT / "kairos" / "data" / "health.py",
+            ROOT / "kairos" / "data" / "market_slice_curation.py",
+            ROOT / "kairos" / "data" / "market_slice_storage.py",
+            ROOT / "kairos" / "research" / "analyzer.py",
+            ROOT / "kairos" / "pricing" / "models.py",
+            ROOT / "kairos" / "pricing" / "option_pricing_models.py",
+            ROOT / "kairos" / "pricing" / "service.py",
+            ROOT / "kairos" / "reference" / "models.py",
+            ROOT / "kairos" / "research" / "selector.py",
+            ROOT / "kairos" / "research" / "service.py",
+            ROOT / "kairos" / "research" / "validation" / "models.py",
+            ROOT / "kairos" / "strategies" / "base.py",
+            ROOT / "kairos" / "strategies" / "sma_cross.py",
+            ROOT / "kairos" / "strategies" / "sma_strategy.py",
+            ROOT / "kairos" / "treasury" / "adapter.py",
+            ROOT / "kairos" / "treasury" / "models.py",
+            ROOT / "kairos" / "treasury" / "service.py",
+            ROOT / "kairos" / "treasury" / "transfer_models.py",
+            ROOT / "kairos" / "volatility" / "models.py",
+        )
+        offenders = []
+        for path in legacy_modules:
+            text = path.read_text(encoding="utf-8")
+            if "Compatibility" not in text or "class " in text or "def " in text:
+                offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(offenders, [])
+
+    def test_new_data_contract_imports_do_not_use_models_module(self):
+        offenders = []
+        legacy_imports = (
+            "from kairos.data.models",
+            "import kairos.data.models",
+            "from kairos.treasury.transfer_models",
+            "import kairos.treasury.transfer_models",
+            "from kairos.volatility.models",
+            "import kairos.volatility.models",
+            "from kairos.research.validation.models",
+            "import kairos.research.validation.models",
+            "from kairos.reference.models",
+            "import kairos.reference.models",
+        )
+        compatibility_modules = {
+            ROOT / "kairos" / "data" / "models.py",
+            ROOT / "kairos" / "treasury" / "transfer_models.py",
+            ROOT / "kairos" / "volatility" / "models.py",
+            ROOT / "kairos" / "research" / "validation" / "models.py",
+            ROOT / "kairos" / "reference" / "models.py",
+        }
+        roots = (ROOT / "kairos", ROOT / "tests", ROOT / "examples")
+        for root in roots:
+            for path in root.rglob("*.py"):
+                if path in compatibility_modules:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for line_number, line in enumerate(text.splitlines(), start=1):
+                    stripped = line.strip()
+                    if stripped.startswith(legacy_imports):
+                        offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
+        self.assertEqual(offenders, [])
+
+    def test_new_code_does_not_import_legacy_base_or_service_modules(self):
+        offenders = []
+        legacy_imports = (
+            "from kairos.adapters.base",
+            "import kairos.adapters.base",
+            "from kairos.strategies.base",
+            "import kairos.strategies.base",
+            "from kairos.backtest.service",
+            "import kairos.backtest.service",
+            "from kairos.pricing.service",
+            "import kairos.pricing.service",
+            "from kairos.research.service",
+            "import kairos.research.service",
+            "from kairos.treasury.service",
+            "import kairos.treasury.service",
+        )
+        compatibility_modules = {
+            ROOT / "kairos" / "adapters" / "base.py",
+            ROOT / "kairos" / "strategies" / "base.py",
+            ROOT / "kairos" / "backtest" / "service.py",
+            ROOT / "kairos" / "pricing" / "service.py",
+            ROOT / "kairos" / "pricing" / "option_pricing_models.py",
+            ROOT / "kairos" / "research" / "service.py",
+            ROOT / "kairos" / "treasury" / "service.py",
+            ROOT / "tests" / "test_naming_migration.py",
+        }
+        roots = (ROOT / "kairos", ROOT / "tests", ROOT / "examples")
+        for root in roots:
+            for path in root.rglob("*.py"):
+                if path in compatibility_modules:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for line_number, line in enumerate(text.splitlines(), start=1):
+                    stripped = line.strip()
+                    if stripped.startswith(legacy_imports):
+                        offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
+        self.assertEqual(offenders, [])
+
+    def test_runtime_boundaries_use_gateway_and_connector_language(self):
+        allowed = {
+            ROOT / "kairos" / "__main__.py",
+            ROOT / "kairos" / "product_surface.py",
+            ROOT / "kairos" / "adapters" / "composite.py",
+            ROOT / "kairos" / "adapters" / "binance" / "funding_ingestion.py",
+            ROOT / "tests" / "test_naming_migration.py",
+            ROOT / "tests" / "test_repository_hygiene.py",
+        }
+        offenders = []
+        forbidden = (
+            "account_adapter",
+            "account_adapters",
+            "no market-data adapter",
+            "no execution adapter",
+            "execution adapter does not support",
+            "adapter does not support",
+            "requires an account adapter",
+        )
+        for root in (ROOT / "kairos", ROOT / "tests"):
+            for path in root.rglob("*.py"):
+                if path in allowed or ("adapters" in path.parts and path.name == "adapter.py"):
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for token in forbidden:
+                    if token in text:
+                        offenders.append(f"{path.relative_to(ROOT)} contains {token}")
+        self.assertEqual(offenders, [])
+
+    def test_binance_adapter_imports_use_dedicated_modules(self):
+        forbidden_names = (
+            "BinanceStreamSession",
+            "WebSocketClientConnector",
+            "parse_market_stream_event",
+            "websocket_url",
+            "BinanceTransport",
+            "UrllibBinanceTransport",
+            "RateLimiter",
+            "BinanceSigner",
+            "synchronize_clock",
+            "BinanceSpotReferenceDataClient",
+            "BinanceFuturesReferenceDataClient",
+            "BinanceOptionsReferenceDataClient",
+            "BinanceMarketDataClient",
+            "BINANCE_SPOT_MARKET_DATA_CAPABILITIES",
+            "BINANCE_FUTURES_MARKET_DATA_CAPABILITIES",
+            "BINANCE_OPTIONS_MARKET_DATA_CAPABILITIES",
+            "BinanceExecutionGateway",
+            "BinanceOptionsExecutionGateway",
+            "BINANCE_SPOT_EXECUTION_CAPABILITIES",
+            "BINANCE_FUTURES_EXECUTION_CAPABILITIES",
+            "BINANCE_OPTIONS_EXECUTION_CAPABILITIES",
+            "BinanceAccountGateway",
+            "BinanceOptionsAccountGateway",
+            "BinanceFundingSettlementClient",
+            "UserFillUpdate",
+            "BalanceUpdate",
+            "BinanceUserDataStreamService",
+            "BinanceUserStreamProcessor",
+            "parse_user_stream_event",
+            "OptionMarketSnapshot",
+            "parse_option_market_snapshot",
+            "BinanceRecoveryService",
+        )
+        offenders = []
+        roots = (ROOT / "kairos", ROOT / "tests", ROOT / "examples")
+        for root in roots:
+            for path in root.rglob("*.py"):
+                lines = path.read_text(encoding="utf-8").splitlines()
+                for line_number, line in enumerate(lines, start=1):
+                    if "binance.adapter import" not in line:
+                        continue
+                    import_block = line
+                    if "(" in line and ")" not in line:
+                        for continuation in lines[line_number:]:
+                            import_block += "\n" + continuation
+                            if ")" in continuation:
+                                break
+                    for name in forbidden_names:
+                        if name in import_block:
+                            offenders.append(f"{path.relative_to(ROOT)}:{line_number} imports {name} from binance adapter")
+        self.assertEqual(offenders, [])
+
+    def test_ibkr_adapter_imports_use_dedicated_modules(self):
+        forbidden_names = (
+            "IbkrSession",
+            "IbkrAccountGateway",
+            "IbkrReferenceDataClient",
+            "IbkrMarketDataClient",
+            "IbkrExecutionGateway",
+            "normalize_ibkr_execution",
+        )
+        offenders = []
+        roots = (ROOT / "kairos", ROOT / "tests", ROOT / "examples")
+        for root in roots:
+            for path in root.rglob("*.py"):
+                lines = path.read_text(encoding="utf-8").splitlines()
+                for line_number, line in enumerate(lines, start=1):
+                    if "ibkr.adapter import" not in line:
+                        continue
+                    import_block = line
+                    if "(" in line and ")" not in line:
+                        for continuation in lines[line_number:]:
+                            import_block += "\n" + continuation
+                            if ")" in continuation:
+                                break
+                    for name in forbidden_names:
+                        if name in import_block:
+                            offenders.append(f"{path.relative_to(ROOT)}:{line_number} imports {name} from ibkr adapter")
+        self.assertEqual(offenders, [])
+
+    def test_transfer_package_public_api_uses_gateway_names(self):
+        text = (ROOT / "kairos" / "adapters" / "transfer" / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn("BinanceTransferGateway", text)
+        self.assertIn("BankTransferGateway", text)
+        self.assertNotIn("BinanceTransferAdapter", text)
+        self.assertNotIn("BankTransferAdapter", text)
+
+    def test_ports_package_public_api_uses_port_names(self):
+        text = (ROOT / "kairos" / "ports" / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn("ReferenceDataPort", text)
+        self.assertIn("ExecutionPort", text)
+        self.assertNotIn("Adapter", text)
+
+    def test_connector_package_public_api_does_not_reexport_adapter_aliases(self):
+        packages = (
+            ROOT / "kairos" / "adapters" / "binance" / "__init__.py",
+            ROOT / "kairos" / "adapters" / "ibkr" / "__init__.py",
+            ROOT / "kairos" / "adapters" / "transfer" / "__init__.py",
+        )
+        offenders = []
+        for path in packages:
+            text = path.read_text(encoding="utf-8")
+            if "Adapter" in text:
+                offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(offenders, [])
+
+    def test_new_test_modules_use_connector_boundary_names(self):
+        offenders = [path.name for path in (ROOT / "tests").glob("*adapter*.py")]
+        self.assertEqual(offenders, [])
+
+    def test_top_level_test_modules_avoid_generic_boundary_names(self):
+        forbidden_names = {
+            "test_service.py",
+            "test_mock.py",
+            "test_adapter.py",
+            "test_backtest_models.py",
+            "test_backtest_fill_models.py",
+            "test_trader_api.py",
+            "test_dataset_product_spec.py",
+            "test_massive_readiness.py",
+            "test_runtime_failure_matrix.py",
+            "test_runtime_golden.py",
+        }
+        offenders = [path.name for path in (ROOT / "tests").glob("test_*.py") if path.name in forbidden_names]
+        self.assertEqual(offenders, [])
+
+    def test_examples_use_connector_directory_names(self):
+        self.assertFalse((ROOT / "examples" / "adapters").exists())
+        self.assertTrue((ROOT / "examples" / "connectors" / "reference_connector").exists())
+
+    def test_user_facing_docs_use_connector_language(self):
+        docs = (
+            ROOT / "README.md",
+            ROOT / "examples" / "README.md",
+            ROOT / "examples" / "connectors" / "reference_connector" / "README.md",
+            ROOT / "docs" / "architecture.md",
+            ROOT / "docs" / "system_convergence_progress.md",
+            ROOT / "docs" / "system_architecture_convergence_blueprint.md",
+            ROOT / "docs" / "research_strategy_backtest_live_convergence_plan.md",
+        )
+        offenders = []
+        for path in docs:
+            text = path.read_text(encoding="utf-8")
+            if "Adapter" in text:
+                offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(offenders, [])
+
+    def test_product_docs_use_kairos_cli_name(self):
+        docs = [ROOT / "README.md"]
+        docs.extend(
+            path
+            for path in (ROOT / "docs").glob("*.md")
+            if path.name != "naming_audit.md"
+        )
+        docs.extend((ROOT / "examples").rglob("*.md"))
+        offenders = []
+        for path in docs:
+            text = path.read_text(encoding="utf-8")
+            if "# Trader" in text or re.search(r"\bTrader\b", text) or re.search(r"\btrader\s+", text):
+                offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(offenders, [])
+
+    def test_user_facing_examples_and_guides_import_kairos_namespace(self):
+        roots = [
+            ROOT / "README.md",
+            ROOT / "docs" / "data_layout.md",
+            ROOT / "docs" / "data_usage_product_design.md",
+            ROOT / "docs" / "research_data_guide.md",
+            ROOT / "docs" / "tutorial_first_research.md",
+            ROOT / "examples",
+        ]
+        offenders = []
+        for root in roots:
+            paths = (root,) if root.is_file() else root.rglob("*")
+            for path in paths:
+                if not path.is_file() or path.suffix not in {".py", ".md", ".ipynb"}:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for line_number, line in enumerate(text.splitlines(), start=1):
+                    stripped = line.strip().lstrip('"')
+                    if stripped.startswith(("from trading", "import trading")) or "trading." in stripped:
+                        offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}")
+        self.assertEqual(offenders, [])
+
+    def test_massive_entitlement_diagnostics_is_the_public_cli_name(self):
+        cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
+        self.assertIn('"massive-entitlement-diagnostics"', cli)
+        self.assertIn('"massive-readiness"', cli)
+        self.assertIn('data_actions.add_parser("massive-readiness", help=argparse.SUPPRESS)', cli)
+        docs = [
+            path
+            for path in (ROOT / "docs").glob("*.md")
+            if path.name != "naming_audit.md"
+        ]
+        docs.extend((ROOT / "examples").rglob("*.md"))
+        offenders = []
+        for path in docs:
+            text = path.read_text(encoding="utf-8")
+            if "massive-readiness" in text:
+                offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(offenders, [])
+
+    def test_us_equity_momentum_diagnostics_is_the_public_data_cli_name(self):
+        cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
+        self.assertIn('"us-equity-momentum-diagnostics"', cli)
+        self.assertIn('"us-equity-momentum-readiness"', cli)
+        self.assertIn('data_actions.add_parser("us-equity-momentum-readiness", help=argparse.SUPPRESS)', cli)
+        offenders = []
+        for root in (ROOT / "kairos", ROOT / "tests", ROOT / "examples"):
+            for path in root.rglob("*.py"):
+                if path in {
+                    ROOT / "kairos" / "features" / "us_equity_momentum_readiness.py",
+                    ROOT / "tests" / "test_repository_hygiene.py",
+                }:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                if "us_equity_momentum_readiness" in text or "UsEquityMomentumReadiness" in text:
+                    offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(offenders, [])
+
+    def test_spxw_reference_scenario_is_the_public_backtest_cli_name(self):
+        cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
+        self.assertIn('"spxw-reference-scenario"', cli)
+        self.assertIn('"golden-spxw"', cli)
+        self.assertIn('backtest_actions.add_parser("golden-spxw", help=argparse.SUPPRESS)', cli)
+        self.assertTrue((ROOT / "kairos" / "backtest" / "spxw_reference_pipeline.py").exists())
+        offenders = []
+        for root in (ROOT / "kairos", ROOT / "tests", ROOT / "examples"):
+            for path in root.rglob("*.py"):
+                if path in {
+                    ROOT / "kairos" / "backtest" / "golden.py",
+                    ROOT / "tests" / "test_repository_hygiene.py",
+                }:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                if "build_spxw_golden_pipeline" in text or "kairos.backtest.golden" in text:
+                    offenders.append(str(path.relative_to(ROOT)))
+        self.assertEqual(offenders, [])
+
+    def test_synthetic_scenarios_use_market_snapshot_contract_names(self):
+        text = (ROOT / "kairos" / "backtest" / "synthetic_scenarios.py").read_text(encoding="utf-8")
+        self.assertIn("MarketReplayDataset", text)
+        self.assertIn("MarketSnapshot", text)
+        self.assertIn("InstrumentLifecycleSnapshot", text)
+        self.assertNotIn("HistoricalDataset", text)
+        self.assertNotIn("MarketSlice", text)
+        self.assertNotIn("ContractMetadata", text)
 
 
 if __name__ == "__main__":

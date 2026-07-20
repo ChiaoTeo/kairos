@@ -7,21 +7,21 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from trading.application import (
-    ApplicationConfig, AsyncTaskSupervisor, AsyncTradingRuntime, ManagedTaskSpec, ManagedTaskStatus,
-    RuntimePaths, RuntimeStatus, TaskCriticality, TradingApplication,
+from kairos.application import (
+    ApplicationConfig, AsyncServiceSupervisor, AsyncKairosRuntime, ManagedServiceSpec, ManagedServiceStatus,
+    RuntimePaths, RuntimeStatus, ServiceCriticality, KairosApplication,
 )
-from trading.adapters.base import Environment
-from trading.domain.capability import MarketDataCapabilities, MarketDataKind
-from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.product import EquitySpec, ProductType
-from trading.reference import ReferenceCatalog
+from kairos.ports import Environment
+from kairos.domain.capability import MarketDataCapabilities, MarketDataKind
+from kairos.domain.identity import AssetId, InstrumentId, VenueId
+from kairos.domain.product import EquitySpec, ProductType
+from kairos.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
-from trading.market_data import (
+from kairos.market_data import (
     CapturePolicy, DeliveryMode, MarketDataRequirement, SubscriptionAction,
     SubscriptionPlanner, SubscriptionReconciler,
 )
-from trading.orchestration.runtime_store import SQLiteRuntimeStore
+from kairos.orchestration.runtime_store import SQLiteRuntimeStore
 
 
 NOW = datetime(2026, 7, 17, 12, tzinfo=timezone.utc)
@@ -29,7 +29,7 @@ VENUE = VenueId("fixture")
 INSTRUMENT = InstrumentId("equity:us:TEST")
 
 
-class AsyncTaskSupervisorTests(unittest.IsolatedAsyncioTestCase):
+class AsyncServiceSupervisorTests(unittest.IsolatedAsyncioTestCase):
     async def test_supervisor_owns_and_stops_long_running_tasks(self) -> None:
         stopped = asyncio.Event()
 
@@ -39,14 +39,14 @@ class AsyncTaskSupervisorTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 stopped.set()
 
-        supervisor = AsyncTaskSupervisor()
-        await supervisor.start((ManagedTaskSpec("market-stream", service),))
+        supervisor = AsyncServiceSupervisor()
+        await supervisor.start((ManagedServiceSpec("market-stream", service),))
 
         self.assertTrue(supervisor.healthy)
-        self.assertEqual(supervisor.snapshots()[0].status, ManagedTaskStatus.RUNNING)
+        self.assertEqual(supervisor.snapshots()[0].status, ManagedServiceStatus.RUNNING)
         await supervisor.stop()
         self.assertTrue(stopped.is_set())
-        self.assertEqual(supervisor.snapshots()[0].status, ManagedTaskStatus.STOPPED)
+        self.assertEqual(supervisor.snapshots()[0].status, ManagedServiceStatus.STOPPED)
 
     async def test_async_runtime_binds_task_health_to_durable_application_state(self) -> None:
         fail = asyncio.Event()
@@ -57,11 +57,11 @@ class AsyncTaskSupervisorTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             paths = RuntimePaths.under(Path(directory))
-            application = TradingApplication(
+            application = KairosApplication(
                 ApplicationConfig(Environment.PAPER, paths), SQLiteRuntimeStore(paths.runtime_database),
                 runtime_id="async-runtime-fixture",
             )
-            runtime = AsyncTradingRuntime(application, (ManagedTaskSpec("private-stream", critical_stream),))
+            runtime = AsyncKairosRuntime(application, (ManagedServiceSpec("private-stream", critical_stream),))
 
             await runtime.start()
             self.assertEqual(application.status, RuntimeStatus.RUNNING)
@@ -70,7 +70,7 @@ class AsyncTaskSupervisorTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(fault.task_name, "private-stream")
             self.assertEqual(application.status, RuntimeStatus.REDUCE_ONLY)
-            persisted = application.store.runtime_state(TradingApplication.STATE_KEY)
+            persisted = application.store.runtime_state(KairosApplication.STATE_KEY)
             self.assertEqual(persisted["status"], RuntimeStatus.REDUCE_ONLY.value)
             await runtime.stop()
             self.assertEqual(application.status, RuntimeStatus.STOPPED)
@@ -79,14 +79,14 @@ class AsyncTaskSupervisorTests(unittest.IsolatedAsyncioTestCase):
         async def failure() -> None:
             raise ConnectionError("stream disconnected")
 
-        supervisor = AsyncTaskSupervisor()
-        await supervisor.start((ManagedTaskSpec("private-stream", failure),))
+        supervisor = AsyncServiceSupervisor()
+        await supervisor.start((ManagedServiceSpec("private-stream", failure),))
         fault = await supervisor.wait_critical_fault()
 
         self.assertEqual(fault.task_name, "private-stream")
         self.assertEqual(fault.error_type, "ConnectionError")
         self.assertFalse(supervisor.healthy)
-        self.assertEqual(supervisor.snapshots()[0].status, ManagedTaskStatus.FAILED)
+        self.assertEqual(supervisor.snapshots()[0].status, ManagedServiceStatus.FAILED)
         await supervisor.stop()
 
     async def test_restart_policy_is_bounded_and_audited(self) -> None:
@@ -98,16 +98,16 @@ class AsyncTaskSupervisorTests(unittest.IsolatedAsyncioTestCase):
             if attempts == 1:
                 raise EOFError("temporary disconnect")
 
-        supervisor = AsyncTaskSupervisor()
-        await supervisor.start((ManagedTaskSpec(
-            "recovering-stream", recover_once, TaskCriticality.IMPORTANT,
+        supervisor = AsyncServiceSupervisor()
+        await supervisor.start((ManagedServiceSpec(
+            "recovering-stream", recover_once, ServiceCriticality.IMPORTANT,
             restart_limit=1, allow_completion=True,
         ),))
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
         snapshot = supervisor.snapshots()[0]
-        self.assertEqual(snapshot.status, ManagedTaskStatus.COMPLETED)
+        self.assertEqual(snapshot.status, ManagedServiceStatus.COMPLETED)
         self.assertEqual(snapshot.attempts, 2)
         self.assertEqual(snapshot.restart_count, 1)
         self.assertEqual(snapshot.last_fault.error_type, "EOFError")
@@ -170,7 +170,7 @@ class SubscriptionPlanningTests(unittest.TestCase):
         missing = MarketDataRequirement(
             "strategy", VenueId("missing"), (INSTRUMENT,), (MarketDataKind.QUOTE,),
         )
-        with self.assertRaisesRegex(LookupError, "no market-data adapter"):
+        with self.assertRaisesRegex(LookupError, "no market data connector"):
             self.planner.build((missing,), NOW)
 
 

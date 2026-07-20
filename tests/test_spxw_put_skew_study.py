@@ -10,9 +10,9 @@ except ImportError:
     pandas = None
 
 if pandas is not None:
-    from research.spxw_put_skew.study import ResearchConfig, analyze_hypothesis, build_panel, execute_research
+    from studies.spxw_put_skew.study import ResearchConfig, analyze_hypothesis, build_panel, execute_research
     from tests.test_options_research_end_to_end import internally_priceable_spxw_dataset
-    from trading.research.data_store import CollectionManifest, CollectionSession
+    from kairos.research.data_store import CollectionManifest, CollectionSession
 
 
 @unittest.skipIf(pandas is None, "install the notebook optional dependencies")

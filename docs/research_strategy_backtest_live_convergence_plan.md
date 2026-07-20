@@ -1,8 +1,8 @@
-# Trader 产品形态与研究、策略、回测、实盘贯通改造方案
+# Kairos 产品形态与研究、策略、回测、实盘贯通改造方案
 
 状态：Proposed  
 日期：2026-07-17  
-适用范围：整个项目，重点包括 `trading.data`、`trading.research`、`trading.features`、`trading.strategies`、`trading.backtest`、`trading.application`、`trading.execution`、CLI、`examples/`、`research/` 和 `data/` 中的治理产物。
+适用范围：整个项目，重点包括 `kairos.data`、`kairos.research`、`kairos.features`、`kairos.strategies`、`kairos.backtest`、`kairos.application`、`kairos.execution`、CLI、`examples/`、`studies/` 和 `data/` 中的治理产物。
 
 ## 1. 文档目的
 
@@ -11,7 +11,7 @@
 本文回答：
 
 1. Research 应该灵活还是固定；
-2. Trader 最终应该以什么产品形态被使用；
+2. Kairos 最终应该以什么产品形态被使用；
 3. 研究员、策略开发者和交易运维人员分别如何使用系统；
 4. 当前设计与目标产品之间有哪些差距；
 5. 如何通过一个最简策略建立第一条端到端链路；
@@ -44,9 +44,9 @@ Governed Research
 
 灵活的是研究过程；固定的是进入共享、复现、回测和部署边界的产物。
 
-### 2.2 Trader 的目标产品形态
+### 2.2 Kairos 的目标产品形态
 
-Trader 应被建设为：
+Kairos 应被建设为：
 
 > 一个本地优先、可审计、支持从数据探索到策略实盘晋级的量化策略生命周期平台。
 
@@ -93,7 +93,7 @@ Trader 应被建设为：
 - `ResearchDataClient` 统一查询入口；
 - point-in-time、`available_time`、冻结 Release 和防隐式联网；
 - 数据搜索、描述、准备、查询、冻结、质量检查；
-- Market Event、OHLCV、MarketSlice、Option Snapshot、Feature 等质量 Profile。
+- Market Event、OHLCV、MarketSnapshot、Option Snapshot、Feature 等质量 Profile。
 
 这部分已经接近一个可供研究使用的数据产品。
 
@@ -101,7 +101,7 @@ Trader 应被建设为：
 
 已经较为扎实：
 
-- Instrument、ProductSpec、ListingDefinition 和 Capability；
+- Instrument、InstrumentContractSpec、ListingDefinition 和 Capability；
 - Intent、Order、Execution 和 Ledger；
 - Portfolio、Risk、Pricing、Volatility 和生命周期事件；
 - 多资产、多账户和策略虚拟持仓归属。
@@ -114,7 +114,7 @@ Trader 应被建设为：
 - Catalog-backed、Ledger-backed 回测；
 - Runtime Store 和持久订单状态机；
 - Readiness、Reconciliation、Recovery 和 Kill Switch；
-- simulated、IBKR、Binance 等 Adapter；
+- simulated、IBKR、Binance 等 connector；
 - Golden、failure matrix 和 soak 验收基础。
 
 ### 策略治理
@@ -131,7 +131,7 @@ Trader 应被建设为：
 
 ### 断点一：Research 的出口不明确
 
-用户可以通过 Notebook、`research/<study>`、`trading.research.features`、`trading.features` 等多种方式计算特征，但没有统一回答：
+用户可以通过 Notebook、`studies/<study>`、`kairos.research.features`、`kairos.features` 等多种方式计算特征，但没有统一回答：
 
 - 哪些只是临时研究列；
 - 哪些是可复现因子；
@@ -210,7 +210,7 @@ data search/prepare/freeze
 research readiness/governance-audit
 backtest run/validate/replay
 trade run
-runtime golden/failure-matrix/l4-preflight
+runtime reference-artifact/failure-policy/l4-preflight
 ```
 
 这些命令更多按模块组织，而不是按“开发一个策略并逐步部署”的产品旅程组织。
@@ -219,7 +219,7 @@ runtime golden/failure-matrix/l4-preflight
 
 ### 4.1 产品定位
 
-Trader 面向个人或小型策略团队，提供本地优先的研究、验证、模拟和交易运行环境。核心价值不是替代 Notebook，而是保证一个研究想法在离开 Notebook 后，不发生数据、因子、策略和执行语义漂移。
+Kairos 面向个人或小型策略团队，提供本地优先的研究、验证、模拟和交易运行环境。核心价值不是替代 Notebook，而是保证一个研究想法在离开 Notebook 后，不发生数据、因子、策略和执行语义漂移。
 
 产品由五个工作区组成：
 
@@ -303,32 +303,32 @@ Operations Workspace
 保留 Python API 供研究使用，同时将 CLI 调整为产品旅程：
 
 ```text
-trader data ...
-trader study ...
-trader factor ...
-trader strategy ...
-trader run ...
-trader ops ...
-trader order ...
+kairos data ...
+kairos study ...
+kairos factor ...
+kairos strategy ...
+kairos run ...
+kairos ops ...
+kairos order ...
 ```
 
 建议的关键命令：
 
 ```bash
-trader study create <study-id>
-trader study freeze <study-id>
-trader factor register <study-id> --factor <factor-id>
-trader strategy create <strategy-id>
-trader strategy validate <strategy-id>
-trader strategy promote <strategy-id> --to <stage>
-trader run backtest <strategy-release>
-trader run simulate <strategy-release>
-trader run paper <strategy-release>
-trader run live <strategy-release> --confirm-live
-trader run inspect <run-id>
-trader ops reconcile <run-id>
-trader ops replay <run-id>
-trader order submit ...
+kairos study create <study-id>
+kairos study freeze <study-id>
+kairos factor register <study-id> --factor <factor-id>
+kairos strategy create <strategy-id>
+kairos strategy validate <strategy-id>
+kairos strategy promote <strategy-id> --to <stage>
+kairos run backtest <strategy-release>
+kairos run simulate <strategy-release>
+kairos run paper <strategy-release>
+kairos run live <strategy-release> --confirm-live
+kairos run inspect <run-id>
+kairos ops reconcile <run-id>
+kairos ops replay <run-id>
+kairos order submit ...
 ```
 
 `order submit` 明确表示人工订单；`run paper/live` 才表示持续运行自动策略。
@@ -453,12 +453,12 @@ Freeze 后必须记录：
 
 ### 6.4 角色 D：项目维护者
 
-目标：维护数据、Adapter、运行时和治理契约。
+目标：维护数据、connector、运行时和治理契约。
 
 维护者关注：
 
 - 数据和 Reference 质量；
-- Adapter capability；
+- connector capability；
 - Runtime recovery；
 - 跨模式 parity；
 - Artifact schema migration；
@@ -473,10 +473,10 @@ Freeze 后必须记录：
 操作：
 
 ```bash
-trader data search --dimension instrument=BTC-USDT --dimension frequency=1h
-trader data freeze --dataset market.ohlcv.crypto.binance.btc-usdt.1h \
+kairos data search --dimension instrument=BTC-USDT --dimension frequency=1h
+kairos data freeze --dataset market.ohlcv.crypto.binance.btc-usdt.1h \
   --start 2024-01-01T00:00:00Z --end 2026-01-01T00:00:00Z
-trader study create btc-short-trend-v1 --input <snapshot-id>
+kairos study create btc-short-trend-v1 --input <snapshot-id>
 ```
 
 用户在 Notebook 中自由尝试 SMA、EMA、momentum、不同窗口和统计方法。
@@ -495,9 +495,9 @@ trader study create btc-short-trend-v1 --input <snapshot-id>
 操作形态：
 
 ```bash
-trader study freeze btc-short-trend-v1
-trader factor register btc-short-trend-v1 --factor sma-spread-v1
-trader factor verify sma-spread-v1 --mode batch,replay
+kairos study freeze btc-short-trend-v1
+kairos factor register btc-short-trend-v1 --factor sma-spread-v1
+kairos factor verify sma-spread-v1 --mode batch,replay
 ```
 
 预期结果：
@@ -514,9 +514,9 @@ trader factor verify sma-spread-v1 --mode batch,replay
 操作形态：
 
 ```bash
-trader strategy create sma-cross-v1 --factor sma-spread-v1
-trader strategy validate sma-cross-v1 --stage trade-proxy
-trader run backtest sma-cross-v1@candidate
+kairos strategy create sma-cross-v1 --factor sma-spread-v1
+kairos strategy validate sma-cross-v1 --stage trade-proxy
+kairos run backtest sma-cross-v1@candidate
 ```
 
 预期结果：
@@ -533,9 +533,9 @@ trader run backtest sma-cross-v1@candidate
 操作形态：
 
 ```bash
-trader run simulate sma-cross-v1@1.0.0 --dataset <release-id>
-trader run inspect <run-id>
-trader ops restart-drill <run-id>
+kairos run simulate sma-cross-v1@1.0.0 --dataset <release-id>
+kairos run inspect <run-id>
+kairos ops restart-drill <run-id>
 ```
 
 预期结果：
@@ -553,9 +553,9 @@ trader ops restart-drill <run-id>
 操作形态：
 
 ```bash
-trader run preflight sma-cross-v1@1.0.0 \
+kairos run preflight sma-cross-v1@1.0.0 \
   --mode paper --venue binance --account default
-trader run paper sma-cross-v1@1.0.0 \
+kairos run paper sma-cross-v1@1.0.0 \
   --venue binance --account default --duration 24h
 ```
 
@@ -566,7 +566,7 @@ trader run paper sma-cross-v1@1.0.0 \
 - Factor Runtime 在线更新；
 - Strategy 产生 EconomicIntent；
 - Portfolio/Risk 决定允许规模；
-- ExecutionPolicy 和 Adapter 负责订单；
+- ExecutionPolicy 和 ExecutionGateway 负责订单；
 - 决策、订单、成交、Ledger 和 reconciliation 可关联查询。
 
 ### 场景六：回放一次 Paper 决策
@@ -576,8 +576,8 @@ trader run paper sma-cross-v1@1.0.0 \
 操作形态：
 
 ```bash
-trader run inspect <run-id> --at 2026-07-17T08:00:00Z
-trader ops replay <run-id> --until 2026-07-17T08:00:00Z
+kairos run inspect <run-id> --at 2026-07-17T08:00:00Z
+kairos ops replay <run-id> --until 2026-07-17T08:00:00Z
 ```
 
 预期结果：
@@ -596,7 +596,7 @@ trader ops replay <run-id> --until 2026-07-17T08:00:00Z
 操作形态：
 
 ```bash
-trader order submit --venue binance --environment testnet \
+kairos order submit --venue binance --environment testnet \
   --instrument crypto:binance:spot:BTCUSDT --side sell --quantity 0.001
 ```
 
@@ -818,7 +818,7 @@ RunRepository
 工作：
 
 1. 用 Frozen Canonical Event 驱动正式 Run Loop；
-2. 接入 SimulatedExecutionAdapter；
+2. 接入 SimulatedExecutionGateway；
 3. 使用 SQLite Runtime Store、Durable Order State 和 Execution Ingestion；
 4. 所有 Fill 进入正式 Ledger；
 5. 建立 pause/restart/recovery；
@@ -832,7 +832,7 @@ RunRepository
 
 工作：
 
-1. 新增 `trader run paper` 或等价 Application 入口；
+1. 新增 `kairos run paper` 或等价 Application 入口；
 2. 加载 StrategyRelease/FactorRelease；
 3. 接入实时 Canonical Event Source；
 4. 接入正式 Portfolio/Risk/Coordinator；
@@ -887,7 +887,7 @@ RunRepository
 Intent：TargetPositionIntent
 风险：单策略资本上限、最大目标 notional
 回测成交：下一根 Bar open
-模拟成交：SimulatedExecutionAdapter
+模拟成交：SimulatedExecutionGateway
 外部环境：Binance testnet
 ```
 

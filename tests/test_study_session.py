@@ -11,19 +11,19 @@ from unittest.mock import patch
 import tempfile
 import unittest
 
-from trading.__main__ import main
-from trading.adapters.massive.equity_day_aggs import MassiveEquityDayAggPipeline
-from trading.data import DataCatalog, DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel
-from trading.data.bootstrap import register_configured_products, register_default_products
-from trading.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
-from trading.research import StudyWorkspace, StudyWorkspaceRepository, ensure_sma_tutorial_dataset, open_study
-from trading.research.tutorial_data import tutorial_sma_bars
-from tests.test_massive_day_aggs import _EquitySource
+from kairos.__main__ import main
+from kairos.connectors.massive.equity_daily_ohlcv import MassiveEquityDailyOhlcvPipeline
+from kairos.data import DataCatalog, DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel
+from kairos.data.bootstrap import register_configured_products, register_default_products
+from kairos.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
+from kairos.research import StudyWorkspace, StudyWorkspaceRepository, ensure_sma_tutorial_dataset, open_study
+from kairos.research.tutorial_data import tutorial_sma_bars
+from tests.test_massive_daily_ohlcv import _EquitySource
 
 
 class StudySessionTests(unittest.TestCase):
     def test_open_study_is_a_static_public_symbol_for_ide_navigation(self) -> None:
-        self.assertEqual(open_study.__module__, "trading.research.session")
+        self.assertEqual(open_study.__module__, "kairos.research.session")
 
     def _study(self, root: Path):
         release = ensure_sma_tutorial_dataset(root)
@@ -45,6 +45,21 @@ class StudySessionTests(unittest.TestCase):
         self.assertEqual(tuple(selected.columns), ("available_time", "close"))
         self.assertIsInstance(frame.iloc[0]["close"], Decimal)
         self.assertEqual(frame.iloc[0]["close"], Decimal("100"))
+
+    def test_describe_can_render_pretty_table(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            study = self._study(Path(directory))
+
+            description = study.describe()
+            table = study.describe(format="prettytable")
+            direct_table = study.describe_table()
+
+        self.assertEqual(description["rows"], 90)
+        self.assertIn("| Field", table)
+        self.assertIn("| Study ID", table)
+        self.assertIn("| Rows", table)
+        self.assertIn("90", table)
+        self.assertEqual(table, direct_table)
 
     def test_profile_and_scaffold_are_safe_and_repeatable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -143,7 +158,7 @@ class StudySessionTests(unittest.TestCase):
 
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
-                    "--lake-root", directory, "data", "us-equity-momentum-readiness",
+                    "--lake-root", directory, "data", "us-equity-momentum-diagnostics",
                     "--study-id", "us-equity-momentum",
                 ]), 0)
                 readiness = json.loads(output.getvalue())
@@ -152,7 +167,7 @@ class StudySessionTests(unittest.TestCase):
             self.assertEqual(readiness["summary"]["errors"], 0)
             self.assertGreaterEqual(readiness["summary"]["warnings"], 1)
 
-    def test_us_equity_momentum_readiness_reports_universe_missing_reason_counts(self) -> None:
+    def test_us_equity_momentum_diagnostics_reports_universe_missing_reason_counts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _write_equity_source(root, values=((date(2026, 1, 2), 100), (date(2026, 1, 6), 121)))
@@ -164,7 +179,7 @@ class StudySessionTests(unittest.TestCase):
 
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
-                    "--lake-root", directory, "data", "us-equity-momentum-readiness",
+                    "--lake-root", directory, "data", "us-equity-momentum-diagnostics",
                     "--study-id", "us-equity-momentum",
                 ]), 0)
                 readiness = json.loads(output.getvalue())
@@ -205,7 +220,7 @@ class StudySessionTests(unittest.TestCase):
     def test_prepare_us_equity_momentum_one_command_uses_existing_raw_release(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            pipeline = MassiveEquityDayAggPipeline(root, client=object())
+            pipeline = MassiveEquityDailyOhlcvPipeline(root, client=object())
             pipeline.source = _EquitySource(root, rows=[
                 {"t": 1767330000000, "o": 100, "h": 101, "l": 99, "c": 100, "v": 100000, "n": 5, "vw": 100},
                 {"t": 1767589200000, "o": 110, "h": 111, "l": 109, "c": 110, "v": 100000, "n": 5, "vw": 110},
@@ -221,7 +236,7 @@ class StudySessionTests(unittest.TestCase):
                 "1",
                 "market.ohlcv.equity.us.1d.v1",
                 "1",
-                "massive.equity_day_aggs",
+                "massive.equity_daily_ohlcv",
                 "1",
                 "canonical/market/ohlcv/asset_class=equity/region=us/provider=massive/interval=1d/view=raw/dataset=raw.oneclick",
                 "parquet",
@@ -272,7 +287,7 @@ class StudySessionTests(unittest.TestCase):
             register_configured_products(root, config)
 
             for ticker, key in (("NVDA", nvda_key), ("AAPL", aapl_key)):
-                pipeline = MassiveEquityDayAggPipeline(root, client=object())
+                pipeline = MassiveEquityDailyOhlcvPipeline(root, client=object())
                 pipeline.source = _EquitySource(root, rows=[
                     {"t": 1767330000000, "o": 100, "h": 101, "l": 99, "c": 100, "v": 100000, "n": 5, "vw": 100},
                     {"t": 1767589200000, "o": 110, "h": 111, "l": 109, "c": 110, "v": 100000, "n": 5, "vw": 110},
@@ -287,7 +302,7 @@ class StudySessionTests(unittest.TestCase):
                     "1",
                     "market.ohlcv.equity.us.1d.v1",
                     "1",
-                    "massive.equity_day_aggs",
+                    "massive.equity_daily_ohlcv",
                     "1",
                     f"canonical/market/ohlcv/asset_class=equity/region=us/provider=massive/interval=1d/view=raw/dataset=raw.{ticker.lower()}",
                     "parquet",
@@ -325,7 +340,7 @@ class StudySessionTests(unittest.TestCase):
     def test_prepare_us_equity_momentum_one_command_can_sync_corporate_actions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            pipeline = MassiveEquityDayAggPipeline(root, client=object())
+            pipeline = MassiveEquityDailyOhlcvPipeline(root, client=object())
             pipeline.source = _EquitySource(root, rows=[
                 {"t": 1767330000000, "o": 100, "h": 101, "l": 99, "c": 100, "v": 100000, "n": 5, "vw": 100},
                 {"t": 1767589200000, "o": 110, "h": 111, "l": 109, "c": 110, "v": 100000, "n": 5, "vw": 110},
@@ -341,7 +356,7 @@ class StudySessionTests(unittest.TestCase):
                 "1",
                 "market.ohlcv.equity.us.1d.v1",
                 "1",
-                "massive.equity_day_aggs",
+                "massive.equity_daily_ohlcv",
                 "1",
                 "canonical/market/ohlcv/asset_class=equity/region=us/provider=massive/interval=1d/view=raw/dataset=raw.actions",
                 "parquet",
@@ -358,8 +373,8 @@ class StudySessionTests(unittest.TestCase):
             catalog.save()
 
             with (
-                patch("trading.__main__.MassiveConfig.from_env", return_value=object()),
-                patch("trading.__main__.MassiveSourceArchive", return_value=_CorporateActionArchive(root)),
+                patch("kairos.__main__.MassiveConfig.from_env", return_value=object()),
+                patch("kairos.__main__.MassiveVendorArchiveClient", return_value=_CorporateActionArchive(root)),
                 StringIO() as output,
                 redirect_stdout(output),
             ):
@@ -405,7 +420,7 @@ class StudySessionTests(unittest.TestCase):
     def test_prepare_us_equity_momentum_auto_uses_clean_identity_reference(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            pipeline = MassiveEquityDayAggPipeline(root, client=object())
+            pipeline = MassiveEquityDailyOhlcvPipeline(root, client=object())
             pipeline.source = _EquitySource(root, rows=[
                 {"t": 1767330000000, "o": 100, "h": 101, "l": 99, "c": 100, "v": 100000, "n": 5, "vw": 100},
                 {"t": 1767675600000, "o": 121, "h": 122, "l": 120, "c": 121, "v": 100000, "n": 5, "vw": 121},
@@ -420,7 +435,7 @@ class StudySessionTests(unittest.TestCase):
                 "1",
                 "market.ohlcv.equity.us.1d.v1",
                 "1",
-                "massive.equity_day_aggs",
+                "massive.equity_daily_ohlcv",
                 "1",
                 "canonical/market/ohlcv/asset_class=equity/region=us/provider=massive/interval=1d/view=raw/dataset=raw.identity",
                 "parquet",
@@ -480,6 +495,9 @@ class StudySessionTests(unittest.TestCase):
             workspace = root / "study-workspaces" / "us-equity-momentum" / "1.0.0" / "input_releases.json"
             inputs = json.loads(workspace.read_text(encoding="utf-8"))
             self.assertIn("reference.identity.equity.us.massive", {item["logical_key"] for item in inputs})
+            identity_check = next(item for item in result["readiness"]["checks"] if item["code"] == "identity_reference_release")
+            self.assertTrue(identity_check["passed"])
+            self.assertEqual(identity_check["evidence"]["identity_release_id"], result["reference"]["release_id"])
             import pyarrow.parquet as pq
             universe = result["features"]["outputs"]["universe"]
             rows = pq.read_table(

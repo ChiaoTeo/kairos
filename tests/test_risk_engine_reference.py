@@ -5,18 +5,18 @@ from decimal import Decimal
 import unittest
 from uuid import UUID
 
-from trading.backtest.feed import MarketSlice
-from trading.backtest.portfolio import PortfolioSnapshot
-from trading.domain.execution import TradeSide
-from trading.domain.capability import TimeInForce
-from trading.domain.identity import AssetId, InstrumentId
-from trading.domain.intent import LegIntent, OpenStructureIntent
-from trading.domain.market_data import Greeks, Quote
-from trading.domain.product import ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from trading.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
-from trading.research.snapshot import InstrumentSnapshot
-from trading.risk.engine import RiskDecisionType, RiskEngine
-from trading.risk.limits import RiskLimits
+from kairos.backtest.feed import MarketSnapshot
+from kairos.backtest.portfolio import PortfolioSnapshot
+from kairos.domain.execution import TradeSide
+from kairos.domain.capability import TimeInForce
+from kairos.domain.identity import AssetId, InstrumentId
+from kairos.domain.intent import LegIntent, OpenStructureIntent
+from kairos.domain.market_data import Greeks, Quote
+from kairos.domain.product import ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairos.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
+from kairos.research.snapshot import InstrumentSnapshot
+from kairos.risk.engine import RiskDecisionType, RiskEngine
+from kairos.risk.limits import RiskLimits
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
@@ -41,7 +41,7 @@ class RiskEngineReferenceTests(unittest.TestCase):
             Decimal("100000"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"),
             (), (), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("0"), Decimal("1"), (), (), Decimal("0"), 0,
         )
-        market = MarketSlice(NOW, tuple(instruments))
+        market = MarketSnapshot(NOW, tuple(instruments))
         approved, decision = RiskEngine(RiskLimits(), catalog, id_factory=lambda: UUID(int=2)).evaluate(intent, portfolio, market)
         self.assertIsNotNone(approved)
         self.assertIn(decision.decision, {RiskDecisionType.APPROVED, RiskDecisionType.RESIZED})

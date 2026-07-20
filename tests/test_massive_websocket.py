@@ -9,10 +9,10 @@ import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from trading.adapters.massive.websocket import MassiveCanonicalStreamService, MassiveLiveStream
-from trading.contracts import MarketEventKind, QuotePayload
-from trading.domain.identity import InstrumentId
-from trading.market_data import BoundedEventChannel, MarketEventEnvelope, MarketEventType
+from kairos.connectors.massive.websocket import MassiveCanonicalStreamService, MassiveLiveStream
+from kairos.contracts import MarketEventKind, QuotePayload
+from kairos.domain.identity import InstrumentId
+from kairos.market_data import BoundedEventChannel, MarketEventEnvelope, MarketEventType
 
 
 class FakeWebSocketClient:

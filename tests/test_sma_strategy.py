@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
-from trading.domain.identity import InstrumentId
-from trading.domain.intent import TargetExposureIntent
-from trading.features import FactorQuality, FactorSnapshot, SmaFactorConfig, SmaFactorRuntime
-from trading.risk.portfolio_governance import PositionSizer
-from trading.strategies import SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext
+from kairos.domain.identity import InstrumentId
+from kairos.domain.intent import TargetExposureIntent
+from kairos.features import FactorQuality, FactorSnapshot, SmaFactorConfig, SmaFactorRuntime
+from kairos.risk.portfolio_governance import PositionSizer
+from kairos.strategies import SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext
 
 
 INSTRUMENT = InstrumentId("crypto:binance:spot:BTCUSDT")

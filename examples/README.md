@@ -1,11 +1,11 @@
-# Trader Examples Suite
+# Kairos Examples Suite
 
 这些示例按完整数据流组织，目标是让新贡献者不阅读测试内部实现也能跑通：
 
 ```text
 Governed Dataset / Live WebSocket
   -> Canonical Event
-  -> Projection / MarketSlice
+  -> Projection / MarketSnapshot
   -> Same Strategy Interface
   -> Decision / Intent
   -> Capture / Replay / Audit Hash
@@ -18,13 +18,13 @@ Governed Dataset / Live WebSocket
 产品工作流命令默认输出适合终端阅读的本地化字段视图或表格，不输出 JSON：
 
 ```bash
-./pyenv/bin/python -m trading --lang zh-CN tutorial sma
+./pyenv/bin/kairos --lang zh-CN tutorial sma
 ```
 
 语言默认根据系统 locale 选择，也可显式使用 `--lang zh-CN` 或 `--lang en-US`。脚本、CI 和 Agent 集成必须显式请求稳定的机器契约：
 
 ```bash
-./pyenv/bin/python -m trading --format json tutorial sma
+./pyenv/bin/kairos --format json tutorial sma
 ```
 
 只需要退出码时使用 `--quiet`。JSON 字段名保持稳定且不参与翻译；国际化只作用于人类展示层。
@@ -33,7 +33,7 @@ Governed Dataset / Live WebSocket
 
 如果你还不知道 Study、Factor、Strategy 和 Run 应该怎样串起来，请不要先运行完整验收，也不要先连接 Paper/Live。按照 [第一次研究教程](../docs/tutorial_first_research.md) 逐条执行。教程会解释每一步的目的、产物、继续条件和停止条件，并使用一个最终应被拒绝的 SMA 结果示范“系统跑通”与“策略有效”之间的区别。
 
-完成 `trader tutorial sma` 后，可以直接打开 Study 绑定的数据为 DataFrame：
+完成 `kairos tutorial sma` 后，可以直接打开 Study 绑定的数据为 DataFrame：
 
 ```bash
 ./pyenv/bin/python examples/research/study_dataframe.py
@@ -67,42 +67,43 @@ Study Candidate、注册 SMA Factor Release，并证明 batch 与 Canonical repl
 同一流程也可以完全通过产品 CLI 执行：
 
 ```bash
-trader tutorial sma --output-root example-output/sma-lifecycle
-trader --lake-root example-output/sma-lifecycle study inspect btc-sma-first
-trader --lake-root example-output/sma-lifecycle study data btc-sma-first --head 10
-trader --lake-root example-output/sma-lifecycle study profile btc-sma-first
-trader --lake-root example-output/sma-lifecycle study scaffold btc-sma-first
-trader --lake-root example-output/sma-lifecycle study freeze btc-sma-first
-trader --lake-root example-output/sma-lifecycle factor register-sma \
+kairos tutorial sma --output-root example-output/sma-lifecycle
+kairos --lake-root example-output/sma-lifecycle study inspect btc-sma-first
+kairos --lake-root example-output/sma-lifecycle study data btc-sma-first --head 10
+kairos --lake-root example-output/sma-lifecycle study profile btc-sma-first
+kairos --lake-root example-output/sma-lifecycle study scaffold btc-sma-first
+kairos --lake-root example-output/sma-lifecycle study freeze btc-sma-first
+kairos --lake-root example-output/sma-lifecycle factor register-sma \
   --input-identity fixture:sma-bars-v1 --fast 5 --slow 15
-trader --lake-root example-output/sma-lifecycle factor verify-sma --fixture --fast 5 --slow 15
-trader --lake-root example-output/sma-lifecycle strategy register-sma \
+kairos --lake-root example-output/sma-lifecycle factor verify-sma --fixture --fast 5 --slow 15
+kairos --lake-root example-output/sma-lifecycle strategy register-sma \
   --input-identity fixture:sma-bars-v1 --fast 5 --slow 15
-trader --lake-root example-output/sma-lifecycle run backtest-sma --fixture --fast 5 --slow 15
-trader --lake-root example-output/sma-lifecycle run simulate-sma --fixture --fast 5 --slow 15 \
+kairos --lake-root example-output/sma-lifecycle run backtest --strategy sma-cross-v1 --fixture --fast 5 --slow 15
+kairos --lake-root example-output/sma-lifecycle run simulate --strategy sma-cross-v1 --fixture --fast 5 --slow 15 \
   --run-root example-output/sma-lifecycle/runs/sma
-trader --lake-root example-output/sma-lifecycle run shadow-sma --fixture --fast 5 --slow 15 \
+kairos --lake-root example-output/sma-lifecycle run shadow --strategy sma-cross-v1 --fixture --fast 5 --slow 15 \
   --run-root example-output/sma-lifecycle/runs/shadow
-trader --lake-root example-output/sma-lifecycle run inspect \
+kairos --lake-root example-output/sma-lifecycle run inspect \
   --db example-output/sma-lifecycle/runs/sma/runtime/runtime.sqlite3
 ```
 
-`run backtest-sma`、`run simulate-sma` 和 `run shadow-sma` 都会返回不可变 Run Artifact 路径。
+`run backtest-sma`、`run simulate-sma` 和 `run shadow-sma` 仍作为兼容入口保留；新示例优先使用带
+`--strategy` 的通用入口。所有运行入口都会返回不可变 Run Artifact 路径。
 Shadow 使用同一 Factor/Strategy，但只记录假设 Intent，`orders=0` 且 `fills=0`。可以解释指定时刻的
 因子、决策和 EconomicIntent，或使用相同输入离线重放：
 
 ```bash
-trader run inspect --artifact '<manifest.json>' --at 2026-01-02T00:00:00Z
-trader run replay-sma --artifact '<manifest.json>' --fixture
+kairos run inspect --artifact '<manifest.json>' --at 2026-01-02T00:00:00Z
+kairos run replay-sma --artifact '<manifest.json>' --fixture
 ```
 
 Replay 会分别比较 factor、decision、intent 和完整 strategy-run audit hash；任一项不一致都会返回
 `passed=false`。
 
-## 5. Live Paper Session 与 Capture Replay
+## 5. Paper Trading Session 与 Capture Replay
 
 以下 deterministic acceptance 先生成带 manifest 的 Canonical Bar capture，再用同一 SMA
-Factor/Strategy 启动 `live-paper` composition。订单经过 Simulated Venue、Durable Order、Fill
+Factor/Strategy 启动 `paper-trading` composition。订单经过 Simulated Venue、Durable Order、Fill
 Ingestion 和 Ledger；session 停止后从 capture 离线重放：
 
 ```bash
@@ -112,13 +113,13 @@ Ingestion 和 Ledger；session 停止后从 capture 离线重放：
 对应产品命令：
 
 ```bash
-trader run shadow-sma --fixture --fast 5 --slow 15 \
+kairos run shadow --fixture --fast 5 --slow 15 \
   --run-root example-output/sma-shadow/runtime \
   --artifact-root example-output/sma-shadow/artifacts
-trader run paper-sma --fixture --fast 5 --slow 15 \
+kairos run paper --fixture --fast 5 --slow 15 \
   --run-root example-output/sma-paper/runtime \
   --artifact-root example-output/sma-paper/artifacts
-trader run replay-sma-capture --artifact '<manifest.json>' --capture '<capture.jsonl>'
+kairos run replay-sma-capture --artifact '<manifest.json>' --capture '<capture.jsonl>'
 ```
 
 Shadow 和 deterministic Paper acceptance 都不需要账户凭据。真实 Binance Testnet/IBKR Paper 仍必须经过
@@ -129,12 +130,12 @@ Shadow 和 deterministic Paper acceptance 都不需要账户凭据。真实 Bina
 人工订单与自动策略运行使用不同入口，并强制留下 actor/reason：
 
 ```bash
-trader order submit --venue simulated --environment testnet \
+kairos order submit --venue simulated --environment testnet \
   --instrument crypto:sim:spot:BTCUSDT --side sell --quantity 0.001 \
   --limit-price 50000 --actor operator@example --reason 'manual risk reduction'
 ```
 
-该入口仍经过 TradingApplication、Coordinator、Durable Order State、readiness 和 kill switch，但
+该入口仍经过 KairosApplication、Coordinator、Durable Order State、readiness 和 kill switch，但
 不会伪装成已经注册和晋级的自动 Strategy Release。
 
 ## 7. 复杂期权策略生命周期
@@ -169,14 +170,14 @@ Funding/Corporate Action/Assignment、Ledger、Conservative/Stress 和 determini
 对应产品命令：
 
 ```bash
-trader strategy register-builtins
-trader strategy register-btc-iron-condor --research-spec-hash '<governed-study-spec-hash>'
-trader strategy inspect covered-call-v1 --version 1.1.0
-trader strategy status covered-call-v1 --version 1.1.0
-trader strategy activate covered-call-v1 --version 1.1.0 --actor operator@example --reason 'approved baseline'
-trader strategy rollback covered-call-v1 --actor operator@example --reason 'observed regression'
-trader run reference --strategy covered-call
-trader run reference --strategy spot-perp-carry
+kairos strategy register-builtins
+kairos strategy register-btc-iron-condor --research-spec-hash '<governed-study-spec-hash>'
+kairos strategy inspect covered-call-v1 --version 1.1.0
+kairos strategy status covered-call-v1 --version 1.1.0
+kairos strategy activate covered-call-v1 --version 1.1.0 --actor operator@example --reason 'approved baseline'
+kairos strategy rollback covered-call-v1 --actor operator@example --reason 'observed regression'
+kairos run reference --strategy covered-call
+kairos run reference --strategy spot-perp-carry
 ```
 
 ## 1. 回测与 Canonical Replay
@@ -239,7 +240,7 @@ trader run reference --strategy spot-perp-carry
 ./pyenv/bin/python examples/runtime/run_modes.py
 ```
 
-输出 Research、Backtest、Historical Simulation、Live Paper 和 Live 的 EventSource、Clock、Execution、Persistence、Safety、Capture 与 composition hash。
+输出 Research、Backtest、Historical Simulation、Paper Trading 和 Live 的 EventSource、Clock、Execution、Persistence、Safety、Capture 与 composition hash。
 
 正式 SMA Historical Simulation 使用与回测相同的 FactorSpec、Strategy implementation 和
 EconomicIntent，但将执行边界替换为 Simulated Venue、Durable Order State、Execution Ingestion、
@@ -249,24 +250,24 @@ SQLite Runtime Store 和正式 Ledger：
 ./pyenv/bin/python examples/runtime/sma_historical_simulation.py
 ```
 
-该示例还会停止并重启 TradingApplication，只有 Ledger、Venue balance/position 和对账恢复一致时
+该示例还会停止并重启 KairosApplication，只有 Ledger、Venue balance/position 和对账恢复一致时
 才输出 `restart_ready=true`。`tests/test_examples_suite.py` 会同时运行 governed backtest 与 historical
 simulation，并要求二者在 execution driver 之前的 factor、decision 和 intent hash 完全一致。
 
-## 5. Adapter / Rust 接入契约
+## 5. Connector / Rust 接入契约
 
 ```bash
-./pyenv/bin/python examples/adapters/reference_adapter/verify_contract.py
+./pyenv/bin/python examples/connectors/reference_connector/verify_contract.py
 ```
 
-详细说明见 [reference_adapter/README.md](adapters/reference_adapter/README.md)。未来 Rust gateway 必须使用相同 golden vectors 和 verifier，不能要求上层策略修改接口。
+详细说明见 [reference_connector/README.md](connectors/reference_connector/README.md)。未来 Rust gateway 必须使用相同 golden vectors 和 verifier，不能要求上层策略修改接口。
 
 ## 6. 长时间行情 Soak
 
 长跑不是普通教学脚本，使用正式 CLI 和可审计 Artifact：
 
 ```bash
-./pyenv/bin/python -m trading \
+./pyenv/bin/kairos \
   --lake-root example-output/market-data-soak \
   data soak-binance \
   --symbol BTCUSDT --channel bookTicker \

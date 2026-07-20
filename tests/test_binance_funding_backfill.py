@@ -3,15 +3,15 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import unittest
 
-from trading.adapters.binance.funding_ingestion import BinanceDurableFundingBackfill
-from trading.application.clock import FixedClock
+from kairos.connectors.binance.funding_ingestion import BinanceDurableFundingBackfill
+from kairos.application.clock import FixedClock
 from tests.test_runtime_store import request
 
 
 NOW = datetime(2026, 7, 17, 16, 0, tzinfo=timezone.utc)
 
 
-class FundingAdapter:
+class FundingSettlementClient:
     def __init__(self): self.windows = []
     def funding_history(self, account, start, end):
         self.windows.append((start, end)); return ()
@@ -25,9 +25,9 @@ class Ingestion:
 
 class BinanceFundingBackfillTests(unittest.TestCase):
     def test_periodic_backfill_uses_initial_window_then_overlap_and_is_supervisor_compatible(self) -> None:
-        clock = FixedClock(NOW); adapter = FundingAdapter(); ingestion = Ingestion()
+        clock = FixedClock(NOW); funding_client = FundingSettlementClient(); ingestion = Ingestion()
         service = BinanceDurableFundingBackfill(
-            request().account, adapter, ingestion, clock=clock,
+            request().account, funding_client, ingestion, clock=clock,
             initial_lookback=timedelta(days=2), overlap=timedelta(hours=1),
         )  # type: ignore[arg-type]
         first = service.start()

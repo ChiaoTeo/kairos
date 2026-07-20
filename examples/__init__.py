@@ -1,1 +1,1 @@
-"""Executable examples for the governed trading runtime."""
+"""Executable examples for the governed execution runtime."""

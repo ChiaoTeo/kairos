@@ -4,20 +4,20 @@ import unittest
 from dataclasses import replace
 from decimal import Decimal
 
-from trading import __version__
-from trading.backtest.engine import BacktestEngine
-from trading.backtest.feed import HistoricalDataset, MarketSlice, build_manifest
-from trading.backtest.mock import _put, make_mock_dataset
-from trading.backtest.result import BacktestConfig
-from trading.domain.market_data import Quote
-from trading.pricing import PricingInput, black76
-from trading.research.snapshot import InstrumentSnapshot
-from trading.risk.limits import RiskLimits
-from trading.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
+from kairos import __version__
+from kairos.backtest.engine import BacktestEngine
+from kairos.backtest.feed import MarketReplayDataset, MarketSnapshot, build_manifest
+from kairos.backtest.synthetic_scenarios import _put, build_synthetic_backtest_dataset
+from kairos.backtest.result import BacktestConfig
+from kairos.domain.market_data import Quote
+from kairos.pricing import PricingInput, black76
+from kairos.research.snapshot import InstrumentSnapshot
+from kairos.risk.limits import RiskLimits
+from kairos.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
 
 
-def internally_priceable_spxw_dataset() -> HistoricalDataset:
-    base = make_mock_dataset()
+def internally_priceable_spxw_dataset() -> MarketReplayDataset:
+    base = build_synthetic_backtest_dataset()
     underlying = base.definitions[0]
     existing = base.definitions[1:]
     catalog = base.reference_catalog()
@@ -36,7 +36,7 @@ def internally_priceable_spxw_dataset() -> HistoricalDataset:
             ask = price + Decimal("0.05")
             quote = Quote(definition.instrument_id, bid, ask, Decimal("100"), Decimal("100"), market.timestamp)
             snapshots.append(InstrumentSnapshot(definition.instrument_id, quote, market.timestamp, None, None, None, None))
-        slices.append(MarketSlice(
+        slices.append(MarketSnapshot(
             market.timestamp, tuple(snapshots), ((underlying.instrument_id, spot),), (), Decimal("0"),
             sequence, tuple(item.instrument_id for item in options),
         ))
@@ -44,11 +44,11 @@ def internally_priceable_spxw_dataset() -> HistoricalDataset:
     contracts = (*base.contracts, replace(base.contracts[0], instrument_id=options[-1].instrument_id))
     manifest = build_manifest(
         "spxw-internal-golden", tuple(slices), tuple(contracts), definitions,
-        sampling_seconds=60, source="synthetic.internal-pricing-golden", market_data_type="mock",
+        sampling_seconds=60, source="synthetic.internal-pricing-reference", market_data_type="synthetic",
         code_version=__version__, split="test", synthetic=True,
         products=catalog.products.values(), references=catalog.all_references(), settlements=catalog.settlements.values(),
     )
-    return HistoricalDataset(
+    return MarketReplayDataset(
         manifest, tuple(slices), tuple(contracts), definitions, catalog.products.values(),
         catalog.all_references(), catalog.settlements.values(),
     )

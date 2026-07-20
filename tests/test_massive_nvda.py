@@ -9,11 +9,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from trading.adapters.massive import (
-    MassiveClient, MassiveConfig, MassiveEquityDayAggPipeline, MassiveResponse,
-    OptionDayAggPipeline, OptionDayIvPipeline,
+from kairos.connectors.massive import (
+    MassiveClient, MassiveConfig, MassiveEquityDailyOhlcvPipeline, MassiveResponse,
+    OptionCloseImpliedVolatilityPipeline, OptionDailyOhlcvPipeline,
 )
-from trading.adapters.massive.source import MassiveFlatFileBatchDownloader, request_fingerprint
+from kairos.connectors.massive.vendor_archive import MassiveFlatFileBatchDownloader, request_fingerprint
 
 
 class StubTransport:
@@ -31,18 +31,18 @@ class MassiveNvdaTests(unittest.TestCase):
                 "O:NVDA260116P00100000,90,4.3,4.5,4.7,4.2,1767330000000000000,18",
                 "O:SPXW260102C06000000,1,1,1,1,1,1767330000000000000,1",
             ])
-            options = OptionDayAggPipeline(root, "NVDA").prepare(
+            options = OptionDailyOhlcvPipeline(root, "NVDA").prepare(
                 "options.nvda.test.v1", date(2026, 1, 2), date(2026, 1, 3),
             )
             self.assertEqual(options["option_root"], "NVDA"); self.assertEqual(options["rows"], 2)
             payload = {"request_id": "nvda-bars", "results": [{
                 "t": 1767330000000, "o": 99, "h": 102, "l": 98, "c": 100, "v": 1_000_000, "n": 10_000, "vw": 100,
             }]}
-            equity = MassiveEquityDayAggPipeline(
+            equity = MassiveEquityDailyOhlcvPipeline(
                 root, MassiveClient(MassiveConfig("secret"), StubTransport(payload)),
             ).prepare("equity.nvda.test.v1", "NVDA", date(2026, 1, 2), date(2026, 1, 3))
             self.assertEqual(equity["rows"], 1)
-            iv = OptionDayIvPipeline(root).prepare(
+            iv = OptionCloseImpliedVolatilityPipeline(root).prepare(
                 "features.nvda.iv.test.v1", "options.nvda.test.v1", "equity.nvda.test.v1",
                 risk_free_rate=Decimal("0.04"), dividend_yield=Decimal("0"),
             )

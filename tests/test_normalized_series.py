@@ -5,13 +5,13 @@ import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from trading.data.market_slice_storage import MarketSliceStorageDriver
-from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.market_data import Quote
-from trading.domain.product import CryptoSpotSpec, EquitySpec, ProductType
-from trading.research.normalized_series import NormalizedSeriesCaptureService
-from trading.research.series import SeriesCaptureSpec
-from trading.reference import ReferenceCatalog
+from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairos.domain.identity import AssetId, InstrumentId, VenueId
+from kairos.domain.market_data import Quote
+from kairos.domain.product import CryptoSpotSpec, EquitySpec, ProductType
+from kairos.research.normalized_series import NormalizedSeriesCaptureService
+from kairos.research.series import SeriesCaptureSpec
+from kairos.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
 
@@ -40,7 +40,7 @@ class NormalizedSeriesTests(unittest.TestCase):
         )
         times = iter((NOW, NOW.replace(minute=1)))
         with tempfile.TemporaryDirectory() as directory:
-            repository = MarketSliceStorageDriver(directory)
+            repository = MarketSnapshotStorageDriver(directory)
             dataset = NormalizedSeriesCaptureService(repository, wait=lambda _: None, now=lambda: next(times)).capture(
                 FakeNormalizedProvider(), catalog, (stock, spot), SeriesCaptureSpec("mixed-series", 2, 60),
                 source="fixture", market_data_type="normalized",

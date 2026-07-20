@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 import asyncio
 from datetime import datetime, timezone
@@ -9,19 +9,19 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from trading.adapters.base import OrderAck, OrderRequest
-from trading.adapters.base import Environment
-from trading.application import ApplicationConfig, AsyncTradingRuntime, ManagedTaskSpec, RuntimePaths, TradingApplication
-from trading.application.clock import FixedClock
-from trading.domain.capability import OrderType
-from trading.domain.execution import TradeSide
-from trading.domain.identity import AccountKey, AccountType, InstrumentId, VenueId
-from trading.domain.order import ExecutionInstructions, TimeInForce
-from trading.execution.command import OutboxStatus
-from trading.execution.order_state import DurableOrderStatus
-from trading.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher
-from trading.orchestration.kill_switch import KillSwitch
-from trading.orchestration.runtime_store import SQLiteRuntimeStore
+from kairos.ports import OrderAck, OrderRequest
+from kairos.ports import Environment
+from kairos.application import ApplicationConfig, AsyncKairosRuntime, ManagedServiceSpec, RuntimePaths, KairosApplication
+from kairos.application.clock import FixedClock
+from kairos.domain.capability import OrderType
+from kairos.domain.execution import TradeSide
+from kairos.domain.identity import AccountKey, AccountType, InstrumentId, VenueId
+from kairos.domain.order import ExecutionInstructions, TimeInForce
+from kairos.execution.command import OutboxStatus
+from kairos.execution.order_state import DurableOrderStatus
+from kairos.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher
+from kairos.orchestration.kill_switch import KillSwitch
+from kairos.orchestration.runtime_store import SQLiteRuntimeStore
 
 
 NOW = datetime(2026, 7, 17, 12, tzinfo=timezone.utc)
@@ -149,11 +149,11 @@ class DurableOrderOutboxTests(unittest.IsolatedAsyncioTestCase):
             store = SQLiteRuntimeStore(paths.runtime_database)
             dispatcher = DurableOrderDispatcher(store, RecordingRouter(), clock=FixedClock(NOW))
             dispatcher.enqueue(request())
-            application = TradingApplication(
+            application = KairosApplication(
                 ApplicationConfig(Environment.PAPER, paths), store, runtime_id="outbox-runtime-fixture",
             )
-            runtime = AsyncTradingRuntime(application, (
-                ManagedTaskSpec("order-outbox-dispatcher", lambda: dispatcher.run(idle_wait_seconds=0.001)),
+            runtime = AsyncKairosRuntime(application, (
+                ManagedServiceSpec("order-outbox-dispatcher", lambda: dispatcher.run(idle_wait_seconds=0.001)),
             ))
 
             await runtime.start()
@@ -171,7 +171,7 @@ class DurableOrderOutboxTests(unittest.IsolatedAsyncioTestCase):
             root = Path(directory)
             paths = RuntimePaths.under(root)
             store = SQLiteRuntimeStore(paths.runtime_database)
-            application = TradingApplication(
+            application = KairosApplication(
                 ApplicationConfig(Environment.PAPER, paths), store, runtime_id="command-service-fixture",
             )
             switch = KillSwitch((), FixedClock(NOW), store)

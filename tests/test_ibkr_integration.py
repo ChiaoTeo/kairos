@@ -1,22 +1,23 @@
 from __future__ import annotations
 
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 import os
 import unittest
 
-from trading.adapters.base import Environment
-from trading.adapters.ibkr.adapter import IbkrAccountAdapter, IbkrSession
-from trading.adapters.ibkr.research import IbkrSpxwResearchAdapter
-from trading.domain.identity import AccountKey, AccountType, VenueId
-from trading.research.spec import ResearchSpec
+from kairos.ports import Environment
+from kairos.connectors.ibkr.account_gateway import IbkrAccountGateway
+from kairos.connectors.ibkr.session import IbkrSession
+from kairos.connectors.ibkr.research import IbkrSpxwResearchProvider
+from kairos.domain.identity import AccountKey, AccountType, VenueId
+from kairos.research.spec import OptionChainCaptureSpec
 
 
 @unittest.skipUnless(os.getenv("RUN_IBKR_INTEGRATION") == "1", "set RUN_IBKR_INTEGRATION=1 to connect to IBKR")
 class IbkrIntegrationTests(unittest.TestCase):
     def test_readonly_underlying_snapshot(self) -> None:
-        spec = ResearchSpec()
-        provider = IbkrSpxwResearchAdapter(
+        spec = OptionChainCaptureSpec()
+        provider = IbkrSpxwResearchProvider(
             spec,
             host=os.getenv("IBKR_HOST", "127.0.0.1"),
             port=int(os.getenv("IBKR_PORT", "4001")),
@@ -39,7 +40,7 @@ class IbkrIntegrationTests(unittest.TestCase):
             session.connect()
             account_id = os.getenv("IBKR_ACCOUNT") or session.ib.managedAccounts()[0]
             account = AccountKey(InstitutionId("ibkr"), account_id, AccountType.SECURITIES_MARGIN)
-            state = IbkrAccountAdapter(session, Environment.PAPER).account_state(account)
+            state = IbkrAccountGateway(session, Environment.PAPER).account_state(account)
             self.assertEqual(state.account, account)
         finally:
             session.disconnect()

@@ -6,23 +6,23 @@ from contextlib import redirect_stdout
 from dataclasses import replace
 from decimal import Decimal
 
-from trading.backtest.engine import BacktestEngine
-from trading.backtest.mock import MockScenario, assess_dataset, make_mock_dataset
-from trading.backtest.repository import BacktestRepository
-from trading.backtest.result import BacktestConfig, ResultStatus
-from trading.backtest.service import BacktestService
-from trading.risk.limits import RiskLimits
-from trading.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
-from trading.__main__ import main
-from trading.data.market_slice_storage import MarketSliceStorageDriver
-from trading.backtest.calendar import AlwaysOpenCalendar, CalendarRegistry, TradingCalendar
-from trading.domain.product import ProductType
-from trading.data import DatasetKey, DatasetLayer, DatasetProduct, register_historical_dataset
+from kairos.backtest.engine import BacktestEngine
+from kairos.backtest.synthetic_scenarios import SyntheticScenario, assess_dataset, build_synthetic_backtest_dataset
+from kairos.backtest.repository import BacktestRepository
+from kairos.backtest.result import BacktestConfig, ResultStatus
+from kairos.backtest.experiment_runner import BacktestExperimentRunner
+from kairos.risk.limits import RiskLimits
+from kairos.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
+from kairos.__main__ import main
+from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairos.backtest.calendar import AlwaysOpenCalendar, CalendarRegistry, TradingCalendar
+from kairos.domain.product import ProductType
+from kairos.data import DatasetKey, DatasetLayer, DataProductDefinition, register_market_replay_dataset
 from datetime import date, time
 
 
-def run_scenario(scenario=MockScenario.PROFIT_TARGET, *, strategy_config=BullPutSpreadConfig(), minimum=Decimal("0.95")):
-    dataset = make_mock_dataset(scenario)
+def run_scenario(scenario=SyntheticScenario.PROFIT_TARGET, *, strategy_config=BullPutSpreadConfig(), minimum=Decimal("0.95")):
+    dataset = build_synthetic_backtest_dataset(scenario)
     config = BacktestConfig(dataset.manifest.start, dataset.manifest.end, minimum_data_coverage=minimum)
     return BacktestEngine(dataset, config, BullPutSpreadStrategy(strategy_config)).run()
 
@@ -46,36 +46,36 @@ class BacktestEngineTests(unittest.TestCase):
         self.assertIn("medium", first.metrics["pnl_by_iv_regime"])
 
     def test_no_trade_and_never_filled(self) -> None:
-        no_trade = run_scenario(MockScenario.NO_TRADE)
+        no_trade = run_scenario(SyntheticScenario.NO_TRADE)
         self.assertFalse(no_trade.fills)
-        never = run_scenario(MockScenario.NEVER_FILLED)
+        never = run_scenario(SyntheticScenario.NEVER_FILLED)
         self.assertFalse(never.fills)
         self.assertGreater(never.metrics["unfilled_orders"], 0)
 
     def test_stop_loss_loses_money(self) -> None:
-        result = run_scenario(MockScenario.STOP_LOSS)
+        result = run_scenario(SyntheticScenario.STOP_LOSS)
         self.assertEqual(len(result.fills), 2)
         self.assertLess(result.metrics["final_equity"], Decimal("100000"))
 
     def test_fee_can_turn_gross_edge_negative(self) -> None:
         strategy = BullPutSpreadConfig(profit_target=Decimal("0"))
-        result = run_scenario(MockScenario.FEE_TURNS_PROFIT_TO_LOSS, strategy_config=strategy)
+        result = run_scenario(SyntheticScenario.FEE_TURNS_PROFIT_TO_LOSS, strategy_config=strategy)
         self.assertEqual(len(result.fills), 2)
         self.assertLess(result.metrics["final_equity"], Decimal("100000"))
 
     def test_missing_quote_and_force_close_failure_are_not_valid(self) -> None:
-        missing = run_scenario(MockScenario.MISSING_QUOTE, minimum=Decimal("0.90"))
+        missing = run_scenario(SyntheticScenario.MISSING_QUOTE, minimum=Decimal("0.90"))
         self.assertNotEqual(missing.status, ResultStatus.VALID)
-        failed = run_scenario(MockScenario.FORCE_CLOSE_FAILURE, minimum=Decimal("0.90"))
+        failed = run_scenario(SyntheticScenario.FORCE_CLOSE_FAILURE, minimum=Decimal("0.90"))
         self.assertEqual(failed.status, ResultStatus.INVALID)
         self.assertTrue(any(reason.startswith("force_close_failed") for reason in failed.validity_reasons))
 
     def test_suite_persists_conservative_and_stress_and_replay_hash_is_stable(self) -> None:
-        dataset = make_mock_dataset()
+        dataset = build_synthetic_backtest_dataset()
         config = BacktestConfig(dataset.manifest.start, dataset.manifest.end)
         with tempfile.TemporaryDirectory() as directory:
             repository = BacktestRepository(directory)
-            conservative, stress = BacktestService(repository).run_suite(dataset, config, BullPutSpreadConfig(), RiskLimits())
+            conservative, stress = BacktestExperimentRunner(repository).run_suite(dataset, config, BullPutSpreadConfig(), RiskLimits())
             self.assertLessEqual(stress.metrics["final_equity"], conservative.metrics["final_equity"])
             for result in (conservative, stress):
                 run_dir = repository.run_dir(result.run_id)
@@ -93,12 +93,12 @@ class BacktestEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             dataset_root = f"{directory}/datasets"
             backtest_root = f"{directory}/backtests"
-            dataset = make_mock_dataset()
-            directory_path = MarketSliceStorageDriver(dataset_root).save(dataset)
-            register_historical_dataset(directory, dataset, directory_path,
-                DatasetProduct(DatasetKey("curated.mock.profit_target.development"), "Mock development",
+            dataset = build_synthetic_backtest_dataset()
+            directory_path = MarketSnapshotStorageDriver(dataset_root).save(dataset)
+            register_market_replay_dataset(directory, dataset, directory_path,
+                DataProductDefinition(DatasetKey("curated.synthetic.profit_target.development"), "Synthetic development",
                                DatasetLayer.CURATED, primary_time="timestamp"),
-                provider="synthetic", venue="mock", synthetic=True)
+                provider="synthetic", venue="synthetic", synthetic=True)
             common = ["--lake-root", directory, "--dataset-root", dataset_root, "--backtest-root", backtest_root, "backtest"]
             with io.StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([*common, "run", "--dataset", dataset.manifest.dataset_id]), 0)
@@ -117,14 +117,14 @@ class BacktestEngineTests(unittest.TestCase):
             with io.StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([*common, "compare", "--run-id", run_ids[0], "--run-id", run_ids[1]]), 0)
                 self.assertIn("slippage=", output.getvalue())
-            validation = make_mock_dataset(split="validation")
-            test = make_mock_dataset(split="test")
+            validation = build_synthetic_backtest_dataset(split="validation")
+            test = build_synthetic_backtest_dataset(split="test")
             for item in (validation, test):
-                path = MarketSliceStorageDriver(dataset_root).save(item)
-                register_historical_dataset(directory, item, path,
-                    DatasetProduct(DatasetKey(f"curated.mock.profit_target.{item.manifest.split}"),
-                                   f"Mock {item.manifest.split}", DatasetLayer.CURATED, primary_time="timestamp"),
-                    provider="synthetic", venue="mock", synthetic=True)
+                path = MarketSnapshotStorageDriver(dataset_root).save(item)
+                register_market_replay_dataset(directory, item, path,
+                    DataProductDefinition(DatasetKey(f"curated.synthetic.profit_target.{item.manifest.split}"),
+                                   f"Synthetic {item.manifest.split}", DatasetLayer.CURATED, primary_time="timestamp"),
+                    provider="synthetic", venue="synthetic", synthetic=True)
             with io.StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
                     *common, "validate",
@@ -139,14 +139,14 @@ class BacktestEngineTests(unittest.TestCase):
         from pathlib import Path
         hashes = set()
         for split in ("development", "validation", "test"):
-            dataset = make_mock_dataset(split=split)
+            dataset = build_synthetic_backtest_dataset(split=split)
             readiness = assess_dataset(dataset)
             self.assertTrue(readiness.ready)
             self.assertEqual(dataset.manifest.split, split)
             hashes.add(dataset.manifest.content_hash)
         self.assertEqual(len(hashes), 1, "split labels must not alter market content hash")
         scenarios = json.loads((Path(__file__).parent / "fixtures" / "backtest" / "scenarios.json").read_text())["scenarios"]
-        self.assertEqual(set(scenarios), {item.value for item in MockScenario})
+        self.assertEqual(set(scenarios), {item.value for item in SyntheticScenario})
         schema = json.loads((Path(__file__).parent / "fixtures" / "backtest" / "dataset.schema.json").read_text())
         self.assertEqual(schema["properties"]["manifest"]["properties"]["schema_version"]["const"], 1)
 
@@ -167,10 +167,10 @@ class BacktestEngineTests(unittest.TestCase):
 
     def test_frozen_parameter_split_validation_records_all_trials(self) -> None:
         import json
-        datasets = tuple(make_mock_dataset(split=split) for split in ("development", "validation", "test"))
+        datasets = tuple(build_synthetic_backtest_dataset(split=split) for split in ("development", "validation", "test"))
         config = BacktestConfig(datasets[0].manifest.start, datasets[0].manifest.end)
         with tempfile.TemporaryDirectory() as directory:
-            service = BacktestService(BacktestRepository(directory))
+            service = BacktestExperimentRunner(BacktestRepository(directory))
             output = service.validate_splits(datasets, config, BullPutSpreadConfig(), RiskLimits())
             summary = json.loads((output / "validation-summary.json").read_text())
             self.assertTrue(summary["parameters_frozen"])

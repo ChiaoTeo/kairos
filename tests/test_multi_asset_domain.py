@@ -5,11 +5,11 @@ import unittest
 from datetime import datetime, time, timezone
 from decimal import Decimal
 
-from trading.domain.capability import ExecutionCapabilities, MarketDataCapabilities, MarketDataKind, OrderType, ReferenceCapabilities
-from trading.domain.identity import Amount, AssetId, InstrumentId, VenueId
-from trading.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from trading.reference import ReferenceCatalog
-from trading.reference.repository import ReferenceCatalogRepository
+from kairos.domain.capability import ExecutionCapabilities, MarketDataCapabilities, MarketDataKind, OrderType, ReferenceCapabilities
+from kairos.domain.identity import Amount, AssetId, InstrumentId, VenueId
+from kairos.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairos.reference import ReferenceCatalog
+from kairos.reference.repository import ReferenceCatalogRepository
 from tests.reference_support import publish_test_instrument
 
 

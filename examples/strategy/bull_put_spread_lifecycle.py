@@ -13,25 +13,25 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 
-from trading.backtest.engine import BacktestEngine
-from trading.backtest.mock import make_mock_dataset
-from trading.backtest.repository import BacktestRepository
-from trading.backtest.result import BacktestConfig
-from trading.features import FactorRegistry,OptionSkewFactorConfig,OptionSkewFactorRuntime,snapshots_hash
-from trading.pricing import ValuationService
-from trading.research import StudyWorkspace,StudyWorkspaceRepository
-from trading.risk.limits import RiskLimits
-from trading.storage.codec import to_primitive
-from trading.strategies import StrategyImplementation,StrategyRegistry
-from trading.strategies.bull_put_spread import BullPutSpreadConfig,BullPutSpreadStrategy
-from trading.strategies.specs import bull_put_strategy_spec
+from kairos.backtest.engine import BacktestEngine
+from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
+from kairos.backtest.repository import BacktestRepository
+from kairos.backtest.result import BacktestConfig
+from kairos.features import FactorRegistry,OptionSkewFactorConfig,OptionSkewFactorRuntime,snapshots_hash
+from kairos.pricing import OptionValuationService
+from kairos.research_platform import StudyWorkspace,StudyWorkspaceRepository
+from kairos.risk.limits import RiskLimits
+from kairos.storage.codec import to_primitive
+from kairos.strategies import StrategyImplementation,StrategyRegistry
+from kairos.strategies.bull_put_spread import BullPutSpreadConfig,BullPutSpreadStrategy
+from kairos.strategies.specs import bull_put_strategy_spec
 
 
 def _hash(value)->str:return sha256(json.dumps(to_primitive(value),sort_keys=True,separators=(",",":")).encode()).hexdigest()
 
 
 def run(root:Path)->dict[str,object]:
-    dataset=make_mock_dataset();catalog=dataset.reference_catalog();identity=dataset.manifest.dataset_id
+    dataset=build_synthetic_backtest_dataset();catalog=dataset.reference_catalog();identity=dataset.manifest.dataset_id
     studies=StudyWorkspaceRepository(root);studies.create(StudyWorkspace("spxw-skew-bull-put","1.0.0",
         "High point-in-time 25-delta put/ATM skew may support a bull put spread trade proxy",identity,
         dataset.manifest.content_hash,"timestamp",dataset.manifest.start.isoformat(),dataset.manifest.end.isoformat(),
@@ -39,15 +39,15 @@ def run(root:Path)->dict[str,object]:
     candidate=studies.freeze("spxw-skew-bull-put","1.0.0")
     factor_config=OptionSkewFactorConfig(minimum_rank_history=0)
     research_factor=OptionSkewFactorRuntime(catalog,factor_config,input_identity=identity)
-    valuation=ValuationService(catalog,max_quote_age_seconds=Decimal("120"));factor_snapshots=[]
+    valuation=OptionValuationService(catalog,max_quote_age_seconds=Decimal("120"));factor_snapshots=[]
     for market in dataset.slices:
         valued,snapshot=valuation.value(market)
         if value:=research_factor.update_market(valued,snapshot):factor_snapshots.append(value)
     factor_dir=FactorRegistry(root/"factors").register(research_factor.spec)
     strategy_config=BullPutSpreadConfig(signal_factor_id=research_factor.spec.factor_id,minimum_skew_rank=Decimal("0.5"))
     spec,policy=bull_put_strategy_spec(strategy_config)
-    implementation=StrategyImplementation("trading.strategies.bull_put_spread:BullPutSpreadStrategy",
-        sha256((ROOT/"trading/strategies/bull_put_spread.py").read_bytes()).hexdigest())
+    implementation=StrategyImplementation("kairos.strategies.bull_put_spread:BullPutSpreadStrategy",
+        sha256((ROOT/"kairos/strategies/bull_put_spread.py").read_bytes()).hexdigest())
     strategy_dir=StrategyRegistry(root/"strategies").register(spec,policy,implementation=implementation,
         factor_specs=(research_factor.spec,))
     config=BacktestConfig(dataset.manifest.start,dataset.manifest.end)

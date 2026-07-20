@@ -6,14 +6,14 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from trading.backtest.feed import MarketSlice
-from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.market_data import Greeks, Quote
-from trading.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from trading.research.retention import DeltaLegWatchlist
-from trading.research.snapshot import InstrumentSnapshot
-from trading.reference import ReferenceCatalog
-from trading.reference.models import InstrumentDefinition
+from kairos.backtest.feed import MarketSnapshot
+from kairos.domain.identity import AssetId, InstrumentId, VenueId
+from kairos.domain.market_data import Greeks, Quote
+from kairos.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairos.research.retention import DeltaLegWatchlist
+from kairos.research.snapshot import InstrumentSnapshot
+from kairos.reference import ReferenceCatalog
+from kairos.reference.contracts import InstrumentDefinition
 from tests.reference_support import publish_test_instrument
 
 
@@ -48,7 +48,7 @@ class OptionLegRetentionTests(unittest.TestCase):
             )
             for definition, delta in zip(definitions, deltas)
         )
-        market = MarketSlice(at, snapshots, ((InstrumentId("index:spx"), Decimal("6000")),), available_instruments=tuple(item.instrument_id for item in definitions))
+        market = MarketSnapshot(at, snapshots, ((InstrumentId("index:spx"), Decimal("6000")),), available_instruments=tuple(item.instrument_id for item in definitions))
         with tempfile.TemporaryDirectory() as directory:
             watchlist = DeltaLegWatchlist(directory, "real-study")
             self.assertTrue(watchlist.observe(market, definitions))

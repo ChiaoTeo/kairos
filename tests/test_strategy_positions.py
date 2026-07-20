@@ -1,8 +1,8 @@
 from decimal import Decimal
 import unittest
 
-from trading.domain.identity import InstrumentId
-from trading.risk.strategy_positions import StrategyPositionBook
+from kairos.domain.identity import InstrumentId
+from kairos.risk.strategy_positions import StrategyPositionBook
 
 
 class StrategyPositionBookTest(unittest.TestCase):

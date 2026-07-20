@@ -2,7 +2,7 @@
 
 ## 1. 文档目的
 
-本文定义 Trader 使用 Massive 建设美股横截面动量研究数据的完整方案，包括研究边界、数据产品、
+本文定义 Kairos 使用 Massive 建设美股横截面动量研究数据的完整方案，包括研究边界、数据产品、
 身份与时间契约、复权方法、动态股票池、存储布局、质量门禁、发布流程、实施阶段和验收标准。
 
 本文首先解决“在任意历史决策时点，系统实际知道什么、允许选择什么、能够以什么价格交易”这三个
@@ -73,7 +73,7 @@ Massive 适配器已有以下基础：
 3. 只保存 Massive `adjusted=true` 结果，缺少原始价格和内部复权审计；
 4. 没有完整区分普通股、ETF、优先股、权证、单位、基金和 OTC；
 5. 退市、停牌、缺失下载和正常无成交尚未形成明确状态；
-6. 股票日线没有接入统一 `DatasetProductSpec`、Connector、质量晋级和 Study 一键启动流程；
+6. 股票日线没有接入统一 `DataProductContract`、Connector、质量晋级和 Study 一键启动流程；
 7. 当前通用 OHLCV 质量规则不能独立证明历史股票池完整或公司行为处理正确。
 
 因此，本项目不是给现有单 ticker 命令套一层循环，而是建立一个独立的“美股全市场日频数据产品”。
@@ -159,7 +159,7 @@ lineage、审计和供应商请求。
 - HTTP 状态和分页信息；
 - 原始 payload 或 Flat File；
 - payload SHA-256；
-- API host、adapter version 和 entitlement 错误；
+- API host、connector version 和 entitlement 错误；
 - 重试和限流信息。
 
 Source 文件一旦完整写入就不原地修改。Decoder、Schema 或复权规则变化时，从相同 Source 重新发布
@@ -410,7 +410,7 @@ momentum_12_1(t) = product(1 + total_return[d]) - 1
 | 日线 | daily aggregates / group daily / Flat Files | 批量资源优先，单 ticker REST 用于补缺和核验 |
 | 交易日历 | market status/holidays + internal calendar | 供应商与内部日历交叉验证 |
 
-具体 endpoint、分页上限和套餐权限可能变化，应封装在 Adapter 内，不写入研究脚本。开发前通过
+具体 endpoint、分页上限和套餐权限可能变化，应封装在 Connector 内，不写入研究脚本。开发前通过
 readiness 命令验证账户的历史深度、inactive ticker 可见性、Flat File 权限和速率限制。
 
 ### 6.2 批量优先原则
@@ -435,7 +435,7 @@ Connector 的 `estimate()` 必须在下载前给出：
 Raw 建议按供应商数据资产的天然粒度分区：
 
 ```text
-data/source/provider=massive/dataset=stocks_day_aggs/
+data/source/provider=massive/dataset=stocks_daily_ohlcv/
   event_year=2024/event_month=01/event_date=2024-01-02/
     payload.csv.gz
     receipt.json
@@ -963,11 +963,22 @@ next_close_to_close_return
 
 退出条件：任意样本日期都能唯一解析当时 ticker；冲突不会被静默猜测。
 
+当前进展：已增加 Massive active/inactive 普通股 ticker reference 同步入口，结果会保存为内容寻址的
+`reference/provider=massive/equity_tickers/version=<hash>/records.json`，可作为后续
+`build-massive-equity-identity --reference-rows` 的输入：
+
+```bash
+./pyenv/bin/python -m kairos data sync-massive-reference --equity-tickers
+```
+
+该入口解决“全市场股票清单如何进入本地 Source/Reference”的前置问题，但还没有完成全历史 ticker
+事件补齐、冲突隔离审核和 full-market identity Release 验收。
+
 ### 阶段 2：全市场 Raw 日线
 
 任务：
 
-- 声明 `DatasetProductSpec`；
+- 声明 `DataProductContract`；
 - 实现全市场 Massive Connector；
 - 批量下载 Raw 与 vendor-adjusted 日线；
 - 支持 plan、estimate、缓存、恢复和增量合并；
@@ -1021,7 +1032,7 @@ next_close_to_close_return
 目标命令形态：
 
 ```bash
-./pyenv/bin/python -m trading data prepare-us-equity-momentum \
+./pyenv/bin/python -m kairos data prepare-us-equity-momentum \
   --raw-dataset market.ohlcv.equity.us.massive.1d.raw \
   --connector-config examples/data/massive_connector.example.json \
   --start 2005-01-01T00:00:00-05:00 \
@@ -1029,12 +1040,12 @@ next_close_to_close_return
   --sync-corporate-actions \
   --dataset-id us-equity-momentum.bounded.v1
 
-./pyenv/bin/python -m trading study plan us-equity-momentum \
+./pyenv/bin/python -m kairos study plan us-equity-momentum \
   --dataset market.ohlcv.equity.us.massive.1d.raw \
   --start 2005-01-01T00:00:00-05:00 \
   --end 2026-07-01T00:00:00-04:00
 
-./pyenv/bin/python -m trading study start us-equity-momentum \
+./pyenv/bin/python -m kairos study start us-equity-momentum \
   --dataset market.ohlcv.equity.us.massive.1d.raw \
   --start 2005-01-01T00:00:00-05:00 \
   --end 2026-07-01T00:00:00-04:00
@@ -1058,7 +1069,7 @@ Feature 构建必须消费已归档的公司行为输入，而不是在研究脚
 构建入口保留显式参数：
 
 ```bash
-./pyenv/bin/python -m trading features build \
+./pyenv/bin/python -m kairos features build \
   --feature-set us-equity-momentum-v1 \
   --source-directory canonical/market/ohlcv/asset_class=equity/region=us/provider=massive/interval=1d/view=raw/dataset=<raw-release> \
   --corporate-actions-directory reference/provider=massive/corporate_actions/ticker=<TICKER>/version=<hash> \
@@ -1068,7 +1079,7 @@ Feature 构建必须消费已归档的公司行为输入，而不是在研究脚
 没有 `--corporate-actions-directory` 时，构建器必须在 Release `quality.json` 和 readiness 报告中明确披露：
 `total_return` 退化为 raw close return，不能声称已完成独立复权和总收益审计。
 
-`trader data us-equity-momentum-readiness` 必须汇总 universe release 中的缺失状态，包括 `observed_rows`、
+`kairos data us-equity-momentum-diagnostics` 必须汇总 universe release 中的缺失状态，包括 `observed_rows`、
 `missing_bar_rows`、`critical_gap_rows` 和 `missing_reason_counts`。存在
 `expected_trading_session_without_bar` 时仍可作为受限研究输入使用，但 readiness 必须以 warning 暴露，
 并提示补充 reference/coverage 证据，将其拆分为停牌、退市、下载失败或供应商覆盖缺口。

@@ -1,16 +1,16 @@
-# Trader 系统架构收敛与改造总纲
+# Kairos 系统架构收敛与改造总纲
 
 状态：Active Blueprint  
 版本：1.0  
 基线日期：2026-07-17  
-适用范围：整个 `trading` 包、`research`、CLI、运行时持久化与 `data/` 数据目录  
+适用范围：整个 `kairos` 包、`studies` 工作区、CLI、运行时持久化与 `data/` 数据目录  
 目标读者：系统维护者、策略开发者、数据工程人员和后续改造实施者
 
 ## 1. 文档目的
 
-本文是 Trader 后续系统改造的总纲，统一回答以下问题：
+本文是 Kairos 后续系统改造的总纲，统一回答以下问题：
 
-1. `trading` 各模块分别负责什么，相互之间应如何依赖；
+1. `kairos` 各模块分别负责什么，相互之间应如何依赖；
 2. 当前系统哪些能力已经成立，哪些只是模块级能力、尚未形成完整运行闭环；
 3. 如何收敛研究数据、回测、模拟、paper/testnet/live 的运行路径；
 4. 如何规范 Domain、Data、Catalog、Research、Backtest 和 Runtime 的边界；
@@ -30,14 +30,14 @@
 
 当前代码已经具备较完整的模块能力：
 
-- 多资产 Instrument、ProductSpec、ListingDefinition 和 Capability；
-- 市场数据归一化、Provider Adapter 和历史数据获取；
+- 多资产 Instrument、InstrumentContractSpec、ListingDefinition 和 Capability；
+- 市场数据归一化、Provider connector 和历史数据获取；
 - Dataset Catalog V3、不可变 Release、Parquet 和 point-in-time 查询；
 - 策略 Intent、执行计划、路由、组合订单和 Venue 规则校验；
 - Ledger、Portfolio、Risk、Pricing、Volatility 和产品生命周期；
 - 确定性 Backtest、Research Validation 和策略治理；
 - Readiness、Reconciliation、Kill Switch、事件日志和部分故障恢复；
-- IBKR、Binance、Deribit、Massive 和模拟 Adapter。
+- IBKR、Binance、Deribit、Massive 和模拟 connector。
 
 当前全量基线为：
 
@@ -57,7 +57,7 @@ git diff --check passed
 
 ```text
 加载 Catalog 和 Ledger
-  -> 创建 Adapter
+  -> 创建 connector
   -> Reconciliation
   -> Readiness
   -> 提交 Order
@@ -89,13 +89,13 @@ Market Data / Reference / Account State
 | 领域 | 当前状态 | 判断 |
 |---|---|---|
 | Domain 边界 | Strategy Runtime 已移出 Domain，并有 AST 边界测试 | 基本完成 |
-| Application 基础 | TradingApplication、Clock、Config、生命周期和账户锁已建立 | 基础完成，闭环未完成 |
+| Application 基础 | KairosApplication、Clock、Config、生命周期和账户锁已建立 | 基础完成，闭环未完成 |
 | Order 持久化 | SQLite Runtime Store、订单状态机、Combo/Cancel、UNKNOWN fail-closed 已建立 | 主干完成，Venue 恢复待补 |
-| Fill/Ledger | Execution、Order、Ledger、Cursor 已可单事务提交并幂等重建 | 基础完成，真实 Adapter 待接入 |
+| Fill/Ledger | Execution、Order、Ledger、Cursor 已可单事务提交并幂等重建 | 基础完成，真实 execution gateway 待接入 |
 | Portfolio/Risk/Reconciliation | 重启 Projection 和 balance/position READY 门禁已落地；Open Order、Funding、Settlement 尚待覆盖 | 主干完成，范围待扩展 |
-| 数据产品 | ProductSpec、Typed/Streaming Quality、OHLCV/MarketSlice Q3、Golden SMA/SPXW 已落地 | 主干完成 |
+| 数据产品 | DataProductContract、Typed/Streaming Quality、OHLCV/MarketSnapshot Q3、Golden SMA/SPXW 已落地 | 主干完成 |
 | 旧 History/CSV | History 代码、CLI、目录和 340 个 CSV sidecar 已安全迁移删除 | 完成 |
-| 旧 Dataset/Surface | 已迁移为内部 MarketSlice Driver 和 Feature Release，旧代码/目录已删除 | 完成 |
+| 旧 Dataset/Surface | 已迁移为内部 MarketSnapshot Driver 和 Feature Release，旧代码/目录已删除 | 完成 |
 | 外部运行验收 | 单元/集成基线稳定 | L3/L4 尚未完成 |
 
 因此，当前系统不是“从零建设”，而是处于从模块能力走向正式 Application 闭环的中后期。下一阶段的第一优先级不是继续增加模型，而是完成：
@@ -123,7 +123,7 @@ Runtime recovery
 - Position、Portfolio 和 Risk；
 - 产品生命周期和结算规则。
 
-研究、回测、模拟、paper/testnet/live 只能在数据来源、Clock、Fill/Execution Adapter 和运行安全等级上不同，不得各自维护一套业务事实模型。
+研究、回测、模拟、paper/testnet/live 只能在数据来源、Clock、Fill/Execution Gateway 和运行安全等级上不同，不得各自维护一套业务事实模型。
 
 ### 3.2 依赖指向稳定抽象
 
@@ -138,7 +138,7 @@ Runtime recovery
                \       |       /
                 application/runtime
               /    |      |       \
-           data  backtest execution adapters
+           data  backtest execution connectors
               \     |      |       /
                  storage/infrastructure
 ```
@@ -147,7 +147,7 @@ Runtime recovery
 
 - Domain 不依赖任何上层或基础设施实现；
 - Application Service 负责编排，不重新定义业务规则；
-- Adapter 只实现端口并完成外部对象转换；
+- Connector 只实现端口并完成外部对象转换；
 - Storage 只提供持久化能力，不决定业务状态转换；
 - Research 和 Backtest 是 Domain/Application 的消费者，不反向进入 Domain；
 - CLI 只是入口，不是业务逻辑和依赖组装的长期归宿。
@@ -183,16 +183,16 @@ Runtime recovery
 - 持久化不可用；
 - 时钟偏差超过阈值。
 
-## 4. `trading` 模块关系梳理
+## 4. `kairos` 模块关系梳理
 
-### 4.1 `trading.domain`
+### 4.1 `kairos.domain`
 
 职责：定义与运行模式无关的业务事实、值对象、实体、状态转换输入和核心约束。
 
 当前主要内容：
 
 - `identity`：Asset、Instrument、Venue、Account 等稳定身份；
-- `product`：Equity、Listed Option、Spot、Future、Perpetual、Crypto Option 等 ProductSpec；
+- `product`：Equity、Listed Option、Spot、Future、Perpetual、Crypto Option 等 InstrumentContractSpec；
 - `instrument`：InstrumentDefinition、ListingDefinition、OptionChain；
 - `market_data`：Quote、Trade、Bar、OrderBook、Greeks 等经济事实；
 - `intent`、`order`、`execution`：交易意图、订单和成交；
@@ -210,19 +210,19 @@ Runtime recovery
 应移出：
 
 - 直接引用具体 `ReferenceCatalog` 的 StrategyContext；
-- 对 Backtest MarketSlice、Research Feature、Volatility Repository 等上层对象的依赖；
+- 对 Backtest MarketSnapshot、Research Feature、Volatility Repository 等上层对象的依赖；
 - 文件、Dataset、Provider、Release、DataFrame 和运行环境概念。
 
 目标依赖：Domain 只能依赖 Python 标准库和 Domain 内部模块。
 
-### 4.2 `trading.reference`
+### 4.2 `kairos.reference`
 
 职责：管理 Instrument Definition 和 Venue Listing 的 point-in-time 版本。
 
 回答：
 
 - 这是哪个金融合约；
-- 其 ProductSpec 是什么；
+- 其 InstrumentContractSpec 是什么；
 - 在某个 Venue 的 symbol、external ID、tick、lot 和 minimum notional 是什么；
 - 某时刻哪一版定义有效。
 
@@ -238,10 +238,10 @@ Runtime recovery
 
 - `ReferenceCatalog` 作为应用服务依赖的端口或稳定服务；
 - Repository 作为可替换基础设施；
-- Adapter 通过 Reference Port 更新 Catalog；
+- Connector 通过 Reference Port 更新 Catalog；
 - 执行和估值只通过 InstrumentId 查询，不猜测 Venue symbol。
 
-### 4.3 `trading.data`
+### 4.3 `kairos.data`
 
 职责：管理研究数据产品的身份、获取、版本、发布、查询、质量和复现。
 
@@ -259,7 +259,7 @@ Runtime recovery
 目标定位：
 
 - `ResearchDataClient` 是 Research 和 Backtest 的唯一公开数据入口；
-- Event、Tabular、MarketSlice Reader 都是内部 storage driver；
+- Event、Tabular、MarketSnapshot Reader 都是内部 storage driver；
 - 所有正式数据读取必须先解析为不可变 Release；
 - Backtest 禁止隐式联网获取；
 - 正式研究必须冻结输入 Release 和 content hash。
@@ -271,7 +271,7 @@ Runtime recovery
 - Data 可以将 Canonical Record 映射为 Domain 对象；
 - Domain 不知道 Data Product 和 Release。
 
-### 4.4 `trading.market_data`
+### 4.4 `kairos.market_data`
 
 职责：定义实时/事件市场数据的 Canonical Record、质量检查、读取和基础估值输入。
 
@@ -288,21 +288,21 @@ Runtime recovery
 - 研究代码直接依赖 Repository；
 - Provider payload 直接进入 Strategy/Risk/Pricing。
 
-### 4.5 `trading.adapters`
+### 4.5 `kairos.connectors`
 
 职责：把外部 Venue/Provider 接口实现为系统端口。
 
 端口包括：
 
-- ReferenceDataAdapter；
-- MarketDataAdapter；
-- ExecutionAdapter；
-- AccountAdapter；
-- CorporateActionAdapter；
-- Funding/Settlement Adapter；
+- ReferenceDataPort，由 ReferenceDataClient 实现；
+- MarketDataPort，由 MarketDataClient 实现；
+- ExecutionPort，由 ExecutionGateway 实现；
+- AccountPort，由 AccountGateway 实现；
+- CorporateActionPort，由 CorporateActionClient 实现；
+- Funding/Settlement Port，由 FundingSettlementClient 实现；
 - Dataset Provider Connector。
 
-Adapter 必须：
+Connector 必须：
 
 - 声明 environment、venue 和 port-scoped capability；
 - 将外部 ID 映射为 InstrumentId；
@@ -310,7 +310,7 @@ Adapter 必须：
 - 实现幂等键、分页、限流、重连和错误分类；
 - 不让外部 SDK 对象进入上层。
 
-Adapter 不得：
+Connector 不得：
 
 - 自行决定策略和风险；
 - 直接修改 Ledger；
@@ -318,9 +318,9 @@ Adapter 不得：
 - 通过内部 InstrumentId 猜 Venue symbol；
 - 在调用链中吞掉关键异常。
 
-### 4.6 `trading.products`
+### 4.6 `kairos.products`
 
-职责：实现不同 ProductSpec 的财务计算和生命周期规则。
+职责：实现不同 InstrumentContractSpec 的财务计算和生命周期规则。
 
 包括：
 
@@ -336,13 +336,13 @@ Adapter 不得：
 - 同一规则被 Backtest、Simulation 和 Live Ledger 使用；
 - 产品规则通过明确 registry 选择，不散落在 if/else 中。
 
-### 4.7 `trading.pricing`
+### 4.7 `kairos.pricing`
 
 职责：无 Venue 副作用的定价、隐含波动率和估值服务。
 
 输入：
 
-- Domain ProductSpec；
+- Domain InstrumentContractSpec；
 - 市场观察；
 - Rate/Dividend/Forward；
 - Volatility Surface。
@@ -358,7 +358,7 @@ Adapter 不得：
 - vendor analytics 与内部估值明确分开；
 - 相同输入在 Research、Backtest 和 Runtime 结果一致。
 
-### 4.8 `trading.volatility`
+### 4.8 `kairos.volatility`
 
 职责：波动率曲面模型、校准和查询。
 
@@ -370,7 +370,7 @@ Adapter 不得：
 - 曲面输入冻结 Canonical Release 和算法版本；
 - 实时内存曲面可以存在，但必须能追踪输入和计算版本。
 
-### 4.9 `trading.features`
+### 4.9 `kairos.features`
 
 职责：构建可跨策略复用、point-in-time safe 的特征数据产品。
 
@@ -383,7 +383,7 @@ Adapter 不得：
 - offline 与 incremental 结果一致；
 - Feature 不以单个策略命名。
 
-### 4.10 `trading.research`
+### 4.10 `kairos.research`
 
 职责：研究工作流、样本、报告、实验和验证产物。
 
@@ -402,7 +402,7 @@ Adapter 不得：
 - 将研究专属标签发布为 Canonical/Feature；
 - 只记录浮动 Alias 而不冻结 Release。
 
-### 4.11 `trading.strategies`
+### 4.11 `kairos.strategies`
 
 职责：根据 StrategyContext 产生 Economic Intent，不直接下单。
 
@@ -415,7 +415,7 @@ Adapter 不得：
 - 策略不直接修改 Portfolio 或 Ledger；
 - 相同策略可以运行于 Backtest、Simulation 和 Live Runtime。
 
-### 4.12 `trading.risk`
+### 4.12 `kairos.risk`
 
 职责：订单前风险、结构风险、Portfolio 风险、场景分析和策略资本治理。
 
@@ -433,7 +433,7 @@ Adapter 不得：
 - hard limit 不能由 Strategy 覆盖；
 - 未知价格、缺失 conversion 或 stale data 默认拒绝扩大风险。
 
-### 4.13 `trading.execution`
+### 4.13 `kairos.execution`
 
 职责：把 Economic Intent 转换为可执行计划，并完成 Venue 路由和成交归一化。
 
@@ -452,7 +452,7 @@ Adapter 不得：
 - UNKNOWN 状态必须查询 Venue，不能盲目重发；
 - Fill 统一进入 LedgerService。
 
-### 4.14 `trading.accounting`
+### 4.14 `kairos.accounting`
 
 职责：通过不可变 Ledger 重建现金、持仓、费用、Funding、公司行为和结算。
 
@@ -464,7 +464,7 @@ Adapter 不得：
 - Portfolio 和 Risk View 是 Ledger Projection；
 - Ledger 持久化必须具备事务、唯一约束和崩溃恢复。
 
-### 4.15 `trading.backtest`
+### 4.15 `kairos.backtest`
 
 职责：用冻结历史输入、确定性 Clock 和 Fill Model 驱动正式 Strategy/Application 逻辑。
 
@@ -472,13 +472,13 @@ Adapter 不得：
 
 - Backtest 不维护平行业务规则；
 - 使用正式 Strategy、Risk、Execution Plan 和 Ledger reducer；
-- 仅替换 Market Data Feed、Clock 和 Execution Adapter；
+- 仅替换 Market Data Feed、Clock 和 Execution Gateway；
 - 无同 slice fill；
 - 输出完整审计 hash；
 - 使用 Q3/Q4 Release；
 - Conservative 和 Stress 必须成对评估。
 
-### 4.16 `trading.orchestration`
+### 4.16 `kairos.orchestration`
 
 职责：系统运行编排、安全门禁、恢复和操作状态。
 
@@ -494,13 +494,13 @@ Adapter 不得：
 
 目标升级：
 
-- 演进为统一 TradingApplication Runtime；
+- 演进为统一 KairosApplication Runtime；
 - Readiness 从调用方布尔值升级为真实 Probe；
 - Kill Switch、cursor 和恢复状态持久化；
 - 编排 Market Data、Strategy、Risk、Execution、Ledger 和 Monitoring 循环；
 - 明确 start/recover/run/degrade/shutdown 生命周期。
 
-### 4.17 `trading.storage`
+### 4.17 `kairos.storage`
 
 职责：提供序列化、事务状态存储和数据湖底层实现。
 
@@ -511,7 +511,7 @@ Adapter 不得：
 - JSON/Markdown/CSV：只作为报告、交换或小型 Artifact；
 - Repository 是基础设施实现，不应成为研究用户 API。
 
-### 4.18 `trading.history`
+### 4.18 `kairos.history`
 
 状态：已删除。
 
@@ -520,7 +520,7 @@ Adapter 不得：
 - OHLCV 数据迁入不可变 Dataset Release；
 - 查询统一进入 ResearchDataClient；
 - SMA 示例改为治理 Release 驱动的 Backtest；
-- 删除 `trading.history`、`BarRepository` 和顶级 `trader history` CLI；
+- 删除 `kairos.history`、`BarRepository` 和顶级 `kairos history` CLI；
 - 旧 CSV sidecar 经行数核验后删除，新发布不再双写 CSV。
 
 后续架构测试应持续禁止重新引入 History import、CLI 和物理目录。
@@ -545,7 +545,7 @@ Adapter 不得：
 
 包含：
 
-- TradingApplication；
+- KairosApplication；
 - ResearchApplication；
 - BacktestApplication；
 - DataPreparationApplication；
@@ -569,7 +569,7 @@ Adapter 不得：
 - Clock；
 - AlertSink。
 
-### 5.4 Adapter Layer
+### 5.4 Connector Layer
 
 包含 IBKR、Binance、Deribit、Massive 和 Simulation 实现。
 
@@ -599,7 +599,7 @@ Interface 只能调用 Application Layer。
 ### 6.1 组件
 
 ```text
-TradingApplication
+KairosApplication
 ├── ApplicationConfig
 ├── Clock
 ├── ReferenceCatalog
@@ -652,7 +652,7 @@ EMERGENCY_STOPPED
 3. 打开并迁移事务数据库；
 4. 加载 Instrument Catalog 和 Strategy Registry；
 5. 恢复 Kill Switch、Order、Cursor 和上次运行状态；
-6. 初始化 Adapter；
+6. 初始化 connector；
 7. 恢复 Market/Private Stream，并执行 REST Backfill；
 8. 查询 Venue balances、positions 和 open orders；
 9. 解决 SUBMITTING/UNKNOWN Orders；
@@ -667,7 +667,7 @@ EMERGENCY_STOPPED
 2. 停止新开仓；
 3. 继续处理 Ack、Fill 和 Cancel；
 4. 持久化 cursor 和运行状态；
-5. 关闭 stream 和 Adapter；
+5. 关闭 stream 和 connector；
 6. 释放账户控制锁；
 7. 写入 shutdown audit event。
 
@@ -948,7 +948,7 @@ quarantine
 
 正式研究和回测保存 Release ID 与 content hash，不只保存 Alias。
 
-### 11.4 DatasetProductSpec
+### 11.4 DataProductContract
 
 统一当前分散的 Datasets、ManagedDataset 和 Provider 配置：
 
@@ -972,7 +972,7 @@ Release 显式声明：
 ```text
 tabular
 market_events
-market_slices
+market_snapshots
 reference
 ```
 
@@ -1022,16 +1022,16 @@ Domain 对象不保存 Dataset Release 和 Provider payload。
 目标 CLI：
 
 ```bash
-trader data search
-trader data describe <product>
-trader data prepare <product> --start ... --end ... --quality backtest
-trader data query <product-or-release>
-trader data replay <product-or-release>
-trader data compare <release-a> <release-b>
-trader data freeze <study-id> --input ...
-trader data doctor <product-or-release>
-trader data health --strict
-trader data migrate ...
+kairos data search
+kairos data describe <product>
+kairos data prepare <product> --start ... --end ... --quality backtest
+kairos data query <product-or-release>
+kairos data replay <product-or-release>
+kairos data compare <release-a> <release-b>
+kairos data freeze <study-id> --input ...
+kairos data doctor <product-or-release>
+kairos data health --strict
+kairos data migrate ...
 ```
 
 `prepare` 统一 plan、source selection、acquire、validate、publish 和可选 promotion，但不得静默发起昂贵请求。
@@ -1041,8 +1041,8 @@ trader data migrate ...
 | 旧对象 | 目标 |
 |---|---|
 | `BarRepository` | Canonical OHLCV + ResearchDataClient |
-| `trader history` | `trader data` + 正式 backtest |
-| `DatasetRepository` 公开使用 | 内部 MarketSlice storage driver |
+| `kairos history` | `kairos data` + 正式 backtest |
+| `DatasetRepository` 公开使用 | 内部 MarketSnapshot storage driver |
 | `ResearchDatasetStore` | Collection Publisher |
 | `SurfaceRepository` | Feature Release |
 | CSV sidecar | 停止生成并迁移删除 |
@@ -1073,9 +1073,9 @@ trader data migrate ...
 |---|---|---|---|
 | Research | Fixed/System | Frozen Release/Table | 无或分析模型 |
 | Backtest | BacktestClock | Frozen Replay | Fill Model |
-| Simulation | SystemClock | Live/Replay | Simulated Adapter |
-| Paper/Testnet | SystemClock | Venue | Venue Adapter |
-| Live | SystemClock | Venue | Venue Adapter |
+| Simulation | SystemClock | Live/Replay | SimulatedExecutionGateway |
+| Paper/Testnet | SystemClock | Venue | VenueExecutionGateway |
+| Live | SystemClock | Venue | VenueExecutionGateway |
 
 以下组件应共享：
 
@@ -1115,7 +1115,7 @@ trader data migrate ...
 
 工作：
 
-- 新建 TradingApplication/ApplicationConfig；
+- 新建 KairosApplication/ApplicationConfig；
 - CLI 只调用 Application Service；
 - 定义 Clock、Store、Catalog、Venue 和 Alert Ports；
 - 将 StrategyContext 移出 Domain；
@@ -1181,7 +1181,7 @@ trader data migrate ...
 
 工作：
 
-- DatasetProductSpec；
+- DataProductContract；
 - storage kind；
 - unified Reader drivers；
 - Quality Engine；
@@ -1246,10 +1246,10 @@ trader data migrate ...
 
 状态：核心完成。
 
-- 建立 ApplicationConfig、Clock 和 TradingApplication；
+- 建立 ApplicationConfig、Clock 和 KairosApplication；
 - 将 CLI 组装迁移到 bootstrap；
 - 修正 Domain 依赖；
-- 建立端口和测试 Adapter。
+- 建立端口和测试 connector。
 
 退出标准：模拟闭环由 Application Runtime 驱动。
 
@@ -1267,7 +1267,7 @@ trader data migrate ...
 
 ### Phase 3：数据系统收敛
 
-状态：进行中。统一 Release、storage kind、OHLCV Quality、产品 CLI 和两条 Golden SMA 已完成；DatasetProductSpec、其他 Quality Profile、Dataset/Surface 迁移仍待完成。
+状态：进行中。统一 Release、storage kind、OHLCV Quality、产品 CLI 和两条 Golden SMA 已完成；DataProductContract、其他 Quality Profile、Dataset/Surface 迁移仍待完成。
 
 - Product Spec、storage kind、Quality Engine；
 - 统一 ResearchDataClient；
@@ -1323,7 +1323,7 @@ trader data migrate ...
 - 全量 Unit/Contract Tests 通过；
 - 定价、风险、产品和 Ledger 可手算核对；
 - 数据 Release/Hash/Schema 测试通过；
-- Adapter 不联网的 Contract Tests 通过。
+- Connector 不联网的 Contract Tests 通过。
 
 ### L2：单进程业务闭环
 
@@ -1426,7 +1426,7 @@ tests/data/test_frozen_research_inputs.py
 
 1. Binance BTC-USDT OHLCV -> Feature -> Strategy/Research；
 2. Deribit BTC Option -> Curated/Feature -> Validation；
-3. Massive SPXW Events -> MarketSlice -> Backtest；
+3. Massive SPXW Events -> MarketSnapshot -> Backtest；
 4. Simulated Venue -> Order -> Fill -> Ledger -> Reconciliation；
 5. Testnet Venue -> Ack/Fill Backfill -> Ledger。
 
@@ -1443,7 +1443,7 @@ tests/data/test_frozen_research_inputs.py
 基础 CI：
 
 ```bash
-./pyenv/bin/python -m compileall -q trading tests research
+./pyenv/bin/python -m compileall -q kairos tests studies
 ./pyenv/bin/python -m unittest discover -s tests -v
 git diff --check
 ```
@@ -1451,21 +1451,21 @@ git diff --check
 目标 CI 增加：
 
 ```bash
-./pyenv/bin/python -m trading data health --strict
-./pyenv/bin/python -m trading data doctor --all-products
-./pyenv/bin/python -m trading runtime doctor --environment simulated
-./pyenv/bin/python -m trading runtime recovery-test --scenario all
-./pyenv/bin/python -m trading data migrate --audit-only
+./pyenv/bin/python -m kairos data health --strict
+./pyenv/bin/python -m kairos data doctor --all-products
+./pyenv/bin/python -m kairos runtime doctor --environment simulated
+./pyenv/bin/python -m kairos runtime recovery-test --scenario all
+./pyenv/bin/python -m kairos data migrate --audit-only
 ```
 
 静态扫描：
 
 ```bash
-rg '^from trading\.(data|catalog|storage|research|backtest)' trading/domain
-rg 'from trading\.history|import trading\.history' trading research examples tests
-rg 'DatasetRepository\(' trading research examples
-rg 'data/(history|datasets|surfaces|raw|normalized|derived)' trading research examples docs
-rg 'read_(csv|parquet)|open\(.+data/' research examples
+rg '^from kairos\.(data|catalog|storage|research|backtest)' kairos/domain
+rg 'from kairos\.history|import kairos\.history' kairos examples tests
+rg 'DatasetRepository\(' kairos examples
+rg 'data/(history|datasets|surfaces|raw|normalized|derived)' kairos examples docs
+rg 'read_(csv|parquet)|open\(.+data/' examples studies
 ```
 
 最终状态：
@@ -1503,7 +1503,7 @@ rg 'read_(csv|parquet)|open\(.+data/' research examples
 系统逻辑真正跑通，应同时满足：
 
 1. 所有模式共享 Domain、Strategy、Risk、Execution Plan 和 Ledger；
-2. TradingApplication 是唯一运行组合根；
+2. KairosApplication 是唯一运行组合根；
 3. Order 在外部副作用前持久化，并有完整状态机；
 4. Ack、Fill、Cancel、Funding 和 Settlement 可幂等恢复；
 5. Ledger 是现金和持仓唯一事实源；
@@ -1530,12 +1530,12 @@ rg 'read_(csv|parquet)|open\(.+data/' research examples
 | P0 | Runtime Recovery 与 Projection | 从 SQLite Ledger 重建 Portfolio、UnifiedRiskView 和运行快照 | 重启后重建结果确定，未完成恢复时不能 READY |
 | P0 | Venue Order/Fill Recovery | 按 client order ID、venue order ID 查询状态、open orders 和 fill history | SUBMITTING/UNKNOWN/CANCELLING 均有明确恢复结果，未知时不重提 |
 | P0 | Reconciliation READY Gate | Ledger、Position、Balance、Open Order 的启动对账 | matched 才 READY；mismatch 进入 UNKNOWN_EXTERNAL_STATE 或 REDUCE_ONLY |
-| P0 | 真实 Adapter Durable Ingestion | Binance/IBKR WebSocket 与 REST backfill 接入事务 ingestion | 重复事件幂等、cursor 可恢复、断线不丢成交 |
+| P0 | 真实 connector Durable Ingestion | Binance/IBKR WebSocket 与 REST backfill 接入事务 ingestion | 重复事件幂等、cursor 可恢复、断线不丢成交 |
 | P1 | Ledger Repository 收敛 | SQLite 成为运行时 Ledger 唯一事实源，JSON 仅作迁移/导出 | CLI 与 Runtime 均从 SQLite 恢复；旧 JSON 可一次性迁移 |
-| P1 | DatasetProductSpec | 合并 Datasets、ManagedDataset 和动态 Provider 配置 | 一个 Product 只有一个编译后 Spec，Catalog health 可验证 |
+| P1 | DataProductContract | 合并 Datasets、ManagedDataset 和动态 Provider 配置 | 一个 Product 只有一个编译后 Spec，Catalog health 可验证 |
 | P1 | Typed Quality Profiles | Quote、Trade、Market Event、Option Snapshot、Feature、Reference 质量规则 | 质量等级由 Engine 计算，调用方不能任意声明 Q3/Q4 |
 | P1 | Dataset/Surface 迁移 | DatasetRepository 内部化，Surface 转 Feature Release | 正式消费者不再直接使用旧 Repository 或物理目录 |
-| P2 | Golden 与 Failure Matrix | SPXW Golden Pipeline、全部 crash-window 场景 | L2/L3 自动化通过，固定 input/output/audit hash |
+| P2 | Golden 与 Failure Matrix | SPXW reference pipeline、全部 crash-window 场景 | L2/L3 自动化通过，固定 input/output/audit hash |
 | P2 | Paper/Testnet Soak | 24–72 小时运行、重连、重启、Kill Switch 演练 | L4 报告无未解释 UNKNOWN、账务差异或 Critical Alert |
 
 每项工作开始前应明确将删除的旧路径；完成时必须同时提交代码、迁移证据、测试和文档更新。只增加新实现而保留平行旧入口，不视为完成。

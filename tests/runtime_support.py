@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from trading.adapters.base import Environment
-from trading.application import ApplicationConfig, RuntimePaths, TradingApplication
-from trading.application.clock import Clock
-from trading.orchestration.runtime_store import SQLiteRuntimeStore
+from kairos.ports import Environment
+from kairos.application import ApplicationConfig, RuntimePaths, KairosApplication
+from kairos.application.clock import Clock
+from kairos.orchestration.runtime_store import SQLiteRuntimeStore
 
 
 def operational_application(
@@ -14,10 +14,10 @@ def operational_application(
     *,
     clock: Clock | None = None,
     environment: Environment = Environment.TESTNET,
-) -> TradingApplication:
+) -> KairosApplication:
     base = Path(root)
     paths = RuntimePaths(base, base / "reference" / "catalog.json", base, store.path, base / "artifacts")
-    application = TradingApplication(
+    application = KairosApplication(
         ApplicationConfig(environment, paths), store,
         runtime_id=f"test-{base.name}-{id(store)}", clock=clock,
     )

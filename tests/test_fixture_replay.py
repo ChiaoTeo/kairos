@@ -7,15 +7,15 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
-from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.market_data import OptionChain
-from trading.domain.market_state import MarketState, apply_market_event
-from trading.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from trading.research.analyzer import analyze
-from trading.research.snapshot import build_snapshot
-from trading.research.spec import ResearchSpec
-from trading.storage.codec import event_from_primitive
-from trading.reference import ReferenceCatalog
+from kairos.domain.identity import AssetId, InstrumentId, VenueId
+from kairos.domain.market_data import OptionChain
+from kairos.domain.market_state import MarketState, apply_market_event
+from kairos.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairos.research.option_snapshot_analysis import analyze_option_snapshot
+from kairos.research.snapshot import build_snapshot
+from kairos.research.spec import OptionChainCaptureSpec
+from kairos.storage.codec import event_from_primitive
+from kairos.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
 
@@ -41,7 +41,7 @@ class FixtureReplayTests(unittest.TestCase):
         chain = OptionChain(underlying.instrument_id, VenueId("ibkr"), "SMART", "SPXW", Decimal("100"), (date(2099, 1, 2),), (Decimal("6000"),))
         snapshot = build_snapshot(
             run_id=UUID("00000000-0000-0000-0000-000000000010"),
-            spec=ResearchSpec(max_quote_age_seconds=60),
+            spec=OptionChainCaptureSpec(max_quote_age_seconds=60),
             underlying=underlying,
             chain=chain,
             selected=(option,),
@@ -49,7 +49,7 @@ class FixtureReplayTests(unittest.TestCase):
             now=datetime(2099, 1, 1, 12, 0, 1, tzinfo=timezone.utc),
             catalog=catalog,
         )
-        result = analyze(snapshot)
+        result = analyze_option_snapshot(snapshot)
         self.assertEqual(result.rows[0].mid, Decimal("10"))
         self.assertEqual(result.rows[0].theta_per_premium, Decimal("-0.2"))
         self.assertEqual(result.completeness_rate, Decimal("1"))

@@ -1,4 +1,4 @@
-from trading.data import ResearchDataClient, OutputFormat
+from kairos.data import ResearchDataClient, OutputFormat
 
 client = ResearchDataClient("data")
 

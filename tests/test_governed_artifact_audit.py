@@ -7,17 +7,17 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from trading.__main__ import main
-from trading.data import (
-    DataCatalog, DatasetKey, DatasetLayer, DatasetProduct, DatasetRelease, DatasetStatus, QualityLevel,
+from kairos.__main__ import main
+from kairos.data import (
+    DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease, DatasetStatus, QualityLevel,
 )
-from trading.data.artifact_audit import audit_governed_artifact
+from kairos.data.artifact_audit import audit_governed_artifact
 
 
 class GovernedArtifactAuditTests(unittest.TestCase):
     def _catalog(self, root: str, *, quality=QualityLevel.BACKTEST, status=DatasetStatus.APPROVED_FOR_BACKTEST):
         catalog = DataCatalog(root)
-        product = DatasetProduct(DatasetKey("market.audit.input"), "Audit input", DatasetLayer.CURATED)
+        product = DataProductDefinition(DatasetKey("market.audit.input"), "Audit input", DatasetLayer.CURATED)
         catalog.register_product(product)
         catalog.register_release(DatasetRelease(
             "ds_audit_q3", product.key, "1", "audit.schema", "1", "audit", "1",

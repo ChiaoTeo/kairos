@@ -1,0 +1,41 @@
+"""Compatibility exports for treasury transfer model definitions."""
+
+from .transfer_contracts import (
+    AmountMode,
+    AssetLocation,
+    AssetMovementIntent,
+    BankAccountDestination,
+    BankTransferInstruction,
+    CryptoAddressDestination,
+    CryptoTransferInstruction,
+    FeePolicy,
+    InternalAccountDestination,
+    InternalTransferInstruction,
+    LocationType,
+    TERMINAL_STATUSES,
+    TransferDestination,
+    TransferInstruction,
+    TransferOperation,
+    TransferOperationEvent,
+    TransferStatus,
+)
+
+__all__ = [
+    "AmountMode",
+    "AssetLocation",
+    "AssetMovementIntent",
+    "BankAccountDestination",
+    "BankTransferInstruction",
+    "CryptoAddressDestination",
+    "CryptoTransferInstruction",
+    "FeePolicy",
+    "InternalAccountDestination",
+    "InternalTransferInstruction",
+    "LocationType",
+    "TERMINAL_STATUSES",
+    "TransferDestination",
+    "TransferInstruction",
+    "TransferOperation",
+    "TransferOperationEvent",
+    "TransferStatus",
+]

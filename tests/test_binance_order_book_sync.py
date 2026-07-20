@@ -7,13 +7,13 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from trading.adapters.binance.order_book import (
+from kairos.connectors.binance.order_book import (
     BinanceOrderBookSnapshotProvider, BinanceOrderBookSyncFault, BinanceOrderBookSyncService,
 )
-from trading.contracts import MarketEventKind, canonical_from_domain_market_data
-from trading.domain.identity import InstrumentId
-from trading.domain.market_data import OrderBookDelta, OrderBookLevel, OrderBookSnapshot
-from trading.market_data import (
+from kairos.contracts import MarketEventKind, canonical_from_domain_market_data
+from kairos.domain.identity import InstrumentId
+from kairos.domain.market_data import OrderBookDelta, OrderBookLevel, OrderBookSnapshot
+from kairos.market_data import (
     BoundedEventChannel, CanonicalCaptureWriter, CanonicalOrderBookProjection,
     CapturedCanonicalEventSource, IterableEventSource,
 )

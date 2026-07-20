@@ -9,20 +9,19 @@ import json
 from pathlib import Path
 import sys
 
-from trading.adapters.base import Environment
-from trading.adapters.binance.adapter import (
-    BinanceStreamSession, UrllibBinanceTransport, WebSocketClientConnector, websocket_url,
-)
-from trading.adapters.binance.order_book import (
+from kairos.ports import Environment
+from kairos.connectors.binance.market_stream import BinanceStreamSession, WebSocketClientConnector, websocket_url
+from kairos.connectors.binance.order_book import (
     BinanceOrderBookSnapshotProvider, BinanceOrderBookSyncService,
 )
-from trading.adapters.binance.stream import BinanceCanonicalStreamService
-from trading.domain.identity import InstrumentId
-from trading.market_data import (
+from kairos.connectors.binance.rest_transport import UrllibBinanceTransport
+from kairos.connectors.binance.stream import BinanceCanonicalStreamService
+from kairos.domain.identity import InstrumentId
+from kairos.market_data import (
     BoundedEventChannel, CanonicalCaptureWriter, CanonicalOrderBookProjection,
     CapturedCanonicalEventSource,
 )
-from trading.storage.codec import to_primitive
+from kairos.storage.codec import to_primitive
 
 
 async def capture(args) -> dict[str, object]:

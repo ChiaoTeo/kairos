@@ -1,6 +1,6 @@
 import argparse
 
-from trading.data import OutputFormat, ResearchDataClient
+from kairos.data import OutputFormat, ResearchDataClient
 
 
 parser = argparse.ArgumentParser()

@@ -7,15 +7,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from trading.adapters.massive import MassiveClient, MassiveConfig, MassiveCuratedSliceBuilder, MassiveResponse
-from trading.adapters.massive.pipeline import MassiveOptionDataPipeline
-from trading.data.market_slice_storage import MarketSliceStorageDriver
-from trading.pricing import ValuationService
-from trading.market_data import ParquetMarketEventRepository
-from trading.adapters.massive.datasets import MassiveOptionEventsDatasetConnector, MassiveOptionProductConfig
-from trading.data import AcquisitionRequest, DataCatalog, DatasetKey, DatasetLayer, DatasetProduct, SourceBinding, TimeRange
-from trading.domain.identity import InstrumentId
-from trading.market_data import MarketEventEnvelope, MarketEventType
+from kairos.connectors.massive import MassiveClient, MassiveConfig, MassiveMarketSnapshotBuilder, MassiveResponse
+from kairos.connectors.massive.pipeline import MassiveOptionDataPipeline
+from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairos.pricing import OptionValuationService
+from kairos.market_data import ParquetMarketEventRepository
+from kairos.connectors.massive.datasets import MassiveOptionEventsDatasetConnector, MassiveOptionProductConfig
+from kairos.data import AcquisitionRequest, DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, SourceBinding, TimeRange
+from kairos.domain.identity import InstrumentId
+from kairos.market_data import MarketEventEnvelope, MarketEventType
 
 
 class StubTransport:
@@ -78,12 +78,12 @@ class MassivePipelineTests(unittest.TestCase):
             events = list(ParquetMarketEventRepository(Path(temporary) / "canonical" / "market").scan("options.us.massive.spxw.test.v1", start, end))
             self.assertEqual([item.record_type.value for item in events], ["quote", "trade", "bar"])
             self.assertEqual(events[0].available_time, datetime.fromtimestamp(sip_ns / 1_000_000_000, tz=timezone.utc))
-            curated = MassiveCuratedSliceBuilder(temporary, dataset_root=Path(temporary) / "datasets").build(
+            curated = MassiveMarketSnapshotBuilder(temporary, dataset_root=Path(temporary) / "datasets").build(
                 "options.us.massive.spxw.test.v1", "spxw.massive.slices.v1", start, end, sampling_seconds=60)
             self.assertEqual(curated.manifest.slice_count, 2)
             self.assertIsNotNone(curated.slices[1].instruments[0].quote)
             self.assertEqual(dict(curated.slices[1].reference_prices).popitem()[1], 6000)
-            _, valuation = ValuationService(MassiveCuratedSliceBuilder(temporary, dataset_root=Path(temporary) / "datasets").catalog).value(curated.slices[1])
+            _, valuation = OptionValuationService(MassiveMarketSnapshotBuilder(temporary, dataset_root=Path(temporary) / "datasets").catalog).value(curated.slices[1])
             self.assertEqual(len(valuation.instruments), 1)
             offline = MassiveOptionDataPipeline(temporary, MassiveClient(MassiveConfig("secret"), StubTransport([])), now=lambda: end + timedelta(days=1))
             rebuilt = offline.prepare_options(dataset_id="options.us.massive.spxw.test.v1", underlying="SPX", option_tickers=(ticker,), start=start, end=end)
@@ -124,7 +124,7 @@ class MassivePipelineTests(unittest.TestCase):
             self.assertFalse(lineage["underlying_reference"]["official_history_available"])
             self.assertEqual(lineage["underlying_reference"]["fallback"], "put_call_parity_synthetic_forward")
             self.assertFalse(any(path.is_dir() and not any(path.iterdir()) for path in (Path(temporary) / "source").rglob("*")))
-            curated = MassiveCuratedSliceBuilder(
+            curated = MassiveMarketSnapshotBuilder(
                 temporary, dataset_root=Path(temporary) / "datasets",
             ).build(
                 "options.us.massive.spxw.synthetic-forward.v1", "spxw.synthetic-forward.slices.v1",
@@ -140,7 +140,7 @@ class MassivePipelineTests(unittest.TestCase):
     def test_dataset_connector_finalizes_staging_by_actual_content_hash(self):
         with TemporaryDirectory() as temporary:
             key = DatasetKey("market.events.options.us.test")
-            product = DatasetProduct(key, "Test option events", DatasetLayer.CANONICAL,
+            product = DataProductDefinition(key, "Test option events", DatasetLayer.CANONICAL,
                                      sources=(SourceBinding("massive", "opra", 100),))
             catalog = DataCatalog(temporary); catalog.register_product(product); catalog.save()
             connector = object.__new__(MassiveOptionEventsDatasetConnector)

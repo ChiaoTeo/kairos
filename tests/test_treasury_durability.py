@@ -7,9 +7,9 @@ import tempfile
 import unittest
 from uuid import uuid4
 
-from trading.domain.identity import AssetId
-from trading.reference.identity import LocationId
-from trading.treasury import (
+from kairos.domain.identity import AssetId
+from kairos.reference.identity import LocationId
+from kairos.treasury import (
     SQLiteTreasuryRepository, TransferObservation, TransferOperation,
     TransferOperationStore, TransferReconciliationService, TransferStatus,
 )

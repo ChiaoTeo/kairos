@@ -6,9 +6,9 @@ from decimal import Decimal
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from trading.adapters.ibkr.research import IbkrSpxwResearchAdapter
-from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.product import (
+from kairos.connectors.ibkr.research import IbkrSpxwResearchProvider
+from kairos.domain.identity import AssetId, InstrumentId, VenueId
+from kairos.domain.product import (
     ExerciseStyle,
     ListedOptionSpec,
     OptionRight,
@@ -16,9 +16,9 @@ from trading.domain.product import (
     SettlementSession,
     SettlementType,
 )
-from trading.research.spec import ResearchSpec
-from trading.reference import ReferenceCatalog
-from trading.reference.models import InstrumentDefinition
+from kairos.research.spec import OptionChainCaptureSpec
+from kairos.reference import ReferenceCatalog
+from kairos.reference.contracts import InstrumentDefinition
 from tests.reference_support import publish_test_instrument
 
 
@@ -65,31 +65,31 @@ class TransientTimeoutIb:
         return [contract]
 
 
-class IbkrResearchAdapterTests(unittest.TestCase):
+class IbkrResearchProviderTests(unittest.TestCase):
     def test_underlying_retries_transient_contract_detail_timeouts(self) -> None:
-        adapter = object.__new__(IbkrSpxwResearchAdapter)
-        adapter._ib = TransientTimeoutIb()
-        adapter._contracts = {}
-        adapter.catalog = ReferenceCatalog()
+        provider = object.__new__(IbkrSpxwResearchProvider)
+        provider._ib = TransientTimeoutIb()
+        provider._contracts = {}
+        provider.catalog = ReferenceCatalog()
 
-        with patch("trading.adapters.ibkr.research.sleep"):
-            result = adapter.underlying(ResearchSpec())
+        with patch("kairos.connectors.ibkr.research.sleep"):
+            result = provider.underlying(OptionChainCaptureSpec())
 
         self.assertEqual(result.instrument_id, InstrumentId("index:spx"))
-        self.assertEqual(adapter._ib.attempts, 3)
+        self.assertEqual(provider._ib.attempts, 3)
 
     def test_qualify_ignores_failed_contract_placeholders(self) -> None:
-        adapter = object.__new__(IbkrSpxwResearchAdapter)
-        adapter._ib = PartialQualificationIb()
-        adapter._contracts = {}
-        adapter.catalog = ReferenceCatalog()
-        missing, available = option_definition(adapter.catalog, "7250"), option_definition(adapter.catalog, "7300")
+        provider = object.__new__(IbkrSpxwResearchProvider)
+        provider._ib = PartialQualificationIb()
+        provider._contracts = {}
+        provider.catalog = ReferenceCatalog()
+        missing, available = option_definition(provider.catalog, "7250"), option_definition(provider.catalog, "7300")
 
-        result = adapter.qualify((missing, available))
+        result = provider.qualify((missing, available))
 
         self.assertEqual([item.instrument_id for item in result], [available.instrument_id])
-        self.assertNotIn(missing.instrument_id, adapter._contracts)
-        self.assertEqual(adapter._contracts[available.instrument_id].conId, 12345)
+        self.assertNotIn(missing.instrument_id, provider._contracts)
+        self.assertEqual(provider._contracts[available.instrument_id].conId, 12345)
 
 
 if __name__ == "__main__":

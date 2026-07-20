@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 import unittest
 from decimal import Decimal
 from uuid import uuid4
 
-from trading.backtest.mock import MockScenario, make_mock_dataset
-from trading.backtest.portfolio import BacktestPortfolio
-from trading.backtest.settlement import due_settlements, intrinsic_value
-from trading.domain.execution import TradeSide
-from trading.domain.identity import AccountKey, AccountType, VenueId
-from trading.domain.order import Fill, LegFill
-from trading.domain.product import ListedOptionSpec, OptionRight
+from kairos.backtest.synthetic_scenarios import SyntheticScenario, build_synthetic_backtest_dataset
+from kairos.backtest.portfolio import BacktestPortfolio
+from kairos.backtest.settlement import due_settlements, intrinsic_value
+from kairos.domain.execution import TradeSide
+from kairos.domain.identity import AccountKey, AccountType, VenueId
+from kairos.domain.order import Fill, LegFill
+from kairos.domain.product import ListedOptionSpec, OptionRight
 
 
 class SettlementTests(unittest.TestCase):
@@ -23,13 +23,13 @@ class SettlementTests(unittest.TestCase):
 
     def test_spread_settlement_scenarios_are_hand_reconcilable(self) -> None:
         expectations = {
-            MockScenario.EXPIRY_ALL_OTM: Decimal("100278.64"),
-            MockScenario.EXPIRY_SHORT_ITM: Decimal("97778.64"),
-            MockScenario.EXPIRY_BOTH_ITM: Decimal("95278.64"),
+            SyntheticScenario.EXPIRY_ALL_OTM: Decimal("100278.64"),
+            SyntheticScenario.EXPIRY_SHORT_ITM: Decimal("97778.64"),
+            SyntheticScenario.EXPIRY_BOTH_ITM: Decimal("95278.64"),
         }
         for scenario, expected_cash in expectations.items():
             with self.subTest(scenario=scenario):
-                dataset = make_mock_dataset(scenario)
+                dataset = build_synthetic_backtest_dataset(scenario)
                 catalog = dataset.reference_catalog()
                 by_strike = {definition.contract_spec.strike: definition.instrument_id for definition in dataset.definitions if isinstance(definition.contract_spec, ListedOptionSpec)}
                 short, long = by_strike[Decimal("6000")], by_strike[Decimal("5950")]
@@ -50,7 +50,7 @@ class SettlementTests(unittest.TestCase):
                 self.assertTrue(all(position.quantity == 0 for position in portfolio.positions.values()))
 
     def test_missing_official_settlement_fails(self) -> None:
-        dataset = make_mock_dataset(MockScenario.EXPIRY_ALL_OTM)
+        dataset = build_synthetic_backtest_dataset(SyntheticScenario.EXPIRY_ALL_OTM)
         # The explicit missing-settlement failure is exercised by removing the official value.
         from dataclasses import replace
         contracts = tuple(replace(item, official_settlement=None) for item in dataset.contracts)

@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from trading.accounting.conversion import AssetConversionGraph, ConversionRate
-from trading.accounting.ledger import LedgerService
-from trading.accounting.portfolio import Portfolio
-from trading.domain.execution import FundingPayment, TradeExecution, TradeSide
-from trading.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from trading.domain.ledger import Ledger, LedgerBook, LedgerEntry, LedgerEntryType, LedgerTransaction
-from trading.domain.product import ContractType, CryptoSpotSpec, PerpetualSpec, ProductType
-from trading.products.calculators import PositionCalculatorRegistry
-from trading.risk.margin import CryptoCrossMarginPolicy
-from trading.risk.view import build_risk_view
-from trading.reference import ReferenceCatalog
+from kairos.accounting.conversion import AssetConversionGraph, ConversionRate
+from kairos.accounting.ledger import LedgerService
+from kairos.accounting.portfolio import Portfolio
+from kairos.domain.execution import FundingPayment, TradeExecution, TradeSide
+from kairos.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairos.domain.ledger import Ledger, LedgerBook, LedgerEntry, LedgerEntryType, LedgerTransaction
+from kairos.domain.product import ContractType, CryptoSpotSpec, PerpetualSpec, ProductType
+from kairos.products.calculators import PositionCalculatorRegistry
+from kairos.risk.margin import CryptoCrossMarginPolicy
+from kairos.risk.view import build_risk_view
+from kairos.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
 
@@ -55,7 +55,7 @@ class LedgerPortfolioTests(unittest.TestCase):
         self.service.deposit(self.account, AssetId("USDT"), Decimal("10000"), NOW, "initial")
         self.service.trade(TradeExecution(uuid4(), NOW + timedelta(seconds=1), self.account, self.spot.instrument_id, TradeSide.BUY, Decimal("0.1"), Decimal("50000"), AssetId("USDT"), Decimal("5"), "order-1"))
         graph = AssetConversionGraph()
-        graph.update(ConversionRate(AssetId("USDT"), AssetId("USD"), Decimal("1"), NOW + timedelta(seconds=2), "mock"))
+        graph.update(ConversionRate(AssetId("USDT"), AssetId("USD"), Decimal("1"), NOW + timedelta(seconds=2), "synthetic"))
         snapshot = Portfolio(self.ledger, self.catalog, AssetId("USD")).snapshot(NOW + timedelta(seconds=2), {self.spot.instrument_id: Decimal("51000")}, graph)
         self.assertEqual(snapshot.status, "complete")
         self.assertEqual(snapshot.positions[0].quantity, Decimal("0.1"))
@@ -90,7 +90,7 @@ class LedgerPortfolioTests(unittest.TestCase):
     def test_unified_risk_view_attributes_exposure_greeks_margin_and_liquidation(self):
         self.service.deposit(self.account, AssetId("USDT"), Decimal("10000"), NOW, "initial")
         self.service.trade(TradeExecution(uuid4(), NOW + timedelta(seconds=1), self.account, self.linear.instrument_id, TradeSide.BUY, Decimal("1"), Decimal("50000"), AssetId("USDT"), Decimal("0"), "open"))
-        graph = AssetConversionGraph(); graph.update(ConversionRate(AssetId("USDT"), AssetId("USD"), Decimal("1"), NOW + timedelta(seconds=2), "mock"))
+        graph = AssetConversionGraph(); graph.update(ConversionRate(AssetId("USDT"), AssetId("USD"), Decimal("1"), NOW + timedelta(seconds=2), "synthetic"))
         snapshot = Portfolio(self.ledger, self.catalog, AssetId("USD")).snapshot(NOW + timedelta(seconds=2), {self.linear.instrument_id: Decimal("51000")}, graph)
         margin = CryptoCrossMarginPolicy().calculate(equity=Decimal("10000"), quantity=Decimal("1"), price=Decimal("51000"), leverage=Decimal("10"))
         view = build_risk_view(snapshot, self.catalog, unit_greeks={self.linear.instrument_id: (Decimal("1"), Decimal("0"), Decimal("0"), Decimal("0"))}, margins={self.account: margin}, liquidation_prices={self.linear.instrument_id: Decimal("45500")})

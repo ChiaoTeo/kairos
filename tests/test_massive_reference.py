@@ -9,16 +9,16 @@ from tempfile import TemporaryDirectory
 import unittest
 from pathlib import Path
 
-from trading.__main__ import main
-from trading.adapters.massive.corporate_actions import MassiveCorporateActionDecoder
-from trading.adapters.massive.equity_day_aggs import MassiveEquityDayAggPipeline
-from trading.adapters.massive.equity_identity import MassiveEquityIdentityResolver
-from trading.adapters.massive.reference_store import MassiveReferenceStore
-from trading.adapters.massive.reference_pipeline import MassiveReferencePipeline
-from trading.adapters.massive import MassiveClient, MassiveConfig, MassiveResponse
-from trading.domain.identity import InstrumentId
-from trading.reference import MappingTargetType, ProviderId, ProviderSymbolMapping, ReferenceCatalog, ReferenceCatalogRepository
-from tests.test_massive_day_aggs import _EquitySource
+from kairos.__main__ import main
+from kairos.connectors.massive.corporate_actions import MassiveCorporateActionDecoder
+from kairos.connectors.massive.equity_daily_ohlcv import MassiveEquityDailyOhlcvPipeline
+from kairos.connectors.massive.equity_identity import MassiveEquityIdentityResolver
+from kairos.connectors.massive.reference_store import MassiveReferenceStore
+from kairos.connectors.massive.reference_pipeline import MassiveReferencePipeline
+from kairos.connectors.massive import MassiveClient, MassiveConfig, MassiveResponse
+from kairos.domain.identity import InstrumentId
+from kairos.reference import MappingTargetType, ProviderId, ProviderSymbolMapping, ReferenceCatalog, ReferenceCatalogRepository
+from tests.test_massive_daily_ohlcv import _EquitySource
 
 
 NOW = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -57,6 +57,31 @@ class MassiveReferenceTests(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             manifests = MassiveReferencePipeline(temporary, MassiveClient(MassiveConfig("secret"), Transport())).sync_code_tables()
             self.assertEqual([item["name"] for item in manifests], ["exchanges", "conditions", "market_holidays"])
+
+    def test_reference_pipeline_syncs_active_and_inactive_equity_tickers(self):
+        class Transport:
+            def __init__(self):
+                self.urls = []
+                self.values = [
+                    {"request_id": "active", "results": [{"ticker": "aapl", "type": "CS", "active": True, "composite_figi": "BBG000B9XRY4"}]},
+                    {"request_id": "inactive", "results": [{"ticker": "OLD", "type": "CS", "active": False, "delisted_utc": "2021-01-01T00:00:00Z"}]},
+                ]
+
+            def request(self, url, headers, timeout):
+                self.urls.append(url)
+                return MassiveResponse(200, {}, json.dumps(self.values.pop(0)).encode())
+
+        with TemporaryDirectory() as temporary:
+            transport = Transport()
+            manifest = MassiveReferencePipeline(temporary, MassiveClient(MassiveConfig("secret"), transport)).sync_equity_tickers()
+            records = json.loads(Path(manifest["records_file"]).read_text(encoding="utf-8"))
+            self.assertEqual(manifest["name"], "equity_tickers")
+            self.assertEqual(manifest["records"], 2)
+            self.assertEqual([item["records"] for item in manifest["active_states"]], [1, 1])
+            self.assertEqual({item["ticker"] for item in records}, {"AAPL", "OLD"})
+            self.assertEqual([item["source_receipt"] for item in manifest["active_states"]], manifest["source_receipts"])
+            self.assertTrue(any("active=true" in url for url in transport.urls))
+            self.assertTrue(any("active=false" in url for url in transport.urls))
 
     def test_equity_identity_resolver_keeps_ticker_change_and_reuse_point_in_time(self):
         resolver = MassiveEquityIdentityResolver()
@@ -107,7 +132,7 @@ class MassiveReferenceTests(unittest.TestCase):
                 / f"version={manifest['sha256']}" / "mappings.json"
             ).exists())
 
-    def test_equity_day_aggs_resolve_instrument_id_from_massive_mapping(self):
+    def test_equity_daily_ohlcv_resolves_instrument_id_from_massive_mapping(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             resolver = MassiveEquityIdentityResolver()
@@ -117,7 +142,7 @@ class MassiveReferenceTests(unittest.TestCase):
                 catalog.add_mapping(mapping)
             mapping_path = root / "reference" / "catalog.json"
             ReferenceCatalogRepository(mapping_path).save(catalog)
-            pipeline = MassiveEquityDayAggPipeline(root, client=object(), mapping_path=mapping_path)
+            pipeline = MassiveEquityDailyOhlcvPipeline(root, client=object(), mapping_path=mapping_path)
             pipeline.source = _EquitySource(root)
             manifest = pipeline.prepare("equity.raw.test.v1", "NVDA", datetime(2026, 1, 2).date(), datetime(2026, 1, 3).date(), view="raw")
 

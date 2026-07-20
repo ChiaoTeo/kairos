@@ -16,12 +16,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from examples._support import MidpointTargetStrategy, example_context
-from trading.contracts import canonical_from_domain_market_data
-from trading.domain.identity import InstrumentId
-from trading.domain.market_data import Quote
-from trading.market_data import CanonicalCaptureWriter, CapturedCanonicalEventSource, IterableEventSource
-from trading.storage.codec import to_primitive
-from trading.strategies import CanonicalStrategyEventSession
+from kairos.contracts import canonical_from_domain_market_data
+from kairos.domain.identity import InstrumentId
+from kairos.domain.market_data import Quote
+from kairos.market_data import CanonicalCaptureWriter, CapturedCanonicalEventSource, IterableEventSource
+from kairos.storage.codec import to_primitive
+from kairos.strategies import CanonicalStrategyEventSession
 
 
 def fixture_events():

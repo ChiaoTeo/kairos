@@ -1,4 +1,4 @@
-# Trader 当前产品状态
+# Kairos 当前产品状态
 
 状态：Usability hardening in progress  
 日期：2026-07-19
@@ -10,13 +10,14 @@
 
 - 本地确定性生命周期：`Study -> Factor -> Strategy -> Backtest -> Historical Simulation -> Shadow -> Live Paper fixture -> Replay -> Audit`。
 - 统一产品命令：`study`、`factor`、`strategy`、`run`、`order`、`runtime`。
-- Notebook/Python 入口：`Trader(...).backtest(...)` 返回可查看 summary、trades、equity 和 explain 的结果视图。
-- 统一回测入口：`trader run backtest --strategy sma-cross-v1@1.2.0 ...`。
-- Shadow 入口：`trader run shadow-sma ...` 使用 Capture/fixture 计算完整决策和假设 Intent，但不提交订单。
-- 策略晋级入口：`trader strategy promote ... --evidence ...`，晋级证据会被哈希、经过 promotion gate，并写入可独立审计的 evidence bundle。
-- 晋级预检查入口：`trader strategy check-promotion ... --evidence ...` 使用同一套 gate、hash 和生命周期顺序检查，但不会修改 Strategy Release。
-- 执行校准入口：`trader runtime calibrate-execution ...` 可从 Runtime Store 的订单/成交事实生成 `ExecutionCalibrationRelease`。
-- 回测执行校准对比：`trader run backtest ... --execution-calibration <manifest>` 会校验校准 release hash，在 Run Artifact 中记录绑定状态、release id/hash、样本数与适用 venue/environment，并给出按校准平均 `fee_bps` 重估的基线/校准后权益对比。
+- Notebook/Python 入口：`Kairos(...).backtest(...)` 返回可查看 summary、trades、equity 和 explain 的结果视图。
+- 统一运行入口：`kairos run backtest/simulate/shadow/paper --strategy sma-cross-v1@1.2.0 ...`。
+- Shadow 入口：`kairos run shadow --strategy ...` 使用 Capture/fixture 计算完整决策和假设 Intent，但不提交订单。
+- 真实行情模拟盘入口：`kairos run paper --strategy ... --live-binance-symbol BTCUSDT ...` 使用 Binance 公共 K 线作为输入，执行仍走模拟账户，不需要账户凭据，不会真实下单。
+- 策略晋级入口：`kairos strategy promote ... --evidence ...`，晋级证据会被哈希、经过 promotion gate，并写入可独立审计的 evidence bundle。
+- 晋级预检查入口：`kairos strategy check-promotion ... --evidence ...` 使用同一套 gate、hash 和生命周期顺序检查，但不会修改 Strategy Release。
+- 执行校准入口：`kairos runtime calibrate-execution ...` 可从 Runtime Store 的订单/成交事实生成 `ExecutionCalibrationRelease`。
+- 回测执行校准对比：`kairos run backtest ... --execution-calibration <manifest>` 会校验校准 release hash，在 Run Artifact 中记录绑定状态、release id/hash、样本数与适用 venue/environment，并给出按校准平均 `fee_bps` 重估的基线/校准后权益对比。
 - 人工订单与自动策略入口分离：新人工运维使用 `order submit`；旧 `trade run` 仅保留兼容。
 - Run Artifact 可解释：`run inspect --artifact ... --at ...`。
 - Capture Replay 可验证：`run replay-sma` 和 `run replay-sma-capture`。
@@ -24,9 +25,9 @@
 
 ## 本地可用但不能冒充外部就绪
 
-- `run shadow-sma --fixture` 和 `run paper-sma --fixture` 是 deterministic acceptance，不需要凭据，也不会证明真实外部运行稳定。
+- `run shadow --fixture` 和 `run paper --fixture` 是 deterministic acceptance，不需要凭据，也不会证明真实外部运行稳定；`run paper --live-binance-symbol ...` 可验证真实行情输入下的模拟盘链路，但仍不是实盘下单证据；`shadow-sma`/`paper-sma` 仅作为兼容入口保留。
 - 本地 `ExecutionCalibrationRelease` 证明校准机制可工作；只有真实 Paper/Testnet/Live 样本生成的 release 才能用于外部执行质量判断。
-- synthetic fixture、mock backtest、trade proxy 只能证明机制，不能作为 live promotion 或收益有效性证据。
+- synthetic fixture、synthetic backtest、trade proxy 只能证明机制，不能作为 live promotion 或收益有效性证据。
 - Strategy promotion gate 已区分本地/外部证据：`PAPER_APPROVED` 需要非 fixture 的 decision-OOS L5 证据和显式 Paper/Testnet readiness；`LIVE_LIMITED`/`LIVE_APPROVED` 需要通过的外部 soak artifact。
 - `runtime l4-preflight --evidence-artifact ...` 可写出带 `kind=runtime_l4_preflight` 和 `audit_hash` 的 readiness evidence，用于 `PAPER_APPROVED` 晋级审计。
 - `trade run ... --soak-artifact ...` 写出的 soak artifact 带 `kind=runtime_l4_soak` 和 `audit_hash`；只有 `passed=true` 且全部 acceptance 通过的外部 artifact 才能用于 `LIVE_LIMITED`/`LIVE_APPROVED` 晋级。
@@ -51,10 +52,10 @@
 ## 推荐可用性验收命令
 
 ```bash
-./pyenv/bin/python -m unittest tests.test_trader_api tests.test_product_cli tests.test_strategy_registry tests.test_strategy_promotion_gate
+./pyenv/bin/python -m unittest tests.test_kairos_api tests.test_trader_api tests.test_product_cli tests.test_strategy_registry tests.test_strategy_promotion_gate
 ./pyenv/bin/python examples/lifecycle/full_product_acceptance.py
 ./pyenv/bin/python -m unittest discover -s tests
-./pyenv/bin/python -m compileall -q trading examples tests research
+./pyenv/bin/python -m compileall -q kairos examples tests studies
 git diff --check
 ```
 

@@ -7,16 +7,16 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from trading.data.market_slice_storage import MarketSliceStorageDriver
-from trading.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
-from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.market_data import OptionChain
-from trading.domain.market_data import Greeks, Quote
-from trading.domain.product import IndexSpec, OptionRight, ProductType
-from trading.research.series import SeriesCaptureService, SeriesCaptureSpec
-from trading.research.data_store import MarketSliceCollectionPublisher
-from trading.research.spec import ResearchSpec
-from trading.reference import ReferenceCatalog
+from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairos.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
+from kairos.domain.identity import AssetId, InstrumentId, VenueId
+from kairos.domain.market_data import OptionChain
+from kairos.domain.market_data import Greeks, Quote
+from kairos.domain.product import IndexSpec, OptionRight, ProductType
+from kairos.research.series import SeriesCaptureService, SeriesCaptureSpec
+from kairos.research.data_store import MarketSnapshotCollectionPublisher
+from kairos.research.spec import OptionChainCaptureSpec
+from kairos.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
 
@@ -69,10 +69,10 @@ class SeriesCaptureTests(unittest.TestCase):
         times = iter(datetime(2099, 1, 1, 12, minute, tzinfo=timezone.utc) for minute in range(3))
         with tempfile.TemporaryDirectory() as directory:
             SeriesCaptureService(
-                MarketSliceStorageDriver(directory), wait=lambda _: None, now=lambda: next(times),
+                MarketSnapshotStorageDriver(directory), wait=lambda _: None, now=lambda: next(times),
                 on_progress=progress.append,
             ).capture(
-                provider, ResearchSpec(strikes_each_side=1, rights=(OptionRight.PUT,)),
+                provider, OptionChainCaptureSpec(strikes_each_side=1, rights=(OptionRight.PUT,)),
                 SeriesCaptureSpec("no-retry", 2, 60),
             )
 
@@ -85,11 +85,11 @@ class SeriesCaptureTests(unittest.TestCase):
         times = iter(datetime(2099, 1, 1, 12, minute, tzinfo=timezone.utc) for minute in range(3))
         waits = []
         with tempfile.TemporaryDirectory() as directory:
-            repository = MarketSliceStorageDriver(directory)
+            repository = MarketSnapshotStorageDriver(directory)
             service = SeriesCaptureService(repository, wait=waits.append, now=lambda: next(times))
             dataset = service.capture(
                 provider,
-                ResearchSpec(strikes_each_side=1),
+                OptionChainCaptureSpec(strikes_each_side=1),
                 SeriesCaptureSpec("series-fixture", sample_count=3, interval_seconds=60),
             )
             self.assertFalse(provider.connected)
@@ -116,8 +116,8 @@ class SeriesCaptureTests(unittest.TestCase):
         provider = DynamicProvider()
         times = iter((datetime(2099, 1, 1, 12, tzinfo=timezone.utc), datetime(2099, 1, 1, 12, 1, tzinfo=timezone.utc)))
         with tempfile.TemporaryDirectory() as directory:
-            dataset = SeriesCaptureService(MarketSliceStorageDriver(directory), wait=lambda _: None, now=lambda: next(times)).capture(
-                provider, ResearchSpec(strikes_each_side=1), SeriesCaptureSpec("dynamic-series", 2, 60),
+            dataset = SeriesCaptureService(MarketSnapshotStorageDriver(directory), wait=lambda _: None, now=lambda: next(times)).capture(
+                provider, OptionChainCaptureSpec(strikes_each_side=1), SeriesCaptureSpec("dynamic-series", 2, 60),
             )
         self.assertEqual(provider.discovery_count, 2)
         self.assertNotEqual(dataset.slices[0].available_instruments, dataset.slices[1].available_instruments)
@@ -126,16 +126,16 @@ class SeriesCaptureTests(unittest.TestCase):
 
     def test_independent_gateway_sessions_append_to_one_research_dataset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            repository = MarketSliceStorageDriver(directory)
+            repository = MarketSnapshotStorageDriver(directory)
             first_times = iter(datetime(2099, 1, 1, 12, minute, tzinfo=timezone.utc) for minute in range(2))
             first = SeriesCaptureService(repository, wait=lambda _: None, now=lambda: next(first_times)).capture(
-                SeriesProvider(), ResearchSpec(strikes_each_side=1), SeriesCaptureSpec("gateway-resume", 2, 60), append=True,
+                SeriesProvider(), OptionChainCaptureSpec(strikes_each_side=1), SeriesCaptureSpec("gateway-resume", 2, 60), append=True,
             )
             second_times = iter(datetime(2099, 1, 1, 12, minute, tzinfo=timezone.utc) for minute in range(2, 4))
             merged = SeriesCaptureService(repository, wait=lambda _: None, now=lambda: next(second_times)).capture(
-                SeriesProvider(), ResearchSpec(strikes_each_side=1), SeriesCaptureSpec("gateway-resume", 2, 60), append=True,
+                SeriesProvider(), OptionChainCaptureSpec(strikes_each_side=1), SeriesCaptureSpec("gateway-resume", 2, 60), append=True,
             )
-            collection = MarketSliceCollectionPublisher(repository).load_collection("gateway-resume")
+            collection = MarketSnapshotCollectionPublisher(repository).load_collection("gateway-resume")
         self.assertEqual(len(first.slices), 2)
         self.assertEqual(len(merged.slices), 4)
         self.assertEqual(len(collection.sessions), 2)
@@ -156,15 +156,15 @@ class SeriesCaptureTests(unittest.TestCase):
         provider = FailingProvider()
         times = iter(datetime(2099, 1, 1, 12, minute, tzinfo=timezone.utc) for minute in range(3))
         with tempfile.TemporaryDirectory() as directory:
-            repository = MarketSliceStorageDriver(directory)
+            repository = MarketSnapshotStorageDriver(directory)
             service = SeriesCaptureService(repository, wait=lambda _: None, now=lambda: next(times))
             with self.assertRaisesRegex(RuntimeError, "gateway disconnect"):
                 service.capture(
-                    provider, ResearchSpec(strikes_each_side=1),
+                    provider, OptionChainCaptureSpec(strikes_each_side=1),
                     SeriesCaptureSpec("checkpoint-recovery", 4, 60, checkpoint_samples=1), append=True,
                 )
             recovered = repository.load("checkpoint-recovery")
-            collection = MarketSliceCollectionPublisher(repository).load_collection("checkpoint-recovery")
+            collection = MarketSnapshotCollectionPublisher(repository).load_collection("checkpoint-recovery")
         self.assertFalse(provider.connected)
         self.assertEqual(len(recovered.slices), 2)
         self.assertEqual(len(collection.sessions), 2)

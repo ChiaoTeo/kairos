@@ -1,8 +1,8 @@
 from tempfile import TemporaryDirectory
 import unittest
 
-from trading.domain.strategy_contract import StrategyLifecycle
-from trading.strategies.specs import builtin_strategy_specs,register_builtin_strategies
+from kairos.domain.strategy_contract import StrategyLifecycle
+from kairos.strategies.specs import builtin_strategy_specs,register_builtin_strategies
 
 
 class BuiltinStrategySpecsTest(unittest.TestCase):

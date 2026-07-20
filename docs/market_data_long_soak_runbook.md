@@ -18,7 +18,7 @@ Binance WebSocket
 24 小时主动重启验收：
 
 ```bash
-./pyenv/bin/python -m trading \
+./pyenv/bin/python -m kairos \
   --lake-root data/market-data-soak \
   data soak-binance \
   --symbol BTCUSDT \

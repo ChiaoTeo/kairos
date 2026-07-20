@@ -4,9 +4,9 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from trading.domain.identity import InstrumentId
-from trading.domain.market_data import Bar
-from trading.strategies.sma_cross import BarSeries, SmaCrossConfig, backtest_sma_cross
+from kairos.domain.identity import InstrumentId
+from kairos.domain.market_data import Bar
+from kairos.strategies.sma_cross_research_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross
 
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)

@@ -1,29 +1,29 @@
 from __future__ import annotations
 
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from trading.accounting.conversion import AssetConversionGraph
-from trading.accounting.ledger import LedgerService
-from trading.accounting.portfolio import Portfolio
-from trading.domain.corporate_action import CashDividendEvent, SplitEvent
-from trading.domain.execution import TradeExecution, TradeSide
-from trading.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from trading.domain.ledger import Ledger, LedgerBook
-from trading.domain.product import EquitySpec, ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from trading.products.equity.corporate_actions import CorporateActionService
-from trading.products.listed_option.lifecycle import OptionLifecycleService, PhysicalOptionEvent, PhysicalOptionEventType
-from trading.risk.covered_call import validate_covered_call
-from trading.execution.strategy_planner import plan_strategy_intent
-from trading.domain.capability import OrderType
-from trading.domain.order import ExecutionInstructions, TimeInForce
-from trading.strategies.covered_call import CoveredCallStrategy
-from trading.strategies.protective_put import ProtectivePutStrategy
-from trading.reference import ReferenceCatalog
+from kairos.accounting.conversion import AssetConversionGraph
+from kairos.accounting.ledger import LedgerService
+from kairos.accounting.portfolio import Portfolio
+from kairos.domain.corporate_action import CashDividendEvent, SplitEvent
+from kairos.domain.execution import TradeExecution, TradeSide
+from kairos.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairos.domain.ledger import Ledger, LedgerBook
+from kairos.domain.product import EquitySpec, ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairos.products.equity.corporate_actions import CorporateActionService
+from kairos.products.listed_option.lifecycle import OptionLifecycleService, PhysicalOptionEvent, PhysicalOptionEventType
+from kairos.risk.covered_call import validate_covered_call
+from kairos.execution.strategy_planner import plan_strategy_intent
+from kairos.domain.capability import OrderType
+from kairos.domain.order import ExecutionInstructions, TimeInForce
+from kairos.strategies.covered_call import CoveredCallStrategy
+from kairos.strategies.protective_put import ProtectivePutStrategy
+from kairos.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
 

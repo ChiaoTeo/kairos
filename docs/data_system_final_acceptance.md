@@ -11,7 +11,7 @@
 - 数据产品发现和说明；
 - 不可变 Release 查询；
 - Study 输入冻结；
-- MarketSlice 回放；
+- MarketSnapshot 回放；
 - 正式研究输入治理；
 - Q3/Q4 数据门禁；
 - 确定性策略回测；
@@ -36,7 +36,7 @@ Q4: 0
 
 验收结果：
 
-- DatasetProductSpec 是统一产品定义；
+- DataProductContract 是统一产品定义；
 - Product、Release、Alias、Schema、Transform 和物理位置身份分离；
 - Release 显式声明 storage kind 和 layout version；
 - Q0 Release 被隔离，正式研究/回测不能消费；
@@ -53,7 +53,7 @@ Q4: 0
 - Option Snapshot；
 - Feature；
 - Reference；
-- MarketSlice。
+- MarketSnapshot。
 
 Trade 和 Market Event 大数据检查使用 DuckDB 流式聚合，不需要把全量数据装入内存。
 
@@ -67,7 +67,7 @@ data describe     -> 解析 BTC-USDT 1d 产品和选中 Release
 data query        -> 返回受治理 Release 的 3 行样例
 data freeze       -> 冻结 2 个 Release 到同一个 Study Input Snapshot
 backtest sma      -> 读取 1,925 条 Q3 Bar 并生成确定性 Artifact
-golden-spxw       -> 回放 4 个 Q3 MarketSlice 并生成 conservative/stress Artifact
+spxw-reference-scenario -> 回放 4 个 Q3 MarketSnapshot 并生成 conservative/stress Artifact
 audit-artifact    -> 核验 Release ID、content hash、Q3/Q4 和批准状态
 ```
 
@@ -83,7 +83,7 @@ Backtest audit: 0594df273f18e113f9658ab0dcca5c77a4f135314b34acc8f7a60011fd1efa90
 Input audit: 009bcb95771ca3485396cfe2e5359c8cd1ada73c9e116758470738fd07627687
 ```
 
-### SPXW MarketSlice Golden
+### SPXW MarketSnapshot Golden
 
 ```text
 Consumed Release: ds_c5cd07c6a542b4af665709b6

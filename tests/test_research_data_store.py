@@ -6,18 +6,18 @@ from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from trading.data.market_slice_storage import MarketSliceStorageDriver
-from trading.backtest.mock import make_mock_dataset
-from trading.domain.market_data import Quote
-from trading.research.data_store import MarketSliceCollectionPublisher, merge_datasets
+from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
+from kairos.domain.market_data import Quote
+from kairos.research.data_store import MarketSnapshotCollectionPublisher, merge_datasets
 
 
 class ResearchDataStoreTests(unittest.TestCase):
     def test_sessions_append_idempotently_with_provenance(self) -> None:
-        first = make_mock_dataset(start_date=date(2025, 1, 6))
-        second = make_mock_dataset(start_date=date(2025, 1, 8))
+        first = build_synthetic_backtest_dataset(start_date=date(2025, 1, 6))
+        second = build_synthetic_backtest_dataset(start_date=date(2025, 1, 8))
         with tempfile.TemporaryDirectory() as directory:
-            store = MarketSliceCollectionPublisher(MarketSliceStorageDriver(directory))
+            store = MarketSnapshotCollectionPublisher(MarketSnapshotStorageDriver(directory))
             store.save_session(first, append=False, collected_at=datetime(2025, 1, 6, tzinfo=timezone.utc))
             merged = store.save_session(second, append=True, collected_at=datetime(2025, 1, 8, tzinfo=timezone.utc))
             replay = store.save_session(second, append=True, collected_at=datetime(2025, 1, 8, tzinfo=timezone.utc))
@@ -28,7 +28,7 @@ class ResearchDataStoreTests(unittest.TestCase):
         self.assertEqual(collection.real_session_count, 0)
 
     def test_conflicting_slice_and_provenance_change_are_rejected(self) -> None:
-        dataset = make_mock_dataset()
+        dataset = build_synthetic_backtest_dataset()
         market = dataset.slices[0]
         item = market.instruments[0]
         changed_quote = replace(item.quote, bid=item.quote.bid + Decimal("1"))

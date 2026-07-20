@@ -12,12 +12,12 @@ from uuid import uuid4
 ROOT=Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 
-from trading.domain.identity import InstrumentId
-from trading.domain.intent import TargetPositionIntent
-from trading.domain.strategy_contract import EconomicIntent
-from trading.risk.portfolio_governance import PortfolioAllocator,StrategyAllocation
-from trading.risk.strategy_positions import StrategyPositionBook
-from trading.strategies.specs import builtin_strategy_specs
+from kairos.domain.identity import InstrumentId
+from kairos.domain.intent import TargetPositionIntent
+from kairos.domain.strategy_contract import EconomicIntent
+from kairos.risk.portfolio_governance import PortfolioAllocator,StrategyAllocation
+from kairos.risk.strategy_positions import StrategyPositionBook
+from kairos.strategies.specs import builtin_strategy_specs
 
 
 def run()->dict[str,object]:

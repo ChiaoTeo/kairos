@@ -6,11 +6,11 @@ import unittest
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from trading.data.bootstrap import register_default_products
-from trading.data.columnar_publishing import publish_intraday_staging_parquet
-from trading.data.models import QualityLevel
-from trading.data.products import BINANCE_USDM_PERPETUAL_HOURLY, capabilities_payload
-from trading.data.quality import DatasetQualityService
+from kairos.data.bootstrap import register_default_products
+from kairos.data.columnar_publishing import publish_intraday_staging_parquet
+from kairos.data.contracts import QualityLevel
+from kairos.data.products import BINANCE_USDM_PERPETUAL_HOURLY, capabilities_payload
+from kairos.data.quality import DatasetQualityService
 
 
 class ColumnarPublishingTests(unittest.TestCase):

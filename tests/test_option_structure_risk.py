@@ -2,9 +2,9 @@ from datetime import datetime,timezone
 from decimal import Decimal
 import unittest
 
-from trading.domain.identity import AssetId
-from trading.domain.product import CryptoOptionSpec,ExerciseStyle,OptionRight
-from trading.risk.option_structure import maximum_expiry_loss
+from kairos.domain.identity import AssetId
+from kairos.domain.product import CryptoOptionSpec,ExerciseStyle,OptionRight
+from kairos.risk.option_structure import maximum_expiry_loss
 
 
 class OptionStructureRiskTest(unittest.TestCase):

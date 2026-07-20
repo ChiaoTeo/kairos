@@ -1,7 +1,7 @@
 from decimal import Decimal
 import unittest
 
-from trading.orchestration.strategy_monitoring import (
+from kairos.orchestration.strategy_monitoring import (
     StrategyHealth,StrategyHealthMonitor,StrategyMonitoringLimits,StrategyMonitoringSnapshot,
 )
 

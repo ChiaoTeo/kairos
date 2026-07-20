@@ -10,28 +10,28 @@ from contextlib import redirect_stdout
 from io import StringIO
 import json
 
-from trading.adapters.base import Environment
-from trading.adapters.simulated import SimulatedExecutionAccountAdapter
-from trading.application import (
+from kairos.ports import Environment
+from kairos.connectors.simulated import SimulatedExecutionAccountGateway
+from kairos.application import (
     ApplicationConfig, FixedClock, RuntimePaths, RuntimeRecoveryService,
-    RuntimeStatus, RuntimeSupervisor, TradingApplication,
+    RuntimeStatus, RuntimeSupervisor, KairosApplication,
     write_soak_artifact,
 )
-from trading.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, VenueId
-from trading.domain.identity import InstrumentId
-from trading.domain.product import CryptoSpotSpec, ProductType
-from trading.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, ReferenceCatalogRepository, RouteId
+from kairos.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, VenueId
+from kairos.domain.identity import InstrumentId
+from kairos.domain.product import CryptoSpotSpec, ProductType
+from kairos.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, ReferenceCatalogRepository, RouteId
 from tests.reference_support import publish_test_instrument
-from trading.strategies.specs import register_builtin_strategies
-from trading.__main__ import main
-from trading.domain.strategy_contract import StrategyLifecycle
-from trading.strategies.promotion import evaluate_promotion_artifacts
-from trading.domain.ledger import Ledger
-from trading.execution.recovery import OrderRecoveryReport
-from trading.orchestration.kill_switch import KillSwitch
-from trading.orchestration.monitoring import OperationalMonitor
-from trading.orchestration.reconciliation import ReconciliationService
-from trading.orchestration.runtime_store import SQLiteRuntimeStore
+from kairos.strategies.specs import register_builtin_strategies
+from kairos.__main__ import main
+from kairos.domain.strategy_contract import StrategyLifecycle
+from kairos.strategies.promotion import evaluate_promotion_artifacts
+from kairos.domain.ledger import Ledger
+from kairos.execution.recovery import OrderRecoveryReport
+from kairos.orchestration.kill_switch import KillSwitch
+from kairos.orchestration.monitoring import OperationalMonitor
+from kairos.orchestration.reconciliation import ReconciliationService
+from kairos.orchestration.runtime_store import SQLiteRuntimeStore
 from tests.test_durable_execution_ingestion import catalog
 from tests.test_runtime_store import request
 
@@ -56,23 +56,23 @@ class RuntimeSupervisorTests(unittest.TestCase):
         store = SQLiteRuntimeStore(paths.runtime_database)
         account = request().account
         clock = FixedClock(NOW)
-        adapter = SimulatedExecutionAccountAdapter(VenueId("simulated"), account, clock=clock)
-        app = TradingApplication(
+        gateway = SimulatedExecutionAccountGateway(VenueId("simulated"), account, clock=clock)
+        app = KairosApplication(
             ApplicationConfig(Environment.TESTNET, paths), store, runtime_id="supervised-runtime",
             accounts=(account,), clock=clock,
-            recovery=RuntimeRecoveryService(store, catalog(), AssetId("USDT"), {account: adapter}),
+            recovery=RuntimeRecoveryService(store, catalog(), AssetId("USDT"), {account: gateway}),
         )
         reconciliation = ReconciliationService(
-            Ledger(), adapter, clock=clock, runtime_store=store,
+            Ledger(), gateway, clock=clock, runtime_store=store,
             strategy_positions=store.load_strategy_position_book(account),
         )
-        switch = KillSwitch((adapter,), clock, store)
+        switch = KillSwitch((gateway,), clock, store)
         background = BackgroundService()
         supervisor = RuntimeSupervisor(
             app, {account: reconciliation}, switch, OperationalMonitor(clock=clock),
             background_services=(background,), clock=clock,
         )
-        return supervisor, app, store, adapter, switch, background
+        return supervisor, app, store, gateway, switch, background
 
     def test_healthy_cycles_heartbeat_recover_reconcile_and_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -91,9 +91,9 @@ class RuntimeSupervisorTests(unittest.TestCase):
 
     def test_periodic_mismatch_triggers_persistent_kill_switch_and_reduce_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            supervisor, app, store, adapter, switch, _ = self._build(directory)
+            supervisor, app, store, gateway, switch, _ = self._build(directory)
             supervisor.start()
-            adapter.balances[AssetId("USDT")] = Decimal("1")
+            gateway.balances[AssetId("USDT")] = Decimal("1")
             cycle = supervisor.run_cycle()
             self.assertFalse(cycle.healthy)
             self.assertTrue(switch.triggered)

@@ -1,7 +1,7 @@
-from trading.research import open_study
+from kairos.research_platform import open_study
 
 study = open_study("crypto-hourly-momentum", root="data", version="1.0.0")
-print(study.describe())
+print(study.describe_table())
 
 df = study.client.get(
     study.workspace.input_release_id,

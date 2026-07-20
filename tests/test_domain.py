@@ -6,19 +6,19 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from trading.adapters.ibkr.research import IbkrSpxwResearchAdapter, decimal_or_none
-from trading.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
-from trading.domain.identity import AssetId, InstrumentId, VenueId
-from trading.domain.market_data import OptionChain
-from trading.domain.market_data import Greeks, Quote
-from trading.domain.market_state import MarketState, apply_market_event
-from trading.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from trading.research.analyzer import analyze
-from trading.research.selector import select_expirations, select_instruments, select_strikes
-from trading.research.snapshot import build_snapshot
-from trading.research.spec import ResearchSpec
-from trading.storage.codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, snapshot_to_primitive
-from trading.reference import ReferenceCatalog
+from kairos.connectors.ibkr.research import IbkrSpxwResearchProvider, decimal_or_none
+from kairos.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
+from kairos.domain.identity import AssetId, InstrumentId, VenueId
+from kairos.domain.market_data import OptionChain
+from kairos.domain.market_data import Greeks, Quote
+from kairos.domain.market_state import MarketState, apply_market_event
+from kairos.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairos.research.option_snapshot_analysis import analyze_option_snapshot
+from kairos.research.option_universe_selector import select_expirations, select_instruments, select_strikes
+from kairos.research.snapshot import build_snapshot
+from kairos.research.spec import OptionChainCaptureSpec
+from kairos.storage.codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, snapshot_to_primitive
+from kairos.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
 
@@ -46,8 +46,8 @@ class DomainTests(unittest.TestCase):
         self.assertEqual(decimal_or_none(0), Decimal("0"))
 
     def test_ibkr_contract_conversion_round_trip(self) -> None:
-        adapter = object.__new__(IbkrSpxwResearchAdapter); adapter.catalog = self.catalog
-        converted = adapter._to_contract(self.option)
+        provider = object.__new__(IbkrSpxwResearchProvider); provider.catalog = self.catalog
+        converted = provider._to_contract(self.option)
         self.assertEqual(converted.right, "C")
         self.assertEqual(converted.lastTradeDateOrContractMonth, "20990102")
         self.assertEqual(converted.strike, 6000.0)
@@ -57,7 +57,7 @@ class DomainTests(unittest.TestCase):
         self.assertEqual(select_strikes(strikes, Decimal("6010"), 1), (Decimal("5950"), Decimal("6000"), Decimal("6050")))
         chain = OptionChain(self.underlying.instrument_id, VenueId("ibkr"), "SMART", "SPXW", Decimal("100"), (date(2098, 1, 1), date(2099, 1, 2)), strikes)
         self.assertEqual(select_expirations(chain, 1, today=date(2099, 1, 1)), (date(2099, 1, 2),))
-        selected = select_instruments(self.catalog, chain, Decimal("6010"), ResearchSpec(strikes_each_side=1))
+        selected = select_instruments(self.catalog, chain, Decimal("6010"), OptionChainCaptureSpec(strikes_each_side=1))
         self.assertEqual(len(selected), 6)
 
     def test_selector_targets_dte_and_samples_moneyness_range(self) -> None:
@@ -93,13 +93,13 @@ class DomainTests(unittest.TestCase):
             apply_market_event(state, decoded)
         chain = OptionChain(self.underlying.instrument_id, VenueId("ibkr"), "SMART", "SPXW", Decimal("100"), (date(2099, 1, 2),), (Decimal("6000"),))
         snapshot = build_snapshot(
-            run_id=uuid4(), spec=ResearchSpec(max_quote_age_seconds=60), underlying=self.underlying,
+            run_id=uuid4(), spec=OptionChainCaptureSpec(max_quote_age_seconds=60), underlying=self.underlying,
             chain=chain, selected=(self.option,), state=state, now=self.now,
             catalog=self.catalog,
         )
         decoded_snapshot = snapshot_from_primitive(snapshot_to_primitive(snapshot))
         self.assertEqual(decoded_snapshot, snapshot)
-        result = analyze(snapshot)
+        result = analyze_option_snapshot(snapshot)
         self.assertEqual(result.rows[0].mid, Decimal("10"))
         self.assertEqual(result.rows[0].spread, Decimal("2"))
         self.assertEqual(result.completeness_rate, Decimal("1"))
@@ -108,7 +108,7 @@ class DomainTests(unittest.TestCase):
         state = MarketState()
         apply_market_event(state, envelope(UnderlyingPriceUpdated(self.underlying.instrument_id, Decimal("6000")), source="fixture", event_time=self.now))
         snapshot = build_snapshot(
-            run_id=uuid4(), spec=ResearchSpec(max_quote_age_seconds=1), underlying=self.underlying,
+            run_id=uuid4(), spec=OptionChainCaptureSpec(max_quote_age_seconds=1), underlying=self.underlying,
             chain=OptionChain(self.underlying.instrument_id, VenueId("ibkr"), "SMART", "SPXW", Decimal("100"), (date(2099, 1, 2),), (Decimal("6000"),)),
             selected=(self.option,), state=state, now=self.now,
             catalog=self.catalog,

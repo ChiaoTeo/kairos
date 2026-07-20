@@ -15,16 +15,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from examples._support import MidpointTargetStrategy, example_context
-from trading.adapters.base import Environment
-from trading.adapters.binance.adapter import BinanceStreamSession, WebSocketClientConnector, websocket_url
-from trading.adapters.binance.stream import BinanceCanonicalStreamService
-from trading.domain.identity import InstrumentId
-from trading.market_data import (
+from kairos.ports import Environment
+from kairos.connectors.binance.market_stream import BinanceStreamSession, WebSocketClientConnector, websocket_url
+from kairos.connectors.binance.stream import BinanceCanonicalStreamService
+from kairos.domain.identity import InstrumentId
+from kairos.market_data import (
     BoundedEventChannel, CanonicalCaptureWriter, CanonicalQuoteProjection,
     CapturedCanonicalEventSource, IterableEventSource,
 )
-from trading.storage.codec import to_primitive
-from trading.strategies import CanonicalStrategyEventSession
+from kairos.storage.codec import to_primitive
+from kairos.strategies import CanonicalStrategyEventSession
 
 
 async def capture(args) -> dict[str, object]:

@@ -8,13 +8,15 @@ import tempfile
 import unittest
 from decimal import Decimal
 
+from kairos.product_workflow import _write_binance_spot_bar_capture
+
 
 ROOT = Path(__file__).parents[1]
 
 
 def command(root: Path, *args: str) -> dict[str, object]:
     completed = subprocess.run(
-        [sys.executable, "-m", "trading", "--format", "json", "--lake-root", str(root), *args],
+        [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root), *args],
         cwd=ROOT, check=True, capture_output=True, text=True,
     )
     return json.loads(completed.stdout)
@@ -24,7 +26,7 @@ class ProductCliTests(unittest.TestCase):
     def test_product_cli_defaults_to_localized_text_and_keeps_json_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            base = [sys.executable, "-m", "trading", "--lake-root", str(root)]
+            base = [sys.executable, "-m", "kairos", "--lake-root", str(root)]
             chinese = subprocess.run(
                 [*base, "--lang", "zh-CN", "factor", "verify-sma", "--fixture", "--fast", "5", "--slow", "15"],
                 cwd=ROOT, check=True, capture_output=True, text=True,
@@ -60,12 +62,12 @@ class ProductCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             completed = subprocess.run(
-                [sys.executable, "-m", "trading", "--format", "json", "tutorial", "sma", "--output-root", str(root)],
+                [sys.executable, "-m", "kairos", "--format", "json", "tutorial", "sma", "--output-root", str(root)],
                 cwd=ROOT, check=True, capture_output=True, text=True,
             )
             tutorial = json.loads(completed.stdout)
             repeated = subprocess.run(
-                [sys.executable, "-m", "trading", "--format", "json", "tutorial", "sma", "--output-root", str(root)],
+                [sys.executable, "-m", "kairos", "--format", "json", "tutorial", "sma", "--output-root", str(root)],
                 cwd=ROOT, check=True, capture_output=True, text=True,
             )
             created = command(root, "study", "create", "short-study", "--hypothesis", "SMA trend",
@@ -123,6 +125,8 @@ class ProductCliTests(unittest.TestCase):
             run_root = root/"runs"/"sma"
             simulation = command(root, "run", "simulate-sma", "--fixture", "--fast", "5", "--slow", "15",
                 "--run-root", str(run_root))
+            generic_simulation = command(root, "run", "simulate", "--strategy", "sma-cross-v1@1.2.0",
+                "--fixture", "--fast", "5", "--slow", "15", "--run-root", str(root/"runs"/"sma-generic"))
             high_fee_simulation = command(root, "run", "simulate-sma", "--fixture", "--fast", "5", "--slow", "15",
                 "--fee-bps", "25", "--run-root", str(root/"runs"/"sma-high-fee"))
             calibration = command(root, "runtime", "calibrate-execution",
@@ -137,10 +141,20 @@ class ProductCliTests(unittest.TestCase):
             replayed = command(root, "run", "replay-sma", "--artifact", simulation["artifact"], "--fixture")
             paper=command(root,"run","paper-sma","--fixture","--fast","5","--slow","15",
                 "--run-root",str(root/"paper-runtime"),"--artifact-root",str(root/"paper-artifacts"))
+            generic_paper=command(root,"run","paper","--strategy","sma-cross-v1@1.2.0","--fixture","--fast","5","--slow","15",
+                "--run-root",str(root/"paper-runtime-generic"),"--artifact-root",str(root/"paper-artifacts-generic"))
             paper_replay=command(root,"run","replay-sma-capture","--artifact",paper["artifact"],"--capture",paper["capture"])
             shadow=command(root,"run","shadow-sma","--capture",paper["capture"],"--fast","5","--slow","15",
                 "--run-root",str(root/"shadow-runtime"),"--artifact-root",str(root/"shadow-artifacts"))
+            generic_shadow=command(root,"run","shadow","--strategy","sma-cross-v1@1.2.0","--capture",paper["capture"],"--fast","5","--slow","15",
+                "--run-root",str(root/"shadow-runtime-generic"),"--artifact-root",str(root/"shadow-artifacts-generic"))
             shadow_replay=command(root,"run","replay-sma-capture","--artifact",shadow["artifact"],"--capture",shadow["capture"])
+            unsupported = subprocess.run(
+                [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root),
+                 "run", "shadow", "--strategy", "covered-call-v1@1.1.0", "--fixture",
+                 "--run-root", str(root/"unsupported-shadow")],
+                cwd=ROOT, check=False, capture_output=True, text=True,
+            )
 
         self.assertEqual(created["status"], "sandbox")
         self.assertEqual(frozen["status"], "frozen_candidate")
@@ -158,20 +172,32 @@ class ProductCliTests(unittest.TestCase):
         self.assertLess(Decimal(calibrated_backtest["calibrated_final_equity"]), Decimal(backtest["final_equity"]))
         for name in ("factor_hash", "decision_hash", "intent_hash"):
             self.assertEqual(backtest[name], simulation[name])
+            self.assertEqual(simulation[name], generic_simulation[name])
         self.assertTrue(simulation["restart_ready"])
+        self.assertTrue(generic_simulation["restart_ready"])
         self.assertGreater(inspected["transactions"], 1)
         self.assertIsNotNone(explained["factor"]); self.assertIsNotNone(explained["decision"])
         self.assertIsNotNone(explained["attribution"])
         self.assertTrue(replayed["passed"])
-        self.assertEqual(paper["mode"],"live-paper");self.assertTrue(paper["restart_ready"])
+        self.assertEqual(paper["mode"],"paper-trading");self.assertTrue(paper["restart_ready"])
+        self.assertEqual(generic_paper["mode"],"paper-trading");self.assertTrue(generic_paper["restart_ready"])
+        self.assertEqual(generic_paper["factor_hash"],paper["factor_hash"])
+        self.assertEqual(generic_paper["decision_hash"],paper["decision_hash"])
+        self.assertEqual(generic_paper["intent_hash"],paper["intent_hash"])
         self.assertTrue(paper_replay["passed"])
         self.assertEqual(shadow["mode"],"shadow")
+        self.assertEqual(generic_shadow["mode"],"shadow")
         self.assertEqual(shadow["orders"],0);self.assertEqual(shadow["fills"],0)
         self.assertEqual(shadow["submitted_orders"],0);self.assertGreater(shadow["hypothetical_intents"],0)
         self.assertEqual(shadow["factor_hash"],paper["factor_hash"])
         self.assertEqual(shadow["decision_hash"],paper["decision_hash"])
         self.assertEqual(shadow["intent_hash"],paper["intent_hash"])
+        self.assertEqual(generic_shadow["factor_hash"],shadow["factor_hash"])
+        self.assertEqual(generic_shadow["decision_hash"],shadow["decision_hash"])
+        self.assertEqual(generic_shadow["intent_hash"],shadow["intent_hash"])
         self.assertTrue(shadow_replay["passed"])
+        self.assertEqual(unsupported.returncode, 2)
+        self.assertIn("currently supports sma-cross-v1", unsupported.stderr)
 
     def test_strategy_promotion_cli_records_gate_checked_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -230,7 +256,7 @@ class ProductCliTests(unittest.TestCase):
             checked = command(root, "strategy", "check-promotion", "sma-cross-v1", "--version", "1.2.0",
                 "--to", "TRADE_PROXY_VALIDATED", "--evidence", str(evidence))
             failed = subprocess.run(
-                [sys.executable, "-m", "trading", "--format", "json", "--lake-root", str(root),
+                [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root),
                  "strategy", "promote", "sma-cross-v1", "--version", "1.2.0",
                  "--to", "TRADE_PROXY_VALIDATED", "--evidence", str(evidence), "--actor", "reviewer",
                  "--capital-limit", "10000", "--rollback-condition", "proxy evidence invalidated"],
@@ -245,6 +271,44 @@ class ProductCliTests(unittest.TestCase):
         self.assertEqual(failed.returncode, 2)
         self.assertIn("strategy promotion transition failed", failed.stderr)
         self.assertEqual(status["lifecycle"], "DRAFT")
+
+    def test_public_binance_bar_capture_can_drive_strategy_paper(self) -> None:
+        class Transport:
+            def request(self, method, path, params=None, headers=None):
+                self.call = (method, path, params, headers)
+                start = 1_735_689_600_000
+                rows = []
+                for index in range(20):
+                    open_time = start + index * 60_000
+                    close = Decimal("100") + Decimal(index)
+                    rows.append([
+                        open_time, str(close - Decimal("1")), str(close + Decimal("1")),
+                        str(close - Decimal("2")), str(close), "1.5", open_time + 59_999,
+                    ])
+                return rows
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            capture = root / "live" / "btc.canonical.jsonl"
+            written = _write_binance_spot_bar_capture(
+                capture, symbol="BTCUSDT", interval="1m", limit=20,
+                base_url="https://example.invalid", transport=Transport(),
+            )
+            paper = command(root, "run", "paper", "--strategy", "sma-cross-v1@1.2.0",
+                "--capture", str(capture), "--fast", "3", "--slow", "5",
+                "--run-root", str(root/"paper-runtime"), "--artifact-root", str(root/"paper-artifacts"))
+            replay = command(root, "run", "replay-sma-capture",
+                "--artifact", paper["artifact"], "--capture", paper["capture"])
+            artifact_exists = Path(paper["artifact"]).exists()
+
+        self.assertEqual(written["bars"], 20)
+        self.assertEqual(written["symbol"], "BTCUSDT")
+        self.assertEqual(paper["mode"], "paper-trading")
+        self.assertEqual(paper["bars"], 20)
+        self.assertTrue(paper["input_identity"].startswith("capture:"))
+        self.assertTrue(artifact_exists)
+        self.assertTrue(replay["passed"])
+        self.assertTrue(replay["comparisons"]["strategy_run_audit_hash"])
 
 
 if __name__ == "__main__":

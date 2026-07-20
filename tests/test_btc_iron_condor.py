@@ -1,7 +1,7 @@
 from datetime import date
 import unittest
 
-from research.btc_deribit_iron_condor.study import _build_trade, _signals, _target_expiry
+from studies.btc_deribit_iron_condor.study import _build_trade, _signals, _target_expiry
 
 
 class BtcIronCondorTest(unittest.TestCase):

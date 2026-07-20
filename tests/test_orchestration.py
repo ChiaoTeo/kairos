@@ -7,29 +7,29 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
-from trading.accounting.ledger import LedgerService
-from trading.adapters.base import ComboLegRequest, ComboOrderRequest, Environment, OrderRequest
-from trading.adapters.simulated import SimulatedExecutionAccountAdapter
-from trading.domain.capability import ExecutionCapabilities, OrderType
-from trading.domain.execution import TradeSide
-from trading.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
-from trading.domain.ledger import Ledger
-from trading.domain.order import ExecutionInstructions, TimeInForce
-from trading.domain.intent import (
+from kairos.accounting.ledger import LedgerService
+from kairos.ports import ComboLegRequest, ComboOrderRequest, Environment, OrderRequest
+from kairos.connectors.simulated import SimulatedExecutionAccountGateway
+from kairos.domain.capability import ExecutionCapabilities, OrderType
+from kairos.domain.execution import TradeSide
+from kairos.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
+from kairos.domain.ledger import Ledger
+from kairos.domain.order import ExecutionInstructions, TimeInForce
+from kairos.domain.intent import (
     CancelIntent, HedgeIntent, LegIntent, OpenStructureIntent, TransferIntent,
 )
-from trading.domain.product import CryptoSpotSpec, ProductType
-from trading.execution.router import ExecutionRiskLimits, ExecutionRouter
-from trading.execution.planner import LeggingPolicy, NativeComboPlan, SequentialLegPlan, plan_combo
-from trading.execution.strategy_planner import plan_strategy_intent
-from trading.orchestration.coordinator import TradingCoordinator
-from trading.orchestration.event_log import PersistentEventLog
-from trading.orchestration.kill_switch import KillSwitch
-from trading.orchestration.monitoring import AlertSeverity, OperationalMonitor
-from trading.orchestration.reconciliation import ReconciliationService
-from trading.orchestration.runtime_store import SQLiteRuntimeStore
+from kairos.domain.product import CryptoSpotSpec, ProductType
+from kairos.execution.router import ExecutionRiskLimits, ExecutionRouter
+from kairos.execution.planner import LeggingPolicy, NativeComboPlan, SequentialLegPlan, plan_combo
+from kairos.execution.strategy_planner import plan_strategy_intent
+from kairos.orchestration.coordinator import TradingCoordinator
+from kairos.orchestration.event_log import PersistentEventLog
+from kairos.orchestration.kill_switch import KillSwitch
+from kairos.orchestration.monitoring import AlertSeverity, OperationalMonitor
+from kairos.orchestration.reconciliation import ReconciliationService
+from kairos.orchestration.runtime_store import SQLiteRuntimeStore
 from tests.runtime_support import operational_application
-from trading.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, RouteId
+from kairos.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, RouteId
 from tests.reference_support import publish_test_instrument
 
 
@@ -69,11 +69,11 @@ class OrchestrationTests(unittest.TestCase):
         self.catalog = make_catalog()
         self.ledger = Ledger()
         self.ledger_service = LedgerService(self.ledger, self.catalog)
-        self.adapter = SimulatedExecutionAccountAdapter(VENUE, ACCOUNT, environment=Environment.TESTNET)
-        self.router = ExecutionRouter(self.catalog, (self.adapter,))
+        self.gateway = SimulatedExecutionAccountGateway(VENUE, ACCOUNT, environment=Environment.TESTNET)
+        self.router = ExecutionRouter(self.catalog, (self.gateway,))
 
     def test_reconciliation_match_and_mismatch(self) -> None:
-        service = ReconciliationService(self.ledger, self.adapter)
+        service = ReconciliationService(self.ledger, self.gateway)
         self.assertTrue(service.reconcile(ACCOUNT).matched)
         self.ledger_service.deposit(ACCOUNT, AssetId("USDT"), Decimal("100"), NOW, "initial")
         report = service.reconcile(ACCOUNT)
@@ -85,15 +85,15 @@ class OrchestrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "events.jsonl"
             store = SQLiteRuntimeStore(Path(directory) / "runtime.sqlite3")
-            from trading.application import ApplicationConfig, FunctionProbe, RuntimePaths, TradingApplication
-            blocked_application = TradingApplication(
+            from kairos.application import ApplicationConfig, FunctionProbe, RuntimePaths, KairosApplication
+            blocked_application = KairosApplication(
                 ApplicationConfig(Environment.TESTNET, RuntimePaths.under(directory)), store,
                 runtime_id="blocked-readiness",
                 probes=(FunctionProbe("catalog", lambda: (False, "catalog unavailable")),),
             )
             blocked = TradingCoordinator(
-                self.router, {ACCOUNT: ReconciliationService(self.ledger, self.adapter)},
-                KillSwitch((self.adapter,)), PersistentEventLog(path),
+                self.router, {ACCOUNT: ReconciliationService(self.ledger, self.gateway)},
+                KillSwitch((self.gateway,)), PersistentEventLog(path),
                 runtime_store=store, application=blocked_application,
             )
             with self.assertRaises(RuntimeError):
@@ -101,8 +101,8 @@ class OrchestrationTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 blocked.submit(request(), NOW)
             ready = coordinator(
-                self.router, {ACCOUNT: ReconciliationService(self.ledger, self.adapter)},
-                KillSwitch((self.adapter,)), path,
+                self.router, {ACCOUNT: ReconciliationService(self.ledger, self.gateway)},
+                KillSwitch((self.gateway,)), path,
             )
             self.assertEqual(ready.submit(request(), NOW).client_order_id, "client-1")
 
@@ -110,7 +110,7 @@ class OrchestrationTests(unittest.TestCase):
         first = self.router.submit(request(), NOW)
         second = self.router.submit(request(), NOW)
         self.assertEqual(first, second)
-        self.assertEqual(len(self.adapter.orders), 1)
+        self.assertEqual(len(self.gateway.orders), 1)
         self.assertEqual(first.internal_order_id, "internal-client-1")
         self.assertEqual(first.strategy_id, "strategy-1")
         self.assertEqual(first.intent_id, "intent-1")
@@ -125,24 +125,24 @@ class OrchestrationTests(unittest.TestCase):
             self.router.submit(request(price="1000.05"), NOW)
         with self.assertRaisesRegex(ValueError, "notional"):
             self.router.submit(request(price="500"), NOW)
-        limited = SimulatedExecutionAccountAdapter(VENUE, ACCOUNT)
+        limited = SimulatedExecutionAccountGateway(VENUE, ACCOUNT)
         limited.capabilities = ExecutionCapabilities(frozenset({OrderType.MARKET}), frozenset(ProductType))
         with self.assertRaisesRegex(ValueError, "order type"):
             ExecutionRouter(self.catalog, (limited,)).submit(request(), NOW)
-        strict = ExecutionRouter(self.catalog, (self.adapter,), ExecutionRiskLimits(Decimal("0.02"), Decimal("15")))
+        strict = ExecutionRouter(self.catalog, (self.gateway,), ExecutionRiskLimits(Decimal("0.02"), Decimal("15")))
         with self.assertRaisesRegex(ValueError, "quantity exceeds"):
             strict.submit(request(quantity="0.03", price="1000"), NOW)
         with self.assertRaisesRegex(ValueError, "notional exceeds"):
             strict.submit(request(quantity="0.02", price="1000"), NOW)
 
     def test_disconnect_and_reconnect(self) -> None:
-        self.adapter.disconnect()
+        self.gateway.disconnect()
         with self.assertRaises(ConnectionError):
-            self.adapter.account_state(ACCOUNT)
+            self.gateway.account_state(ACCOUNT)
         with self.assertRaises(ConnectionError):
-            self.adapter.place_order(request())
-        self.adapter.reconnect()
-        self.assertEqual(self.adapter.account_state(ACCOUNT).account, ACCOUNT)
+            self.gateway.place_order(request())
+        self.gateway.reconnect()
+        self.assertEqual(self.gateway.account_state(ACCOUNT).account, ACCOUNT)
 
     def test_event_log_deduplicates_and_reloads(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -160,11 +160,11 @@ class OrchestrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = f"{directory}/events.jsonl"
             first = coordinator(
-                self.router, {ACCOUNT: ReconciliationService(self.ledger, self.adapter)},
-                KillSwitch((self.adapter,)), path,
+                self.router, {ACCOUNT: ReconciliationService(self.ledger, self.gateway)},
+                KillSwitch((self.gateway,)), path,
             )
             original = first.submit(request(), NOW)
-            restarted_adapter = SimulatedExecutionAccountAdapter(VENUE, ACCOUNT)
+            restarted_adapter = SimulatedExecutionAccountGateway(VENUE, ACCOUNT)
             restarted = coordinator(
                 ExecutionRouter(self.catalog, (restarted_adapter,)),
                 {ACCOUNT: ReconciliationService(self.ledger, restarted_adapter)},
@@ -176,19 +176,19 @@ class OrchestrationTests(unittest.TestCase):
 
     def test_kill_switch_cancels_orders_and_allows_only_reduce_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            kill_switch = KillSwitch((self.adapter,))
+            kill_switch = KillSwitch((self.gateway,))
             runtime = coordinator(
-                self.router, {ACCOUNT: ReconciliationService(self.ledger, self.adapter)},
+                self.router, {ACCOUNT: ReconciliationService(self.ledger, self.gateway)},
                 kill_switch, f"{directory}/events.jsonl",
             )
             runtime.submit(request(client_id="normal"), NOW)
             result = kill_switch.trigger((ACCOUNT,), "drill")
             self.assertEqual(len(result.cancelled_orders), 1)
             self.assertTrue(kill_switch.reduce_only)
-            self.assertEqual(self.adapter.open_orders(ACCOUNT), ())
+            self.assertEqual(self.gateway.open_orders(ACCOUNT), ())
             with self.assertRaisesRegex(RuntimeError, "only reduce-only"):
                 runtime.submit(request(client_id="blocked"), NOW)
-            self.adapter.positions[INSTRUMENT] = Decimal("-0.02")
+            self.gateway.positions[INSTRUMENT] = Decimal("-0.02")
             ack = runtime.submit(request(client_id="reduce", reduce_only=True), NOW)
             self.assertEqual(ack.intent_id, "intent-1")
 
@@ -207,8 +207,8 @@ class OrchestrationTests(unittest.TestCase):
             (ComboLegRequest(INSTRUMENT, TradeSide.BUY, 1), ComboLegRequest(INSTRUMENT, TradeSide.SELL, 1)),
             Decimal("1"), ExecutionInstructions(OrderType.LIMIT, TimeInForce.DAY, Decimal("10")),
         )
-        self.assertIsInstance(plan_combo(combo, self.adapter.capabilities), NativeComboPlan)
-        limited = ExecutionCapabilities(self.adapter.capabilities.order_types, frozenset(ProductType))
+        self.assertIsInstance(plan_combo(combo, self.gateway.capabilities), NativeComboPlan)
+        limited = ExecutionCapabilities(self.gateway.capabilities.order_types, frozenset(ProductType))
         with self.assertRaisesRegex(ValueError, "silent legging"):
             plan_combo(combo, limited)
         plan = plan_combo(combo, limited, legging_policy=LeggingPolicy.SEQUENTIAL, maximum_naked_legs=1)
@@ -245,8 +245,8 @@ class OrchestrationTests(unittest.TestCase):
     def test_native_combo_and_cancel_intent_pass_through_coordinator_and_event_log(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime = coordinator(
-                self.router, {ACCOUNT: ReconciliationService(self.ledger, self.adapter)},
-                KillSwitch((self.adapter,)), f"{directory}/events.jsonl",
+                self.router, {ACCOUNT: ReconciliationService(self.ledger, self.gateway)},
+                KillSwitch((self.gateway,)), f"{directory}/events.jsonl",
             )
             combo = ComboOrderRequest(
                 "combo-internal", "combo-client", "spread", "combo-intent", "combo-correlation",
@@ -256,13 +256,13 @@ class OrchestrationTests(unittest.TestCase):
             )
             ack = runtime.submit_combo(combo, NOW)
             self.assertEqual(runtime.submit_combo(combo, NOW), ack)
-            self.assertEqual(len(self.adapter.orders), 1)
+            self.assertEqual(len(self.gateway.orders), 1)
             with self.assertRaisesRegex(ValueError, "different request"):
                 runtime.submit(request(client_id="combo-client"), NOW)
             cancel = CancelIntent(UUID("00000000-0000-0000-0000-000000000124"), "spread", "combo-client", "risk exit")
             runtime.cancel(cancel, ACCOUNT)
             runtime.cancel(cancel, ACCOUNT)
-            self.assertEqual(self.adapter.orders, {})
+            self.assertEqual(self.gateway.orders, {})
             event_types = [item["event_type"] for item in runtime.event_log.read()]
             self.assertIn("combo_order_ack", event_types)
             self.assertIn("order_cancelled", event_types)

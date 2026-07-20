@@ -51,7 +51,7 @@ class ExamplesSuiteTests(unittest.TestCase):
         result = run_example("examples/runtime/run_modes.py")
         self.assertEqual(len(result["modes"]), 5)
         self.assertEqual({item["mode"] for item in result["modes"]}, {
-            "research", "backtest", "historical-simulation", "live-paper", "live",
+            "research", "backtest", "historical-simulation", "paper-trading", "live",
         })
         self.assertTrue(all(len(item["composition_hash"]) == 64 for item in result["modes"]))
 
@@ -64,7 +64,7 @@ class ExamplesSuiteTests(unittest.TestCase):
 
     def test_sma_live_paper_capture_and_offline_replay(self):
         result=run_example("examples/runtime/sma_paper_session.py")
-        self.assertEqual(result["mode"],"live-paper");self.assertGreater(result["fills"],0)
+        self.assertEqual(result["mode"],"paper-trading");self.assertGreater(result["fills"],0)
         self.assertTrue(result["restart_ready"]);self.assertTrue(result["capture_replay_passed"])
 
     def test_complex_option_strategy_binds_research_factor_to_executable_strategy(self):
@@ -87,8 +87,8 @@ class ExamplesSuiteTests(unittest.TestCase):
         for name in ("factor_hash", "decision_hash", "intent_hash"):
             self.assertEqual(backtest[name], simulation[name])
 
-    def test_reference_adapter_passes_language_boundary_vectors(self):
-        result = run_example("examples/adapters/reference_adapter/verify_contract.py")
+    def test_reference_connector_passes_language_boundary_vectors(self):
+        result = run_example("examples/connectors/reference_connector/verify_contract.py")
         self.assertTrue(result["passed"])
         self.assertGreaterEqual(result["vectors"], 1)
 

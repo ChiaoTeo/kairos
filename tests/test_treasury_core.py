@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from trading.domain.identity import AccountKey, AccountType, AssetId, VenueId
-from trading.domain.ledger import Ledger, LedgerBook
-from trading.reference.identity import LocationId
-from trading.treasury import TransferOperation, TransferOperationStore, TransferStatus, TreasuryService
+from kairos.domain.identity import AccountKey, AccountType, AssetId, VenueId
+from kairos.domain.ledger import Ledger, LedgerBook
+from kairos.reference.identity import LocationId
+from kairos.treasury import TransferOperation, TransferOperationStore, TransferStatus, TreasuryLedgerPostingService
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
@@ -37,7 +37,7 @@ class TreasuryCoreTests(unittest.TestCase):
 
     def test_external_transfer_uses_in_transit_until_destination_credit(self) -> None:
         ledger = Ledger()
-        service = TreasuryService(ledger, {SOURCE: SOURCE_ACCOUNT, DESTINATION: DESTINATION_ACCOUNT}, TRANSIT_ACCOUNT)
+        service = TreasuryLedgerPostingService(ledger, {SOURCE: SOURCE_ACCOUNT, DESTINATION: DESTINATION_ACCOUNT}, TRANSIT_ACCOUNT)
         service.post_source_debit("transfer-2", SOURCE, AssetId("USDT"), Decimal("100"), NOW)
         self.assertEqual(ledger.book_balance(SOURCE_ACCOUNT, LedgerBook.CASH, AssetId("USDT")), Decimal("-100"))
         self.assertEqual(ledger.book_balance(TRANSIT_ACCOUNT, LedgerBook.IN_TRANSIT, AssetId("USDT")), Decimal("100"))
@@ -50,7 +50,7 @@ class TreasuryCoreTests(unittest.TestCase):
 
     def test_internal_transfer_posts_both_controlled_sides_atomically(self) -> None:
         ledger = Ledger()
-        service = TreasuryService(ledger, {SOURCE: SOURCE_ACCOUNT, DESTINATION: DESTINATION_ACCOUNT}, TRANSIT_ACCOUNT)
+        service = TreasuryLedgerPostingService(ledger, {SOURCE: SOURCE_ACCOUNT, DESTINATION: DESTINATION_ACCOUNT}, TRANSIT_ACCOUNT)
         service.post_internal_transfer("transfer-3", SOURCE, DESTINATION, AssetId("USDT"), Decimal("25"), NOW)
         self.assertEqual(ledger.book_balance(SOURCE_ACCOUNT, LedgerBook.CASH, AssetId("USDT")), Decimal("-25"))
         self.assertEqual(ledger.book_balance(DESTINATION_ACCOUNT, LedgerBook.CASH, AssetId("USDT")), Decimal("25"))

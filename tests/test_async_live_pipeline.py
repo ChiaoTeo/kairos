@@ -7,16 +7,16 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from trading.adapters.base import Environment
-from trading.adapters.massive.websocket import MassiveCanonicalStreamService, MassiveLiveStream
-from trading.application import (
-    ApplicationConfig, AsyncTradingRuntime, ManagedTaskSpec, RuntimePaths, RuntimeStatus, TradingApplication,
+from kairos.ports import Environment
+from kairos.connectors.massive.websocket import MassiveCanonicalStreamService, MassiveLiveStream
+from kairos.application import (
+    ApplicationConfig, AsyncKairosRuntime, ManagedServiceSpec, RuntimePaths, RuntimeStatus, KairosApplication,
 )
-from trading.domain.identity import InstrumentId
-from trading.domain.market_data import Bar
-from trading.market_data import BoundedEventChannel, MarketEventEnvelope, MarketEventType
-from trading.orchestration.runtime_store import SQLiteRuntimeStore
-from trading.strategies.sma_cross import (
+from kairos.domain.identity import InstrumentId
+from kairos.domain.market_data import Bar
+from kairos.market_data import BoundedEventChannel, MarketEventEnvelope, MarketEventType
+from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairos.strategies.sma_cross_research_backtest import (
     BarSeries, SmaCrossConfig, backtest_sma_cross, backtest_sma_cross_events,
 )
 
@@ -69,14 +69,14 @@ class AsyncLivePipelineTests(unittest.IsolatedAsyncioTestCase):
                 completed.set()
 
             paths = RuntimePaths.under(root)
-            application = TradingApplication(
+            application = KairosApplication(
                 ApplicationConfig(Environment.PAPER, paths), SQLiteRuntimeStore(paths.runtime_database),
                 runtime_id="live-pipeline-fixture",
             )
-            runtime = AsyncTradingRuntime(application, (
-                ManagedTaskSpec("massive-market-stream", lambda: service.run(stop_after_messages=4),
+            runtime = AsyncKairosRuntime(application, (
+                ManagedServiceSpec("massive-market-stream", lambda: service.run(stop_after_messages=4),
                                 allow_completion=True),
-                ManagedTaskSpec("sma-strategy", strategy, allow_completion=True),
+                ManagedServiceSpec("sma-strategy", strategy, allow_completion=True),
             ))
 
             await runtime.start()

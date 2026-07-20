@@ -3,11 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import unittest
 
-from trading.domain.capability import MarketDataCapabilities, MarketDataKind
-from trading.domain.identity import AssetId, InstrumentId
-from trading.domain.product import CryptoSpotSpec, ProductType
-from trading.market_data.subscriptions import MarketDataRequirement, SubscriptionPlanner
-from trading.reference import (
+from kairos.domain.capability import MarketDataCapabilities, MarketDataKind
+from kairos.domain.identity import AssetId, InstrumentId
+from kairos.domain.product import CryptoSpotSpec, ProductType
+from kairos.market_data.subscriptions import MarketDataRequirement, SubscriptionPlanner
+from kairos.reference import (
     EconomicProduct, InstrumentDefinition, InstrumentLifecycle,
     MappingTargetType, ProductId, ProviderId, ProviderSymbolMapping,
     ReferenceCatalog,

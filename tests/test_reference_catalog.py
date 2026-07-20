@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
-from trading.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from trading.domain.product import ContractType, PerpetualSpec, ProductType, SettlementSession
-from trading.reference import (
+from kairos.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairos.domain.product import ContractType, PerpetualSpec, ProductType, SettlementSession
+from kairos.reference import (
     AssetDefinition, AssetType, BenchmarkDefinition, BenchmarkId, BenchmarkType, BrokerId,
     ContractSeries, EconomicProduct, ExecutionRoute, InstrumentDefinition,
     InstrumentLifecycle, InstrumentReference, ListingDefinition, ListingId,

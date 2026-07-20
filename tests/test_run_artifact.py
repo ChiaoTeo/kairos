@@ -7,8 +7,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from trading.application import RunArtifactRepository
-from trading.product_workflow import _governed_run, fixture_sma_bars
+from kairos.application import RunArtifactRepository
+from kairos.product_workflow import _governed_run, fixture_sma_bars
 
 
 class RunArtifactTests(unittest.TestCase):

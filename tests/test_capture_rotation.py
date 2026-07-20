@@ -7,10 +7,10 @@ import json
 import tempfile
 import unittest
 
-from trading.contracts import canonical_from_domain_market_data
-from trading.domain.identity import InstrumentId
-from trading.domain.market_data import Quote
-from trading.market_data import (
+from kairos.contracts import canonical_from_domain_market_data
+from kairos.domain.identity import InstrumentId
+from kairos.domain.market_data import Quote
+from kairos.market_data import (
     CaptureResourceExceeded, RotatingCanonicalCaptureWriter,
     RotatingCapturedCanonicalEventSource,
 )

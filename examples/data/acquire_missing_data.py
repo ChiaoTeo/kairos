@@ -1,6 +1,6 @@
-from trading.data import AcquirePolicy, OutputFormat, ResearchDataClient
-from trading.data.products import BTC_SPOT_DAILY
-from trading.data.bootstrap import default_provider_registry, register_default_products
+from kairos.data import AcquirePolicy, OutputFormat, ResearchDataClient
+from kairos.data.products import BTC_SPOT_DAILY
+from kairos.data.bootstrap import default_provider_registry, register_default_products
 
 
 register_default_products("data")

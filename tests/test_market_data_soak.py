@@ -7,9 +7,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from trading.contracts import canonicalize_market_event
-from trading.domain.identity import InstrumentId
-from trading.market_data import (
+from kairos.contracts import canonicalize_market_event
+from kairos.domain.identity import InstrumentId
+from kairos.market_data import (
     BoundedEventChannel, MarketEventEnvelope, MarketEventType, run_binance_market_soak,
     run_binance_market_restart_campaign,
 )

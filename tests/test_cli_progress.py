@@ -1,7 +1,7 @@
 from io import StringIO
 import unittest
 
-from trading.cli_progress import TerminalProgressMatrix
+from kairos.cli_progress import TerminalProgressMatrix
 
 
 class _TtyBuffer(StringIO):

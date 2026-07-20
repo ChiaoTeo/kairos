@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 from itertools import islice
 
-from trading.data import DataView, ResearchDataClient, RunMode
-from trading.data.models import Datasets
+from kairos.data import DataView, ResearchDataClient, RunMode
+from kairos.data.products import Datasets
 
 
 # Research replay accepts Q2 data. Use RunMode.BACKTEST only after the exact

@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 from examples.runtime.sma_historical_simulation import run
-from trading.execution import build_execution_calibration_release, load_execution_calibration_release
+from kairos.execution import build_execution_calibration_release, load_execution_calibration_release
 
 
 ROOT = Path(__file__).parents[1]
@@ -41,7 +41,7 @@ class ExecutionCalibrationTests(unittest.TestCase):
             run_root = root / "run"
             simulation = asyncio.run(run(run_root))
             completed = subprocess.run(
-                [sys.executable, "-m", "trading", "runtime", "calibrate-execution",
+                [sys.executable, "-m", "kairos", "runtime", "calibrate-execution",
                  "--db", str(run_root / "runtime" / "runtime.sqlite3"), "--output-root", str(root / "calibration"),
                  "--venue", "simulated", "--environment", "testnet", "--strategy", "sma-cross-v1"],
                 cwd=ROOT, check=True, capture_output=True, text=True,

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from trading.domain.identity import InstitutionId
+from kairos.domain.identity import InstitutionId
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -10,19 +10,19 @@ import tempfile
 import unittest
 from uuid import UUID
 
-from trading.accounting.ledger import LedgerService
-from trading.adapters.base import OrderAck, OrderRequest
-from trading.domain.capability import OrderType
-from trading.domain.execution import TradeExecution, TradeSide
-from trading.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from trading.domain.ledger import Ledger
-from trading.domain.order import ExecutionInstructions, TimeInForce
-from trading.domain.product import CryptoSpotSpec, ProductType
-from trading.execution.order_state import DurableOrderStatus
-from trading.orchestration.runtime_store import SQLiteRuntimeStore
-from trading.orchestration.kill_switch import KillSwitch
-from trading.application.clock import FixedClock
-from trading.reference import ReferenceCatalog
+from kairos.accounting.ledger import LedgerService
+from kairos.ports import OrderAck, OrderRequest
+from kairos.domain.capability import OrderType
+from kairos.domain.execution import TradeExecution, TradeSide
+from kairos.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairos.domain.ledger import Ledger
+from kairos.domain.order import ExecutionInstructions, TimeInForce
+from kairos.domain.product import CryptoSpotSpec, ProductType
+from kairos.execution.order_state import DurableOrderStatus
+from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairos.orchestration.kill_switch import KillSwitch
+from kairos.application.clock import FixedClock
+from kairos.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
 
@@ -119,7 +119,7 @@ class RuntimeStoreTests(unittest.TestCase):
             resolution = store.resolve_unresolved_order(
                 order.client_order_id, DurableOrderStatus.REJECTED, now + timedelta(seconds=1),
                 actor="operator@example.com", reason="confirmed crash before transport call",
-                evidence="trace=runtime-failure-matrix; venue-query=no-order",
+                evidence="trace=runtime-failure-policy; venue-query=no-order",
             )
             self.assertEqual(resolution.previous_status, DurableOrderStatus.SUBMITTING)
             self.assertEqual(store.order(order.client_order_id).status, DurableOrderStatus.REJECTED)  # type: ignore[union-attr]

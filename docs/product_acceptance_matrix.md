@@ -1,4 +1,4 @@
-# Trader 产品贯通验收矩阵
+# Kairos 产品贯通验收矩阵
 
 状态：Local Acceptance Passed  
 基线日期：2026-07-18
@@ -39,7 +39,7 @@ Spot/Perpetual Carry、Funding、Corporate Action、Assignment、Conservative/St
 
 | 要求 | 权威实现 | 证据 |
 |---|---|---|
-| Sandbox/Governed Research 分离 | `trading.research.workspace`、ValidationArtifactWriter | workspace 与 `data/studies` 不混用 |
+| Sandbox/Governed Research 分离 | `kairos.research.workspace`、ValidationArtifactWriter | workspace 与 `data/studies` 不混用 |
 | Study 可直接使用绑定数据 | `StudySession`、`StudyData` | Dataset hash 校验、Pandas/Polars/Arrow、profile、scaffold |
 | Factor 一等公民 | FactorSpec/Snapshot/Runtime/Registry | SMA、SPXW skew、fear-cooling factors |
 | Strategy Release 绑定代码和因子 | StrategyRegistry | implementation.json、factor_bindings.json、manifest.json |
@@ -55,21 +55,21 @@ Spot/Perpetual Carry、Funding、Corporate Action、Assignment、Conservative/St
 | 明确 active version | StrategyRegistry.activate | active.json、activations.jsonl |
 | 审计回滚 | StrategyRegistry.rollback | `test_strategy_registry.py` |
 | 晋级缺口与证据包 | StrategyRegistry.status / promote | complete、missing_files、next_promotion、latest_promotion_bundle、promotion-bundles manifest |
-| 人工/自动入口分离 | `order submit` / `run paper-sma` | actor/reason 与 Strategy Release 分离 |
+| 人工/自动入口分离 | `order submit` / `run paper` | actor/reason 与 Strategy Release 分离 |
 | 研究 proxy 不冒充回测 | `TRADE_PROXY_ONLY` | SPXW study + complex option example |
 
 ## 正式命令入口
 
 ```text
-trader tutorial sma
-trader study create|inspect|data|profile|scaffold|freeze
-trader factor register-sma|verify-sma
-trader strategy register-sma|register-builtins|register-btc-iron-condor
-trader strategy inspect|status|activate|rollback|check-promotion|promote
-trader run backtest|backtest-sma|simulate-sma|shadow-sma|paper-sma|reference
-trader run inspect|replay-sma|replay-sma-capture
-trader order submit
-trader runtime calibrate-execution|golden|failure-matrix|l4-preflight
+kairos tutorial sma
+kairos study create|inspect|data|profile|scaffold|freeze
+kairos factor register-sma|verify-sma
+kairos strategy register-sma|register-builtins|register-btc-iron-condor
+kairos strategy inspect|status|activate|rollback|check-promotion|promote
+kairos run backtest|simulate|shadow|paper|reference
+kairos run inspect|replay-sma|replay-sma-capture
+kairos order submit
+kairos runtime calibrate-execution|reference-artifact|failure-policy|l4-preflight
 ```
 
 旧 `trade run` 保留为兼容 facade，但不是自动策略入口；新代码应使用 `order submit` 或 `run ...`。
@@ -80,7 +80,7 @@ trader runtime calibrate-execution|golden|failure-matrix|l4-preflight
 仍属于显式启用的外部 L4 验收：
 
 ```bash
-trader runtime l4-preflight --venue binance --environment testnet \
+kairos runtime l4-preflight --venue binance --environment testnet \
   --strategy sma-cross-v1 --instrument '<instrument-id>'
 ```
 
@@ -99,7 +99,7 @@ Promotion gate 会复算外部 readiness/soak artifact 的 `audit_hash`；证据
 ## 全量仓库验收
 
 ```bash
-./pyenv/bin/python -m compileall -q trading examples tests research
+./pyenv/bin/python -m compileall -q kairos examples tests studies
 ./pyenv/bin/python -m unittest discover -s tests
 git diff --check
 ```

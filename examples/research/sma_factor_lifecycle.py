@@ -13,8 +13,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from examples.backtest.governed_sma import canonical_events, fixture_bars
-from trading.features import FactorRegistry, SmaFactorConfig, SmaFactorRuntime, batch_sma_factors, snapshots_hash
-from trading.research import StudyWorkspace, StudyWorkspaceRepository
+from kairos.features import FactorRegistry, SmaFactorConfig, SmaFactorRuntime, batch_sma_factors, snapshots_hash
+from kairos.research_platform import StudyWorkspace, StudyWorkspaceRepository
 
 
 def run(root: Path) -> dict[str, object]:

@@ -2,8 +2,8 @@ from datetime import date, timedelta
 import math
 import unittest
 
-from research.btc_options_vrp.study import analyze, prepare_study_panel
-from trading.features.volatility import build_iv_rv_panel
+from studies.btc_options_vrp.study import analyze, prepare_study_panel
+from kairos.features.volatility import build_iv_rv_panel
 
 
 class BtcOptionsVrpTest(unittest.TestCase):
