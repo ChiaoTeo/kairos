@@ -166,5 +166,3 @@ class IbkrReferenceDataClient:
         if not qualified:
             raise LookupError(f"IBKR contract not found for {definition.instrument_id}")
         self.session.contracts[definition.instrument_id] = qualified[0]
-
-

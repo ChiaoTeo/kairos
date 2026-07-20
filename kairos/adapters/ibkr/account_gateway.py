@@ -40,5 +40,3 @@ class IbkrAccountGateway:
             tuple(str(item.order.orderId) for item in self.session.ib.openTrades()),
             datetime.now(timezone.utc),
         )
-
-

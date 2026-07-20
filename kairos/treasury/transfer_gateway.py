@@ -39,5 +39,3 @@ class SimulatedTransferGateway:
 
     def status(self, provider_reference: str) -> TransferSubmission:
         return next((item for item in self.submissions.values() if item.provider_reference == provider_reference), TransferSubmission(provider_reference, TransferStatus.FAILED))
-
-

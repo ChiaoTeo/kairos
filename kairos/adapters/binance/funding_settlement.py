@@ -47,5 +47,3 @@ class BinanceFundingSettlementClient:
                 Decimal(row.get("fundingRate", "0")), Decimal(row.get("positionNotional", "0")),
             ))
         return tuple(sorted(payments, key=lambda item: (item.timestamp, str(item.payment_id))))
-
-

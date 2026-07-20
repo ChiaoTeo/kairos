@@ -64,5 +64,3 @@ def _status(value: str) -> TransferStatus:
         "manual_review": TransferStatus.MANUAL_REVIEW,
     }
     return values.get(value.lower(), TransferStatus.MANUAL_REVIEW)
-
-

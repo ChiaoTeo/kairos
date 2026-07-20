@@ -27,5 +27,3 @@ class CompositeMarketDataClient:
             values.extend(market_data_client.snapshot(tuple(definitions)))
         by_id = {item.instrument_id: item for item in values}
         return tuple(by_id[item.instrument_id] for item in instruments)
-
-

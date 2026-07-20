@@ -126,5 +126,3 @@ def _bar_span(value: str) -> timedelta:
     if seconds is None or amount <= 0:
         raise ValueError(f"unsupported IBKR bar size: {value}")
     return timedelta(seconds=amount * seconds)
-
-

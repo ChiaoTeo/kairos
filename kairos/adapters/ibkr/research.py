@@ -194,5 +194,3 @@ def _definition_signature(definition: InstrumentDefinition) -> tuple[str, Decima
 
 def _contract_signature(contract: Any) -> tuple[str, Decimal, str]:
     return contract.lastTradeDateOrContractMonth[:8], Decimal(str(contract.strike)), contract.right
-
-

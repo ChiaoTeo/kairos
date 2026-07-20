@@ -130,5 +130,3 @@ def _now_from_signer(signer: BinanceSigner):
     from datetime import datetime, timezone
     from time import time
     return datetime.fromtimestamp((time() * 1000 + signer.clock_offset_ms) / 1000, timezone.utc)
-
-

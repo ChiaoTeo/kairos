@@ -100,5 +100,3 @@ class SimulatedExecutionAccountGateway:
 
     def disconnect(self): self.connected = False
     def reconnect(self): self.connected = True
-
-

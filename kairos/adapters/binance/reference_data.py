@@ -215,5 +215,3 @@ def _binance_reference_facts(*asset_codes: str, at: datetime) -> dict[str, tuple
 
 def _decimal(value):
     return Decimal(str(value)) if value not in (None, "") else None
-
-

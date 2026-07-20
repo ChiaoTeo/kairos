@@ -356,5 +356,3 @@ def _binance_recovered_executions(
             f"{event_ms}:{trade_id}",
         ))
     return tuple(recovered)
-
-

@@ -234,5 +234,3 @@ def normalize_ibkr_execution(*, execution_id: str, timestamp: datetime, account,
         Decimal(str(quantity)), Decimal(str(price)), AssetId(commission_currency),
         abs(Decimal(str(commission))), order_id,
     )
-
-

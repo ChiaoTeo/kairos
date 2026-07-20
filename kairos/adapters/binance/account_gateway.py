@@ -87,5 +87,3 @@ class BinanceOptionsAccountGateway:
             account, balances, positions, tuple(str(item["orderId"]) for item in open_orders),
             datetime.now(timezone.utc),
         )
-
-
