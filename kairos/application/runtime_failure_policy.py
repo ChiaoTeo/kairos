@@ -82,7 +82,7 @@ def _request():
     account = AccountKey(InstitutionId("simulated"), "failure-policy", AccountType.CRYPTO_SPOT)
     intent = TargetPositionIntent(
         UUID("00000000-0000-0000-0000-00000000f301"), "failure-policy-strategy",
-        instrument, Decimal("1"), "failure matrix deterministic target",
+        instrument, Decimal("1"), "failure policy deterministic target",
     )
     return plan_strategy_intent(
         intent, accounts={instrument: account}, current_positions={},

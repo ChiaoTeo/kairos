@@ -52,7 +52,7 @@
 ## 推荐可用性验收命令
 
 ```bash
-./pyenv/bin/python -m unittest tests.test_kairos_api tests.test_trader_api tests.test_product_cli tests.test_strategy_registry tests.test_strategy_promotion_gate
+./pyenv/bin/python -m unittest tests.test_kairos_api tests.test_product_cli tests.test_strategy_registry tests.test_strategy_promotion_gate
 ./pyenv/bin/python examples/lifecycle/full_product_acceptance.py
 ./pyenv/bin/python -m unittest discover -s tests
 ./pyenv/bin/python -m compileall -q kairos examples tests studies

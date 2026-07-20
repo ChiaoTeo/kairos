@@ -20,7 +20,7 @@ class KairosProjectInitTests(unittest.TestCase):
             self.assertEqual(result.name, "alpha-desk")
             self.assertTrue((root / "kairos.toml").exists())
             self.assertTrue((root / "pyproject.toml").exists())
-            self.assertTrue((root / "research" / "starter.py").exists())
+            self.assertTrue((root / "studies" / "starter.py").exists())
             self.assertTrue((root / "strategies" / "starter_sma.py").exists())
             self.assertTrue((root / ".kairos" / "project.json").exists())
 
@@ -33,10 +33,10 @@ class KairosProjectInitTests(unittest.TestCase):
 
     def test_project_initializer_is_available_from_kairos_namespace(self) -> None:
         from kairos.project import initialize_project as subpackage_initialize_project
-        from kairos.project import initialize_project as trading_initialize_project
+        from kairos.project import initialize_project as project_initialize_project
 
-        self.assertIs(initialize_project, trading_initialize_project)
-        self.assertIs(subpackage_initialize_project, trading_initialize_project)
+        self.assertIs(initialize_project, project_initialize_project)
+        self.assertIs(subpackage_initialize_project, project_initialize_project)
 
     def test_kairos_init_cli_bootstraps_a_runnable_external_project(self) -> None:
         with TemporaryDirectory() as directory:
@@ -50,12 +50,12 @@ class KairosProjectInitTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
 
             self.assertEqual(payload["name"], "external-desk")
-            self.assertTrue((root / "research" / "starter.py").exists())
+            self.assertTrue((root / "studies" / "starter.py").exists())
 
             env = dict(os.environ)
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
             starter = subprocess.run(
-                [sys.executable, "research/starter.py"],
+                [sys.executable, "studies/starter.py"],
                 cwd=root,
                 check=True,
                 capture_output=True,

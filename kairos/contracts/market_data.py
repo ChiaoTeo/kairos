@@ -233,7 +233,7 @@ def canonical_from_domain_market_data(
     source_sequence: int | None = None,
     receive_sequence: int | None = None,
 ) -> tuple[CanonicalEventEnvelope, ...]:
-    """Normalize shared domain market values emitted by live venue adapters."""
+    """Normalize shared domain market values emitted by live venue connectors."""
 
     if isinstance(value, Quote):
         return (_canonical(

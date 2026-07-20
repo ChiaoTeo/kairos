@@ -47,7 +47,7 @@ def initialize_project(target: str | Path = ".", *, name: str | None = None, for
         created=tuple(created),
         reused=tuple(reused),
         next_steps=(
-            "python research/starter.py",
+            "python studies/starter.py",
             "kairos --help",
         ),
     )
@@ -90,7 +90,7 @@ def _directories() -> tuple[Path, ...]:
         Path("data/curated"),
         Path("data/events"),
         Path("data/reference"),
-        Path("research"),
+        Path("studies"),
         Path("strategies"),
     )
 
@@ -102,7 +102,7 @@ def _files(project_name: str) -> tuple[tuple[Path, str], ...]:
         (Path(".gitignore"), _gitignore()),
         (Path("README.md"), _readme(project_name)),
         (Path("config/research.json"), _research_config(project_name)),
-        (Path("research/starter.py"), _starter_script()),
+        (Path("studies/starter.py"), _starter_script()),
         (Path("strategies/__init__.py"), ""),
         (Path("strategies/starter_sma.py"), _starter_strategy()),
         (Path("data/.gitkeep"), ""),
@@ -190,11 +190,11 @@ This is a Kairos quantitative research and trading project.
 ## Start
 
 ```bash
-python research/starter.py
+python studies/starter.py
 kairos --help
 ```
 
-Project data lives under `data/`. Keep research code in `research/` and reusable strategy code in `strategies/`.
+Project data lives under `data/`. Keep study code in `studies/` and reusable strategy code in `strategies/`.
 """
 
 

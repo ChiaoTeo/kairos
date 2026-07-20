@@ -25,6 +25,62 @@ def command(root: Path, *args: str) -> dict[str, object]:
 
 
 class FourProductSurfaceTests(unittest.TestCase):
+    def test_paper_run_requires_healthy_live_view_freshness(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            external = root / "external-input"
+            external.mkdir()
+            contract = external / "sentiment.contract.json"
+            csv_file = external / "sentiment.csv"
+            live_connector = external / "sentiment_live.py"
+
+            contract.write_text(json.dumps({
+                "dataset_id": "reference.sentiment.equity.us",
+                "primary_time": "available_time",
+                "grain": {"kind": "event_stream"},
+                "fields": ["available_time", "instrument_id", "sentiment"],
+                "freshness": {"max_age_seconds": 60},
+            }), encoding="utf-8")
+            csv_file.write_text(
+                "available_time,instrument_id,sentiment\n"
+                "2026-01-01T00:00:00Z,equity:US:AAPL,0.4\n",
+                encoding="utf-8",
+            )
+            live_connector.write_text(
+                "def subscribe(params, context):\n"
+                "    yield {'available_time': '2026-01-01T00:00:00Z', 'instrument_id': 'equity:US:AAPL', 'sentiment': 0.4}\n",
+                encoding="utf-8",
+            )
+
+            data = DataProductApi(root)
+            study = StudyProductApi(root)
+            strategy = StrategyProductApi(root)
+            run = RunProductApi(root)
+
+            data.write_file(csv_file, as_dataset="reference.sentiment.equity.us", contract=contract)
+            live_view = data.write_live(live_connector, as_dataset="reference.sentiment.equity.us", contract=contract)
+            study.open("live-freshness-study", hypothesis="fresh live data is required")
+            study.add_data("live-freshness-study", name="sentiment", dataset="reference.sentiment.equity.us")
+            study.freeze("live-freshness-study", version="1.0.0")
+            strategy.open("live-freshness-strategy", from_study="live-freshness-study@1.0.0")
+            strategy_lock = strategy.freeze("live-freshness-strategy", version="1.0.0")
+
+            with self.assertRaisesRegex(ValueError, "paper-live-freshness"):
+                run.start_snapshot("live-freshness-strategy@1.0.0", mode="paper")
+
+            manifest_path = Path(str(live_view["artifact"]))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["freshness_status"] = "healthy"
+            manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            started = run.start_snapshot("live-freshness-strategy@1.0.0", mode="paper")
+
+        self.assertEqual(started["target"]["hash"], strategy_lock["lock_hash"])
+        freshness = started["runtime_contract"]["freshness_gates"][0]
+        self.assertTrue(freshness["passed"])
+        self.assertEqual(freshness["freshness_status"], "healthy")
+        self.assertEqual(freshness["max_age_seconds"], 60)
+
     def test_python_product_apis_share_the_same_artifact_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

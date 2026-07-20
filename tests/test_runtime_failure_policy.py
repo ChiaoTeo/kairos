@@ -173,7 +173,7 @@ class RuntimeFailurePolicyTests(unittest.TestCase):
             path = Path(directory) / "runtime.sqlite3"
             store = SQLiteRuntimeStore(path)
             gateway = SimulatedExecutionAccountGateway(VenueId("simulated"), request().account, clock=FixedClock(NOW))
-            KillSwitch((gateway,), FixedClock(NOW), store).trigger((), "failure matrix drill")
+            KillSwitch((gateway,), FixedClock(NOW), store).trigger((), "failure policy drill")
             restarted = KillSwitch((gateway,), FixedClock(NOW), SQLiteRuntimeStore(path))
             self.assertTrue(restarted.triggered)
             coordinator = ExecutionCoordinator(

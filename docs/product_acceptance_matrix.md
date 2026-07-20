@@ -18,7 +18,7 @@
 
 | 场景 | 产品行为 | Example | 自动化证据 | 状态 |
 |---|---|---|---|---|
-| 1 因子探索 | Sandbox workspace，不产生部署证据 | `examples/research/sma_factor_lifecycle.py` | `test_study_workspace.py` | Passed |
+| 1 因子探索 | Sandbox workspace，不产生部署证据 | `examples/studies/sma_factor_lifecycle.py` | `test_study_workspace.py` | Passed |
 | 2 因子正式化 | Study Candidate、Factor Release、batch/replay parity | 同上 | `test_factor_runtime.py` | Passed |
 | 3 最简策略 | SMA Factor→Strategy→EconomicIntent→Backtest | `examples/backtest/governed_sma.py` | `test_strategy_run_loop.py` | Passed |
 | 4 历史模拟 | Durable Order、Fill Ingestion、Ledger、restart | `examples/runtime/sma_historical_simulation.py` | `test_sma_historical_simulation.py` | Passed |
@@ -29,7 +29,7 @@
 
 首次研究产品入口补充证据：`tutorial sma` 会发布 governed fixture Release；`study inspect/data/profile/scaffold`
 以及 `open_study(...).data.pandas|polars|arrow` 由 `tests/test_study_session.py` 和
-`examples/research/study_dataframe.py` 验收。StudySession 打开时强制核对 Workspace input hash 与 Dataset Release。
+`examples/studies/study_dataframe.py` 验收。StudySession 打开时强制核对 Workspace input hash 与 Dataset Release。
 
 多资产补充证据：`examples/strategy/multi_asset_reference_lifecycle.py` 覆盖 Covered Call、Protective Put、
 Spot/Perpetual Carry、Funding、Corporate Action、Assignment、Conservative/Stress 和 Ledger replay。

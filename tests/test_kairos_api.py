@@ -69,6 +69,17 @@ class KairosApiTests(unittest.TestCase):
         )
         self.assertIn("usage: kairos", completed.stdout)
 
+    def test_python_module_entrypoint_without_command_shows_help(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-m", "kairos"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("usage: kairos", completed.stdout)
+        self.assertIn("{init,data,features", completed.stdout)
+        self.assertEqual(completed.stderr, "")
+
     def test_daily_ohlcv_cli_names_are_primary_and_day_aggs_are_compatibility_aliases(self) -> None:
         completed = subprocess.run(
             [sys.executable, "-m", "kairos", "data", "--help"],

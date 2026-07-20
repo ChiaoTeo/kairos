@@ -62,9 +62,12 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertNotIn("trading*", includes)
         self.assertNotIn("research*", includes)
         self.assertNotIn("studies*", includes)
-        self.assertIn("kairos.research*", excludes)
-        self.assertIn("research*", excludes)
-        self.assertIn("studies*", excludes)
+        self.assertIn("kairos.research", excludes)
+        self.assertIn("kairos.research.*", excludes)
+        self.assertIn("research", excludes)
+        self.assertIn("research.*", excludes)
+        self.assertIn("studies", excludes)
+        self.assertIn("studies.*", excludes)
 
     def test_source_workspace_study_commands_are_hidden_from_product_help(self):
         cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
@@ -454,6 +457,10 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertFalse((ROOT / "examples" / "adapters").exists())
         self.assertTrue((ROOT / "examples" / "connectors" / "reference_connector").exists())
 
+    def test_user_study_examples_use_studies_directory(self):
+        self.assertFalse((ROOT / "examples" / "research").exists())
+        self.assertTrue((ROOT / "examples" / "studies").exists())
+
     def test_user_facing_docs_use_connector_language(self):
         docs = (
             ROOT / "README.md",
@@ -470,6 +477,12 @@ class RepositoryHygieneTests(unittest.TestCase):
             if "Adapter" in text:
                 offenders.append(str(path.relative_to(ROOT)))
         self.assertEqual(offenders, [])
+
+    def test_public_cli_does_not_accept_adapter_argument(self):
+        text = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
+        surface = (ROOT / "kairos" / "product_surface.py").read_text(encoding="utf-8")
+        self.assertNotIn("--adapter", text)
+        self.assertNotIn("args.adapter", surface)
 
     def test_product_docs_use_kairos_cli_name(self):
         docs = [ROOT / "README.md"]
@@ -510,7 +523,16 @@ class RepositoryHygieneTests(unittest.TestCase):
 
     def test_massive_entitlement_diagnostics_is_the_public_cli_name(self):
         cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
-        self.assertIn('"massive-entitlement-diagnostics"', cli)
+        self.assertIn('"provider-entitlement-diagnostics"', cli)
+        self.assertIn('choices=("massive",)', cli)
+        self.assertNotIn('"massive-entitlement-diagnostics"', cli)
+        self.assertNotIn('"massive-fetch"', cli)
+        self.assertNotIn('"massive-flat-file"', cli)
+        self.assertNotIn('"massive-flat-file-batch"', cli)
+        self.assertNotIn('"build-massive-slices"', cli)
+        self.assertNotIn('"sync-massive-reference"', cli)
+        self.assertNotIn('"build-massive-equity-identity"', cli)
+        self.assertNotIn('"quarantine-insecure-massive-cache"', cli)
         self.assertNotIn('"massive-readiness"', cli)
         self.assertFalse((ROOT / "kairos" / "connectors" / "massive" / "readiness.py").exists())
         docs = [

@@ -767,7 +767,7 @@ Massive：
 | 密钥不落盘 | 只读取 `MASSIVE_API_KEY`，Header 鉴权，URL/receipt/异常脱敏测试 |
 | Source 不可变与幂等 | `MassiveVendorArchiveClient`、内容 fingerprint、gzip pages、receipt 和 HTTPS cache gate |
 | Flat File 限额和时段 | `/usage` 服务端额度与本地 150 GB 配置取较小值、纽约 09:30–16:00 禁止、1 MiB 流式写入 |
-| Flat File 年度批次 | `massive-flat-file-batch --start/--end/--max-files` 按 US 交易日历生成 OPRA Day Aggregates key，支持 dry-run、已下载跳过、缓存中状态和内容寻址批次报告 |
+| Flat File 年度批次 | `provider-flat-file-batch --provider massive --start/--end/--max-files` 按 US 交易日历生成 OPRA Day Aggregates key，支持 dry-run、已下载跳过、缓存中状态和内容寻址批次报告 |
 | OPRA 年度 inventory | `SpxwDailyOhlcvPipeline.build_inventory` 以交易日历为预期集合，冻结 date/key/fingerprint/path/bytes/SHA-256 映射并阻断缺日或 hash 冲突 |
 | SPXW Daily OHLCV Curated | `prepare-spxw-daily-ohlcv` 流式过滤 `O:SPXW`，校验 OCC/OHLC/window_start，写月度 ZSTD Parquet 和 0DTE/热门 Call-Put 每日滚动代表序列 |
 | 通用期权根 Daily OHLCV | `prepare-option-daily-ohlcv --option-root` 复用同一 OPRA inventory，为 NVDA 等 OCC root 生成隔离的月度 Parquet |

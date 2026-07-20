@@ -3,7 +3,7 @@
 状态：Proposed  
 版本：1.0  
 基线日期：2026-07-17  
-适用范围：`trading` 全包、实时数据接入、研究、回测、模拟、paper/testnet/live Runtime，以及未来 Python/Rust 混合部署  
+适用范围：`kairos` 全包、实时数据接入、研究、回测、模拟、paper/testnet/live Runtime，以及未来 Python/Rust 混合部署
 目标读者：系统维护者、数据工程人员、策略开发者、执行与基础设施开发者
 
 ## 1. 文档目的

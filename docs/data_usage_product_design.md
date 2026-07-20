@@ -766,7 +766,7 @@ study.freeze(version="1.0.0")
 |---|---|---|
 | Draft | 可以添加/删除数据、因子、标签和实验配置 | 日常探索 |
 | Candidate | 输入解析为候选 Release，生成一致性诊断 | 准备复现或晋级 |
-| Frozen | 数据 Release、因子代码 hash、参数和窗口全部锁定 | 正式报告、策略晋级、回测 |
+| Frozen | 数据 Release、因子代码、参数和窗口形成冻结快照，并记录 hash | 正式报告、策略晋级、回测 |
 | Archived | 只读保留 | 历史复现 |
 
 ### 5.5 冻结内容
@@ -775,7 +775,7 @@ study.freeze(version="1.0.0")
 
 - Study spec hash；
 - 所有 Data Release ID 和 content hash；
-- 所有本地 factor 文件 hash；
+- freeze 时采样的 factor 文件 hash；
 - factor 参数、依赖和输出 schema；
 - Python/package 版本；
 - 查询窗口；
@@ -1204,8 +1204,8 @@ user/
 |---|---|---|
 | Data Source Connector | `user/data_sources/*.py` | Source 归档、identity、schema、quality、Release |
 | Live Source Connector | `user/data_sources/live_*.py` | schema、identity、freshness、Live View、Source 归档 |
-| Study Factor | `studies/<id>/factors/*.py` | 输入声明、输出 schema、hash、point-in-time |
-| Shared Factor | `user/factors_shared/*.py` | 可被多个 Study 引用，冻结时记录 hash |
+| Study Factor | `studies/<id>/factors/*.py` | 输入声明、输出 schema、point-in-time；freeze 时记录 hash |
+| Shared Factor | `user/factors_shared/*.py` | 可被多个 Study 引用，freeze 时记录 hash |
 | Strategy Model | `strategies/<id>/model.py` | 只读 StrategyContext，输出 EconomicIntent |
 | Risk Policy | `strategies/<id>/risk.yaml` | 环境门禁和限额 |
 | Execution Policy | `strategies/<id>/execution.yaml` | 可执行假设、订单样式、venue 能力 |
@@ -1304,13 +1304,24 @@ def decide(context):
   `data_release_manifest.json` 纳入必备元数据，并在 `release.json` 中记录 manifest hash/ref；
 - `DatasetQualityService` 已开始区分 gate 与 diagnostic：artifact/contract/时间语义类检查仍可 fail closed，
   coverage、history length、source receipt、streaming execution 等本地诊断不再默认阻塞 `assessment.passed`；
+- `DataPreparationService` 已开始通过 `DataPromotionPolicyProfile` / `DataPromotionPolicyResult` 显式判断请求的
+  Q2/Q3/Q4 晋级目标：quality report 提供 gate/diagnostic 事实，promotion policy 可按用途选择哪些 diagnostic
+  需要升级为用途门禁；
+- `DataProductContract.capabilities["promotion_policy"]` 已可声明产品默认 promotion policy，DataPreparation 会优先使用
+  产品契约中的 Q2/Q3/Q4 policy profile，再回退到默认宽松策略；
+- 内置 `research-default` / `backtest-default` / `production-default` promotion policy profile 已有只读 registry，
+  产品契约可以直接引用内置 profile 名称；默认 profile 不把本地 diagnostic 自动升级为硬门禁；
+- `LiveViewFreshnessPolicy` / `LiveViewFreshnessGateResult` 已建立最小 freshness gate 模型，区分 Live View
+  已配置 freshness 与 paper/live 所需的 healthy freshness；
+- 四产品 surface 的 `run start --mode paper/live` 已接入最小 freshness gate：Strategy data input 必须存在
+  匹配 DataSet contract 的 healthy Live View，Run Manifest 会记录 `freshness_gates`；
 - Python API：`DataProductApi`、`StudyProductApi`、`StrategyProductApi`、`RunProductApi` 已提供和 CLI 同源的最小调用面；
 - 完整示例：`examples/four_product_user_path.sh`；
 - 自动化验收：`tests/test_four_product_surface.py`。
 
 目标态剩余缺口：
 
-1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型，并接入四产品 surface、`publish_release`、columnar publishing 和 MarketReplayDataset metadata 补全路径；质量报告已开始区分 gate/diagnostic，但 Q3/Q4 promotion policy 和 freshness gate 还没有正式模型化；
+1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型，并接入四产品 surface、`publish_release`、columnar publishing 和 MarketReplayDataset metadata 补全路径；质量报告已开始区分 gate/diagnostic，DataPreparation 已有可配置 promotion policy profile，DataProductContract capabilities 已可声明产品默认 policy，内置 Q2/Q3/Q4 profile registry 已建立，freshness gate 已有最小 policy/result 模型并接入四产品 paper/live run 边界；剩余缺口是 freshness monitor、channel 诊断和实际实时 runtime 还没有完整统一接入该 gate；
 2. 旧 `StudyWorkspace` 仍以单 `input_release_id` 为主模型，新的 Study Product workspace 还没有替换旧模型；
 3. Study Product 的 Draft/Frozen 生命周期已最小落地，但状态机、质量门禁和目录结构还没有统一到正式模型；
 4. 本地 factor 已记录 code hash，但依赖、参数、输出 schema 和 point-in-time 检查还没有正式约定；
@@ -1318,7 +1329,7 @@ def decide(context):
 6. Strategy 已要求从 Frozen Study 打开，但还没有完整自动检查 Data Release hash 与 Factor Output 语义一致；
 7. Study factor 与 Strategy model 的语义一致性还没有自动检查；
 8. Data Product 已有最小 `data download` 和 `data write` 入口，但 download spec、YAML contract、quality report 还没有完整实现；
-9. 实时数据流接入已能生成 Live View manifest，并已有 provider WebSocket/canonical channel 运行基线，但 freshness gate、订阅 API、channel 诊断和历史回放归档还没有完整统一到 DataSet identity；
+9. 实时数据流接入已能生成 Live View manifest，并已有 provider WebSocket/canonical channel 运行基线；四产品 paper/live run 已要求 healthy Live View freshness，但 freshness monitor、订阅 API、channel 诊断和历史回放归档还没有完整统一到 DataSet identity；
 10. Run Product 已有最小 `run start/inspect/replay/compare` API，但还没有接入真实 InputTable、clock、feed 和 execution gateway；
 11. `data.dataset(name)`、`study.data(name)`、`study.factor(name)`、`strategy.decide(context)` 和 `run.start(...)` 这种用户 API 还没有完成；
 12. Factor Code decorator/metadata/hash 协议还没有完成；
@@ -1358,7 +1369,7 @@ def decide(context):
 - 定义 `studies/<study_id>/factors/`；
 - 增加 `kairos study add-factor`；
 - 增加 Factor Code decorator 或 metadata 协议；
-- 记录本地 factor code hash、参数、依赖和输出 schema；
+- freeze 时记录本地 factor code hash、参数、依赖和输出 schema；
 - 区分 notebook exploration artifact、candidate factor、frozen factor 和 published feature；
 - 支持 `study.factor(name)`；
 - 检查 point-in-time、lineage 和 schema。
@@ -1807,7 +1818,7 @@ Run Product 必须输出数据平面或运行契约缺口诊断。
 | Async Live Plane | WebSocket/实时 connector 只能产出 Live View、canonical event、channel metrics 和 capture evidence | Strategy 直接订阅 provider WebSocket 或静默丢 event 时拒绝 paper/live |
 | Study Draft | 可 add-data、add-factor、run | 未声明输入时 factor-run fail closed |
 | Factor Boundary | Exploration Artifact 不能被 strategy bind | 提示先 `study add-factor` |
-| Study Freeze | 生成 `study.lock.json`，含 data/factor hash | hash、schema、quality 缺失时拒绝冻结 |
+| Study Freeze | 生成 `study.lock.json`，含 data/factor hash | 冻结快照缺 hash、schema、quality 时拒绝冻结 |
 | Strategy Open | 只能从 Frozen Study 创建 | Draft Study 拒绝 |
 | Strategy Bind | factor hash 与 Study Lock 一致 | hash 不一致拒绝绑定 |
 | Run Start | 使用 Strategy snapshot、Run Workspace 和统一 InputTable | 缺数据输出 data plane diagnosis |

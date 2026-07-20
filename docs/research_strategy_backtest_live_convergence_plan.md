@@ -115,7 +115,7 @@ Kairos 应被建设为：
 - Runtime Store 和持久订单状态机；
 - Readiness、Reconciliation、Recovery 和 Kill Switch；
 - simulated、IBKR、Binance 等 connector；
-- Golden、failure matrix 和 soak 验收基础。
+- Reference、failure policy 和 soak 验收基础。
 
 ### 策略治理
 

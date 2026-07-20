@@ -119,7 +119,7 @@ class MassiveReferenceTests(unittest.TestCase):
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
                     "--lake-root", temporary,
-                    "data", "build-massive-equity-identity",
+                    "data", "build-provider-equity-identity", "--provider", "massive",
                     "--reference-rows", str(reference_rows),
                     "--ticker-events", str(ticker_events),
                 ]), 0)

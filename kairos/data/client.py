@@ -100,7 +100,7 @@ class ResearchDataClient:
 
     Researchers address datasets by catalog ID/logical alias and never need to know
     whether the physical source is typed Parquet, event Parquet, or a
-    MarketReplayDataset.  Arrow is the native return type; pandas/polars are adapters.
+    MarketReplayDataset.  Arrow is the native return type; pandas/polars are conversion formats.
     """
 
     def __init__(self, root: str | Path = "data", *, catalog_path: str | Path | None = None,

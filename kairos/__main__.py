@@ -264,24 +264,27 @@ def _parser() -> argparse.ArgumentParser:
     ))
     promote_data.add_argument("--actor", required=True)
     promote_data.add_argument("--reason", required=True)
-    massive_fetch = data_actions.add_parser("massive-fetch", help="archive a Massive REST resource through the private server")
-    massive_fetch.add_argument("--resource", choices=("option-contracts", "option-quotes", "option-trades", "aggregates", "option-chain"), required=True)
-    massive_fetch.add_argument("--ticker", help="option ticker for quote/trade or underlying ticker for aggregates")
-    massive_fetch.add_argument("--underlying", help="underlying ticker for contracts or current option-chain snapshot")
-    massive_fetch.add_argument("--start", help="inclusive start date/timestamp")
-    massive_fetch.add_argument("--end", help="exclusive end date/timestamp")
-    massive_fetch.add_argument("--limit", type=int, default=50000)
-    massive_fetch.add_argument("--max-pages", type=int, default=100000, help="fail closed if pagination exceeds this bound")
-    massive_fetch.add_argument("--multiplier", type=int, default=1)
-    massive_fetch.add_argument("--timespan", default="minute")
-    massive_flat = data_actions.add_parser("massive-flat-file", help="inspect or download Massive Flat Files outside NY regular hours")
-    massive_flat.add_argument("--operation", choices=("usage", "status", "download"), required=True)
-    massive_flat.add_argument("--key", help="Flat File key for status/download")
-    massive_flat_batch = data_actions.add_parser("massive-flat-file-batch", help="plan or download a bounded, resumable range of OPRA daily aggregates")
-    massive_flat_batch.add_argument("--start", required=True, help="inclusive trading date YYYY-MM-DD")
-    massive_flat_batch.add_argument("--end", required=True, help="exclusive date YYYY-MM-DD")
-    massive_flat_batch.add_argument("--max-files", type=int, default=5, help="maximum non-local files to inspect/download in this run")
-    massive_flat_batch.add_argument("--dry-run", action="store_true", help="only inspect cache status and write a plan")
+    provider_fetch = data_actions.add_parser("provider-fetch", help="archive a provider REST resource through its governed connector")
+    provider_fetch.add_argument("--provider", choices=("massive",), default="massive")
+    provider_fetch.add_argument("--resource", choices=("option-contracts", "option-quotes", "option-trades", "aggregates", "option-chain"), required=True)
+    provider_fetch.add_argument("--ticker", help="option ticker for quote/trade or underlying ticker for aggregates")
+    provider_fetch.add_argument("--underlying", help="underlying ticker for contracts or current option-chain snapshot")
+    provider_fetch.add_argument("--start", help="inclusive start date/timestamp")
+    provider_fetch.add_argument("--end", help="exclusive end date/timestamp")
+    provider_fetch.add_argument("--limit", type=int, default=50000)
+    provider_fetch.add_argument("--max-pages", type=int, default=100000, help="fail closed if pagination exceeds this bound")
+    provider_fetch.add_argument("--multiplier", type=int, default=1)
+    provider_fetch.add_argument("--timespan", default="minute")
+    provider_flat = data_actions.add_parser("provider-flat-file", help="inspect or download provider flat files outside restricted market hours")
+    provider_flat.add_argument("--provider", choices=("massive",), default="massive")
+    provider_flat.add_argument("--operation", choices=("usage", "status", "download"), required=True)
+    provider_flat.add_argument("--key", help="Flat File key for status/download")
+    provider_flat_batch = data_actions.add_parser("provider-flat-file-batch", help="plan or download a bounded, resumable provider flat-file range")
+    provider_flat_batch.add_argument("--provider", choices=("massive",), default="massive")
+    provider_flat_batch.add_argument("--start", required=True, help="inclusive trading date YYYY-MM-DD")
+    provider_flat_batch.add_argument("--end", required=True, help="exclusive date YYYY-MM-DD")
+    provider_flat_batch.add_argument("--max-files", type=int, default=5, help="maximum non-local files to inspect/download in this run")
+    provider_flat_batch.add_argument("--dry-run", action="store_true", help="only inspect cache status and write a plan")
     prepare_spxw_daily_ohlcv = data_actions.add_parser("prepare-spxw-daily-ohlcv", help="inventory and convert downloaded OPRA daily OHLCV into governed SPXW Parquet")
     prepare_spxw_daily_ohlcv.add_argument("--dataset-id", required=True)
     prepare_spxw_daily_ohlcv.add_argument("--start", required=True, help="inclusive date YYYY-MM-DD")
@@ -306,29 +309,34 @@ def _parser() -> argparse.ArgumentParser:
     prepare_option_close_iv.add_argument("--dividend-yield", type=Decimal, default=Decimal("0.0003"))
     compact_massive = data_actions.add_parser("compact-market-events", help="explicitly compact immutable Parquet event partitions")
     compact_massive.add_argument("--dataset", required=True)
-    massive_entitlement = data_actions.add_parser("massive-entitlement-diagnostics", help="probe private-server entitlement and historical endpoint access")
-    massive_entitlement.add_argument("--underlying", required=True)
-    massive_entitlement.add_argument("--option-ticker", required=True)
-    massive_entitlement.add_argument("--date", required=True)
-    massive_slices = data_actions.add_parser("build-massive-slices", help="build point-in-time MarketReplayDataset slices from Massive canonical events")
-    massive_slices.add_argument("--source-dataset", required=True)
-    massive_slices.add_argument("--output-dataset", required=True)
-    massive_slices.add_argument("--start", required=True)
-    massive_slices.add_argument("--end", required=True)
-    massive_slices.add_argument("--sampling-seconds", type=int, default=60)
-    massive_slices.add_argument("--max-quote-age-seconds", type=int, default=300)
-    massive_slices.add_argument("--risk-free-rate", type=Decimal, default=Decimal("0"), help="continuously compounded annual rate used for put-call parity")
-    massive_slices.add_argument("--split", choices=("development", "validation", "test"), default="development")
-    sync_massive_reference = data_actions.add_parser("sync-massive-reference", help="sync Massive exchanges, conditions, holidays, equity tickers and optional corporate actions")
-    sync_massive_reference.add_argument("--equity-tickers", action="store_true", help="sync active and inactive US common stock ticker reference")
-    sync_massive_reference.add_argument("--active-only", action="store_true", help="only sync currently active equity tickers")
-    sync_massive_reference.add_argument("--ticker")
-    sync_massive_reference.add_argument("--start")
-    sync_massive_reference.add_argument("--end")
-    build_equity_identity = data_actions.add_parser("build-massive-equity-identity", help="build point-in-time Massive equity symbol mappings from reference rows")
+    provider_entitlement = data_actions.add_parser("provider-entitlement-diagnostics", help="probe provider entitlement and historical endpoint access")
+    provider_entitlement.add_argument("--provider", choices=("massive",), default="massive")
+    provider_entitlement.add_argument("--underlying", required=True)
+    provider_entitlement.add_argument("--option-ticker", required=True)
+    provider_entitlement.add_argument("--date", required=True)
+    provider_slices = data_actions.add_parser("build-provider-slices", help="build point-in-time MarketReplayDataset slices from provider canonical events")
+    provider_slices.add_argument("--provider", choices=("massive",), default="massive")
+    provider_slices.add_argument("--source-dataset", required=True)
+    provider_slices.add_argument("--output-dataset", required=True)
+    provider_slices.add_argument("--start", required=True)
+    provider_slices.add_argument("--end", required=True)
+    provider_slices.add_argument("--sampling-seconds", type=int, default=60)
+    provider_slices.add_argument("--max-quote-age-seconds", type=int, default=300)
+    provider_slices.add_argument("--risk-free-rate", type=Decimal, default=Decimal("0"), help="continuously compounded annual rate used for put-call parity")
+    provider_slices.add_argument("--split", choices=("development", "validation", "test"), default="development")
+    sync_provider_reference = data_actions.add_parser("sync-provider-reference", help="sync provider exchanges, conditions, holidays, equity tickers and optional corporate actions")
+    sync_provider_reference.add_argument("--provider", choices=("massive",), default="massive")
+    sync_provider_reference.add_argument("--equity-tickers", action="store_true", help="sync active and inactive US common stock ticker reference")
+    sync_provider_reference.add_argument("--active-only", action="store_true", help="only sync currently active equity tickers")
+    sync_provider_reference.add_argument("--ticker")
+    sync_provider_reference.add_argument("--start")
+    sync_provider_reference.add_argument("--end")
+    build_equity_identity = data_actions.add_parser("build-provider-equity-identity", help="build point-in-time provider equity symbol mappings from reference rows")
+    build_equity_identity.add_argument("--provider", choices=("massive",), default="massive")
     build_equity_identity.add_argument("--reference-rows", type=Path, required=True)
     build_equity_identity.add_argument("--ticker-events", type=Path)
-    data_actions.add_parser("quarantine-insecure-massive-cache", help="move incomplete or non-HTTPS Massive source requests out of Source")
+    quarantine_provider_cache = data_actions.add_parser("quarantine-insecure-provider-cache", help="move incomplete or non-HTTPS provider source requests out of Source")
+    quarantine_provider_cache.add_argument("--provider", choices=("massive",), default="massive")
     features = commands.add_parser("features", help="build reusable feature datasets")
     feature_actions = features.add_subparsers(dest="action", required=True)
     build_features = feature_actions.add_parser("build")
@@ -749,7 +757,12 @@ def _spec(args: argparse.Namespace) -> OptionChainCaptureSpec:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    raw_argv = sys.argv[1:] if argv is None else argv
+    parser = _parser()
+    if not raw_argv:
+        parser.print_help()
+        return 0
+    args = parser.parse_args(raw_argv)
     if args.group == "catalog":
         return _catalog(args)
     if args.group == "account":
@@ -1251,10 +1264,10 @@ def _data(args: argparse.Namespace) -> int:
             args.release, args.status, actor=args.actor, reason=args.reason,
         )
         print(json.dumps(to_primitive(release), ensure_ascii=False, indent=2)); return 0
-    if args.action == "quarantine-insecure-massive-cache":
+    if args.action == "quarantine-insecure-provider-cache":
         moved = MassiveVendorArchiveClient.quarantine_non_https(args.lake_root)
         print(json.dumps({"quarantined": len(moved), "paths": [str(item) for item in moved]}, ensure_ascii=False, indent=2)); return 0
-    if args.action == "sync-massive-reference":
+    if args.action == "sync-provider-reference":
         pipeline = MassiveReferencePipeline(args.lake_root, MassiveClient(MassiveConfig.from_env()))
         result: dict[str, object] = {"code_tables": pipeline.sync_code_tables()}
         if args.equity_tickers:
@@ -1264,7 +1277,7 @@ def _data(args: argparse.Namespace) -> int:
                 raise SystemExit("--start and --end are required with --ticker")
             result["corporate_actions"] = pipeline.sync_corporate_actions(args.ticker, datetime.fromisoformat(args.start), datetime.fromisoformat(args.end))
         print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
-    if args.action == "build-massive-equity-identity":
+    if args.action == "build-provider-equity-identity":
         reference_rows = json.loads(args.reference_rows.read_text(encoding="utf-8"))
         ticker_events = json.loads(args.ticker_events.read_text(encoding="utf-8")) if args.ticker_events else []
         resolver = MassiveEquityIdentityResolver()
@@ -1272,14 +1285,14 @@ def _data(args: argparse.Namespace) -> int:
         manifest = resolver.save(resolved, args.lake_root)
         print(json.dumps(manifest, ensure_ascii=False, indent=2))
         return 0 if not resolved.quarantined else 2
-    if args.action == "build-massive-slices":
+    if args.action == "build-provider-slices":
         dataset = MassiveMarketSnapshotBuilder(args.lake_root, reference_catalog_path=args.reference_catalog_path, dataset_root=args.dataset_root).build(
             args.source_dataset, args.output_dataset, datetime.fromisoformat(args.start), datetime.fromisoformat(args.end),
             sampling_seconds=args.sampling_seconds, max_quote_age_seconds=args.max_quote_age_seconds,
             split=args.split, risk_free_rate=args.risk_free_rate)
         print(f"{dataset.manifest.dataset_id}: slices={dataset.manifest.slice_count} hash={dataset.manifest.content_hash}")
         return 0
-    if args.action == "massive-entitlement-diagnostics":
+    if args.action == "provider-entitlement-diagnostics":
         report = MassiveEntitlementDiagnostics(MassiveClient(MassiveConfig.from_env())).check(
             underlying=args.underlying, option_ticker=args.option_ticker, date=args.date)
         print(json.dumps({
@@ -1293,14 +1306,14 @@ def _data(args: argparse.Namespace) -> int:
     if args.action == "compact-market-events":
         result = ParquetMarketEventRepository(Path(args.lake_root) / "canonical" / "market").compact(args.dataset)
         print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
-    if args.action == "massive-fetch":
+    if args.action == "provider-fetch":
         client = MassiveClient(MassiveConfig.from_env())
         archive = MassiveVendorArchiveClient(args.lake_root, client)
         resource, params = _massive_request(args)
         result = archive.fetch_pages(resource, params, max_pages=args.max_pages)
         print(json.dumps({"fingerprint": result.fingerprint, "directory": str(result.directory), "receipt": result.receipt}, ensure_ascii=False, indent=2))
         return 0
-    if args.action == "massive-flat-file":
+    if args.action == "provider-flat-file":
         client = MassiveClient(MassiveConfig.from_env())
         flat = MassiveFlatFileClient(args.lake_root, client)
         if args.operation == "usage":
@@ -1310,7 +1323,7 @@ def _data(args: argparse.Namespace) -> int:
         if args.operation == "status":
             print(json.dumps(flat.cache_status(args.key), ensure_ascii=False, indent=2)); return 0
         print(flat.download(args.key)); return 0
-    if args.action == "massive-flat-file-batch":
+    if args.action == "provider-flat-file-batch":
         flat = MassiveFlatFileClient(args.lake_root, MassiveClient(MassiveConfig.from_env()))
         report = MassiveFlatFileBatchDownloader(flat).download_range(
             date.fromisoformat(args.start), date.fromisoformat(args.end), max_files=args.max_files, dry_run=args.dry_run,

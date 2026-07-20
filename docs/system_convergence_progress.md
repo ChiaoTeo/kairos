@@ -391,7 +391,7 @@ DurableExecutionIngestionService 和 RuntimeRecoveryService，并验证成交后
 Ledger、Portfolio 和 Risk，且 Venue balance/position 对账一致。它完成 L2，但不替代 L3 crash-window
 矩阵或 L4 Paper/Testnet 长时间运行验收。
 
-## Runtime L3 Failure Matrix
+## Runtime L3 Failure Policy
 
 ```text
 Matrix: runtime-l3-failure-policy-v1

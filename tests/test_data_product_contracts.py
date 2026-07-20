@@ -15,6 +15,7 @@ from kairos.data.contracts import (
     DataProductContract, DataReleaseManifest, DataSetContractArtifact, DatasetStorageKind, LiveViewManifest,
     QualityLevel,
 )
+from kairos.data.freshness import PAPER_LIVE_FRESHNESS_POLICY, evaluate_live_view_freshness
 from kairos.data.products import (
     BTC_SPOT_DAILY, US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MASSIVE_CORPORATE_ACTIONS,
     US_EQUITY_MASSIVE_IDENTITY,
@@ -166,6 +167,42 @@ class DataProductContractTests(unittest.TestCase):
             "2026-07-20T00:00:00+00:00",
         ).manifest_hash)
         self.assertEqual(live_manifest.to_primitive()["kind"], "live_view_manifest")
+
+    def test_live_view_freshness_gate_separates_configured_from_paper_live(self) -> None:
+        contract_hash = DataSetContractArtifact.from_product_contract(BTC_SPOT_DAILY).contract_hash
+        configured = LiveViewManifest(
+            str(BTC_SPOT_DAILY.key),
+            "live:configured",
+            contract_hash,
+            "connector-hash",
+            "available_time",
+            ("available_time", "close"),
+            {"channel_contract": "BoundedEventChannel", "freshness": {"max_age_seconds": 60}},
+            {"kind": "live_connector"},
+            "configured",
+            "2026-07-20T00:00:00+00:00",
+        )
+        configured_gate = evaluate_live_view_freshness(configured)
+        paper_live_gate = evaluate_live_view_freshness(configured, policy=PAPER_LIVE_FRESHNESS_POLICY)
+
+        self.assertTrue(configured_gate.passed)
+        self.assertEqual(configured_gate.max_age_seconds, 60)
+        self.assertFalse(paper_live_gate.passed)
+
+        healthy = LiveViewManifest(
+            str(BTC_SPOT_DAILY.key),
+            "live:healthy",
+            contract_hash,
+            "connector-hash",
+            "available_time",
+            ("available_time", "close"),
+            {"channel_contract": "BoundedEventChannel", "freshness": {"max_age_seconds": 60}},
+            {"kind": "live_connector"},
+            "healthy",
+            "2026-07-20T00:00:00+00:00",
+        )
+
+        self.assertTrue(evaluate_live_view_freshness(healthy, policy=PAPER_LIVE_FRESHNESS_POLICY).passed)
 
 
 if __name__ == "__main__":

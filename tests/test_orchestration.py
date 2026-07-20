@@ -164,15 +164,15 @@ class OrchestrationTests(unittest.TestCase):
                 KillSwitch((self.gateway,)), path,
             )
             original = first.submit(request(), NOW)
-            restarted_adapter = SimulatedExecutionAccountGateway(VENUE, ACCOUNT)
+            restarted_gateway = SimulatedExecutionAccountGateway(VENUE, ACCOUNT)
             restarted = coordinator(
-                ExecutionRouter(self.catalog, (restarted_adapter,)),
-                {ACCOUNT: ReconciliationService(self.ledger, restarted_adapter)},
-                KillSwitch((restarted_adapter,)), path,
+                ExecutionRouter(self.catalog, (restarted_gateway,)),
+                {ACCOUNT: ReconciliationService(self.ledger, restarted_gateway)},
+                KillSwitch((restarted_gateway,)), path,
             )
             recovered = restarted.submit(request(), NOW)
             self.assertEqual(recovered, original)
-            self.assertEqual(restarted_adapter.orders, {})
+            self.assertEqual(restarted_gateway.orders, {})
 
     def test_kill_switch_cancels_orders_and_allows_only_reduce_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

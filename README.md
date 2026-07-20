@@ -21,10 +21,10 @@ python3 -m pip install kairos
 mkdir my-kairos-project
 cd my-kairos-project
 kairos init
-python research/starter.py
+python studies/starter.py
 ```
 
-`kairos init` 会创建 `kairos.toml`、`pyproject.toml`、`data/`、`research/`、`strategies/` 和一个可运行的 starter 脚本。默认不会覆盖已有文件；需要重写模板时显式使用 `kairos init --force`。
+`kairos init` 会创建 `kairos.toml`、`pyproject.toml`、`data/`、`studies/`、`strategies/` 和一个可运行的 starter 脚本。默认不会覆盖已有文件；需要重写模板时显式使用 `kairos init --force`。
 
 安装包只包含 Kairos 产品库和 CLI，不包含本仓库顶层 `studies/` 源码研究工作区。用户自己的研究代码应放在 `kairos init` 创建的项目目录中。
 
@@ -362,7 +362,7 @@ Massive REST/Flat File 请求只允许通过 `https://api.massiveprivateserver.s
 export MASSIVE_API_KEY='...'
 
 ./pyenv/bin/pip install -e '.[data,massive]'
-./pyenv/bin/kairos data massive-fetch \
+./pyenv/bin/kairos data provider-fetch --provider massive \
   --resource option-contracts --underlying SPX --start 2026-07-15
 
 ./pyenv/bin/kairos data plan \
@@ -377,7 +377,7 @@ export MASSIVE_API_KEY='...'
   --start 2026-07-15T13:30:00+00:00 \
   --end 2026-07-15T20:00:00+00:00
 
-./pyenv/bin/kairos data build-massive-slices \
+./pyenv/bin/kairos data build-provider-slices --provider massive \
   --source-dataset options.us.massive.spxw.20260715.v1 \
   --output-dataset spxw.massive.20260715.v1 \
   --start 2026-07-15T13:30:00+00:00 \
@@ -392,9 +392,9 @@ manifest 和质量信息会明确标记该来源。要求官方 SPX 收盘价或
 Flat File 下载器会在纽约工作日 09:30–16:00 拒绝启动，并在下载前检查 150 GB/月用量上限：
 
 ```bash
-./pyenv/bin/kairos data massive-flat-file --operation usage
-./pyenv/bin/kairos data massive-flat-file --operation status --key '<file-key>'
-./pyenv/bin/kairos data massive-flat-file --operation download --key '<file-key>'
+./pyenv/bin/kairos data provider-flat-file --provider massive --operation usage
+./pyenv/bin/kairos data provider-flat-file --provider massive --operation status --key '<file-key>'
+./pyenv/bin/kairos data provider-flat-file --provider massive --operation download --key '<file-key>'
 ```
 
 OPRA Day Aggregates 支持按 `[start,end)` 交易日范围分批规划和下载。默认每次最多处理 5 个尚未
@@ -402,11 +402,11 @@ OPRA Day Aggregates 支持按 `[start,end)` 交易日范围分批规划和下载
 
 ```bash
 # 盘中可安全执行：只查询前三个待处理文件的缓存状态并写批次报告
-./pyenv/bin/kairos data massive-flat-file-batch \
+./pyenv/bin/kairos data provider-flat-file-batch --provider massive \
   --start 2026-01-01 --end 2026-07-16 --max-files 3 --dry-run
 
 # 纽约 16:00 后执行；每次最多下载 5 个新文件
-./pyenv/bin/kairos data massive-flat-file-batch \
+./pyenv/bin/kairos data provider-flat-file-batch --provider massive \
   --start 2026-01-01 --end 2026-07-16 --max-files 5
 ```
 

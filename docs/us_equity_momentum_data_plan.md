@@ -965,10 +965,10 @@ next_close_to_close_return
 
 当前进展：已增加 Massive active/inactive 普通股 ticker reference 同步入口，结果会保存为内容寻址的
 `reference/provider=massive/equity_tickers/version=<hash>/records.json`，可作为后续
-`build-massive-equity-identity --reference-rows` 的输入：
+`build-provider-equity-identity --provider massive --reference-rows` 的输入：
 
 ```bash
-./pyenv/bin/python -m kairos data sync-massive-reference --equity-tickers
+./pyenv/bin/python -m kairos data sync-provider-reference --provider massive --equity-tickers
 ```
 
 该入口解决“全市场股票清单如何进入本地 Source/Reference”的前置问题，但还没有完成全历史 ticker

@@ -155,7 +155,7 @@ class UsEquityMomentumDiagnostics:
                 "warning",
                 "missing",
                 "Massive equity identity mapping exists and records ticker changes/reuse",
-                "Run kairos data build-massive-equity-identity with active/inactive reference rows and ticker events",
+                "Run kairos data build-provider-equity-identity --provider massive with active/inactive reference rows and ticker events",
             )
         latest = json.loads(manifests[-1].read_text(encoding="utf-8"))
         return UsEquityReadinessCheck(
@@ -265,7 +265,7 @@ class UsEquityMomentumDiagnostics:
                     "release": "missing",
                 },
                 "Identity/reference input is registered as an immutable reference release",
-                "Run data build-massive-equity-identity or rerun data prepare-us-equity-momentum with a clean identity directory",
+                "Run data build-provider-equity-identity --provider massive or rerun data prepare-us-equity-momentum with a clean identity directory",
             )
         passed = identity.content_hash == used_hash
         return UsEquityReadinessCheck(

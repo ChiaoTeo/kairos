@@ -32,7 +32,7 @@ class ExamplesSuiteTests(unittest.TestCase):
         )))
 
     def test_sma_research_candidate_and_factor_release_lifecycle(self):
-        result = run_example("examples/research/sma_factor_lifecycle.py")
+        result = run_example("examples/studies/sma_factor_lifecycle.py")
         self.assertTrue(result["sandbox_workspace"])
         self.assertTrue(result["frozen_candidate"])
         self.assertTrue(result["factor_release"])

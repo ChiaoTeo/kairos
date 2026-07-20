@@ -20,4 +20,4 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["kairos*"]
-exclude = ["kairos.research*", "research*", "studies*"]
+exclude = ["kairos.research", "kairos.research.*", "research", "research.*", "studies", "studies.*"]

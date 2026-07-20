@@ -189,7 +189,7 @@ print(df[["available_time", "close", "spread", "next_return"]].tail(20))
 正式的 batch/replay 一致性示例仍可直接运行：
 
 ```bash
-./pyenv/bin/python examples/research/sma_factor_lifecycle.py
+./pyenv/bin/python examples/studies/sma_factor_lifecycle.py
 ```
 
 重点不是只看 `true`，而是理解两个结果：
