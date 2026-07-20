@@ -2,49 +2,20 @@
 
 from __future__ import annotations
 
-import importlib
-import sys
+from pathlib import Path
 
-from kairos.research_platform import (
-    MarketDataType,
-    OptionChainCaptureSpec,
-    SMA_TUTORIAL_RELEASE_ID,
-    StudyData,
-    StudyProfile,
-    StudySession,
-    StudyWorkspace,
-    StudyWorkspaceRepository,
-    StudyWorkspaceStatus,
-    ensure_sma_tutorial_dataset,
-    open_study,
-)
+from .session import StudyData, StudyProfile, StudySession, open_study
+from .spec import MarketDataType, OptionChainCaptureSpec
+from .workspace import StudyWorkspace, StudyWorkspaceRepository, StudyWorkspaceStatus
 
 
-_ALIASED_MODULES = (
-    "data_store",
-    "features",
-    "normalized_series",
-    "option_capture",
-    "option_snapshot_analysis",
-    "option_universe_selector",
-    "report",
-    "retention",
-    "series",
-    "session",
-    "snapshot",
-    "spec",
-    "tutorial_data",
-    "validation",
-    "workspace",
-)
+SMA_TUTORIAL_RELEASE_ID = "fixture:sma-bars-v1"
 
 
-def _install_research_platform_aliases() -> None:
-    for name in _ALIASED_MODULES:
-        sys.modules.setdefault(f"{__name__}.{name}", importlib.import_module(f"kairos.research_platform.{name}"))
-
-
-_install_research_platform_aliases()
+def ensure_sma_tutorial_dataset(root: str | Path):
+    """Publish the bundled SMA fixture as a governed Dataset Release."""
+    from .tutorial_data import ensure_sma_tutorial_dataset as ensure
+    return ensure(root)
 
 
 __all__ = [

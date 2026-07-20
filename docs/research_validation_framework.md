@@ -24,7 +24,7 @@
 通用能力与具体研究分离：
 
 ```text
-kairos/research/validation/
+kairos/research_platform/validation/
   contracts.py       # 验证结果、状态和证据等级
   split.py           # 时间切分和 walk-forward
   predictability.py  # 相关性、条件效应和预测检验
@@ -48,7 +48,7 @@ kairos/strategies/
   # 已冻结规则、准备回测或部署的策略实现
 ```
 
-`kairos/research/validation` 只保存可跨策略复用的方法和数据契约。具体资产、特征、阈值、期权腿和研究结论保留在 `studies/<study>`。成交、保证金和资金曲线由 `kairos/backtest` 管理，不在统计验证库中重复实现。
+`kairos/research_platform/validation` 只保存可跨策略复用的方法和数据契约。具体资产、特征、阈值、期权腿和研究结论保留在 `studies/<study>`。成交、保证金和资金曲线由 `kairos/backtest` 管理，不在统计验证库中重复实现。
 
 ### 2.1 长期目标架构
 

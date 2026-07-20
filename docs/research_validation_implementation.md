@@ -6,14 +6,14 @@
 
 |规范对象|实现|
 |---|---|
-|研究注册、多维状态、资本、样本和数据缺口|`kairos/research/validation/contracts.py`|
-|产品、收益来源和阶段门禁|`kairos/research/validation/protocols.py`, `gates.py`|
-|有效样本量与统计功效|`kairos/research/validation/samples.py`|
-|数据缺口补齐计划|`kairos/research/validation/data_gaps.py`|
-|标准产物与audit hash|`kairos/research/validation/artifacts.py`|
-|允许声明的结论|`kairos/research/validation/claims.py`|
-|测试窗口消耗|`kairos/research/validation/test_windows.py`|
-|项目治理审计|`kairos/research/validation/audit.py`|
+|研究注册、多维状态、资本、样本和数据缺口|`kairos/research_platform/validation/contracts.py`|
+|产品、收益来源和阶段门禁|`kairos/research_platform/validation/protocols.py`, `gates.py`|
+|有效样本量与统计功效|`kairos/research_platform/validation/samples.py`|
+|数据缺口补齐计划|`kairos/research_platform/validation/data_gaps.py`|
+|标准产物与audit hash|`kairos/research_platform/validation/artifacts.py`|
+|允许声明的结论|`kairos/research_platform/validation/claims.py`|
+|测试窗口消耗|`kairos/research_platform/validation/test_windows.py`|
+|项目治理审计|`kairos/research_platform/validation/audit.py`|
 |StrategySpec与EconomicIntent|`kairos/domain/strategy_contract.py`|
 |ExecutionPolicy|`kairos/execution/policy.py`|
 |策略到EconomicIntent适配|`kairos/strategies/runtime.py`|
