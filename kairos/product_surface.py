@@ -2304,6 +2304,42 @@ def _run_input_artifacts(target_kind: str, target: dict[str, Any]) -> dict[str, 
     return {"data": data, "inputs": inputs}
 
 
+def _run_target_workspace_evidence(
+    root: Path,
+    target_kind: str,
+    target_id: str,
+    target: dict[str, Any],
+    target_hash: str,
+) -> dict[str, object]:
+    if target_kind == "study":
+        source = _study_file(root, target_id)
+        current = _read_json(source) if source.exists() else {}
+        current_hash = _stable_hash(current) if current else ""
+        return {
+            "workspace_source": str(source),
+            "workspace_hash": current_hash,
+            "workspace_dirty": current_hash != target_hash,
+        }
+    source = _strategy_file(root, target_id)
+    if not source.exists():
+        return {
+            "workspace_source": str(source),
+            "workspace_hash": "",
+            "workspace_dirty": False,
+        }
+    current = _read_json(source)
+    return {
+        "workspace_source": str(source),
+        "workspace_hash": _stable_hash(current),
+        "workspace_dirty": _strategy_workspace_differs_from_lock(current, target),
+    }
+
+
+def _strategy_workspace_differs_from_lock(workspace: dict[str, Any], lock: dict[str, Any]) -> bool:
+    compared_fields = ("derived_from", "data", "inputs", "model", "risk", "execution")
+    return any(workspace.get(field, {}) != lock.get(field, {}) for field in compared_fields)
+
+
 def _paper_live_subscription_bindings(root: Path, target: dict[str, Any]) -> tuple[dict[str, object], ...]:
     results = []
     for name, data in sorted(target.get("data", {}).items()):

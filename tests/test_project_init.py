@@ -21,7 +21,7 @@ class KairosProjectInitTests(unittest.TestCase):
             self.assertTrue((root / "kairos.toml").exists())
             self.assertTrue((root / ".env.example").exists())
             self.assertTrue((root / "pyproject.toml").exists())
-            self.assertTrue((root / "config" / "study.json").exists())
+            self.assertFalse((root / "config").exists())
             self.assertFalse((root / "config" / "research.json").exists())
             self.assertTrue((root / "studies" / "starter.py").exists())
             self.assertTrue((root / "strategies" / "starter_sma.py").exists())
@@ -33,6 +33,12 @@ class KairosProjectInitTests(unittest.TestCase):
             self.assertIn("[providers.massive]", config)
             self.assertIn('api_key = "env:MASSIVE_API_KEY"', config)
             self.assertIn("[data]", config)
+            self.assertIn('default_quality = "Q2"', config)
+            self.assertIn("[execution]", config)
+            self.assertIn("[cli]", config)
+            self.assertIn('default_dataset = "fixture:sma-bars-v1"', config)
+            self.assertIn('default_strategy = "sma-cross-v1"', config)
+            self.assertIn(".env", (root / ".gitignore").read_text(encoding="utf-8"))
 
             readme = root / "README.md"
             readme.write_text("custom notes\n", encoding="utf-8")
@@ -76,6 +82,26 @@ class KairosProjectInitTests(unittest.TestCase):
                 env=env,
             )
             self.assertIn("final_equity", starter.stdout)
+
+    def test_kairos_init_accepts_positional_project_directory_and_writes_config(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "positional-project"
+            completed = subprocess.run(
+                [sys.executable, "-m", "kairos", "--format", "json", "init", str(root), "--name", "Positional Desk"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            payload = json.loads(completed.stdout)
+
+            self.assertEqual(payload["name"], "positional-desk")
+            self.assertTrue((root / "kairos.toml").exists())
+            self.assertTrue((root / ".env.example").exists())
+            self.assertFalse((root / "config").exists())
+            config = (root / "kairos.toml").read_text(encoding="utf-8")
+            self.assertIn("[providers.binance.testnet]", config)
+            self.assertIn('api_secret = "env:BINANCE_TESTNET_API_SECRET"', config)
+            self.assertIn("kairos configure massive", "\n".join(payload["next_steps"]))
 
     def test_source_repository_default_name_remains_kairos_even_when_directory_is_trader(self) -> None:
         with TemporaryDirectory() as directory:

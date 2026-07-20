@@ -145,19 +145,30 @@ class ProductCliTests(unittest.TestCase):
                  "strategy", "freeze", "cli-model-strategy", "--version", "1.0.0"],
                 cwd=ROOT, check=False, capture_output=True, text=True,
             )
+            old_artifact = Path(model["artifact_path"])
+            model_file.write_text("def decide(context):\n    return {'intent': 'dirty-draft'}\n", encoding="utf-8")
+            edited_model = command(root, "strategy", "set-model-code", "cli-model-strategy", str(model_file),
+                                   "--metadata", str(metadata_file))
             started = command(root, "run", "start", "--snapshot", "cli-model-strategy@1.0.0",
                               "--mode", "backtest", "--execute-strategy")
             decision = json.loads(Path(started["outputs"]["strategy_decision"]).read_text(encoding="utf-8"))
+            run_snapshot = json.loads(Path(started["target"]["snapshot_artifact"]).read_text(encoding="utf-8"))
             snapshot_artifact_exists = Path(started["target"]["snapshot_artifact"]).exists()
+            old_artifact_exists = old_artifact.exists()
 
         self.assertEqual(model["operation"], "set-model-code")
         self.assertEqual(len(model["model_contract_hash"]), 64)
+        self.assertTrue(old_artifact_exists)
+        self.assertNotEqual(edited_model["artifact_path"], model["artifact_path"])
         self.assertEqual(lock["model"]["model_contract_hash"], model["model_contract_hash"])
         self.assertEqual(duplicate.returncode, 2)
         self.assertIn("Strategy Lock version already exists", json.loads(duplicate.stderr)["error"]["message"])
         self.assertEqual(started["target"]["snapshot_hash"], lock["lock_hash"])
         self.assertTrue(started["target"]["snapshot_source"].endswith("strategies/cli-model-strategy/locks/1.0.0/strategy.lock.json"))
+        self.assertTrue(started["target"]["workspace_source"].endswith("strategies/cli-model-strategy/strategy.json"))
+        self.assertTrue(started["target"]["workspace_dirty"])
         self.assertTrue(snapshot_artifact_exists)
+        self.assertEqual(run_snapshot["model"]["artifact_path"], model["artifact_path"])
         self.assertEqual(started["runtime_contract"]["strategy_decision_execution"]["decision_hash"], decision["decision_hash"])
         self.assertEqual(decision["decision"]["close"], "100")
 

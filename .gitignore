@@ -10,3 +10,7 @@ __pycache__/
 .pytest_cache/
 build/
 .DS_Store
+.env
+.kairos.toml
+/config
+.kairos

@@ -154,16 +154,18 @@ class RepositoryHygieneTests(unittest.TestCase):
             "def _default_project_name(root: Path) -> str:",
             're.search(r\'(?m)^name\\s*=\\s*"(?:kairos|kairospy)"\'',
             'dependencies = ["kairospy>=0.1.0"]',
-            'Path("config/study.json")',
             'Path("studies/starter.py")',
             "python studies/starter.py",
             "[study]",
             "This is a Kairos quantitative study, backtest, and execution project.",
+            "Configure providers only in `kairos.toml`",
         )
         for marker in required:
             self.assertIn(marker, source)
         forbidden = (
             'dependencies = ["trader',
+            'Path("config")',
+            'Path("config/study.json")',
             'Path("config/research.json")',
             'Path("research',
             "python research/",

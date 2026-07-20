@@ -3,13 +3,14 @@
   "kairos_version": "0.1.0",
   "name": "kairos",
   "next_steps": [
-    "export MASSIVE_API_KEY=...",
+    "kairos configure massive",
+    "kairos configure binance --environment testnet",
     "kairos doctor",
+    "kairos data catalog --refresh",
     "python studies/starter.py"
   ],
   "reused": [
     ".kairos/",
-    "config/",
     "data/",
     "data/backtests/",
     "data/catalog/",
@@ -23,7 +24,6 @@
     "pyproject.toml",
     ".gitignore",
     "README.md",
-    "config/study.json",
     "studies/starter.py",
     "strategies/__init__.py",
     "strategies/starter_sma.py",

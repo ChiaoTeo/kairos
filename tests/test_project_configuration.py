@@ -230,6 +230,37 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             self.assertEqual(payload["mode"], "backtest")
             self.assertNotIn("Kairos Run Control", machine.stdout)
 
+    def test_data_catalog_human_output_and_json_output_are_separate(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+
+            human = subprocess.run(
+                [sys.executable, "-m", "kairos", "--lake-root", str(root / "lake"), "data", "catalog", "--refresh"],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertIn("Kairos Data Catalog", human.stdout)
+            self.assertIn("Binance BTC/USDT daily OHLCV", human.stdout)
+            self.assertIn("Primary Time", human.stdout)
+
+            machine = subprocess.run(
+                [
+                    sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root / "json-lake"),
+                    "data", "catalog", "--refresh",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            payload = json.loads(machine.stdout)
+            self.assertIn("products", payload)
+            self.assertNotIn("Kairos Data Catalog", machine.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

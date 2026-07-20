@@ -114,6 +114,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--quiet", action="store_true", help="suppress successful product command output")
     commands = parser.add_subparsers(dest="group", required=True)
     init = commands.add_parser("init", help="create a Kairos project in any local directory")
+    init.add_argument("target_path", nargs="?", type=Path, help="project directory, e.g. kairos init my-desk")
     init.add_argument("--target", type=Path, default=Path("."), help="project directory; defaults to the current directory")
     init.add_argument("--name", help="project name; defaults to the target directory name")
     init.add_argument("--force", action="store_true", help="overwrite existing scaffold files")
@@ -745,6 +746,7 @@ def _parser() -> argparse.ArgumentParser:
                            help="execute a bound Strategy model: supervised runtime for paper/live, decide(context) for user model backtests")
     run_start.add_argument("--feed-runtime-seconds", type=float, default=5.0,
                            help="duration for --execute-feeds/--execute-strategy supervised runtime")
+    _add_run_control_argument(run_start)
     run_backtest_generic = run_actions.add_parser("backtest", help="run a Strategy Release through the unified backtest entry")
     run_backtest_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
     _add_run_control_argument(run_backtest_generic)
@@ -1210,6 +1212,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if payload.get("ready", True) else 2
     if args.group == "init":
         from kairos.project import initialize_project, render_project_init
+        if getattr(args, "target_path", None) is not None:
+            args.target = args.target_path
         if args.interactive:
             args.target = Path(_prompt_text("Project directory", str(args.target)))
             args.name = _prompt_text("Project name", args.name or args.target.name or "kairos-project")
@@ -1393,7 +1397,7 @@ def _product_command(args: argparse.Namespace) -> int:
     try:
         _validate_strategy_scoped_run(args)
         if _should_render_run_control(args):
-            print(render_run_control(initial_run_control_state(str(getattr(args, "strategy", "unknown")), args.action)))
+            print(render_run_control(initial_run_control_state(_run_control_target(args), args.action)))
         payload = handlers[(args.group, args.action)](args)
     except GracefulShutdown as error:
         print(f"Stopped cleanly: {error}", file=sys.stderr)
@@ -1407,18 +1411,33 @@ def _product_command(args: argparse.Namespace) -> int:
     if args.format == "json":
         print(json.dumps(to_primitive(payload), ensure_ascii=False, indent=2, sort_keys=True))
     elif _is_run_execution(args):
-        print(render_run_summary(str(getattr(args, "strategy", "unknown")), payload))
+        print(render_run_summary(_run_control_target(args), payload))
     else:
         print(render_product_result(args.group, args.action, payload, resolve_language(args.lang)))
     return 0
 
 
 def _is_run_execution(args: argparse.Namespace) -> bool:
-    return args.group == "run" and args.action in {"backtest", "simulate", "paper", "shadow"}
+    if args.group != "run":
+        return False
+    if args.action in {"backtest", "simulate", "paper", "shadow"}:
+        return True
+    return args.action == "start" and (
+        bool(getattr(args, "execute_strategy", False)) or bool(getattr(args, "execute_feeds", False))
+    )
 
 
 def _should_render_run_control(args: argparse.Namespace) -> bool:
     return _is_run_execution(args) and bool(getattr(args, "control", False)) and args.format != "json" and not args.quiet
+
+
+def _run_control_target(args: argparse.Namespace) -> str:
+    return str(
+        getattr(args, "strategy", None)
+        or getattr(args, "snapshot", None)
+        or getattr(args, "study", None)
+        or "unknown"
+    )
 
 
 def _validate_strategy_scoped_run(args: argparse.Namespace) -> None:

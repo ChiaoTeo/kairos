@@ -47,8 +47,10 @@ def initialize_project(target: str | Path = ".", *, name: str | None = None, for
         created=tuple(created),
         reused=tuple(reused),
         next_steps=(
-            "export MASSIVE_API_KEY=...",
+            "kairos configure massive",
+            "kairos configure binance --environment testnet",
             "kairos doctor",
+            "kairos data catalog --refresh",
             "python studies/starter.py",
         ),
     )
@@ -85,7 +87,6 @@ def render_project_init(result: ProjectInitResult) -> str:
 def _directories() -> tuple[Path, ...]:
     return (
         Path(".kairos"),
-        Path("config"),
         Path("data"),
         Path("data/backtests"),
         Path("data/catalog"),
@@ -104,7 +105,6 @@ def _files(project_name: str) -> tuple[tuple[Path, str], ...]:
         (Path("pyproject.toml"), _pyproject_toml(project_name)),
         (Path(".gitignore"), _gitignore()),
         (Path("README.md"), _readme(project_name)),
-        (Path("config/study.json"), _study_config(project_name)),
         (Path("studies/starter.py"), _starter_script()),
         (Path("strategies/__init__.py"), ""),
         (Path("strategies/starter_sma.py"), _starter_strategy()),
@@ -154,23 +154,38 @@ def _default_project_name(root: Path) -> str:
 
 
 def _kairos_toml(project_name: str) -> str:
-    return f"""[project]
+    return f"""# Kairos project configuration.
+# Secrets should normally stay in environment variables and be referenced as env:NAME.
+
+[project]
 name = "{project_name}"
 timezone = "UTC"
 
 [data]
+# All relative paths are resolved from this project directory.
 lake_root = "data"
 dataset_root = "data/curated"
 catalog_path = "data/catalog/instruments.json"
 reference_catalog_path = "data/reference/catalog.json"
 event_log_path = "data/events/kairos.jsonl"
+default_quality = "Q2"
+default_provider = "auto"
 
 [study]
 default_study = "starter"
+default_dataset = "fixture:sma-bars-v1"
+default_strategy = "sma-cross-v1"
 
 [execution]
 default_environment = "simulated"
 live_trading_enabled = false
+paper_account_id = "kairos-paper"
+shadow_account_id = "kairos-shadow"
+
+[cli]
+format = "text"
+language = "auto"
+run_control = true
 
 [providers.massive]
 api_key = "env:MASSIVE_API_KEY"
@@ -198,6 +213,9 @@ BINANCE_TESTNET_API_SECRET=
 
 BINANCE_LIVE_API_KEY=
 BINANCE_LIVE_API_SECRET=
+
+# Optional runtime overrides.
+KAIROS_LAKE_ROOT=data
 """
 
 
@@ -218,6 +236,7 @@ def _gitignore() -> str:
 *.py[cod]
 .pytest_cache/
 .venv/
+.env
 data/backtests/*
 data/events/*
 data/source/*
@@ -240,17 +259,8 @@ python studies/starter.py
 ```
 
 Project data lives under `data/`. Keep study code in `studies/` and reusable strategy code in `strategies/`.
-Configure providers in `kairos.toml`; credentials should normally be referenced with `env:VARIABLE_NAME`.
+Configure providers only in `kairos.toml`; credentials should normally be referenced with `env:VARIABLE_NAME`.
 """
-
-
-def _study_config(project_name: str) -> str:
-    return json.dumps({
-        "project": project_name,
-        "lake_root": "data",
-        "default_dataset": "fixture:sma-bars-v1",
-        "default_strategy": "sma-cross-v1",
-    }, indent=2, sort_keys=True) + "\n"
 
 
 def _starter_script() -> str:

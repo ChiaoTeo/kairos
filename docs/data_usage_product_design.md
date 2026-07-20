@@ -1431,8 +1431,9 @@ def decide(context):
 - `kairos strategy set-model-code <strategy_id> model.py --metadata <model.metadata.yaml>` 已把用户区 `model.py`
   作为 Strategy Model Contract 读入 workspace，校验 model metadata 声明的 inputs 必须来自 Strategy Lock 的
   data/factor input；当 metadata 以 object 形式为 input 声明 `fields` / `primary_time` 时，已对 Strategy
-  input schema 做最小匹配检查，并把 `input_contracts` 纳入 `model_contract_hash`；注册时会把 `model.py`
-  复制为 Strategy workspace 受管 artifact，`run start` 不重新读取本地 Draft `model.py`；
+  input schema 做最小匹配检查，并把 `input_contracts` 纳入 `model_contract_hash`；注册时会按代码 hash 把
+  `model.py` 复制为 Strategy workspace 受管 artifact，后续本地编辑或再次 `set-model-code` 不会覆盖旧
+  Strategy Lock 引用的模型工件，`run start` 不重新读取本地 Draft `model.py`；
 - `kairos run start --snapshot <strategy@version> --mode backtest --execute-strategy` 已支持用户
   `model.py:decide(context)` 的最小执行路径：context 只暴露 Strategy Lock 声明的输入，Data input 和已发布
   Feature Release 的 Factor input 以 `InputTableRef` 读取冻结 Data Release，decision 和 `decision_hash`
@@ -1441,7 +1442,8 @@ def decide(context):
   Data Release evidence，又能通过 `rows()` / `pandas()` / `arrow()` 读取冻结 release；`study add-data`
   已把 Data Release 的 `primary_time` / `fields` schema evidence 带入 Study/Strategy；
 - `kairos run start/inspect/replay/compare`：已支持从 Study 或 Strategy snapshot 创建 Run Workspace 和 Run Manifest；
-  manifest target 已记录 snapshot source、run-local snapshot artifact 和 snapshot hash；
+  manifest target 已记录 snapshot source、run-local snapshot artifact 和 snapshot hash；Strategy snapshot run
+  会额外记录当前 Strategy workspace source/hash 以及 `workspace_dirty`，但不因本地 workspace 已有后续编辑而阻塞运行；
 - Strategy user model backtest 执行失败时，Run Product 已写出最小 `run.data_plane_diagnostic`，例如未发布
   contract-only Factor 被 `context.input(...).rows()` 读取时输出 `factor_runtime_missing_input` 和下一步
   `study publish-factor` 提示；CLI 路径保留非零退出，并在 Run Workspace 中留下同一份
@@ -1500,7 +1502,8 @@ def decide(context):
   simulated account state、open orders 和 strategy position ownership 一致；live execution 仍保持未绑定 fail closed；
 - 本地可编辑文件不做持续 hash 校验：Draft workspace 中的 `model.py`、connector 和临时文件以路径作为编辑引用；
   只有 Data Release、Live View、Study Lock、Strategy Lock、Run Manifest、promotion evidence 这些跨产品冻结/发布边界记录
-  hash。`run start --execute-strategy` 只消费 Strategy Lock 的 model 声明，不重新 hash 本地 `model.py`；
+  hash。Provider/download spec 是 Data Product artifact，不另起运行配置；credential/config 永远以本地
+  `kairos.toml` 为准，并支持 `env:` 间接引用。`run start --execute-strategy` 只消费 Strategy Lock 的 model 声明，不重新 hash 本地 `model.py`；
 - `RuntimeFeedPlan.managed_services(...)` 已能把 feed runtime plan 适配为 `ManagedServiceSpec`，交由
   `AsyncKairosRuntime` 监督启动；未绑定真实 connector runner 时会 fail closed；
 - `RuntimeFeedPlan.managed_service_bundle(...)` 已能把 feed connector runner 和 freshness monitor runner 按

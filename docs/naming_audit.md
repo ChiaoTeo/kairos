@@ -596,7 +596,7 @@ Wave 0 命名冻结
 
 1. 构建 wheel / sdist 后检查分发文件清单，确认只包含 `kairos*` 包，不包含顶层 `studies/`、Notebook、旧 `research/` 或旧 `trading/`。
 2. 在干净临时环境中执行 `pip install kairospy`，确认只安装 `kairos` console script，不安装 `trader`。
-3. 在任意空目录执行 `kairos init`，确认生成 `kairos.toml`、`.kairos/project.json`、`studies/starter.py` 和 `config/study.json`，且不生成 `research/` 或 `config/research.json`。
+3. 在任意空目录执行 `kairos init`，确认生成 `kairos.toml`、`.kairos/project.json` 和 `studies/starter.py`，且不生成 `config/study.json`、`research/` 或 `config/research.json`；项目配置只以 `kairos.toml` 为准。
 4. 在该外部项目目录运行 starter，确认用户无需停留在源码仓库即可开始自己的 Kairos 量化项目。
 
 ## 本项目当前做得好的命名
