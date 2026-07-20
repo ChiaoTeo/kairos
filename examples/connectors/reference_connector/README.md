@@ -14,7 +14,7 @@
 
 ```bash
 ./pyenv/bin/python examples/connectors/reference_connector/verify_contract.py \
-  --command './target/release/kairos-binance-gateway --contract-vectors examples/connectors/reference_connector/contract_vectors.json'
+  --command './target/release/kairospy-binance-gateway --contract-vectors examples/connectors/reference_connector/contract_vectors.json'
 ```
 
 接入约束：

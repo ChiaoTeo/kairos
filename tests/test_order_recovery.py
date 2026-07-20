@@ -7,18 +7,18 @@ import tempfile
 import unittest
 from uuid import UUID
 
-from kairos.accounting.ledger import LedgerService
-from kairos.ports import (
+from kairospy.accounting.ledger import LedgerService
+from kairospy.ports import (
     Environment, OrderAck, RecoveredExecution, VenueOrderRecovery, VenueOrderStatus,
 )
-from kairos.connectors.simulated import SimulatedExecutionAccountGateway
-from kairos.domain.execution import TradeExecution, TradeSide
-from kairos.domain.identity import AssetId, VenueId
-from kairos.domain.ledger import Ledger
-from kairos.execution.ingestion import DurableExecutionIngestionService
-from kairos.execution.order_state import DurableOrderStatus
-from kairos.execution.recovery import VenueOrderRecoveryService
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
+from kairospy.domain.execution import TradeExecution, TradeSide
+from kairospy.domain.identity import AssetId, VenueId
+from kairospy.domain.ledger import Ledger
+from kairospy.execution.ingestion import DurableExecutionIngestionService
+from kairospy.execution.order_state import DurableOrderStatus
+from kairospy.execution.recovery import VenueOrderRecoveryService
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 from tests.test_durable_execution_ingestion import catalog
 from tests.test_runtime_store import request
 

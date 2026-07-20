@@ -6,9 +6,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.ports import Environment
-from kairos.application import ApplicationConfig, FixedClock, RuntimePaths
-from kairos.orchestration.monitoring import OperationalMonitor
+from kairospy.ports import Environment
+from kairospy.application import ApplicationConfig, FixedClock, RuntimePaths
+from kairospy.orchestration.monitoring import OperationalMonitor
 
 
 class ApplicationFoundationTests(unittest.TestCase):

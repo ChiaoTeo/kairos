@@ -2,8 +2,8 @@ import unittest
 from hashlib import sha256
 import json
 
-from kairos.domain.strategy_contract import StrategyLifecycle
-from kairos.strategies.promotion import evaluate_promotion_artifacts
+from kairospy.domain.strategy_contract import StrategyLifecycle
+from kairospy.strategies.promotion import evaluate_promotion_artifacts
 
 
 class StrategyPromotionGateTest(unittest.TestCase):

@@ -1,6 +1,6 @@
-from kairos import __version__
-from kairos.data import DatasetClient
-from kairos.data.products import BTC_SPOT_DAILY
+from kairospy import __version__
+from kairospy.data import DatasetClient
+from kairospy.data.products import BTC_SPOT_DAILY
 
 
 data = DatasetClient("data")

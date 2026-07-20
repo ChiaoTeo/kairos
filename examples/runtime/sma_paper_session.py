@@ -12,7 +12,7 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 
-from kairos.product_workflow import replay_sma_capture,run_sma_paper_workflow
+from kairospy.product_workflow import replay_sma_capture,run_sma_paper_workflow
 
 
 def run(root:Path)->dict[str,object]:

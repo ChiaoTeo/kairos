@@ -3,9 +3,9 @@ from tempfile import TemporaryDirectory
 import json
 import unittest
 
-from kairos.storage.data_lake import write_daily_dataset
-from kairos.data import DataCatalog, DatasetRelease
-from kairos.data.products import BTC_IV_RV_DAILY, BTC_SPOT_DAILY
+from kairospy.storage.data_lake import write_daily_dataset
+from kairospy.data import DataCatalog, DatasetRelease
+from kairospy.data.products import BTC_IV_RV_DAILY, BTC_SPOT_DAILY
 
 
 def register_managed(catalog, dataset):

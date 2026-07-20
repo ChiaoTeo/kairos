@@ -10,28 +10,28 @@ from contextlib import redirect_stdout
 from io import StringIO
 import json
 
-from kairos.ports import Environment
-from kairos.connectors.simulated import SimulatedExecutionAccountGateway
-from kairos.application import (
+from kairospy.ports import Environment
+from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
+from kairospy.application import (
     ApplicationConfig, FixedClock, RuntimePaths, RuntimeRecoveryService,
     RuntimeStatus, RuntimeSupervisor, KairosApplication,
     write_soak_artifact,
 )
-from kairos.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, VenueId
-from kairos.domain.identity import InstrumentId
-from kairos.domain.product import CryptoSpotSpec, ProductType
-from kairos.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, ReferenceCatalogRepository, RouteId
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, VenueId
+from kairospy.domain.identity import InstrumentId
+from kairospy.domain.product import CryptoSpotSpec, ProductType
+from kairospy.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, ReferenceCatalogRepository, RouteId
 from tests.reference_support import publish_test_instrument
-from kairos.strategies.specs import register_builtin_strategies
-from kairos.__main__ import main
-from kairos.domain.strategy_contract import StrategyLifecycle
-from kairos.strategies.promotion import evaluate_promotion_artifacts
-from kairos.domain.ledger import Ledger
-from kairos.execution.recovery import OrderRecoveryReport
-from kairos.orchestration.kill_switch import KillSwitch
-from kairos.orchestration.monitoring import OperationalMonitor
-from kairos.orchestration.reconciliation import ReconciliationService
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.strategies.specs import register_builtin_strategies
+from kairospy.__main__ import main
+from kairospy.domain.strategy_contract import StrategyLifecycle
+from kairospy.strategies.promotion import evaluate_promotion_artifacts
+from kairospy.domain.ledger import Ledger
+from kairospy.execution.recovery import OrderRecoveryReport
+from kairospy.orchestration.kill_switch import KillSwitch
+from kairospy.orchestration.monitoring import OperationalMonitor
+from kairospy.orchestration.reconciliation import ReconciliationService
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 from tests.test_durable_execution_ingestion import catalog
 from tests.test_runtime_store import request
 

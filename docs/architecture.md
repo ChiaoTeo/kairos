@@ -30,7 +30,7 @@ normalized market/order/execution/lifecycle events
 - 余额、持仓、费用、Funding、公司行为和结算都由不可变 Ledger transaction 重建；
 - study、backtest、simulation、paper/testnet 和 live fill 最终进入同一个 `LedgerService` reducer。
 
-旧 `kairos/core`、旧单币种 Portfolio 和旧 broker facade 已删除。
+旧 `kairospy/core`、旧单币种 Portfolio 和旧 broker facade 已删除。
 
 ## 2. 产品与 Venue
 
@@ -131,7 +131,7 @@ SPXW `BacktestEngine` 使用 Catalog 和 Ledger-backed `BacktestPortfolio`，保
 标准验收命令：
 
 ```bash
-./pyenv/bin/python -m compileall -q kairos tests
+./pyenv/bin/python -m compileall -q kairospy tests
 ./pyenv/bin/python -m unittest discover -s tests -v
 git diff --check
 ```

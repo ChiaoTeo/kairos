@@ -1,21 +1,21 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
-from kairos.accounting.portfolio import PortfolioSnapshot, Position
-from kairos.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairos.domain.product import ContractType, PerpetualSpec, ProductType
-from kairos.reference import (
+from kairospy.accounting.portfolio import PortfolioSnapshot, Position
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.domain.product import ContractType, PerpetualSpec, ProductType
+from kairospy.reference import (
     BrokerId, EconomicProduct, ExecutionRoute, InstrumentDefinition,
     InstrumentLifecycle, InstrumentReference, ListingDefinition, ListingId,
     ProductId, ReferenceCatalog, ReferenceRole, ReferenceTarget, RouteId,
     TradingRules,
 )
-from kairos.risk.view import build_risk_view
+from kairospy.risk.view import build_risk_view
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)

@@ -3,12 +3,12 @@ from __future__ import annotations
 import unittest
 from decimal import Decimal
 
-from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
-from kairos.features import FactorQuality,OptionSkewFactorConfig,OptionSkewFactorRuntime
-from kairos.pricing import OptionValuationService
-from kairos.backtest.engine import BacktestEngine
-from kairos.backtest.result import BacktestConfig
-from kairos.strategies.bull_put_spread import BullPutSpreadConfig,BullPutSpreadStrategy
+from kairospy.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
+from kairospy.features import FactorQuality,OptionSkewFactorConfig,OptionSkewFactorRuntime
+from kairospy.pricing import OptionValuationService
+from kairospy.backtest.engine import BacktestEngine
+from kairospy.backtest.result import BacktestConfig
+from kairospy.strategies.bull_put_spread import BullPutSpreadConfig,BullPutSpreadStrategy
 
 
 class OptionSkewFactorTests(unittest.TestCase):

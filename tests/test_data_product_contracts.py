@@ -6,21 +6,21 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.data.bootstrap import (
+from kairospy.data.bootstrap import (
     configured_product_specs, default_provider_registry, register_configured_products,
     register_default_products,
 )
-from kairos.data.catalog import DataCatalog
-from kairos.data.contracts import (
+from kairospy.data.catalog import DataCatalog
+from kairospy.data.contracts import (
     DataProductContract, DataReleaseManifest, DataSetContractArtifact, DatasetStorageKind, LiveViewManifest,
     QualityLevel,
 )
-from kairos.data.freshness import (
+from kairospy.data.freshness import (
     PAPER_LIVE_FRESHNESS_POLICY, evaluate_live_view_freshness, live_view_channel_diagnostics,
     find_live_view_manifest, live_view_freshness_evidence, live_view_manifest_path, update_live_view_manifest_freshness,
     resolve_live_view_subscription, write_live_view_manifest,
 )
-from kairos.data.products import (
+from kairospy.data.products import (
     BTC_SPOT_DAILY, US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MASSIVE_CORPORATE_ACTIONS,
     US_EQUITY_MASSIVE_IDENTITY,
     US_EQUITY_MASSIVE_RAW_DAILY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY, US_EQUITY_MOMENTUM_DAILY,
@@ -30,7 +30,7 @@ from kairos.data.products import (
 
 class DataProductContractTests(unittest.TestCase):
     def test_builtin_specs_are_the_catalog_and_provider_registry_contract(self) -> None:
-        self.assertFalse((Path("kairos") / "data" / "models.py").exists())
+        self.assertFalse((Path("kairospy") / "data" / "models.py").exists())
         self.assertIs(DataProductContract, type(BTC_SPOT_DAILY))
         with tempfile.TemporaryDirectory() as directory:
             catalog = register_default_products(directory)

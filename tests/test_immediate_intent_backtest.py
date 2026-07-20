@@ -2,13 +2,13 @@ from decimal import Decimal
 import unittest
 
 from examples.backtest.governed_sma import canonical_events, fixture_bars
-from kairos.application import run_immediate_target_backtest
-from kairos.execution.intent_status import IntentStatus
-from kairos.features import SmaFactorConfig, SmaFactorRuntime
-from kairos.market_data import IterableEventSource
-from kairos.strategies import GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig
-from kairos.strategies.specs import sma_strategy_spec
-from kairos.strategies.sma_cross_study_backtest import SmaCrossConfig
+from kairospy.application import run_immediate_target_backtest
+from kairospy.execution.intent_status import IntentStatus
+from kairospy.features import SmaFactorConfig, SmaFactorRuntime
+from kairospy.market_data import IterableEventSource
+from kairospy.strategies import GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig
+from kairospy.strategies.specs import sma_strategy_spec
+from kairospy.strategies.sma_cross_study_backtest import SmaCrossConfig
 
 
 class ImmediateIntentBacktestTests(unittest.IsolatedAsyncioTestCase):

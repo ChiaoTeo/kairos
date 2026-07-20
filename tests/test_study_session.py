@@ -11,19 +11,19 @@ from unittest.mock import patch
 import tempfile
 import unittest
 
-from kairos.__main__ import main
-from kairos.connectors.massive.equity_daily_ohlcv import MassiveEquityDailyOhlcvPipeline
-from kairos.data import DataCatalog, DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel
-from kairos.data.bootstrap import register_configured_products, register_default_products
-from kairos.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
-from kairos.study_platform import StudyWorkspace, StudyWorkspaceRepository, ensure_sma_tutorial_dataset, open_study
-from kairos.study_platform.tutorial_data import tutorial_sma_bars
+from kairospy.__main__ import main
+from kairospy.connectors.massive.equity_daily_ohlcv import MassiveEquityDailyOhlcvPipeline
+from kairospy.data import DataCatalog, DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel
+from kairospy.data.bootstrap import register_configured_products, register_default_products
+from kairospy.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
+from kairospy.study_platform import StudyWorkspace, StudyWorkspaceRepository, ensure_sma_tutorial_dataset, open_study
+from kairospy.study_platform.tutorial_data import tutorial_sma_bars
 from tests.test_massive_daily_ohlcv import _EquitySource
 
 
 class StudySessionTests(unittest.TestCase):
     def test_open_study_is_a_static_public_symbol_for_ide_navigation(self) -> None:
-        self.assertEqual(open_study.__module__, "kairos.study_platform.session")
+        self.assertEqual(open_study.__module__, "kairospy.study_platform.session")
 
     def _study(self, root: Path):
         release = ensure_sma_tutorial_dataset(root)
@@ -373,8 +373,8 @@ class StudySessionTests(unittest.TestCase):
             catalog.save()
 
             with (
-                patch("kairos.__main__.MassiveConfig.from_env", return_value=object()),
-                patch("kairos.__main__.MassiveVendorArchiveClient", return_value=_CorporateActionArchive(root)),
+                patch("kairospy.__main__.MassiveConfig.from_env", return_value=object()),
+                patch("kairospy.__main__.MassiveVendorArchiveClient", return_value=_CorporateActionArchive(root)),
                 StringIO() as output,
                 redirect_stdout(output),
             ):

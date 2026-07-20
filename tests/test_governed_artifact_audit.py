@@ -7,11 +7,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairos.__main__ import main
-from kairos.data import (
+from kairospy.__main__ import main
+from kairospy.data import (
     DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease, DatasetStatus, QualityLevel,
 )
-from kairos.data.artifact_audit import audit_governed_artifact
+from kairospy.data.artifact_audit import audit_governed_artifact
 
 
 class GovernedArtifactAuditTests(unittest.TestCase):

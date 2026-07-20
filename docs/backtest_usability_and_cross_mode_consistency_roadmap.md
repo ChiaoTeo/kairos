@@ -2,7 +2,7 @@
 
 状态：Proposed  
 日期：2026-07-19  
-适用范围：`kairos.data`、`kairos.features`、`kairos.strategies`、`kairos.backtest`、`kairos.application`、`kairos.market_data`、`kairos.execution`、CLI、Examples 和运行验收体系
+适用范围：`kairospy.data`、`kairospy.features`、`kairospy.strategies`、`kairospy.backtest`、`kairospy.application`、`kairospy.market_data`、`kairospy.execution`、CLI、Examples 和运行验收体系
 
 ## 1. 文档目的
 
@@ -34,7 +34,7 @@
 目标开发体验：
 
 ```python
-from kairos import Kairos
+from kairospy import Kairos
 
 result = Kairos("./data").backtest(
     strategy="sma-cross-v1@1.2.0",
@@ -55,7 +55,7 @@ result.explain(at="2025-03-01T08:00:00Z")
 对应 CLI：
 
 ```bash
-kairos backtest run \
+kairospy backtest run \
   --strategy sma-cross-v1@1.2.0 \
   --dataset market.binance.btcusdt.1h@2026-07-01 \
   --start 2024-01-01 --end 2026-01-01 \
@@ -205,10 +205,10 @@ Factor、Strategy、EconomicIntent 和核心风控定义不得因运行模式而
 在输入能力满足时，应支持：
 
 ```bash
-kairos strategy promote <strategy-release> --to historical-simulation
-kairos strategy promote <strategy-release> --to shadow
-kairos strategy promote <strategy-release> --to paper
-kairos strategy promote <strategy-release> --to limited-live
+kairospy strategy promote <strategy-release> --to historical-simulation
+kairospy strategy promote <strategy-release> --to shadow
+kairospy strategy promote <strategy-release> --to paper
+kairospy strategy promote <strategy-release> --to limited-live
 ```
 
 晋级命令不自动绕过门禁，只负责运行检查、生成报告并在全部满足时发布目标环境部署声明。
@@ -221,7 +221,7 @@ kairos strategy promote <strategy-release> --to limited-live
 
 - 新增稳定的 `BacktestRequest`、`BacktestRunner`、`BacktestResultView`；
 - 建立 `Kairos.backtest()` facade；
-- 建立统一 `kairos backtest run|inspect|compare|replay` CLI；
+- 建立统一 `kairospy backtest run|inspect|compare|replay` CLI；
 - 自动解析 Strategy Release、Factor Binding、Dataset Release 和 Execution Profile；
 - 提供结构化配置文件，并允许 CLI 参数覆盖；
 - 统一输出 summary、trades、equity、drawdown、exposure、fees 和 attribution；

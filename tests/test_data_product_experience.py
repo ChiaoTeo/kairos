@@ -7,12 +7,12 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.__main__ import main
-from kairos.data import (
+from kairospy.__main__ import main
+from kairospy.data import (
     DataCatalog, DataDiagnosticsService, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease,
     DatasetStatus, QualityLevel,
 )
-from kairos.storage.data_lake import write_daily_dataset
+from kairospy.storage.data_lake import write_daily_dataset
 
 
 class DataProductExperienceTests(unittest.TestCase):

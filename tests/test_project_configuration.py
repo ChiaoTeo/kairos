@@ -8,8 +8,8 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairos.configuration import KairosProjectConfig, set_config_value, unset_config_value
-from kairos.project import initialize_project
+from kairospy.configuration import KairosProjectConfig, set_config_value, unset_config_value
+from kairospy.project import initialize_project
 
 
 class KairosProjectConfigurationTests(unittest.TestCase):
@@ -39,9 +39,9 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             initialize_project(root, name="Config Desk")
             path = root / "kairos.toml"
 
-            set_config_value(path, "providers.massive.api_key", "env:KAIROS_MASSIVE_KEY")
+            set_config_value(path, "providers.massive.api_key", "env:KAIROSPY_MASSIVE_KEY")
             config = KairosProjectConfig.load(path)
-            self.assertEqual(config.get("providers.massive.api_key"), "env:KAIROS_MASSIVE_KEY")
+            self.assertEqual(config.get("providers.massive.api_key"), "env:KAIROSPY_MASSIVE_KEY")
 
             self.assertTrue(unset_config_value(path, "providers.massive.api_key"))
             config = KairosProjectConfig.load(path)
@@ -56,7 +56,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             env["MASSIVE_API_KEY"] = "secret"
 
             show = subprocess.run(
-                [sys.executable, "-m", "kairos", "--format", "json", "config", "show"],
+                [sys.executable, "-m", "kairospy", "--format", "json", "config", "show"],
                 cwd=root,
                 check=True,
                 capture_output=True,
@@ -68,7 +68,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             self.assertEqual(payload["providers"]["massive"]["api_key"], "env:MASSIVE_API_KEY")
 
             doctor = subprocess.run(
-                [sys.executable, "-m", "kairos", "--format", "json", "doctor"],
+                [sys.executable, "-m", "kairospy", "--format", "json", "doctor"],
                 cwd=root,
                 check=True,
                 capture_output=True,
@@ -87,7 +87,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
 
             subprocess.run(
-                [sys.executable, "-m", "kairos", "configure", "massive", "--api-key-env", "MY_MASSIVE_KEY"],
+                [sys.executable, "-m", "kairospy", "configure", "massive", "--api-key-env", "MY_MASSIVE_KEY"],
                 cwd=root,
                 check=True,
                 capture_output=True,
@@ -96,7 +96,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             )
             subprocess.run(
                 [
-                    sys.executable, "-m", "kairos", "configure", "binance",
+                    sys.executable, "-m", "kairospy", "configure", "binance",
                     "--environment", "live", "--api-key-env", "MY_BINANCE_KEY", "--api-secret-env", "MY_BINANCE_SECRET",
                 ],
                 cwd=root,
@@ -120,7 +120,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             env["MASSIVE_API_KEY"] = "secret"
 
             doctor = subprocess.run(
-                [sys.executable, "-m", "kairos", "doctor"],
+                [sys.executable, "-m", "kairospy", "doctor"],
                 cwd=root,
                 check=True,
                 capture_output=True,
@@ -132,7 +132,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             self.assertIn("OK", doctor.stdout)
 
             status = subprocess.run(
-                [sys.executable, "-m", "kairos", "project", "status"],
+                [sys.executable, "-m", "kairospy", "project", "status"],
                 cwd=root,
                 check=True,
                 capture_output=True,
@@ -143,7 +143,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             self.assertIn("output-desk", status.stdout)
 
             show = subprocess.run(
-                [sys.executable, "-m", "kairos", "config", "show"],
+                [sys.executable, "-m", "kairospy", "config", "show"],
                 cwd=root,
                 check=True,
                 capture_output=True,
@@ -161,7 +161,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
 
             subprocess.run(
-                [sys.executable, "-m", "kairos", "configure", "--interactive"],
+                [sys.executable, "-m", "kairospy", "configure", "--interactive"],
                 cwd=root,
                 input="binance\ntestnet\nPIPE_BINANCE_KEY\nPIPE_BINANCE_SECRET\n",
                 check=True,
@@ -182,7 +182,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
 
             subprocess.run(
-                [sys.executable, "-m", "kairos", "init", "--interactive"],
+                [sys.executable, "-m", "kairospy", "init", "--interactive"],
                 cwd=root,
                 input=f"{target}\nInteractive Desk\nno\n",
                 check=True,
@@ -202,7 +202,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
 
             human = subprocess.run(
                 [
-                    sys.executable, "-m", "kairos", "run", "backtest",
+                    sys.executable, "-m", "kairospy", "run", "backtest",
                     "--fixture", "--fast", "5", "--slow", "15", "--artifact-root", str(root / "artifacts"),
                     "--control",
                 ],
@@ -217,7 +217,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
 
             machine = subprocess.run(
                 [
-                    sys.executable, "-m", "kairos", "--format", "json", "run", "backtest",
+                    sys.executable, "-m", "kairospy", "--format", "json", "run", "backtest",
                     "--fixture", "--fast", "5", "--slow", "15", "--artifact-root", str(root / "json-artifacts"),
                     "--control",
                 ],
@@ -237,7 +237,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
 
             human = subprocess.run(
-                [sys.executable, "-m", "kairos", "--lake-root", str(root / "lake"), "data", "catalog", "--refresh"],
+                [sys.executable, "-m", "kairospy", "--lake-root", str(root / "lake"), "data", "catalog", "--refresh"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -249,7 +249,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
 
             machine = subprocess.run(
                 [
-                    sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root / "json-lake"),
+                    sys.executable, "-m", "kairospy", "--format", "json", "--lake-root", str(root / "json-lake"),
                     "data", "catalog", "--refresh",
                 ],
                 check=True,

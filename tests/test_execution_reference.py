@@ -1,19 +1,19 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
-from kairos.ports import Environment, OrderAck, OrderRequest
-from kairos.domain.capability import ExecutionCapabilities, OrderType
-from kairos.domain.execution import TradeSide
-from kairos.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairos.domain.order import ExecutionInstructions, TimeInForce
-from kairos.domain.product import EquitySpec, ProductType
-from kairos.execution.router import ExecutionRouter
-from kairos.reference import (
+from kairospy.ports import Environment, OrderAck, OrderRequest
+from kairospy.domain.capability import ExecutionCapabilities, OrderType
+from kairospy.domain.execution import TradeSide
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.domain.order import ExecutionInstructions, TimeInForce
+from kairospy.domain.product import EquitySpec, ProductType
+from kairospy.execution.router import ExecutionRouter
+from kairospy.reference import (
     BrokerId, EconomicProduct, ExecutionRoute, InstrumentDefinition,
     InstrumentLifecycle, ListingDefinition, ListingId, ProductId,
     ReferenceCatalog, RouteId, TradingRules,

@@ -5,14 +5,14 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.data import (
+from kairospy.data import (
     DataCatalog, DataProductContract, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease, DatasetStatus,
     DataPreparationService, DataPromotionPolicyProfile, DatasetQualityService, QualityLevel, DatasetClient,
     STUDY_DEFAULT_POLICY,
     data_promotion_policy_profile,
 )
-from kairos.storage.data_lake import write_daily_dataset
-from kairos.__main__ import main
+from kairospy.storage.data_lake import write_daily_dataset
+from kairospy.__main__ import main
 from contextlib import redirect_stdout
 from io import StringIO
 

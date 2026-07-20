@@ -5,19 +5,19 @@ from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from kairos.domain.identity import AccountKey, AccountType, AssetId, VenueId
-from kairos.reference import (
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, VenueId
+from kairospy.reference import (
     NetworkAssetDefinition, NetworkDefinition, NetworkType, RailId, RailType,
     ReferenceCatalog, SettlementRail,
 )
-from kairos.reference.identity import LocationId, NetworkAssetId, NetworkId
-from kairos.treasury import (
+from kairospy.reference.identity import LocationId, NetworkAssetId, NetworkId
+from kairospy.treasury import (
     AmountMode, AssetMovementIntent, BankAccountDestination,
     CryptoAddressDestination, FeePolicy, InternalAccountDestination,
     TransferOperationStore, TreasuryCoordinator, TreasuryPlanner,
 )
-from kairos.treasury.transfer_gateway import SimulatedTransferGateway
-from kairos.treasury.policy import TransferPolicy
+from kairospy.treasury.transfer_gateway import SimulatedTransferGateway
+from kairospy.treasury.policy import TransferPolicy
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)

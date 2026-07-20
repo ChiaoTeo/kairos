@@ -6,10 +6,10 @@ from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
-from kairos.domain.market_data import Quote
-from kairos.study_platform.data_store import MarketSnapshotCollectionPublisher, merge_datasets
+from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
+from kairospy.domain.market_data import Quote
+from kairospy.study_platform.data_store import MarketSnapshotCollectionPublisher, merge_datasets
 
 
 class StudyDataStoreTests(unittest.TestCase):

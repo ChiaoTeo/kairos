@@ -10,9 +10,9 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 
-from kairos.backtest.reference_scenarios import run_reference_scenario
-from kairos.strategies import StrategyRegistry
-from kairos.strategies.specs import register_builtin_strategies
+from kairospy.backtest.reference_scenarios import run_reference_scenario
+from kairospy.strategies import StrategyRegistry
+from kairospy.strategies.specs import register_builtin_strategies
 
 
 def run(root:Path)->dict[str,object]:

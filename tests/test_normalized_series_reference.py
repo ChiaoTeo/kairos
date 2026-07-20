@@ -6,14 +6,14 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairos.domain.identity import AssetId, InstrumentId, VenueId
-from kairos.domain.market_data import Quote
-from kairos.domain.product import ContractType, FutureSpec, ProductType
-from kairos.reference import ReferenceCatalog
+from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.domain.identity import AssetId, InstrumentId, VenueId
+from kairospy.domain.market_data import Quote
+from kairospy.domain.product import ContractType, FutureSpec, ProductType
+from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
-from kairos.study_platform.normalized_series import NormalizedSeriesCaptureService
-from kairos.study_platform.series import SeriesCaptureSpec
+from kairospy.study_platform.normalized_series import NormalizedSeriesCaptureService
+from kairospy.study_platform.series import SeriesCaptureSpec
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)

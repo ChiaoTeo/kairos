@@ -4,13 +4,13 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
 
-from kairos.domain.identity import AssetId, InstrumentId, VenueId
-from kairos.domain.product import (
+from kairospy.domain.identity import AssetId, InstrumentId, VenueId
+from kairospy.domain.product import (
     EquitySpec, ExerciseStyle, ListedOptionSpec, OptionRight, ProductType,
     SettlementSession, SettlementType,
 )
-from kairos.pricing import PricingContextResolver
-from kairos.reference import ReferenceCatalog
+from kairospy.pricing import PricingContextResolver
+from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
 

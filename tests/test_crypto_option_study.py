@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta, timezone
 import unittest
 
-from kairos.connectors.deribit.trade_history import normalize_deribit_trades
-from kairos.features.volatility import build_term_skew_panel
+from kairospy.connectors.deribit.trade_history import normalize_deribit_trades
+from kairospy.features.volatility import build_term_skew_panel
 
 
 class CryptoOptionStudyTest(unittest.TestCase):

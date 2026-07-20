@@ -12,7 +12,7 @@ except ImportError:
 if pandas is not None:
     from studies.spxw_put_skew.study import StudyConfig, analyze_hypothesis, build_panel, execute_study
     from tests.test_options_study_end_to_end import internally_priceable_spxw_dataset
-    from kairos.study_platform.data_store import CollectionManifest, CollectionSession
+    from kairospy.study_platform.data_store import CollectionManifest, CollectionSession
 
 
 @unittest.skipIf(pandas is None, "install the notebook optional dependencies")

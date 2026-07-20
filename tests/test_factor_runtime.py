@@ -6,7 +6,7 @@ import tempfile
 import unittest
 
 from examples.backtest.governed_sma import canonical_events, fixture_bars
-from kairos.features import (
+from kairospy.features import (
     FactorQuality, FactorRegistry, SmaFactorConfig, SmaFactorRuntime, batch_sma_factors,
     snapshots_hash,
 )

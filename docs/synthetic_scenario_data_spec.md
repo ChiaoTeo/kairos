@@ -4,8 +4,8 @@
 
 ## 1. 权威实现
 
-- 生成器：`kairos.backtest.synthetic_scenarios.build_synthetic_backtest_dataset`
-- 场景枚举：`kairos.backtest.synthetic_scenarios.SyntheticScenario`
+- 生成器：`kairospy.backtest.synthetic_scenarios.build_synthetic_backtest_dataset`
+- 场景枚举：`kairospy.backtest.synthetic_scenarios.SyntheticScenario`
 - JSON Schema：`tests/fixtures/backtest/dataset.schema.json`
 - 场景期望：`tests/fixtures/backtest/scenarios.json`
 
@@ -93,7 +93,7 @@ MarketReplayDataset
 
 ## 5. 多资产垂直切片
 
-除 SPXW 场景外，以下永久 fixture 由 `kairos.backtest.reference_scenarios` 提供：
+除 SPXW 场景外，以下永久 fixture 由 `kairospy.backtest.reference_scenarios` 提供：
 
 - `covered-call`：股票买入、上市 Call 卖出、现金分红、ITM 指派和股票交割；
 - `spot-perp-carry`：BTC 现货买入、永续卖空、跨账户划转、Funding、双边平仓；

@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from kairos.accounting.ledger import LedgerService
-from kairos.domain.corporate_action import DelistingEvent, SymbolChangeEvent
-from kairos.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairos.domain.ledger import Ledger
-from kairos.domain.product import ContractType, EquitySpec, PerpetualSpec, ProductType
-from kairos.products.equity.corporate_actions import CorporateActionService
-from kairos.products.perpetual.funding import FundingEngine
-from kairos.reference import (
+from kairospy.accounting.ledger import LedgerService
+from kairospy.domain.corporate_action import DelistingEvent, SymbolChangeEvent
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.domain.ledger import Ledger
+from kairospy.domain.product import ContractType, EquitySpec, PerpetualSpec, ProductType
+from kairospy.products.equity.corporate_actions import CorporateActionService
+from kairospy.products.perpetual.funding import FundingEngine
+from kairospy.reference import (
     EconomicProduct, InstrumentDefinition, InstrumentLifecycle,
     ListingDefinition, ListingId, ProductId, ReferenceCatalog, TradingRules,
     VenueDefinition, VenueType,

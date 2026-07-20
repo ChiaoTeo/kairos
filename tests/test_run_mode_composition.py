@@ -5,22 +5,22 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.application import (
+from kairospy.application import (
     ApplicationConfig, AsyncKairosRuntime, KairosApplication, ManagedServiceStatus, RuntimePaths,
     RunModeComposition, RuntimeFeedServiceBundle, RuntimeStatus, backtest_composition,
     historical_simulation_composition, live_composition, paper_trading_composition, study_composition,
     runtime_execution_plan, runtime_feed_plan, runtime_strategy_plan,
 )
-from kairos.ports import Environment
-from kairos.data import (
+from kairospy.ports import Environment
+from kairospy.data import (
     DataSetContractArtifact, LiveViewFreshnessMonitor, LiveViewManifest, PAPER_LIVE_FRESHNESS_POLICY,
     evaluate_live_view_freshness, live_view_freshness_evidence, live_view_manifest_path, load_live_view_manifest,
     write_live_view_manifest,
 )
-from kairos.data.contracts import RunMode
-from kairos.data.products import BTC_SPOT_DAILY
-from kairos.market_data import CapturePolicy
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.data.contracts import RunMode
+from kairospy.data.products import BTC_SPOT_DAILY
+from kairospy.market_data import CapturePolicy
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 
 
 class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):

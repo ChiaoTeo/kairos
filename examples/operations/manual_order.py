@@ -13,10 +13,10 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 
-from kairos.__main__ import main
-from kairos.application import build_simulated_spot_catalog
-from kairos.domain.identity import AccountKey,AccountType,AssetId,InstitutionId,InstrumentId
-from kairos.reference import ReferenceCatalogRepository
+from kairospy.__main__ import main
+from kairospy.application import build_simulated_spot_catalog
+from kairospy.domain.identity import AccountKey,AccountType,AssetId,InstitutionId,InstrumentId
+from kairospy.reference import ReferenceCatalogRepository
 
 
 def run(root:Path)->dict[str,object]:

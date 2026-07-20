@@ -7,16 +7,16 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.ports import Environment
-from kairos.connectors.massive.websocket import MassiveCanonicalStreamService, MassiveLiveStream
-from kairos.application import (
+from kairospy.ports import Environment
+from kairospy.connectors.massive.websocket import MassiveCanonicalStreamService, MassiveLiveStream
+from kairospy.application import (
     ApplicationConfig, AsyncKairosRuntime, ManagedServiceSpec, RuntimePaths, RuntimeStatus, KairosApplication,
 )
-from kairos.domain.identity import InstrumentId
-from kairos.domain.market_data import Bar
-from kairos.market_data import BoundedEventChannel, MarketEventEnvelope, MarketEventType
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
-from kairos.strategies.sma_cross_study_backtest import (
+from kairospy.domain.identity import InstrumentId
+from kairospy.domain.market_data import Bar
+from kairospy.market_data import BoundedEventChannel, MarketEventEnvelope, MarketEventType
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.strategies.sma_cross_study_backtest import (
     BarSeries, SmaCrossConfig, backtest_sma_cross, backtest_sma_cross_events,
 )
 

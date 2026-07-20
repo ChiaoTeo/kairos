@@ -4,14 +4,14 @@ import unittest
 from dataclasses import replace
 from decimal import Decimal
 
-from kairos.backtest.engine import BacktestEngine
-from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
-from kairos.backtest.result import BacktestConfig
-from kairos.pricing import SolverStatus, OptionValuationService
-from kairos.study_platform.snapshot import InstrumentSnapshot
-from kairos.risk.limits import RiskLimits
-from kairos.study_platform.features import FeatureEngine, build_features
-from kairos.strategies.bull_put_spread import BullPutSpreadStrategy
+from kairospy.backtest.engine import BacktestEngine
+from kairospy.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
+from kairospy.backtest.result import BacktestConfig
+from kairospy.pricing import SolverStatus, OptionValuationService
+from kairospy.study_platform.snapshot import InstrumentSnapshot
+from kairospy.risk.limits import RiskLimits
+from kairospy.study_platform.features import FeatureEngine, build_features
+from kairospy.strategies.bull_put_spread import BullPutSpreadStrategy
 
 
 class InternalValuationTests(unittest.TestCase):

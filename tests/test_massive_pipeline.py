@@ -7,15 +7,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairos.connectors.massive import MassiveClient, MassiveConfig, MassiveMarketSnapshotBuilder, MassiveResponse
-from kairos.connectors.massive.pipeline import MassiveOptionDataPipeline
-from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairos.pricing import OptionValuationService
-from kairos.market_data import ParquetMarketEventRepository
-from kairos.connectors.massive.datasets import MassiveOptionEventsDatasetConnector, MassiveOptionProductConfig
-from kairos.data import AcquisitionRequest, DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, SourceBinding, TimeRange
-from kairos.domain.identity import InstrumentId
-from kairos.market_data import MarketEventEnvelope, MarketEventType
+from kairospy.connectors.massive import MassiveClient, MassiveConfig, MassiveMarketSnapshotBuilder, MassiveResponse
+from kairospy.connectors.massive.pipeline import MassiveOptionDataPipeline
+from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.pricing import OptionValuationService
+from kairospy.market_data import ParquetMarketEventRepository
+from kairospy.connectors.massive.datasets import MassiveOptionEventsDatasetConnector, MassiveOptionProductConfig
+from kairospy.data import AcquisitionRequest, DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, SourceBinding, TimeRange
+from kairospy.domain.identity import InstrumentId
+from kairospy.market_data import MarketEventEnvelope, MarketEventType
 
 
 class StubTransport:

@@ -5,11 +5,11 @@ import unittest
 from datetime import datetime, time, timezone
 from decimal import Decimal
 
-from kairos.domain.capability import ExecutionCapabilities, MarketDataCapabilities, MarketDataKind, OrderType, ReferenceCapabilities
-from kairos.domain.identity import Amount, AssetId, InstrumentId, VenueId
-from kairos.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from kairos.reference import ReferenceCatalog
-from kairos.reference.repository import ReferenceCatalogRepository
+from kairospy.domain.capability import ExecutionCapabilities, MarketDataCapabilities, MarketDataKind, OrderType, ReferenceCapabilities
+from kairospy.domain.identity import Amount, AssetId, InstrumentId, VenueId
+from kairospy.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairospy.reference import ReferenceCatalog
+from kairospy.reference.repository import ReferenceCatalogRepository
 from tests.reference_support import publish_test_instrument
 
 

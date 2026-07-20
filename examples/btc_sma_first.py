@@ -1,4 +1,4 @@
-from kairos.study_platform import open_study
+from kairospy.study_platform import open_study
 
 
 study = open_study(

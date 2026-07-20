@@ -3,7 +3,7 @@
 状态：Proposed  
 版本：1.0  
 基线日期：2026-07-17  
-适用范围：`kairos` 全包、实时数据接入、研究、回测、模拟、paper/testnet/live Runtime，以及未来 Python/Rust 混合部署
+适用范围：`kairospy` 全包、实时数据接入、研究、回测、模拟、paper/testnet/live Runtime，以及未来 Python/Rust 混合部署
 目标读者：系统维护者、数据工程人员、策略开发者、执行与基础设施开发者
 
 ## 1. 文档目的
@@ -11,7 +11,7 @@
 本文专门用于指导 Kairos 下一阶段的系统级改造，统一以下目标：
 
 1. 保留当前系统已经成立的领域模型、数据治理、订单状态、Ledger、恢复与运行安全能力；
-2. 不复用已经失控的 `kairos_v2` 代码，但吸收其中经过实践验证的设计思想；
+2. 不复用已经失控的 `kairospy_v2` 代码，但吸收其中经过实践验证的设计思想；
 3. 将当前以同步编排、周期轮询和分散回调为主的 Runtime，演进为可恢复、可观测、可回放的异步数据流系统；
 4. 建立从研究、回测、历史模拟、实时模拟、paper/testnet 到 live 的统一事实、统一策略和统一执行链路；
 5. 为未来将市场数据接入、网络传输或执行网关替换为 Rust 提供稳定、语言无关的接入规范；
@@ -27,9 +27,9 @@
 
 ## 2. 改造立场
 
-### 2.1 不迁移 `kairos_v2` 代码
+### 2.1 不迁移 `kairospy_v2` 代码
 
-本次改造明确不直接复用 `kairos_v2` 的工程、crate、共享内存实现、网络栈或运行框架。
+本次改造明确不直接复用 `kairospy_v2` 的工程、crate、共享内存实现、网络栈或运行框架。
 
 原因不是其中所有设计均无价值，而是该系统已经出现以下失控特征：
 
@@ -45,7 +45,7 @@
 
 ### 2.2 吸收的核心思想
 
-从 `kairos_v2` 吸收以下设计思想：
+从 `kairospy_v2` 吸收以下设计思想：
 
 - 策略声明数据和账户能力需求，Runtime 负责汇总、去重和应用；
 - WebSocket、HTTP、共享内存等 transport 对上层暴露统一事件源；
@@ -258,7 +258,7 @@ at-least-once delivery
 建议逐步收敛为以下结构，名称可在实施中调整，但职责不能重新混合：
 
 ```text
-kairos/
+kairospy/
 ├── domain/                  # 稳定业务事实和值对象
 ├── contracts/               # 语言无关 Event/Command schema 的 Python binding
 ├── catalog/                 # Instrument/Product/Listing
@@ -1013,16 +1013,16 @@ Debug tap 可以：
 后续应提供：
 
 ```text
-kairos runtime tasks
-kairos runtime streams
-kairos runtime queues
-kairos runtime trace <trace-id>
-kairos data trace --instrument ... --start ... --end ...
-kairos data explain-event <event-id>
-kairos data inspect-gap <stream-id>
-kairos data replay-session <session-id>
-kairos data compare-session <live-session> <replay-run>
-kairos execution explain-order <client-order-id>
+kairospy runtime tasks
+kairospy runtime streams
+kairospy runtime queues
+kairospy runtime trace <trace-id>
+kairospy data trace --instrument ... --start ... --end ...
+kairospy data explain-event <event-id>
+kairospy data inspect-gap <stream-id>
+kairospy data replay-session <session-id>
+kairospy data compare-session <live-session> <replay-run>
+kairospy execution explain-order <client-order-id>
 ```
 
 ### 15.5 Replay 验收
@@ -1234,7 +1234,7 @@ Paper/Testnet L4 至少验证：
 
 本次改造不做：
 
--直接搬迁 `kairos_v2` crate；
+-直接搬迁 `kairospy_v2` crate；
 -重新自研完整 HTTP/TLS/WebSocket 网络栈；
 -让所有消息都经过共享内存；
 -使用共享内存替代持久订单、Fill 和 Ledger；

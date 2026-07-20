@@ -7,29 +7,29 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
-from kairos.accounting.ledger import LedgerService
-from kairos.ports import ComboLegRequest, ComboOrderRequest, Environment, OrderRequest
-from kairos.connectors.simulated import SimulatedExecutionAccountGateway
-from kairos.domain.capability import ExecutionCapabilities, OrderType
-from kairos.domain.execution import TradeSide
-from kairos.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
-from kairos.domain.ledger import Ledger
-from kairos.domain.order import ExecutionInstructions, TimeInForce
-from kairos.domain.intent import (
+from kairospy.accounting.ledger import LedgerService
+from kairospy.ports import ComboLegRequest, ComboOrderRequest, Environment, OrderRequest
+from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
+from kairospy.domain.capability import ExecutionCapabilities, OrderType
+from kairospy.domain.execution import TradeSide
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
+from kairospy.domain.ledger import Ledger
+from kairospy.domain.order import ExecutionInstructions, TimeInForce
+from kairospy.domain.intent import (
     CancelIntent, HedgeIntent, LegIntent, OpenStructureIntent, TransferIntent,
 )
-from kairos.domain.product import CryptoSpotSpec, ProductType
-from kairos.execution.router import ExecutionRiskLimits, ExecutionRouter
-from kairos.execution.planner import LeggingPolicy, NativeComboPlan, SequentialLegPlan, plan_combo
-from kairos.execution.strategy_planner import plan_strategy_intent
-from kairos.orchestration.coordinator import ExecutionCoordinator
-from kairos.orchestration.event_log import PersistentEventLog
-from kairos.orchestration.kill_switch import KillSwitch
-from kairos.orchestration.monitoring import AlertSeverity, OperationalMonitor
-from kairos.orchestration.reconciliation import ReconciliationService
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.domain.product import CryptoSpotSpec, ProductType
+from kairospy.execution.router import ExecutionRiskLimits, ExecutionRouter
+from kairospy.execution.planner import LeggingPolicy, NativeComboPlan, SequentialLegPlan, plan_combo
+from kairospy.execution.strategy_planner import plan_strategy_intent
+from kairospy.orchestration.coordinator import ExecutionCoordinator
+from kairospy.orchestration.event_log import PersistentEventLog
+from kairospy.orchestration.kill_switch import KillSwitch
+from kairospy.orchestration.monitoring import AlertSeverity, OperationalMonitor
+from kairospy.orchestration.reconciliation import ReconciliationService
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 from tests.runtime_support import operational_application
-from kairos.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, RouteId
+from kairospy.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, RouteId
 from tests.reference_support import publish_test_instrument
 
 
@@ -85,7 +85,7 @@ class OrchestrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "events.jsonl"
             store = SQLiteRuntimeStore(Path(directory) / "runtime.sqlite3")
-            from kairos.application import ApplicationConfig, FunctionProbe, RuntimePaths, KairosApplication
+            from kairospy.application import ApplicationConfig, FunctionProbe, RuntimePaths, KairosApplication
             blocked_application = KairosApplication(
                 ApplicationConfig(Environment.TESTNET, RuntimePaths.under(directory)), store,
                 runtime_id="blocked-readiness",

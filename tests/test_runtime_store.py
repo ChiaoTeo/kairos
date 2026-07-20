@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -10,19 +10,19 @@ import tempfile
 import unittest
 from uuid import UUID
 
-from kairos.accounting.ledger import LedgerService
-from kairos.ports import OrderAck, OrderRequest
-from kairos.domain.capability import OrderType
-from kairos.domain.execution import TradeExecution, TradeSide
-from kairos.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairos.domain.ledger import Ledger
-from kairos.domain.order import ExecutionInstructions, TimeInForce
-from kairos.domain.product import CryptoSpotSpec, ProductType
-from kairos.execution.order_state import DurableOrderStatus
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
-from kairos.orchestration.kill_switch import KillSwitch
-from kairos.application.clock import FixedClock
-from kairos.reference import ReferenceCatalog
+from kairospy.accounting.ledger import LedgerService
+from kairospy.ports import OrderAck, OrderRequest
+from kairospy.domain.capability import OrderType
+from kairospy.domain.execution import TradeExecution, TradeSide
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.domain.ledger import Ledger
+from kairospy.domain.order import ExecutionInstructions, TimeInForce
+from kairospy.domain.product import CryptoSpotSpec, ProductType
+from kairospy.execution.order_state import DurableOrderStatus
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.orchestration.kill_switch import KillSwitch
+from kairospy.application.clock import FixedClock
+from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
 

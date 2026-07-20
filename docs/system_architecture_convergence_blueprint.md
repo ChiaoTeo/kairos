@@ -3,14 +3,14 @@
 状态：Active Blueprint  
 版本：1.0  
 基线日期：2026-07-17  
-适用范围：整个 `kairos` 包、`studies` 工作区、CLI、运行时持久化与 `data/` 数据目录
+适用范围：整个 `kairospy` 包、`studies` 工作区、CLI、运行时持久化与 `data/` 数据目录
 目标读者：系统维护者、策略开发者、数据工程人员和后续改造实施者
 
 ## 1. 文档目的
 
 本文是 Kairos 后续系统改造的总纲，统一回答以下问题：
 
-1. `kairos` 各模块分别负责什么，相互之间应如何依赖；
+1. `kairospy` 各模块分别负责什么，相互之间应如何依赖；
 2. 当前系统哪些能力已经成立，哪些只是模块级能力、尚未形成完整运行闭环；
 3. 如何收敛研究数据、回测、模拟、paper/testnet/live 的运行路径；
 4. 如何规范 Domain、Data、Catalog、Study、Backtest 和 Runtime 的边界；
@@ -183,9 +183,9 @@ Runtime recovery
 - 持久化不可用；
 - 时钟偏差超过阈值。
 
-## 4. `kairos` 模块关系梳理
+## 4. `kairospy` 模块关系梳理
 
-### 4.1 `kairos.domain`
+### 4.1 `kairospy.domain`
 
 职责：定义与运行模式无关的业务事实、值对象、实体、状态转换输入和核心约束。
 
@@ -215,7 +215,7 @@ Runtime recovery
 
 目标依赖：Domain 只能依赖 Python 标准库和 Domain 内部模块。
 
-### 4.2 `kairos.reference`
+### 4.2 `kairospy.reference`
 
 职责：管理 Instrument Definition 和 Venue Listing 的 point-in-time 版本。
 
@@ -241,7 +241,7 @@ Runtime recovery
 - Connector 通过 Reference Port 更新 Catalog；
 - 执行和估值只通过 InstrumentId 查询，不猜测 Venue symbol。
 
-### 4.3 `kairos.data`
+### 4.3 `kairospy.data`
 
 职责：管理研究数据产品的身份、获取、版本、发布、查询、质量和复现。
 
@@ -271,7 +271,7 @@ Runtime recovery
 - Data 可以将 Canonical Record 映射为 Domain 对象；
 - Domain 不知道 Data Product 和 Release。
 
-### 4.4 `kairos.market_data`
+### 4.4 `kairospy.market_data`
 
 职责：定义实时/事件市场数据的 Canonical Record、质量检查、读取和基础估值输入。
 
@@ -288,7 +288,7 @@ Runtime recovery
 - 研究代码直接依赖 Repository；
 - Provider payload 直接进入 Strategy/Risk/Pricing。
 
-### 4.5 `kairos.connectors`
+### 4.5 `kairospy.connectors`
 
 职责：把外部 Venue/Provider 接口实现为系统端口。
 
@@ -318,7 +318,7 @@ Connector 不得：
 - 通过内部 InstrumentId 猜 Venue symbol；
 - 在调用链中吞掉关键异常。
 
-### 4.6 `kairos.products`
+### 4.6 `kairospy.products`
 
 职责：实现不同 InstrumentContractSpec 的财务计算和生命周期规则。
 
@@ -336,7 +336,7 @@ Connector 不得：
 - 同一规则被 Backtest、Simulation 和 Live Ledger 使用；
 - 产品规则通过明确 registry 选择，不散落在 if/else 中。
 
-### 4.7 `kairos.pricing`
+### 4.7 `kairospy.pricing`
 
 职责：无 Venue 副作用的定价、隐含波动率和估值服务。
 
@@ -358,7 +358,7 @@ Connector 不得：
 - vendor analytics 与内部估值明确分开；
 - 相同输入在 Study、Backtest 和 Runtime 结果一致。
 
-### 4.8 `kairos.volatility`
+### 4.8 `kairospy.volatility`
 
 职责：波动率曲面模型、校准和查询。
 
@@ -370,7 +370,7 @@ Connector 不得：
 - 曲面输入冻结 Canonical Release 和算法版本；
 - 实时内存曲面可以存在，但必须能追踪输入和计算版本。
 
-### 4.9 `kairos.features`
+### 4.9 `kairospy.features`
 
 职责：构建可跨策略复用、point-in-time safe 的特征数据产品。
 
@@ -383,7 +383,7 @@ Connector 不得：
 - offline 与 incremental 结果一致；
 - Feature 不以单个策略命名。
 
-### 4.10 `kairos.study_platform`
+### 4.10 `kairospy.study_platform`
 
 职责：研究工作流、样本、报告、实验和验证产物。
 
@@ -402,7 +402,7 @@ Connector 不得：
 - 将研究专属标签发布为 Canonical/Feature；
 - 只记录浮动 Alias 而不冻结 Release。
 
-### 4.11 `kairos.strategies`
+### 4.11 `kairospy.strategies`
 
 职责：根据 StrategyContext 产生 Economic Intent，不直接下单。
 
@@ -415,7 +415,7 @@ Connector 不得：
 - 策略不直接修改 Portfolio 或 Ledger；
 - 相同策略可以运行于 Backtest、Simulation 和 Live Runtime。
 
-### 4.12 `kairos.risk`
+### 4.12 `kairospy.risk`
 
 职责：订单前风险、结构风险、Portfolio 风险、场景分析和策略资本治理。
 
@@ -433,7 +433,7 @@ Connector 不得：
 - hard limit 不能由 Strategy 覆盖；
 - 未知价格、缺失 conversion 或 stale data 默认拒绝扩大风险。
 
-### 4.13 `kairos.execution`
+### 4.13 `kairospy.execution`
 
 职责：把 Economic Intent 转换为可执行计划，并完成 Venue 路由和成交归一化。
 
@@ -452,7 +452,7 @@ Connector 不得：
 - UNKNOWN 状态必须查询 Venue，不能盲目重发；
 - Fill 统一进入 LedgerService。
 
-### 4.14 `kairos.accounting`
+### 4.14 `kairospy.accounting`
 
 职责：通过不可变 Ledger 重建现金、持仓、费用、Funding、公司行为和结算。
 
@@ -464,7 +464,7 @@ Connector 不得：
 - Portfolio 和 Risk View 是 Ledger Projection；
 - Ledger 持久化必须具备事务、唯一约束和崩溃恢复。
 
-### 4.15 `kairos.backtest`
+### 4.15 `kairospy.backtest`
 
 职责：用冻结历史输入、确定性 Clock 和 Fill Model 驱动正式 Strategy/Application 逻辑。
 
@@ -478,7 +478,7 @@ Connector 不得：
 - 使用 Q3/Q4 Release；
 - Conservative 和 Stress 必须成对评估。
 
-### 4.16 `kairos.orchestration`
+### 4.16 `kairospy.orchestration`
 
 职责：系统运行编排、安全门禁、恢复和操作状态。
 
@@ -500,7 +500,7 @@ Connector 不得：
 - 编排 Market Data、Strategy、Risk、Execution、Ledger 和 Monitoring 循环；
 - 明确 start/recover/run/degrade/shutdown 生命周期。
 
-### 4.17 `kairos.storage`
+### 4.17 `kairospy.storage`
 
 职责：提供序列化、事务状态存储和数据湖底层实现。
 
@@ -511,7 +511,7 @@ Connector 不得：
 - JSON/Markdown/CSV：只作为报告、交换或小型 Artifact；
 - Repository 是基础设施实现，不应成为研究用户 API。
 
-### 4.18 `kairos.history`
+### 4.18 `kairospy.history`
 
 状态：已删除。
 
@@ -520,7 +520,7 @@ Connector 不得：
 - OHLCV 数据迁入不可变 Dataset Release；
 - 查询统一进入 DatasetClient；
 - SMA 示例改为治理 Release 驱动的 Backtest；
-- 删除 `kairos.history`、`BarRepository` 和顶级 `kairos history` CLI；
+- 删除 `kairospy.history`、`BarRepository` 和顶级 `kairospy history` CLI；
 - 旧 CSV sidecar 经行数核验后删除，新发布不再双写 CSV。
 
 后续架构测试应持续禁止重新引入 History import、CLI 和物理目录。
@@ -1022,16 +1022,16 @@ Domain 对象不保存 Dataset Release 和 Provider payload。
 目标 CLI：
 
 ```bash
-kairos data search
-kairos data describe <product>
-kairos data prepare <product> --start ... --end ... --quality backtest
-kairos data query <product-or-release>
-kairos data replay <product-or-release>
-kairos data compare <release-a> <release-b>
-kairos data freeze <study-id> --input ...
-kairos data doctor <product-or-release>
-kairos data diagnostics --strict
-kairos data migrate ...
+kairospy data search
+kairospy data describe <product>
+kairospy data prepare <product> --start ... --end ... --quality backtest
+kairospy data query <product-or-release>
+kairospy data replay <product-or-release>
+kairospy data compare <release-a> <release-b>
+kairospy data freeze <study-id> --input ...
+kairospy data doctor <product-or-release>
+kairospy data diagnostics --strict
+kairospy data migrate ...
 ```
 
 `prepare` 统一 plan、source selection、acquire、validate、publish 和可选 promotion，但不得静默发起昂贵请求。
@@ -1041,7 +1041,7 @@ kairos data migrate ...
 | 旧对象 | 目标 |
 |---|---|
 | `BarRepository` | Canonical OHLCV + DatasetClient |
-| `kairos history` | `kairos data` + 正式 backtest |
+| `kairospy history` | `kairospy data` + 正式 backtest |
 | `DatasetRepository` 公开使用 | 内部 MarketSnapshot storage driver |
 | `StudySnapshotCollectionStore` | Collection Publisher |
 | `SurfaceRepository` | Feature Release |
@@ -1443,7 +1443,7 @@ tests/data/test_frozen_study_inputs.py
 基础 CI：
 
 ```bash
-./pyenv/bin/python -m compileall -q kairos tests studies
+./pyenv/bin/python -m compileall -q kairospy tests studies
 ./pyenv/bin/python -m unittest discover -s tests -v
 git diff --check
 ```
@@ -1451,20 +1451,20 @@ git diff --check
 目标 CI 增加：
 
 ```bash
-./pyenv/bin/python -m kairos data diagnostics --strict
-./pyenv/bin/python -m kairos data doctor --all-products
-./pyenv/bin/python -m kairos runtime doctor --environment simulated
-./pyenv/bin/python -m kairos runtime recovery-test --scenario all
-./pyenv/bin/python -m kairos data migrate --audit-only
+./pyenv/bin/python -m kairospy data diagnostics --strict
+./pyenv/bin/python -m kairospy data doctor --all-products
+./pyenv/bin/python -m kairospy runtime doctor --environment simulated
+./pyenv/bin/python -m kairospy runtime recovery-test --scenario all
+./pyenv/bin/python -m kairospy data migrate --audit-only
 ```
 
 静态扫描：
 
 ```bash
-rg '^from kairos\.(data|catalog|storage|study|backtest)' kairos/domain
-rg 'from kairos\.history|import kairos\.history' kairos examples tests
-rg 'DatasetRepository\(' kairos examples
-rg 'data/(history|datasets|surfaces|raw|normalized|derived)' kairos examples docs
+rg '^from kairospy\.(data|catalog|storage|study|backtest)' kairospy/domain
+rg 'from kairospy\.history|import kairospy\.history' kairospy examples tests
+rg 'DatasetRepository\(' kairospy examples
+rg 'data/(history|datasets|surfaces|raw|normalized|derived)' kairospy examples docs
 rg 'read_(csv|parquet)|open\(.+data/' examples studies
 ```
 

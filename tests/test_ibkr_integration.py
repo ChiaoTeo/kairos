@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 import os
 import unittest
 
-from kairos.ports import Environment
-from kairos.connectors.ibkr.account_gateway import IbkrAccountGateway
-from kairos.connectors.ibkr.session import IbkrSession
-from kairos.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
-from kairos.domain.identity import AccountKey, AccountType, VenueId
-from kairos.study_platform.spec import OptionChainCaptureSpec
+from kairospy.ports import Environment
+from kairospy.connectors.ibkr.account_gateway import IbkrAccountGateway
+from kairospy.connectors.ibkr.session import IbkrSession
+from kairospy.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
+from kairospy.domain.identity import AccountKey, AccountType, VenueId
+from kairospy.study_platform.spec import OptionChainCaptureSpec
 
 
 @unittest.skipUnless(os.getenv("RUN_IBKR_INTEGRATION") == "1", "set RUN_IBKR_INTEGRATION=1 to connect to IBKR")

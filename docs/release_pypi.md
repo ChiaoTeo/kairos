@@ -3,7 +3,7 @@
 Kairos uses two public names:
 
 - PyPI distribution name: `kairospy`
-- Python import package and CLI command: `kairos`
+- Python import package and CLI command: `kairospy`
 
 ## PyPI Trusted Publisher
 
@@ -13,11 +13,11 @@ On PyPI, add a pending GitHub trusted publisher with these fields:
 | --- | --- |
 | PyPI Project Name | `kairospy` |
 | Owner | `ChiaoTeo` |
-| Repository name | `kairos` |
+| Repository name | `kairospy` |
 | Workflow name | `release.yml` |
 | Environment name | `pypi` |
 
-The repository URL currently configured as `origin` is `https://github.com/ChiaoTeo/kairos.git`, so the trusted publisher must use `ChiaoTeo / kairos`.
+The repository URL currently configured as `origin` is `https://github.com/ChiaoTeo/kairospy.git`, so the trusted publisher must use `ChiaoTeo / kairospy`.
 
 ## GitHub Environment
 

@@ -5,9 +5,9 @@ from decimal import Decimal
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairos.connectors.massive.decoder import decode_option_snapshots
-from kairos.domain.identity import InstrumentId
-from kairos.reference import MappingTargetType, ProviderId, ProviderSymbolMapping, ReferenceCatalog
+from kairospy.connectors.massive.decoder import decode_option_snapshots
+from kairospy.domain.identity import InstrumentId
+from kairospy.reference import MappingTargetType, ProviderId, ProviderSymbolMapping, ReferenceCatalog
 
 
 NOW = datetime(2026, 7, 15, tzinfo=timezone.utc)

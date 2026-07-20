@@ -1,5 +1,5 @@
-from kairos.data import OutputFormat, DatasetClient
-from kairos.data.products import BTC_SPOT_DAILY
+from kairospy.data import OutputFormat, DatasetClient
+from kairospy.data.products import BTC_SPOT_DAILY
 
 
 data = DatasetClient("data")

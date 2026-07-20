@@ -5,18 +5,18 @@ from decimal import Decimal
 import unittest
 from uuid import UUID
 
-from kairos.backtest.feed import MarketSnapshot
-from kairos.backtest.portfolio import PortfolioSnapshot
-from kairos.domain.execution import TradeSide
-from kairos.domain.capability import TimeInForce
-from kairos.domain.identity import AssetId, InstrumentId
-from kairos.domain.intent import LegIntent, OpenStructureIntent
-from kairos.domain.market_data import Greeks, Quote
-from kairos.domain.product import ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from kairos.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
-from kairos.study_platform.snapshot import InstrumentSnapshot
-from kairos.risk.engine import RiskDecisionType, RiskEngine
-from kairos.risk.limits import RiskLimits
+from kairospy.backtest.feed import MarketSnapshot
+from kairospy.backtest.portfolio import PortfolioSnapshot
+from kairospy.domain.execution import TradeSide
+from kairospy.domain.capability import TimeInForce
+from kairospy.domain.identity import AssetId, InstrumentId
+from kairospy.domain.intent import LegIntent, OpenStructureIntent
+from kairospy.domain.market_data import Greeks, Quote
+from kairospy.domain.product import ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairospy.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
+from kairospy.study_platform.snapshot import InstrumentSnapshot
+from kairospy.risk.engine import RiskDecisionType, RiskEngine
+from kairospy.risk.limits import RiskLimits
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)

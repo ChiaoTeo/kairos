@@ -6,11 +6,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.application.recovery import RuntimeRecoveryService
-from kairos.domain.identity import AssetId, InstrumentId
-from kairos.domain.product import FutureSpec, ContractType, ProductType
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
-from kairos.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
+from kairospy.application.recovery import RuntimeRecoveryService
+from kairospy.domain.identity import AssetId, InstrumentId
+from kairospy.domain.product import FutureSpec, ContractType, ProductType
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)

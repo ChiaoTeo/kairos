@@ -18,7 +18,7 @@ Binance WebSocket
 24 小时主动重启验收：
 
 ```bash
-./pyenv/bin/python -m kairos \
+./pyenv/bin/python -m kairospy \
   --lake-root data/market-data-soak \
   data soak-binance \
   --symbol BTCUSDT \
@@ -37,11 +37,11 @@ Binance WebSocket
 
 ## 绑定 Live View Freshness
 
-如果本次 soak 是为了批准某个 Strategy paper/live 使用的 Live View，先用 `kairos data write --live --connector ...`
+如果本次 soak 是为了批准某个 Strategy paper/live 使用的 Live View，先用 `kairospy data write --live --connector ...`
 生成 Live View manifest，再把 manifest 路径传给 soak 命令：
 
 ```bash
-./pyenv/bin/python -m kairos \
+./pyenv/bin/python -m kairospy \
   --lake-root data/market-data-soak \
   data soak-binance \
   --symbol BTCUSDT \

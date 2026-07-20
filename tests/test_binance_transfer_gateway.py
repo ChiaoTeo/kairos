@@ -5,12 +5,12 @@ from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from kairos.connectors.binance import BinanceSigner
-from kairos.connectors.transfer import BinanceTransferGateway, BinanceWalletRoute
-from kairos.domain.identity import AssetId
-from kairos.reference import NetworkAssetDefinition, NetworkDefinition, NetworkType, ReferenceCatalog
-from kairos.reference.identity import LocationId, NetworkAssetId, NetworkId
-from kairos.treasury import CryptoTransferInstruction, FeePolicy, InternalTransferInstruction, TransferStatus
+from kairospy.connectors.binance import BinanceSigner
+from kairospy.connectors.transfer import BinanceTransferGateway, BinanceWalletRoute
+from kairospy.domain.identity import AssetId
+from kairospy.reference import NetworkAssetDefinition, NetworkDefinition, NetworkType, ReferenceCatalog
+from kairospy.reference.identity import LocationId, NetworkAssetId, NetworkId
+from kairospy.treasury import CryptoTransferInstruction, FeePolicy, InternalTransferInstruction, TransferStatus
 
 
 NOW = datetime(2020, 1, 1, tzinfo=timezone.utc)

@@ -8,7 +8,7 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairos import initialize_project
+from kairospy import initialize_project
 
 
 class KairosProjectInitTests(unittest.TestCase):
@@ -47,18 +47,18 @@ class KairosProjectInitTests(unittest.TestCase):
             self.assertIn("README.md", second.reused)
             self.assertEqual(readme.read_text(encoding="utf-8"), "custom notes\n")
 
-    def test_project_initializer_is_available_from_kairos_namespace(self) -> None:
-        from kairos.project import initialize_project as subpackage_initialize_project
-        from kairos.project import initialize_project as project_initialize_project
+    def test_project_initializer_is_available_from_kairospy_namespace(self) -> None:
+        from kairospy.project import initialize_project as subpackage_initialize_project
+        from kairospy.project import initialize_project as project_initialize_project
 
         self.assertIs(initialize_project, project_initialize_project)
         self.assertIs(subpackage_initialize_project, project_initialize_project)
 
-    def test_kairos_init_cli_bootstraps_a_runnable_external_project(self) -> None:
+    def test_kairospy_init_cli_bootstraps_a_runnable_external_project(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory) / "external-project"
             completed = subprocess.run(
-                [sys.executable, "-m", "kairos", "--format", "json", "init", "--target", str(root), "--name", "External Desk"],
+                [sys.executable, "-m", "kairospy", "--format", "json", "init", "--target", str(root), "--name", "External Desk"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -83,11 +83,11 @@ class KairosProjectInitTests(unittest.TestCase):
             )
             self.assertIn("final_equity", starter.stdout)
 
-    def test_kairos_init_accepts_positional_project_directory_and_writes_config(self) -> None:
+    def test_kairospy_init_accepts_positional_project_directory_and_writes_config(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory) / "positional-project"
             completed = subprocess.run(
-                [sys.executable, "-m", "kairos", "--format", "json", "init", str(root), "--name", "Positional Desk"],
+                [sys.executable, "-m", "kairospy", "--format", "json", "init", str(root), "--name", "Positional Desk"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -101,19 +101,19 @@ class KairosProjectInitTests(unittest.TestCase):
             config = (root / "kairos.toml").read_text(encoding="utf-8")
             self.assertIn("[providers.binance.testnet]", config)
             self.assertIn('api_secret = "env:BINANCE_TESTNET_API_SECRET"', config)
-            self.assertIn("kairos configure massive", "\n".join(payload["next_steps"]))
+            self.assertIn("kairospy configure massive", "\n".join(payload["next_steps"]))
 
-    def test_source_repository_default_name_remains_kairos_even_when_directory_is_trader(self) -> None:
+    def test_source_repository_default_name_remains_kairospy_even_when_directory_is_trader(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory) / "trader"
-            (root / "kairos").mkdir(parents=True)
+            (root / "kairospy").mkdir(parents=True)
             (root / "pyproject.toml").write_text('[project]\nname = "kairospy"\n', encoding="utf-8")
 
             result = initialize_project(root)
             metadata = json.loads((root / ".kairos" / "project.json").read_text(encoding="utf-8"))
 
-            self.assertEqual(result.name, "kairos")
-            self.assertEqual(metadata["name"], "kairos")
+            self.assertEqual(result.name, "kairospy")
+            self.assertEqual(metadata["name"], "kairospy")
             self.assertEqual(metadata["root"], ".")
 
 

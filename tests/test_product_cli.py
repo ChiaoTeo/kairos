@@ -9,8 +9,8 @@ import tempfile
 import unittest
 from decimal import Decimal
 
-from kairos.product_surface import DataProductApi
-from kairos.product_workflow import _write_binance_spot_bar_capture
+from kairospy.product_surface import DataProductApi
+from kairospy.product_workflow import _write_binance_spot_bar_capture
 
 
 ROOT = Path(__file__).parents[1]
@@ -18,7 +18,7 @@ ROOT = Path(__file__).parents[1]
 
 def command(root: Path, *args: str) -> dict[str, object]:
     completed = subprocess.run(
-        [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root), *args],
+        [sys.executable, "-m", "kairospy", "--format", "json", "--lake-root", str(root), *args],
         cwd=ROOT, check=True, capture_output=True, text=True,
     )
     return json.loads(completed.stdout)
@@ -49,7 +49,7 @@ class ProductCliTests(unittest.TestCase):
                             "--metadata", str(metadata_file))
             lock = command(root, "study", "freeze", "cli-factor-study", "--version", "1.0.0")
             duplicate = subprocess.run(
-                [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root),
+                [sys.executable, "-m", "kairospy", "--format", "json", "--lake-root", str(root),
                  "study", "freeze", "cli-factor-study", "--version", "1.0.0"],
                 cwd=ROOT, check=False, capture_output=True, text=True,
             )
@@ -141,7 +141,7 @@ class ProductCliTests(unittest.TestCase):
             model_file.write_text("def decide(context):\n    raise RuntimeError('draft file should not run')\n", encoding="utf-8")
             lock = command(root, "strategy", "freeze", "cli-model-strategy", "--version", "1.0.0")
             duplicate = subprocess.run(
-                [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root),
+                [sys.executable, "-m", "kairospy", "--format", "json", "--lake-root", str(root),
                  "strategy", "freeze", "cli-model-strategy", "--version", "1.0.0"],
                 cwd=ROOT, check=False, capture_output=True, text=True,
             )
@@ -271,7 +271,7 @@ class ProductCliTests(unittest.TestCase):
                     "--metadata", str(model_metadata))
             command(root, "strategy", "freeze", "cli-diagnostic-strategy", "--version", "1.0.0")
             failed = subprocess.run(
-                [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root),
+                [sys.executable, "-m", "kairospy", "--format", "json", "--lake-root", str(root),
                  "run", "start", "--snapshot", "cli-diagnostic-strategy@1.0.0",
                  "--mode", "backtest", "--execute-strategy"],
                 cwd=ROOT, check=False, capture_output=True, text=True,
@@ -302,7 +302,7 @@ class ProductCliTests(unittest.TestCase):
                 "    count_path = Path(__file__).with_name('calls.txt')\n"
                 "    count = int(count_path.read_text()) if count_path.exists() else 0\n"
                 "    count_path.write_text(str(count + 1))\n"
-                "    token = context['credentials']['KAIROS_TEST_CLI_PROVIDER_TOKEN']\n"
+                "    token = context['credentials']['KAIROSPY_TEST_CLI_PROVIDER_TOKEN']\n"
                 "    value = 4.2 if token == 'cli-secret-token' else -1\n"
                 "    return {'rows': [{'available_time': scope['as_of'], 'metric': product['metric'], 'value': value}]}\n",
                 encoding="utf-8",
@@ -319,7 +319,7 @@ class ProductCliTests(unittest.TestCase):
                     "kind": "python_provider",
                     "path": "provider.py",
                     "function": "acquire",
-                    "credentials": {"required_env": ["KAIROS_TEST_CLI_PROVIDER_TOKEN"]},
+                    "credentials": {"required_env": ["KAIROSPY_TEST_CLI_PROVIDER_TOKEN"]},
                 },
                 "scope": {"as_of": "2026-01-02T00:00:00Z"},
                 "products": [{
@@ -330,25 +330,25 @@ class ProductCliTests(unittest.TestCase):
             }), encoding="utf-8")
 
             registered = command(root, "data", "register-download", "--key", "provider-macro", "--spec", str(spec))
-            original_token = os.environ.pop("KAIROS_TEST_CLI_PROVIDER_TOKEN", None)
+            original_token = os.environ.pop("KAIROSPY_TEST_CLI_PROVIDER_TOKEN", None)
             try:
-                os.environ["KAIROS_TEST_CLI_PROVIDER_TOKEN"] = "cli-secret-token"
+                os.environ["KAIROSPY_TEST_CLI_PROVIDER_TOKEN"] = "cli-secret-token"
                 downloaded = command(root, "data", "download", "provider-macro")
                 rows = DataProductApi(root).dataset("reference.macro.provider").rows(columns=("metric", "value"))
-                os.environ.pop("KAIROS_TEST_CLI_PROVIDER_TOKEN", None)
+                os.environ.pop("KAIROSPY_TEST_CLI_PROVIDER_TOKEN", None)
                 reused = command(root, "data", "download", "provider-macro")
                 provider_calls = (spec_dir / "calls.txt").read_text(encoding="utf-8")
             finally:
                 if original_token is None:
-                    os.environ.pop("KAIROS_TEST_CLI_PROVIDER_TOKEN", None)
+                    os.environ.pop("KAIROSPY_TEST_CLI_PROVIDER_TOKEN", None)
                 else:
-                    os.environ["KAIROS_TEST_CLI_PROVIDER_TOKEN"] = original_token
+                    os.environ["KAIROSPY_TEST_CLI_PROVIDER_TOKEN"] = original_token
 
         self.assertEqual(registered["key"], "provider-macro")
         self.assertEqual(downloaded["source"]["kind"], "python_provider")
         self.assertEqual(downloaded["source"]["function"], "acquire")
         self.assertEqual(len(downloaded["source"]["provider_code_hash"]), 64)
-        self.assertEqual(downloaded["source"]["credentials"]["required_env"], ["KAIROS_TEST_CLI_PROVIDER_TOKEN"])
+        self.assertEqual(downloaded["source"]["credentials"]["required_env"], ["KAIROSPY_TEST_CLI_PROVIDER_TOKEN"])
         self.assertEqual(rows[0]["metric"], "cpi")
         self.assertEqual(rows[0]["value"], 4.2)
         self.assertEqual(reused["release_id"], downloaded["release_id"])
@@ -407,7 +407,7 @@ class ProductCliTests(unittest.TestCase):
             root = Path(directory)
             root.joinpath("kairos.toml").write_text(
                 "[project]\nname = \"cli-provider-config\"\n\n"
-                "[providers.test]\napi_key = \"env:KAIROS_TEST_CLI_CONFIG_PROVIDER_TOKEN\"\n",
+                "[providers.test]\napi_key = \"env:KAIROSPY_TEST_CLI_CONFIG_PROVIDER_TOKEN\"\n",
                 encoding="utf-8",
             )
             provider = root / "provider.py"
@@ -441,16 +441,16 @@ class ProductCliTests(unittest.TestCase):
             }), encoding="utf-8")
 
             command(root, "data", "register-download", "--key", "cli-config-provider", "--spec", str(spec))
-            original_token = os.environ.pop("KAIROS_TEST_CLI_CONFIG_PROVIDER_TOKEN", None)
+            original_token = os.environ.pop("KAIROSPY_TEST_CLI_CONFIG_PROVIDER_TOKEN", None)
             try:
-                os.environ["KAIROS_TEST_CLI_CONFIG_PROVIDER_TOKEN"] = "cli-config-secret-token"
+                os.environ["KAIROSPY_TEST_CLI_CONFIG_PROVIDER_TOKEN"] = "cli-config-secret-token"
                 downloaded = command(root, "data", "download", "cli-config-provider")
                 rows = DataProductApi(root).dataset("reference.provider.config.cli").rows(columns=("symbol", "value"))
             finally:
                 if original_token is None:
-                    os.environ.pop("KAIROS_TEST_CLI_CONFIG_PROVIDER_TOKEN", None)
+                    os.environ.pop("KAIROSPY_TEST_CLI_CONFIG_PROVIDER_TOKEN", None)
                 else:
-                    os.environ["KAIROS_TEST_CLI_CONFIG_PROVIDER_TOKEN"] = original_token
+                    os.environ["KAIROSPY_TEST_CLI_CONFIG_PROVIDER_TOKEN"] = original_token
 
         self.assertEqual(downloaded["source"]["credentials"]["required_config"], ["providers.test.api_key"])
         self.assertEqual(rows[0]["symbol"], "GOOG")
@@ -460,7 +460,7 @@ class ProductCliTests(unittest.TestCase):
     def test_product_cli_defaults_to_localized_text_and_keeps_json_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            base = [sys.executable, "-m", "kairos", "--lake-root", str(root)]
+            base = [sys.executable, "-m", "kairospy", "--lake-root", str(root)]
             chinese = subprocess.run(
                 [*base, "--lang", "zh-CN", "factor", "verify-sma", "--fixture", "--fast", "5", "--slow", "15"],
                 cwd=ROOT, check=True, capture_output=True, text=True,
@@ -496,12 +496,12 @@ class ProductCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             completed = subprocess.run(
-                [sys.executable, "-m", "kairos", "--format", "json", "tutorial", "sma", "--output-root", str(root)],
+                [sys.executable, "-m", "kairospy", "--format", "json", "tutorial", "sma", "--output-root", str(root)],
                 cwd=ROOT, check=True, capture_output=True, text=True,
             )
             tutorial = json.loads(completed.stdout)
             repeated = subprocess.run(
-                [sys.executable, "-m", "kairos", "--format", "json", "tutorial", "sma", "--output-root", str(root)],
+                [sys.executable, "-m", "kairospy", "--format", "json", "tutorial", "sma", "--output-root", str(root)],
                 cwd=ROOT, check=True, capture_output=True, text=True,
             )
             created = command(root, "study", "create", "short-study", "--hypothesis", "SMA trend",
@@ -585,7 +585,7 @@ class ProductCliTests(unittest.TestCase):
                 "--run-root",str(root/"shadow-runtime-generic"),"--artifact-root",str(root/"shadow-artifacts-generic"))
             shadow_replay=command(root,"run","capture-replay","--artifact",shadow["artifact"],"--capture",shadow["capture"])
             unsupported = subprocess.run(
-                [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root),
+                [sys.executable, "-m", "kairospy", "--format", "json", "--lake-root", str(root),
                  "run", "shadow", "--strategy", "covered-call-v1@1.1.0", "--fixture",
                  "--run-root", str(root/"unsupported-shadow")],
                 cwd=ROOT, check=False, capture_output=True, text=True,
@@ -694,7 +694,7 @@ class ProductCliTests(unittest.TestCase):
             checked = command(root, "strategy", "check-promotion", "sma-cross-v1", "--version", "1.2.0",
                 "--to", "TRADE_PROXY_VALIDATED", "--evidence", str(evidence))
             failed = subprocess.run(
-                [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root),
+                [sys.executable, "-m", "kairospy", "--format", "json", "--lake-root", str(root),
                  "strategy", "promote", "sma-cross-v1", "--version", "1.2.0",
                  "--to", "TRADE_PROXY_VALIDATED", "--evidence", str(evidence), "--actor", "reviewer",
                  "--capital-limit", "10000", "--rollback-condition", "proxy evidence invalidated"],

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 import unittest
 from decimal import Decimal
 from uuid import uuid4
 
-from kairos.backtest.synthetic_scenarios import SyntheticScenario, build_synthetic_backtest_dataset
-from kairos.backtest.portfolio import BacktestPortfolio
-from kairos.backtest.settlement import due_settlements, intrinsic_value
-from kairos.domain.execution import TradeSide
-from kairos.domain.identity import AccountKey, AccountType, VenueId
-from kairos.domain.order import Fill, LegFill
-from kairos.domain.product import ListedOptionSpec, OptionRight
+from kairospy.backtest.synthetic_scenarios import SyntheticScenario, build_synthetic_backtest_dataset
+from kairospy.backtest.portfolio import BacktestPortfolio
+from kairospy.backtest.settlement import due_settlements, intrinsic_value
+from kairospy.domain.execution import TradeSide
+from kairospy.domain.identity import AccountKey, AccountType, VenueId
+from kairospy.domain.order import Fill, LegFill
+from kairospy.domain.product import ListedOptionSpec, OptionRight
 
 
 class SettlementTests(unittest.TestCase):

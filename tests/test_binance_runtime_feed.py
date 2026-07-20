@@ -7,9 +7,9 @@ from threading import Event
 import tempfile
 import unittest
 
-from kairos.application import ApplicationConfig, AsyncKairosRuntime, KairosApplication, RuntimePaths, runtime_feed_plan
-from kairos.connectors.binance import BinanceRuntimeFeedFactory
-from kairos.data import (
+from kairospy.application import ApplicationConfig, AsyncKairosRuntime, KairosApplication, RuntimePaths, runtime_feed_plan
+from kairospy.connectors.binance import BinanceRuntimeFeedFactory
+from kairospy.data import (
     DataCatalog,
     DataSetContractArtifact,
     LiveViewManifest,
@@ -20,9 +20,9 @@ from kairos.data import (
     load_live_view_manifest,
     write_live_view_manifest,
 )
-from kairos.data.products import BTC_SPOT_DAILY
-from kairos.ports import Environment
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.data.products import BTC_SPOT_DAILY
+from kairospy.ports import Environment
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 
 
 class OneMessageConnection:

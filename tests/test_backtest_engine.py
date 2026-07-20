@@ -8,18 +8,18 @@ from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
 
-from kairos.backtest.engine import BacktestEngine
-from kairos.backtest.synthetic_scenarios import SyntheticScenario, assess_dataset, build_synthetic_backtest_dataset
-from kairos.backtest.repository import BacktestRepository
-from kairos.backtest.result import BacktestConfig, ResultStatus
-from kairos.backtest.experiment_runner import BacktestExperimentRunner
-from kairos.risk.limits import RiskLimits
-from kairos.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
-from kairos.__main__ import main
-from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairos.backtest.calendar import AlwaysOpenCalendar, CalendarRegistry, TradingCalendar
-from kairos.domain.product import ProductType
-from kairos.data import DatasetKey, DatasetLayer, DataProductDefinition, register_market_replay_dataset
+from kairospy.backtest.engine import BacktestEngine
+from kairospy.backtest.synthetic_scenarios import SyntheticScenario, assess_dataset, build_synthetic_backtest_dataset
+from kairospy.backtest.repository import BacktestRepository
+from kairospy.backtest.result import BacktestConfig, ResultStatus
+from kairospy.backtest.experiment_runner import BacktestExperimentRunner
+from kairospy.risk.limits import RiskLimits
+from kairospy.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
+from kairospy.__main__ import main
+from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.backtest.calendar import AlwaysOpenCalendar, CalendarRegistry, TradingCalendar
+from kairospy.domain.product import ProductType
+from kairospy.data import DatasetKey, DatasetLayer, DataProductDefinition, register_market_replay_dataset
 from datetime import date, time
 
 

@@ -5,7 +5,7 @@ import json
 import tempfile
 import unittest
 
-from kairos.data import (
+from kairospy.data import (
     DataCatalog,
     DatasetKey,
     DatasetLayer,

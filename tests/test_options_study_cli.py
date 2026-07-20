@@ -6,10 +6,10 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from kairos.__main__ import main
-from kairos.data import DatasetKey, DatasetLayer, DataProductDefinition, register_market_replay_dataset
-from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
+from kairospy.__main__ import main
+from kairospy.data import DatasetKey, DatasetLayer, DataProductDefinition, register_market_replay_dataset
+from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
 
 
 class OptionsStudyCliTests(unittest.TestCase):

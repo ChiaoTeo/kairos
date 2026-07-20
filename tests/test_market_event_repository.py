@@ -5,8 +5,8 @@ from decimal import Decimal
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairos.domain.identity import InstrumentId
-from kairos.market_data import MarketEventEnvelope, MarketEventType, ParquetMarketEventRepository, validate_events
+from kairospy.domain.identity import InstrumentId
+from kairospy.market_data import MarketEventEnvelope, MarketEventType, ParquetMarketEventRepository, validate_events
 
 
 NOW = datetime(2026, 7, 15, 14, 30, tzinfo=timezone.utc)

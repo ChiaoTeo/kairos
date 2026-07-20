@@ -39,7 +39,7 @@ Spot/Perpetual Carry、Funding、Corporate Action、Assignment、Conservative/St
 
 | 要求 | 权威实现 | 证据 |
 |---|---|---|
-| Sandbox/Governed Study 分离 | `kairos.study_platform.workspace`、ValidationArtifactWriter | workspace 与 `data/studies` 不混用 |
+| Sandbox/Governed Study 分离 | `kairospy.study_platform.workspace`、ValidationArtifactWriter | workspace 与 `data/studies` 不混用 |
 | Study 可直接使用绑定数据 | `StudySession`、`StudyData` | Dataset hash 校验、Pandas/Polars/Arrow、profile、scaffold |
 | Factor 一等公民 | FactorSpec/Snapshot/Runtime/Registry | SMA、SPXW skew、fear-cooling factors |
 | Strategy Release 绑定代码和因子 | StrategyRegistry | implementation.json、factor_bindings.json、manifest.json |
@@ -61,15 +61,15 @@ Spot/Perpetual Carry、Funding、Corporate Action、Assignment、Conservative/St
 ## 正式命令入口
 
 ```text
-kairos tutorial sma
-kairos study create|inspect|data|profile|scaffold|freeze
-kairos factor register-sma|verify-sma
-kairos strategy register-sma|register-builtins|register-btc-iron-condor
-kairos strategy inspect|status|activate|rollback|check-promotion|promote
-kairos run backtest|simulate|shadow|paper|reference
-kairos run inspect|artifact-replay|capture-replay
-kairos order submit
-kairos runtime calibrate-execution|reference-artifact|failure-policy|l4-preflight|soak
+kairospy tutorial sma
+kairospy study create|inspect|data|profile|scaffold|freeze
+kairospy factor register-sma|verify-sma
+kairospy strategy register-sma|register-builtins|register-btc-iron-condor
+kairospy strategy inspect|status|activate|rollback|check-promotion|promote
+kairospy run backtest|simulate|shadow|paper|reference
+kairospy run inspect|artifact-replay|capture-replay
+kairospy order submit
+kairospy runtime calibrate-execution|reference-artifact|failure-policy|l4-preflight|soak
 ```
 
 人工订单使用 `order submit`；外部运行验收和 soak evidence 使用 `runtime soak`。
@@ -80,7 +80,7 @@ kairos runtime calibrate-execution|reference-artifact|failure-policy|l4-prefligh
 仍属于显式启用的外部 L4 验收：
 
 ```bash
-kairos runtime l4-preflight --venue binance --environment testnet \
+kairospy runtime l4-preflight --venue binance --environment testnet \
   --strategy sma-cross-v1 --instrument '<instrument-id>'
 ```
 
@@ -100,7 +100,7 @@ Promotion gate 会复算外部 readiness/soak artifact 的 `audit_hash`；证据
 
 ```bash
 ./scripts/check_naming_static.sh
-./pyenv/bin/python -m compileall -q kairos examples tests studies
+./pyenv/bin/python -m compileall -q kairospy examples tests studies
 ./pyenv/bin/python -m unittest discover -s tests
 git diff --check
 ```

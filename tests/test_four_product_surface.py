@@ -11,11 +11,11 @@ from types import SimpleNamespace
 import unittest
 
 from examples.backtest.governed_sma import canonical_events, fixture_bars
-from kairos.application import builtin_runtime_strategy_model_registry
-from kairos.execution.order_state import DurableOrderStatus
-from kairos.market_data import BoundedEventChannel
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
-from kairos.product_surface import DataProductApi, RunProductApi, StrategyProductApi, StudyProductApi
+from kairospy.application import builtin_runtime_strategy_model_registry
+from kairospy.execution.order_state import DurableOrderStatus
+from kairospy.market_data import BoundedEventChannel
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.product_surface import DataProductApi, RunProductApi, StrategyProductApi, StudyProductApi
 
 
 ROOT = Path(__file__).parents[1]
@@ -23,7 +23,7 @@ ROOT = Path(__file__).parents[1]
 
 def command(root: Path, *args: str) -> dict[str, object]:
     completed = subprocess.run(
-        [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root), *args],
+        [sys.executable, "-m", "kairospy", "--format", "json", "--lake-root", str(root), *args],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -609,7 +609,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "    count_path = Path(__file__).with_name('calls.txt')\n"
                 "    count = int(count_path.read_text()) if count_path.exists() else 0\n"
                 "    count_path.write_text(str(count + 1))\n"
-                "    token = context['credentials']['KAIROS_TEST_PROVIDER_TOKEN']\n"
+                "    token = context['credentials']['KAIROSPY_TEST_PROVIDER_TOKEN']\n"
                 "    sentiment = 0.8 if token == 'secret-token' else -1\n"
                 "    return [{'available_time': scope['start'], 'instrument_id': product['instrument_id'], 'sentiment': sentiment}]\n",
                 encoding="utf-8",
@@ -627,7 +627,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "source": {
                     "kind": "python_provider",
                     "path": "provider.py",
-                    "credentials": {"env": ["KAIROS_TEST_PROVIDER_TOKEN"]},
+                    "credentials": {"env": ["KAIROSPY_TEST_PROVIDER_TOKEN"]},
                 },
                 "products": [{
                     "dataset_id": "reference.sentiment.provider",
@@ -638,14 +638,14 @@ class FourProductSurfaceTests(unittest.TestCase):
 
             data = DataProductApi(root)
             registered = data.register_download("provider-sentiment", spec)
-            original_token = os.environ.pop("KAIROS_TEST_PROVIDER_TOKEN", None)
+            original_token = os.environ.pop("KAIROSPY_TEST_PROVIDER_TOKEN", None)
             try:
                 with self.assertRaisesRegex(ValueError, "missing required provider credentials"):
                     data.download("provider-sentiment")
-                os.environ["KAIROS_TEST_PROVIDER_TOKEN"] = "secret-token"
+                os.environ["KAIROSPY_TEST_PROVIDER_TOKEN"] = "secret-token"
                 downloaded = data.download("provider-sentiment")
                 rows = data.dataset("reference.sentiment.provider").rows(columns=("instrument_id", "sentiment"))
-                os.environ.pop("KAIROS_TEST_PROVIDER_TOKEN", None)
+                os.environ.pop("KAIROSPY_TEST_PROVIDER_TOKEN", None)
                 reused = data.download("provider-sentiment")
                 study = StudyProductApi(root)
                 study.open("provider-study")
@@ -653,14 +653,14 @@ class FourProductSurfaceTests(unittest.TestCase):
                 provider_calls = (external / "calls.txt").read_text(encoding="utf-8")
             finally:
                 if original_token is None:
-                    os.environ.pop("KAIROS_TEST_PROVIDER_TOKEN", None)
+                    os.environ.pop("KAIROSPY_TEST_PROVIDER_TOKEN", None)
                 else:
-                    os.environ["KAIROS_TEST_PROVIDER_TOKEN"] = original_token
+                    os.environ["KAIROSPY_TEST_PROVIDER_TOKEN"] = original_token
 
         self.assertEqual(registered["operation"], "register-download")
         self.assertEqual(downloaded["source"]["kind"], "python_provider")
         self.assertEqual(len(downloaded["source"]["provider_code_hash"]), 64)
-        self.assertEqual(downloaded["source"]["credentials"]["required_env"], ["KAIROS_TEST_PROVIDER_TOKEN"])
+        self.assertEqual(downloaded["source"]["credentials"]["required_env"], ["KAIROSPY_TEST_PROVIDER_TOKEN"])
         self.assertEqual(downloaded["source"]["row_count"], 1)
         self.assertEqual(rows[0]["instrument_id"], "equity:US:AAPL")
         self.assertEqual(rows[0]["sentiment"], 0.8)
@@ -724,7 +724,7 @@ class FourProductSurfaceTests(unittest.TestCase):
             root = Path(directory)
             root.joinpath("kairos.toml").write_text(
                 "[project]\nname = \"provider-config\"\n\n"
-                "[providers.test]\napi_key = \"env:KAIROS_TEST_CONFIG_PROVIDER_TOKEN\"\n",
+                "[providers.test]\napi_key = \"env:KAIROSPY_TEST_CONFIG_PROVIDER_TOKEN\"\n",
                 encoding="utf-8",
             )
             provider = root / "provider.py"
@@ -759,21 +759,21 @@ class FourProductSurfaceTests(unittest.TestCase):
 
             data = DataProductApi(root)
             data.register_download("config-provider-data", spec)
-            original_token = os.environ.pop("KAIROS_TEST_CONFIG_PROVIDER_TOKEN", None)
+            original_token = os.environ.pop("KAIROSPY_TEST_CONFIG_PROVIDER_TOKEN", None)
             try:
                 with self.assertRaisesRegex(ValueError, "missing required provider config credentials"):
                     data.download("config-provider-data")
-                os.environ["KAIROS_TEST_CONFIG_PROVIDER_TOKEN"] = "config-secret-token"
+                os.environ["KAIROSPY_TEST_CONFIG_PROVIDER_TOKEN"] = "config-secret-token"
                 downloaded = data.download("config-provider-data")
                 rows = data.dataset("reference.provider.config").rows(columns=("symbol", "score"))
             finally:
                 if original_token is None:
-                    os.environ.pop("KAIROS_TEST_CONFIG_PROVIDER_TOKEN", None)
+                    os.environ.pop("KAIROSPY_TEST_CONFIG_PROVIDER_TOKEN", None)
                 else:
-                    os.environ["KAIROS_TEST_CONFIG_PROVIDER_TOKEN"] = original_token
+                    os.environ["KAIROSPY_TEST_CONFIG_PROVIDER_TOKEN"] = original_token
 
         self.assertEqual(downloaded["source"]["credentials"]["required_config"], ["providers.test.api_key"])
-        self.assertEqual(downloaded["source"]["credentials"]["config_sources"]["providers.test.api_key"], "env:KAIROS_TEST_CONFIG_PROVIDER_TOKEN")
+        self.assertEqual(downloaded["source"]["credentials"]["config_sources"]["providers.test.api_key"], "env:KAIROSPY_TEST_CONFIG_PROVIDER_TOKEN")
         self.assertEqual(rows[0]["symbol"], "NVDA")
         self.assertEqual(rows[0]["score"], 11)
         self.assertNotIn("config-secret-token", json.dumps(downloaded))

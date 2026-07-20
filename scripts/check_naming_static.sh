@@ -39,7 +39,7 @@ workspace_name_offenders="$(
 require_empty "workspace contains legacy or generic file names" "$workspace_name_offenders"
 
 content_matches="$(
-  rg -n 'APPROVED_FOR_RESEARCH|RESEARCH_VALIDATED|ResearchDataClient|ResearchSpec|ResearchService|RunMode\.RESEARCH|research_composition|kairos\.research|from trading|import trading|name = "trader"|"trader"|"trading"|--adapter|args\.adapter|kairos\.adapters|from kairos\.adapters|import kairos\.adapters' . \
+  rg -n 'APPROVED_FOR_RESEARCH|RESEARCH_VALIDATED|ResearchDataClient|ResearchSpec|ResearchService|RunMode\.RESEARCH|research_composition|kairospy\.research|from trading|import trading|name = "trader"|"trader"|"trading"|--adapter|args\.adapter|kairospy\.adapters|from kairospy\.adapters|import kairospy\.adapters' . \
     --glob '!pyenv/**' \
     --glob '!.git/**' \
     --glob '!docs/naming_audit.md' \
@@ -50,7 +50,7 @@ content_matches="$(
 unexpected_content_matches=""
 while IFS= read -r line; do
   [[ -z "$line" ]] && continue
-  if [[ "$line" == './pyproject.toml:'*'exclude = ["kairos.research", "kairos.research.*", "research", "research.*", "studies", "studies.*"]' ]]; then
+  if [[ "$line" == './pyproject.toml:'*'exclude = ["kairospy.research", "kairospy.research.*", "research", "research.*", "studies", "studies.*"]' ]]; then
     continue
   fi
   unexpected_content_matches+="${line}"$'\n'
@@ -71,8 +71,8 @@ require_empty "README core naming table has duplicate rows" "$readme_duplicate_r
 for marker in \
   '普通用户不需要复制本仓库' \
   'python3 -m pip install kairospy' \
-  'mkdir my-kairos-project' \
-  'kairos init' \
+  'mkdir my-kairospy-project' \
+  'kairospy init' \
   'python studies/starter.py' \
   '安装包只包含 Kairos 产品库和 CLI，不包含本仓库顶层 `studies/` 源码研究工作区' \
   '如果你是从源码参与开发，再使用 editable 安装' \
@@ -86,19 +86,19 @@ if [[ -z "$readme_user_line" || -z "$readme_source_line" || "$readme_user_line" 
   fail "README does not present user pip install before source editable install"
 fi
 readme_legacy_install="$(
-  rg -n 'pip install trader|pip install kairos$|trader init' README.md || true
+  rg -n 'pip install trader|pip install kairospy$|trader init' README.md || true
 )"
 require_empty "README contains legacy trader install commands" "$readme_legacy_install"
 
 rg -n 'name = "kairospy"' pyproject.toml >/dev/null || fail "pyproject.toml distribution name is not kairospy"
-rg -n 'kairos = "kairos.__main__:main"' pyproject.toml >/dev/null || fail "pyproject.toml does not publish kairos CLI"
+rg -n 'kairospy = "kairospy.__main__:main"' pyproject.toml >/dev/null || fail "pyproject.toml does not publish kairospy CLI"
 [[ -f .github/workflows/release.yml ]] || fail "missing GitHub release workflow"
 rg -n 'environment: pypi' .github/workflows/release.yml >/dev/null || fail "release workflow does not use pypi environment"
 rg -n 'id-token: write' .github/workflows/release.yml >/dev/null || fail "release workflow does not grant OIDC id-token permission"
 rg -n 'pypa/gh-action-pypi-publish@release/v1' .github/workflows/release.yml >/dev/null || fail "release workflow does not use PyPI publish action"
-rg -n '"name": "kairos"' .kairos/project.json >/dev/null || fail ".kairos/project.json does not use kairos"
+rg -n '"name": "kairospy"' .kairos/project.json >/dev/null || fail ".kairos/project.json does not use kairospy"
 rg -n '"root": "\."' .kairos/project.json >/dev/null || fail ".kairos/project.json root is not portable"
-rg -n 'name = "kairos"' kairos.toml >/dev/null || fail "kairos.toml does not use kairos"
+rg -n 'name = "kairospy"' kairos.toml >/dev/null || fail "kairos.toml does not use kairospy"
 rg -n '^\[study\]' kairos.toml >/dev/null || fail "kairos.toml does not use [study]"
 
 printf 'naming static check passed\n'

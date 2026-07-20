@@ -9,21 +9,21 @@ import json
 import io
 import unittest
 
-from kairos.data import (
+from kairospy.data import (
     AcquirePolicy, AcquisitionLimits, DataCatalog, DataUnavailableError, DatasetKey, DatasetLayer,
     DataProductDefinition, DatasetRelease, DatasetStatus, DatasetStorageKind, FieldRef, OutputFormat, ProviderRegistry,
     QualityLevel, DatasetClient, RunMode, SourceBinding, TimeRange,
     ConsolidatedTradeBuilder, ConsolidatedTradeInput, ConsolidatedTradePolicy,
 )
-from kairos.domain.identity import InstrumentId
-from kairos.connectors.binance.datasets import BinanceSpotDatasetConnector
-from kairos.market_data import MarketEventEnvelope, MarketEventType, ParquetMarketEventRepository
-from kairos.storage.data_lake import write_daily_dataset, write_event_dataset
-from kairos.data.products import BTC_SPOT_DAILY
-from kairos.data.publishing import content_release_id, merge_release_rows, publish_release, release_path
-from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
-from kairos.__main__ import main
+from kairospy.domain.identity import InstrumentId
+from kairospy.connectors.binance.datasets import BinanceSpotDatasetConnector
+from kairospy.market_data import MarketEventEnvelope, MarketEventType, ParquetMarketEventRepository
+from kairospy.storage.data_lake import write_daily_dataset, write_event_dataset
+from kairospy.data.products import BTC_SPOT_DAILY
+from kairospy.data.publishing import content_release_id, merge_release_rows, publish_release, release_path
+from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
+from kairospy.__main__ import main
 
 
 NOW = datetime(2026, 7, 15, 14, 30, tzinfo=timezone.utc)
@@ -415,7 +415,7 @@ class DatasetClientTests(unittest.TestCase):
             self.assertEqual(plan.selected.provider, "test-provider")
             self.assertTrue(plan.connector_available)
             self.assertEqual(plan.estimate.requests, 1)
-            with self.assertRaisesRegex(DataUnavailableError, "kairos data acquire"):
+            with self.assertRaisesRegex(DataUnavailableError, "kairospy data acquire"):
                 client.get(product.key, start=start, end=end, acquire=AcquirePolicy.PLAN)
             release = client.acquire(plan)
             self.assertEqual(release.release_id, "ds_test_1")

@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from kairos.domain.identity import AccountKey, AccountType, AssetId, VenueId
-from kairos.domain.ledger import Ledger, LedgerBook
-from kairos.reference.identity import LocationId
-from kairos.treasury import FeePolicy, TransferOperation, TransferStatus, TreasuryAccountingProjector, TreasuryLedgerPostingService
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, VenueId
+from kairospy.domain.ledger import Ledger, LedgerBook
+from kairospy.reference.identity import LocationId
+from kairospy.treasury import FeePolicy, TransferOperation, TransferStatus, TreasuryAccountingProjector, TreasuryLedgerPostingService
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)

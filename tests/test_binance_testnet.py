@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 import os
 import unittest
 
-from kairos.ports import Environment
-from kairos.ports import ReferenceDataRequest
-from kairos.connectors.binance.account_gateway import BinanceAccountGateway
-from kairos.connectors.binance.reference_data import BinanceSpotReferenceDataClient
-from kairos.connectors.binance.request_signing import BinanceSigner, synchronize_clock
-from kairos.connectors.binance.rest_transport import RateLimiter, UrllibBinanceTransport
-from kairos.domain.identity import AccountKey, AccountType, VenueId
-from kairos.domain.product import ProductType
+from kairospy.ports import Environment
+from kairospy.ports import ReferenceDataRequest
+from kairospy.connectors.binance.account_gateway import BinanceAccountGateway
+from kairospy.connectors.binance.reference_data import BinanceSpotReferenceDataClient
+from kairospy.connectors.binance.request_signing import BinanceSigner, synchronize_clock
+from kairospy.connectors.binance.rest_transport import RateLimiter, UrllibBinanceTransport
+from kairospy.domain.identity import AccountKey, AccountType, VenueId
+from kairospy.domain.product import ProductType
 
 
 @unittest.skipUnless(

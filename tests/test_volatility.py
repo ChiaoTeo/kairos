@@ -6,11 +6,11 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from kairos.data import DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease
-from kairos.data.surface_features import SurfaceFeaturePublisher, load_surface_features
-from kairos.domain.identity import InstrumentId
-from kairos.domain.product import OptionRight
-from kairos.volatility import CalibrationStatus, SviParameters, VolObservation, build_surface, surface_implied_volatility, total_variance
+from kairospy.data import DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease
+from kairospy.data.surface_features import SurfaceFeaturePublisher, load_surface_features
+from kairospy.domain.identity import InstrumentId
+from kairospy.domain.product import OptionRight
+from kairospy.volatility import CalibrationStatus, SviParameters, VolObservation, build_surface, surface_implied_volatility, total_variance
 
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)

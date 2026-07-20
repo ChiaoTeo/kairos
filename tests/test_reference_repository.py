@@ -6,9 +6,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.domain.identity import AssetId, InstrumentId, VenueId
-from kairos.domain.product import EquitySpec, ProductType
-from kairos.reference import ReferenceCatalog, ReferenceCatalogRepository
+from kairospy.domain.identity import AssetId, InstrumentId, VenueId
+from kairospy.domain.product import EquitySpec, ProductType
+from kairospy.reference import ReferenceCatalog, ReferenceCatalogRepository
 from tests.reference_support import publish_test_instrument
 
 

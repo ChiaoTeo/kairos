@@ -3,7 +3,7 @@ import math
 import unittest
 
 from studies.btc_options_vrp.study import analyze, prepare_study_panel
-from kairos.features.volatility import build_iv_rv_panel
+from kairospy.features.volatility import build_iv_rv_panel
 
 
 class BtcOptionsVrpTest(unittest.TestCase):

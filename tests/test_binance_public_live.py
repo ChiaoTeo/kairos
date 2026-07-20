@@ -8,22 +8,22 @@ import tempfile
 import unittest
 from uuid import NAMESPACE_URL, uuid5
 
-from kairos.ports import Environment
-from kairos.connectors.binance.market_stream import BinanceStreamSession, WebSocketClientConnector, websocket_url
-from kairos.connectors.binance.order_book import (
+from kairospy.ports import Environment
+from kairospy.connectors.binance.market_stream import BinanceStreamSession, WebSocketClientConnector, websocket_url
+from kairospy.connectors.binance.order_book import (
     BinanceOrderBookSnapshotProvider, BinanceOrderBookSyncService,
 )
-from kairos.connectors.binance.rest_transport import UrllibBinanceTransport
-from kairos.connectors.binance.stream import BinanceCanonicalStreamService
-from kairos.contracts import MarketEventKind, QuotePayload
-from kairos.domain.identity import InstrumentId
-from kairos.domain.intent import TargetPositionIntent
-from kairos.market_data import (
+from kairospy.connectors.binance.rest_transport import UrllibBinanceTransport
+from kairospy.connectors.binance.stream import BinanceCanonicalStreamService
+from kairospy.contracts import MarketEventKind, QuotePayload
+from kairospy.domain.identity import InstrumentId
+from kairospy.domain.intent import TargetPositionIntent
+from kairospy.market_data import (
     BoundedEventChannel, CanonicalCaptureWriter, CanonicalQuoteProjection, CapturedCanonicalEventSource,
     CanonicalOrderBookProjection,
     IterableEventSource,
 )
-from kairos.strategies import CanonicalStrategyEventSession, StrategyContext, StrategyDecision
+from kairospy.strategies import CanonicalStrategyEventSession, StrategyContext, StrategyDecision
 
 
 class PublicQuoteAuditStrategy:

@@ -11,13 +11,13 @@
 - 本地确定性生命周期：`Study -> Factor -> Strategy -> Backtest -> Historical Simulation -> Shadow -> Live Paper fixture -> Replay -> Audit`。
 - 统一产品命令：`study`、`factor`、`strategy`、`run`、`order`、`runtime`。
 - Notebook/Python 入口：`Kairos(...).backtest(...)` 返回可查看 summary、trades、equity 和 explain 的结果视图。
-- 统一运行入口：`kairos run backtest/simulate/shadow/paper --strategy sma-cross-v1@1.2.0 ...`。
-- Shadow 入口：`kairos run shadow --strategy ...` 使用 Capture/fixture 计算完整决策和假设 Intent，但不提交订单。
-- 真实行情模拟盘入口：`kairos run paper --strategy ... --live-binance-symbol BTCUSDT ...` 使用 Binance 公共 K 线作为输入，执行仍走模拟账户，不需要账户凭据，不会真实下单。
-- 策略晋级入口：`kairos strategy promote ... --evidence ...`，晋级证据会被哈希、经过 promotion gate，并写入可独立审计的 evidence bundle。
-- 晋级预检查入口：`kairos strategy check-promotion ... --evidence ...` 使用同一套 gate、hash 和生命周期顺序检查，但不会修改 Strategy Release。
-- 执行校准入口：`kairos runtime calibrate-execution ...` 可从 Runtime Store 的订单/成交事实生成 `ExecutionCalibrationRelease`。
-- 回测执行校准对比：`kairos run backtest ... --execution-calibration <manifest>` 会校验校准 release hash，在 Run Artifact 中记录绑定状态、release id/hash、样本数与适用 venue/environment，并给出按校准平均 `fee_bps` 重估的基线/校准后权益对比。
+- 统一运行入口：`kairospy run backtest/simulate/shadow/paper --strategy sma-cross-v1@1.2.0 ...`。
+- Shadow 入口：`kairospy run shadow --strategy ...` 使用 Capture/fixture 计算完整决策和假设 Intent，但不提交订单。
+- 真实行情模拟盘入口：`kairospy run paper --strategy ... --live-binance-symbol BTCUSDT ...` 使用 Binance 公共 K 线作为输入，执行仍走模拟账户，不需要账户凭据，不会真实下单。
+- 策略晋级入口：`kairospy strategy promote ... --evidence ...`，晋级证据会被哈希、经过 promotion gate，并写入可独立审计的 evidence bundle。
+- 晋级预检查入口：`kairospy strategy check-promotion ... --evidence ...` 使用同一套 gate、hash 和生命周期顺序检查，但不会修改 Strategy Release。
+- 执行校准入口：`kairospy runtime calibrate-execution ...` 可从 Runtime Store 的订单/成交事实生成 `ExecutionCalibrationRelease`。
+- 回测执行校准对比：`kairospy run backtest ... --execution-calibration <manifest>` 会校验校准 release hash，在 Run Artifact 中记录绑定状态、release id/hash、样本数与适用 venue/environment，并给出按校准平均 `fee_bps` 重估的基线/校准后权益对比。
 - 人工订单与自动策略入口分离：人工运维使用 `order submit`；外部运行验收使用 `runtime soak`。
 - Run Artifact 可解释：`run inspect --artifact ... --at ...`。
 - Replay 可验证：`run artifact-replay` 和 `run capture-replay`。
@@ -52,10 +52,10 @@
 ## 推荐可用性验收命令
 
 ```bash
-./pyenv/bin/python -m unittest tests.test_kairos_api tests.test_product_cli tests.test_strategy_registry tests.test_strategy_promotion_gate
+./pyenv/bin/python -m unittest tests.test_kairospy_api tests.test_product_cli tests.test_strategy_registry tests.test_strategy_promotion_gate
 ./pyenv/bin/python examples/lifecycle/full_product_acceptance.py
 ./pyenv/bin/python -m unittest discover -s tests
-./pyenv/bin/python -m compileall -q kairos examples tests studies
+./pyenv/bin/python -m compileall -q kairospy examples tests studies
 git diff --check
 ```
 

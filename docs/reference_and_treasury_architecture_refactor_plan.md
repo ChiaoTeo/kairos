@@ -31,7 +31,7 @@
 - live CLI 的所有交易/行情入口完全切换为 V2 Catalog；
 - 旧版 IBKR/Binance connector 内部参数从 `InstrumentDefinition` 改为解析后的轻量 contract；
 - 旧研究快照 builder 已收敛为 `OptionCaptureSnapshot`；后续仅剩少量 synthetic compatibility 分支移除；
-- 旧版 `kairos.reference.ReferenceCatalog`、嵌套 `ListingDefinition` 和兼容 facade 的最终删除；
+- 旧版 `kairospy.reference.ReferenceCatalog`、嵌套 `ListingDefinition` 和兼容 facade 的最终删除；
 - 完成删除后的全量故障注入与最终逐项验收审计。
 
 ## 2. 当前系统基础与核心判断
@@ -144,7 +144,7 @@ Intent 不能直接作为已完成事实入账；Operation 状态也不能替代
 
 ### 4.1 身份类型
 
-在 `kairos.reference.identity` 中增加：
+在 `kairospy.reference.identity` 中增加：
 
 ```python
 EntityId
@@ -847,7 +847,7 @@ Portfolio 需要区分：
 ## 8. 建议项目目录
 
 ```text
-kairos/
+kairospy/
   reference/
     identity.py
     asset.py

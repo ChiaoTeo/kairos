@@ -1,4 +1,4 @@
-from kairos.data import DataCatalog
+from kairospy.data import DataCatalog
 
 
 catalog = DataCatalog("data")

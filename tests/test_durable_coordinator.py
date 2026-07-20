@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -9,18 +9,18 @@ import tempfile
 import unittest
 from uuid import UUID
 
-from kairos.ports import ComboLegRequest, ComboOrderRequest, OrderAck, OrderRequest
-from kairos.application.clock import FixedClock
-from kairos.domain.capability import OrderType
-from kairos.domain.execution import TradeSide
-from kairos.domain.identity import AccountKey, AccountType, InstrumentId, VenueId
-from kairos.domain.intent import CancelIntent
-from kairos.domain.order import ExecutionInstructions, TimeInForce
-from kairos.execution.order_state import DurableOrderStatus
-from kairos.orchestration.coordinator import ExecutionCoordinator
-from kairos.orchestration.event_log import PersistentEventLog
-from kairos.orchestration.kill_switch import KillSwitch
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.ports import ComboLegRequest, ComboOrderRequest, OrderAck, OrderRequest
+from kairospy.application.clock import FixedClock
+from kairospy.domain.capability import OrderType
+from kairospy.domain.execution import TradeSide
+from kairospy.domain.identity import AccountKey, AccountType, InstrumentId, VenueId
+from kairospy.domain.intent import CancelIntent
+from kairospy.domain.order import ExecutionInstructions, TimeInForce
+from kairospy.execution.order_state import DurableOrderStatus
+from kairospy.orchestration.coordinator import ExecutionCoordinator
+from kairospy.orchestration.event_log import PersistentEventLog
+from kairospy.orchestration.kill_switch import KillSwitch
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 from tests.runtime_support import operational_application
 
 

@@ -1,6 +1,6 @@
 import argparse
 
-from kairos.data import OutputFormat, DatasetClient
+from kairospy.data import OutputFormat, DatasetClient
 
 
 parser = argparse.ArgumentParser()

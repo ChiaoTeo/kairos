@@ -6,19 +6,19 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from kairos.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider, decimal_or_none
-from kairos.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
-from kairos.domain.identity import AssetId, InstrumentId, VenueId
-from kairos.domain.market_data import OptionChain
-from kairos.domain.market_data import Greeks, Quote
-from kairos.domain.market_state import MarketState, apply_market_event
-from kairos.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from kairos.study_platform.option_snapshot_analysis import analyze_option_snapshot
-from kairos.study_platform.option_universe_selector import select_expirations, select_instruments, select_strikes
-from kairos.study_platform.snapshot import build_snapshot
-from kairos.study_platform.spec import OptionChainCaptureSpec
-from kairos.storage.codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, snapshot_to_primitive
-from kairos.reference import ReferenceCatalog
+from kairospy.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider, decimal_or_none
+from kairospy.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
+from kairospy.domain.identity import AssetId, InstrumentId, VenueId
+from kairospy.domain.market_data import OptionChain
+from kairospy.domain.market_data import Greeks, Quote
+from kairospy.domain.market_state import MarketState, apply_market_event
+from kairospy.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairospy.study_platform.option_snapshot_analysis import analyze_option_snapshot
+from kairospy.study_platform.option_universe_selector import select_expirations, select_instruments, select_strikes
+from kairospy.study_platform.snapshot import build_snapshot
+from kairospy.study_platform.spec import OptionChainCaptureSpec
+from kairospy.storage.codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, snapshot_to_primitive
+from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
 

@@ -8,10 +8,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.__main__ import main
-from kairos.application.runtime_reference_artifact import RUNTIME_REFERENCE_SCENARIO_ID, run_runtime_reference_artifact
-from kairos.execution.order_state import DurableOrderStatus
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.__main__ import main
+from kairospy.application.runtime_reference_artifact import RUNTIME_REFERENCE_SCENARIO_ID, run_runtime_reference_artifact
+from kairospy.execution.order_state import DurableOrderStatus
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 from tests.test_runtime_store import request
 
 

@@ -3,13 +3,13 @@ from decimal import Decimal
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairos.ports import Environment
-from kairos.domain.capability import TimeInForce
-from kairos.domain.strategy_contract import StrategyLifecycle
-from kairos.execution.policy import ExecutionMode,ExecutionPolicy
-from kairos.strategies.btc_iron_condor import BtcIronCondorStrategy
-from kairos.strategies.deployment import StrategyDeploymentGate
-from kairos.strategies.registry import StrategyRegistry
+from kairospy.ports import Environment
+from kairospy.domain.capability import TimeInForce
+from kairospy.domain.strategy_contract import StrategyLifecycle
+from kairospy.execution.policy import ExecutionMode,ExecutionPolicy
+from kairospy.strategies.btc_iron_condor import BtcIronCondorStrategy
+from kairospy.strategies.deployment import StrategyDeploymentGate
+from kairospy.strategies.registry import StrategyRegistry
 
 
 class StrategyDeploymentTest(unittest.TestCase):

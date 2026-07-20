@@ -1,7 +1,7 @@
 import argparse
 from decimal import Decimal
 
-from kairos.data import ConsolidatedTradeBuilder, ConsolidatedTradeInput, ConsolidatedTradePolicy
+from kairospy.data import ConsolidatedTradeBuilder, ConsolidatedTradeInput, ConsolidatedTradePolicy
 
 
 parser = argparse.ArgumentParser()

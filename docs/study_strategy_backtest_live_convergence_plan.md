@@ -2,7 +2,7 @@
 
 状态：Proposed  
 日期：2026-07-17  
-适用范围：整个项目，重点包括 `kairos.data`、`kairos.study_platform`、`kairos.features`、`kairos.strategies`、`kairos.backtest`、`kairos.application`、`kairos.execution`、CLI、`examples/`、`studies/` 和 `data/` 中的治理产物。
+适用范围：整个项目，重点包括 `kairospy.data`、`kairospy.study_platform`、`kairospy.features`、`kairospy.strategies`、`kairospy.backtest`、`kairospy.application`、`kairospy.execution`、CLI、`examples/`、`studies/` 和 `data/` 中的治理产物。
 
 ## 1. 文档目的
 
@@ -131,7 +131,7 @@ Kairos 应被建设为：
 
 ### 断点一：Study 的出口不明确
 
-用户可以通过 Notebook、`studies/<study>`、`kairos.study_platform.features`、`kairos.features` 等多种方式计算特征，但没有统一回答：
+用户可以通过 Notebook、`studies/<study>`、`kairospy.study_platform.features`、`kairospy.features` 等多种方式计算特征，但没有统一回答：
 
 - 哪些只是临时研究列；
 - 哪些是可复现因子；
@@ -303,32 +303,32 @@ Operations Workspace
 保留 Python API 供研究使用，同时将 CLI 调整为产品旅程：
 
 ```text
-kairos data ...
-kairos study ...
-kairos factor ...
-kairos strategy ...
-kairos run ...
-kairos ops ...
-kairos order ...
+kairospy data ...
+kairospy study ...
+kairospy factor ...
+kairospy strategy ...
+kairospy run ...
+kairospy ops ...
+kairospy order ...
 ```
 
 建议的关键命令：
 
 ```bash
-kairos study create <study-id>
-kairos study freeze <study-id>
-kairos factor register <study-id> --factor <factor-id>
-kairos strategy create <strategy-id>
-kairos strategy validate <strategy-id>
-kairos strategy promote <strategy-id> --to <stage>
-kairos run backtest <strategy-release>
-kairos run simulate <strategy-release>
-kairos run paper <strategy-release>
-kairos run live <strategy-release> --confirm-live
-kairos run inspect <run-id>
-kairos ops reconcile <run-id>
-kairos ops replay <run-id>
-kairos order submit ...
+kairospy study create <study-id>
+kairospy study freeze <study-id>
+kairospy factor register <study-id> --factor <factor-id>
+kairospy strategy create <strategy-id>
+kairospy strategy validate <strategy-id>
+kairospy strategy promote <strategy-id> --to <stage>
+kairospy run backtest <strategy-release>
+kairospy run simulate <strategy-release>
+kairospy run paper <strategy-release>
+kairospy run live <strategy-release> --confirm-live
+kairospy run inspect <run-id>
+kairospy ops reconcile <run-id>
+kairospy ops replay <run-id>
+kairospy order submit ...
 ```
 
 `order submit` 明确表示人工订单；`run paper/live` 才表示持续运行自动策略。
@@ -473,10 +473,10 @@ Freeze 后必须记录：
 操作：
 
 ```bash
-kairos data search --dimension instrument=BTC-USDT --dimension frequency=1h
-kairos data freeze --dataset market.ohlcv.crypto.binance.btc-usdt.1h \
+kairospy data search --dimension instrument=BTC-USDT --dimension frequency=1h
+kairospy data freeze --dataset market.ohlcv.crypto.binance.btc-usdt.1h \
   --start 2024-01-01T00:00:00Z --end 2026-01-01T00:00:00Z
-kairos study create btc-short-trend-v1 --input <snapshot-id>
+kairospy study create btc-short-trend-v1 --input <snapshot-id>
 ```
 
 用户在 Notebook 中自由尝试 SMA、EMA、momentum、不同窗口和统计方法。
@@ -495,9 +495,9 @@ kairos study create btc-short-trend-v1 --input <snapshot-id>
 操作形态：
 
 ```bash
-kairos study freeze btc-short-trend-v1
-kairos factor register btc-short-trend-v1 --factor sma-spread-v1
-kairos factor verify sma-spread-v1 --mode batch,replay
+kairospy study freeze btc-short-trend-v1
+kairospy factor register btc-short-trend-v1 --factor sma-spread-v1
+kairospy factor verify sma-spread-v1 --mode batch,replay
 ```
 
 预期结果：
@@ -514,9 +514,9 @@ kairos factor verify sma-spread-v1 --mode batch,replay
 操作形态：
 
 ```bash
-kairos strategy create sma-cross-v1 --factor sma-spread-v1
-kairos strategy validate sma-cross-v1 --stage trade-proxy
-kairos run backtest sma-cross-v1@candidate
+kairospy strategy create sma-cross-v1 --factor sma-spread-v1
+kairospy strategy validate sma-cross-v1 --stage trade-proxy
+kairospy run backtest sma-cross-v1@candidate
 ```
 
 预期结果：
@@ -533,9 +533,9 @@ kairos run backtest sma-cross-v1@candidate
 操作形态：
 
 ```bash
-kairos run simulate sma-cross-v1@1.0.0 --dataset <release-id>
-kairos run inspect <run-id>
-kairos ops restart-drill <run-id>
+kairospy run simulate sma-cross-v1@1.0.0 --dataset <release-id>
+kairospy run inspect <run-id>
+kairospy ops restart-drill <run-id>
 ```
 
 预期结果：
@@ -553,9 +553,9 @@ kairos ops restart-drill <run-id>
 操作形态：
 
 ```bash
-kairos run preflight sma-cross-v1@1.0.0 \
+kairospy run preflight sma-cross-v1@1.0.0 \
   --mode paper --venue binance --account default
-kairos run paper sma-cross-v1@1.0.0 \
+kairospy run paper sma-cross-v1@1.0.0 \
   --venue binance --account default --duration 24h
 ```
 
@@ -576,8 +576,8 @@ kairos run paper sma-cross-v1@1.0.0 \
 操作形态：
 
 ```bash
-kairos run inspect <run-id> --at 2026-07-17T08:00:00Z
-kairos ops replay <run-id> --until 2026-07-17T08:00:00Z
+kairospy run inspect <run-id> --at 2026-07-17T08:00:00Z
+kairospy ops replay <run-id> --until 2026-07-17T08:00:00Z
 ```
 
 预期结果：
@@ -596,7 +596,7 @@ kairos ops replay <run-id> --until 2026-07-17T08:00:00Z
 操作形态：
 
 ```bash
-kairos order submit --venue binance --environment testnet \
+kairospy order submit --venue binance --environment testnet \
   --instrument crypto:binance:spot:BTCUSDT --side sell --quantity 0.001
 ```
 
@@ -832,7 +832,7 @@ RunRepository
 
 工作：
 
-1. 新增 `kairos run paper` 或等价 Application 入口；
+1. 新增 `kairospy run paper` 或等价 Application 入口；
 2. 加载 StrategyRelease/FactorRelease；
 3. 接入实时 Canonical Event Source；
 4. 接入正式 Portfolio/Risk/Coordinator；

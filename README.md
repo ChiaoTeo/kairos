@@ -29,7 +29,7 @@ Study -> Factor -> Strategy -> Backtest -> Simulation -> Shadow -> Paper Fixture
 
 ## 🚀 核心功能
 
-- 📦 **项目初始化**：`kairos init` 在任意空目录创建自己的 Kairos 项目。
+- 📦 **项目初始化**：`kairospy init` 在任意空目录创建自己的 Kairos 项目。
 - 🔍 **数据治理**：管理 Data Product、Dataset Release、质量等级、别名和数据审计。
 - 🧠 **Study / Factor**：从假设、数据绑定、特征计算到可冻结的研究证据。
 - ⚙️ **Strategy Release**：注册、检查、晋级和回滚可运行策略版本。
@@ -52,18 +52,18 @@ python3 -m pip install 'kairospy[data,massive]'
 创建一个自己的项目：
 
 ```bash
-mkdir my-kairos-project
-cd my-kairos-project
-kairos init
-kairos project status
-kairos doctor
+mkdir my-kairospy-project
+cd my-kairospy-project
+kairospy init
+kairospy project status
+kairospy doctor
 python studies/starter.py
 ```
 
 也可以用交互式初始化：
 
 ```bash
-kairos init --interactive
+kairospy init --interactive
 ```
 
 配置外部 provider：
@@ -73,15 +73,15 @@ export MASSIVE_API_KEY='...'
 export BINANCE_TESTNET_API_KEY='...'
 export BINANCE_TESTNET_API_SECRET='...'
 
-kairos configure massive
-kairos configure binance --environment testnet
+kairospy configure massive
+kairospy configure binance --environment testnet
 ```
 
-直接运行 `kairos configure` 会进入交互式向导；`kairos config show/path/set/unset/validate` 是底层 TOML 配置入口。`kairos doctor` 会输出状态表和可执行的 Next Steps。CLI 默认输出面向人类的专业表格，脚本和 CI 使用稳定 JSON：
+直接运行 `kairospy configure` 会进入交互式向导；`kairospy config show/path/set/unset/validate` 是底层 TOML 配置入口。`kairospy doctor` 会输出状态表和可执行的 Next Steps。CLI 默认输出面向人类的专业表格，脚本和 CI 使用稳定 JSON：
 
 ```bash
-kairos doctor
-kairos --format json doctor
+kairospy doctor
+kairospy --format json doctor
 ```
 
 可选安装富文本和交互增强：
@@ -95,8 +95,8 @@ python3 -m pip install 'kairospy[cli]'
 ```bash
 python3 -m venv pyenv
 ./pyenv/bin/pip install -e '.[data,query,notebook]'
-./pyenv/bin/kairos --help
-./pyenv/bin/kairos tutorial sma
+./pyenv/bin/kairospy --help
+./pyenv/bin/kairospy tutorial sma
 ```
 
 静态命名和打包边界检查：
@@ -108,14 +108,14 @@ python3 -m venv pyenv
 运行一个无凭据、无下单的 SMA 教程：
 
 ```bash
-kairos tutorial sma
+kairospy tutorial sma
 ```
 
 运行统一回测入口：
 
 ```bash
-kairos run backtest --strategy sma-cross-v1 --fixture --fast 5 --slow 15
-kairos run backtest --strategy sma-cross-v1 --fixture --fast 5 --slow 15 --control
+kairospy run backtest --strategy sma-cross-v1 --fixture --fast 5 --slow 15
+kairospy run backtest --strategy sma-cross-v1 --fixture --fast 5 --slow 15 --control
 ```
 
 `--control` 会显示 Run Control 控制台和 Run Summary，包含 pipeline、metrics、artifact、audit hash 和可执行的下一步命令；`--format json` 仍只输出稳定 JSON。
@@ -123,7 +123,7 @@ kairos run backtest --strategy sma-cross-v1 --fixture --fast 5 --slow 15 --contr
 Python API 示例：
 
 ```python
-from kairos import Kairos
+from kairospy import Kairos
 
 result = Kairos().backtest(
     strategy="sma-cross-v1",
@@ -146,4 +146,4 @@ print(result.summary())
 
 ## 🌟 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ChiaoTeo/kairos&type=Date)](https://www.star-history.com/#ChiaoTeo/kairos&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=ChiaoTeo/kairospy&type=Date)](https://www.star-history.com/#ChiaoTeo/kairospy&Date)

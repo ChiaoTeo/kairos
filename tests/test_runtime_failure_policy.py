@@ -7,24 +7,24 @@ import tempfile
 import unittest
 from uuid import UUID
 
-from kairos.accounting.ledger import LedgerService
-from kairos.ports import OrderAck
-from kairos.connectors.simulated import SimulatedExecutionAccountGateway
-from kairos.application import ApplicationConfig, FixedClock, RuntimePaths, RuntimeRecoveryService, RuntimeStatus, KairosApplication
-from kairos.application.runtime_failure_policy import RUNTIME_FAILURE_POLICY_ID, run_runtime_failure_policy
-from kairos.domain.execution import TradeExecution, TradeSide
-from kairos.domain.identity import AssetId, VenueId
-from kairos.domain.ledger import Ledger
-from kairos.execution.ingestion import DurableExecutionIngestionService
-from kairos.execution.order_state import DurableOrderStatus
-from kairos.execution.recovery import VenueOrderRecoveryService
-from kairos.execution.router import ExecutionRouter
-from kairos.orchestration.coordinator import ExecutionCoordinator
-from kairos.orchestration.event_log import PersistentEventLog
-from kairos.orchestration.faults import InjectedRuntimeFailure, OneShotRuntimeFaultInjector, RuntimeFaultPoint
-from kairos.orchestration.kill_switch import KillSwitch
-from kairos.orchestration.reconciliation import ReconciliationService
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.accounting.ledger import LedgerService
+from kairospy.ports import OrderAck
+from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
+from kairospy.application import ApplicationConfig, FixedClock, RuntimePaths, RuntimeRecoveryService, RuntimeStatus, KairosApplication
+from kairospy.application.runtime_failure_policy import RUNTIME_FAILURE_POLICY_ID, run_runtime_failure_policy
+from kairospy.domain.execution import TradeExecution, TradeSide
+from kairospy.domain.identity import AssetId, VenueId
+from kairospy.domain.ledger import Ledger
+from kairospy.execution.ingestion import DurableExecutionIngestionService
+from kairospy.execution.order_state import DurableOrderStatus
+from kairospy.execution.recovery import VenueOrderRecoveryService
+from kairospy.execution.router import ExecutionRouter
+from kairospy.orchestration.coordinator import ExecutionCoordinator
+from kairospy.orchestration.event_log import PersistentEventLog
+from kairospy.orchestration.faults import InjectedRuntimeFailure, OneShotRuntimeFaultInjector, RuntimeFaultPoint
+from kairospy.orchestration.kill_switch import KillSwitch
+from kairospy.orchestration.reconciliation import ReconciliationService
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 from tests.test_durable_execution_ingestion import catalog
 from tests.test_runtime_store import request
 from tests.runtime_support import operational_application

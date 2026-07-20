@@ -10,17 +10,17 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
-from kairos.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
-from kairos.domain.identity import AssetId, InstrumentId, VenueId
-from kairos.domain.market_data import OptionChain
-from kairos.domain.market_data import Greeks, Quote
-from kairos.domain.product import IndexSpec, ProductType
-from kairos.__main__ import main
-from kairos.study_platform.option_capture import OptionCaptureService
-from kairos.study_platform.spec import OptionChainCaptureSpec
-from kairos.storage.repository import FileOptionCaptureRepository
-from kairos.reference import ReferenceCatalog
-from kairos.reference.contracts import InstrumentDefinition
+from kairospy.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
+from kairospy.domain.identity import AssetId, InstrumentId, VenueId
+from kairospy.domain.market_data import OptionChain
+from kairospy.domain.market_data import Greeks, Quote
+from kairospy.domain.product import IndexSpec, ProductType
+from kairospy.__main__ import main
+from kairospy.study_platform.option_capture import OptionCaptureService
+from kairospy.study_platform.spec import OptionChainCaptureSpec
+from kairospy.storage.repository import FileOptionCaptureRepository
+from kairospy.reference import ReferenceCatalog
+from kairospy.reference.contracts import InstrumentDefinition
 from tests.reference_support import publish_test_instrument
 
 

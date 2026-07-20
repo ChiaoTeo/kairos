@@ -1,26 +1,26 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 import unittest
 from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from kairos.backtest.execution import ExecutionPlanner, combo_quote
-from kairos.backtest.clock import BacktestClock
-from kairos.backtest.fill import FillModelType, FixedCommissionModel, ListedOptionComboFillModel
-from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
-from kairos.backtest.portfolio import BacktestPortfolio
-from kairos.domain.execution import TradeSide
-from kairos.domain.identity import AccountKey, AccountType, VenueId
-from kairos.domain.intent import LegIntent, OpenStructureIntent
-from kairos.domain.market_data import Quote
-from kairos.domain.order import Fill, LegFill, OrderStatus, TimeInForce
-from kairos.domain.product import ListedOptionSpec
-from kairos.risk.engine import RiskDecisionType, RiskEngine
-from kairos.risk.limits import RiskLimits
-from kairos.storage.codec import from_primitive, to_primitive
+from kairospy.backtest.execution import ExecutionPlanner, combo_quote
+from kairospy.backtest.clock import BacktestClock
+from kairospy.backtest.fill import FillModelType, FixedCommissionModel, ListedOptionComboFillModel
+from kairospy.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
+from kairospy.backtest.portfolio import BacktestPortfolio
+from kairospy.domain.execution import TradeSide
+from kairospy.domain.identity import AccountKey, AccountType, VenueId
+from kairospy.domain.intent import LegIntent, OpenStructureIntent
+from kairospy.domain.market_data import Quote
+from kairospy.domain.order import Fill, LegFill, OrderStatus, TimeInForce
+from kairospy.domain.product import ListedOptionSpec
+from kairospy.risk.engine import RiskDecisionType, RiskEngine
+from kairospy.risk.limits import RiskLimits
+from kairospy.storage.codec import from_primitive, to_primitive
 
 
 class BacktestFillContractTests(unittest.TestCase):
@@ -113,7 +113,7 @@ class BacktestFillContractTests(unittest.TestCase):
 
     def test_single_sided_quote_uses_directional_fallback_and_is_counted(self) -> None:
         from dataclasses import replace
-        from kairos.study_platform.snapshot import InstrumentSnapshot
+        from kairospy.study_platform.snapshot import InstrumentSnapshot
         portfolio = BacktestPortfolio(Decimal("100000"), self.catalog, self.account)
         structure_id = uuid4()
         portfolio.apply_fill(Fill(uuid4(), uuid4(), uuid4(), "test", structure_id, self.second.timestamp, (LegFill(self.long, TradeSide.BUY, 1, Decimal("2.2")),), Decimal("-2.2"), 1, Decimal("1"), Decimal("0"), False))

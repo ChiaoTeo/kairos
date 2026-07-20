@@ -64,7 +64,7 @@ Live == Replay: true
 ## 自动回归
 
 ```text
-compileall kairos/tests/examples: passed
+compileall kairospy/tests/examples: passed
 full suite: 421 passed, 5 optional external integrations skipped
 public Binance Quote/Depth integration: 2 passed
 git diff --check: passed

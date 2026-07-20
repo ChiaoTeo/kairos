@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from kairos.application import (
+from kairospy.application import (
     backtest_composition, historical_simulation_composition, live_composition,
     paper_trading_composition, study_composition,
 )

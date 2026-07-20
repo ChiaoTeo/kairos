@@ -7,12 +7,12 @@ import tempfile
 import unittest
 from uuid import NAMESPACE_URL, uuid5
 
-from kairos.contracts import canonical_from_domain_market_data
-from kairos.domain.identity import InstrumentId
-from kairos.domain.intent import TargetPositionIntent
-from kairos.domain.market_data import Quote
-from kairos.market_data import CanonicalCaptureWriter, CapturedCanonicalEventSource, IterableEventSource
-from kairos.strategies import CanonicalStrategyEventSession, StrategyContext, StrategyDecision
+from kairospy.contracts import canonical_from_domain_market_data
+from kairospy.domain.identity import InstrumentId
+from kairospy.domain.intent import TargetPositionIntent
+from kairospy.domain.market_data import Quote
+from kairospy.market_data import CanonicalCaptureWriter, CapturedCanonicalEventSource, IterableEventSource
+from kairospy.strategies import CanonicalStrategyEventSession, StrategyContext, StrategyDecision
 
 
 INSTRUMENT = InstrumentId("crypto:binance:spot:BTCUSDT")

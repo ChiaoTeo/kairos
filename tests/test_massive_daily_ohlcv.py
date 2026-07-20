@@ -9,10 +9,10 @@ from tempfile import TemporaryDirectory
 import unittest
 from types import SimpleNamespace
 
-from kairos.connectors.massive import MassiveEquityDailyOhlcvPipeline, SpxwDailyOhlcvPipeline
-from kairos.connectors.massive.vendor_archive import MassiveFlatFileBatchDownloader, request_fingerprint
-from kairos.data import DataCatalog, DatasetQualityService, QualityLevel, DatasetClient
-from kairos.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
+from kairospy.connectors.massive import MassiveEquityDailyOhlcvPipeline, MassiveEquityHourlyOhlcvPipeline, SpxwDailyOhlcvPipeline
+from kairospy.connectors.massive.vendor_archive import MassiveFlatFileBatchDownloader, request_fingerprint
+from kairospy.data import DataCatalog, DatasetQualityService, QualityLevel, DatasetClient
+from kairospy.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
 
 
 HEADER = "ticker,volume,open,close,high,low,window_start,transactions\n"
@@ -84,6 +84,35 @@ class MassiveDailyOhlcvTests(unittest.TestCase):
             row = pq.read_table(raw_dir / raw["file"]).to_pylist()[0]
             self.assertEqual(row["ticker"], "NVDA")
             self.assertEqual(row["price_view"], "raw")
+
+    def test_equity_hourly_ohlcv_archives_and_materializes_hour_bars(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pipeline = MassiveEquityHourlyOhlcvPipeline(root, client=object())
+            source = _EquitySource(root, rows=[
+                {"t": 1767364200000, "o": 100, "h": 101, "l": 99, "c": 100.5, "v": 1000, "n": 5, "vw": 100.25},
+                {"t": 1767367800000, "o": 100.5, "h": 102, "l": 100, "c": 101, "v": 1200, "n": 7, "vw": 101},
+            ])
+            pipeline.source = source
+
+            manifest = pipeline.prepare("equity.hourly.test.v1", "nvda", _date("2026-01-02"), _date("2026-01-03"), view="raw")
+
+            self.assertEqual(source.calls[0]["resource"], "/v2/aggs/ticker/NVDA/range/1/hour/2026-01-02/2026-01-03")
+            self.assertFalse(source.calls[0]["params"]["adjusted"])
+            self.assertEqual(manifest["interval"], "1h")
+            self.assertEqual(manifest["rows"], 2)
+            hourly_dir = root / "canonical/market/ohlcv/asset_class=equity/region=us/provider=massive/interval=1h/view=raw/dataset=equity.hourly.test.v1"
+            self.assertTrue((hourly_dir / "manifest.json").exists())
+            quality = json.loads((hourly_dir / "quality.json").read_text())
+            self.assertTrue(quality["publishable"])
+            self.assertEqual(quality["duplicate_windows"], 0)
+
+            import pyarrow.parquet as pq
+            rows = pq.read_table(hourly_dir / manifest["file"]).to_pylist()
+            self.assertEqual(rows[0]["ticker"], "NVDA")
+            self.assertEqual(rows[0]["event_date"].isoformat(), "2026-01-02")
+            self.assertEqual(rows[0]["available_time"].isoformat(), "2026-01-02T15:30:00+00:00")
+            self.assertEqual(rows[1]["window_start"].isoformat(), "2026-01-02T15:30:00+00:00")
 
     def test_us_equity_momentum_builder_materializes_derived_datasets_without_future_data(self):
         with TemporaryDirectory() as temporary:

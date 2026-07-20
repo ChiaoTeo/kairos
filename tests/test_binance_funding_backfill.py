@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import unittest
 
-from kairos.connectors.binance.funding_ingestion import BinanceDurableFundingBackfill
-from kairos.application.clock import FixedClock
+from kairospy.connectors.binance.funding_ingestion import BinanceDurableFundingBackfill
+from kairospy.application.clock import FixedClock
 from tests.test_runtime_store import request
 
 

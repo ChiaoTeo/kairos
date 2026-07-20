@@ -7,16 +7,16 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairos.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
-from kairos.domain.identity import AssetId, InstrumentId, VenueId
-from kairos.domain.market_data import OptionChain
-from kairos.domain.market_data import Greeks, Quote
-from kairos.domain.product import IndexSpec, OptionRight, ProductType
-from kairos.study_platform.series import SeriesCaptureService, SeriesCaptureSpec
-from kairos.study_platform.data_store import MarketSnapshotCollectionPublisher
-from kairos.study_platform.spec import OptionChainCaptureSpec
-from kairos.reference import ReferenceCatalog
+from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
+from kairospy.domain.identity import AssetId, InstrumentId, VenueId
+from kairospy.domain.market_data import OptionChain
+from kairospy.domain.market_data import Greeks, Quote
+from kairospy.domain.product import IndexSpec, OptionRight, ProductType
+from kairospy.study_platform.series import SeriesCaptureService, SeriesCaptureSpec
+from kairospy.study_platform.data_store import MarketSnapshotCollectionPublisher
+from kairospy.study_platform.spec import OptionChainCaptureSpec
+from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
 

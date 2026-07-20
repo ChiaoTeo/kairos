@@ -6,12 +6,12 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.connectors.binance.market_stream import BinanceStreamSession, websocket_url
-from kairos.ports import Environment
-from kairos.connectors.binance.stream import BinanceCanonicalStreamService
-from kairos.contracts import MarketEventKind, QuotePayload, TradePayload
-from kairos.domain.identity import InstrumentId
-from kairos.market_data import BoundedEventChannel, CanonicalCaptureWriter, CapturedCanonicalEventSource
+from kairospy.connectors.binance.market_stream import BinanceStreamSession, websocket_url
+from kairospy.ports import Environment
+from kairospy.connectors.binance.stream import BinanceCanonicalStreamService
+from kairospy.contracts import MarketEventKind, QuotePayload, TradePayload
+from kairospy.domain.identity import InstrumentId
+from kairospy.market_data import BoundedEventChannel, CanonicalCaptureWriter, CapturedCanonicalEventSource
 
 
 INSTRUMENT = InstrumentId("crypto:binance:spot:BTCUSDT")

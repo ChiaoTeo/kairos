@@ -7,21 +7,21 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.application import (
+from kairospy.application import (
     ApplicationConfig, AsyncServiceSupervisor, AsyncKairosRuntime, ManagedServiceSpec, ManagedServiceStatus,
     RuntimePaths, RuntimeStatus, ServiceCriticality, KairosApplication,
 )
-from kairos.ports import Environment
-from kairos.domain.capability import MarketDataCapabilities, MarketDataKind
-from kairos.domain.identity import AssetId, InstrumentId, VenueId
-from kairos.domain.product import EquitySpec, ProductType
-from kairos.reference import ReferenceCatalog
+from kairospy.ports import Environment
+from kairospy.domain.capability import MarketDataCapabilities, MarketDataKind
+from kairospy.domain.identity import AssetId, InstrumentId, VenueId
+from kairospy.domain.product import EquitySpec, ProductType
+from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
-from kairos.market_data import (
+from kairospy.market_data import (
     CapturePolicy, DeliveryMode, MarketDataRequirement, SubscriptionAction,
     SubscriptionPlanner, SubscriptionReconciler,
 )
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 
 
 NOW = datetime(2026, 7, 17, 12, tzinfo=timezone.utc)

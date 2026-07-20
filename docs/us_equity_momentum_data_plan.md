@@ -968,7 +968,7 @@ next_close_to_close_return
 `build-provider-equity-identity --provider massive --reference-rows` 的输入：
 
 ```bash
-./pyenv/bin/python -m kairos data sync-provider-reference --provider massive --equity-tickers
+./pyenv/bin/python -m kairospy data sync-provider-reference --provider massive --equity-tickers
 ```
 
 该入口解决“全市场股票清单如何进入本地 Source/Reference”的前置问题，但还没有完成全历史 ticker
@@ -1032,7 +1032,7 @@ next_close_to_close_return
 目标命令形态：
 
 ```bash
-./pyenv/bin/python -m kairos data prepare-us-equity-momentum \
+./pyenv/bin/python -m kairospy data prepare-us-equity-momentum \
   --raw-dataset market.ohlcv.equity.us.massive.1d.raw \
   --connector-config examples/data/massive_connector.example.json \
   --start 2005-01-01T00:00:00-05:00 \
@@ -1040,12 +1040,12 @@ next_close_to_close_return
   --sync-corporate-actions \
   --dataset-id us-equity-momentum.bounded.v1
 
-./pyenv/bin/python -m kairos study plan us-equity-momentum \
+./pyenv/bin/python -m kairospy study plan us-equity-momentum \
   --dataset market.ohlcv.equity.us.massive.1d.raw \
   --start 2005-01-01T00:00:00-05:00 \
   --end 2026-07-01T00:00:00-04:00
 
-./pyenv/bin/python -m kairos study start us-equity-momentum \
+./pyenv/bin/python -m kairospy study start us-equity-momentum \
   --dataset market.ohlcv.equity.us.massive.1d.raw \
   --start 2005-01-01T00:00:00-05:00 \
   --end 2026-07-01T00:00:00-04:00
@@ -1069,7 +1069,7 @@ Feature 构建必须消费已归档的公司行为输入，而不是在研究脚
 构建入口保留显式参数：
 
 ```bash
-./pyenv/bin/python -m kairos features build \
+./pyenv/bin/python -m kairospy features build \
   --feature-set us-equity-momentum-v1 \
   --source-directory canonical/market/ohlcv/asset_class=equity/region=us/provider=massive/interval=1d/view=raw/dataset=<raw-release> \
   --corporate-actions-directory reference/provider=massive/corporate_actions/ticker=<TICKER>/version=<hash> \
@@ -1079,7 +1079,7 @@ Feature 构建必须消费已归档的公司行为输入，而不是在研究脚
 没有 `--corporate-actions-directory` 时，构建器必须在 Release `quality.json` 和 readiness 报告中明确披露：
 `total_return` 退化为 raw close return，不能声称已完成独立复权和总收益审计。
 
-`kairos data us-equity-momentum-diagnostics` 必须汇总 universe release 中的缺失状态，包括 `observed_rows`、
+`kairospy data us-equity-momentum-diagnostics` 必须汇总 universe release 中的缺失状态，包括 `observed_rows`、
 `missing_bar_rows`、`critical_gap_rows` 和 `missing_reason_counts`。存在
 `expected_trading_session_without_bar` 时仍可作为受限研究输入使用，但 readiness 必须以 warning 暴露，
 并提示补充 reference/coverage 证据，将其拆分为停牌、退市、下载失败或供应商覆盖缺口。

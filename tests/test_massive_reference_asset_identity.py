@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import unittest
 
-from kairos.connectors.massive.reference import MassiveReferenceImporter
-from kairos.domain.identity import AssetId
-from kairos.reference import AssetType, ReferenceCatalog
+from kairospy.connectors.massive.reference import MassiveReferenceImporter
+from kairospy.domain.identity import AssetId
+from kairospy.reference import AssetType, ReferenceCatalog
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)

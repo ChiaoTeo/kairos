@@ -1,27 +1,27 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
-from kairos.ports import (
+from kairospy.ports import (
     ComboLegRequest, ComboOrderRequest, Environment, OrderRequest, ReferenceDataRequest, VenueOrderStatus,
 )
-from kairos.connectors.ibkr.account_gateway import IbkrAccountGateway
-from kairos.connectors.ibkr.execution_gateway import IbkrExecutionGateway
-from kairos.connectors.ibkr.ingestion import IbkrDurableFillIngestion
-from kairos.connectors.ibkr.market_data_client import IbkrMarketDataClient
-from kairos.connectors.ibkr.reference_data import IbkrReferenceDataClient
-from kairos.domain.capability import OrderType
-from kairos.domain.execution import TradeSide
-from kairos.domain.identity import AccountKey, AccountType, AssetId, VenueId
-from kairos.domain.order import ExecutionInstructions, TimeInForce
-from kairos.domain.product import ProductType
-from kairos.execution.recovery import OrderRecoveryReport
-from kairos.application.clock import FixedClock
+from kairospy.connectors.ibkr.account_gateway import IbkrAccountGateway
+from kairospy.connectors.ibkr.execution_gateway import IbkrExecutionGateway
+from kairospy.connectors.ibkr.ingestion import IbkrDurableFillIngestion
+from kairospy.connectors.ibkr.market_data_client import IbkrMarketDataClient
+from kairospy.connectors.ibkr.reference_data import IbkrReferenceDataClient
+from kairospy.domain.capability import OrderType
+from kairospy.domain.execution import TradeSide
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, VenueId
+from kairospy.domain.order import ExecutionInstructions, TimeInForce
+from kairospy.domain.product import ProductType
+from kairospy.execution.recovery import OrderRecoveryReport
+from kairospy.application.clock import FixedClock
 
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)

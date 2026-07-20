@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "kairos://contracts/canonical-market-event-v1",
+  "$id": "kairospy://contracts/canonical-market-event-v1",
   "title": "Kairos Canonical Market Event v1",
   "type": "object",
   "required": [

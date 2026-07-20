@@ -4,16 +4,16 @@ import unittest
 from dataclasses import replace
 from decimal import Decimal
 
-from kairos import __version__
-from kairos.backtest.engine import BacktestEngine
-from kairos.backtest.feed import MarketReplayDataset, MarketSnapshot, build_manifest
-from kairos.backtest.synthetic_scenarios import _put, build_synthetic_backtest_dataset
-from kairos.backtest.result import BacktestConfig
-from kairos.domain.market_data import Quote
-from kairos.pricing import PricingInput, black76
-from kairos.study_platform.snapshot import InstrumentSnapshot
-from kairos.risk.limits import RiskLimits
-from kairos.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
+from kairospy import __version__
+from kairospy.backtest.engine import BacktestEngine
+from kairospy.backtest.feed import MarketReplayDataset, MarketSnapshot, build_manifest
+from kairospy.backtest.synthetic_scenarios import _put, build_synthetic_backtest_dataset
+from kairospy.backtest.result import BacktestConfig
+from kairospy.domain.market_data import Quote
+from kairospy.pricing import PricingInput, black76
+from kairospy.study_platform.snapshot import InstrumentSnapshot
+from kairospy.risk.limits import RiskLimits
+from kairospy.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
 
 
 def internally_priceable_spxw_dataset() -> MarketReplayDataset:

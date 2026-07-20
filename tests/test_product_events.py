@@ -5,29 +5,29 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from kairos.accounting.conversion import AssetConversionGraph, ConversionRate
-from kairos.accounting.ledger import LedgerService
-from kairos.accounting.portfolio import Portfolio
-from kairos.domain.corporate_action import (
+from kairospy.accounting.conversion import AssetConversionGraph, ConversionRate
+from kairospy.accounting.ledger import LedgerService
+from kairospy.accounting.portfolio import Portfolio
+from kairospy.domain.corporate_action import (
     CorporateActionType, DelistingEvent, InstrumentExchangeEvent, StockDividendEvent, SymbolChangeEvent,
 )
-from kairos.domain.derivative_event import DerivativeEventType, DerivativePositionEvent
-from kairos.domain.event import EventEnvelope
-from kairos.domain.execution import TradeExecution, TradeSide
-from kairos.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
-from kairos.domain.ledger import Ledger, LedgerBook
-from kairos.domain.market_data import IndexPrice, VolatilitySurfacePoint
-from kairos.domain.market_state import MarketState, apply_market_event
-from kairos.domain.product import (
+from kairospy.domain.derivative_event import DerivativeEventType, DerivativePositionEvent
+from kairospy.domain.event import EventEnvelope
+from kairospy.domain.execution import TradeExecution, TradeSide
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
+from kairospy.domain.ledger import Ledger, LedgerBook
+from kairospy.domain.market_data import IndexPrice, VolatilitySurfacePoint
+from kairospy.domain.market_state import MarketState, apply_market_event
+from kairospy.domain.product import (
     ContractType, EquitySpec, ExerciseStyle, FutureSpec, ListedOptionSpec, OptionRight,
     ProductType, SettlementSession, SettlementType,
 )
-from kairos.products.equity.corporate_actions import CorporateActionService
-from kairos.products.future.settlement import DerivativeLifecycleService
-from kairos.products.listed_option.lifecycle import OptionLifecycleService
-from kairos.risk.margin import CryptoCrossMarginPolicy, CryptoIsolatedMarginPolicy, CryptoSpotPolicy
-from kairos.reference import ReferenceCatalog
-from kairos.reference.contracts import InstrumentDefinition
+from kairospy.products.equity.corporate_actions import CorporateActionService
+from kairospy.products.future.settlement import DerivativeLifecycleService
+from kairospy.products.listed_option.lifecycle import OptionLifecycleService
+from kairospy.risk.margin import CryptoCrossMarginPolicy, CryptoIsolatedMarginPolicy, CryptoSpotPolicy
+from kairospy.reference import ReferenceCatalog
+from kairospy.reference.contracts import InstrumentDefinition
 from tests.reference_support import publish_test_instrument
 
 

@@ -4,8 +4,8 @@ import asyncio
 from decimal import Decimal
 import unittest
 
-from kairos.application import build_run_attribution
-from kairos.product_workflow import _governed_run,fixture_sma_bars
+from kairospy.application import build_run_attribution
+from kairospy.product_workflow import _governed_run,fixture_sma_bars
 
 
 class RunAttributionTests(unittest.TestCase):

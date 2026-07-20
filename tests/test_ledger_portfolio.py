@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from kairos.accounting.conversion import AssetConversionGraph, ConversionRate
-from kairos.accounting.ledger import LedgerService
-from kairos.accounting.portfolio import Portfolio
-from kairos.domain.execution import FundingPayment, TradeExecution, TradeSide
-from kairos.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairos.domain.ledger import Ledger, LedgerBook, LedgerEntry, LedgerEntryType, LedgerTransaction
-from kairos.domain.product import ContractType, CryptoSpotSpec, PerpetualSpec, ProductType
-from kairos.products.calculators import PositionCalculatorRegistry
-from kairos.risk.margin import CryptoCrossMarginPolicy
-from kairos.risk.view import build_risk_view
-from kairos.reference import ReferenceCatalog
+from kairospy.accounting.conversion import AssetConversionGraph, ConversionRate
+from kairospy.accounting.ledger import LedgerService
+from kairospy.accounting.portfolio import Portfolio
+from kairospy.domain.execution import FundingPayment, TradeExecution, TradeSide
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.domain.ledger import Ledger, LedgerBook, LedgerEntry, LedgerEntryType, LedgerTransaction
+from kairospy.domain.product import ContractType, CryptoSpotSpec, PerpetualSpec, ProductType
+from kairospy.products.calculators import PositionCalculatorRegistry
+from kairospy.risk.margin import CryptoCrossMarginPolicy
+from kairospy.risk.view import build_risk_view
+from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
 

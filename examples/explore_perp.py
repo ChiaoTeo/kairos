@@ -1,4 +1,4 @@
-from kairos.data import DatasetClient, OutputFormat
+from kairospy.data import DatasetClient, OutputFormat
 
 client = DatasetClient("data")
 

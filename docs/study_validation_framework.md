@@ -24,7 +24,7 @@
 通用能力与具体研究分离：
 
 ```text
-kairos/study_platform/validation/
+kairospy/study_platform/validation/
   contracts.py       # 验证结果、状态和证据等级
   split.py           # 时间切分和 walk-forward
   predictability.py  # 相关性、条件效应和预测检验
@@ -33,7 +33,7 @@ kairos/study_platform/validation/
   gates.py           # 阶段准入门槛
   report.py          # 标准化结果和报告
 
-kairos/backtest/
+kairospy/backtest/
   # 时钟、行情、成交、持仓、Ledger、保证金和资金曲线
 
 studies/<study>/
@@ -44,11 +44,11 @@ studies/<study>/
   robustness.py
   report.py
 
-kairos/strategies/
+kairospy/strategies/
   # 已冻结规则、准备回测或部署的策略实现
 ```
 
-`kairos/study_platform/validation` 只保存可跨策略复用的方法和数据契约。具体资产、特征、阈值、期权腿和研究结论保留在 `studies/<study>`。成交、保证金和资金曲线由 `kairos/backtest` 管理，不在统计验证库中重复实现。
+`kairospy/study_platform/validation` 只保存可跨策略复用的方法和数据契约。具体资产、特征、阈值、期权腿和研究结论保留在 `studies/<study>`。成交、保证金和资金曲线由 `kairospy/backtest` 管理，不在统计验证库中重复实现。
 
 ### 2.1 长期目标架构
 
@@ -148,7 +148,7 @@ StrategyDecision
 
 期限、Delta节点、腿数量、入场过滤、持有期、止损、对冲目标和单策略风险预算属于策略语义，由策略所有者开发并版本化。它们不能由通用执行系统根据一个因子分数自行猜测。
 
-生产实现位于 `kairos/strategies/`，但其所有权可以属于研究/策略团队。`studies/<study>` 保存实验、诊断和候选实现；只有通过晋级门禁的冻结规则才提升为生产 Strategy Model。
+生产实现位于 `kairospy/strategies/`，但其所有权可以属于研究/策略团队。`studies/<study>` 保存实验、诊断和候选实现；只有通过晋级门禁的冻结规则才提升为生产 Strategy Model。
 
 ### 2.4 Portfolio & Risk Platform
 
@@ -254,7 +254,7 @@ Operations负责：
 |PnL归因|信号与模型归因|组合归因|执行成本归因|
 |策略停用建议|提出|可强制降额/停用|执行停止与撤单|
 
-策略实际执行因此与 `kairos` 放在一起，但不是把研究压缩为单一因子：研究/策略团队负责“预测什么、持有什么”，Portfolio/Risk负责“账户允许持多少”，Execution/Trading负责“如何安全成交并持续运行”。
+策略实际执行因此与 `kairospy` 放在一起，但不是把研究压缩为单一因子：研究/策略团队负责“预测什么、持有什么”，Portfolio/Risk负责“账户允许持多少”，Execution/Trading负责“如何安全成交并持续运行”。
 
 ### 2.9 同代码语义与不同运行环境
 
@@ -1045,7 +1045,7 @@ data_gap_plan.json      # 数据缺口、补数计划和重评条件
 2. `EconomicIntent`支持权重、数量、结构和风险目标；
 3. 统一capital spec、组合保证金和完整权益曲线；
 4. 产品协议与收益来源协议成为可组合门禁；
-5. 研究实现向`kairos/strategies`晋级的语义一致性测试。
+5. 研究实现向`kairospy/strategies`晋级的语义一致性测试。
 
 完成标准：研究和生产使用同一冻结策略语义，能够生成不依赖Venue API的经济目标。
 

@@ -6,27 +6,27 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DOMAIN = ROOT / "kairos" / "domain"
+DOMAIN = ROOT / "kairospy" / "domain"
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):
     def test_domain_does_not_depend_on_upper_layers(self) -> None:
         forbidden = {
-            "kairos.accounting",
-            "kairos.connectors",
-            "kairos.backtest",
-            "kairos." + "catalog",
-            "kairos.data",
-            "kairos.execution",
-            "kairos.features",
-            "kairos.market_data",
-            "kairos.orchestration",
-            "kairos.pricing",
-            "kairos.study_platform",
-            "kairos.risk",
-            "kairos.storage",
-            "kairos.strategies",
-            "kairos.volatility",
+            "kairospy.accounting",
+            "kairospy.connectors",
+            "kairospy.backtest",
+            "kairospy." + "catalog",
+            "kairospy.data",
+            "kairospy.execution",
+            "kairospy.features",
+            "kairospy.market_data",
+            "kairospy.orchestration",
+            "kairospy.pricing",
+            "kairospy.study_platform",
+            "kairospy.risk",
+            "kairospy.storage",
+            "kairospy.strategies",
+            "kairospy.volatility",
         }
         violations: list[str] = []
         for path in sorted(DOMAIN.glob("*.py")):
@@ -44,27 +44,27 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_strategy_runtime_contract_is_not_in_domain(self) -> None:
         self.assertFalse((DOMAIN / "strategy.py").exists())
-        from kairos.strategies.strategy_protocols import StrategyContext, StrategyDecision
+        from kairospy.strategies.strategy_protocols import StrategyContext, StrategyDecision
 
-        self.assertEqual(StrategyContext.__module__, "kairos.strategies.strategy_protocols")
-        self.assertEqual(StrategyDecision.__module__, "kairos.strategies.strategy_protocols")
+        self.assertEqual(StrategyContext.__module__, "kairospy.strategies.strategy_protocols")
+        self.assertEqual(StrategyDecision.__module__, "kairospy.strategies.strategy_protocols")
 
     def test_strategies_do_not_depend_on_removed_history_module(self) -> None:
         violations = []
-        for path in sorted((ROOT / "kairos" / "strategies").glob("*.py")):
-            if "kairos.history" in path.read_text(encoding="utf-8"):
+        for path in sorted((ROOT / "kairospy" / "strategies").glob("*.py")):
+            if "kairospy.history" in path.read_text(encoding="utf-8"):
                 violations.append(str(path.relative_to(ROOT)))
         self.assertEqual(violations, [])
 
     def test_json_ledger_repository_is_removed(self) -> None:
-        self.assertFalse((ROOT / "kairos" / "accounting" / "repository.py").exists())
-        self.assertFalse((ROOT / "kairos" / "application" / "ledger_migration.py").exists())
+        self.assertFalse((ROOT / "kairospy" / "accounting" / "repository.py").exists())
+        self.assertFalse((ROOT / "kairospy" / "application" / "ledger_migration.py").exists())
 
     def test_old_catalog_package_is_removed(self) -> None:
-        self.assertFalse((ROOT / "kairos" / "catalog").exists())
+        self.assertFalse((ROOT / "kairospy" / "catalog").exists())
         forbidden = ("Instrument" + "Catalog", "ExternalMapping" + "Repository")
         violations = []
-        for path in sorted((ROOT / "kairos").rglob("*.py")):
+        for path in sorted((ROOT / "kairospy").rglob("*.py")):
             text = path.read_text(encoding="utf-8")
             for name in forbidden:
                 if name in text:
@@ -73,13 +73,13 @@ class ArchitectureBoundaryTests(unittest.TestCase):
 
     def test_only_current_reference_and_metadata_models_exist(self) -> None:
         self.assertFalse((DOMAIN / "instrument.py").exists())
-        self.assertFalse((ROOT / "kairos" / "data" / ("metadata_" + "migration.py")).exists())
+        self.assertFalse((ROOT / "kairospy" / "data" / ("metadata_" + "migration.py")).exists())
         self.assertFalse((ROOT / ("re" + "search") / ("btc_study_" + "governance.py")).exists())
 
     def test_legacy_instrument_access_is_removed(self) -> None:
         forbidden = ("definition.product_" + "spec", "definition.listings" + "[", "definition.listing" + "(")
         violations = []
-        for path in sorted((ROOT / "kairos").rglob("*.py")):
+        for path in sorted((ROOT / "kairospy").rglob("*.py")):
             text = path.read_text(encoding="utf-8")
             for token in forbidden:
                 if token in text:
@@ -89,13 +89,13 @@ class ArchitectureBoundaryTests(unittest.TestCase):
     def test_removed_dataset_and_surface_repositories_do_not_return(self) -> None:
         forbidden = ("DatasetRepository", "Re" + "search" + "DatasetStore", "SurfaceRepository")
         violations = []
-        for path in sorted((ROOT / "kairos").rglob("*.py")):
+        for path in sorted((ROOT / "kairospy").rglob("*.py")):
             text = path.read_text(encoding="utf-8")
             for name in forbidden:
                 if name in text:
                     violations.append(f"{path.relative_to(ROOT)}: {name}")
         self.assertEqual(violations, [], "removed data repositories remain:\n" + "\n".join(violations))
-        self.assertFalse((ROOT / "kairos" / "volatility" / "repository.py").exists())
+        self.assertFalse((ROOT / "kairospy" / "volatility" / "repository.py").exists())
 
 
 if __name__ == "__main__":

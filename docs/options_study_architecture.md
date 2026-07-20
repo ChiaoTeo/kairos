@@ -41,13 +41,13 @@ Risk Analytics
 
 下列边界已经具备正确方向，应扩展而不是替换：
 
-- `kairos.domain`：Instrument、InstrumentContractSpec、MarketEvent、Intent；
-- `kairos.reference`：内部 InstrumentId 与 ListingDefinition 的 point-in-time 映射；
-- `kairos.study_platform`：snapshot、series capture、数据质量问题；
-- `kairos.backtest`：确定性 feed/clock、无同 slice 成交、fill model、结算和 replay；
-- `kairos.accounting`：Ledger 与 Portfolio；
-- `kairos.execution` / `kairos.orchestration`：执行计划、路由、对账和 kill switch；
-- `kairos.risk`：交易前限制与统一敞口视图。
+- `kairospy.domain`：Instrument、InstrumentContractSpec、MarketEvent、Intent；
+- `kairospy.reference`：内部 InstrumentId 与 ListingDefinition 的 point-in-time 映射；
+- `kairospy.study_platform`：snapshot、series capture、数据质量问题；
+- `kairospy.backtest`：确定性 feed/clock、无同 slice 成交、fill model、结算和 replay；
+- `kairospy.accounting`：Ledger 与 Portfolio；
+- `kairospy.execution` / `kairospy.orchestration`：执行计划、路由、对账和 kill switch；
+- `kairospy.risk`：交易前限制与统一敞口视图。
 
 ### 2.2 必须消除的隐含耦合
 
@@ -67,7 +67,7 @@ Risk Analytics
 建议模块：
 
 ```text
-kairos/market_data/
+kairospy/market_data/
   snapshot_builder.py
   quality.py
   repository.py
@@ -104,7 +104,7 @@ MarketDataSnapshot(as_of, spot, forwards, chains, observations, quality_issues)
 建议模块：
 
 ```text
-kairos/pricing/
+kairospy/pricing/
   option_pricing_contracts.py
   black_scholes.py
   black76.py
@@ -143,7 +143,7 @@ PricingResult(
 建议模块：
 
 ```text
-kairos/volatility/
+kairospy/volatility/
   observation.py
   smile.py
   surface.py
@@ -411,7 +411,7 @@ optional contract
 验收命令：
 
 ```bash
-./pyenv/bin/python -m compileall -q kairos tests
+./pyenv/bin/python -m compileall -q kairospy tests
 ./pyenv/bin/python -m unittest discover -s tests -v
 git diff --check
 ```

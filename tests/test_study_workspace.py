@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.study_platform import StudyWorkspace, StudyWorkspaceRepository, StudyWorkspaceStatus
+from kairospy.study_platform import StudyWorkspace, StudyWorkspaceRepository, StudyWorkspaceStatus
 
 
 class StudyWorkspaceTests(unittest.TestCase):

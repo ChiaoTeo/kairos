@@ -4,15 +4,15 @@ from datetime import datetime,timezone
 from decimal import Decimal
 import unittest
 
-from kairos.backtest.feed import MarketSnapshot
-from kairos.domain.identity import InstrumentId
-from kairos.domain.market_data import Quote
-from kairos.study_platform.snapshot import InstrumentSnapshot
-from kairos.strategies import GovernedStrategyRuntime,StrategyContext
-from kairos.strategies.cash_and_carry import CashAndCarryConfig,CashAndCarryStrategy
-from kairos.strategies.covered_call import CoveredCallStrategy
-from kairos.strategies.protective_put import ProtectivePutStrategy
-from kairos.strategies.specs import builtin_strategy_specs
+from kairospy.backtest.feed import MarketSnapshot
+from kairospy.domain.identity import InstrumentId
+from kairospy.domain.market_data import Quote
+from kairospy.study_platform.snapshot import InstrumentSnapshot
+from kairospy.strategies import GovernedStrategyRuntime,StrategyContext
+from kairospy.strategies.cash_and_carry import CashAndCarryConfig,CashAndCarryStrategy
+from kairospy.strategies.covered_call import CoveredCallStrategy
+from kairospy.strategies.protective_put import ProtectivePutStrategy
+from kairospy.strategies.specs import builtin_strategy_specs
 
 
 NOW=datetime(2026,7,17,tzinfo=timezone.utc)

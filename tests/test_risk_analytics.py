@@ -3,10 +3,10 @@ from __future__ import annotations
 import unittest
 from decimal import Decimal
 
-from kairos.domain.identity import InstrumentId
-from kairos.domain.product import OptionRight
-from kairos.pricing import PricingInput, PricingModel
-from kairos.risk import RevaluationPosition, Scenario, ScenarioEngine, explain_scenario, historical_var_es, standard_scenario_grid
+from kairospy.domain.identity import InstrumentId
+from kairospy.domain.product import OptionRight
+from kairospy.pricing import PricingInput, PricingModel
+from kairospy.risk import RevaluationPosition, Scenario, ScenarioEngine, explain_scenario, historical_var_es, standard_scenario_grid
 
 
 class RiskAnalyticsTests(unittest.TestCase):

@@ -6,26 +6,26 @@
 
 |规范对象|实现|
 |---|---|
-|研究注册、多维状态、资本、样本和数据缺口|`kairos/study_platform/validation/contracts.py`|
-|产品、收益来源和阶段门禁|`kairos/study_platform/validation/protocols.py`, `gates.py`|
-|有效样本量与统计功效|`kairos/study_platform/validation/samples.py`|
-|数据缺口补齐计划|`kairos/study_platform/validation/data_gaps.py`|
-|标准产物与audit hash|`kairos/study_platform/validation/artifacts.py`|
-|允许声明的结论|`kairos/study_platform/validation/claims.py`|
-|测试窗口消耗|`kairos/study_platform/validation/test_windows.py`|
-|项目治理审计|`kairos/study_platform/validation/audit.py`|
-|StrategySpec与EconomicIntent|`kairos/domain/strategy_contract.py`|
-|ExecutionPolicy|`kairos/execution/policy.py`|
-|策略到EconomicIntent适配|`kairos/strategies/runtime.py`|
-|EconomicIntent到订单计划|`kairos/execution/strategy_planner.py`|
-|资本分配和策略虚拟持仓|`kairos/risk/portfolio_governance.py`, `strategy_positions.py`|
-|Maker FIFO和Hybrid状态机|`kairos/backtest/maker.py`|
-|策略晋级与证据仓库|`kairos/strategies/registry.py`|
-|持续监控、降额和暂停|`kairos/orchestration/strategy_monitoring.py`|
+|研究注册、多维状态、资本、样本和数据缺口|`kairospy/study_platform/validation/contracts.py`|
+|产品、收益来源和阶段门禁|`kairospy/study_platform/validation/protocols.py`, `gates.py`|
+|有效样本量与统计功效|`kairospy/study_platform/validation/samples.py`|
+|数据缺口补齐计划|`kairospy/study_platform/validation/data_gaps.py`|
+|标准产物与audit hash|`kairospy/study_platform/validation/artifacts.py`|
+|允许声明的结论|`kairospy/study_platform/validation/claims.py`|
+|测试窗口消耗|`kairospy/study_platform/validation/test_windows.py`|
+|项目治理审计|`kairospy/study_platform/validation/audit.py`|
+|StrategySpec与EconomicIntent|`kairospy/domain/strategy_contract.py`|
+|ExecutionPolicy|`kairospy/execution/policy.py`|
+|策略到EconomicIntent适配|`kairospy/strategies/runtime.py`|
+|EconomicIntent到订单计划|`kairospy/execution/strategy_planner.py`|
+|资本分配和策略虚拟持仓|`kairospy/risk/portfolio_governance.py`, `strategy_positions.py`|
+|Maker FIFO和Hybrid状态机|`kairospy/backtest/maker.py`|
+|策略晋级与证据仓库|`kairospy/strategies/registry.py`|
+|持续监控、降额和暂停|`kairospy/orchestration/strategy_monitoring.py`|
 
 ## 数据治理
 
-Catalog中的受管数据集除`schema.json`、`lineage.json`、`coverage.json`和`manifest.json`外，必须包含`capabilities.json`。能力模板位于`kairos/data/capabilities.py`，所有BTC pipeline和feature builder在写数据时同步写入该文件。
+Catalog中的受管数据集除`schema.json`、`lineage.json`、`coverage.json`和`manifest.json`外，必须包含`capabilities.json`。能力模板位于`kairospy/data/capabilities.py`，所有BTC pipeline和feature builder在写数据时同步写入该文件。
 
 迁移已有数据：
 
@@ -87,13 +87,13 @@ soak artifact。本地 deterministic acceptance、synthetic fixture 和 trade pr
 参考策略首先注册为`DRAFT`：
 
 ```bash
-pyenv/bin/python -m kairos --lake-root data study register-builtin-strategies
+pyenv/bin/python -m kairospy --lake-root data study register-builtin-strategies
 ```
 
 BTC铁鹰以治理 Study 结果作为hash证据晋级到`STUDY_VALIDATED`：
 
 ```bash
-pyenv/bin/python -m kairos --lake-root data study register-btc-iron-condor
+pyenv/bin/python -m kairospy --lake-root data study register-btc-iron-condor
 ```
 
 该状态只允许进入后续可执行数据研究，不代表通过L4或允许实盘。
@@ -103,7 +103,7 @@ pyenv/bin/python -m kairos --lake-root data study register-btc-iron-condor
 - Strategy Model决定期限、腿、ratio、信号、退出、对冲目标和风险申请；
 - Portfolio/Risk批准、缩小或拒绝风险预算，但不改变结构语义；
 - Execution按`ExecutionPolicy`实现Maker、Taker或Hybrid；
-- Venue API、订单幂等、恢复、对账和kill switch保留在`kairos`；
+- Venue API、订单幂等、恢复、对账和kill switch保留在`kairospy`；
 - Maker正式回测需要sequence、增量订单簿、交易事件和可重建队列；价格触碰不产生fill；
 - Hybrid在超时后按policy取消、cross remainder或立即对冲。
 
@@ -112,7 +112,7 @@ pyenv/bin/python -m kairos --lake-root data study register-btc-iron-condor
 治理审计：
 
 ```bash
-pyenv/bin/python -m kairos --lake-root data study governance-audit
+pyenv/bin/python -m kairospy --lake-root data study governance-audit
 ```
 
 完整测试：

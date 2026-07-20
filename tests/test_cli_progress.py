@@ -1,7 +1,7 @@
 from io import StringIO
 import unittest
 
-from kairos.cli_progress import TerminalProgressMatrix
+from kairospy.cli_progress import TerminalProgressMatrix
 
 
 class _TtyBuffer(StringIO):

@@ -41,46 +41,46 @@ cat > "$ROOT/external-input/risk.json" <<'JSON'
 }
 JSON
 
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" data download tutorial-sma-data
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" data write \
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" data download tutorial-sma-data
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" data write \
   --file "$ROOT/external-input/sentiment.csv" \
   --as reference.sentiment.equity.us \
   --contract "$ROOT/external-input/sentiment.contract.json"
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" data write \
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" data write \
   --live \
   --connector "$ROOT/external-input/sentiment_live.py" \
   --as reference.sentiment.equity.us \
   --contract "$ROOT/external-input/sentiment.contract.json"
 
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" study open momentum-study \
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" study open momentum-study \
   --hypothesis "momentum persists"
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" study add-data \
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" study add-data \
   --workspace momentum-study \
   --name bars \
   --dataset market.ohlcv.crypto.tutorial.btc-usdt.1h
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" study add-data \
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" study add-data \
   --workspace momentum-study \
   --name sentiment \
   --dataset reference.sentiment.equity.us
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" study add-factor \
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" study add-factor \
   --workspace momentum-study \
   --name momentum_12_1 \
   --file "$ROOT/external-input/momentum_factor.py"
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" run start \
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" run start \
   --study momentum-study \
   --mode study
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" study freeze momentum-study --version 1.0.0
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" study freeze momentum-study --version 1.0.0
 
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" strategy open momentum-long-only \
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" strategy open momentum-long-only \
   --from-study momentum-study@1.0.0
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" strategy bind-factor \
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" strategy bind-factor \
   --workspace momentum-long-only \
   --name primary \
   --study-factor momentum_12_1
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" strategy set-risk \
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" strategy set-risk \
   momentum-long-only \
   "$ROOT/external-input/risk.json"
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" strategy freeze momentum-long-only --version 1.0.0
-"$PYTHON" -m kairos --format json --lake-root "$ROOT" run start \
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" strategy freeze momentum-long-only --version 1.0.0
+"$PYTHON" -m kairospy --format json --lake-root "$ROOT" run start \
   --snapshot momentum-long-only@1.0.0 \
   --mode backtest

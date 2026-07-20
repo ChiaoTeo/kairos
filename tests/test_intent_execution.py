@@ -3,15 +3,15 @@ from decimal import Decimal
 from uuid import uuid4
 import unittest
 
-from kairos.ports import OrderRequest
-from kairos.domain.capability import OrderType, TimeInForce
-from kairos.domain.execution import TradeSide
-from kairos.domain.identity import AccountKey, AccountType, InstitutionId, InstrumentId
-from kairos.domain.intent import TargetExposureIntent, TargetPositionIntent
-from kairos.domain.order import ExecutionInstructions
-from kairos.execution.intent_status import IntentExecutionTracker, IntentStatus, intent_scope
-from kairos.execution.strategy_planner import plan_strategy_intent
-from kairos.strategies.strategy_protocols import StrategyContext
+from kairospy.ports import OrderRequest
+from kairospy.domain.capability import OrderType, TimeInForce
+from kairospy.domain.execution import TradeSide
+from kairospy.domain.identity import AccountKey, AccountType, InstitutionId, InstrumentId
+from kairospy.domain.intent import TargetExposureIntent, TargetPositionIntent
+from kairospy.domain.order import ExecutionInstructions
+from kairospy.execution.intent_status import IntentExecutionTracker, IntentStatus, intent_scope
+from kairospy.execution.strategy_planner import plan_strategy_intent
+from kairospy.strategies.strategy_protocols import StrategyContext
 
 
 NOW = datetime(2026, 7, 19, tzinfo=timezone.utc)

@@ -13,18 +13,18 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 
-from kairos.backtest.engine import BacktestEngine
-from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
-from kairos.backtest.repository import BacktestRepository
-from kairos.backtest.result import BacktestConfig
-from kairos.features import FactorRegistry,OptionSkewFactorConfig,OptionSkewFactorRuntime,snapshots_hash
-from kairos.pricing import OptionValuationService
-from kairos.study_platform import StudyWorkspace,StudyWorkspaceRepository
-from kairos.risk.limits import RiskLimits
-from kairos.storage.codec import to_primitive
-from kairos.strategies import StrategyImplementation,StrategyRegistry
-from kairos.strategies.bull_put_spread import BullPutSpreadConfig,BullPutSpreadStrategy
-from kairos.strategies.specs import bull_put_strategy_spec
+from kairospy.backtest.engine import BacktestEngine
+from kairospy.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
+from kairospy.backtest.repository import BacktestRepository
+from kairospy.backtest.result import BacktestConfig
+from kairospy.features import FactorRegistry,OptionSkewFactorConfig,OptionSkewFactorRuntime,snapshots_hash
+from kairospy.pricing import OptionValuationService
+from kairospy.study_platform import StudyWorkspace,StudyWorkspaceRepository
+from kairospy.risk.limits import RiskLimits
+from kairospy.storage.codec import to_primitive
+from kairospy.strategies import StrategyImplementation,StrategyRegistry
+from kairospy.strategies.bull_put_spread import BullPutSpreadConfig,BullPutSpreadStrategy
+from kairospy.strategies.specs import bull_put_strategy_spec
 
 
 def _hash(value)->str:return sha256(json.dumps(to_primitive(value),sort_keys=True,separators=(",",":")).encode()).hexdigest()
@@ -46,8 +46,8 @@ def run(root:Path)->dict[str,object]:
     factor_dir=FactorRegistry(root/"factors").register(study_factor.spec)
     strategy_config=BullPutSpreadConfig(signal_factor_id=study_factor.spec.factor_id,minimum_skew_rank=Decimal("0.5"))
     spec,policy=bull_put_strategy_spec(strategy_config)
-    implementation=StrategyImplementation("kairos.strategies.bull_put_spread:BullPutSpreadStrategy",
-        sha256((ROOT/"kairos/strategies/bull_put_spread.py").read_bytes()).hexdigest())
+    implementation=StrategyImplementation("kairospy.strategies.bull_put_spread:BullPutSpreadStrategy",
+        sha256((ROOT/"kairospy/strategies/bull_put_spread.py").read_bytes()).hexdigest())
     strategy_dir=StrategyRegistry(root/"strategies").register(spec,policy,implementation=implementation,
         factor_specs=(study_factor.spec,))
     config=BacktestConfig(dataset.manifest.start,dataset.manifest.end)

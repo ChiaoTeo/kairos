@@ -9,11 +9,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairos.connectors.massive import (
+from kairospy.connectors.massive import (
     MassiveClient, MassiveConfig, MassiveEquityDailyOhlcvPipeline, MassiveResponse,
     OptionCloseImpliedVolatilityPipeline, OptionDailyOhlcvPipeline,
 )
-from kairos.connectors.massive.vendor_archive import MassiveFlatFileBatchDownloader, request_fingerprint
+from kairospy.connectors.massive.vendor_archive import MassiveFlatFileBatchDownloader, request_fingerprint
 
 
 class StubTransport:

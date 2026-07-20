@@ -1,7 +1,7 @@
 # 数据系统收敛、领域边界与产品化改造方案
 
 状态：Proposed
-适用范围：`kairos.domain`、`kairos.data`、`kairos.market_data`、`kairos.reference`、`kairos.study_platform`、`kairos.backtest`、数据 CLI 与 `data/` 目录
+适用范围：`kairospy.domain`、`kairospy.data`、`kairospy.market_data`、`kairospy.reference`、`kairospy.study_platform`、`kairospy.backtest`、数据 CLI 与 `data/` 目录
 目标：收敛系统运行路径，删除旧代码和旧数据，规范 Domain 与 Data 的关系，并形成可以被研究、回测和生产稳定消费的数据产品。
 
 ## 1. 执行摘要
@@ -44,7 +44,7 @@ Provider
 - 所有正式数据都有 Product、Release、Schema、Transform、content hash、lineage、coverage、quality 和 usage；
 - 所有数据读取都先解析为不可变 Release；
 - 回测和正式研究只能消费冻结的、达到相应质量等级的 Release；
-- Domain 不依赖 `kairos.data`、`kairos.reference`、`kairos.storage`、`kairos.study_platform` 或 `kairos.backtest`；
+- Domain 不依赖 `kairospy.data`、`kairospy.reference`、`kairospy.storage`、`kairospy.study_platform` 或 `kairospy.backtest`；
 - Data 层保存的是 Domain 事实的持久化表达，不把供应商原始对象或研究专属对象伪装成 Domain；
 - CLI 为普通用户提供发现、准备、读取、验证、冻结和诊断的完整闭环；
 - 旧代码和旧数据有明确迁移清单、删除日期、回退方案和自动化验收证据。
@@ -224,7 +224,7 @@ Dataset Product 可以声明 instrument universe 语义，但不得复制完整 
 
 ### 4.5 需要修正的依赖
 
-当前 `domain.strategy.StrategyContext` 直接引用具体 `ReferenceCatalog`，并通过类型引用 Backtest、Study 和 Volatility 对象。建议将 StrategyContext 移出 Domain，放入 `kairos.strategies.runtime` 或应用层。
+当前 `domain.strategy.StrategyContext` 直接引用具体 `ReferenceCatalog`，并通过类型引用 Backtest、Study 和 Volatility 对象。建议将 StrategyContext 移出 Domain，放入 `kairospy.strategies.runtime` 或应用层。
 
 如果 Domain 行为确实需要查询合约定义，应依赖最小 Protocol：
 
@@ -322,9 +322,9 @@ snapshot = prepared.freeze(study_id="btc-sma-v2")
 
 | 对象 | 迁移目标 | 删除验收 |
 |---|---|---|
-| `kairos.history.BarRepository` | Canonical OHLCV Release | 全仓无生产 import；CLI 已替换；数据已核对 |
-| `kairos history *` | `kairos data prepare/query` 与正式 backtest | CLI help 中不再出现 history |
-| `strategies.sma_cross_study_backtest -> BarSeries` | Arrow rows 或统一 Bar Series Port | 策略不再 import `kairos.history` |
+| `kairospy.history.BarRepository` | Canonical OHLCV Release | 全仓无生产 import；CLI 已替换；数据已核对 |
+| `kairospy history *` | `kairospy data prepare/query` 与正式 backtest | CLI help 中不再出现 history |
+| `strategies.sma_cross_study_backtest -> BarSeries` | Arrow rows 或统一 Bar Series Port | 策略不再 import `kairospy.history` |
 | Parquet 的 CSV sidecar | 仅 Parquet | 新发布不生成 CSV；旧 CSV 经核对删除 |
 | `data/history` | Canonical | 目录为空并删除 |
 | 旧 `data/datasets` | Curated Release | Release 已注册且 hash 冻结 |
@@ -380,18 +380,18 @@ snapshot = prepared.freeze(study_id="btc-sma-v2")
 建议收敛为：
 
 ```bash
-kairos data search
-kairos data describe <product>
-kairos data prepare <product> --start ... --end ... --quality backtest
-kairos data query <product-or-release> --start ... --end ...
-kairos data replay <product-or-release> --start ... --end ...
-kairos data compare <release-a> <release-b>
-kairos data freeze <study-id> --input ...
-kairos data doctor <product-or-release>
-kairos data migrate ...
+kairospy data search
+kairospy data describe <product>
+kairospy data prepare <product> --start ... --end ... --quality backtest
+kairospy data query <product-or-release> --start ... --end ...
+kairospy data replay <product-or-release> --start ... --end ...
+kairospy data compare <release-a> <release-b>
+kairospy data freeze <study-id> --input ...
+kairospy data doctor <product-or-release>
+kairospy data migrate ...
 ```
 
-Provider 运维命令可以保留在 `kairos provider massive ...` 或内部运维组，不应与普通数据产品命令混在同一层级。
+Provider 运维命令可以保留在 `kairospy provider massive ...` 或内部运维组，不应与普通数据产品命令混在同一层级。
 
 ### 7.3 `describe` 必须回答的问题
 
@@ -472,7 +472,7 @@ resolve intent
 
 验收：
 
-- CI 可检测新增的 `kairos.history`、直接 `DatasetRepository` 和硬编码 `data/...` 读取；
+- CI 可检测新增的 `kairospy.history`、直接 `DatasetRepository` 和硬编码 `data/...` 读取；
 - 所有旧入口都有 owner、迁移目标和删除阶段；
 - 当前 Product、Release、目录和消费者清单已冻结到审计文件。
 
@@ -505,7 +505,7 @@ resolve intent
 
 验收：
 
-- `kairos/domain` 中无 `from kairos.*` 的跨包实现依赖；
+- `kairospy/domain` 中无 `from kairospy.*` 的跨包实现依赖；
 - Domain 单元测试不需要文件系统、Catalog JSON、Arrow 或 Provider；
 - Connector contract 测试证明相同 Provider payload 可稳定映射到 Canonical Record；
 - Replay contract 测试证明 Canonical Record 可稳定映射为 Domain 输入。
@@ -646,20 +646,20 @@ test_storage_driver_boundaries.py
 最终 CI 至少执行：
 
 ```bash
-./pyenv/bin/python -m compileall -q kairos tests
+./pyenv/bin/python -m compileall -q kairospy tests
 ./pyenv/bin/python -m unittest discover -s tests -v
-./pyenv/bin/python -m kairos data diagnostics --strict
-./pyenv/bin/python -m kairos data doctor --all-products
-./pyenv/bin/python -m kairos data migrate --audit-only
+./pyenv/bin/python -m kairospy data diagnostics --strict
+./pyenv/bin/python -m kairospy data doctor --all-products
+./pyenv/bin/python -m kairospy data migrate --audit-only
 git diff --check
 ```
 
 另增加静态扫描：
 
 ```bash
-rg 'from kairos\.history|import kairos\.history' kairos examples tests
-rg 'DatasetRepository\(' kairos examples
-rg 'data/(history|datasets|surfaces|raw|normalized|derived)' kairos examples docs
+rg 'from kairospy\.history|import kairospy\.history' kairospy examples tests
+rg 'DatasetRepository\(' kairospy examples
+rg 'data/(history|datasets|surfaces|raw|normalized|derived)' kairospy examples docs
 rg 'read_(csv|parquet)|open\(.+data/' examples studies
 ```
 
@@ -741,7 +741,7 @@ rg 'read_(csv|parquet)|open\(.+data/' examples studies
 
 ### 删除与迁移
 
-- [ ] `BarRepository` 和 `kairos history` 已删除；
+- [ ] `BarRepository` 和 `kairospy history` 已删除；
 - [ ] 旧 `data/history`、`data/datasets` 和 `data/surfaces` 已迁移；
 - [ ] CSV sidecar 已停止生成并完成清理；
 - [ ] 空旧目录已删除；

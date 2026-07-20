@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from kairos.backtest.reference_scenarios import run_reference_scenario
+from kairospy.backtest.reference_scenarios import run_reference_scenario
 
 
 class ReferenceScenarioTests(unittest.TestCase):

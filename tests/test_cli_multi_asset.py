@@ -8,10 +8,10 @@ from decimal import Decimal
 from io import StringIO
 from pathlib import Path
 
-from kairos.__main__ import main
-from kairos.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
-from kairos.domain.product import CryptoSpotSpec, ProductType
-from kairos.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, ReferenceCatalogRepository, RouteId
+from kairospy.__main__ import main
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
+from kairospy.domain.product import CryptoSpotSpec, ProductType
+from kairospy.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, ReferenceCatalogRepository, RouteId
 from tests.reference_support import publish_test_instrument
 
 

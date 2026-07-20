@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 import asyncio
 from datetime import datetime, timezone
@@ -9,19 +9,19 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairos.ports import OrderAck, OrderRequest
-from kairos.ports import Environment
-from kairos.application import ApplicationConfig, AsyncKairosRuntime, ManagedServiceSpec, RuntimePaths, KairosApplication
-from kairos.application.clock import FixedClock
-from kairos.domain.capability import OrderType
-from kairos.domain.execution import TradeSide
-from kairos.domain.identity import AccountKey, AccountType, InstrumentId, VenueId
-from kairos.domain.order import ExecutionInstructions, TimeInForce
-from kairos.execution.command import OutboxStatus
-from kairos.execution.order_state import DurableOrderStatus
-from kairos.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher
-from kairos.orchestration.kill_switch import KillSwitch
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.ports import OrderAck, OrderRequest
+from kairospy.ports import Environment
+from kairospy.application import ApplicationConfig, AsyncKairosRuntime, ManagedServiceSpec, RuntimePaths, KairosApplication
+from kairospy.application.clock import FixedClock
+from kairospy.domain.capability import OrderType
+from kairospy.domain.execution import TradeSide
+from kairospy.domain.identity import AccountKey, AccountType, InstrumentId, VenueId
+from kairospy.domain.order import ExecutionInstructions, TimeInForce
+from kairospy.execution.command import OutboxStatus
+from kairospy.execution.order_state import DurableOrderStatus
+from kairospy.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher
+from kairospy.orchestration.kill_switch import KillSwitch
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 
 
 NOW = datetime(2026, 7, 17, 12, tzinfo=timezone.utc)

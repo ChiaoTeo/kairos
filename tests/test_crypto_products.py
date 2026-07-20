@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairos.domain.identity import InstitutionId
+from kairospy.domain.identity import InstitutionId
 
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -9,58 +9,58 @@ from pathlib import Path
 import tempfile
 from uuid import uuid4
 
-from kairos.accounting.ledger import LedgerService
-from kairos.ports import Environment, OrderRequest, ReferenceDataRequest, VenueOrderStatus
-from kairos.connectors.binance.account_gateway import (
+from kairospy.accounting.ledger import LedgerService
+from kairospy.ports import Environment, OrderRequest, ReferenceDataRequest, VenueOrderStatus
+from kairospy.connectors.binance.account_gateway import (
     BinanceAccountGateway,
     BinanceOptionsAccountGateway,
 )
-from kairos.connectors.binance.execution_gateway import (
+from kairospy.connectors.binance.execution_gateway import (
     BINANCE_FUTURES_EXECUTION_CAPABILITIES,
     BINANCE_OPTIONS_EXECUTION_CAPABILITIES,
     BINANCE_SPOT_EXECUTION_CAPABILITIES,
     BinanceExecutionGateway,
     BinanceOptionsExecutionGateway,
 )
-from kairos.connectors.binance.funding_settlement import BinanceFundingSettlementClient
-from kairos.connectors.binance.market_data_client import (
+from kairospy.connectors.binance.funding_settlement import BinanceFundingSettlementClient
+from kairospy.connectors.binance.market_data_client import (
     BINANCE_FUTURES_MARKET_DATA_CAPABILITIES,
     BINANCE_OPTIONS_MARKET_DATA_CAPABILITIES,
     BINANCE_SPOT_MARKET_DATA_CAPABILITIES,
     BinanceMarketDataClient,
 )
-from kairos.connectors.binance.market_stream import BinanceStreamSession, parse_market_stream_event, websocket_url
-from kairos.connectors.binance.option_market_snapshot import parse_option_market_snapshot
-from kairos.connectors.binance.order_recovery import BinanceRecoveryService
-from kairos.connectors.binance.reference_data import (
+from kairospy.connectors.binance.market_stream import BinanceStreamSession, parse_market_stream_event, websocket_url
+from kairospy.connectors.binance.option_market_snapshot import parse_option_market_snapshot
+from kairospy.connectors.binance.order_recovery import BinanceRecoveryService
+from kairospy.connectors.binance.reference_data import (
     BinanceFuturesReferenceDataClient,
     BinanceOptionsReferenceDataClient,
     BinanceSpotReferenceDataClient,
 )
-from kairos.connectors.binance.request_signing import BinanceSigner, synchronize_clock
-from kairos.connectors.binance.user_data_stream import (
+from kairospy.connectors.binance.request_signing import BinanceSigner, synchronize_clock
+from kairospy.connectors.binance.user_data_stream import (
     BinanceUserDataStreamService,
     BinanceUserStreamProcessor,
     parse_user_stream_event,
 )
-from kairos.domain.capability import MarginMode, OrderType
-from kairos.domain.execution import TradeExecution, TradeSide
-from kairos.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairos.domain.ledger import Ledger, LedgerBook
-from kairos.domain.order import ExecutionInstructions, TimeInForce
-from kairos.domain.market_data import DerivativeMarketState, OrderBookDelta, Quote, Trade
-from kairos.domain.product import ProductType
-from kairos.reference import ReferenceCatalog
-from kairos.reference.access import contract_spec
-from kairos.execution.ingestion import DurableAccountingIngestionService, ExecutionIngestionService
-from kairos.execution.strategy_planner import plan_strategy_intent
-from kairos.products.crypto_option.settlement import (
+from kairospy.domain.capability import MarginMode, OrderType
+from kairospy.domain.execution import TradeExecution, TradeSide
+from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.domain.ledger import Ledger, LedgerBook
+from kairospy.domain.order import ExecutionInstructions, TimeInForce
+from kairospy.domain.market_data import DerivativeMarketState, OrderBookDelta, Quote, Trade
+from kairospy.domain.product import ProductType
+from kairospy.reference import ReferenceCatalog
+from kairospy.reference.access import contract_spec
+from kairospy.execution.ingestion import DurableAccountingIngestionService, ExecutionIngestionService
+from kairospy.execution.strategy_planner import plan_strategy_intent
+from kairospy.products.crypto_option.settlement import (
     CryptoOptionSettlementService, DurableCryptoOptionSettlementService,
 )
-from kairos.orchestration.runtime_store import SQLiteRuntimeStore
-from kairos.products.perpetual.funding import FundingEngine
-from kairos.risk.margin import CryptoCrossMarginPolicy
-from kairos.strategies.cash_and_carry import CashAndCarryConfig, CashAndCarryStrategy
+from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.products.perpetual.funding import FundingEngine
+from kairospy.risk.margin import CryptoCrossMarginPolicy
+from kairospy.strategies.cash_and_carry import CashAndCarryConfig, CashAndCarryStrategy
 
 
 NOW = datetime(2025, 1, 1, tzinfo=timezone.utc)
