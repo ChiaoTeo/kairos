@@ -14,3 +14,5 @@ build/
 .kairos.toml
 /config
 .kairos
+.strategies
+.studies
