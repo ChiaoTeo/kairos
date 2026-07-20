@@ -35,6 +35,28 @@ Binance WebSocket
 
 72 小时验收将 `--duration-seconds` 改为 `259200`。重启间隔 `21600` 表示每 6 小时主动关闭并重新建立一个完整 Stream Session；每个 Session 使用独立 Raw Journal、Canonical Segment Manifest 和 Leg Artifact。
 
+## 绑定 Live View Freshness
+
+如果本次 soak 是为了批准某个 Strategy paper/live 使用的 Live View，先用 `kairos data write --live --connector ...`
+生成 Live View manifest，再把 manifest 路径传给 soak 命令：
+
+```bash
+./pyenv/bin/python -m kairos \
+  --lake-root data/market-data-soak \
+  data soak-binance \
+  --symbol BTCUSDT \
+  --channel bookTicker \
+  --duration-seconds 86400 \
+  --minimum-events 100000 \
+  --maximum-channel-utilization 0.9 \
+  --live-view-manifest data/market-data-soak/live-views/<dataset>/<live-view-id>/manifest.json
+```
+
+命令会把审计后的 `freshness_status`、`channel_diagnostics` 和 `freshness_evidence` 写回该 manifest。若
+channel diagnostics 中出现 drop、overflow 或 sequence gap，manifest 会被标记为 `unhealthy`。后续
+`run start --mode paper|live` 会要求同一 DataSet contract 下存在 healthy Live View，并且这些 channel
+failure 均为 0。
+
 ## 资源边界
 
 - Soak 统计保持 O(1) 内存，只保存上一条事件和聚合计数，不在内存中保留完整事件列表。

@@ -32,6 +32,14 @@ class RepositoryHygieneTests(unittest.TestCase):
                 forbidden.append(value)
         self.assertEqual(forbidden, [])
 
+    def test_local_build_artifacts_are_not_present(self):
+        forbidden = []
+        for path in (ROOT / "build", ROOT / "dist"):
+            if path.exists():
+                forbidden.append(str(path.relative_to(ROOT)))
+        forbidden.extend(str(path.relative_to(ROOT)) for path in ROOT.glob("*.egg-info"))
+        self.assertEqual(forbidden, [])
+
     def test_notebook_checkpoints_are_not_present(self):
         files = [path for path in ROOT.rglob("*") if path.is_file() and ".ipynb_checkpoints" in path.parts]
         self.assertEqual(files, [])

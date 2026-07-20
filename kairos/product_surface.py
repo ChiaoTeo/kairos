@@ -25,8 +25,10 @@ from kairos.data import (
     QualityLevel,
     SourceBinding,
     data_release_ref,
-    evaluate_live_view_freshness,
+    live_view_manifest_path,
+    resolve_live_view_subscription,
     stable_artifact_hash,
+    write_live_view_manifest,
 )
 from kairos.research_platform import ensure_sma_tutorial_dataset
 
@@ -415,7 +417,11 @@ def run_start(args) -> dict[str, object]:
         target_kind = "strategy"
         target = _load_strategy_lock(root, strategy_id, version)
         target_hash = target["lock_hash"]
-    freshness_gates = _paper_live_freshness_gates(root, target) if args.mode in {"paper", "live"} else ()
+    live_bindings = _paper_live_subscription_bindings(root, target) if args.mode in {"paper", "live"} else ()
+    freshness_gates = tuple(
+        {"name": item["name"], "dataset": item["dataset"], **item["freshness_gate"]}
+        for item in live_bindings
+    )
     material = {"target_kind": target_kind, "target_id": target_id, "mode": args.mode, "target_hash": target_hash, "at": _now()}
     run_id = f"run_{sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:16]}"
     directory = root / "runs" / target_id / run_id
@@ -429,6 +435,7 @@ def run_start(args) -> dict[str, object]:
         "input_artifacts": _run_input_artifacts(target_kind, target),
         "runtime_contract": {
             "mode": args.mode,
+            **({"feed_bindings": list(live_bindings)} if live_bindings else {}),
             **({"freshness_gates": list(freshness_gates)} if freshness_gates else {}),
         },
         "started_at": material["at"],
@@ -476,13 +483,13 @@ def _write_live_view(args, dataset_id: str, contract: dict[str, Any], fields: li
     connector_arg = getattr(args, "connector", None)
     if connector_arg is None:
         raise ValueError("data write --live requires --connector")
+    freshness = _live_view_freshness_contract(contract)
     connector = Path(connector_arg)
     if not connector.exists():
         raise FileNotFoundError(connector)
     contract_hash = stable_artifact_hash(contract)
     connector_hash = sha256(connector.read_bytes()).hexdigest()
     live_view_id = f"{dataset_id}:live:{connector_hash[:12]}"
-    directory = Path(args.lake_root) / "live-views" / dataset_id.replace(".", "/") / live_view_id
     manifest = LiveViewManifest(
         dataset_id,
         live_view_id,
@@ -494,20 +501,37 @@ def _write_live_view(args, dataset_id: str, contract: dict[str, Any], fields: li
             "transport": "connector",
             "event_source_contract": "EventSource[DataSetRecord]",
             "channel_contract": "BoundedEventChannel",
-            "freshness": contract.get("freshness", {}),
+            "freshness": freshness,
         },
         {"kind": "live_connector", "name": connector.name},
         "configured",
         _now(),
     )
     manifest_payload = manifest.to_primitive()
-    _write_json(directory / "manifest.json", manifest_payload)
+    manifest_path = live_view_manifest_path(args.lake_root, dataset_id, live_view_id)
+    write_live_view_manifest(manifest_path, manifest)
     return {
         **manifest_payload,
         "manifest_hash": manifest.manifest_hash,
-        "artifact": str(directory / "manifest.json"),
+        "artifact": str(manifest_path),
         "artifact_ref": manifest.artifact_ref,
     }
+
+
+def _live_view_freshness_contract(contract: dict[str, Any]) -> dict[str, object]:
+    freshness = contract.get("freshness")
+    if not isinstance(freshness, dict):
+        raise ValueError("data write --live contract must declare freshness.max_age_seconds")
+    max_age = freshness.get("max_age_seconds")
+    try:
+        max_age_seconds = int(max_age)
+    except (TypeError, ValueError) as error:
+        raise ValueError("data write --live contract must declare positive freshness.max_age_seconds") from error
+    if max_age_seconds <= 0:
+        raise ValueError("data write --live contract must declare positive freshness.max_age_seconds")
+    normalized = dict(freshness)
+    normalized["max_age_seconds"] = max_age_seconds
+    return normalized
 
 
 def _data_release_evidence(root: Path, release: DatasetRelease) -> dict[str, object]:
@@ -599,63 +623,17 @@ def _run_input_artifacts(target_kind: str, target: dict[str, Any]) -> dict[str, 
     return {"data": data, "inputs": inputs}
 
 
-def _paper_live_freshness_gates(root: Path, target: dict[str, Any]) -> tuple[dict[str, object], ...]:
+def _paper_live_subscription_bindings(root: Path, target: dict[str, Any]) -> tuple[dict[str, object], ...]:
     results = []
     for name, data in sorted(target.get("data", {}).items()):
         dataset = str(data.get("dataset") or "")
         contract_hash = str(data.get("contract_hash") or "")
-        manifest = _matching_live_view_manifest(root, dataset, contract_hash)
-        if manifest is None:
-            raise ValueError(f"paper/live run requires healthy Live View freshness for data input {name!r}")
-        gate = evaluate_live_view_freshness(manifest, policy=PAPER_LIVE_FRESHNESS_POLICY)
-        result = {
-            "name": name,
-            "dataset": dataset,
-            "live_view_id": gate.live_view_id,
-            "policy": gate.policy_name,
-            "freshness_status": gate.freshness_status,
-            "max_age_seconds": gate.max_age_seconds,
-            "passed": gate.passed,
-            "reason": gate.reason,
-        }
-        if not gate.passed:
-            raise ValueError(result["reason"])
-        results.append(result)
+        binding = resolve_live_view_subscription(
+            root, name=name, dataset_id=dataset, contract_hash=contract_hash,
+            policy=PAPER_LIVE_FRESHNESS_POLICY,
+        )
+        results.append(binding.to_primitive())
     return tuple(results)
-
-
-def _matching_live_view_manifest(root: Path, dataset: str, contract_hash: str) -> LiveViewManifest | None:
-    if not dataset or not contract_hash:
-        return None
-    directory = root / "live-views" / dataset.replace(".", "/")
-    candidates = []
-    for path in sorted(directory.glob("*/manifest.json")):
-        payload = _read_json(path)
-        if payload.get("dataset_id") == dataset and payload.get("contract_hash") == contract_hash:
-            candidates.append(_live_view_manifest_from_payload(payload))
-    passing = [
-        item for item in candidates
-        if evaluate_live_view_freshness(item, policy=PAPER_LIVE_FRESHNESS_POLICY).passed
-    ]
-    if passing:
-        return passing[-1]
-    return candidates[-1] if candidates else None
-
-
-def _live_view_manifest_from_payload(payload: dict[str, Any]) -> LiveViewManifest:
-    return LiveViewManifest(
-        str(payload["dataset_id"]),
-        str(payload["live_view_id"]),
-        str(payload["contract_hash"]),
-        str(payload["connector_hash"]),
-        str(payload["primary_time"]),
-        tuple(str(item) for item in payload.get("fields", ())),
-        payload.get("live_data_plane", {}),
-        payload.get("source", {}),
-        str(payload.get("freshness_status", "")),
-        str(payload.get("published_at", "")),
-        int(payload.get("schema_version", 1)),
-    )
 
 
 def _register_written_release(root: Path, dataset_id: str, release_id: str, directory: Path, content_hash: str, primary_time: str) -> None:

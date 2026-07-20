@@ -246,8 +246,8 @@ kairos/ports/venue.py
 | `base.py` | Python 项目常见，但公共领域语义弱；`kairos/strategies/base.py` 已改为 `strategy_protocols.py`，旧文件已删除 | `protocols.py`、`interfaces.py`、`ports.py` |
 | `service.py` | 过泛，多个包都有 `service.py`；`kairos/pricing/service.py` 已改为 `option_valuation.py`，`kairos/research/service.py` 已改为 `option_capture.py`，`kairos/treasury/service.py` 已改为 `ledger_posting.py`，旧文件已删除 | 用业务动作命名，如 `dataset_publication.py`、`option_valuation.py`、`research_capture.py` |
 | `models.py` | 过泛，但在小包内可接受；`kairos/data/models.py` 已改为 `contracts.py`，`kairos/reference/models.py` 已改为 `contracts.py`，`kairos/volatility/models.py` 已改为 `contracts.py`，`kairos/research/validation/models.py` 已改为 `contracts.py`，`kairos/treasury/models.py` 和 `transfer_models.py` 已改为 `transfer_contracts.py`，`kairos/pricing/models.py` 和 `option_pricing_models.py` 已改为 `option_pricing_contracts.py`，旧文件已删除 | 后续如继续细拆 Reference，可从 `contracts.py` 拆出 `instrument_definitions.py`、`listing_definitions.py`、`routing_definitions.py` |
-| `analyzer.py` | 分析对象不明确；`kairos/research/analyzer.py` 已改为 `option_snapshot_analysis.py`，主类型为 `OptionSnapshotAnalysis` / `OptionSnapshotMetricRow`，旧文件仅兼容 | `option_snapshot_analysis.py`、`research_evidence_analysis.py` |
-| `selector.py` | 选择什么不明确；`kairos/research/selector.py` 已改为 `option_universe_selector.py`，旧文件仅兼容 | `option_universe_selector.py` 或 `instrument_selector.py` |
+| `analyzer.py` | 分析对象不明确；旧 `kairos/research/analyzer.py` 已删除，当前主类型为 `OptionSnapshotAnalysis` / `OptionSnapshotMetricRow` | `option_snapshot_analysis.py`、`research_evidence_analysis.py` |
+| `selector.py` | 选择什么不明确；旧 `kairos/research/selector.py` 已删除，当前期权入口为 `option_universe_selector.py` | `option_universe_selector.py` 或 `instrument_selector.py` |
 | `readiness.py` / `health.py` / `doctor` | 三者边界接近；`kairos/data/health.py`、`DataHealth*` 和 `kairos data health` 已删除，数据质量主入口为 `kairos/data/diagnostics.py`、`DataDiagnosticsService` / `DataDiagnosticIssue` 和 `kairos data diagnostics`；Massive 权限探测已改为 `entitlement_diagnostics.py`，主类为 `MassiveEntitlementDiagnostics` / `MassiveEntitlementReport`，旧 `readiness.py`、`MassiveReadiness*` 和 `massive-readiness` 已删除；US equity momentum 数据包审计已改为 `us_equity_momentum_diagnostics.py`、`UsEquityMomentumDiagnostics` 和 `us-equity-momentum-diagnostics`，旧 readiness 模块/类/命令已删除 | 统一命名层次：内部 API 使用 `diagnostics`；供应商权限探测使用 `entitlement-diagnostics`；准备度证据字段可继续叫 readiness，但文件/主命令不要泛称 readiness |
 | `btcusdt-depth-...` 输出文件 | Venue symbol 直接出现在产物名里可接受，但不应作为内部身份 | 产物 manifest 中必须同时写 `InstrumentId`、`ListingId`、`VenueId` |
 
@@ -345,7 +345,7 @@ kairos/ports/venue.py
 | --- | --- |
 | 建立命名决策记录 | 在 `docs/` 增加或链接本文，明确 `Kairos`、`OHLCV/Bar`、`Gateway/Client/Port` 规则 |
 | 增加禁用词扫描 | 在 hygiene test 中扫描新增文件名和公开类名，提示 `adapter`、`manager`、`utils`、裸 `service`、裸 `models` |
-| 建立兼容策略 | 规定旧名至少保留一个迁移周期，旧入口只做转发和提示 |
+| 建立迁移策略 | 迁移期先加新名再删除旧名；当前最终态不保留旧项目名、旧 CLI 或旧 adapter 参数 |
 
 验收标准：
 
@@ -353,13 +353,13 @@ kairos/ports/venue.py
 2. 新增命名不得继续引入裸 `adapter`、`utils`、`manager`。
 3. 测试不要求大规模改名，但能提醒后续新增命名。
 
-### Wave 1：品牌和 CLI 兼容入口
+### Wave 1：品牌和 CLI 迁移
 
-目标：把产品名切到 `Kairos`，但不破坏现有脚本。
+目标：把产品名切到 `Kairos`，并在最终态删除旧 CLI。
 
 典型改动：
 
-| 当前 | 新命名 | 兼容方式 |
+| 当前 | 新命名 | 最终状态 |
 | --- | --- | --- |
 | README `# Kairos` | `# Kairos` | README 不再展示旧 CLI 别名 |
 | `pyproject.toml` script `trader` | 增加 script `kairos` | 删除 `trader` script，只保留 `kairos` |
@@ -427,11 +427,11 @@ kairos/ports/venue.py
 | `MassiveSourceArchive` | `MassiveVendorArchiveClient` | 供应商原始响应归档读取；旧名已删除 |
 | decoder 类 | `EventDecoder` / `MarketDataNormalizer` | 原始响应到 canonical |
 
-兼容策略：
+迁移策略：
 
 1. 先新增新类名，旧类名继承或别名到新类。
 2. 更新内部导入到新名。
-3. 最后保留旧名仅供外部兼容。
+3. 删除旧名，最终公开 API 不再暴露裸 `Adapter`。
 
 验收标准：
 
@@ -470,14 +470,14 @@ kairos/ports/venue.py
 | --- | --- | --- |
 | `kairos/` | `kairos/` | 真实实现包直接位于 `kairos`，不保留 `trading` 目录 |
 | `from kairos...` | `from kairos...` | 内部导入全部迁移 |
-| `python -m kairos` | `python -m kairos` | 旧入口保留 |
-| package include `kairos*` | `kairos*` + `kairos*` 兼容 | 一个迁移周期后删除旧包 |
+| `python -m kairos` | `python -m kairos` | 正式模块入口 |
+| package include `kairos*` | `kairos*` | 只打包 Kairos 产品库，并精确排除源码研究工作区 |
 
 验收标准：
 
 1. 内部源码不再从 `trading` 导入。
 2. `python -m kairos --help` 正常。
-3. `python -m kairos --help` 仍能兼容运行。
+3. `kairos` console script 是唯一发布的 CLI。
 4. 测试、示例、文档都优先使用 `kairos`。
 
 推荐执行顺序：
@@ -545,6 +545,7 @@ Wave 0 命名冻结
 本轮追加进展：
 
 - 高优先级规划文档中的历史 `Adapter` 泛称已收敛到 `Connector`、`Execution Gateway`、`Port Implementation` 或 `Source`，覆盖 examples suite、async dataflow、data usage、market data provider、reference/treasury、research data platform 和 US equity momentum 计划文档。
+- 旧 `build/` 与 `kairos.egg-info/` 构建缓存已清理，避免陈旧 `build/lib/research` 误导打包验收；仓库卫生测试新增工作区构建产物护栏。
 - 顶层测试文件 `test_service.py` 已改为 `test_option_research_capture.py`，`test_dataset_quality_service.py` 已改为 `test_dataset_quality_assessment.py`，测试列表不再暴露笼统 service 命名。
 - 仓库卫生测试新增护栏：`kairos.ports` 包根不得重新导出 `Adapter` 旧名，顶层测试不得新增 `test_service.py`、`test_mock.py`、`test_adapter.py` 这类泛称文件。
 - 除本审计文档外，产品文档与示例 Markdown 已切到 `kairos` CLI 默认命名；`architecture.md`、system blueprint、async dataflow、research/backtest/live convergence 等标题和命令不再使用 `Trader` / `trader` 作为主名。

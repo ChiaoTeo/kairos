@@ -15,7 +15,11 @@ from kairos.data.contracts import (
     DataProductContract, DataReleaseManifest, DataSetContractArtifact, DatasetStorageKind, LiveViewManifest,
     QualityLevel,
 )
-from kairos.data.freshness import PAPER_LIVE_FRESHNESS_POLICY, evaluate_live_view_freshness
+from kairos.data.freshness import (
+    PAPER_LIVE_FRESHNESS_POLICY, evaluate_live_view_freshness, live_view_channel_diagnostics,
+    find_live_view_manifest, live_view_manifest_path, update_live_view_manifest_freshness,
+    write_live_view_manifest,
+)
 from kairos.data.products import (
     BTC_SPOT_DAILY, US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MASSIVE_CORPORATE_ACTIONS,
     US_EQUITY_MASSIVE_IDENTITY,
@@ -188,10 +192,32 @@ class DataProductContractTests(unittest.TestCase):
         self.assertTrue(configured_gate.passed)
         self.assertEqual(configured_gate.max_age_seconds, 60)
         self.assertFalse(paper_live_gate.passed)
+        self.assertEqual(paper_live_gate.channel_failures, ("missing_channel_diagnostics",))
 
         healthy = LiveViewManifest(
             str(BTC_SPOT_DAILY.key),
             "live:healthy",
+            contract_hash,
+            "connector-hash",
+            "available_time",
+            ("available_time", "close"),
+            {
+                "channel_contract": "BoundedEventChannel",
+                "freshness": {"max_age_seconds": 60},
+                "channel_diagnostics": {"dropped": 0, "sequence_gaps": 0, "conflated": 1, "reconnects": 1},
+            },
+            {"kind": "live_connector"},
+            "healthy",
+            "2026-07-20T00:00:00+00:00",
+        )
+
+        self.assertTrue(evaluate_live_view_freshness(healthy, policy=PAPER_LIVE_FRESHNESS_POLICY).passed)
+
+    def test_paper_live_freshness_gate_fails_on_missing_or_lossy_channel_diagnostics(self) -> None:
+        contract_hash = DataSetContractArtifact.from_product_contract(BTC_SPOT_DAILY).contract_hash
+        missing = LiveViewManifest(
+            str(BTC_SPOT_DAILY.key),
+            "live:missing-channel-diagnostics",
             contract_hash,
             "connector-hash",
             "available_time",
@@ -201,8 +227,167 @@ class DataProductContractTests(unittest.TestCase):
             "healthy",
             "2026-07-20T00:00:00+00:00",
         )
+        missing_gate = evaluate_live_view_freshness(missing, policy=PAPER_LIVE_FRESHNESS_POLICY)
 
-        self.assertTrue(evaluate_live_view_freshness(healthy, policy=PAPER_LIVE_FRESHNESS_POLICY).passed)
+        self.assertFalse(missing_gate.passed)
+        self.assertEqual(missing_gate.channel_failures, ("missing_channel_diagnostics",))
+
+        lossy = LiveViewManifest(
+            str(BTC_SPOT_DAILY.key),
+            "live:lossy-channel",
+            contract_hash,
+            "connector-hash",
+            "available_time",
+            ("available_time", "close"),
+            {
+                "channel_contract": "BoundedEventChannel",
+                "freshness": {"max_age_seconds": 60},
+                "channel_diagnostics": {"dropped": 1, "channel_overflow": 1, "sequence_gaps": 1, "reconnects": 1},
+            },
+            {"kind": "live_connector"},
+            "healthy",
+            "2026-07-20T00:00:00+00:00",
+        )
+        lossy_gate = evaluate_live_view_freshness(lossy, policy=PAPER_LIVE_FRESHNESS_POLICY)
+
+        self.assertFalse(lossy_gate.passed)
+        self.assertIn("channel_dropped", lossy_gate.channel_failures)
+        self.assertIn("channel_overflow", lossy_gate.channel_failures)
+        self.assertIn("sequence_gap", lossy_gate.channel_failures)
+        self.assertEqual(lossy_gate.channel_diagnostics["overflow"], 1)
+
+    def test_live_view_channel_diagnostics_normalizes_soak_report_fields(self) -> None:
+        diagnostics = live_view_channel_diagnostics({
+            "channel_capacity": 64,
+            "peak_channel_depth": 8,
+            "peak_channel_utilization": 0.125,
+            "channel_dropped": 0,
+            "channel_overflow": 0,
+            "reconnect_count": 2,
+        })
+
+        self.assertEqual(diagnostics["capacity"], 64)
+        self.assertEqual(diagnostics["peak_depth"], 8)
+        self.assertEqual(diagnostics["peak_utilization"], 0.125)
+        self.assertEqual(diagnostics["dropped"], 0)
+        self.assertEqual(diagnostics["overflow"], 0)
+        self.assertEqual(diagnostics["sequence_gaps"], 0)
+        self.assertEqual(diagnostics["reconnects"], 2)
+
+    def test_soak_evidence_updates_live_view_manifest_freshness(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            contract_hash = DataSetContractArtifact.from_product_contract(BTC_SPOT_DAILY).contract_hash
+            manifest = LiveViewManifest(
+                str(BTC_SPOT_DAILY.key),
+                "live:soak-updated",
+                contract_hash,
+                "connector-hash",
+                "available_time",
+                ("available_time", "close"),
+                {"channel_contract": "BoundedEventChannel", "freshness": {"max_age_seconds": 60}},
+                {"kind": "live_connector"},
+                "configured",
+                "2026-07-20T00:00:00+00:00",
+            )
+            path.write_text(json.dumps(manifest.to_primitive()), encoding="utf-8")
+
+            updated = update_live_view_manifest_freshness(path, {
+                "passed": True,
+                "artifact": str(Path(directory) / "soak.json"),
+                "audit_hash": "a" * 64,
+                "source": "binance",
+                "stream_id": "btcusdt@bookTicker",
+                "event_count": 10,
+                "channel_capacity": 64,
+                "peak_channel_depth": 2,
+                "peak_channel_utilization": 0.03125,
+                "channel_dropped": 0,
+                "reconnect_count": 1,
+            })
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            gate = evaluate_live_view_freshness(updated, policy=PAPER_LIVE_FRESHNESS_POLICY)
+
+        self.assertEqual(payload["freshness_status"], "healthy")
+        self.assertEqual(payload["live_data_plane"]["channel_diagnostics"]["dropped"], 0)
+        self.assertEqual(payload["live_data_plane"]["freshness_evidence"]["audit_hash"], "a" * 64)
+        self.assertTrue(gate.passed)
+
+    def test_soak_evidence_marks_live_view_unhealthy_when_channel_is_lossy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            contract_hash = DataSetContractArtifact.from_product_contract(BTC_SPOT_DAILY).contract_hash
+            manifest = LiveViewManifest(
+                str(BTC_SPOT_DAILY.key),
+                "live:lossy-soak",
+                contract_hash,
+                "connector-hash",
+                "available_time",
+                ("available_time", "close"),
+                {"channel_contract": "BoundedEventChannel", "freshness": {"max_age_seconds": 60}},
+                {"kind": "live_connector"},
+                "configured",
+                "2026-07-20T00:00:00+00:00",
+            )
+            path.write_text(json.dumps(manifest.to_primitive()), encoding="utf-8")
+
+            updated = update_live_view_manifest_freshness(path, {
+                "passed": True,
+                "audit_hash": "b" * 64,
+                "event_count": 10,
+                "channel_capacity": 64,
+                "channel_dropped": 1,
+                "sequence_gaps": 1,
+            })
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            gate = evaluate_live_view_freshness(updated, policy=PAPER_LIVE_FRESHNESS_POLICY)
+
+        self.assertEqual(payload["freshness_status"], "unhealthy")
+        self.assertIn("channel_dropped", payload["live_data_plane"]["freshness_evidence"]["channel_failures"])
+        self.assertFalse(gate.passed)
+
+    def test_find_live_view_manifest_prefers_policy_passing_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset_id = str(BTC_SPOT_DAILY.key)
+            contract_hash = DataSetContractArtifact.from_product_contract(BTC_SPOT_DAILY).contract_hash
+            configured = LiveViewManifest(
+                dataset_id,
+                "live:configured",
+                contract_hash,
+                "configured-connector",
+                "available_time",
+                ("available_time", "close"),
+                {"channel_contract": "BoundedEventChannel", "freshness": {"max_age_seconds": 60}},
+                {"kind": "live_connector"},
+                "configured",
+                "2026-07-20T00:00:00+00:00",
+            )
+            healthy = LiveViewManifest(
+                dataset_id,
+                "live:healthy",
+                contract_hash,
+                "healthy-connector",
+                "available_time",
+                ("available_time", "close"),
+                {
+                    "channel_contract": "BoundedEventChannel",
+                    "freshness": {"max_age_seconds": 60},
+                    "channel_diagnostics": {"dropped": 0, "overflow": 0, "sequence_gaps": 0},
+                },
+                {"kind": "live_connector"},
+                "healthy",
+                "2026-07-20T00:00:00+00:00",
+            )
+            write_live_view_manifest(live_view_manifest_path(root, dataset_id, configured.live_view_id), configured)
+            write_live_view_manifest(live_view_manifest_path(root, dataset_id, healthy.live_view_id), healthy)
+
+            selected = find_live_view_manifest(
+                root, dataset_id=dataset_id, contract_hash=contract_hash, policy=PAPER_LIVE_FRESHNESS_POLICY,
+            )
+
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected.live_view_id, "live:healthy")
 
 
 if __name__ == "__main__":

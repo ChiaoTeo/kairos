@@ -1315,13 +1315,20 @@ def decide(context):
   已配置 freshness 与 paper/live 所需的 healthy freshness；
 - 四产品 surface 的 `run start --mode paper/live` 已接入最小 freshness gate：Strategy data input 必须存在
   匹配 DataSet contract 的 healthy Live View，Run Manifest 会记录 `freshness_gates`；
+- paper/live freshness gate 已要求 Live View manifest 携带 channel diagnostics；drop、overflow 和 sequence gap
+  会 fail closed，reconnect/conflation 作为显式证据记录，不再静默丢失；
+- `kairos data soak-binance --live-view-manifest ...` 已可把审计后的 soak 结果写回 Live View manifest，自动更新
+  `freshness_status`、`channel_diagnostics` 和 `freshness_evidence`；drop、overflow 或 sequence gap 会写成
+  `unhealthy`；
+- Live View manifest 已有统一读写/查找 API：`live_view_manifest_path`、`load_live_view_manifest`、
+  `write_live_view_manifest`、`find_live_view_manifest`；四产品 surface 和 freshness 写回路径共享同一套解析逻辑；
 - Python API：`DataProductApi`、`StudyProductApi`、`StrategyProductApi`、`RunProductApi` 已提供和 CLI 同源的最小调用面；
 - 完整示例：`examples/four_product_user_path.sh`；
 - 自动化验收：`tests/test_four_product_surface.py`。
 
 目标态剩余缺口：
 
-1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型，并接入四产品 surface、`publish_release`、columnar publishing 和 MarketReplayDataset metadata 补全路径；质量报告已开始区分 gate/diagnostic，DataPreparation 已有可配置 promotion policy profile，DataProductContract capabilities 已可声明产品默认 policy，内置 Q2/Q3/Q4 profile registry 已建立，freshness gate 已有最小 policy/result 模型并接入四产品 paper/live run 边界；剩余缺口是 freshness monitor、channel 诊断和实际实时 runtime 还没有完整统一接入该 gate；
+1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型，并接入四产品 surface、`publish_release`、columnar publishing 和 MarketReplayDataset metadata 补全路径；质量报告已开始区分 gate/diagnostic，DataPreparation 已有可配置 promotion policy profile，DataProductContract capabilities 已可声明产品默认 policy，内置 Q2/Q3/Q4 profile registry 已建立，freshness gate 已有最小 policy/result 模型并接入四产品 paper/live run 边界，channel diagnostics 已进入该 gate，`soak-binance` 可显式写回 Live View health/diagnostics，Live View manifest 读写/查找已有共享 API；剩余缺口是通用 freshness monitor 和实际实时 runtime 还没有自动持续写回 Live View health/diagnostics；
 2. 旧 `StudyWorkspace` 仍以单 `input_release_id` 为主模型，新的 Study Product workspace 还没有替换旧模型；
 3. Study Product 的 Draft/Frozen 生命周期已最小落地，但状态机、质量门禁和目录结构还没有统一到正式模型；
 4. 本地 factor 已记录 code hash，但依赖、参数、输出 schema 和 point-in-time 检查还没有正式约定；
@@ -1329,7 +1336,7 @@ def decide(context):
 6. Strategy 已要求从 Frozen Study 打开，但还没有完整自动检查 Data Release hash 与 Factor Output 语义一致；
 7. Study factor 与 Strategy model 的语义一致性还没有自动检查；
 8. Data Product 已有最小 `data download` 和 `data write` 入口，但 download spec、YAML contract、quality report 还没有完整实现；
-9. 实时数据流接入已能生成 Live View manifest，并已有 provider WebSocket/canonical channel 运行基线；四产品 paper/live run 已要求 healthy Live View freshness，但 freshness monitor、订阅 API、channel 诊断和历史回放归档还没有完整统一到 DataSet identity；
+9. 实时数据流接入已能生成 Live View manifest，并已有 provider WebSocket/canonical channel 运行基线；四产品 paper/live run 已要求 healthy Live View freshness 和 channel diagnostics，`soak-binance` 已能把审计结果写回指定 Live View manifest，但通用 freshness monitor、订阅 API、持续诊断写回和历史回放归档还没有完整统一到 DataSet identity；
 10. Run Product 已有最小 `run start/inspect/replay/compare` API，但还没有接入真实 InputTable、clock、feed 和 execution gateway；
 11. `data.dataset(name)`、`study.data(name)`、`study.factor(name)`、`strategy.decide(context)` 和 `run.start(...)` 这种用户 API 还没有完成；
 12. Factor Code decorator/metadata/hash 协议还没有完成；

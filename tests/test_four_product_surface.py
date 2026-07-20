@@ -73,6 +73,19 @@ class FourProductSurfaceTests(unittest.TestCase):
             manifest["freshness_status"] = "healthy"
             manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
+            with self.assertRaisesRegex(ValueError, "missing_channel_diagnostics"):
+                run.start_snapshot("live-freshness-strategy@1.0.0", mode="paper")
+
+            manifest["live_data_plane"]["channel_diagnostics"] = {
+                "capacity": 64,
+                "peak_depth": 1,
+                "dropped": 0,
+                "sequence_gaps": 0,
+                "conflated": 0,
+                "reconnects": 0,
+            }
+            manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
             started = run.start_snapshot("live-freshness-strategy@1.0.0", mode="paper")
 
         self.assertEqual(started["target"]["hash"], strategy_lock["lock_hash"])
@@ -80,6 +93,8 @@ class FourProductSurfaceTests(unittest.TestCase):
         self.assertTrue(freshness["passed"])
         self.assertEqual(freshness["freshness_status"], "healthy")
         self.assertEqual(freshness["max_age_seconds"], 60)
+        self.assertEqual(freshness["channel_failures"], [])
+        self.assertEqual(freshness["channel_diagnostics"]["dropped"], 0)
 
     def test_python_product_apis_share_the_same_artifact_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

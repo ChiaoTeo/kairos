@@ -275,6 +275,10 @@ simulation，并要求二者在 execution driver 之前的 factor、decision 和
   --capture-segment-events 1000
 ```
 
+绑定 Strategy paper/live 使用的 Live View 时，把 `data write --live` 生成的 manifest 路径传给
+`--live-view-manifest`；通过后会写回 freshness 与 channel diagnostics，供 `run start --mode paper|live`
+门禁读取。
+
 24–72 小时参数和验收边界见 [market_data_long_soak_runbook.md](../docs/market_data_long_soak_runbook.md)。
 
 ## 示例边界

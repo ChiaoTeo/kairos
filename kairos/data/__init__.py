@@ -19,8 +19,11 @@ from .curated import ConsolidatedTradeBuilder, ConsolidatedTradeInput, Consolida
 from .diagnostics import DataDiagnosticIssue, DataDiagnosticsService
 from .freshness import (
     LIVE_VIEW_CONFIGURED_FRESHNESS_POLICY, LIVE_VIEW_FRESHNESS_POLICIES, PAPER_LIVE_FRESHNESS_POLICY,
-    LiveViewFreshnessGateResult, LiveViewFreshnessPolicy, evaluate_live_view_freshness,
-    live_view_freshness_policy,
+    LiveViewFreshnessGateResult, LiveViewFreshnessPolicy, LiveViewSubscriptionBinding,
+    evaluate_live_view_freshness, freshness_gate_to_primitive,
+    find_live_view_manifest, live_view_channel_diagnostics, live_view_freshness_policy,
+    live_view_manifest_path, load_live_view_manifest, update_live_view_manifest_freshness,
+    resolve_live_view_subscription, write_live_view_manifest,
 )
 from .quality import DatasetQualityService, QualityAssessment, QualityCheck
 from .preparation import (
@@ -45,8 +48,11 @@ __all__ = ["DataCatalog", "ResearchDataClient", "ensure_release_metadata", "veri
 __all__ += ["DataDiagnosticIssue", "DataDiagnosticsService"]
 __all__ += [
     "LIVE_VIEW_CONFIGURED_FRESHNESS_POLICY", "LIVE_VIEW_FRESHNESS_POLICIES", "PAPER_LIVE_FRESHNESS_POLICY",
-    "LiveViewFreshnessGateResult", "LiveViewFreshnessPolicy", "evaluate_live_view_freshness",
-    "live_view_freshness_policy",
+    "LiveViewFreshnessGateResult", "LiveViewFreshnessPolicy", "LiveViewSubscriptionBinding",
+    "evaluate_live_view_freshness", "freshness_gate_to_primitive",
+    "find_live_view_manifest", "live_view_channel_diagnostics", "live_view_freshness_policy",
+    "live_view_manifest_path", "load_live_view_manifest", "update_live_view_manifest_freshness",
+    "resolve_live_view_subscription", "write_live_view_manifest",
 ]
 __all__ += ["DatasetQualityService", "QualityAssessment", "QualityCheck"]
 __all__ += [

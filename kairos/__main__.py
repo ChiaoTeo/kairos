@@ -162,6 +162,10 @@ def _parser() -> argparse.ArgumentParser:
     soak_binance.add_argument("--instrument")
     soak_binance.add_argument("--journal", type=Path)
     soak_binance.add_argument("--artifact", type=Path)
+    soak_binance.add_argument(
+        "--live-view-manifest", type=Path,
+        help="Live View manifest to mark healthy/unhealthy with audited soak channel diagnostics",
+    )
     inspect_data = data_actions.add_parser("inspect", help="show schema, lineage and time coverage")
     inspect_data.add_argument("--dataset", required=True)
     search_data = data_actions.add_parser("search", help="discover products by structured dimensions")
@@ -1086,7 +1090,17 @@ def _data(args: argparse.Namespace) -> int:
             )
 
         result = asyncio.run(soak())
-        print(json.dumps(to_primitive(result), ensure_ascii=False, indent=2))
+        payload = to_primitive(result)
+        if args.live_view_manifest is not None:
+            from kairos.data import update_live_view_manifest_freshness
+            manifest = update_live_view_manifest_freshness(args.live_view_manifest, payload)
+            payload["live_view_manifest"] = {
+                "artifact": str(args.live_view_manifest),
+                "live_view_id": manifest.live_view_id,
+                "freshness_status": manifest.freshness_status,
+                "manifest_hash": manifest.manifest_hash,
+            }
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0 if result.passed else 2
     if args.action == "live-binance":
         if args.messages <= 0:
