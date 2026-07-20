@@ -191,15 +191,10 @@ class SpxwDailyOhlcvPipeline(OptionDailyOhlcvPipeline):
         super().__init__(lake_root, "SPXW", flat_files, calendar=calendar)
 
 
-OptionDayAggPipeline = OptionDailyOhlcvPipeline
-SpxwDayAggPipeline = SpxwDailyOhlcvPipeline
-
 __all__ = [
     "OpraInventoryEntry",
     "OptionDailyOhlcvPipeline",
-    "OptionDayAggPipeline",
     "SpxwDailyOhlcvPipeline",
-    "SpxwDayAggPipeline",
 ]
 
 

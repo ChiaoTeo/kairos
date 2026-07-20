@@ -447,7 +447,7 @@ resolve intent
 
 ### 7.6 数据产品健康页
 
-建议增加 `data health` 或生成静态报告，至少包含：
+建议增加 `data diagnostics` 或生成静态报告，至少包含：
 
 - Product 数量及 owner 覆盖率；
 - Release 数量和各状态分布；
@@ -648,7 +648,7 @@ test_storage_driver_boundaries.py
 ```bash
 ./pyenv/bin/python -m compileall -q kairos tests
 ./pyenv/bin/python -m unittest discover -s tests -v
-./pyenv/bin/python -m kairos data health --strict
+./pyenv/bin/python -m kairos data diagnostics --strict
 ./pyenv/bin/python -m kairos data doctor --all-products
 ./pyenv/bin/python -m kairos data migrate --audit-only
 git diff --check

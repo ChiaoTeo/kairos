@@ -17,7 +17,7 @@ from kairos.domain.identity import AccountKey, AccountType, InstrumentId, VenueI
 from kairos.domain.intent import CancelIntent
 from kairos.domain.order import ExecutionInstructions, TimeInForce
 from kairos.execution.order_state import DurableOrderStatus
-from kairos.orchestration.coordinator import TradingCoordinator
+from kairos.orchestration.coordinator import ExecutionCoordinator
 from kairos.orchestration.event_log import PersistentEventLog
 from kairos.orchestration.kill_switch import KillSwitch
 from kairos.orchestration.runtime_store import SQLiteRuntimeStore
@@ -70,7 +70,7 @@ class DurableCoordinatorTests(unittest.TestCase):
             root = Path(directory)
             store = SQLiteRuntimeStore(root / "runtime.sqlite3")
             router = RecordingRouter()
-            first = TradingCoordinator(
+            first = ExecutionCoordinator(
                 router, {}, KillSwitch(()), PersistentEventLog(root / "events.jsonl"),
                 FixedClock(NOW), store,
                 application=operational_application(root, store, clock=FixedClock(NOW)),
@@ -80,7 +80,7 @@ class DurableCoordinatorTests(unittest.TestCase):
 
             restarted_router = RecordingRouter()
             restarted_store = SQLiteRuntimeStore(root / "runtime.sqlite3")
-            restarted = TradingCoordinator(
+            restarted = ExecutionCoordinator(
                 restarted_router, {}, KillSwitch(()), PersistentEventLog(root / "events.jsonl"),
                 FixedClock(NOW), restarted_store,
                 application=operational_application(root, restarted_store, clock=FixedClock(NOW)),
@@ -93,7 +93,7 @@ class DurableCoordinatorTests(unittest.TestCase):
             root = Path(directory)
             store = SQLiteRuntimeStore(root / "runtime.sqlite3")
             router = RecordingRouter(failure=ConnectionError("connection lost after submit"))
-            coordinator = TradingCoordinator(
+            coordinator = ExecutionCoordinator(
                 router, {}, KillSwitch(()), PersistentEventLog(root / "events.jsonl"),
                 FixedClock(NOW), store,
                 application=operational_application(root, store, clock=FixedClock(NOW)),
@@ -115,7 +115,7 @@ class DurableCoordinatorTests(unittest.TestCase):
             root = Path(directory)
             store = SQLiteRuntimeStore(root / "runtime.sqlite3")
             router = RecordingRouter()
-            coordinator = TradingCoordinator(
+            coordinator = ExecutionCoordinator(
                 router, {}, KillSwitch(()), PersistentEventLog(root / "events.jsonl"),
                 FixedClock(NOW), store,
                 application=operational_application(root, store, clock=FixedClock(NOW)),

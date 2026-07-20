@@ -11,7 +11,7 @@ from kairos.execution.order_state import DurableOrderStatus
 from kairos.storage.codec import from_primitive
 
 if TYPE_CHECKING:
-    from kairos.application.runtime import TradingApplication
+    from kairos.application.runtime import KairosApplication
 
 from .event_log import PersistentEventLog
 from .faults import RuntimeFaultInjector, RuntimeFaultPoint, inject
@@ -39,14 +39,14 @@ class PersistedCancellationRecord:
     venue_order_id: str
 
 
-class TradingCoordinator:
+class ExecutionCoordinator:
     def __init__(self, router: ExecutionRouter, reconciliation: dict[AccountKey, ReconciliationService],
                  kill_switch: KillSwitch, event_log: PersistentEventLog, clock: Clock | None = None,
                  runtime_store: SQLiteRuntimeStore | None = None,
-                 application: "TradingApplication | None" = None,
+                 application: "KairosApplication | None" = None,
                  fault_injector: RuntimeFaultInjector | None = None) -> None:
         if application is None:
-            raise ValueError("TradingCoordinator requires the authoritative TradingApplication")
+            raise ValueError("ExecutionCoordinator requires the authoritative KairosApplication")
         self.router, self.reconciliation, self.kill_switch, self.event_log = router, reconciliation, kill_switch, event_log
         self.clock = clock or SystemClock()
         self.runtime_store = runtime_store
@@ -54,7 +54,7 @@ class TradingCoordinator:
         self.fault_injector = fault_injector
 
     def activate(self) -> None:
-        """Activate the formal coordinator after TradingApplication reached READY."""
+        """Activate the formal coordinator after KairosApplication reached READY."""
         self.application.require_operational()
 
     def submit(self, request: OrderRequest, at):

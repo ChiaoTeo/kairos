@@ -49,4 +49,3 @@ class BinanceFundingSettlementClient:
         return tuple(sorted(payments, key=lambda item: (item.timestamp, str(item.payment_id))))
 
 
-BinanceFundingAdapter = BinanceFundingSettlementClient

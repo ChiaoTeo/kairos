@@ -411,7 +411,7 @@ momentum_12_1(t) = product(1 + total_return[d]) - 1
 | 交易日历 | market status/holidays + internal calendar | 供应商与内部日历交叉验证 |
 
 具体 endpoint、分页上限和套餐权限可能变化，应封装在 Connector 内，不写入研究脚本。开发前通过
-readiness 命令验证账户的历史深度、inactive ticker 可见性、Flat File 权限和速率限制。
+diagnostics 命令验证账户的历史深度、inactive ticker 可见性、Flat File 权限和速率限制。
 
 ### 6.2 批量优先原则
 
@@ -939,7 +939,7 @@ next_close_to_close_return
 
 任务：
 
-- 增加 Massive equity readiness 检查；
+- 增加 Massive equity diagnostics 检查；
 - 验证 active/inactive tickers、历史详情、splits、dividends、ticker events；
 - 验证 raw 和 adjusted day aggregates；
 - 验证 Flat File/bulk 访问权限、最早日期、文件大小和限流；

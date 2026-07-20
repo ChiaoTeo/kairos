@@ -154,7 +154,3 @@ class DataDiagnosticsService:
         if any("quality" in item.code for item in issues):
             return f"review quality report and revalidate {product}"
         return f"kairos data describe --dataset {product}"
-
-
-DataHealthIssue = DataDiagnosticIssue
-DataHealthService = DataDiagnosticsService

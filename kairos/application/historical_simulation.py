@@ -21,7 +21,7 @@ from kairos.execution.order_state import DurableOrderStatus
 from kairos.execution.router import ExecutionRouter
 from kairos.execution.strategy_planner import plan_economic_intent
 from kairos.features import SmaFactorConfig, SmaFactorRuntime
-from kairos.orchestration.coordinator import TradingCoordinator
+from kairos.orchestration.coordinator import ExecutionCoordinator
 from kairos.orchestration.event_log import PersistentEventLog
 from kairos.orchestration.kill_switch import KillSwitch
 from kairos.orchestration.reconciliation import ReconciliationService
@@ -40,7 +40,7 @@ from kairos.strategies.sma_cross_research_backtest import SmaCrossConfig
 from .clock import FixedClock
 from .config import ApplicationConfig, RuntimePaths
 from .recovery import RuntimeRecoveryService
-from .runtime import FunctionProbe, RuntimeStatus, TradingApplication
+from .runtime import FunctionProbe, RuntimeStatus, KairosApplication
 from .strategy_run_loop import GovernedStrategyRunLoop, StrategyRunResult
 
 
@@ -66,7 +66,7 @@ class _SmaSimulationHooks:
     def __init__(self, *, clock: FixedClock, store: SQLiteRuntimeStore, catalog: ReferenceCatalog,
                  account: AccountKey, instrument_id: InstrumentId, cash_asset: AssetId,
                  approved_capital: Decimal, lot_size: Decimal, fee_bps: Decimal,
-                 policy, coordinator: TradingCoordinator,
+                 policy, coordinator: ExecutionCoordinator,
                  venue: SimulatedExecutionAccountGateway) -> None:
         self.clock = clock; self.store = store; self.catalog = catalog; self.account = account
         self.instrument_id = instrument_id; self.cash_asset = cash_asset
@@ -194,14 +194,14 @@ async def run_sma_historical_simulation(
     recovery = RuntimeRecoveryService(
         store, catalog, cash_asset, {account: venue}, marks={instrument_id: _close(events[0])},
     )
-    application = TradingApplication(
+    application = KairosApplication(
         ApplicationConfig(environment, paths), store,
         runtime_id=f"sma-{mode}", accounts=(account,), recovery=recovery, clock=clock,
         probes=(FunctionProbe("market_data", lambda: (True, "frozen canonical bars ready")),),
     )
     ledger = store.load_ledger()
     reconciliation = ReconciliationService(ledger, venue, runtime_store=store, clock=clock)
-    coordinator = TradingCoordinator(
+    coordinator = ExecutionCoordinator(
         ExecutionRouter(catalog, (venue,)), {account: reconciliation},
         KillSwitch((venue,), clock, store), PersistentEventLog(paths.root/"runtime"/"events.jsonl"),
         clock=clock, runtime_store=store, application=application,
@@ -230,7 +230,7 @@ async def run_sma_historical_simulation(
     application.stop()
 
     clock.set(events[-1].available_time)
-    restarted = TradingApplication(
+    restarted = KairosApplication(
         ApplicationConfig(environment, paths), store,
         runtime_id=f"sma-{mode}-restart", accounts=(account,), clock=clock,
         recovery=RuntimeRecoveryService(

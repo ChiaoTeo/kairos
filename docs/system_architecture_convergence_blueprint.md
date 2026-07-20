@@ -3,7 +3,7 @@
 状态：Active Blueprint  
 版本：1.0  
 基线日期：2026-07-17  
-适用范围：整个 `kairos` 包、`studies` 工作区、CLI、运行时持久化与 `data/` 数据目录  
+适用范围：整个 `kairos` 包、`studies` 工作区、CLI、运行时持久化与 `data/` 数据目录
 目标读者：系统维护者、策略开发者、数据工程人员和后续改造实施者
 
 ## 1. 文档目的
@@ -484,7 +484,7 @@ Connector 不得：
 
 当前已有：
 
-- TradingCoordinator；
+- ExecutionCoordinator；
 - Readiness；
 - Reconciliation；
 - Kill Switch；
@@ -1030,7 +1030,7 @@ kairos data replay <product-or-release>
 kairos data compare <release-a> <release-b>
 kairos data freeze <study-id> --input ...
 kairos data doctor <product-or-release>
-kairos data health --strict
+kairos data diagnostics --strict
 kairos data migrate ...
 ```
 
@@ -1451,7 +1451,7 @@ git diff --check
 目标 CI 增加：
 
 ```bash
-./pyenv/bin/python -m kairos data health --strict
+./pyenv/bin/python -m kairos data diagnostics --strict
 ./pyenv/bin/python -m kairos data doctor --all-products
 ./pyenv/bin/python -m kairos runtime doctor --environment simulated
 ./pyenv/bin/python -m kairos runtime recovery-test --scenario all

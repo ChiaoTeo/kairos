@@ -244,7 +244,7 @@
 
 ### 数据产品体验和质量
 
-- [x] 新增 `data search/describe/doctor/health --strict`。
+- [x] 新增 `data search/describe/doctor/diagnostics --strict`。
 - [x] 14 个既有 Product 补齐 owner/description，Bootstrap 不会再次抹除治理字段。
 - [x] 浮动 Alias 从 Release 内嵌字段迁移到全局 Alias Registry。
 - [x] 新增 typed OHLCV Quality Profile，校验字段、OHLC、时间、覆盖、主键和 Manifest/Release hash。
@@ -386,7 +386,7 @@ Runtime audit: 1fa8996ace7160718d82b4c2f824ae0d6cb433f1e8d7b4a351272a33d7a50812
 Artifact: data/runtime-reference-artifact/artifacts/runtime-l2-spot-target-position-v1/manifest.json
 ```
 
-该场景使用正式 KairosApplication、TradingCoordinator、ExecutionRouter、SQLite Runtime Store、
+该场景使用正式 KairosApplication、ExecutionCoordinator、ExecutionRouter、SQLite Runtime Store、
 DurableExecutionIngestionService 和 RuntimeRecoveryService，并验证成交后重启可从持久事实重建
 Ledger、Portfolio 和 Risk，且 Venue balance/position 对账一致。它完成 L2，但不替代 L3 crash-window
 矩阵或 L4 Paper/Testnet 长时间运行验收。

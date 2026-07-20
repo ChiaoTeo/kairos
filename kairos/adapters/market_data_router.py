@@ -29,4 +29,3 @@ class CompositeMarketDataClient:
         return tuple(by_id[item.instrument_id] for item in instruments)
 
 
-CompositeMarketDataAdapter = CompositeMarketDataClient

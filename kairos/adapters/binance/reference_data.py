@@ -217,6 +217,3 @@ def _decimal(value):
     return Decimal(str(value)) if value not in (None, "") else None
 
 
-BinanceSpotReferenceAdapter = BinanceSpotReferenceDataClient
-BinanceFuturesReferenceAdapter = BinanceFuturesReferenceDataClient
-BinanceOptionsReferenceAdapter = BinanceOptionsReferenceDataClient

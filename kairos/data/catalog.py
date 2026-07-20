@@ -577,7 +577,7 @@ def _discovered_product(logical: str, layer: DatasetLayer, provider: str) -> Dat
             dimensions["contract_family"] = "SPXW"
         if layer is DatasetLayer.CANONICAL:
             dimensions["venue"] = "opra"
-    elif logical in {"curated.synthetic", "curated.mock"}:
+    elif logical == "curated.synthetic":
         dimensions = {"synthetic": "true"}
     elif logical.startswith("curated."):
         dimensions = {"market_data_type": logical.removeprefix("curated.")}

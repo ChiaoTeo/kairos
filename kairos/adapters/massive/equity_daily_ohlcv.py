@@ -149,9 +149,6 @@ def _pyarrow():
     return pa, pq
 
 
-MassiveEquityDayAggPipeline = MassiveEquityDailyOhlcvPipeline
-
 __all__ = [
     "MassiveEquityDailyOhlcvPipeline",
-    "MassiveEquityDayAggPipeline",
 ]

@@ -236,4 +236,3 @@ def normalize_ibkr_execution(*, execution_id: str, timestamp: datetime, account,
     )
 
 
-IbkrExecutionAdapter = IbkrExecutionGateway

@@ -89,5 +89,3 @@ class BinanceOptionsAccountGateway:
         )
 
 
-BinanceAccountAdapter = BinanceAccountGateway
-BinanceOptionsAccountAdapter = BinanceOptionsAccountGateway

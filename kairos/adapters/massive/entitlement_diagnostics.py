@@ -37,7 +37,7 @@ class MassiveEntitlementDiagnostics:
             try:
                 payload = self.client.get(path, params).json()
                 if not isinstance(payload, dict):
-                    raise ValueError("readiness probe expected an object response")
+                    raise ValueError("entitlement probe expected an object response")
                 results = payload.get("results")
                 checks[name] = {"accessible": True, "request_id": payload.get("request_id"),
                                 "result_count": len(results) if isinstance(results, list) else int(results is not None),
@@ -59,10 +59,6 @@ class MassiveEntitlementDiagnostics:
 def _paired_option_ticker(ticker: str) -> str:
     match = re.match(r"^(O:[A-Z0-9.]+\d{6})([CP])(\d{8})$", ticker)
     if not match:
-        raise ValueError("Massive readiness requires an OCC option ticker with O: prefix")
+        raise ValueError("Massive entitlement diagnostics requires an OCC option ticker with O: prefix")
     opposite = "P" if match.group(2) == "C" else "C"
     return f"{match.group(1)}{opposite}{match.group(3)}"
-
-
-MassiveReadinessReport = MassiveEntitlementReport
-MassiveReadinessChecker = MassiveEntitlementDiagnostics

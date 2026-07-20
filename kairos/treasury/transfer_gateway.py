@@ -41,5 +41,3 @@ class SimulatedTransferGateway:
         return next((item for item in self.submissions.values() if item.provider_reference == provider_reference), TransferSubmission(provider_reference, TransferStatus.FAILED))
 
 
-TransferAdapter = TransferGateway
-SimulatedTransferAdapter = SimulatedTransferGateway

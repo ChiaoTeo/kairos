@@ -167,9 +167,6 @@ def _pyarrow():
     return pa, pq
 
 
-OptionDayIvPipeline = OptionCloseImpliedVolatilityPipeline
-
 __all__ = [
     "OptionCloseImpliedVolatilityPipeline",
-    "OptionDayIvPipeline",
 ]

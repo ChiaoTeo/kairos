@@ -54,7 +54,7 @@ from kairos.domain.ledger import LedgerBook
 from kairos.domain.order import ExecutionInstructions, TimeInForce
 from kairos.domain.product import OptionRight, ProductType
 from kairos.execution.router import ExecutionRouter
-from kairos.orchestration.coordinator import TradingCoordinator
+from kairos.orchestration.coordinator import ExecutionCoordinator
 from kairos.orchestration.event_log import PersistentEventLog
 from kairos.orchestration.kill_switch import KillSwitch
 from kairos.orchestration.reconciliation import ReconciliationService
@@ -106,8 +106,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime-db", help="transactional runtime database; defaults beside --event-log-path")
     parser.add_argument(
         "--lake-root",
-        default=os.environ.get("KAIROS_LAKE_ROOT", os.environ.get("TRADER_LAKE_ROOT", "data")),
-        help="data lake root; defaults to KAIROS_LAKE_ROOT, TRADER_LAKE_ROOT, or data",
+        default=os.environ.get("KAIROS_LAKE_ROOT", "data"),
+        help="data lake root; defaults to KAIROS_LAKE_ROOT or data",
     )
     parser.add_argument("--format", choices=("text", "json"), default="text",
                         help="output format; human-readable text is the default")
@@ -172,16 +172,12 @@ def _parser() -> argparse.ArgumentParser:
     describe_data.add_argument("--dataset", required=True)
     doctor_data = data_actions.add_parser("doctor", help="diagnose one product and suggest the next action")
     doctor_data.add_argument("--dataset", required=True)
-    health_data = data_actions.add_parser("health", help="audit all Catalog products and releases")
-    health_data.add_argument("--strict", action="store_true", help="return non-zero when errors exist")
+    diagnostics_data = data_actions.add_parser("diagnostics", help="audit all Catalog products and releases")
+    diagnostics_data.add_argument("--strict", action="store_true", help="return non-zero when errors exist")
     us_equity_diagnostics = data_actions.add_parser("us-equity-momentum-diagnostics", help="audit the local US equity momentum data package")
     us_equity_diagnostics.add_argument("--study-id", default="us-equity-momentum")
     us_equity_diagnostics.add_argument("--version", default="1.0.0")
     us_equity_diagnostics.add_argument("--strict", action="store_true", help="return non-zero when diagnostics errors exist")
-    us_equity_ready = data_actions.add_parser("us-equity-momentum-readiness", help=argparse.SUPPRESS)
-    us_equity_ready.add_argument("--study-id", default="us-equity-momentum")
-    us_equity_ready.add_argument("--version", default="1.0.0")
-    us_equity_ready.add_argument("--strict", action="store_true", help="return non-zero when diagnostics errors exist")
     validate_data = data_actions.add_parser("validate", help="run the typed Quality Profile for a release")
     validate_data.add_argument("--release", required=True)
     prepare_data = data_actions.add_parser("prepare", help="plan, acquire, validate and optionally promote a product")
@@ -198,7 +194,7 @@ def _parser() -> argparse.ArgumentParser:
     prepare_data.add_argument("--reason", default="explicit data preparation")
     prepare_us_equity_momentum = data_actions.add_parser(
         "prepare-us-equity-momentum",
-        help="one-command bounded US equity momentum data, feature, study and readiness workflow",
+        help="one-command bounded US equity momentum data, feature, study and diagnostics workflow",
     )
     prepare_us_equity_momentum.add_argument(
         "--raw-dataset", action="append", required=True,
@@ -292,20 +288,11 @@ def _parser() -> argparse.ArgumentParser:
     prepare_spxw_daily_ohlcv.add_argument("--dataset-id", required=True)
     prepare_spxw_daily_ohlcv.add_argument("--start", required=True, help="inclusive date YYYY-MM-DD")
     prepare_spxw_daily_ohlcv.add_argument("--end", required=True, help="exclusive date YYYY-MM-DD")
-    prepare_spxw_day_aggs = data_actions.add_parser("prepare-spxw-day-aggs", help=argparse.SUPPRESS)
-    prepare_spxw_day_aggs.add_argument("--dataset-id", required=True)
-    prepare_spxw_day_aggs.add_argument("--start", required=True, help="inclusive date YYYY-MM-DD")
-    prepare_spxw_day_aggs.add_argument("--end", required=True, help="exclusive date YYYY-MM-DD")
     prepare_option_daily_ohlcv = data_actions.add_parser("prepare-option-daily-ohlcv", help="convert downloaded OPRA daily OHLCV for one OCC root")
     prepare_option_daily_ohlcv.add_argument("--dataset-id", required=True)
     prepare_option_daily_ohlcv.add_argument("--option-root", required=True, help="OCC root without O: prefix, for example NVDA")
     prepare_option_daily_ohlcv.add_argument("--start", required=True)
     prepare_option_daily_ohlcv.add_argument("--end", required=True)
-    prepare_option_day_aggs = data_actions.add_parser("prepare-option-day-aggs", help=argparse.SUPPRESS)
-    prepare_option_day_aggs.add_argument("--dataset-id", required=True)
-    prepare_option_day_aggs.add_argument("--option-root", required=True, help="OCC root without O: prefix, for example NVDA")
-    prepare_option_day_aggs.add_argument("--start", required=True)
-    prepare_option_day_aggs.add_argument("--end", required=True)
     prepare_equity_daily_ohlcv = data_actions.add_parser("prepare-equity-daily-ohlcv", help="archive and convert provider equity daily OHLCV")
     prepare_equity_daily_ohlcv.add_argument("--provider", choices=("massive",), default="massive")
     prepare_equity_daily_ohlcv.add_argument("--dataset-id", required=True)
@@ -313,34 +300,18 @@ def _parser() -> argparse.ArgumentParser:
     prepare_equity_daily_ohlcv.add_argument("--start", required=True)
     prepare_equity_daily_ohlcv.add_argument("--end", required=True)
     prepare_equity_daily_ohlcv.add_argument("--view", choices=("raw", "vendor_adjusted"), default="vendor_adjusted")
-    prepare_equity_day_aggs = data_actions.add_parser("prepare-massive-equity-day-aggs", help=argparse.SUPPRESS)
-    prepare_equity_day_aggs.add_argument("--dataset-id", required=True)
-    prepare_equity_day_aggs.add_argument("--ticker", required=True)
-    prepare_equity_day_aggs.add_argument("--start", required=True)
-    prepare_equity_day_aggs.add_argument("--end", required=True)
-    prepare_equity_day_aggs.add_argument("--view", choices=("raw", "vendor_adjusted"), default="vendor_adjusted")
     prepare_option_close_iv = data_actions.add_parser("prepare-option-close-implied-volatility", help="materialize close-based implied volatility for an option daily OHLCV dataset")
     prepare_option_close_iv.add_argument("--dataset-id", required=True)
     prepare_option_close_iv.add_argument("--option-dataset", required=True)
     prepare_option_close_iv.add_argument("--equity-dataset", required=True)
     prepare_option_close_iv.add_argument("--risk-free-rate", type=Decimal, default=Decimal("0.04"))
     prepare_option_close_iv.add_argument("--dividend-yield", type=Decimal, default=Decimal("0.0003"))
-    prepare_option_iv = data_actions.add_parser("prepare-option-day-iv", help=argparse.SUPPRESS)
-    prepare_option_iv.add_argument("--dataset-id", required=True)
-    prepare_option_iv.add_argument("--option-dataset", required=True)
-    prepare_option_iv.add_argument("--equity-dataset", required=True)
-    prepare_option_iv.add_argument("--risk-free-rate", type=Decimal, default=Decimal("0.04"))
-    prepare_option_iv.add_argument("--dividend-yield", type=Decimal, default=Decimal("0.0003"))
     compact_massive = data_actions.add_parser("compact-market-events", help="explicitly compact immutable Parquet event partitions")
     compact_massive.add_argument("--dataset", required=True)
     massive_entitlement = data_actions.add_parser("massive-entitlement-diagnostics", help="probe private-server entitlement and historical endpoint access")
     massive_entitlement.add_argument("--underlying", required=True)
     massive_entitlement.add_argument("--option-ticker", required=True)
     massive_entitlement.add_argument("--date", required=True)
-    massive_readiness = data_actions.add_parser("massive-readiness", help=argparse.SUPPRESS)
-    massive_readiness.add_argument("--underlying", required=True)
-    massive_readiness.add_argument("--option-ticker", required=True)
-    massive_readiness.add_argument("--date", required=True)
     massive_slices = data_actions.add_parser("build-massive-slices", help="build point-in-time MarketReplayDataset slices from Massive canonical events")
     massive_slices.add_argument("--source-dataset", required=True)
     massive_slices.add_argument("--output-dataset", required=True)
@@ -458,13 +429,9 @@ def _parser() -> argparse.ArgumentParser:
     actions.add_parser("register-builtin-strategies", help="register draft StrategySpec and ExecutionPolicy contracts for reference strategies")
     backtest = commands.add_parser("backtest", help="run deterministic conservative/stress strategy validation")
     backtest_actions = backtest.add_subparsers(dest="action", required=True)
-    for name, help_text in (
-        ("synthetic-scenario", "create a standardized synthetic backtest dataset"),
-        ("mock", argparse.SUPPRESS),
-    ):
-        synthetic = backtest_actions.add_parser(name, help=help_text)
-        synthetic.add_argument("--scenario", choices=[item.value for item in SyntheticScenario], default=SyntheticScenario.PROFIT_TARGET.value)
-        synthetic.add_argument("--split", choices=("development", "validation", "test"), default="development")
+    synthetic = backtest_actions.add_parser("synthetic-scenario", help="create a standardized synthetic backtest dataset")
+    synthetic.add_argument("--scenario", choices=[item.value for item in SyntheticScenario], default=SyntheticScenario.PROFIT_TARGET.value)
+    synthetic.add_argument("--split", choices=("development", "validation", "test"), default="development")
     run = backtest_actions.add_parser("run", help="run conservative and stress backtests")
     run.add_argument("--strategy", choices=("bull-put-spread", "covered-call", "spot-perp-carry"), default="bull-put-spread")
     run.add_argument("--dataset")
@@ -1206,13 +1173,13 @@ def _data(args: argparse.Namespace) -> int:
                          ensure_ascii=False, indent=2)); return 0
     if args.action == "describe":
         print(json.dumps(ResearchDataClient(args.lake_root).describe(args.dataset), ensure_ascii=False, indent=2)); return 0
-    if args.action in {"doctor", "health"}:
+    if args.action in {"doctor", "diagnostics"}:
         from kairos.data.diagnostics import DataDiagnosticsService
         service = DataDiagnosticsService(args.lake_root)
         report = service.doctor(args.dataset) if args.action == "doctor" else service.audit()
         print(json.dumps(report, ensure_ascii=False, indent=2))
-        return 2 if args.action == "health" and args.strict and not report["healthy"] else 0
-    if args.action in {"us-equity-momentum-diagnostics", "us-equity-momentum-readiness"}:
+        return 2 if args.action == "diagnostics" and args.strict and not report["healthy"] else 0
+    if args.action == "us-equity-momentum-diagnostics":
         from kairos.features import UsEquityMomentumDiagnostics
         report = UsEquityMomentumDiagnostics(args.lake_root).report(study_id=args.study_id, version=args.version)
         print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -1347,7 +1314,7 @@ def _data(args: argparse.Namespace) -> int:
             split=args.split, risk_free_rate=args.risk_free_rate)
         print(f"{dataset.manifest.dataset_id}: slices={dataset.manifest.slice_count} hash={dataset.manifest.content_hash}")
         return 0
-    if args.action in {"massive-entitlement-diagnostics", "massive-readiness"}:
+    if args.action == "massive-entitlement-diagnostics":
         report = MassiveEntitlementDiagnostics(MassiveClient(MassiveConfig.from_env())).check(
             underlying=args.underlying, option_ticker=args.option_ticker, date=args.date)
         print(json.dumps({
@@ -1384,17 +1351,17 @@ def _data(args: argparse.Namespace) -> int:
             date.fromisoformat(args.start), date.fromisoformat(args.end), max_files=args.max_files, dry_run=args.dry_run,
         )
         print(json.dumps(report, ensure_ascii=False, indent=2)); return 0
-    if args.action in {"prepare-spxw-daily-ohlcv", "prepare-spxw-day-aggs"}:
+    if args.action == "prepare-spxw-daily-ohlcv":
         manifest = SpxwDailyOhlcvPipeline(args.lake_root).prepare(
             args.dataset_id, date.fromisoformat(args.start), date.fromisoformat(args.end),
         )
         print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
-    if args.action in {"prepare-option-daily-ohlcv", "prepare-option-day-aggs"}:
+    if args.action == "prepare-option-daily-ohlcv":
         manifest = OptionDailyOhlcvPipeline(args.lake_root, args.option_root).prepare(
             args.dataset_id, date.fromisoformat(args.start), date.fromisoformat(args.end),
         )
         print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
-    if args.action in {"prepare-equity-daily-ohlcv", "prepare-massive-equity-day-aggs"}:
+    if args.action == "prepare-equity-daily-ohlcv":
         manifest = MassiveEquityDailyOhlcvPipeline(
             args.lake_root, MassiveClient(MassiveConfig.from_env()),
         ).prepare(
@@ -1402,7 +1369,7 @@ def _data(args: argparse.Namespace) -> int:
             view=args.view,
         )
         print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
-    if args.action in {"prepare-option-close-implied-volatility", "prepare-option-day-iv"}:
+    if args.action == "prepare-option-close-implied-volatility":
         manifest = OptionCloseImpliedVolatilityPipeline(args.lake_root).prepare(
             args.dataset_id, args.option_dataset, args.equity_dataset,
             risk_free_rate=args.risk_free_rate, dividend_yield=args.dividend_yield,
@@ -2019,7 +1986,7 @@ def _backtest(args: argparse.Namespace) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         return 0
     backtests = BacktestRepository(args.backtest_root)
-    if args.action in {"synthetic-scenario", "mock"}:
+    if args.action == "synthetic-scenario":
         dataset = build_synthetic_backtest_dataset(SyntheticScenario(args.scenario), split=args.split)
         directory = MarketSnapshotStorageDriver(args.dataset_root).save(dataset)
         product = DataProductDefinition(
@@ -2382,11 +2349,11 @@ def _trade(args: argparse.Namespace) -> int:
         )
     kill_switch = KillSwitch((execution_gateway,), runtime_store=runtime_store)
     from kairos.application import (
-        ApplicationConfig, FunctionProbe, RuntimePaths, RuntimeRecoveryService, TradingApplication,
+        ApplicationConfig, FunctionProbe, RuntimePaths, RuntimeRecoveryService, KairosApplication,
     )
     runtime_root = runtime_path.parent
     paths = RuntimePaths(runtime_root, Path(args.reference_catalog_path), Path(args.lake_root), runtime_path, runtime_root / "artifacts")
-    application = TradingApplication(
+    application = KairosApplication(
         ApplicationConfig(environment, paths), runtime_store, runtime_id=f"cli-{uuid4()}", accounts=(account,),
         order_recovery=order_recovery,
         recovery=RuntimeRecoveryService(
@@ -2406,7 +2373,7 @@ def _trade(args: argparse.Namespace) -> int:
             )),
         ),
     )
-    coordinator = TradingCoordinator(
+    coordinator = ExecutionCoordinator(
         ExecutionRouter(catalog, (execution_gateway,)), {account: reconciliation}, kill_switch, event_log,
         runtime_store=runtime_store, application=application,
     )

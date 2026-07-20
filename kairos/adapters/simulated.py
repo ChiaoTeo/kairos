@@ -102,4 +102,3 @@ class SimulatedExecutionAccountGateway:
     def reconnect(self): self.connected = True
 
 
-SimulatedExecutionAccountAdapter = SimulatedExecutionAccountGateway

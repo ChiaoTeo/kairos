@@ -82,6 +82,3 @@ class TreasuryLedgerPostingService:
         transaction = LedgerTransaction(transaction_id, at, reference, entries)
         self.ledger.post(transaction)
         return transaction
-
-
-TreasuryService = TreasuryLedgerPostingService

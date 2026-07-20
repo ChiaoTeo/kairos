@@ -30,7 +30,7 @@ from kairos.reference.factory import publish_instrument
 from kairos.execution.ingestion import DurableExecutionIngestionService
 from kairos.execution.router import ExecutionRouter
 from kairos.execution.strategy_planner import plan_strategy_intent
-from kairos.orchestration.coordinator import TradingCoordinator
+from kairos.orchestration.coordinator import ExecutionCoordinator
 from kairos.orchestration.event_log import PersistentEventLog
 from kairos.orchestration.kill_switch import KillSwitch
 from kairos.orchestration.reconciliation import ReconciliationService
@@ -40,7 +40,7 @@ from kairos.storage.codec import to_primitive
 from .clock import FixedClock
 from .config import ApplicationConfig, RuntimePaths
 from .recovery import RuntimeRecoveryService
-from .runtime import FunctionProbe, RuntimeStatus, TradingApplication
+from .runtime import FunctionProbe, RuntimeStatus, KairosApplication
 
 
 RUNTIME_REFERENCE_SCHEMA_VERSION = 1
@@ -79,7 +79,7 @@ def run_runtime_reference_artifact(root: str | Path) -> RuntimeReferenceArtifact
     recovery = RuntimeRecoveryService(
         store, catalog, AssetId("USDT"), {account: venue}, marks={instrument_id: Decimal("100")},
     )
-    application = TradingApplication(
+    application = KairosApplication(
         ApplicationConfig(Environment.TESTNET, paths), store,
         runtime_id="runtime-golden-before-restart", accounts=(account,), recovery=recovery, clock=clock,
         probes=(
@@ -88,7 +88,7 @@ def run_runtime_reference_artifact(root: str | Path) -> RuntimeReferenceArtifact
         ),
     )
     reconciliation = ReconciliationService(Ledger(), venue, clock=clock)
-    coordinator = TradingCoordinator(
+    coordinator = ExecutionCoordinator(
         ExecutionRouter(catalog, (venue,)), {account: reconciliation},
         KillSwitch((venue,), clock, store),
         PersistentEventLog(paths.root / "runtime" / "events.jsonl"),
@@ -143,7 +143,7 @@ def run_runtime_reference_artifact(root: str | Path) -> RuntimeReferenceArtifact
         balances=((AssetId("USDT"), Decimal("-100.1")),),
         positions=((instrument_id, Decimal("1")),), clock=clock,
     )
-    restarted = TradingApplication(
+    restarted = KairosApplication(
         ApplicationConfig(Environment.TESTNET, paths), restarted_store,
         runtime_id="runtime-golden-after-restart", accounts=(account,), clock=clock,
         recovery=RuntimeRecoveryService(

@@ -132,4 +132,3 @@ def _now_from_signer(signer: BinanceSigner):
     return datetime.fromtimestamp((time() * 1000 + signer.clock_offset_ms) / 1000, timezone.utc)
 
 
-BinanceTransferAdapter = BinanceTransferGateway

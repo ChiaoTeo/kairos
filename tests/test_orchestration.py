@@ -22,7 +22,7 @@ from kairos.domain.product import CryptoSpotSpec, ProductType
 from kairos.execution.router import ExecutionRiskLimits, ExecutionRouter
 from kairos.execution.planner import LeggingPolicy, NativeComboPlan, SequentialLegPlan, plan_combo
 from kairos.execution.strategy_planner import plan_strategy_intent
-from kairos.orchestration.coordinator import TradingCoordinator
+from kairos.orchestration.coordinator import ExecutionCoordinator
 from kairos.orchestration.event_log import PersistentEventLog
 from kairos.orchestration.kill_switch import KillSwitch
 from kairos.orchestration.monitoring import AlertSeverity, OperationalMonitor
@@ -54,10 +54,10 @@ def request(*, client_id: str = "client-1", quantity: str = "0.01", price: str =
     )
 
 
-def coordinator(router, reconciliation, kill_switch, event_path) -> TradingCoordinator:
+def coordinator(router, reconciliation, kill_switch, event_path) -> ExecutionCoordinator:
     path = Path(event_path)
     store = SQLiteRuntimeStore(path.parent / "runtime.sqlite3")
-    return TradingCoordinator(
+    return ExecutionCoordinator(
         router, reconciliation, kill_switch, PersistentEventLog(path),
         runtime_store=store,
         application=operational_application(path.parent, store),
@@ -91,7 +91,7 @@ class OrchestrationTests(unittest.TestCase):
                 runtime_id="blocked-readiness",
                 probes=(FunctionProbe("catalog", lambda: (False, "catalog unavailable")),),
             )
-            blocked = TradingCoordinator(
+            blocked = ExecutionCoordinator(
                 self.router, {ACCOUNT: ReconciliationService(self.ledger, self.gateway)},
                 KillSwitch((self.gateway,)), PersistentEventLog(path),
                 runtime_store=store, application=blocked_application,

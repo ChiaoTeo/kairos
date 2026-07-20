@@ -15,7 +15,7 @@ from kairos.orchestration.reconciliation import ReconciliationReport, Reconcilia
 from kairos.storage.codec import to_primitive
 
 from .clock import Clock, SystemClock
-from .runtime import RuntimeStatus, TradingApplication
+from .runtime import RuntimeStatus, KairosApplication
 
 
 class RuntimeBackgroundService(Protocol):
@@ -52,13 +52,13 @@ class SupervisorCycle:
 
 
 class RuntimeSupervisor:
-    """Long-running safety loop around one TradingApplication instance."""
+    """Long-running safety loop around one KairosApplication instance."""
 
     STATE_KEY = "runtime_supervisor"
 
     def __init__(
         self,
-        application: TradingApplication,
+        application: KairosApplication,
         reconciliation: Mapping[AccountKey, ReconciliationService],
         kill_switch: KillSwitch,
         monitor: OperationalMonitor,

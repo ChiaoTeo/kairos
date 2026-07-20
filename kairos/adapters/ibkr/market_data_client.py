@@ -128,4 +128,3 @@ def _bar_span(value: str) -> timedelta:
     return timedelta(seconds=amount * seconds)
 
 
-IbkrMarketDataAdapter = IbkrMarketDataClient

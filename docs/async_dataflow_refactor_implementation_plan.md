@@ -3,7 +3,7 @@
 状态：Proposed  
 版本：1.0  
 基线日期：2026-07-17  
-上位设计：`docs/async_dataflow_runtime_refactor.md`  
+上位设计：`docs/async_dataflow_runtime_refactor.md`
 用途：将架构原则转换为可以分工、实施、验收和追踪的项目工作
 
 ## 1. 文档目标

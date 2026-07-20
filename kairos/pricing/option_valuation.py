@@ -164,6 +164,3 @@ def _contract_spec(definition):
 
 def _product_type(definition):
     return definition.instrument_type
-
-
-ValuationService = OptionValuationService

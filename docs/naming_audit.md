@@ -190,9 +190,9 @@ kairos/adapters/base.py
 | `research_platform.service/analyzer/selector` | `kairos.research_platform` / `kairos.research_platform` | 新平台 namespace 不应继续挂旧笼统模块名，否则用户自动补全会发现旧入口 | 已落地；新 namespace 只挂 `option_capture`、`option_snapshot_analysis`、`option_universe_selector` 等正式模块，旧模块留在 `kairos.research` 兼容层 |
 | `kairos.research` | `kairos` 顶层 namespace | `research` 是旧兼容包名，和新用户的研究平台入口 `research_platform` 并存会产生歧义 | 已落地；`kairos` 不再 alias `kairos.research`，新用户只看到 `kairos.research_platform` |
 | `connectors.massive` 包根 | `kairos.connectors.massive` / `kairos.connectors.massive` | 直接指向 `kairos.adapters.massive` 会把 `DayAgg`、`DayIv`、`Readiness` 等旧兼容名泄漏给新用户 | 已落地；新增干净的 `kairos.connectors.massive` 包根和 high-risk 子模块 wrapper，只导出 `DailyOhlcv`、`CloseImpliedVolatility`、`EntitlementDiagnostics` 等正式名 |
-| `ResearchService.capture` | `kairos/research/service.py` | 已改为 `OptionResearchCaptureService.capture_snapshot`，真实实现迁到 `kairos/research/option_capture.py`；旧类名、旧方法和旧文件保留兼容 | 后续如果加入非期权研究，再拆出更通用的 `ResearchSnapshotService` | 已落地 |
-| `kairos/backtest/mock.py` | 回测数据生成 | 真实实现已迁到 `kairos/backtest/synthetic_scenarios.py`；旧文件只保留薄兼容导出 | 新代码统一使用 `SyntheticScenario` 和 `build_synthetic_backtest_dataset` | 已落地 |
-| `make_mock_dataset` | `kairos/backtest/mock.py` | 已退为 `build_synthetic_backtest_dataset` 的兼容别名 | 新代码禁止继续引入旧函数名 | 已落地 |
+| `ResearchService.capture` | 旧研究采集 API | 已改为 `OptionResearchCaptureService.capture_snapshot`，真实实现迁到 `kairos/research/option_capture.py`；旧类名、旧方法和旧 `service.py` 已删除 | 后续如果加入非期权研究，再拆出更通用的 `ResearchSnapshotService` | 已落地 |
+| `kairos/backtest/mock.py` | 回测数据生成 | 旧名会把测试替身语义误导为正式数据产品 | 已删除；真实入口为 `kairos/backtest/synthetic_scenarios.py` | 已落地 |
+| `make_mock_dataset` | 旧回测数据生成函数 | 旧名不说明数据是 synthetic scenario，也不适合作为公共 API | 已删除；使用 `build_synthetic_backtest_dataset` | 已落地 |
 | `paper-sma`、`shadow-sma`、`simulate-sma` | CLI 和文档 | 已新增 `run paper`、`run shadow`、`run simulate`、`run backtest` 通用入口；旧 `*-sma` 命令仅作为兼容路径 | 新文档和示例优先使用 `kairos run <mode> --strategy ...` | 已落地 |
 | `sma_strategy.py` 与 `sma_cross.py` | `kairos/strategies/`，未来 `kairos/strategies/` | 已改为 `sma_cross_strategy.py`（正式策略运行时）和 `sma_cross_research_backtest.py`（研究/批量回测）；旧文件仅兼容导出 | 已落地 |
 | `main.py` | 仓库根目录 | 已删除根目录转发入口；统一使用 `kairos` / `python -m kairos`，不再保留旧 `trading` 包入口 | 已落地 |
@@ -203,7 +203,7 @@ kairos/adapters/base.py
 | --- | --- | --- | --- |
 | `massive` | `kairos/adapters/massive/*`、CLI `massive-*`、数据集 ID | 已新增 `kairos.connectors.massive` / `kairos.connectors.massive` 作为新公共入口；供应商实现仍保留在兼容 adapters 包下 | 新代码优先使用 connector 入口；CLI 和 DatasetKey 后续继续向 `provider` 维度收敛 |
 | `day_aggs` | Massive 适配器、CLI、数据集 | vendor API 叫法，行业里更常见 `daily_bars` 或 `daily_ohlcv`；数据产品名更建议 `ohlcv` | `daily_ohlcv` 用于数据产品；`DailyBar` / `BarSeries` 用于代码对象 |
-| `option_day_iv` | `kairos/adapters/massive/option_iv.py`、CLI | 已新增 `OptionCloseImpliedVolatilityPipeline`、`close_implied_volatility.py` 和 `prepare-option-close-implied-volatility` 主路径；旧 `OptionDayIvPipeline` 与 `prepare-option-day-iv` 仅兼容 | 已落地；新代码统一使用 close-implied-volatility 命名 |
+| `option_day_iv` | 旧 Massive IV 物化模块和 CLI | 已新增 `OptionCloseImpliedVolatilityPipeline`、`close_implied_volatility.py` 和 `prepare-option-close-implied-volatility` 主路径；旧 `option_iv.py`、`OptionDayIvPipeline` 与 `prepare-option-day-iv` 已删除 | 已落地；新代码统一使用 close-implied-volatility 命名 |
 | `market_slice` | `kairos/data/market_slice_*`、`kairos/backtest/feed.py` | 已改为 `MarketSnapshot`、`MarketSnapshotFeed`、`MarketSnapshotStorageDriver`、`MarketSnapshotCollectionPublisher`；旧 `MarketSlice*` 仅兼容 | 已落地；新代码统一使用 market snapshot 语义 |
 | `HistoricalDataset` | `kairos/backtest/feed.py` | 已改为 `MarketReplayDataset`；旧名仅作为兼容别名 | 已落地；新代码统一使用 `MarketReplayDataset` |
 | `register_historical_dataset` / `historical_dataset.v2` | `kairos/data/publishing.py`、Release metadata | 已新增 `register_market_replay_dataset` 主入口和 `market_replay_dataset.v2` 新 schema id；旧函数名和旧 schema 仅用于兼容 | 已落地；新发布流程统一使用 MarketReplayDataset 语义 |
@@ -241,13 +241,13 @@ kairos/adapters/base.py
 | Deribit connector | 当前真实类名已使用 `DeribitDvolProvider`、`DeribitOptionChainProvider`、`DeribitOptionTradeHistoryProvider` | 暂不需要改类名；后续只需统一文档里的泛称 |
 | `data write --live --adapter` | 用户数据产品入口 | 已新增 `--connector` 作为主参数；旧 `--adapter` 仅作为隐藏兼容参数继续接受 | 已落地；manifest 使用 `connector_hash` |
 | execution/account runtime boundary 局部变量和错误文案 | `ExecutionRouter`、`RuntimeRecoveryService`、`ReconciliationService`、`KillSwitch`、CLI trade runtime | 运行期真实边界是下单、撤单、账户读取和恢复，属于 `Gateway`，不应继续用 `adapter` 描述 | 已落地；核心属性和报错已改为 `gateway` / `connector`，卫生测试防止 `account_adapter` 和旧 adapter 报错文案回流 |
-| `ValuationService` / `TreasuryService` 包根导出 | `kairos.pricing`、`kairos.treasury` | 名称过泛，容易和具体 valuation/posting 职责混淆 | 已从包根 public surface 移除；旧别名仅保留在兼容模块内部 |
-| `base.py` | Python 项目常见，但公共领域语义弱；`kairos/strategies/base.py` 已改为 `strategy_protocols.py`，旧文件仅兼容 | `protocols.py`、`interfaces.py`、`ports.py` |
-| `service.py` | 过泛，多个包都有 `service.py`；`kairos/pricing/service.py` 已改为 `option_valuation.py`，`kairos/research/service.py` 已改为 `option_capture.py`，`kairos/treasury/service.py` 已改为 `ledger_posting.py`，旧文件仅兼容 | 用业务动作命名，如 `dataset_publication.py`、`option_valuation.py`、`research_capture.py` |
-| `models.py` | 过泛，但在小包内可接受；`kairos/data/models.py` 已改为 `contracts.py`，`kairos/reference/models.py` 已改为 `contracts.py`，`kairos/volatility/models.py` 已改为 `contracts.py`，`kairos/research/validation/models.py` 已改为 `contracts.py`，`kairos/treasury/models.py` 和 `transfer_models.py` 已改为 `transfer_contracts.py`，`kairos/pricing/models.py` 和 `option_pricing_models.py` 已改为 `option_pricing_contracts.py`，旧文件仅兼容 | 后续如继续细拆 Reference，可从 `contracts.py` 拆出 `instrument_definitions.py`、`listing_definitions.py`、`routing_definitions.py` |
+| `ValuationService` / `TreasuryService` 包根导出 | `kairos.pricing`、`kairos.treasury` | 名称过泛，容易和具体 valuation/posting 职责混淆 | 已删除；使用 `OptionValuationService` / `TreasuryLedgerPostingService` |
+| `base.py` | Python 项目常见，但公共领域语义弱；`kairos/strategies/base.py` 已改为 `strategy_protocols.py`，旧文件已删除 | `protocols.py`、`interfaces.py`、`ports.py` |
+| `service.py` | 过泛，多个包都有 `service.py`；`kairos/pricing/service.py` 已改为 `option_valuation.py`，`kairos/research/service.py` 已改为 `option_capture.py`，`kairos/treasury/service.py` 已改为 `ledger_posting.py`，旧文件已删除 | 用业务动作命名，如 `dataset_publication.py`、`option_valuation.py`、`research_capture.py` |
+| `models.py` | 过泛，但在小包内可接受；`kairos/data/models.py` 已改为 `contracts.py`，`kairos/reference/models.py` 已改为 `contracts.py`，`kairos/volatility/models.py` 已改为 `contracts.py`，`kairos/research/validation/models.py` 已改为 `contracts.py`，`kairos/treasury/models.py` 和 `transfer_models.py` 已改为 `transfer_contracts.py`，`kairos/pricing/models.py` 和 `option_pricing_models.py` 已改为 `option_pricing_contracts.py`，旧文件已删除 | 后续如继续细拆 Reference，可从 `contracts.py` 拆出 `instrument_definitions.py`、`listing_definitions.py`、`routing_definitions.py` |
 | `analyzer.py` | 分析对象不明确；`kairos/research/analyzer.py` 已改为 `option_snapshot_analysis.py`，主类型为 `OptionSnapshotAnalysis` / `OptionSnapshotMetricRow`，旧文件仅兼容 | `option_snapshot_analysis.py`、`research_evidence_analysis.py` |
 | `selector.py` | 选择什么不明确；`kairos/research/selector.py` 已改为 `option_universe_selector.py`，旧文件仅兼容 | `option_universe_selector.py` 或 `instrument_selector.py` |
-| `readiness.py` / `health.py` / `doctor` | 三者边界接近；`kairos/data/health.py` 已改为 `kairos/data/diagnostics.py`，主类改为 `DataDiagnosticsService` / `DataDiagnosticIssue`；`kairos/adapters/massive/readiness.py` 已改为 `entitlement_diagnostics.py`，主类改为 `MassiveEntitlementDiagnostics` / `MassiveEntitlementReport`；`kairos/features/us_equity_momentum_readiness.py` 已改为 `us_equity_momentum_diagnostics.py`，主类改为 `UsEquityMomentumDiagnostics`；旧 `DataHealth*`、`MassiveReadiness*`、`UsEquityMomentumReadiness` 仅兼容；CLI 主命令已新增 `massive-entitlement-diagnostics` 和 `us-equity-momentum-diagnostics`，旧 readiness 命令仅作为兼容别名 | 统一命名层次：内部 API 使用 `diagnostics`；供应商权限探测使用 `entitlement-diagnostics`；准备度证据字段可继续叫 readiness，但文件/主命令不要泛称 readiness |
+| `readiness.py` / `health.py` / `doctor` | 三者边界接近；`kairos/data/health.py`、`DataHealth*` 和 `kairos data health` 已删除，数据质量主入口为 `kairos/data/diagnostics.py`、`DataDiagnosticsService` / `DataDiagnosticIssue` 和 `kairos data diagnostics`；Massive 权限探测已改为 `entitlement_diagnostics.py`，主类为 `MassiveEntitlementDiagnostics` / `MassiveEntitlementReport`，旧 `readiness.py`、`MassiveReadiness*` 和 `massive-readiness` 已删除；US equity momentum 数据包审计已改为 `us_equity_momentum_diagnostics.py`、`UsEquityMomentumDiagnostics` 和 `us-equity-momentum-diagnostics`，旧 readiness 模块/类/命令已删除 | 统一命名层次：内部 API 使用 `diagnostics`；供应商权限探测使用 `entitlement-diagnostics`；准备度证据字段可继续叫 readiness，但文件/主命令不要泛称 readiness |
 | `btcusdt-depth-...` 输出文件 | Venue symbol 直接出现在产物名里可接受，但不应作为内部身份 | 产物 manifest 中必须同时写 `InstrumentId`、`ListingId`、`VenueId` |
 
 ## 专业命名词典建议
@@ -311,7 +311,7 @@ kairos/adapters/base.py
 1. 新增命名规范文档，并在 README 的“核心命名与边界”处链接。
 2. 确立 `Kairos` / `kairos` 为同一项目的产品、公开包和 CLI 目标命名，移除 `trader` / `trading` 兼容别名。
 3. 清理本地运行产物：`__pycache__`、`.pyc`、`.pytest_cache`、`pyenv/` 不应进入版本库或审计范围。
-4. 给高风险旧名加 alias 和 deprecation 注释：例如 `MockScenario = SyntheticScenario`、`make_mock_dataset = build_synthetic_backtest_dataset`。
+4. 高风险旧名不再新增 alias；`MockScenario`、`make_mock_dataset` 这类旧入口已删除。
 5. CLI 已新增通用命令并保留旧命令：`run shadow --strategy ...` 兼容 `run shadow-sma`。
 6. 明确 `OHLCV` 用于数据产品/schema，`Bar` 用于代码对象和市场事件。
 
@@ -378,10 +378,10 @@ kairos/adapters/base.py
 
 | 当前 | 新命名 | 兼容方式 |
 | --- | --- | --- |
-| `kairos/backtest/mock.py` | `kairos/backtest/synthetic_scenarios.py` | 旧文件保留薄转发 |
-| `MockScenario` | `SyntheticScenario` | `MockScenario = SyntheticScenario` |
-| `make_mock_dataset` | `build_synthetic_backtest_dataset` | 旧函数转发并标注 deprecated |
-| CLI `backtest mock` | `backtest synthetic-scenario` | 旧命令保留 |
+| `kairos/backtest/mock.py` | `kairos/backtest/synthetic_scenarios.py` | 旧文件已删除 |
+| `MockScenario` | `SyntheticScenario` | 旧别名已删除 |
+| `make_mock_dataset` | `build_synthetic_backtest_dataset` | 旧函数已删除 |
+| CLI `backtest mock` | `backtest synthetic-scenario` | 旧命令已删除 |
 | Dataset ID `mock-*` | `synthetic-*` | 旧测试夹具允许读取 |
 
 验收标准：
@@ -400,7 +400,7 @@ kairos/adapters/base.py
 | --- | --- | --- |
 | `day_aggs` | `daily_ohlcv` | 数据产品、CLI、文件名优先使用 |
 | `equity_day_aggs.py` | `equity_daily_ohlcv.py` | 如果内容是 OHLCV schema |
-| `prepare-massive-equity-day-aggs` | `prepare-equity-daily-ohlcv --provider massive` | 旧命令保留 |
+| `prepare-massive-equity-day-aggs` | `prepare-equity-daily-ohlcv --provider massive` | 旧命令已删除 |
 | `Bar` / `BarSeries` | 保留 | 代码对象命名专业且直观 |
 | quote 聚合 bar | `QuoteBar` / `MidQuoteBar` | 避免误认为成交 OHLCV |
 
@@ -408,7 +408,7 @@ kairos/adapters/base.py
 
 1. DatasetKey 新增命名统一为 `market.ohlcv...`。
 2. 代码里 `Bar` 类型不被机械改成 `OHLCV`。
-3. 供应商术语 `day_aggs` 只留在 connector 内部或兼容层。
+3. 供应商术语 `day_aggs` 只允许出现在外部供应商原始 key/provenance 中，例如 `day_aggs_v1`。
 
 ### Wave 4：adapter 拆成职责命名
 
@@ -418,7 +418,7 @@ kairos/adapters/base.py
 
 | 当前 | 新命名 | 用途 |
 | --- | --- | --- |
-| `adapters/base.py` | `ports/venue.py`、`ports/execution.py`、`ports/market_data.py`、`ports/reference_data.py` | 内部协议；旧文件仅兼容导出 |
+| `adapters/base.py` | `ports/venue.py`、`ports/execution.py`、`ports/market_data.py`、`ports/reference_data.py` | 内部协议；旧文件已删除 |
 | `BinanceExecutionAdapter` | `BinanceExecutionGateway` | 下单/撤单等外部副作用 |
 | `BinanceAccountAdapter` | `BinanceAccountGateway` | 账户、余额、仓位读取 |
 | `BinanceMarketDataAdapter` | `BinanceMarketDataClient` | 行情读取 |
@@ -450,7 +450,7 @@ kairos/adapters/base.py
 | 顶层 `research/` | `studies/` | 已迁移；表示具体研究项目、实验、报告 |
 | `kairos/research/` | `kairos.research_platform` / `kairos.research_platform` | 已新增新入口；旧包暂作兼容 |
 | `ResearchSpec` | `OptionChainCaptureSpec` | 已落地；避免通用名绑定 SPXW 期权链采集 |
-| `ResearchService` | `OptionResearchCaptureService` | 已落地；旧名作为兼容别名 |
+| `ResearchService` | `OptionResearchCaptureService` | 已落地；旧名已删除 |
 | `research.analyzer` / `ResearchResult` | `option_snapshot_analysis` / `OptionSnapshotAnalysis` | 已落地；旧模块、旧类名和 `analyze` 仅作兼容 |
 
 验收标准：
@@ -531,15 +531,15 @@ Wave 0 命名冻结
 
 | 批次 | 当前状态 | 已落地点 | 仍需收口 |
 | --- | --- | --- | --- |
-| Wave 0 命名冻结 | 已开始 | 增加仓库卫生测试，防止本地运行产物进入提交态；新增 legacy naming shim 检查，防止旧命名模块重新长出真实实现；数据诊断主 API 已从 `DataHealthService` 收敛到 `DataDiagnosticsService`；Massive 权限探测主 API 已从 `MassiveReadinessChecker` 收敛到 `MassiveEntitlementDiagnostics`；数据产品完整契约主 API 已从 `DatasetProductSpec` 收敛到 `DataProductContract`；数据契约真实模块已从 `kairos.data.models` 迁到 `kairos.data.contracts`；新增导入护栏禁止新代码继续依赖旧 `models.py`、`base.py`、`service.py` 兼容入口 | 继续增加新增文件名/公开类名禁用词扫描 |
+| Wave 0 命名冻结 | 已开始 | 增加仓库卫生测试，防止本地运行产物进入提交态；新增 legacy naming shim 检查，防止旧命名模块重新长出真实实现；数据诊断主 API 已从 `DataHealthService` 收敛到 `DataDiagnosticsService`，旧 `DataHealth*` 和 `data health` 已删除；Massive 权限探测主 API 已从 `MassiveReadinessChecker` 收敛到 `MassiveEntitlementDiagnostics`，旧 `MassiveReadiness*` 和 `massive-readiness` 已删除；数据产品完整契约主 API 已从 `DatasetProductSpec` 收敛到 `DataProductContract`；数据/Reference/Pricing/Treasury/Volatility/Research validation 的旧 `models.py` / `transfer_models.py` 兼容入口已删除；新增导入护栏禁止新代码继续依赖旧 `base.py` 和历史兼容入口 | 继续增加新增文件名/公开类名禁用词扫描 |
 | Wave 1 Kairos 品牌和 CLI | 已开始 | `pyproject.toml` 项目名改为 `kairos`；新增 `kairos` CLI；新增 `kairos init`，支持安装后在任意目录创建项目骨架；README 主路径使用 `pip install kairos`、`kairos init`、`Kairos/kairos`；旧 `trader` 入口已移除 | 后续 release notes 标明旧 CLI 迁移窗口；发布前继续做真实 wheel 安装验收 |
-| Wave 2 fixture/mock | 已开始 | `SyntheticScenario`、`build_synthetic_backtest_dataset`、`backtest synthetic-scenario` 成为主路径；真实实现已迁入 `kairos/backtest/synthetic_scenarios.py`；合成数据 venue/listing 元数据改为 `synthetic`；旧 `mock.py`、`MockScenario`、`make_mock_dataset`、`backtest mock` 仅保留兼容 | 最终删除旧 `mock` API 前需经过迁移周期 |
-| Wave 3 OHLCV/Bar | 已开始 | `OptionDailyOhlcvPipeline`、`SpxwDailyOhlcvPipeline`、`MassiveEquityDailyOhlcvPipeline` 成为真实类名；实现主体已迁入 `daily_ohlcv.py`、`equity_daily_ohlcv.py`；旧 `day_aggs.py`、`equity_day_aggs.py` 收窄为兼容导出；CLI 新增 `prepare-spxw-daily-ohlcv`、`prepare-option-daily-ohlcv`、`prepare-equity-daily-ohlcv --provider massive` 主路径 | 旧 CLI `prepare-*-day-aggs` 仍作为兼容别名保留；供应商源路径仍保留 `day_aggs_v1` provenance |
-| Wave 4 adapter 职责拆分 | 已开始 | 新增 `kairos.ports`、`kairos.ports.venue/execution/market_data/reference_data/account`；协议层真实定义已从 `kairos.adapters.base` 移到 `kairos.ports.venue`，主导出只保留 `ReferenceDataPort`、`ExecutionPort`、`AccountPort` 等 `*Port`；新增 `kairos.connectors` 与实体 `kairos.connectors` 公共入口，Kairos 品牌层不再暴露 `kairos.adapters`；应用层和执行层类型注解开始改用 `*Port`；Binance/IBKR/模拟执行/组合行情主类名已迁移到 `*Gateway` / `*Client`；供应商包 `__all__` 不再导出旧 `*Adapter` 名；Binance/IBKR/transfer package root 不再 re-export 旧 `*Adapter` 兼容别名；IBKR SPXW 研究采集改为 `IbkrSpxwResearchProvider`；资金划转边界改为 `TransferGateway`、`BinanceTransferGateway`、`BankTransferGateway`，真实模块改为 `kairos.treasury.transfer_gateway`；Massive 原始响应归档主类改为 `MassiveVendorArchiveClient`，真实模块改为 `kairos.adapters.massive.vendor_archive`；组合行情路由真实模块改为 `kairos.adapters.market_data_router`，新公开入口为 `kairos.connectors.market_data_router`；Binance public market stream 主入口新增 `kairos.adapters.binance.market_stream` / `kairos.connectors.binance.market_stream`；Binance REST transport、request signing 和 clock sync 已拆到 `binance.rest_transport` / `binance.request_signing`；Binance reference data discovery 已拆到 `binance.reference_data`；Binance REST snapshot 行情读取已拆到 `binance.market_data_client`；Binance 下单/撤单/订单恢复能力已拆到 `binance.execution_gateway` / `kairos.connectors.binance.execution_gateway`；Binance 账户、余额、仓位读取已拆到 `binance.account_gateway` / `kairos.connectors.binance.account_gateway`；Binance 资金费率结算流水已拆到 `binance.funding_settlement` / `kairos.connectors.binance.funding_settlement`；Binance user data stream 已拆到 `binance.user_data_stream`；Binance 期权行情快照解析已拆到 `binance.option_market_snapshot`；Binance 订单恢复协调已拆到 `binance.order_recovery`；`kairos.adapters.binance.adapter` 已退化为无 class/def 的兼容聚合入口；IBKR session 已拆到 `ibkr.session`；IBKR account gateway 已拆到 `ibkr.account_gateway`；IBKR reference data discovery 已拆到 `ibkr.reference_data`；IBKR market data client 已拆到 `ibkr.market_data_client`；IBKR execution gateway 已拆到 `ibkr.execution_gateway`；`kairos.adapters.ibkr.adapter` 已退化为无 class/def 的兼容聚合入口；`kairos.adapters.transfer` 包入口已收敛到 `*TransferGateway` 新名；transfer 测试文件已从 `*_adapter` 收敛为 `*_gateway`；IBKR/Massive 测试文件已从 `*_adapter(s)` 收敛为 `*_connectors`；tests 顶层新增护栏禁止 `*adapter*.py` 文件名；connector contract 示例已迁到 `examples/connectors/reference_connector`，并新增护栏禁止旧 examples 目录名回流；Deribit connector 真实类名已审计为 `*Provider`，无需改名；README、examples README、architecture、system convergence progress、system architecture blueprint 和 research/backtest/live convergence plan 已切到 connector/port/client/gateway 语言 | 旧 `*Adapter` 名、`MassiveSourceArchive`、`kairos.adapters.composite` 和 `kairos.adapters` 目录仍作为兼容实现层保留；后续继续收敛历史实施计划中的阶段性 Adapter 泛称 |
-| Wave 5 research/studies 边界 | 已开始 | 顶层源码研究工作区已从 `research/` 迁到 `studies/`；新增 `kairos.research_platform` 与 `kairos.research_platform` 平台研究服务入口；`OptionChainCaptureSpec` 成为期权链采集规格真实类名，`ResearchSpec` 仅作兼容别名；`OptionResearchCaptureService.capture_snapshot` 成为期权研究快照采集主入口，真实实现位于 `kairos.research.option_capture`；`option_universe_selector.py` 成为期权 universe 选择主模块；期权快照分析主入口改为 `OptionSnapshotAnalysis` / `OptionSnapshotMetricRow` / `analyze_option_snapshot`，真实模块改为 `kairos.research.option_snapshot_analysis`；`ResearchService.capture`、`research.service`、`research.selector`、`research.analyzer` 仅作兼容；`pyproject.toml` 已排除 `research*`/`studies*` 工作区；`kairos/`、`kairos/` 打包模块不再在模块加载时导入顶层工作区；源码专用研究命令通过 workspace-only helper 按需加载；新增仓库卫生测试防止工作区回到安装包 | 旧 `kairos.research` 仍需保留兼容；后续可继续收敛 validation/session/workspace 的公共命名 |
+| Wave 2 fixture/mock | 已落地 | `SyntheticScenario`、`build_synthetic_backtest_dataset`、`backtest synthetic-scenario` 成为唯一主路径；真实实现位于 `kairos/backtest/synthetic_scenarios.py`；合成数据 venue/listing 元数据改为 `synthetic`；旧 `mock.py`、`MockScenario`、`make_mock_dataset`、`backtest mock` 已删除 | 后续只保留测试框架自身的 `unittest.mock` 语义 |
+| Wave 3 OHLCV/Bar | 已落地 | `OptionDailyOhlcvPipeline`、`SpxwDailyOhlcvPipeline`、`MassiveEquityDailyOhlcvPipeline` 成为真实类名；实现主体位于 `daily_ohlcv.py`、`equity_daily_ohlcv.py`；旧 `day_aggs.py`、`equity_day_aggs.py`、`*DayAgg*` 别名和 `prepare-*-day-aggs` CLI 已删除；CLI 使用 `prepare-spxw-daily-ohlcv`、`prepare-option-daily-ohlcv`、`prepare-equity-daily-ohlcv --provider massive` | 供应商源路径仍保留 `day_aggs_v1` provenance |
+| Wave 4 adapter 职责拆分 | 已开始 | 新增 `kairos.ports`、`kairos.ports.venue/execution/market_data/reference_data/account`；协议层真实定义已从 `kairos.adapters.base` 移到 `kairos.ports.venue`，旧 `kairos.adapters.base` 已删除，主导出只保留 `ReferenceDataPort`、`ExecutionPort`、`AccountPort` 等 `*Port`；新增 `kairos.connectors` 与实体 `kairos.connectors` 公共入口，Kairos 品牌层不再暴露 `kairos.adapters`；应用层和执行层类型注解开始改用 `*Port`；Binance/IBKR/模拟执行/组合行情主类名已迁移到 `*Gateway` / `*Client`；供应商包 `__all__` 不再导出旧 `*Adapter` 名；Binance/IBKR/transfer package root 不再 re-export 旧 `*Adapter` 兼容别名；IBKR SPXW 研究采集改为 `IbkrSpxwResearchProvider`；资金划转边界改为 `TransferGateway`、`BinanceTransferGateway`、`BankTransferGateway`，真实模块改为 `kairos.treasury.transfer_gateway`；Massive 原始响应归档主类改为 `MassiveVendorArchiveClient`，真实模块改为 `kairos.adapters.massive.vendor_archive`；组合行情路由真实模块改为 `kairos.adapters.market_data_router`，新公开入口为 `kairos.connectors.market_data_router`；Binance public market stream 主入口新增 `kairos.adapters.binance.market_stream` / `kairos.connectors.binance.market_stream`；Binance REST transport、request signing 和 clock sync 已拆到 `binance.rest_transport` / `binance.request_signing`；Binance reference data discovery 已拆到 `binance.reference_data`；Binance REST snapshot 行情读取已拆到 `binance.market_data_client`；Binance 下单/撤单/订单恢复能力已拆到 `binance.execution_gateway` / `kairos.connectors.binance.execution_gateway`；Binance 账户、余额、仓位读取已拆到 `binance.account_gateway` / `kairos.connectors.binance.account_gateway`；Binance 资金费率结算流水已拆到 `binance.funding_settlement` / `kairos.connectors.binance.funding_settlement`；Binance user data stream 已拆到 `binance.user_data_stream`；Binance 期权行情快照解析已拆到 `binance.option_market_snapshot`；Binance 订单恢复协调已拆到 `binance.order_recovery`；`kairos.adapters.binance.adapter` 已退化为无 class/def 的兼容聚合入口；IBKR session 已拆到 `ibkr.session`；IBKR account gateway 已拆到 `ibkr.account_gateway`；IBKR reference data discovery 已拆到 `ibkr.reference_data`；IBKR market data client 已拆到 `ibkr.market_data_client`；IBKR execution gateway 已拆到 `ibkr.execution_gateway`；`kairos.adapters.ibkr.adapter` 已退化为无 class/def 的兼容聚合入口；`kairos.adapters.transfer` 包入口已收敛到 `*TransferGateway` 新名；transfer 测试文件已从 `*_adapter` 收敛为 `*_gateway`；IBKR/Massive 测试文件已从 `*_adapter(s)` 收敛为 `*_connectors`；tests 顶层新增护栏禁止 `*adapter*.py` 文件名；connector contract 示例已迁到 `examples/connectors/reference_connector`，并新增护栏禁止旧 examples 目录名回流；Deribit connector 真实类名已审计为 `*Provider`，无需改名；README、examples README、architecture、system convergence progress、system architecture blueprint 和 research/backtest/live convergence plan 已切到 connector/port/client/gateway 语言 | 旧 `*Adapter` 名、`MassiveSourceArchive`、`kairos.adapters.composite` 和 `kairos.adapters` 目录仍作为兼容实现层保留；后续继续收敛历史实施计划中的阶段性 Adapter 泛称 |
+| Wave 5 research/studies 边界 | 已开始 | 顶层源码研究工作区已从 `research/` 迁到 `studies/`；新增 `kairos.research_platform` 与 `kairos.research_platform` 平台研究服务入口；`OptionChainCaptureSpec` 成为期权链采集规格真实类名，`ResearchSpec` 仅作兼容别名；`OptionResearchCaptureService.capture_snapshot` 成为期权研究快照采集主入口，真实实现位于 `kairos.research.option_capture`；`option_universe_selector.py` 成为期权 universe 选择主模块；期权快照分析主入口改为 `OptionSnapshotAnalysis` / `OptionSnapshotMetricRow` / `analyze_option_snapshot`，真实模块改为 `kairos.research.option_snapshot_analysis`；`ResearchService.capture` 与 `research.service` 已删除，`research.selector`、`research.analyzer` 仍仅作兼容；`pyproject.toml` 已排除 `research*`/`studies*` 工作区；`kairos/`、`kairos/` 打包模块不再在模块加载时导入顶层工作区；源码专用研究命令通过 workspace-only helper 按需加载；新增仓库卫生测试防止工作区回到安装包 | 旧 `kairos.research` 仍需保留兼容；后续可继续收敛 validation/session/workspace 的公共命名 |
 | Wave 6 kairos 单包名 | 已开始 | `kairos` 顶层 facade 可用；`python -m kairos` 可用；`initialize_project`、`kairos.project`、`kairos.ports`、`kairos.backtest.synthetic_scenarios`、`kairos.data` 等公开入口可导入 | 真实实现已位于 `kairos/`；打包配置只包含 `kairos*` |
 
-这个状态符合“先新名、再迁移调用方、最后删除旧名”的原则。当前阶段已经删除旧项目/包/CLI 命名 `trader` 与 `trading`；`mock`、`day_aggs`、`Adapter` 等领域旧名仍只承担有限兼容和测试覆盖职责。新文档、新示例和新代码应使用 `kairos`、`synthetic`、`daily_ohlcv`、`Port/Gateway/Client`、`connectors`。
+这个状态符合“先新名、再迁移调用方、最后删除旧名”的原则。当前阶段已经删除旧项目/包/CLI 命名 `trader` 与 `trading`，并删除 `mock` 回测入口和 `day_aggs` 平台入口；`Adapter` 等边界旧名仍只承担有限兼容和测试覆盖职责。新文档、新示例和新代码应使用 `kairos`、`synthetic`、`daily_ohlcv`、`Port/Gateway/Client`、`connectors`。
 
 本轮追加进展：
 
@@ -547,21 +547,21 @@ Wave 0 命名冻结
 - 顶层测试文件 `test_service.py` 已改为 `test_option_research_capture.py`，`test_dataset_quality_service.py` 已改为 `test_dataset_quality_assessment.py`，测试列表不再暴露笼统 service 命名。
 - 仓库卫生测试新增护栏：`kairos.ports` 包根不得重新导出 `Adapter` 旧名，顶层测试不得新增 `test_service.py`、`test_mock.py`、`test_adapter.py` 这类泛称文件。
 - 除本审计文档外，产品文档与示例 Markdown 已切到 `kairos` CLI 默认命名；`architecture.md`、system blueprint、async dataflow、research/backtest/live convergence 等标题和命令不再使用 `Trader` / `trader` 作为主名。
-- 用户可见文档中的非兼容 `Adapter/adapter`、`Mock/mock data`、`service.py` 残留已清零；仓库卫生测试新增文档默认 CLI 名护栏，防止旧 CLI 命令重新成为产品文档主路径。
+- 用户可见文档中的非兼容 `Adapter/adapter`、`Mock/mock data`、`service.py` 残留已清零；仓库卫生测试新增文档默认 CLI 名护栏，防止旧 CLI 命令重新成为产品文档主路径；`mock` 回测兼容入口已删除。
 - README、数据指南、examples Python 脚本和 Notebook 示例已从 `from kairos...` / `import kairos...` 迁移到 `from kairos...` / `import kairos...`；研究工作区入口统一为 `kairos.research_platform`，不重新暴露 `kairos.research`。
 - 仓库卫生测试新增用户侧导入护栏，覆盖 README、数据指南、tutorial 和 examples 的 `.py` / `.md` / `.ipynb`，防止公开示例回退到旧 namespace。
 - 顶层测试文件 `test_backtest_models.py` 已改为 `test_backtest_fill_contracts.py`，对应测试类改为 `BacktestFillContractTests`，避免用笼统 `models` 掩盖真实验收对象。
-- 数据产品契约真实模块已从 `kairos.data.models` 迁到 `kairos.data.contracts`；`kairos.data.models` 纳入兼容壳护栏，源码、测试和示例的新导入统一走 `data.contracts`。
-- 波动率曲面和研究验证契约真实模块已分别从 `kairos.volatility.models`、`kairos.research.validation.models` 迁到 `contracts.py`；旧 `models.py` 均纳入兼容壳护栏，新导入统一走 contracts。
-- Reference 静态定义真实模块已从 `kairos.reference.models` 迁到 `kairos.reference.contracts`；`reference.models` 纳入兼容壳护栏，新导入统一走 `reference.contracts`。
-- Treasury 转账真实契约已从 `kairos.treasury.transfer_models` 迁到 `kairos.treasury.transfer_contracts`；旧 `transfer_models.py` 纳入兼容壳护栏，新导入统一走 `transfer_contracts`。
-- `kairos.adapters.base`、`kairos.strategies.base` 以及 backtest/pricing/research/treasury 的旧 `service.py` 入口已确认均为无真实实现的兼容壳；新增仓库卫生测试禁止新代码继续直接导入这些兼容入口，迁移测试作为唯一例外。
+- 数据产品契约真实模块已从 `kairos.data.models` 迁到 `kairos.data.contracts`；旧 `kairos.data.models` 已删除，源码、测试和示例的新导入统一走 `data.contracts`。
+- 波动率曲面和研究验证契约真实模块已分别从 `kairos.volatility.models`、`kairos.research.validation.models` 迁到 `contracts.py`；旧 `models.py` 已删除，新导入统一走 contracts。
+- Reference 静态定义真实模块已从 `kairos.reference.models` 迁到 `kairos.reference.contracts`；旧 `reference.models` 已删除，新导入统一走 `reference.contracts`。
+- Treasury 转账真实契约已从 `kairos.treasury.transfer_models` 迁到 `kairos.treasury.transfer_contracts`；旧 `treasury.models` / `transfer_models.py` 已删除，新导入统一走 `transfer_contracts`。
+- `kairos.adapters.base`、`kairos.strategies.base`、backtest/pricing/research/treasury 的旧 `service.py` 入口以及 `BacktestService`、`ValuationService`、`ResearchService`、`TreasuryService` 泛名已删除；新增仓库卫生测试禁止新代码继续直接导入仍保留的兼容入口，迁移测试作为唯一例外。
 - 新增实体 `kairos.connectors` facade，并从 `kairos.__init__` 的动态别名中移除 `adapters`；Kairos 品牌层不再暴露 `kairos.adapters`，示例入口统一使用 `kairos.connectors`。
 - 普通测试层已从 `kairos.adapters.*` 导入迁移到 `kairos.connectors.*`；`test_naming_migration.py` 作为旧别名兼容验证保留唯一旧 adapters 导入例外，仓库卫生测试已覆盖 tests/examples 回流。
 - 测试中的 patch target 也已从 `kairos.adapters.*` 迁到 `kairos.connectors.*`；架构边界测试同时禁止 domain 依赖旧 `kairos.adapters` 和新 `kairos.connectors`。
-- `kairos.connectors` facade 已与 `kairos.connectors` 对齐，不再公开 `base`、`composite`、`binance.adapter`、`ibkr.adapter`、旧 `day_aggs` / `equity_day_aggs` / `option_iv` / `readiness` 兼容子模块；这些旧名只保留在历史实现/兼容层。
-- `kairos data massive-entitlement-diagnostics` 已成为 Massive 供应商权限和 endpoint 能力诊断主命令；旧 `massive-readiness` 仅作为兼容别名继续接受。
-- `kairos data us-equity-momentum-diagnostics` 已成为 US equity momentum 数据包审计主命令；旧 `us-equity-momentum-readiness` 和 `UsEquityMomentumReadiness` 仅作为兼容入口。
+- `kairos.connectors` facade 已与 `kairos.connectors` 对齐，不再公开 `base`、`composite`、`binance.adapter`、`ibkr.adapter`、旧 `day_aggs` / `equity_day_aggs` / `option_iv` / `readiness` 兼容子模块；`day_aggs` / `equity_day_aggs` / `option_iv` / `readiness` 平台模块已删除，剩余旧名只保留在其他历史实现/兼容层。
+- `kairos data massive-entitlement-diagnostics` 已成为 Massive 供应商权限和 endpoint 能力诊断唯一命令；旧 `massive-readiness` 已删除。
+- `kairos data us-equity-momentum-diagnostics` 已成为 US equity momentum 数据包审计唯一主命令；旧 `us-equity-momentum-readiness` 和 `UsEquityMomentumReadiness` 已删除。
 - `kairos backtest spxw-reference-scenario` 已成为 SPXW 固定回放验收主命令；真实模块从 `kairos.backtest.golden` 迁到 `kairos.backtest.spxw_reference_pipeline`，产物 ID 从 `market-slice` 迁到 `market-snapshot`，旧 `golden-spxw` 仅作为兼容别名。
 - 依赖源码工作区 `studies.*` 的历史研究命令（如 BTC options readiness、SPXW study readiness、BTC iron condor registration）已从产品 CLI help 隐藏；`studies/` 仍不进入 pip package，安装后公开体验不再暗示这些源码研究模块可用。
 - `kairos.__init__` 不再为旧 `task_supervisor`、`runtime_golden`、`runtime_failure_matrix`、`market_slice_storage`、`market_slice_curation` 安装动态子模块别名；Kairos API 测试改为只验证新 `service_supervisor`、`runtime_reference_artifact`、`runtime_failure_policy`、`market_snapshot_*` 入口。
@@ -600,7 +600,7 @@ Wave 0 命名冻结
 
 1. 将产品、README 标题、CLI 目标名定为 `Kairos` / `kairos`，删除旧 `trader` 入口。
 2. 清理并确认不再出现提交态 `__pycache__`、`.pyc`、`pyenv/`。
-3. `kairos/backtest/mock.py` 已收薄为兼容 shim，真实实现位于 `synthetic_scenarios.py`。
+3. `kairos/backtest/mock.py` 已删除，真实实现位于 `synthetic_scenarios.py`。
 4. 把 `adapter` 命名按职责拆成 `ExecutionGateway`、`MarketDataClient`、`ReferenceDataClient`、`EventNormalizer`、`Port`。
 5. CLI 的 `paper-sma`、`shadow-sma`、`simulate-sma` 已增加 `paper`、`shadow`、`simulate` 通用入口。
 6. `ResearchSpec` 已改为 `OptionChainCaptureSpec`，避免通用研究规格被 SPXW 默认值占用。

@@ -24,7 +24,7 @@ from kairos.execution.order_state import DurableOrderStatus
 from kairos.execution.recovery import VenueOrderRecoveryService
 from kairos.execution.router import ExecutionRouter
 from kairos.execution.strategy_planner import plan_strategy_intent
-from kairos.orchestration.coordinator import TradingCoordinator
+from kairos.orchestration.coordinator import ExecutionCoordinator
 from kairos.orchestration.event_log import PersistentEventLog
 from kairos.orchestration.faults import InjectedRuntimeFailure, OneShotRuntimeFaultInjector, RuntimeFaultPoint
 from kairos.orchestration.kill_switch import KillSwitch
@@ -34,7 +34,7 @@ from kairos.orchestration.runtime_store import SQLiteRuntimeStore
 from .clock import FixedClock
 from .config import ApplicationConfig, RuntimePaths
 from .recovery import RuntimeRecoveryService
-from .runtime import RuntimeStatus, TradingApplication
+from .runtime import RuntimeStatus, KairosApplication
 from .runtime_reference_artifact import STARTED_AT, _catalog
 
 
@@ -100,12 +100,12 @@ def _execution_gateway(clock: FixedClock, *, balances=(), positions=()):
 def _coordinator(path: Path, store: SQLiteRuntimeStore, gateway, clock: FixedClock, injector=None):
     order = _request()
     paths = RuntimePaths(path, path / "catalog.json", path, store.path, path / "artifacts")
-    application = TradingApplication(
+    application = KairosApplication(
         ApplicationConfig(gateway.environment, paths), store,
         runtime_id=f"failure-policy-{path.name}", accounts=(order.account,), clock=clock,
         recovery=RuntimeRecoveryService(store, _catalog(), AssetId("USDT"), {order.account: gateway}),
     )
-    coordinator = TradingCoordinator(
+    coordinator = ExecutionCoordinator(
         ExecutionRouter(_catalog(), (gateway,)),
         {order.account: ReconciliationService(store.load_ledger(), gateway, clock=clock)},
         KillSwitch((gateway,), clock, store), PersistentEventLog(path / "events.jsonl"),
@@ -252,12 +252,12 @@ def _kill_switch_restart(path: Path) -> dict[str, object]:
     blocked = False
     try:
         paths = RuntimePaths(path, path / "catalog.json", path, store.path, path / "artifacts")
-        application = TradingApplication(
+        application = KairosApplication(
             ApplicationConfig(gateway.environment, paths), store,
             runtime_id="failure-policy-kill-switch", accounts=(_request().account,), clock=clock,
             recovery=RuntimeRecoveryService(store, _catalog(), AssetId("USDT"), {_request().account: gateway}),
         )
-        coordinator = TradingCoordinator(
+        coordinator = ExecutionCoordinator(
             ExecutionRouter(_catalog(), (gateway,)), {_request().account: ReconciliationService(Ledger(), gateway, clock=clock)},
             switch, PersistentEventLog(path / "events.jsonl"), clock=clock, application=application,
         )
@@ -271,7 +271,7 @@ def _kill_switch_restart(path: Path) -> dict[str, object]:
 def _reconciliation_mismatch(path: Path) -> dict[str, object]:
     clock = FixedClock(STARTED_AT); paths = RuntimePaths.under(path); store = SQLiteRuntimeStore(paths.runtime_database)
     gateway = _execution_gateway(clock, balances=((AssetId("USDT"), Decimal("1")),)); blocked = False
-    app = TradingApplication(
+    app = KairosApplication(
         ApplicationConfig(gateway.environment, paths), store, runtime_id="matrix-mismatch",
         accounts=(_request().account,), clock=clock,
         recovery=RuntimeRecoveryService(store, _catalog(), AssetId("USDT"), {_request().account: gateway}),

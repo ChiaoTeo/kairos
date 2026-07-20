@@ -66,4 +66,3 @@ def _status(value: str) -> TransferStatus:
     return values.get(value.lower(), TransferStatus.MANUAL_REVIEW)
 
 
-BankTransferAdapter = BankTransferGateway

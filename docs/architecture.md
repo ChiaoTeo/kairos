@@ -80,7 +80,7 @@ Capability 以 port 边界为准，而不是描述 Venue 的能力全集：
 - maximum order quantity/notional；
 - kill switch 后 reduce-only 必须真实缩小现有仓位。
 
-普通订单和 native combo 都必须经过 `TradingCoordinator` 的 readiness、reconciliation、持久幂等与 kill switch；`CancelIntent` 会与原 client order、Strategy Intent 和 Venue order id 一并写入事件日志。
+普通订单和 native combo 都必须经过 `ExecutionCoordinator` 的 readiness、reconciliation、持久幂等与 kill switch；`CancelIntent` 会与原 client order、Strategy Intent 和 Venue order id 一并写入事件日志。
 
 ## 4. 回测与研究
 

@@ -116,6 +116,3 @@ class OptionResearchCaptureService:
         updated = replace(manifest, status=status, updated_at=datetime.now(timezone.utc))
         self.repository.save_manifest(updated)
         return updated
-
-
-ResearchService = OptionResearchCaptureService

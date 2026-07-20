@@ -10,7 +10,7 @@ from uuid import UUID
 from kairos.accounting.ledger import LedgerService
 from kairos.ports import OrderAck
 from kairos.connectors.simulated import SimulatedExecutionAccountGateway
-from kairos.application import ApplicationConfig, FixedClock, RuntimePaths, RuntimeRecoveryService, RuntimeStatus, TradingApplication
+from kairos.application import ApplicationConfig, FixedClock, RuntimePaths, RuntimeRecoveryService, RuntimeStatus, KairosApplication
 from kairos.application.runtime_failure_policy import RUNTIME_FAILURE_POLICY_ID, run_runtime_failure_policy
 from kairos.domain.execution import TradeExecution, TradeSide
 from kairos.domain.identity import AssetId, VenueId
@@ -19,7 +19,7 @@ from kairos.execution.ingestion import DurableExecutionIngestionService
 from kairos.execution.order_state import DurableOrderStatus
 from kairos.execution.recovery import VenueOrderRecoveryService
 from kairos.execution.router import ExecutionRouter
-from kairos.orchestration.coordinator import TradingCoordinator
+from kairos.orchestration.coordinator import ExecutionCoordinator
 from kairos.orchestration.event_log import PersistentEventLog
 from kairos.orchestration.faults import InjectedRuntimeFailure, OneShotRuntimeFaultInjector, RuntimeFaultPoint
 from kairos.orchestration.kill_switch import KillSwitch
@@ -67,7 +67,7 @@ class RuntimeFailurePolicyTests(unittest.TestCase):
 
     def _coordinator(self, directory: str, store: SQLiteRuntimeStore, gateway, injector=None):
         ledger = store.load_ledger()
-        coordinator = TradingCoordinator(
+        coordinator = ExecutionCoordinator(
             ExecutionRouter(catalog(), (gateway,)),
             {request().account: ReconciliationService(ledger, gateway, clock=FixedClock(NOW))},
             KillSwitch((gateway,), FixedClock(NOW), store),
@@ -176,7 +176,7 @@ class RuntimeFailurePolicyTests(unittest.TestCase):
             KillSwitch((gateway,), FixedClock(NOW), store).trigger((), "failure matrix drill")
             restarted = KillSwitch((gateway,), FixedClock(NOW), SQLiteRuntimeStore(path))
             self.assertTrue(restarted.triggered)
-            coordinator = TradingCoordinator(
+            coordinator = ExecutionCoordinator(
                 ExecutionRouter(catalog(), (gateway,)),
                 {request().account: ReconciliationService(Ledger(), gateway, clock=FixedClock(NOW))},
                 restarted, PersistentEventLog(Path(directory) / "events.jsonl"),
@@ -195,7 +195,7 @@ class RuntimeFailurePolicyTests(unittest.TestCase):
                 VenueId("simulated"), request().account,
                 balances=((AssetId("USDT"), Decimal("1")),), clock=FixedClock(NOW),
             )
-            app = TradingApplication(
+            app = KairosApplication(
                 ApplicationConfig(gateway.environment, paths), store, runtime_id="mismatch",
                 accounts=(request().account,), clock=FixedClock(NOW),
                 recovery=RuntimeRecoveryService(store, catalog(), AssetId("USDT"), {request().account: gateway}),

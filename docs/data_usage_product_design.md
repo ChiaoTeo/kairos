@@ -587,7 +587,7 @@ Source Transport(WebSocket/SSE/Polling/User Connector)
 | Canonical Event | `CanonicalEventEnvelope` |
 | Async Channel | `BoundedEventChannel`、`ConflatedLatestChannel` |
 | Capture / Replay | `CanonicalCaptureWriter`、`CapturedCanonicalEventSource`、`ReplayEventFeed` |
-| Supervised Runtime | `AsyncTradingRuntime`、`AsyncServiceSupervisor`、`ManagedServiceSpec` |
+| Supervised Runtime | `AsyncKairosRuntime`、`AsyncServiceSupervisor`、`ManagedServiceSpec` |
 | Data CLI | `kairos data live-binance`、`kairos data soak-binance`、`kairos data write --live --connector ...` |
 
 关键边界：
@@ -1269,7 +1269,7 @@ def decide(context):
 - `kairos data download <data_key>`：已支持 credential-free 的 `tutorial-sma-data`，走 Data Catalog 和 Release 产物；
 - `kairos data write --file ... --as <dataset_id> --contract <contract>`：已支持 CSV 时间序列按 Data Contract 写入 Release；
 - `kairos data write --live --connector ... --as <dataset_id> --contract <contract>`：已支持生成带 `live_data_plane` 证据的 Live View manifest；
-- `kairos data live-binance/soak-binance`、`BoundedEventChannel`、`AsyncTradingRuntime`：已有 provider WebSocket 到 canonical async channel 的运行基线；
+- `kairos data live-binance/soak-binance`、`BoundedEventChannel`、`AsyncKairosRuntime`：已有 provider WebSocket 到 canonical async channel 的运行基线；
 - `kairos study open/add-data/add-factor/inspect/freeze`：已支持一个 Study workspace 绑定多个 Data Release 和 factor code hash；
 - `kairos strategy open/bind-factor/set-risk/inspect/freeze`：已支持从 Frozen Study 创建 Strategy workspace，并复用 Study factor hash；
 - `kairos run start/inspect/replay/compare`：已支持从 Study 或 Strategy snapshot 创建 Run Workspace 和 Run Manifest；

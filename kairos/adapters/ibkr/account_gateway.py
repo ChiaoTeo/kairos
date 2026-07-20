@@ -42,4 +42,3 @@ class IbkrAccountGateway:
         )
 
 
-IbkrAccountAdapter = IbkrAccountGateway

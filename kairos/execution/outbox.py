@@ -12,7 +12,7 @@ from kairos.orchestration.kill_switch import KillSwitch
 from .command import OutboxRecord
 
 if TYPE_CHECKING:
-    from kairos.application.runtime import TradingApplication
+    from kairos.application.runtime import KairosApplication
 
 
 class DurableOrderCommandService:
@@ -21,7 +21,7 @@ class DurableOrderCommandService:
     def __init__(
         self,
         store: SQLiteRuntimeStore,
-        application: "TradingApplication",
+        application: "KairosApplication",
         kill_switch: KillSwitch,
         validate: Callable[[OrderRequest | ComboOrderRequest], None],
         *,

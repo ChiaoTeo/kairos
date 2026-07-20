@@ -358,5 +358,3 @@ def _binance_recovered_executions(
     return tuple(recovered)
 
 
-BinanceExecutionAdapter = BinanceExecutionGateway
-BinanceOptionsExecutionAdapter = BinanceOptionsExecutionGateway

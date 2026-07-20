@@ -84,17 +84,75 @@ class RepositoryHygieneTests(unittest.TestCase):
                         offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
         self.assertEqual(offenders, [])
 
-    def test_packaged_modules_do_not_use_legacy_backtest_mock_entrypoint(self):
+    def test_packaged_modules_do_not_include_legacy_backtest_mock_entrypoint(self):
+        self.assertFalse((ROOT / "kairos" / "backtest" / "mock.py").exists())
+        cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
+        self.assertNotIn('"mock"', cli)
+        self.assertNotIn("backtest mock", cli)
         offenders = []
         for root in (ROOT / "kairos",):
             for path in root.rglob("*.py"):
-                if path == ROOT / "kairos" / "backtest" / "mock.py":
-                    continue
                 text = path.read_text(encoding="utf-8")
                 for line_number, line in enumerate(text.splitlines(), start=1):
                     stripped = line.strip()
-                    if stripped.startswith(("from kairos.backtest.mock", "import kairos.backtest.mock")):
+                    if (
+                        stripped.startswith(("from kairos.backtest.mock", "import kairos.backtest.mock"))
+                        or "MockScenario" in stripped
+                        or "make_mock_dataset" in stripped
+                        or "curated.mock" in stripped
+                    ):
                         offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
+        self.assertEqual(offenders, [])
+
+    def test_deleted_legacy_product_names_do_not_return(self):
+        deleted_paths = (
+            ROOT / "kairos" / "backtest" / "mock.py",
+            ROOT / "kairos" / "adapters" / "massive" / "day_aggs.py",
+            ROOT / "kairos" / "adapters" / "massive" / "equity_day_aggs.py",
+            ROOT / "kairos" / "adapters" / "massive" / "option_iv.py",
+            ROOT / "kairos" / "adapters" / "massive" / "readiness.py",
+            ROOT / "kairos" / "adapters" / "base.py",
+            ROOT / "kairos" / "backtest" / "service.py",
+            ROOT / "kairos" / "data" / "health.py",
+            ROOT / "kairos" / "features" / "us_equity_momentum_readiness.py",
+            ROOT / "kairos" / "data" / "models.py",
+            ROOT / "kairos" / "pricing" / "models.py",
+            ROOT / "kairos" / "pricing" / "option_pricing_models.py",
+            ROOT / "kairos" / "pricing" / "service.py",
+            ROOT / "kairos" / "reference" / "models.py",
+            ROOT / "kairos" / "research" / "validation" / "models.py",
+            ROOT / "kairos" / "research" / "service.py",
+            ROOT / "kairos" / "treasury" / "service.py",
+            ROOT / "kairos" / "treasury" / "models.py",
+            ROOT / "kairos" / "treasury" / "transfer_models.py",
+            ROOT / "kairos" / "volatility" / "models.py",
+            ROOT / "kairos" / "strategies" / "base.py",
+        )
+        for path in deleted_paths:
+            self.assertFalse(path.exists(), str(path.relative_to(ROOT)))
+
+        forbidden = (
+            "MockScenario",
+            "make_mock_dataset",
+            "curated.mock",
+            "OptionDayIvPipeline",
+            "MassiveReadiness",
+            "DataHealth",
+            "UsEquityMomentumReadiness",
+            "TRADER_LAKE_ROOT",
+        )
+        forbidden_exact_names = re.compile(r"\b(BacktestService|ValuationService|ResearchService|TreasuryService)\b")
+        offenders = []
+        for root in (ROOT / "kairos", ROOT / "tests", ROOT / "examples"):
+            for path in root.rglob("*.py"):
+                if path == ROOT / "tests" / "test_repository_hygiene.py":
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for marker in forbidden:
+                    if marker in text:
+                        offenders.append(f"{path.relative_to(ROOT)} contains {marker}")
+                if forbidden_exact_names.search(text):
+                    offenders.append(f"{path.relative_to(ROOT)} contains a deleted generic service name")
         self.assertEqual(offenders, [])
 
     def test_packaged_modules_use_connectors_outside_legacy_adapter_layer(self):
@@ -178,6 +236,14 @@ class RepositoryHygieneTests(unittest.TestCase):
             self.assertNotIn("DayAgg", text)
             self.assertNotIn("DayIv", text)
             self.assertNotIn("Readiness", text)
+        self.assertFalse((ROOT / "kairos" / "adapters" / "massive" / "day_aggs.py").exists())
+        self.assertFalse((ROOT / "kairos" / "adapters" / "massive" / "equity_day_aggs.py").exists())
+        self.assertFalse((ROOT / "kairos" / "adapters" / "massive" / "option_iv.py").exists())
+        self.assertFalse((ROOT / "kairos" / "adapters" / "massive" / "readiness.py").exists())
+        massive_adapter_init = (ROOT / "kairos" / "adapters" / "massive" / "__init__.py").read_text(encoding="utf-8")
+        self.assertNotIn("DayAgg", massive_adapter_init)
+        self.assertNotIn("DayIv", massive_adapter_init)
+        self.assertNotIn("MassiveReadiness", massive_adapter_init)
 
     def test_legacy_naming_modules_remain_thin_compatibility_shims(self):
         legacy_modules = (
@@ -185,33 +251,17 @@ class RepositoryHygieneTests(unittest.TestCase):
             ROOT / "kairos" / "application" / "runtime_golden.py",
             ROOT / "kairos" / "application" / "task_supervisor.py",
             ROOT / "kairos" / "backtest" / "golden.py",
-            ROOT / "kairos" / "backtest" / "service.py",
-            ROOT / "kairos" / "backtest" / "mock.py",
-            ROOT / "kairos" / "features" / "us_equity_momentum_readiness.py",
             ROOT / "kairos" / "adapters" / "binance" / "adapter.py",
             ROOT / "kairos" / "adapters" / "ibkr" / "adapter.py",
             ROOT / "kairos" / "adapters" / "massive" / "source.py",
             ROOT / "kairos" / "adapters" / "composite.py",
-            ROOT / "kairos" / "data" / "models.py",
-            ROOT / "kairos" / "data" / "health.py",
             ROOT / "kairos" / "data" / "market_slice_curation.py",
             ROOT / "kairos" / "data" / "market_slice_storage.py",
             ROOT / "kairos" / "research" / "analyzer.py",
-            ROOT / "kairos" / "pricing" / "models.py",
-            ROOT / "kairos" / "pricing" / "option_pricing_models.py",
-            ROOT / "kairos" / "pricing" / "service.py",
-            ROOT / "kairos" / "reference" / "models.py",
             ROOT / "kairos" / "research" / "selector.py",
-            ROOT / "kairos" / "research" / "service.py",
-            ROOT / "kairos" / "research" / "validation" / "models.py",
-            ROOT / "kairos" / "strategies" / "base.py",
             ROOT / "kairos" / "strategies" / "sma_cross.py",
             ROOT / "kairos" / "strategies" / "sma_strategy.py",
             ROOT / "kairos" / "treasury" / "adapter.py",
-            ROOT / "kairos" / "treasury" / "models.py",
-            ROOT / "kairos" / "treasury" / "service.py",
-            ROOT / "kairos" / "treasury" / "transfer_models.py",
-            ROOT / "kairos" / "volatility" / "models.py",
         )
         offenders = []
         for path in legacy_modules:
@@ -233,18 +283,17 @@ class RepositoryHygieneTests(unittest.TestCase):
             "import kairos.research.validation.models",
             "from kairos.reference.models",
             "import kairos.reference.models",
+            "from kairos.pricing.models",
+            "import kairos.pricing.models",
+            "from kairos.pricing.option_pricing_models",
+            "import kairos.pricing.option_pricing_models",
+            "from kairos.treasury.models",
+            "import kairos.treasury.models",
         )
-        compatibility_modules = {
-            ROOT / "kairos" / "data" / "models.py",
-            ROOT / "kairos" / "treasury" / "transfer_models.py",
-            ROOT / "kairos" / "volatility" / "models.py",
-            ROOT / "kairos" / "research" / "validation" / "models.py",
-            ROOT / "kairos" / "reference" / "models.py",
-        }
         roots = (ROOT / "kairos", ROOT / "tests", ROOT / "examples")
         for root in roots:
             for path in root.rglob("*.py"):
-                if path in compatibility_modules:
+                if path == ROOT / "tests" / "test_repository_hygiene.py":
                     continue
                 text = path.read_text(encoding="utf-8")
                 for line_number, line in enumerate(text.splitlines(), start=1):
@@ -260,23 +309,8 @@ class RepositoryHygieneTests(unittest.TestCase):
             "import kairos.adapters.base",
             "from kairos.strategies.base",
             "import kairos.strategies.base",
-            "from kairos.backtest.service",
-            "import kairos.backtest.service",
-            "from kairos.pricing.service",
-            "import kairos.pricing.service",
-            "from kairos.research.service",
-            "import kairos.research.service",
-            "from kairos.treasury.service",
-            "import kairos.treasury.service",
         )
         compatibility_modules = {
-            ROOT / "kairos" / "adapters" / "base.py",
-            ROOT / "kairos" / "strategies" / "base.py",
-            ROOT / "kairos" / "backtest" / "service.py",
-            ROOT / "kairos" / "pricing" / "service.py",
-            ROOT / "kairos" / "pricing" / "option_pricing_models.py",
-            ROOT / "kairos" / "research" / "service.py",
-            ROOT / "kairos" / "treasury" / "service.py",
             ROOT / "tests" / "test_naming_migration.py",
         }
         roots = (ROOT / "kairos", ROOT / "tests", ROOT / "examples")
@@ -509,8 +543,8 @@ class RepositoryHygieneTests(unittest.TestCase):
     def test_massive_entitlement_diagnostics_is_the_public_cli_name(self):
         cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
         self.assertIn('"massive-entitlement-diagnostics"', cli)
-        self.assertIn('"massive-readiness"', cli)
-        self.assertIn('data_actions.add_parser("massive-readiness", help=argparse.SUPPRESS)', cli)
+        self.assertNotIn('"massive-readiness"', cli)
+        self.assertFalse((ROOT / "kairos" / "adapters" / "massive" / "readiness.py").exists())
         docs = [
             path
             for path in (ROOT / "docs").glob("*.md")
@@ -527,13 +561,12 @@ class RepositoryHygieneTests(unittest.TestCase):
     def test_us_equity_momentum_diagnostics_is_the_public_data_cli_name(self):
         cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
         self.assertIn('"us-equity-momentum-diagnostics"', cli)
-        self.assertIn('"us-equity-momentum-readiness"', cli)
-        self.assertIn('data_actions.add_parser("us-equity-momentum-readiness", help=argparse.SUPPRESS)', cli)
+        self.assertNotIn('"us-equity-momentum-readiness"', cli)
+        self.assertFalse((ROOT / "kairos" / "features" / "us_equity_momentum_readiness.py").exists())
         offenders = []
         for root in (ROOT / "kairos", ROOT / "tests", ROOT / "examples"):
             for path in root.rglob("*.py"):
                 if path in {
-                    ROOT / "kairos" / "features" / "us_equity_momentum_readiness.py",
                     ROOT / "tests" / "test_repository_hygiene.py",
                 }:
                     continue

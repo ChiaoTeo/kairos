@@ -180,7 +180,3 @@ def _replace_dataset_id(value, previous: str, current: str) -> None:
     elif isinstance(value, list):
         for item in value:
             _replace_dataset_id(item, previous, current)
-
-
-MassiveEquityDayAggProductConfig = MassiveEquityDailyOhlcvProductConfig
-MassiveEquityDayAggDatasetConnector = MassiveEquityDailyOhlcvDatasetConnector

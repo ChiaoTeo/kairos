@@ -8,7 +8,7 @@ from kairos.domain.identity import InstrumentId
 from kairos.domain.intent import TargetExposureIntent
 from kairos.features import FactorQuality
 
-from .base import StrategyContext, StrategyDecision
+from .strategy_protocols import StrategyContext, StrategyDecision
 
 
 @dataclass(frozen=True, slots=True)

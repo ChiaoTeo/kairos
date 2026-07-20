@@ -168,4 +168,3 @@ class IbkrReferenceDataClient:
         self.session.contracts[definition.instrument_id] = qualified[0]
 
 
-IbkrReferenceAdapter = IbkrReferenceDataClient
