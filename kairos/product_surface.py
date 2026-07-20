@@ -160,6 +160,9 @@ class DataProductApi:
     def register_download(self, key: str, spec: str | Path) -> dict[str, object]:
         return data_register_download(_args(self.root, key=key, spec=Path(spec)))
 
+    def register_provider(self, name: str, spec: str | Path) -> dict[str, object]:
+        return data_register_provider(_args(self.root, name=name, spec=Path(spec)))
+
     def write_file(self, file: str | Path, *, as_dataset: str, contract: str | Path) -> dict[str, object]:
         return data_write(_args(
             self.root, file=Path(file), live=False, connector=None,
@@ -459,6 +462,31 @@ def data_register_download(args) -> dict[str, object]:
     return {"product": "data", "operation": "register-download", "key": key, "spec": str(target), "spec_hash": spec_hash}
 
 
+def data_register_provider(args) -> dict[str, object]:
+    name = _validate_provider_name(args.name)
+    payload = _read_contract(args.spec)
+    if payload.get("kind") not in (None, "data.provider"):
+        raise ValueError("provider spec kind must be data.provider")
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else payload
+    if not isinstance(source, dict):
+        raise ValueError("provider spec must declare source")
+    source_kind = str(source.get("kind") or source.get("type") or "")
+    if source_kind not in {"python_provider", "provider", "acquire"}:
+        raise ValueError(f"unsupported provider source kind {source_kind!r}; supported: python_provider")
+    if not (source.get("path") or source.get("file") or source.get("module")):
+        raise ValueError("provider spec python_provider source requires path")
+    spec_hash = _stable_hash(payload)
+    target = _registered_provider_spec_path(Path(args.lake_root), name)
+    _write_json(target, {
+        "name": name,
+        "spec": payload,
+        "spec_hash": spec_hash,
+        "registered_at": _now(),
+        "registered_from": str(Path(args.spec).resolve()),
+    })
+    return {"product": "data", "operation": "register-provider", "name": name, "spec": str(target), "spec_hash": spec_hash}
+
+
 def data_write(args) -> dict[str, object]:
     dataset_id = args.as_dataset
     contract = _read_contract(args.contract)
@@ -512,6 +540,7 @@ def _write_registered_download_product(
     source_spec = product_entry.get("source") or spec.get("source")
     if not isinstance(source_spec, dict):
         raise ValueError("download spec product must declare source")
+    source_spec, source_base, provider_ref = _resolve_download_source_spec(root, source_spec, spec_base)
     source_kind = str(source_spec.get("kind") or source_spec.get("type") or "")
     contract = _download_product_contract(product_entry, spec, spec_base)
     dataset_id = str(
@@ -534,7 +563,7 @@ def _write_registered_download_product(
         source_value = source_spec.get("path") or source_spec.get("file")
         if not source_value:
             raise ValueError("download spec local_csv source requires path")
-        source = _resolve_download_spec_file(str(source_value), spec_base)
+        source = _resolve_download_spec_file(str(source_value), source_base)
         release = _write_historical_file(root, dataset_id, contract, source)
         return {
             **release,
@@ -543,8 +572,10 @@ def _write_registered_download_product(
         }
     if source_kind in {"python_provider", "provider", "acquire"}:
         source, provider_source = _acquire_registered_provider_source(
-            root, spec, product_entry, source_spec, spec_base, dataset_id, contract,
+            root, spec, product_entry, source_spec, source_base, dataset_id, contract,
         )
+        if provider_ref:
+            provider_source["provider"] = provider_ref
         release = _write_historical_file(root, dataset_id, contract, source)
         return {
             **release,
@@ -554,6 +585,25 @@ def _write_registered_download_product(
     raise ValueError(
         f"unsupported download source kind {source_kind!r}; supported: local_csv, python_provider"
     )
+
+
+def _resolve_download_source_spec(
+    root: Path,
+    source_spec: dict[str, Any],
+    spec_base: Path,
+) -> tuple[dict[str, Any], Path, str | None]:
+    provider_name = source_spec.get("provider") or source_spec.get("provider_ref")
+    if not provider_name:
+        return source_spec, spec_base, None
+    provider = _read_registered_provider(root, str(provider_name))
+    provider_base = Path(provider["registered_from"]).parent
+    provider_spec = provider["spec"]
+    provider_source = provider_spec.get("source") if isinstance(provider_spec.get("source"), dict) else provider_spec
+    if not isinstance(provider_source, dict):
+        raise ValueError(f"registered provider {provider_name!r} is invalid")
+    overrides = {key: value for key, value in source_spec.items() if key not in {"provider", "provider_ref"}}
+    merged = {**provider_source, **overrides}
+    return merged, provider_base, str(provider_name)
 
 
 def _existing_download_release(root: Path, dataset_id: str, spec: dict[str, Any]) -> dict[str, object] | None:
@@ -2192,8 +2242,40 @@ def _validate_download_key(key: str) -> str:
     return value
 
 
+def _validate_provider_name(name: str) -> str:
+    value = str(name)
+    if not value or value in {".", ".."} or "/" in value or "\\" in value:
+        raise ValueError(f"invalid data provider name {name!r}")
+    return value
+
+
 def _registered_download_spec_path(root: Path, key: str) -> Path:
     return root / "data-products" / "downloads" / _validate_download_key(key) / "download-spec.json"
+
+
+def _registered_provider_spec_path(root: Path, name: str) -> Path:
+    return root / "data-products" / "providers" / _validate_provider_name(name) / "provider-spec.json"
+
+
+def _read_registered_provider(root: Path, name: str) -> dict[str, Any]:
+    path = _registered_provider_spec_path(root, name)
+    if not path.exists():
+        providers_root = root / "data-products" / "providers"
+        known = sorted(item.name for item in providers_root.iterdir() if item.is_dir()) if providers_root.exists() else []
+        raise ValueError(f"unknown data provider {name!r}; registered providers: {', '.join(known) or '-'}")
+    payload = _read_json(path)
+    spec = payload.get("spec")
+    if not isinstance(spec, dict):
+        raise ValueError(f"registered provider spec is invalid: {path}")
+    registered_from = payload.get("registered_from")
+    if not registered_from:
+        raise ValueError(f"registered provider spec is missing registered_from: {path}")
+    return {
+        "name": str(payload.get("name") or name),
+        "spec": spec,
+        "spec_hash": str(payload.get("spec_hash") or _stable_hash(spec)),
+        "registered_from": str(registered_from),
+    }
 
 
 def _read_registered_download(root: Path, key: str) -> dict[str, Any]:

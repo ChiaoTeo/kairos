@@ -126,6 +126,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     data_register_download.add_argument("--key", required=True, help="stable Data Product key")
     data_register_download.add_argument("--spec", type=Path, required=True, help="JSON or YAML Data Product download spec")
+    data_register_provider = data_actions.add_parser(
+        "register-provider", help="register a reusable Data Product provider",
+    )
+    data_register_provider.add_argument("--name", required=True, help="stable Data provider name")
+    data_register_provider.add_argument("--spec", type=Path, required=True, help="JSON or YAML Data provider spec")
     data_write = data_actions.add_parser("write", help="write external data into the Data Contract")
     data_write.add_argument("--file", type=Path, help="CSV file to import as a historical time series")
     data_write.add_argument("--live", action="store_true", help="register a live data view instead of importing a file")
@@ -356,6 +361,9 @@ def _parser() -> argparse.ArgumentParser:
     build_features.add_argument("--minimum-price", type=Decimal, default=Decimal("5"))
     build_features.add_argument("--minimum-adv20", type=Decimal, default=Decimal("10000000"))
     build_features.add_argument("--minimum-history", type=int, default=252)
+    project = commands.add_parser("project", help="inspect the local Kairos project")
+    project_actions = project.add_subparsers(dest="action", required=True)
+    project_actions.add_parser("status", help="show project root, configuration and operational gates")
     config = commands.add_parser("config", help="inspect and edit the local Kairos project configuration")
     config_actions = config.add_subparsers(dest="action", required=True)
     config_actions.add_parser("path", help="print the discovered kairos.toml path")
@@ -371,7 +379,8 @@ def _parser() -> argparse.ArgumentParser:
     doctor = commands.add_parser("doctor", help="diagnose the local Kairos project setup")
     doctor.add_argument("--strict", action="store_true", help="return non-zero when warnings exist")
     configure = commands.add_parser("configure", help="configure a provider in the local Kairos project")
-    configure_actions = configure.add_subparsers(dest="provider", required=True)
+    configure.add_argument("--interactive", action="store_true", help="prompt for provider and credential environment variables")
+    configure_actions = configure.add_subparsers(dest="provider", required=False)
     configure_massive = configure_actions.add_parser("massive", help="configure Massive credentials")
     configure_massive.add_argument("--api-key-env", default="MASSIVE_API_KEY", help="environment variable containing the Massive API key")
     configure_binance = configure_actions.add_parser("binance", help="configure Binance credentials")
@@ -844,6 +853,7 @@ def _require_project_config(args: argparse.Namespace):
 
 def _config_command(args: argparse.Namespace) -> int:
     from kairos.configuration import ConfigError, set_config_value, unset_config_value
+    from kairos.cli_output import render_key_value_panel, render_status_table
 
     try:
         config = _require_project_config(args)
@@ -852,7 +862,10 @@ def _config_command(args: argparse.Namespace) -> int:
             return 0
         if args.action == "show":
             payload = config.data if args.raw else config.to_redacted_dict()
-            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            if args.format == "json":
+                print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            else:
+                print(render_key_value_panel("Kairos Configuration", _flatten_config(payload)))
             return 0
         if args.action == "set":
             set_config_value(config.path, args.path, args.value)
@@ -869,20 +882,47 @@ def _config_command(args: argparse.Namespace) -> int:
         if args.format == "json":
             print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         else:
-            print(f"Config: {config.path}")
-            print("Status: " + ("valid" if not issues else "needs attention"))
-            for issue in issues:
-                print(f"- {issue}")
+            rows = [{"name": "config", "status": "ok" if not issues else "warn", "detail": str(config.path)}]
+            rows.extend({"name": "issue", "status": "warn", "detail": issue} for issue in issues)
+            print(render_status_table("Kairos Config Validation", rows))
         return 2 if issues and args.strict else 0
     except ConfigError as exc:
         raise SystemExit(str(exc)) from exc
 
 
-def _configure_command(args: argparse.Namespace) -> int:
-    from kairos.configuration import ConfigError, set_config_value
+def _project_command(args: argparse.Namespace) -> int:
+    from kairos.configuration import ConfigError
+    from kairos.cli_output import render_key_value_panel
 
     try:
         config = _require_project_config(args)
+    except ConfigError as exc:
+        raise SystemExit(str(exc)) from exc
+    if args.action != "status":
+        raise SystemExit(f"unsupported project action: {args.action}")
+    payload = {
+        "project": config.get("project.name", config.root.name),
+        "root": str(config.root),
+        "config": str(config.path),
+        "data_root": str(config.relative_path("data.lake_root", "data")),
+        "default_environment": config.get("execution.default_environment", "simulated"),
+        "live_trading": "enabled" if config.get("execution.live_trading_enabled", False) else "locked",
+    }
+    if args.format == "json":
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        print(render_key_value_panel("Kairos Project Status", tuple((key.replace("_", " ").title(), value) for key, value in payload.items())))
+    return 0
+
+
+def _configure_command(args: argparse.Namespace) -> int:
+    from kairos.configuration import ConfigError, set_config_value
+    from kairos.cli_output import render_command_success
+
+    try:
+        config = _require_project_config(args)
+        if args.provider is None:
+            args = _prompt_configure_args(args)
         if args.provider == "massive":
             set_config_value(config.path, "providers.massive.api_key", f"env:{args.api_key_env}")
             message = f"Configured Massive API key from {args.api_key_env}"
@@ -902,7 +942,11 @@ def _configure_command(args: argparse.Namespace) -> int:
         if args.format == "json":
             print(json.dumps({"configured": args.provider, "path": str(config.path)}, ensure_ascii=False, indent=2))
         elif not args.quiet:
-            print(message)
+            print(render_command_success("Kairos Provider Configured", (
+                ("Provider", args.provider),
+                ("Config", str(config.path)),
+                ("Result", message),
+            )))
         return 0
     except ConfigError as exc:
         raise SystemExit(str(exc)) from exc
@@ -940,11 +984,61 @@ def _doctor(args: argparse.Namespace) -> int:
 
 
 def _print_doctor(checks: list[dict[str, object]], output_format: str) -> None:
+    from kairos.cli_output import render_status_table
+
     if output_format == "json":
         print(json.dumps({"checks": checks}, ensure_ascii=False, indent=2))
         return
-    for item in checks:
-        print(f"{item['status']}: {item['name']} - {item['detail']}")
+    print(render_status_table("Kairos Doctor", checks))
+
+
+def _flatten_config(payload: dict[str, Any], prefix: str = "") -> list[tuple[str, object]]:
+    rows: list[tuple[str, object]] = []
+    for key, value in payload.items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            rows.extend(_flatten_config(value, path))
+        else:
+            rows.append((path, value))
+    return rows
+
+
+def _prompt_configure_args(args: argparse.Namespace) -> argparse.Namespace:
+    if not args.interactive and not sys.stdin.isatty():
+        raise SystemExit("configure requires a provider in non-interactive mode; use 'kairos configure massive' or 'kairos configure binance'")
+    provider = _prompt_choice("Provider", ("massive", "binance"), default="massive")
+    setattr(args, "provider", provider)
+    if provider == "massive":
+        setattr(args, "api_key_env", _prompt_text("Massive API key environment variable", "MASSIVE_API_KEY"))
+        return args
+    environment = _prompt_choice("Binance environment", ("testnet", "live"), default="testnet")
+    default_key = "BINANCE_TESTNET_API_KEY" if environment == "testnet" else "BINANCE_LIVE_API_KEY"
+    default_secret = "BINANCE_TESTNET_API_SECRET" if environment == "testnet" else "BINANCE_LIVE_API_SECRET"
+    setattr(args, "environment", environment)
+    setattr(args, "api_key_env", _prompt_text("Binance API key environment variable", default_key))
+    setattr(args, "api_secret_env", _prompt_text("Binance API secret environment variable", default_secret))
+    return args
+
+
+def _prompt_choice(label: str, choices: tuple[str, ...], *, default: str) -> str:
+    try:
+        import questionary
+    except Exception:
+        prompt = f"{label} [{'/'.join(choices)}] ({default}): "
+        value = input(prompt).strip()
+        return value if value in choices else default
+    value = questionary.select(label, choices=list(choices), default=default).ask()
+    return str(value or default)
+
+
+def _prompt_text(label: str, default: str) -> str:
+    try:
+        import questionary
+    except Exception:
+        value = input(f"{label} ({default}): ").strip()
+        return value or default
+    value = questionary.text(label, default=default).ask()
+    return str(value or default)
 
 
 def _massive_config(args: argparse.Namespace | None = None) -> MassiveConfig:
@@ -971,6 +1065,8 @@ def main(argv: list[str] | None = None) -> int:
         _apply_project_config_defaults(args, raw_argv)
     if args.group == "config":
         return _config_command(args)
+    if args.group == "project":
+        return _project_command(args)
     if args.group == "doctor":
         return _doctor(args)
     if args.group == "configure":
@@ -1243,11 +1339,12 @@ def _validate_strategy_scoped_run(args: argparse.Namespace) -> None:
 
 
 def _data(args: argparse.Namespace) -> int:
-    if args.action in {"download", "register-download", "write"}:
+    if args.action in {"download", "register-download", "register-provider", "write"}:
         from kairos import product_surface
         handlers = {
             "download": product_surface.data_download,
             "register-download": product_surface.data_register_download,
+            "register-provider": product_surface.data_register_provider,
             "write": product_surface.data_write,
         }
         payload = handlers[args.action](args)

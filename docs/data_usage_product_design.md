@@ -1377,6 +1377,8 @@ def decide(context):
 当前新增最小纵切：
 
 - `kairos data download <data_key>`：已支持 credential-free 的 `tutorial-sma-data`，走 Data Catalog 和 Release 产物；
+- `kairos data register-provider --name <provider_name> --spec <spec.json|yaml>`：已支持最小 provider catalog，
+  download spec 可通过 `source.provider` 复用 provider 定义；
 - `kairos data register-download --key <data_key> --spec <spec.json|yaml>`：已支持用户注册本地 `local_csv`
   和 `python_provider` download spec；注册阶段只保存 spec 与来源路径，`data download <key>` 发布时才读取
   本地文件或执行 provider `acquire(product, scope, context)`，并生成 Data Release、`content_hash`、
@@ -1515,9 +1517,9 @@ def decide(context):
    Strategy context 作为 InputTable；Strategy model 对未发布 Factor Output schema 的完整消费语义检查还没有自动完成；
 8. Data Product 已有最小 `data download` 和 `data write` 入口，live write 已要求 freshness contract；已注册
    `local_csv` 和 `python_provider` download spec 可通过 Python API/CLI 发布为 Data Release；CSV Data
-   Release 已写出独立 `data.quality_report` 和稳定 hash；provider 已支持最小 env credential gate、脱敏
-   evidence 和 `acquire_missing` 复用策略；但 provider catalog、secret backend、更完整的批量 acquire
-   planner、更完整 YAML contract 规范和 richer quality profile 还没有完整实现；
+   Release 已写出独立 `data.quality_report` 和稳定 hash；provider 已支持最小 catalog 注册/引用、env
+   credential gate、脱敏 evidence 和 `acquire_missing` 复用策略；但更完整 provider catalog、secret backend、
+   更完整的批量 acquire planner、更完整 YAML contract 规范和 richer quality profile 还没有完整实现；
 9. 实时数据流接入已能生成 Live View manifest，并已有 provider WebSocket/canonical channel 运行基线；四产品 paper/live run 已要求 healthy Live View freshness 和 channel diagnostics，`soak-binance` 已能把审计结果写回指定 Live View manifest，Run Manifest 已记录 DataSet 到 Live View/EventSource/channel 的最小 subscription binding、runtime feed plan、feed/monitor bundle hash、execution runtime plan 和 strategy runtime plan，feed plan 已能生成 `ManagedServiceSpec` 并被 `AsyncKairosRuntime` 监督，`LiveViewFreshnessMonitor` 已能持续写回 manifest，connector service metrics 已能生成 monitor evidence，feed/monitor 已能按 binding 成对组装为 runtime bundle，Binance runtime feed factory 已能从 Live View manifest 自动生成 connector/channel/capture/monitor 运行包，Run Product 已能显式调用该 factory 执行订阅并记录 runtime execution 摘要，paper simulated execution gateway 已能作为 supervised service 同步启动，注入式 strategy runner 和 Strategy Lock 内置 SMA runner 已能进入同一个 supervised runtime，paper intent bridge 已能把 strategy TargetExposureIntent 转成 simulated execution gateway order ack、fill projection、durable runtime-store evidence 和 readiness/reconciliation evidence，canonical capture 已可归档为 DataSet identity 下的 replayable `MARKET_EVENTS` Release；但 paper/live 默认生产运行生命周期和 live execution gateway runner 还没有完整统一到 Run Product；
 10. Run Product 已有最小 `run start/inspect/replay/compare` API，Strategy user model backtest 已可通过
     `InputTableRef` 消费冻结 Data Release 和已发布 Feature Factor；但完整 clock、feed 和 execution gateway
@@ -1712,6 +1714,22 @@ quality:
 当前也已落地最小 Python provider 注册形式：
 
 ```yaml
+kind: data.provider
+source:
+  kind: python_provider
+  path: provider.py
+  function: acquire
+  credentials:
+    required_env: [MASSIVE_API_KEY]
+```
+
+```bash
+kairos data register-provider --name massive-provider --spec massive-provider.yaml
+```
+
+download spec 可以引用已注册 provider：
+
+```yaml
 kind: data.download
 key: provider-sentiment
 mode:
@@ -1719,11 +1737,7 @@ mode:
 scope:
   start: 2026-01-01T00:00:00Z
 source:
-  kind: python_provider
-  path: provider.py
-  function: acquire
-  credentials:
-    required_env: [MASSIVE_API_KEY]
+  provider: massive-provider
 products:
   - dataset_id: reference.sentiment.provider
     instrument_id: equity:US:AAPL

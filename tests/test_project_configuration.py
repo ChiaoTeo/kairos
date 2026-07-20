@@ -110,6 +110,48 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             self.assertEqual(config.get("providers.binance.live.api_key"), "env:MY_BINANCE_KEY")
             self.assertEqual(config.get("providers.binance.live.api_secret"), "env:MY_BINANCE_SECRET")
 
+    def test_cli_human_output_uses_professional_status_tables(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Output Desk")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+            env["MASSIVE_API_KEY"] = "secret"
+
+            doctor = subprocess.run(
+                [sys.executable, "-m", "kairos", "doctor"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertIn("Kairos Doctor", doctor.stdout)
+            self.assertIn("massive", doctor.stdout)
+            self.assertIn("OK", doctor.stdout)
+
+            status = subprocess.run(
+                [sys.executable, "-m", "kairos", "project", "status"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertIn("Kairos Project Status", status.stdout)
+            self.assertIn("output-desk", status.stdout)
+
+            show = subprocess.run(
+                [sys.executable, "-m", "kairos", "config", "show"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertIn("Kairos Configuration", show.stdout)
+            self.assertIn("providers.massive.api_key", show.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

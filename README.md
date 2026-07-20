@@ -53,8 +53,33 @@ python3 -m pip install 'kairospy[data,massive]'
 mkdir my-kairos-project
 cd my-kairos-project
 kairos init
+kairos project status
 kairos doctor
 python studies/starter.py
+```
+
+配置外部 provider：
+
+```bash
+export MASSIVE_API_KEY='...'
+export BINANCE_TESTNET_API_KEY='...'
+export BINANCE_TESTNET_API_SECRET='...'
+
+kairos configure massive
+kairos configure binance --environment testnet
+```
+
+直接运行 `kairos configure` 会进入交互式向导；`kairos config show/path/set/unset/validate` 是底层 TOML 配置入口。CLI 默认输出面向人类的专业表格，脚本和 CI 使用稳定 JSON：
+
+```bash
+kairos doctor
+kairos --format json doctor
+```
+
+可选安装富文本和交互增强：
+
+```bash
+python3 -m pip install 'kairospy[cli]'
 ```
 
 如果你从源码开发：

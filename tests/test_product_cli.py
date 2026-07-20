@@ -254,6 +254,52 @@ class ProductCliTests(unittest.TestCase):
         self.assertEqual(provider_calls, "1")
         self.assertNotIn("cli-secret-token", json.dumps(downloaded))
 
+    def test_registered_provider_catalog_from_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            provider_dir = root / "providers"
+            download_dir = root / "downloads"
+            provider_dir.mkdir()
+            download_dir.mkdir()
+            provider = provider_dir / "provider.py"
+            provider_spec = provider_dir / "provider.json"
+            contract = download_dir / "provider.contract.json"
+            download_spec = download_dir / "provider.download.json"
+            provider.write_text(
+                "def acquire(product, scope, context):\n"
+                "    return [{'available_time': scope['as_of'], 'symbol': product['symbol'], 'score': 9}]\n",
+                encoding="utf-8",
+            )
+            provider_spec.write_text(json.dumps({
+                "kind": "data.provider",
+                "source": {"kind": "python_provider", "path": "provider.py"},
+            }), encoding="utf-8")
+            contract.write_text(json.dumps({
+                "dataset_id": "reference.provider.cli",
+                "primary_time": "available_time",
+                "fields": ["available_time", "symbol", "score"],
+            }), encoding="utf-8")
+            download_spec.write_text(json.dumps({
+                "kind": "data.download",
+                "scope": {"as_of": "2026-01-04T00:00:00Z"},
+                "source": {"provider": "cli-provider"},
+                "products": [{
+                    "dataset_id": "reference.provider.cli",
+                    "symbol": "MSFT",
+                    "contract": "provider.contract.json",
+                }],
+            }), encoding="utf-8")
+
+            registered_provider = command(root, "data", "register-provider", "--name", "cli-provider", "--spec", str(provider_spec))
+            command(root, "data", "register-download", "--key", "cli-provider-data", "--spec", str(download_spec))
+            downloaded = command(root, "data", "download", "cli-provider-data")
+            rows = DataProductApi(root).dataset("reference.provider.cli").rows(columns=("symbol", "score"))
+
+        self.assertEqual(registered_provider["operation"], "register-provider")
+        self.assertEqual(downloaded["source"]["provider"], "cli-provider")
+        self.assertEqual(rows[0]["symbol"], "MSFT")
+        self.assertEqual(rows[0]["score"], 9)
+
     def test_product_cli_defaults_to_localized_text_and_keeps_json_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

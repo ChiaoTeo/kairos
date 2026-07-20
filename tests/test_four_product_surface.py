@@ -615,6 +615,54 @@ class FourProductSurfaceTests(unittest.TestCase):
         self.assertNotIn("provider.py", json.dumps(bound))
         self.assertNotIn("secret-token", json.dumps(downloaded))
 
+    def test_registered_provider_catalog_can_be_reused_by_download_spec(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            provider_dir = root / "providers"
+            spec_dir = root / "downloads"
+            provider_dir.mkdir()
+            spec_dir.mkdir()
+            provider = provider_dir / "provider.py"
+            provider_spec = provider_dir / "provider.json"
+            contract = spec_dir / "provider.contract.json"
+            download_spec = spec_dir / "provider.download.json"
+            provider.write_text(
+                "def acquire(product, scope, context):\n"
+                "    return [{'available_time': scope['as_of'], 'ticker': product['ticker'], 'score': 7}]\n",
+                encoding="utf-8",
+            )
+            provider_spec.write_text(json.dumps({
+                "kind": "data.provider",
+                "source": {"kind": "python_provider", "path": "provider.py"},
+            }), encoding="utf-8")
+            contract.write_text(json.dumps({
+                "dataset_id": "reference.provider.catalog",
+                "primary_time": "available_time",
+                "fields": ["available_time", "ticker", "score"],
+            }), encoding="utf-8")
+            download_spec.write_text(json.dumps({
+                "kind": "data.download",
+                "scope": {"as_of": "2026-01-03T00:00:00Z"},
+                "source": {"provider": "catalog-provider"},
+                "products": [{
+                    "dataset_id": "reference.provider.catalog",
+                    "ticker": "AAPL",
+                    "contract": "provider.contract.json",
+                }],
+            }), encoding="utf-8")
+
+            data = DataProductApi(root)
+            registered_provider = data.register_provider("catalog-provider", provider_spec)
+            data.register_download("catalog-provider-data", download_spec)
+            downloaded = data.download("catalog-provider-data")
+            rows = data.dataset("reference.provider.catalog").rows(columns=("ticker", "score"))
+
+        self.assertEqual(registered_provider["operation"], "register-provider")
+        self.assertEqual(downloaded["source"]["provider"], "catalog-provider")
+        self.assertEqual(downloaded["source"]["kind"], "python_provider")
+        self.assertEqual(rows[0]["ticker"], "AAPL")
+        self.assertEqual(rows[0]["score"], 7)
+
     def test_factor_metadata_contract_flows_from_study_to_strategy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
