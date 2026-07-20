@@ -26,6 +26,8 @@ class KairosProjectInitTests(unittest.TestCase):
             self.assertTrue((root / "studies" / "starter.py").exists())
             self.assertTrue((root / "strategies" / "starter_sma.py").exists())
             self.assertTrue((root / ".kairos" / "project.json").exists())
+            self.assertTrue((root / ".kairos" / "data" / "curated").is_dir())
+            self.assertFalse((root / "data").exists())
             metadata = json.loads((root / ".kairos" / "project.json").read_text(encoding="utf-8"))
             self.assertEqual(metadata["name"], "alpha-desk")
             self.assertEqual(metadata["root"], ".")
@@ -33,6 +35,8 @@ class KairosProjectInitTests(unittest.TestCase):
             self.assertIn("[providers.massive]", config)
             self.assertIn('api_key = "env:MASSIVE_API_KEY"', config)
             self.assertIn("[data]", config)
+            self.assertIn('lake_root = ".kairos/data"', config)
+            self.assertNotIn('dataset_root = "data/curated"', config)
             self.assertIn('default_quality = "Q2"', config)
             self.assertIn("[execution]", config)
             self.assertIn("[cli]", config)
@@ -101,6 +105,7 @@ class KairosProjectInitTests(unittest.TestCase):
             config = (root / "kairos.toml").read_text(encoding="utf-8")
             self.assertIn("[providers.binance.testnet]", config)
             self.assertIn('api_secret = "env:BINANCE_TESTNET_API_SECRET"', config)
+            self.assertIn('lake_root = ".kairos/data"', config)
             self.assertIn("kairospy configure massive", "\n".join(payload["next_steps"]))
 
     def test_source_repository_default_name_remains_kairospy_even_when_directory_is_trader(self) -> None:

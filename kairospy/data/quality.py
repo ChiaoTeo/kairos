@@ -8,6 +8,7 @@ import json
 import math
 from pathlib import Path
 
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 from kairospy.storage.data_lake import write_json
 
 from .catalog import DataCatalog
@@ -35,7 +36,7 @@ class QualityAssessment:
 
 
 class DatasetQualityService:
-    def __init__(self, root: str | Path = "data") -> None:
+    def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.root = Path(root)
         self.catalog = DataCatalog(self.root)
         self.client = DatasetClient(self.root)

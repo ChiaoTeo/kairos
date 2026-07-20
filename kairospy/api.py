@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
 
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 from kairospy.product_workflow import inspect_run, run_sma_backtest_workflow
 
 
@@ -53,7 +54,7 @@ class BacktestResultView:
 
 
 class BacktestRunner:
-    def __init__(self, lake_root: str | Path = "data") -> None:
+    def __init__(self, lake_root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.lake_root = Path(lake_root)
 
     def run(self, request: BacktestRequest) -> BacktestResultView:
@@ -79,7 +80,7 @@ class BacktestRunner:
 
 
 class Kairos:
-    def __init__(self, lake_root: str | Path = "data") -> None:
+    def __init__(self, lake_root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.lake_root = Path(lake_root)
 
     def backtest(

@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 from kairospy.data.bootstrap import register_default_products
 from kairospy.data.catalog import DataCatalog
 from kairospy.data.client import DatasetClient
@@ -30,7 +31,7 @@ class UsEquityMomentumDiagnostics:
         "features.momentum.equity.us.1d",
     )
 
-    def __init__(self, root: str | Path = "data") -> None:
+    def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.root = Path(root)
 
     def report(self, *, study_id: str = "us-equity-momentum", version: str = "1.0.0") -> dict[str, object]:

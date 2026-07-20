@@ -7,6 +7,8 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
+from kairospy.configuration import DEFAULT_LAKE_ROOT
+
 
 class StudyWorkspaceStatus(StrEnum):
     SANDBOX = "sandbox"
@@ -48,7 +50,7 @@ class StudyWorkspace:
 class StudyWorkspaceRepository:
     """Separates flexible sandbox metadata from immutable governed validation artifacts."""
 
-    def __init__(self, root: str | Path = "data") -> None:
+    def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.root = Path(root)
 
     def create(self, workspace: StudyWorkspace) -> Path:

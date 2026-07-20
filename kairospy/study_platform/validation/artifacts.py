@@ -6,13 +6,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+from kairospy.configuration import DEFAULT_LAKE_ROOT
+
 from .contracts import StudyValidationResult
 
 
 class ValidationArtifactWriter:
     """Writes the governed, machine-readable artifact set for a study version."""
 
-    def __init__(self, data_root: str | Path = "data") -> None:
+    def __init__(self, data_root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.data_root = Path(data_root)
 
     def write(self, result: StudyValidationResult, *, report: str,

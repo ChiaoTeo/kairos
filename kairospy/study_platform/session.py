@@ -5,6 +5,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Iterable
 
+from kairospy.configuration import DEFAULT_LAKE_ROOT
+
 from .workspace import StudyWorkspace, StudyWorkspaceRepository
 
 
@@ -152,7 +154,7 @@ print(study.profile().as_dict())
         return target
 
 
-def open_study(study_id: str, *, root: str | Path = "data", version: str = "1.0.0") -> StudySession:
+def open_study(study_id: str, *, root: str | Path = DEFAULT_LAKE_ROOT, version: str = "1.0.0") -> StudySession:
     repository = StudyWorkspaceRepository(root)
     workspace = repository.load(study_id, version)
     if workspace.input_release_id == "fixture:sma-bars-v1":

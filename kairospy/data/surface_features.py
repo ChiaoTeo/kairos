@@ -4,6 +4,7 @@ from datetime import timedelta, timezone
 import json
 from pathlib import Path
 
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 from kairospy.storage.codec import from_primitive, to_primitive
 from kairospy.storage.data_lake import write_intraday_dataset
 from kairospy.volatility.contracts import SurfaceSnapshot
@@ -21,7 +22,7 @@ from .quality import DatasetQualityService
 class SurfaceFeaturePublisher:
     """Publish calibrated volatility surfaces as immutable Feature Releases."""
 
-    def __init__(self, root: str | Path = "data") -> None:
+    def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.root = Path(root)
 
     def publish(self, surfaces: tuple[SurfaceSnapshot, ...], *, input_release_id: str):
@@ -119,4 +120,3 @@ class SurfaceFeaturePublisher:
 def load_surface_features(root: str | Path, dataset: str) -> tuple[SurfaceSnapshot, ...]:
     rows = DatasetClient(root).load_rows(dataset)
     return tuple(from_primitive(json.loads(str(row["surface_json"])), SurfaceSnapshot) for row in rows)
-

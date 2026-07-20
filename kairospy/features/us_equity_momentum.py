@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterable
 
 from kairospy.backtest.calendar import TradingCalendar
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 from kairospy.data.bootstrap import register_default_products
 from kairospy.data.catalog import DataCatalog
 from kairospy.data.contracts import DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel
@@ -38,7 +39,7 @@ class UsEquityMomentumDatasetBuilder:
     reference pipeline is complete.
     """
 
-    def __init__(self, lake_root: str | Path = "data") -> None:
+    def __init__(self, lake_root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.root = Path(lake_root)
 
     def build_from_ohlcv_directory(

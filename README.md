@@ -84,6 +84,40 @@ kairospy doctor
 kairospy --format json doctor
 ```
 
+统一下载 governed Data Product：
+
+```bash
+kairospy data acquire
+```
+
+该命令会交互式选择可下载的数据集、时间窗口和 full-market/指定 instruments，并先展示统一 acquisition plan。底层 provider 可以不同：Binance USD-M 永续小时线使用 public archive zip，Massive 美股小时线使用 REST paginated aggregates；CLI 会统一显示 `task_type`、`total_tasks`、`cached_tasks`、`uncached_tasks` 和 `resume_supported`。
+
+先 dry-run，再正式下载：
+
+```bash
+kairospy data acquire \
+  --dataset market.ohlcv.equity.us.massive.1h.adjusted \
+  --start 2026-01-02T14:30:00+00:00 \
+  --end 2026-01-02T16:30:00+00:00 \
+  --provider massive \
+  --venue us-securities \
+  --instrument equity:us:AAPL \
+  --max-requests 10 \
+  --dry-run
+
+kairospy data acquire \
+  --dataset market.ohlcv.equity.us.massive.1h.adjusted \
+  --start 2026-01-02T14:30:00+00:00 \
+  --end 2026-01-02T16:30:00+00:00 \
+  --provider massive \
+  --venue us-securities \
+  --instrument equity:us:AAPL \
+  --max-requests 10 \
+  --yes
+```
+
+项目根目录的 `.env` 会自动加载，并且不会覆盖 shell 中已经存在的环境变量。全市场下载建议先使用 `--dry-run` 和 `--max-requests/--max-instruments` 控制范围。
+
 可选安装富文本和交互增强：
 
 ```bash

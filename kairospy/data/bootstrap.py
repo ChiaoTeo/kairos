@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 from kairospy.connectors.binance.datasets import (
     BinanceOptionQuotesDatasetConnector, BinanceSpotDatasetConnector,
     BinanceUsdmPerpetualHourlyDatasetConnector,
@@ -21,7 +22,8 @@ from .products import (
     BTC_DERIBIT_OPTION_QUOTES, BTC_DERIBIT_OPTION_TRADES, BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY,
     BTC_SPOT_DAILY, BINANCE_USDM_PERPETUAL_HOURLY, BTC_DERIBIT_TERM_SKEW_DAILY,
     BTC_IV_RV_DAILY, BTC_TERM_SKEW_HOURLY, US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MASSIVE_RAW_DAILY,
-    US_EQUITY_MASSIVE_CORPORATE_ACTIONS, US_EQUITY_MASSIVE_IDENTITY,
+    US_EQUITY_MASSIVE_CORPORATE_ACTIONS, US_EQUITY_MASSIVE_IDENTITY, US_EQUITY_MASSIVE_RAW_HOURLY,
+    US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,
     US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
     US_EQUITY_MOMENTUM_DAILY, US_EQUITY_RETURNS_DAILY, US_EQUITY_UNIVERSE_DAILY,
 )
@@ -34,11 +36,12 @@ DEFAULT_ACQUIRABLE_PRODUCTS = (
 KNOWN_PRODUCTS = (*DEFAULT_ACQUIRABLE_PRODUCTS, BTC_IV_RV_DAILY, BTC_TERM_SKEW_HOURLY,
                   BTC_DERIBIT_TERM_SKEW_DAILY, US_EQUITY_MASSIVE_RAW_DAILY,
                   US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY, US_EQUITY_MASSIVE_CORPORATE_ACTIONS,
+                  US_EQUITY_MASSIVE_RAW_HOURLY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,
                   US_EQUITY_MASSIVE_IDENTITY, US_EQUITY_RETURNS_DAILY, US_EQUITY_UNIVERSE_DAILY,
                   US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MOMENTUM_DAILY)
 
 
-def register_default_products(root: str | Path = "data") -> DataCatalog:
+def register_default_products(root: str | Path = DEFAULT_LAKE_ROOT) -> DataCatalog:
     catalog = DataCatalog(root)
     for dataset in KNOWN_PRODUCTS:
         try:
@@ -63,7 +66,7 @@ def register_configured_products(root: str | Path, config_path: str | Path) -> D
     return catalog
 
 
-def default_provider_registry(root: str | Path = "data", *, connector_config: str | Path | None = None,
+def default_provider_registry(root: str | Path = DEFAULT_LAKE_ROOT, *, connector_config: str | Path | None = None,
                               progress=None, stop_event=None) -> ProviderRegistry:
     providers = ProviderRegistry()
     specs = KNOWN_PRODUCTS
@@ -97,6 +100,25 @@ def default_provider_registry(root: str | Path = "data", *, connector_config: st
                 ),
             )
             providers.register(connector, (spec,))
+    from kairospy.configuration import ConfigError
+    try:
+        from kairospy.connectors.massive.client import MassiveClient
+        from kairospy.connectors.massive.datasets import MassiveEquityHourlyOhlcvDatasetConnector
+        massive_config = _massive_config_for_project()
+        providers.register(
+            MassiveEquityHourlyOhlcvDatasetConnector(
+                root, MassiveClient(massive_config), view="raw",
+            ),
+            (US_EQUITY_MASSIVE_RAW_HOURLY,),
+        )
+        providers.register(
+            MassiveEquityHourlyOhlcvDatasetConnector(
+                root, MassiveClient(massive_config), view="adjusted",
+            ),
+            (US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,),
+        )
+    except (ConfigError, RuntimeError, ValueError):
+        pass
     return providers
 
 

@@ -30,7 +30,6 @@ from .order_book import (
     OrderBookSnapshotProvider,
 )
 from .stream import BinanceCanonicalStreamService
-from .runtime_feed import BinanceRuntimeFeed, BinanceRuntimeFeedFactory
 
 __all__ = [
     "BinanceAccountGateway",
@@ -59,3 +58,10 @@ __all__ = [
     "OrderBookSnapshotProvider",
     "synchronize_clock",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"BinanceRuntimeFeed", "BinanceRuntimeFeedFactory"}:
+        from .runtime_feed import BinanceRuntimeFeed, BinanceRuntimeFeedFactory
+        return {"BinanceRuntimeFeed": BinanceRuntimeFeed, "BinanceRuntimeFeedFactory": BinanceRuntimeFeedFactory}[name]
+    raise AttributeError(name)

@@ -5,6 +5,9 @@ from datetime import datetime, timezone
 from difflib import get_close_matches
 import json
 from pathlib import Path
+from uuid import uuid4
+
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 
 from .contracts import (
     DataView, DatasetKey, DatasetLayer, DataProductDefinition, DataProductContract, DatasetRelease, DatasetStatus,
@@ -16,7 +19,7 @@ from .contracts import (
 class DataCatalog:
     """Current dataset-product, immutable-release, and alias registry."""
 
-    def __init__(self, root: str | Path = "data", registry_path: str | Path | None = None) -> None:
+    def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT, registry_path: str | Path | None = None) -> None:
         self.root = Path(root)
         self.registry_path = Path(registry_path) if registry_path is not None else self.root / "catalog" / "datasets.json"
         self._products: dict[str, DataProductDefinition] = {}
@@ -31,7 +34,7 @@ class DataCatalog:
             for raw in value.get("product_specs", []):
                 self.register_product_spec(_spec_from_primitive(raw))
             for raw in value.get("products", []):
-                self.register_product(_product_from_primitive(raw))
+                self.register_product(_product_from_primitive(raw), enrich=True)
             for raw in value.get("releases", []):
                 self.register_release(_release_from_primitive(raw))
             missing_alias_targets = sorted(set(self._aliases.values()) - set(self._releases))
@@ -323,14 +326,36 @@ class DataCatalog:
                    "products": [_product_primitive(item) for item in self.products()],
                    "product_specs": [_spec_primitive(item) for item in self.product_specs()],
                    "releases": [_release_primitive(item) for item in self.releases()]}
-        temporary = self.registry_path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        temporary.replace(self.registry_path)
+        temporary = self.registry_path.with_name(f".{self.registry_path.name}.{uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            temporary.replace(self.registry_path)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
         return self.registry_path
 
     def discover(self) -> tuple[DatasetRelease, ...]:
         """Register current governed datasets already present in the lake."""
         discovered: list[DatasetRelease] = []
+        for pointer in sorted(self.root.glob("**/release.json")):
+            directory = pointer.parent
+            release = _release_from_metadata(self.root, directory)
+            if release is None or release.release_id in self._releases:
+                continue
+            product = _product_from_metadata(directory, release)
+            try:
+                spec = _spec_from_metadata(self.root, directory, product, release)
+                try:
+                    self.product_spec(product.key)
+                except KeyError:
+                    self.register_product_spec(spec, enrich=True)
+                else:
+                    self.register_product(product, enrich=True)
+            except ValueError:
+                self.register_product(product, enrich=True)
+            self.register_release(release)
+            discovered.append(release)
         event_root = self.root / "canonical" / "market"
         for directory in sorted(event_root.glob("dataset=*")):
             dataset_id = directory.name.removeprefix("dataset=")
@@ -544,6 +569,75 @@ def _read_json(path: Path) -> dict[str, object]:
         return {}
     value = json.loads(path.read_text(encoding="utf-8"))
     return value if isinstance(value, dict) else {}
+
+
+def _release_from_metadata(root: Path, directory: Path) -> DatasetRelease | None:
+    raw = _read_json(directory / "release.json")
+    release_id = raw.get("release_id")
+    logical_key = raw.get("logical_key")
+    if not release_id or not logical_key:
+        return None
+    relative_path = directory.relative_to(root).as_posix()
+    schema_id = str(raw.get("schema_id") or _read_json(directory / "schema.json").get("schema_id") or "dataset.v1")
+    status = _status(str(raw.get("status") or _discovered_status(directory)))
+    quality = QualityLevel(str(raw.get("quality_level") or _quality_level(directory, status).value))
+    content_hash = raw.get("content_hash") or _read_json(directory / "manifest.json").get("dataset_sha256")
+    return DatasetRelease(
+        str(release_id),
+        DatasetKey(str(logical_key)),
+        str(raw.get("release_version") or f"content.{str(content_hash or release_id)[:16]}"),
+        schema_id,
+        str(raw.get("schema_version") or _schema_version(schema_id)),
+        str(raw.get("transform_id") or "discovery"),
+        str(raw.get("transform_version") or "1"),
+        relative_path,
+        str(raw.get("format") or "parquet"),
+        str(content_hash) if content_hash is not None else None,
+        str(raw.get("provider")) if raw.get("provider") is not None else None,
+        str(raw.get("venue")) if raw.get("venue") is not None else None,
+        tuple(str(item) for item in raw.get("aliases", ())),
+        status,
+        quality,
+        str(raw.get("published_at")) if raw.get("published_at") is not None else None,
+        DatasetStorageKind(str(raw.get("storage_kind") or _storage_kind(relative_path, schema_id).value)),
+        str(raw.get("layout_version") or "1"),
+    )
+
+
+def _product_from_metadata(directory: Path, release: DatasetRelease) -> DataProductDefinition:
+    usage = _read_json(directory / "usage.json")
+    dimensions = {str(key): str(value) for key, value in dict(usage.get("dimensions", {})).items()}
+    sources = (
+        SourceBinding(release.provider, release.venue, 100, release.quality_level),
+    ) if release.provider else ()
+    return DataProductDefinition(
+        release.product_key,
+        str(usage.get("title") or release.product_key),
+        _layer(release.relative_path.split("/", 1)[0]),
+        str(usage.get("description") or ""),
+        dimensions,
+        str(usage.get("primary_time") or _primary_time(release.schema_id)),
+        DataView(str(usage.get("default_view") or DataView.RAW_AS_RECEIVED.value)),
+        sources,
+        str(usage.get("owner")) if usage.get("owner") is not None else None,
+        str(usage.get("source_policy_version") or "priority-v1"),
+    )
+
+
+def _spec_from_metadata(root: Path, directory: Path, product: DataProductDefinition,
+                        release: DatasetRelease) -> DataProductContract:
+    base = directory.parent if directory.name.startswith("release=") else directory
+    capabilities = _read_json(directory / "capabilities.json")
+    return DataProductContract(
+        product,
+        base.relative_to(root).as_posix(),
+        release.schema_id,
+        capabilities,
+        release.storage_kind,
+        release.layout_version,
+        str(_read_json(directory / "quality.json").get("profile") or "generic"),
+        release.quality_level if release.quality_level is not QualityLevel.ARCHIVED else QualityLevel.STUDY,
+    )
 
 
 def _event_logical_name(dataset_id: str, provider: str) -> str:

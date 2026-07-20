@@ -17,12 +17,15 @@ from kairospy.connectors.binance.historical_archive import (
 from kairospy.connectors.deribit.datasets import (
     DeribitDvolDatasetConnector, DeribitOptionSnapshotDatasetConnector, DeribitOptionTradesDatasetConnector,
 )
-from kairospy.data import AcquisitionRequest, SourceBinding, TimeRange
+from kairospy.connectors.massive.datasets import MassiveEquityHourlyOhlcvDatasetConnector
+from kairospy.data import (
+    AcquisitionLimits, AcquisitionRequest, AcquirePolicy, OutputFormat, ProviderRegistry, SourceBinding, TimeRange,
+)
 from kairospy.data.products import (
     BINANCE_USDM_PERPETUAL_HOURLY, BTC_DERIBIT_OPTION_QUOTES, BTC_DERIBIT_OPTION_TRADES,
-    BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY,
+    BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,
 )
-from kairospy.data.bootstrap import default_provider_registry, register_configured_products
+from kairospy.data.bootstrap import default_provider_registry, register_configured_products, register_default_products
 from kairospy.data import DatasetClient
 
 
@@ -52,6 +55,29 @@ class _Snapshot:
     def snapshot(self, currency):
         self.calls += 1
         return {"result": "fake"}, self.rows
+
+
+class _MassiveHourlySource:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.calls = []
+
+    def fetch_pages(self, resource, params):
+        from types import SimpleNamespace
+        self.calls.append({"resource": resource, "params": dict(params)})
+        directory = self.root / "source/provider=massive/resource=fake" / f"request_id={len(self.calls)}"
+        directory.mkdir(parents=True, exist_ok=True)
+        receipt = {"resource": resource, "parameters": dict(params), "status": "complete"}
+        (directory / "receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+        return SimpleNamespace(directory=directory, receipt=receipt, fingerprint=f"fp{len(self.calls)}")
+
+    def iter_results(self, archive):
+        symbol = str(archive.receipt["resource"]).split("/")[4]
+        base = 100 if symbol == "AAPL" else 200
+        return iter((
+            {"t": 1767364200000, "o": base, "h": base + 1, "l": base - 1, "c": base + 0.5, "v": 1000, "n": 5, "vw": base + 0.25},
+            {"t": 1767367800000, "o": base + 0.5, "h": base + 2, "l": base, "c": base + 1, "v": 1200, "n": 7, "vw": base + 1},
+        ))
 
 
 class ProviderConnectorContractTests(unittest.TestCase):
@@ -98,6 +124,93 @@ class ProviderConnectorContractTests(unittest.TestCase):
             self.assertEqual(plan["total_tasks"], 3)
             self.assertEqual([item["tasks"] for item in plan["matrix"]], [1, 0, 1, 1])
             self.assertEqual(plan["planned_symbols"], 3)
+
+    def test_massive_equity_hourly_acquires_and_reads_like_full_market_product(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            register_default_products(root)
+            connector = MassiveEquityHourlyOhlcvDatasetConnector(root, client=object(), view="adjusted")
+            connector.source = _MassiveHourlySource(root)
+            providers = ProviderRegistry()
+            providers.register(connector, (US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,))
+            client = DatasetClient(
+                root, providers=providers,
+                acquisition_limits=AcquisitionLimits(maximum_requests=10, maximum_instruments=10),
+            )
+            self.assertEqual(str(US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.key), "market.ohlcv.equity.us.massive.1h.adjusted")
+
+            rows = client.get(
+                US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.product,
+                start="2026-01-02T14:30:00Z",
+                end="2026-01-02T17:30:00Z",
+                instruments=("equity:us:AAPL", "equity:us:MSFT"),
+                fields=("period_start", "instrument_id", "symbol", "close"),
+                acquire=AcquirePolicy.IF_MISSING,
+            ).collect(OutputFormat.ROWS)
+
+            self.assertEqual([row["symbol"] for row in rows], ["AAPL", "MSFT", "AAPL", "MSFT"])
+            self.assertEqual({row["instrument_id"] for row in rows}, {"equity:us:AAPL", "equity:us:MSFT"})
+            release = DatasetClient(root).resolve(str(US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.key))
+            self.assertEqual(release.provider, "massive")
+            self.assertEqual(release.venue, "us-securities")
+            self.assertTrue((root / release.relative_path / "lineage.json").exists())
+
+    def test_full_market_instrument_limits_fail_before_provider_downloads(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            register_default_products(root)
+            connector = MassiveEquityHourlyOhlcvDatasetConnector(root, client=object(), view="adjusted")
+            connector.source = _MassiveHourlySource(root)
+            providers = ProviderRegistry()
+            providers.register(connector, (US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,))
+            client = DatasetClient(
+                root, providers=providers,
+                acquisition_limits=AcquisitionLimits(maximum_requests=20_000, maximum_instruments=10),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "estimates 8000 instruments"):
+                client.get(
+                    US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.product,
+                    start="2026-01-02T14:30:00Z",
+                    end="2026-01-02T17:30:00Z",
+                    acquire=AcquirePolicy.IF_MISSING,
+                )
+            self.assertEqual(connector.source.calls, [])
+
+    def test_binance_full_market_instrument_limits_use_provider_estimate(self):
+        class Archive:
+            called = False
+
+            def estimated_symbol_count(self, _root):
+                return 700
+
+            def discover_symbols(self, _root):
+                self.called = True
+                return ("BTCUSDT",)
+
+            def acquire(self, *args, **kwargs):
+                self.called = True
+                return {}
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            register_default_products(root)
+            archive = Archive()
+            providers = ProviderRegistry()
+            providers.register(BinanceUsdmPerpetualHourlyDatasetConnector(root, archive), (BINANCE_USDM_PERPETUAL_HOURLY,))
+            client = DatasetClient(
+                root, providers=providers,
+                acquisition_limits=AcquisitionLimits(maximum_requests=20_000, maximum_instruments=10),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "estimates 700 instruments"):
+                client.get(
+                    BINANCE_USDM_PERPETUAL_HOURLY.product,
+                    start="2026-01-01T00:00:00Z",
+                    end="2026-02-01T00:00:00Z",
+                    acquire=AcquirePolicy.IF_MISSING,
+                )
+            self.assertFalse(archive.called)
 
     def test_binance_graceful_shutdown_stops_scheduling_and_preserves_completed_raw_files(self):
         with TemporaryDirectory() as temporary:
@@ -256,8 +369,9 @@ class ProviderConnectorContractTests(unittest.TestCase):
                                provider="massive", venue="opra")
             self.assertTrue(plan.connector_available)
             self.assertEqual(plan.estimate.cost_class, "entitled")
-            with self.assertRaisesRegex(RuntimeError, "MASSIVE_API_KEY"):
-                client.acquire(plan)
+            with patch("kairospy.data.bootstrap._massive_config_for_project", side_effect=RuntimeError("MASSIVE_API_KEY is required")):
+                with self.assertRaisesRegex(RuntimeError, "MASSIVE_API_KEY"):
+                    client.acquire(plan)
 
     def test_massive_equity_configuration_plans_without_credentials_and_acquire_fails_before_network(self):
         with TemporaryDirectory() as temporary, patch.dict("os.environ", {}, clear=True):
@@ -273,8 +387,9 @@ class ProviderConnectorContractTests(unittest.TestCase):
                                provider="massive", venue="us-securities")
             self.assertTrue(plan.connector_available)
             self.assertEqual(plan.estimate.cost_class, "entitled-rest-bounded-ticker")
-            with self.assertRaisesRegex(RuntimeError, "MASSIVE_API_KEY"):
-                client.acquire(plan)
+            with patch("kairospy.data.bootstrap._massive_config_for_project", side_effect=RuntimeError("MASSIVE_API_KEY is required")):
+                with self.assertRaisesRegex(RuntimeError, "MASSIVE_API_KEY"):
+                    client.acquire(plan)
 
     def test_binance_option_connector_contract(self):
         raw = [{

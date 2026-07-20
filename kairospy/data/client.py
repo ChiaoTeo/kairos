@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable, Iterator, Literal
 
 from kairospy.domain.identity import InstrumentId
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 from kairospy.market_data import MarketEventType, ParquetMarketEventRepository
 from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
 
@@ -103,7 +104,7 @@ class DatasetClient:
     MarketReplayDataset.  Arrow is the native return type; pandas/polars are conversion formats.
     """
 
-    def __init__(self, root: str | Path = "data", *, catalog_path: str | Path | None = None,
+    def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT, *, catalog_path: str | Path | None = None,
                  dataset_root: str | Path | None = None, providers: ProviderRegistry | None = None,
                  run_mode: RunMode | str = RunMode.STUDY, acquisition_limits: AcquisitionLimits = AcquisitionLimits()) -> None:
         self.root = Path(root)
@@ -128,6 +129,56 @@ class DatasetClient:
 
     def search(self, **dimensions: str) -> tuple[DataProductDefinition, ...]:
         return self.catalog.search(**dimensions)
+
+    def list(self, **dimensions: str) -> list[dict[str, object]]:
+        products = self.catalog.search(**dimensions) if dimensions else self.catalog.products()
+        result = []
+        for product in products:
+            releases = self.catalog.releases(product)
+            selected = self.catalog.release(product) if releases else None
+            result.append({
+                "logical_key": str(product.key),
+                "title": product.title,
+                "description": product.description,
+                "layer": product.layer.value,
+                "dimensions": dict(product.dimensions),
+                "primary_time": product.primary_time,
+                "default_view": product.default_view.value,
+                "sources": [
+                    {
+                        "provider": item.provider,
+                        "venue": item.venue,
+                        "priority": item.priority,
+                        "quality_level": item.quality_level.value,
+                        "acquisition_modes": list(item.acquisition_modes),
+                    }
+                    for item in product.sources
+                ],
+                "release_count": len(releases),
+                "selected_release": _release_summary(selected) if selected else None,
+            })
+        return result
+
+    def releases(self, dataset: DatasetLike | None = None, **dimensions: str) -> list[dict[str, object]]:
+        products = self.catalog.search(**dimensions) if dimensions else self.catalog.products()
+        if dataset is not None:
+            products = (self.catalog.product(dataset),)
+        rows = []
+        for product in products:
+            selected = self.catalog.release(product) if self.catalog.releases(product) else None
+            for release in self.catalog.releases(product):
+                summary = _release_summary(release)
+                summary.update({
+                    "logical_key": str(product.key),
+                    "title": product.title,
+                    "layer": product.layer.value,
+                    "schema_id": release.schema_id,
+                    "storage_kind": release.storage_kind.value,
+                    "selected": selected is not None and release.release_id == selected.release_id,
+                    "relative_path": release.relative_path,
+                })
+                rows.append(summary)
+        return rows
 
     def describe(self, dataset: DatasetLike) -> dict[str, object]:
         product = self.catalog.product(dataset)
@@ -236,8 +287,9 @@ class DatasetClient:
         limits = self.acquisition_limits
         if len(request.missing) > limits.maximum_ranges:
             raise RuntimeError(f"acquisition has {len(request.missing)} ranges; limit is {limits.maximum_ranges}")
-        if len(request.instruments) > limits.maximum_instruments:
-            raise RuntimeError(f"acquisition has {len(request.instruments)} instruments; limit is {limits.maximum_instruments}")
+        estimated_instruments = estimate.instruments if estimate.instruments is not None else len(request.instruments)
+        if estimated_instruments > limits.maximum_instruments:
+            raise RuntimeError(f"acquisition estimates {estimated_instruments} instruments; limit is {limits.maximum_instruments}")
         if estimate.requests > limits.maximum_requests:
             raise RuntimeError(f"acquisition estimates {estimate.requests} requests; limit is {limits.maximum_requests}")
         if limits.maximum_bytes is not None and estimate.bytes is not None and estimate.bytes > limits.maximum_bytes:

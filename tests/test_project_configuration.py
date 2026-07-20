@@ -18,13 +18,13 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             root = Path(directory)
             initialize_project(root, name="Config Desk")
 
-            with self.assertRaisesRegex(Exception, "Massive API key is missing"):
-                KairosProjectConfig.discover(root).massive_config()
-
             env = {"MASSIVE_API_KEY": "secret"}
             old = os.environ.copy()
-            os.environ.update(env)
             try:
+                os.environ.pop("MASSIVE_API_KEY", None)
+                with self.assertRaisesRegex(Exception, "Massive API key is missing"):
+                    KairosProjectConfig.discover(root).massive_config()
+                os.environ.update(env)
                 config = KairosProjectConfig.discover(root / "studies")
                 self.assertEqual(config.root, root.resolve())
                 self.assertEqual(config.massive_config().api_key, "secret")
@@ -32,6 +32,42 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             finally:
                 os.environ.clear()
                 os.environ.update(old)
+
+    def test_project_config_loads_dotenv_without_overriding_existing_environment(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Dotenv Desk")
+            (root / ".env").write_text("MASSIVE_API_KEY=dotenv-secret\nQUOTED=\"quoted value\"\n", encoding="utf-8")
+            old = os.environ.copy()
+            os.environ.pop("MASSIVE_API_KEY", None)
+            os.environ.pop("QUOTED", None)
+            try:
+                self.assertEqual(KairosProjectConfig.discover(root).massive_config().api_key, "dotenv-secret")
+                self.assertEqual(os.environ["QUOTED"], "quoted value")
+                os.environ["MASSIVE_API_KEY"] = "shell-secret"
+                self.assertEqual(KairosProjectConfig.discover(root).massive_config().api_key, "shell-secret")
+            finally:
+                os.environ.clear()
+                os.environ.update(old)
+
+    def test_data_bootstrap_import_is_safe_from_cold_process(self) -> None:
+        env = dict(os.environ)
+        env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+        result = subprocess.run(
+            [
+                sys.executable, "-c",
+                "from kairospy.data.bootstrap import register_default_products; "
+                "from kairospy.connectors.binance import BinanceRuntimeFeedFactory; "
+                "from kairospy.study_platform.session import open_study; "
+                "print(register_default_products.__name__, BinanceRuntimeFeedFactory.__name__, open_study.__name__)",
+            ],
+            cwd=os.getcwd(),
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertIn("register_default_products BinanceRuntimeFeedFactory open_study", result.stdout)
 
     def test_set_and_unset_config_value_preserves_valid_toml(self) -> None:
         with TemporaryDirectory() as directory:
@@ -141,6 +177,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             )
             self.assertIn("Kairos Project Status", status.stdout)
             self.assertIn("output-desk", status.stdout)
+            self.assertIn(".kairos/data", status.stdout)
 
             show = subprocess.run(
                 [sys.executable, "-m", "kairospy", "config", "show"],
@@ -173,6 +210,97 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             config = KairosProjectConfig.load(root / "kairos.toml")
             self.assertEqual(config.get("providers.binance.testnet.api_key"), "env:PIPE_BINANCE_KEY")
             self.assertEqual(config.get("providers.binance.testnet.api_secret"), "env:PIPE_BINANCE_SECRET")
+
+    def test_cli_data_acquire_lists_products_and_accepts_interactive_dry_run(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Acquire Desk")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+
+            listed = subprocess.run(
+                [sys.executable, "-m", "kairospy", "--format", "json", "data", "acquire", "--list-products"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertIn("market.ohlcv.crypto.binance.usdm-perpetual.1h", listed.stdout)
+
+            dry_run = subprocess.run(
+                [sys.executable, "-m", "kairospy", "data", "acquire", "--dry-run"],
+                cwd=root,
+                input=(
+                    "market.ohlcv.crypto.binance.btc-usdt.1d\n"
+                    "2026-01-01T00:00:00+00:00\n"
+                    "2026-01-02T00:00:00+00:00\n"
+                    "full-market\n"
+                ),
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertIn("Acquirable Data Products", dry_run.stdout)
+            self.assertIn("Kairos Acquisition Plan", dry_run.stdout)
+            self.assertIn("market.ohlcv.crypto.binance.btc-usdt.1d", dry_run.stdout)
+
+            (root / ".env").write_text("MASSIVE_API_KEY=test-key\n", encoding="utf-8")
+            massive_human_plan = subprocess.run(
+                [
+                    sys.executable, "-m", "kairospy", "data", "acquire",
+                    "--dataset", "market.ohlcv.equity.us.massive.1h.adjusted",
+                    "--start", "2026-01-02T14:30:00+00:00",
+                    "--end", "2026-01-02T16:30:00+00:00",
+                    "--provider", "massive", "--venue", "us-securities",
+                    "--instrument", "equity:us:AAPL", "--dry-run",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertIn("Provider Task Plan", massive_human_plan.stdout)
+            self.assertIn("rest-paginated-aggregate", massive_human_plan.stdout)
+            massive_plan = subprocess.run(
+                [
+                    sys.executable, "-m", "kairospy", "--format", "json", "data", "acquire",
+                    "--dataset", "market.ohlcv.equity.us.massive.1h.adjusted",
+                    "--start", "2026-01-02T14:30:00+00:00",
+                    "--end", "2026-01-02T16:30:00+00:00",
+                    "--provider", "massive", "--venue", "us-securities",
+                    "--instrument", "equity:us:AAPL", "--dry-run",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            payload = json.loads(massive_plan.stdout)
+            self.assertEqual(payload["estimate"]["requests"], 1)
+            self.assertEqual(payload["provider_tasks"]["task_type"], "rest-paginated-aggregate")
+            self.assertEqual(payload["provider_tasks"]["total_tasks"], 1)
+            self.assertEqual(payload["provider_tasks"]["uncached_tasks"], 1)
+
+            blocked = subprocess.run(
+                [
+                    sys.executable, "-m", "kairospy", "data", "acquire",
+                    "--dataset", "market.ohlcv.equity.us.massive.1h.adjusted",
+                    "--start", "2026-01-02T14:30:00+00:00",
+                    "--end", "2026-01-02T16:30:00+00:00",
+                    "--provider", "massive", "--venue", "us-securities",
+                    "--max-requests", "1", "--yes",
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertNotEqual(blocked.returncode, 0)
+            self.assertIn("acquisition estimates", blocked.stderr + blocked.stdout)
 
     def test_cli_init_interactive_accepts_piped_answers(self) -> None:
         with TemporaryDirectory() as directory:

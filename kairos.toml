@@ -3,11 +3,7 @@ name = "kairospy"
 timezone = "UTC"
 
 [data]
-lake_root = "data"
-dataset_root = "data/curated"
-catalog_path = "data/catalog/instruments.json"
-reference_catalog_path = "data/reference/catalog.json"
-event_log_path = "data/events/kairospy.jsonl"
+lake_root = ".kairos/data"
 
 [study]
 default_study = "starter"

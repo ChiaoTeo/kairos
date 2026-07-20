@@ -49,6 +49,24 @@ _US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY_PRODUCT = _product(
     primary_time="available_time",
     sources=(SourceBinding("massive", "us-securities", 90, QualityLevel.STUDY, ("rest", "flat-file")),),
 )
+_US_EQUITY_MASSIVE_RAW_HOURLY_PRODUCT = _product(
+    "market.ohlcv.equity.us.massive.1h.raw",
+    "Massive US equity hourly raw OHLCV",
+    DatasetLayer.CANONICAL,
+    {"asset_class": "equity", "region": "us", "provider": "massive", "frequency": "1h", "view": "raw",
+     "universe": "full-market"},
+    primary_time="available_time",
+    sources=(SourceBinding("massive", "us-securities", 100, QualityLevel.STUDY, ("rest",)),),
+)
+_US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY_PRODUCT = _product(
+    "market.ohlcv.equity.us.massive.1h.adjusted",
+    "Massive US equity hourly adjusted OHLCV",
+    DatasetLayer.CANONICAL,
+    {"asset_class": "equity", "region": "us", "provider": "massive", "frequency": "1h",
+     "view": "adjusted", "universe": "full-market"},
+    primary_time="available_time",
+    sources=(SourceBinding("massive", "us-securities", 90, QualityLevel.STUDY, ("rest",)),),
+)
 _US_EQUITY_MASSIVE_CORPORATE_ACTIONS_PRODUCT = _product(
     "reference.corporate_actions.equity.us.massive",
     "Massive US equity split and dividend events",
@@ -183,6 +201,28 @@ US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY = DataProductContract(
     quality_profile="equity_ohlcv",
     minimum_publication_level=QualityLevel.STUDY,
 )
+US_EQUITY_MASSIVE_RAW_HOURLY = DataProductContract(
+    _governed(
+        _US_EQUITY_MASSIVE_RAW_HOURLY_PRODUCT,
+        "Massive US equity raw hourly OHLCV bars. Full-market acquisition discovers active common stocks from Massive reference data.",
+    ),
+    "canonical/market/ohlcv/asset_class=equity/region=us/provider=massive/interval=1h/view=raw",
+    "market.ohlcv.equity.us.1h.v1",
+    _capabilities(point_in_time_universe=True, products=("equity",), maximum_validation_level=2),
+    quality_profile="ohlcv",
+    minimum_publication_level=QualityLevel.STUDY,
+)
+US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY = DataProductContract(
+    _governed(
+        _US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY_PRODUCT,
+        "Massive US equity adjusted hourly OHLCV bars. Full-market acquisition discovers active common stocks from Massive reference data.",
+    ),
+    "canonical/market/ohlcv/asset_class=equity/region=us/provider=massive/interval=1h/view=adjusted",
+    "market.ohlcv.equity.us.1h.v1",
+    _capabilities(point_in_time_universe=True, products=("equity",), maximum_validation_level=2),
+    quality_profile="ohlcv",
+    minimum_publication_level=QualityLevel.STUDY,
+)
 US_EQUITY_MASSIVE_CORPORATE_ACTIONS = DataProductContract(
     _governed(
         _US_EQUITY_MASSIVE_CORPORATE_ACTIONS_PRODUCT,
@@ -304,6 +344,8 @@ class Datasets:
     MARKET_OHLCV_CRYPTO_BINANCE_USDM_PERPETUAL_1H = BINANCE_USDM_PERPETUAL_HOURLY.product
     MARKET_OHLCV_EQUITY_US_MASSIVE_1D_RAW = US_EQUITY_MASSIVE_RAW_DAILY.product
     MARKET_OHLCV_EQUITY_US_MASSIVE_1D_VENDOR_ADJUSTED = US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY.product
+    MARKET_OHLCV_EQUITY_US_MASSIVE_1H_RAW = US_EQUITY_MASSIVE_RAW_HOURLY.product
+    MARKET_OHLCV_EQUITY_US_MASSIVE_1H_VENDOR_ADJUSTED = US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.product
     REFERENCE_CORPORATE_ACTIONS_EQUITY_US_MASSIVE = US_EQUITY_MASSIVE_CORPORATE_ACTIONS.product
     REFERENCE_IDENTITY_EQUITY_US_MASSIVE = US_EQUITY_MASSIVE_IDENTITY.product
     MARKET_RETURNS_EQUITY_US_1D = US_EQUITY_RETURNS_DAILY.product

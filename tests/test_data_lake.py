@@ -1,10 +1,13 @@
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from tempfile import TemporaryDirectory
 import json
 import unittest
 
 from kairospy.storage.data_lake import write_daily_dataset
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 from kairospy.data import DataCatalog, DatasetRelease
+from kairospy.data.client import DatasetClient
 from kairospy.data.products import BTC_IV_RV_DAILY, BTC_SPOT_DAILY
 
 
@@ -19,6 +22,10 @@ def register_managed(catalog, dataset):
 
 
 class DataLakeTest(unittest.TestCase):
+    def test_default_catalog_and_client_use_project_lake_root(self):
+        self.assertEqual(DataCatalog().root, Path(DEFAULT_LAKE_ROOT))
+        self.assertEqual(DatasetClient().root, Path(DEFAULT_LAKE_ROOT))
+
     def test_discovery_registers_structured_product_dimensions(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -32,6 +39,63 @@ class DataLakeTest(unittest.TestCase):
             self.assertEqual(product.dimensions["underlying"], "SPX")
             self.assertEqual(product.dimensions["contract_family"], "SPXW")
             self.assertEqual(product.dimensions["venue"], "opra")
+
+    def test_discovery_generates_catalog_from_release_metadata(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            directory = (
+                root / "canonical" / "market" / "ohlcv" / "asset_class=crypto" / "venue=binance"
+                / "product=usdm-perpetual" / "interval=1h" / "release=ds_release_metadata"
+            )
+            directory.mkdir(parents=True)
+            (directory / "release.json").write_text(json.dumps({
+                "release_id": "ds_release_metadata",
+                "logical_key": "market.ohlcv.crypto.binance.usdm-perpetual.1h",
+                "release_version": "content.abc",
+                "schema_id": "market.ohlcv.v1",
+                "schema_version": "1",
+                "transform_id": "binance.usdm_perpetual.kline.ohlcv",
+                "transform_version": "2",
+                "content_hash": "abc",
+                "provider": "binance",
+                "venue": "binance",
+                "status": "approved_for_backtest",
+                "quality_level": "Q3",
+                "published_at": "2026-07-20T00:00:00+00:00",
+            }))
+            (directory / "usage.json").write_text(json.dumps({
+                "logical_key": "market.ohlcv.crypto.binance.usdm-perpetual.1h",
+                "primary_time": "available_time",
+                "dimensions": {"asset_class": "crypto", "venue": "binance", "frequency": "1h"},
+            }))
+            (directory / "capabilities.json").write_text(json.dumps({"maximum_validation_level": 3}))
+
+            catalog = DataCatalog(root)
+            discovered = catalog.discover()
+            catalog.save()
+
+            self.assertEqual(discovered[0].release_id, "ds_release_metadata")
+            loaded = DataCatalog(root)
+            release = loaded.release("market.ohlcv.crypto.binance.usdm-perpetual.1h")
+            self.assertEqual(release.release_id, "ds_release_metadata")
+            self.assertEqual(loaded.product(release.product_key).dimensions["frequency"], "1h")
+            self.assertTrue((root / "catalog" / "datasets.json").exists())
+
+    def test_catalog_save_uses_independent_temporary_files(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+
+            def save_once(_index: int) -> None:
+                catalog = DataCatalog(root)
+                catalog.register_product(BTC_SPOT_DAILY.product)
+                catalog.save()
+
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                list(executor.map(save_once, range(8)))
+
+            loaded = DataCatalog(root)
+            self.assertEqual(str(loaded.product(BTC_SPOT_DAILY.key).key), str(BTC_SPOT_DAILY.key))
+            self.assertFalse(list((root / "catalog").glob("*.tmp")))
 
     def test_old_registry_schema_is_rejected(self):
         with TemporaryDirectory() as temporary:

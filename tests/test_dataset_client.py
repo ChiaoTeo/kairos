@@ -50,7 +50,7 @@ class DatasetClientTests(unittest.TestCase):
     def test_generic_data_plan_cli_is_read_only_and_reports_missing_range(self):
         with TemporaryDirectory() as temporary, io.StringIO() as output, redirect_stdout(output):
             result = main([
-                "--lake-root", temporary, "data", "plan", "--dataset", str(BTC_SPOT_DAILY.key),
+                "--lake-root", temporary, "--format", "json", "data", "plan", "--dataset", str(BTC_SPOT_DAILY.key),
                 "--start", "2026-01-01T00:00:00+00:00", "--end", "2026-01-02T00:00:00+00:00",
                 "--provider", "binance", "--venue", "binance",
             ])
@@ -81,6 +81,42 @@ class DatasetClientTests(unittest.TestCase):
             client = DatasetClient(temporary)
             self.assertEqual(client.search(venue="binance"), (product,))
             self.assertEqual(client.describe(product)["selected_release"]["release_id"], "ds_btc_1")
+            products = client.list(venue="binance")
+            self.assertEqual(products[0]["logical_key"], "market.trades.crypto.btc_usdt")
+            self.assertEqual(products[0]["release_count"], 1)
+            self.assertEqual(products[0]["selected_release"]["release_id"], "ds_btc_1")
+            releases = client.releases(venue="binance")
+            self.assertEqual(releases[0]["logical_key"], "market.trades.crypto.btc_usdt")
+            self.assertEqual(releases[0]["release_id"], "ds_btc_1")
+            self.assertTrue(releases[0]["selected"])
+
+    def test_data_list_cli_reports_catalog_products(self):
+        with TemporaryDirectory() as temporary, io.StringIO() as output, redirect_stdout(output):
+            catalog = DataCatalog(temporary)
+            catalog.register_product(BTC_SPOT_DAILY.product)
+            catalog.save()
+            result = main([
+                "--lake-root", temporary, "--format", "json", "data", "list",
+                "--dimension", "venue=binance",
+            ])
+            self.assertEqual(result, 0)
+            payload = json.loads(output.getvalue())
+            self.assertEqual(payload["products"][0]["logical_key"], str(BTC_SPOT_DAILY.key))
+
+    def test_data_releases_cli_reports_local_versions(self):
+        with TemporaryDirectory() as temporary, io.StringIO() as output, redirect_stdout(output):
+            catalog = DataCatalog(temporary)
+            release = register_managed(catalog, BTC_SPOT_DAILY, release_id="ds_cli_release", version="content.abc")
+            catalog.save()
+            result = main([
+                "--lake-root", temporary, "--format", "json", "data", "releases",
+                "--dataset", str(BTC_SPOT_DAILY.key),
+            ])
+            self.assertEqual(result, 0)
+            payload = json.loads(output.getvalue())
+            self.assertEqual(payload["releases"][0]["release_id"], release.release_id)
+            self.assertEqual(payload["releases"][0]["version"], "content.abc")
+            self.assertTrue(payload["releases"][0]["selected"])
 
     def test_typed_product_resolution_is_not_shadowed_by_same_named_earlier_release(self):
         with TemporaryDirectory() as temporary:

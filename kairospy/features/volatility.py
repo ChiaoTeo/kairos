@@ -6,6 +6,7 @@ import math
 import statistics
 from pathlib import Path
 
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 from kairospy.data.client import DatasetClient
 from kairospy.data.contracts import QualityLevel
 from kairospy.data.products import (
@@ -40,7 +41,7 @@ def build_iv_rv_panel(spot_rows, dvol_rows, lookback=30):
 
 
 class BtcIvRvFeatureBuilder:
-    def __init__(self, root: str | Path = "data") -> None:
+    def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.root, self.data = Path(root), DatasetClient(root)
 
     def build(self):
@@ -75,7 +76,7 @@ class BtcIvRvFeatureBuilder:
 class BtcTermSkewFeatureBuilder:
     TARGETS = (7, 14, 30, 60, 90)
 
-    def __init__(self, root: str | Path = "data") -> None:
+    def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.root, self.data = Path(root), DatasetClient(root)
 
     def build(self):
@@ -111,7 +112,7 @@ class BtcTermSkewFeatureBuilder:
 class BtcDeribitTradeSkewFeatureBuilder:
     TARGETS = (7, 14, 30, 60, 90)
 
-    def __init__(self, root: str | Path = "data") -> None:
+    def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.root, self.data = Path(root), DatasetClient(root)
 
     def build(self):

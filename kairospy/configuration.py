@@ -6,10 +6,10 @@ from pathlib import Path
 import tomllib
 from typing import Any
 
-from kairospy.connectors.massive.config import MassiveConfig
-
 
 CONFIG_FILE_NAME = "kairos.toml"
+PROJECT_STATE_DIR = ".kairos"
+DEFAULT_LAKE_ROOT = f"{PROJECT_STATE_DIR}/data"
 
 
 class ConfigError(ValueError):
@@ -51,6 +51,7 @@ class KairosProjectConfig:
         config_path = Path(path).expanduser().resolve()
         if not config_path.exists():
             raise ConfigError(f"configuration file does not exist: {config_path}")
+        _load_dotenv(config_path.parent / ".env")
         try:
             data = tomllib.loads(config_path.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as exc:
@@ -77,6 +78,8 @@ class KairosProjectConfig:
         return path if path.is_absolute() else self.root / path
 
     def massive_config(self) -> MassiveConfig:
+        from kairospy.connectors.massive.config import MassiveConfig
+
         api_key = self.resolve("providers.massive.api_key").resolved
         if not api_key:
             raise ConfigError(
@@ -104,7 +107,7 @@ class KairosProjectConfig:
             issues.append("[project] table is required")
         if not self.get("project.name"):
             issues.append("project.name is required")
-        data_root = self.relative_path("data.lake_root", "data")
+        data_root = self.relative_path("data.lake_root", DEFAULT_LAKE_ROOT)
         if not data_root.exists():
             issues.append(f"data.lake_root does not exist: {data_root}")
         for key_path in (
@@ -175,6 +178,33 @@ def _resolve_value(raw: Any, source: str) -> ConfigValue:
         name = raw[4:]
         return ConfigValue(raw, os.environ.get(name), f"env:{name}")
     return ConfigValue(raw, raw, source)
+
+
+def _load_dotenv(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        raw = line.strip()
+        if not raw or raw.startswith("#"):
+            continue
+        if raw.startswith("export "):
+            raw = raw[len("export "):].lstrip()
+        if "=" not in raw:
+            continue
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        os.environ[key] = _dotenv_value(value)
+
+
+def _dotenv_value(value: str) -> str:
+    text = value.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    if " #" in text:
+        text = text.split(" #", 1)[0].rstrip()
+    return text
 
 
 def _parse_scalar(value: str) -> Any:

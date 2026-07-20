@@ -3,8 +3,8 @@ from kairospy.data.products import BTC_SPOT_DAILY
 from kairospy.data.bootstrap import default_provider_registry, register_default_products
 
 
-register_default_products("data")
-data = DatasetClient("data", providers=default_provider_registry("data"))
+register_default_products()
+data = DatasetClient(providers=default_provider_registry())
 frame = data.get(
     BTC_SPOT_DAILY.product,
     start="2025-01-01T00:00:00Z",

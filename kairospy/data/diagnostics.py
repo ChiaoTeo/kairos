@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from kairospy.configuration import DEFAULT_LAKE_ROOT
+
 from .catalog import DataCatalog
 from .contracts import DatasetRelease, DatasetStatus, QualityLevel
 
@@ -22,7 +24,7 @@ class DataDiagnosticIssue:
 
 
 class DataDiagnosticsService:
-    def __init__(self, root: str | Path = "data") -> None:
+    def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.root = Path(root)
         self.catalog = DataCatalog(self.root)
 

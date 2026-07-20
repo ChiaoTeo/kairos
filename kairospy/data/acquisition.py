@@ -33,9 +33,14 @@ class AcquisitionEstimate:
     requests: int
     bytes: int | None = None
     cost_class: str = "unknown"
+    instruments: int | None = None
 
     def __post_init__(self) -> None:
-        if self.requests < 0 or self.bytes is not None and self.bytes < 0:
+        if (
+            self.requests < 0
+            or self.bytes is not None and self.bytes < 0
+            or self.instruments is not None and self.instruments < 0
+        ):
             raise ValueError("acquisition estimates cannot be negative")
 
 

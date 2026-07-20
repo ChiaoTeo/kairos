@@ -14,6 +14,7 @@ from .daily_ohlcv import OptionDailyOhlcvPipeline, SpxwDailyOhlcvPipeline
 from .equity_daily_ohlcv import MassiveEquityDailyOhlcvPipeline, MassiveEquityHourlyOhlcvPipeline
 from .datasets import (
     MassiveEquityDailyOhlcvDatasetConnector,
+    MassiveEquityHourlyOhlcvDatasetConnector,
     MassiveEquityDailyOhlcvProductConfig,
 )
 from .equity_identity import MassiveEquityIdentityResolver, MassiveEquityIdentityResult
@@ -33,7 +34,8 @@ __all__ = [
     "OptionDailyOhlcvPipeline",
     "MassiveEquityDailyOhlcvPipeline",
     "MassiveEquityHourlyOhlcvPipeline",
-    "MassiveEquityDailyOhlcvDatasetConnector", "MassiveEquityDailyOhlcvProductConfig",
+    "MassiveEquityDailyOhlcvDatasetConnector", "MassiveEquityHourlyOhlcvDatasetConnector",
+    "MassiveEquityDailyOhlcvProductConfig",
     "MassiveEquityIdentityResolver", "MassiveEquityIdentityResult",
     "OptionCloseImpliedVolatilityPipeline",
 ]

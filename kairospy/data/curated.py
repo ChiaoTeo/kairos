@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
+from kairospy.configuration import DEFAULT_LAKE_ROOT
+
 from .client import DatasetClient
 from .contracts import DatasetKey, DatasetLayer, DatasetLike, DataProductDefinition, QualityLevel
 from .products import DataProductContract
@@ -39,7 +41,7 @@ class ConsolidatedTradePolicy:
 class ConsolidatedTradeBuilder:
     """Build an explicit cross-venue product; never acts as source fallback."""
 
-    def __init__(self, root: str | Path = "data") -> None:
+    def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.root, self.data = Path(root), DatasetClient(root)
 
     def build(self, output_key: DatasetKey | str, title: str, inputs: tuple[ConsolidatedTradeInput, ...],

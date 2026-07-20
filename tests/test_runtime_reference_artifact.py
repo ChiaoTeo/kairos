@@ -15,8 +15,8 @@ from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 from tests.test_runtime_store import request
 
 
-EXPECTED_AUDIT_HASH = "9eeca28324c1f63e3fb98e805bd7a8abd78f4e72d722b3da910ca3b2cb179271"
-EXPECTED_LEDGER_HASH = "e98d2fcdc54aede8b210b3601296494b5888136d82e650f1016f661de72e943f"
+EXPECTED_AUDIT_HASH = "5d026b6d2d139b4f9ed3e3e7c047ff61010fe6d9d5764e6cc081307e58def031"
+EXPECTED_LEDGER_HASH = "a734aa836750bc2a669ce59ce231a1d93c1e91a014a0e393133b188ab1b005a8"
 
 
 class RuntimeReferenceArtifactTests(unittest.TestCase):

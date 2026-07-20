@@ -88,7 +88,43 @@ class BinanceUsdmPerpetualHourlyDatasetConnector:
                      for item in request.missing)
         estimate_symbols = getattr(self.archive, "estimated_symbol_count", lambda _root: 700)
         instruments = len(request.instruments) if request.instruments else estimate_symbols(self.root / "source")
-        return AcquisitionEstimate(months * instruments, cost_class="public")
+        return AcquisitionEstimate(months * instruments, cost_class="public", instruments=instruments)
+
+    def task_plan(self, request: AcquisitionRequest) -> dict[str, object]:
+        symbols = tuple(request.instruments) or self.archive.discover_symbols(self.root / "source")
+        ranges = []
+        total_tasks = cached_tasks = uncached_tasks = 0
+        matrices = []
+        for missing in request.missing:
+            plan = self.archive.acquisition_plan(
+                symbols, missing.start, missing.end, self.root / "source",
+                actual_archives=not bool(request.instruments),
+            )
+            records = list(plan.pop("records", ()))
+            total_tasks += int(plan.get("total_tasks", len(records)))
+            cached = int(plan.get("cached_monthly", 0)) + int(plan.get("cached_daily_files", 0))
+            cached_tasks += cached
+            uncached_tasks += int(plan.get("uncached_files", max(0, len(records) - cached)))
+            matrices.extend(plan.get("matrix", ()))
+            ranges.append({
+                "start": missing.start.isoformat(),
+                "end": missing.end.isoformat(),
+                "tasks": plan.get("total_tasks", len(records)),
+                "cached": cached,
+                "uncached": plan.get("uncached_files", max(0, len(records) - cached)),
+            })
+        return {
+            "provider": "binance",
+            "task_type": "public-archive-zip",
+            "universe": "bounded" if request.instruments else "full-market",
+            "symbols": len(symbols),
+            "total_tasks": total_tasks,
+            "cached_tasks": cached_tasks,
+            "uncached_tasks": uncached_tasks,
+            "resume_supported": True,
+            "ranges": ranges,
+            "matrix": matrices,
+        }
 
     def acquire(self, request: AcquisitionRequest) -> DatasetRelease:
         if not self.supports(request.logical_key) or request.source.provider != self.provider:

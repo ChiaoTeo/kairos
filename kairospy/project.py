@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 
 from kairospy import __version__
+from kairospy.configuration import DEFAULT_LAKE_ROOT, PROJECT_STATE_DIR
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,13 +87,13 @@ def render_project_init(result: ProjectInitResult) -> str:
 
 def _directories() -> tuple[Path, ...]:
     return (
-        Path(".kairos"),
-        Path("data"),
-        Path("data/backtests"),
-        Path("data/catalog"),
-        Path("data/curated"),
-        Path("data/events"),
-        Path("data/reference"),
+        Path(PROJECT_STATE_DIR),
+        Path(DEFAULT_LAKE_ROOT),
+        Path(DEFAULT_LAKE_ROOT) / "backtests",
+        Path(DEFAULT_LAKE_ROOT) / "catalog",
+        Path(DEFAULT_LAKE_ROOT) / "curated",
+        Path(DEFAULT_LAKE_ROOT) / "events",
+        Path(DEFAULT_LAKE_ROOT) / "reference",
         Path("studies"),
         Path("strategies"),
     )
@@ -108,12 +109,6 @@ def _files(project_name: str) -> tuple[tuple[Path, str], ...]:
         (Path("studies/starter.py"), _starter_script()),
         (Path("strategies/__init__.py"), ""),
         (Path("strategies/starter_sma.py"), _starter_strategy()),
-        (Path("data/.gitkeep"), ""),
-        (Path("data/backtests/.gitkeep"), ""),
-        (Path("data/catalog/.gitkeep"), ""),
-        (Path("data/curated/.gitkeep"), ""),
-        (Path("data/events/.gitkeep"), ""),
-        (Path("data/reference/.gitkeep"), ""),
     )
 
 
@@ -163,11 +158,7 @@ timezone = "UTC"
 
 [data]
 # All relative paths are resolved from this project directory.
-lake_root = "data"
-dataset_root = "data/curated"
-catalog_path = "data/catalog/instruments.json"
-reference_catalog_path = "data/reference/catalog.json"
-event_log_path = "data/events/kairospy.jsonl"
+lake_root = "{DEFAULT_LAKE_ROOT}"
 default_quality = "Q2"
 default_provider = "auto"
 
@@ -215,7 +206,7 @@ BINANCE_LIVE_API_KEY=
 BINANCE_LIVE_API_SECRET=
 
 # Optional runtime overrides.
-KAIROSPY_LAKE_ROOT=data
+KAIROSPY_LAKE_ROOT={DEFAULT_LAKE_ROOT}
 """
 
 
@@ -237,10 +228,8 @@ def _gitignore() -> str:
 .pytest_cache/
 .venv/
 .env
-data/backtests/*
-data/events/*
-data/source/*
-!data/**/.gitkeep
+.kairos/*
+!.kairos/project.json
 """
 
 
@@ -258,23 +247,26 @@ kairospy doctor
 python studies/starter.py
 ```
 
-Project data lives under `data/`. Keep study code in `studies/` and reusable strategy code in `strategies/`.
+Kairos-managed data lives under `.kairos/data/`. Keep study code in `studies/` and reusable strategy code in `strategies/`.
 Configure providers only in `kairos.toml`; credentials should normally be referenced with `env:VARIABLE_NAME`.
 """
 
 
 def _starter_script() -> str:
     return '''from kairospy import BacktestRequest, BacktestRunner
+from kairospy.configuration import DEFAULT_LAKE_ROOT, KairosProjectConfig
 
 
 def main() -> None:
+    config = KairosProjectConfig.discover(__file__)
+    lake_root = config.relative_path("data.lake_root", DEFAULT_LAKE_ROOT)
     request = BacktestRequest(
         strategy="sma-cross-v1",
         dataset="fixture:sma-bars-v1",
         parameters={"fast": 5, "slow": 20},
-        artifact_root="data/backtests",
+        artifact_root=lake_root / "backtests",
     )
-    result = BacktestRunner(lake_root="data").run(request)
+    result = BacktestRunner(lake_root=lake_root).run(request)
     print(result.summary())
 
 

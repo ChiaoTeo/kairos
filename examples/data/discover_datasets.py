@@ -1,7 +1,7 @@
 from kairospy.data import DataCatalog
 
 
-catalog = DataCatalog("data")
+catalog = DataCatalog()
 for product in catalog.search(asset_class="option"):
     releases = catalog.releases(product)
     print(product.key, product.title, product.dimensions)

@@ -15,6 +15,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from kairospy import __version__
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 
 from kairospy.accounting.ledger import LedgerService
 from kairospy.ports import Environment, OrderRequest, ReferenceDataRequest
@@ -77,7 +78,7 @@ from kairospy.strategies.sma_cross_study_backtest import BarSeries, SmaCrossConf
 from kairospy.pricing import PricingInput, PricingModel, OptionValuationService, implied_volatility, price_with_volatility
 from kairospy.risk import RevaluationPosition, Scenario, ScenarioEngine, explain_scenario
 from kairospy.data import (
-    DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetQualityService, DatasetRelease,
+    AcquisitionLimits, DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetQualityService, DatasetRelease,
     DatasetStatus, DatasetStorageKind, OutputFormat, QualityLevel, DatasetClient, RunMode,
     register_market_replay_dataset,
 )
@@ -96,17 +97,17 @@ def _program_name() -> str:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog=_program_name(), description="Multi-asset study, backtest, reconciliation, and execution toolkit")
-    parser.add_argument("--data-root", default="data/snapshots")
-    parser.add_argument("--dataset-root", default="data/curated")
-    parser.add_argument("--backtest-root", default="data/backtests")
-    parser.add_argument("--catalog-path", default="data/catalog/instruments.json")
-    parser.add_argument("--reference-catalog-path", default="data/reference/catalog.json")
-    parser.add_argument("--event-log-path", default="data/events/kairospy.jsonl")
+    parser.add_argument("--data-root", default=f"{DEFAULT_LAKE_ROOT}/snapshots")
+    parser.add_argument("--dataset-root", default=f"{DEFAULT_LAKE_ROOT}/curated")
+    parser.add_argument("--backtest-root", default=f"{DEFAULT_LAKE_ROOT}/backtests")
+    parser.add_argument("--catalog-path", default=f"{DEFAULT_LAKE_ROOT}/catalog/instruments.json")
+    parser.add_argument("--reference-catalog-path", default=f"{DEFAULT_LAKE_ROOT}/reference/catalog.json")
+    parser.add_argument("--event-log-path", default=f"{DEFAULT_LAKE_ROOT}/events/kairospy.jsonl")
     parser.add_argument("--runtime-db", help="transactional runtime database; defaults beside --event-log-path")
     parser.add_argument(
         "--lake-root",
-        default=os.environ.get("KAIROSPY_LAKE_ROOT", "data"),
-        help="data lake root; defaults to KAIROSPY_LAKE_ROOT or data",
+        default=os.environ.get("KAIROSPY_LAKE_ROOT", DEFAULT_LAKE_ROOT),
+        help=f"data lake root; defaults to KAIROSPY_LAKE_ROOT or {DEFAULT_LAKE_ROOT}",
     )
     parser.add_argument("--format", choices=("text", "json"), default="text",
                         help="output format; human-readable text is the default")
@@ -175,6 +176,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     inspect_data = data_actions.add_parser("inspect", help="show schema, lineage and time coverage")
     inspect_data.add_argument("--dataset", required=True)
+    list_data = data_actions.add_parser("list", help="list governed dataset products")
+    list_data.add_argument("--dimension", action="append", default=[], help="key=value dimension; repeatable")
+    releases_data = data_actions.add_parser("releases", help="list local dataset releases and versions")
+    releases_data.add_argument("--dataset", help="logical dataset key, release id, or alias")
+    releases_data.add_argument("--dimension", action="append", default=[], help="key=value dimension; repeatable")
     search_data = data_actions.add_parser("search", help="discover products by structured dimensions")
     search_data.add_argument("--dimension", action="append", default=[], help="key=value dimension; repeatable")
     describe_data = data_actions.add_parser("describe", help="show product semantics, sources and releases")
@@ -198,6 +204,7 @@ def _parser() -> argparse.ArgumentParser:
     prepare_data.add_argument("--venue")
     prepare_data.add_argument("--connector-config", type=Path)
     prepare_data.add_argument("--acquire-missing", action="store_true")
+    _add_acquisition_limit_args(prepare_data)
     prepare_data.add_argument("--promote", action="store_true", help="explicitly approve promotion after quality passes")
     prepare_data.add_argument("--actor", default="data-prepare")
     prepare_data.add_argument("--reason", default="explicit data preparation")
@@ -255,18 +262,34 @@ def _parser() -> argparse.ArgumentParser:
     data_actions.add_parser("btc-options-readiness", help=argparse.SUPPRESS)
     catalog_data = data_actions.add_parser("catalog", help="list governed logical datasets, versions, aliases and formats")
     catalog_data.add_argument("--refresh", action="store_true", help="discover and persist existing governed datasets")
+    copy_data = data_actions.add_parser("copy", help="copy a governed dataset release between local data lake roots")
+    copy_data.add_argument("--from", dest="source_root", required=True, type=Path,
+                           help="source data lake root, for example /path/to/project/.kairos/data")
+    copy_data.add_argument("--to", dest="target_root", type=Path,
+                           help="target data lake root; defaults to --lake-root")
+    copy_data.add_argument("--dataset", required=True, help="logical dataset key to copy")
+    copy_data.add_argument("--release", help="specific release id or alias; defaults to the source catalog selected release")
+    copy_data.add_argument("--include-source-cache", action="store_true",
+                           help="also copy source/provider=<provider> raw provider cache, such as Binance payload.zip files")
+    copy_data.add_argument("--overwrite", action="store_true", help="overwrite existing copied files")
+    copy_data.add_argument("--dry-run", action="store_true", help="show what would be copied without writing files")
     for action, help_text in (("plan", "show local coverage and missing-data acquisition plan"),
                               ("acquire", "acquire missing data and publish an immutable release")):
         command = data_actions.add_parser(action, help=help_text)
-        command.add_argument("--dataset", required=True)
-        command.add_argument("--start", required=True, help="inclusive ISO-8601 timestamp with timezone")
-        command.add_argument("--end", required=True, help="exclusive ISO-8601 timestamp with timezone")
+        command.add_argument("--dataset", required=action == "plan")
+        command.add_argument("--start", required=action == "plan", help="inclusive ISO-8601 timestamp with timezone")
+        command.add_argument("--end", required=action == "plan", help="exclusive ISO-8601 timestamp with timezone")
         command.add_argument("--provider")
         command.add_argument("--venue")
         command.add_argument("--connector-config", type=Path,
                              help="explicit JSON configuration for additional provider connectors")
+        command.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat for a bounded universe")
+        _add_acquisition_limit_args(command)
         if action == "acquire":
             command.add_argument("--refresh", action="store_true")
+            command.add_argument("--yes", action="store_true", help="skip confirmation after showing the acquisition plan")
+            command.add_argument("--dry-run", action="store_true", help="show the plan without downloading")
+            command.add_argument("--list-products", action="store_true", help="list acquirable data products and exit")
     promote_data = data_actions.add_parser("promote", help="audit and promote a frozen dataset release")
     promote_data.add_argument("--release", required=True)
     promote_data.add_argument("--status", required=True, choices=(
@@ -826,6 +849,12 @@ def _add_sma_input_arguments(parser):
     parser.add_argument("--start"); parser.add_argument("--end")
 
 
+def _add_acquisition_limit_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--max-requests", type=int, default=10_000, help="maximum provider requests allowed for this acquisition")
+    parser.add_argument("--max-instruments", type=int, default=10_000, help="maximum instruments allowed for this acquisition")
+    parser.add_argument("--max-bytes", type=int, help="maximum estimated bytes allowed for this acquisition")
+
+
 def _add_sma_run_arguments(parser):
     parser.add_argument("--fast", type=int, default=20); parser.add_argument("--slow", type=int, default=50)
     parser.add_argument("--initial-cash", type=Decimal, default=Decimal("100000"))
@@ -869,12 +898,13 @@ def _apply_project_config_defaults(args: argparse.Namespace, raw_argv: list[str]
     if config is None:
         return
     setattr(args, "_kairospy_project_config", config)
+    lake_root = config.relative_path("data.lake_root", DEFAULT_LAKE_ROOT)
     defaults = {
-        "--lake-root": ("lake_root", "data.lake_root", "data"),
-        "--dataset-root": ("dataset_root", "data.dataset_root", "data/curated"),
-        "--catalog-path": ("catalog_path", "data.catalog_path", "data/catalog/instruments.json"),
-        "--reference-catalog-path": ("reference_catalog_path", "data.reference_catalog_path", "data/reference/catalog.json"),
-        "--event-log-path": ("event_log_path", "data.event_log_path", "data/events/kairospy.jsonl"),
+        "--lake-root": ("lake_root", "data.lake_root", DEFAULT_LAKE_ROOT),
+        "--dataset-root": ("dataset_root", "data.dataset_root", str(lake_root / "curated")),
+        "--catalog-path": ("catalog_path", "data.catalog_path", str(lake_root / "catalog" / "instruments.json")),
+        "--reference-catalog-path": ("reference_catalog_path", "data.reference_catalog_path", str(lake_root / "reference" / "catalog.json")),
+        "--event-log-path": ("event_log_path", "data.event_log_path", str(lake_root / "events" / "kairospy.jsonl")),
     }
     for option, (attribute, dotted_path, default) in defaults.items():
         if not hasattr(args, attribute) or _has_cli_option(raw_argv, option):
@@ -882,7 +912,7 @@ def _apply_project_config_defaults(args: argparse.Namespace, raw_argv: list[str]
         value = config.relative_path(dotted_path, default)
         setattr(args, attribute, str(value))
     if hasattr(args, "data_root") and not _has_cli_option(raw_argv, "--data-root"):
-        setattr(args, "data_root", str(config.root / "data" / "snapshots"))
+        setattr(args, "data_root", str(lake_root / "snapshots"))
 
 
 def _require_project_config(args: argparse.Namespace):
@@ -945,7 +975,7 @@ def _project_command(args: argparse.Namespace) -> int:
         "project": config.get("project.name", config.root.name),
         "root": str(config.root),
         "config": str(config.path),
-        "data_root": str(config.relative_path("data.lake_root", "data")),
+        "data_root": str(config.relative_path("data.lake_root", DEFAULT_LAKE_ROOT)),
         "default_environment": config.get("execution.default_environment", "simulated"),
         "live_trading": "enabled" if config.get("execution.live_trading_enabled", False) else "locked",
     }
@@ -1598,17 +1628,20 @@ def _data(args: argparse.Namespace) -> int:
             "events": to_primitive(events),
         }, ensure_ascii=False, indent=2))
         return 0
+    if args.action == "list":
+        payload = {"products": DatasetClient(args.lake_root).list(**_dimension_filters(args.dimension))}
+        _emit_data_payload(args, "Kairos Data Products", payload)
+        return 0
+    if args.action == "releases":
+        payload = {"releases": DatasetClient(args.lake_root).releases(
+            args.dataset, **_dimension_filters(args.dimension),
+        )}
+        _emit_data_payload(args, "Kairos Data Releases", payload)
+        return 0
     if args.action == "search":
-        dimensions = {}
-        for item in args.dimension:
-            if "=" not in item:
-                raise SystemExit("--dimension must use key=value")
-            key, value = item.split("=", 1)
-            if not key.strip() or not value.strip():
-                raise SystemExit("--dimension key and value cannot be empty")
-            dimensions[key.strip()] = value.strip()
-        products = DatasetClient(args.lake_root).search(**dimensions)
-        payload = {"products": [DatasetClient(args.lake_root).describe(item) for item in products]}
+        client = DatasetClient(args.lake_root)
+        products = client.search(**_dimension_filters(args.dimension))
+        payload = {"products": [client.describe(item) for item in products]}
         _emit_data_payload(args, "Kairos Data Search", payload)
         return 0
     if args.action == "describe":
@@ -1639,7 +1672,7 @@ def _data(args: argparse.Namespace) -> int:
             args.lake_root, connector_config=args.connector_config,
             progress=None if args.quiet else _archive_progress,
         )
-        client = DatasetClient(args.lake_root, providers=providers)
+        client = DatasetClient(args.lake_root, providers=providers, acquisition_limits=_acquisition_limits(args))
         from kairospy.data.preparation import DataPreparationService
         prepared = DataPreparationService(client).prepare(
             args.dataset, start=datetime.fromisoformat(args.start), end=datetime.fromisoformat(args.end),
@@ -1692,6 +1725,18 @@ def _data(args: argparse.Namespace) -> int:
             } for release in catalog.releases(product)],
         } for product in catalog.products()]
         _emit_data_payload(args, "Kairos Data Catalog", {"products": values}); return 0
+    if args.action == "copy":
+        from kairospy.data.transfer import copy_dataset_release
+        result = copy_dataset_release(
+            args.source_root,
+            args.target_root or args.lake_root,
+            args.dataset,
+            release=args.release,
+            include_source_cache=args.include_source_cache,
+            overwrite=args.overwrite,
+            dry_run=args.dry_run,
+        )
+        _emit_data_payload(args, "Kairos Data Copy", to_primitive(result)); return 0
     if args.action == "compare":
         comparison = DatasetClient(args.lake_root).compare(args.first, args.second)
         print(json.dumps(comparison, ensure_ascii=False, indent=2)); return 0
@@ -1716,12 +1761,31 @@ def _data(args: argparse.Namespace) -> int:
             args.lake_root, connector_config=args.connector_config,
             progress=(None if args.quiet or args.action == "plan" else _archive_progress),
         )
-        client = DatasetClient(args.lake_root, providers=providers)
+        client = DatasetClient(args.lake_root, providers=providers, acquisition_limits=_acquisition_limits(args))
+        if args.action == "acquire" and getattr(args, "list_products", False):
+            _emit_data_payload(args, "Kairos Acquirable Data Products", {"products": _acquirable_product_rows(client, providers)})
+            return 0
+        interactive_acquire = args.action == "acquire" and not (args.dataset and args.start and args.end)
+        if args.action == "acquire":
+            _prompt_acquire_args(args, client, providers)
+        if not args.dataset or not args.start or not args.end:
+            raise SystemExit("--dataset, --start and --end are required outside interactive acquire")
         start, end = datetime.fromisoformat(args.start), datetime.fromisoformat(args.end)
         plan = client.plan(args.dataset, start=start, end=end, provider=args.provider, venue=args.venue)
+        plan = _plan_with_cli_instruments(plan, providers, tuple(args.instrument))
         if args.action == "plan":
-            _emit_data_payload(args, "Kairos Acquisition Plan", to_primitive(plan)); return 0
-        release = client.acquire(plan, refresh=args.refresh)
+            _emit_data_payload(args, "Kairos Acquisition Plan", _acquisition_plan_payload(plan, providers, tuple(args.instrument))); return 0
+        _emit_data_payload(args, "Kairos Acquisition Plan", _acquisition_plan_payload(plan, providers, tuple(args.instrument)))
+        if args.dry_run:
+            return 0
+        should_confirm = interactive_acquire or sys.stdin.isatty()
+        if should_confirm and not args.yes and not _prompt_bool("Proceed with acquisition", False):
+            print("Acquisition cancelled")
+            return 1
+        try:
+            release = client.acquire(plan, instruments=tuple(args.instrument), refresh=args.refresh)
+        except RuntimeError as error:
+            raise SystemExit(str(error)) from error
         _emit_data_payload(args, "Kairos Data Release", to_primitive(release)); return 0
     if args.action == "promote":
         release = DataCatalog(args.lake_root).promote(
@@ -1836,7 +1900,7 @@ def _data(args: argparse.Namespace) -> int:
 
 def _emit_data_payload(args: argparse.Namespace, title: str, payload: object) -> None:
     from kairospy.cli_output import (
-        render_data_catalog, render_dataset_detail, render_dataset_list, render_generic_payload,
+        render_data_catalog, render_dataset_detail, render_dataset_list, render_dataset_releases, render_generic_payload,
         render_key_value_panel, render_status_table,
     )
 
@@ -1850,7 +1914,16 @@ def _emit_data_payload(args: argparse.Namespace, title: str, payload: object) ->
     if args.action == "catalog" and isinstance(primitive.get("products"), list):
         print(render_data_catalog(primitive["products"]))
         return
+    if args.action == "list" and isinstance(primitive.get("products"), list):
+        print(render_dataset_list(title, primitive["products"]))
+        return
+    if args.action == "releases" and isinstance(primitive.get("releases"), list):
+        print(render_dataset_releases(title, primitive["releases"]))
+        return
     if args.action == "search" and isinstance(primitive.get("products"), list):
+        print(render_dataset_list(title, primitive["products"]))
+        return
+    if args.action == "acquire" and isinstance(primitive.get("products"), list):
         print(render_dataset_list(title, primitive["products"]))
         return
     if args.action == "describe":
@@ -1859,10 +1932,112 @@ def _emit_data_payload(args: argparse.Namespace, title: str, payload: object) ->
     if args.action in {"doctor", "diagnostics"}:
         print(render_status_table(title, _diagnostic_rows(primitive)))
         return
+    if args.action in {"plan", "acquire"}:
+        print(_render_acquisition_plan_payload(title, primitive))
+        return
     if args.action == "query":
         print(_render_query_payload(title, primitive))
         return
     print(render_generic_payload(title, primitive))
+
+
+def _dimension_filters(values: list[str]) -> dict[str, str]:
+    dimensions = {}
+    for item in values:
+        if "=" not in item:
+            raise SystemExit("--dimension must use key=value")
+        key, value = item.split("=", 1)
+        if not key.strip() or not value.strip():
+            raise SystemExit("--dimension key and value cannot be empty")
+        dimensions[key.strip()] = value.strip()
+    return dimensions
+
+
+def _prompt_acquire_args(args: argparse.Namespace, client: DatasetClient, providers) -> None:
+    if args.dataset and args.start and args.end:
+        return
+    products = _acquirable_product_rows(client, providers)
+    if not products:
+        raise SystemExit("no acquirable data products are registered")
+    if args.dataset is None:
+        print("Acquirable Data Products")
+        for index, product in enumerate(products, start=1):
+            print(f"  {index}. {product['logical_key']}  {product['title']}")
+        selected = _prompt_text("Dataset number or logical key", "1").strip()
+        if selected.isdigit() and 1 <= int(selected) <= len(products):
+            args.dataset = str(products[int(selected) - 1]["logical_key"])
+        else:
+            args.dataset = selected
+    if args.start is None:
+        args.start = _prompt_text("Start [inclusive ISO-8601]", "")
+    if args.end is None:
+        args.end = _prompt_text("End [exclusive ISO-8601]", "")
+    if not args.instrument:
+        universe = _prompt_text("Universe [full-market or comma-separated instruments]", "full-market").strip()
+        if universe and universe != "full-market":
+            args.instrument = tuple(item.strip() for item in universe.split(",") if item.strip())
+
+
+def _acquirable_product_rows(client: DatasetClient, providers) -> list[dict[str, object]]:
+    rows = []
+    specs = getattr(providers, "_specs", {})
+    for key, spec in sorted(specs.items()):
+        product = spec.product
+        rows.append({
+            "logical_key": str(key),
+            "title": product.title,
+            "layer": product.layer.value,
+            "dimensions": dict(product.dimensions),
+            "primary_time": product.primary_time,
+            "sources": to_primitive(product.sources),
+            "releases": [to_primitive(release) for release in client.catalog.releases(product)],
+        })
+    return rows
+
+
+def _plan_with_cli_instruments(plan, providers, instruments: tuple[str, ...]):
+    if not instruments or plan.selected is None or not plan.connector_available:
+        return plan
+    from dataclasses import replace
+    from kairospy.data import AcquisitionRequest
+
+    connector = providers.get(plan.selected.provider, plan.logical_key)
+    request = AcquisitionRequest(
+        plan.logical_key, plan.missing, plan.selected, instruments,
+        base_release_id=plan.local_release_id,
+    )
+    estimate = connector.estimate(request) if hasattr(connector, "estimate") else plan.estimate
+    return replace(plan, estimate=estimate)
+
+
+def _acquisition_plan_payload(plan, providers, instruments: tuple[str, ...]) -> dict[str, object]:
+    payload = to_primitive(plan)
+    if plan.selected is None or not plan.connector_available:
+        return payload
+    connector = providers.get(plan.selected.provider, plan.logical_key)
+    task_plan = getattr(connector, "task_plan", None)
+    if task_plan is None:
+        return payload
+    from kairospy.data import AcquisitionRequest
+
+    request = AcquisitionRequest(
+        plan.logical_key, plan.missing, plan.selected, instruments,
+        base_release_id=plan.local_release_id,
+    )
+    try:
+        payload["provider_tasks"] = task_plan(request)
+    except Exception as error:
+        payload["provider_tasks"] = {"status": "unavailable", "error": f"{type(error).__name__}: {error}"}
+    return payload
+
+
+def _acquisition_limits(args: argparse.Namespace) -> AcquisitionLimits:
+    max_requests = int(getattr(args, "max_requests", 10_000))
+    max_instruments = int(getattr(args, "max_instruments", 10_000))
+    max_bytes = getattr(args, "max_bytes", None)
+    if max_requests <= 0 or max_instruments <= 0 or max_bytes is not None and int(max_bytes) <= 0:
+        raise SystemExit("acquisition limits must be positive")
+    return AcquisitionLimits(maximum_requests=max_requests, maximum_instruments=max_instruments, maximum_bytes=max_bytes)
 
 
 def _diagnostic_rows(payload: dict[str, object]) -> list[dict[str, object]]:
@@ -1898,6 +2073,60 @@ def _render_query_payload(title: str, payload: dict[str, object]) -> str:
             table_rows.append({field: row.get(field, "") for field in fields} if isinstance(row, dict) else {"row": row})
         output.append(render_status_table("Rows", table_rows, columns=fields))
     return "\n\n".join(output)
+
+
+def _render_acquisition_plan_payload(title: str, payload: dict[str, object]) -> str:
+    from kairospy.cli_output import render_key_value_panel, render_status_table
+
+    estimate = payload.get("estimate") if isinstance(payload.get("estimate"), dict) else {}
+    selected = payload.get("selected") if isinstance(payload.get("selected"), dict) else {}
+    requested = payload.get("requested") if isinstance(payload.get("requested"), dict) else {}
+    missing = payload.get("missing") if isinstance(payload.get("missing"), list) else []
+    rows = (
+        ("Dataset", payload.get("logical_key", "-")),
+        ("Provider", selected.get("provider", "-") if selected else "-"),
+        ("Venue", selected.get("venue", "-") if selected else "-"),
+        ("Connector", "available" if payload.get("connector_available") else "unavailable"),
+        ("Complete", payload.get("complete", False)),
+        ("Missing Ranges", len(missing)),
+        ("Estimated Requests", estimate.get("requests", "-") if estimate else "-"),
+        ("Estimated Instruments", estimate.get("instruments", "-") if estimate else "-"),
+        ("Cost Class", estimate.get("cost_class", "-") if estimate else "-"),
+    )
+    output = [render_key_value_panel(title, rows)]
+    tasks = payload.get("provider_tasks")
+    if isinstance(tasks, dict) and tasks:
+        task_rows = (
+            ("Provider", tasks.get("provider", "-")),
+            ("Task Type", tasks.get("task_type", "-")),
+            ("Universe", tasks.get("universe", "-")),
+            ("Symbols", tasks.get("symbols", "-")),
+            ("Total Tasks", tasks.get("total_tasks", "-")),
+            ("Cached Tasks", tasks.get("cached_tasks", "-")),
+            ("Uncached Tasks", tasks.get("uncached_tasks", "-")),
+            ("Resume Supported", tasks.get("resume_supported", "-")),
+        )
+        output.append(render_key_value_panel("Provider Task Plan", task_rows))
+        ranges = tasks.get("ranges")
+        if isinstance(ranges, list) and ranges:
+            output.append(render_status_table(
+                "Task Ranges",
+                [item for item in ranges if isinstance(item, dict)],
+                columns=("start", "end", "tasks", "cached", "uncached"),
+            ))
+        matrix = tasks.get("matrix")
+        if isinstance(matrix, list) and matrix:
+            output.append(render_status_table(
+                "Task Matrix",
+                [item for item in matrix if isinstance(item, dict)],
+                columns=("year", "month", "tasks", "cached_monthly", "cached_daily_files"),
+            ))
+    elif isinstance(requested, dict):
+        output.append(render_key_value_panel("Requested Window", (
+            ("Start", requested.get("start", "-")),
+            ("End", requested.get("end", "-")),
+        )))
+    return "\n\n".join(item for item in output if item)
 
 
 def _massive_request(args: argparse.Namespace) -> tuple[str, dict[str, object]]:

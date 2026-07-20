@@ -13,7 +13,7 @@ args = parser.parse_args()
 
 # Provider and venue are both explicit. A Deribit release can never silently
 # satisfy this Binance request.
-frame = DatasetClient("data").get(
+frame = DatasetClient().get(
     args.dataset,
     provider=args.provider,
     venue=args.venue,

@@ -353,13 +353,30 @@ def render_data_catalog(products: Sequence[Mapping[str, object]]) -> str:
 
 
 def render_dataset_list(title: str, products: Sequence[Mapping[str, object]]) -> str:
+    rows = []
+    for item in products:
+        selected = item.get("selected_release")
+        rows.append({
+            "key": item.get("logical_key") or item.get("key") or item.get("dataset") or "",
+            "layer": item.get("layer", ""),
+            "releases": item.get("release_count", ""),
+            "selected": selected.get("version", "") if isinstance(selected, Mapping) else "",
+            "primary_time": item.get("primary_time", ""),
+            "title": item.get("title", ""),
+        })
+    return render_status_table(title, rows, columns=("key", "layer", "releases", "selected", "primary_time", "title"))
+
+
+def render_dataset_releases(title: str, releases: Sequence[Mapping[str, object]]) -> str:
     rows = [{
-        "key": item.get("logical_key") or item.get("key") or item.get("dataset") or "",
-        "layer": item.get("layer", ""),
-        "primary_time": item.get("primary_time", ""),
-        "title": item.get("title", ""),
-    } for item in products]
-    return render_status_table(title, rows, columns=("key", "layer", "primary_time", "title"))
+        "key": item.get("logical_key", ""),
+        "release_id": item.get("release_id", ""),
+        "version": item.get("version", ""),
+        "quality": item.get("quality_level", ""),
+        "status": item.get("status", ""),
+        "selected": "yes" if item.get("selected") else "",
+    } for item in releases]
+    return render_status_table(title, rows, columns=("key", "release_id", "version", "quality", "status", "selected"))
 
 
 def render_dataset_detail(title: str, payload: Mapping[str, object]) -> str:

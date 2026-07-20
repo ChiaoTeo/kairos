@@ -11,8 +11,8 @@ __pycache__/
 build/
 .DS_Store
 .env
-.kairos.toml
 /config
-.kairos
-.strategies
-/.studies
+.kairos/
+!.kairos/project.json
+strategies/
+studies/

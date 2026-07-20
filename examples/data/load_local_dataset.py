@@ -2,7 +2,7 @@ from kairospy.data import OutputFormat, DatasetClient
 from kairospy.data.products import BTC_SPOT_DAILY
 
 
-data = DatasetClient("data")
+data = DatasetClient()
 frame = data.get(
     BTC_SPOT_DAILY.product,
     start="2025-01-01T00:00:00Z",

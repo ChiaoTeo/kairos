@@ -59,10 +59,10 @@ class DataProductExperienceTests(unittest.TestCase):
                 self.assertEqual(main(["--lake-root", directory, "data", "describe", "--dataset", str(product.key)]), 0)
                 self.assertIn(release.release_id, output.getvalue())
             with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main(["--lake-root", directory, "data", "doctor", "--dataset", str(product.key)]), 0)
+                self.assertEqual(main(["--lake-root", directory, "--format", "json", "data", "doctor", "--dataset", str(product.key)]), 0)
                 self.assertIn('"healthy": true', output.getvalue())
             with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main(["--lake-root", directory, "data", "diagnostics", "--strict"]), 0)
+                self.assertEqual(main(["--lake-root", directory, "--format", "json", "data", "diagnostics", "--strict"]), 0)
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
                     "--lake-root", directory, "data", "query", "--dataset", release.release_id,
@@ -82,7 +82,7 @@ class DataProductExperienceTests(unittest.TestCase):
             product, release = self._lake(directory)
             (Path(directory) / release.relative_path / "quality.json").unlink()
             with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main(["--lake-root", directory, "data", "diagnostics", "--strict"]), 2)
+                self.assertEqual(main(["--lake-root", directory, "--format", "json", "data", "diagnostics", "--strict"]), 2)
                 self.assertIn("missing_quality", output.getvalue())
             doctor = DataDiagnosticsService(directory).doctor(str(product.key))
             self.assertIn("reacquire", doctor["next"])

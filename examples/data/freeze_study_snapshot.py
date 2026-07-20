@@ -3,7 +3,7 @@ from kairospy.data import DatasetClient
 from kairospy.data.products import BTC_SPOT_DAILY
 
 
-data = DatasetClient("data")
+data = DatasetClient()
 query = data.get(
     BTC_SPOT_DAILY.product,
     start="2025-01-01T00:00:00Z",
@@ -11,7 +11,7 @@ query = data.get(
     fields=("period_start", "close"),
 )
 data.freeze_study(
-    "data/studies/example/data_snapshot.json",
+    ".kairos/data/studies/example/data_snapshot.json",
     "example",
     (query,),
     code_version=__version__,

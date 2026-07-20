@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 from kairospy.data.catalog import DataCatalog
 
 
@@ -17,7 +18,7 @@ class GovernanceAudit:
     violations: tuple[str, ...]
 
 
-def audit_governance(root: str | Path = "data", *, ignored_studies: tuple[str, ...] = ("btc_options_study_summary",)) -> GovernanceAudit:
+def audit_governance(root: str | Path = DEFAULT_LAKE_ROOT, *, ignored_studies: tuple[str, ...] = ("btc_options_study_summary",)) -> GovernanceAudit:
     root=Path(root);violations=[];datasets=studies=strategies=0;study_versions=[]
     catalog=DataCatalog(root)
     for release in catalog.releases():

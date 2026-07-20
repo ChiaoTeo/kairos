@@ -158,6 +158,8 @@ class RepositoryHygieneTests(unittest.TestCase):
             "python studies/starter.py",
             "[study]",
             "This is a Kairos quantitative study, backtest, and execution project.",
+            'lake_root = "{DEFAULT_LAKE_ROOT}"',
+            "Kairos-managed data lives under `.kairos/data/`",
             "Configure providers only in `kairos.toml`",
         )
         for marker in required:

@@ -15,6 +15,7 @@ import json
 
 from kairospy.contracts import canonicalize_market_event
 from kairospy.application import GovernedStrategyRunLoop, run_target_backtest
+from kairospy.configuration import DEFAULT_LAKE_ROOT
 from kairospy.data import OutputFormat, DatasetClient, RunMode
 from kairospy.domain.identity import InstrumentId
 from kairospy.domain.market_data import Bar
@@ -131,7 +132,7 @@ def _time(value) -> datetime:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--lake-root", default="data")
+    parser.add_argument("--lake-root", default=DEFAULT_LAKE_ROOT)
     parser.add_argument("--dataset")
     parser.add_argument("--start")
     parser.add_argument("--end")
