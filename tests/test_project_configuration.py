@@ -77,6 +77,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             )
             checks = json.loads(doctor.stdout)["checks"]
             self.assertIn({"name": "massive", "status": "ok", "detail": "credentials resolved"}, checks)
+            self.assertIn("next_steps", json.loads(doctor.stdout))
 
     def test_cli_configure_provider_shortcuts_write_project_config(self) -> None:
         with TemporaryDirectory() as directory:
@@ -151,6 +152,83 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             )
             self.assertIn("Kairos Configuration", show.stdout)
             self.assertIn("providers.massive.api_key", show.stdout)
+
+    def test_cli_configure_interactive_accepts_piped_answers(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Interactive Desk")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+
+            subprocess.run(
+                [sys.executable, "-m", "kairos", "configure", "--interactive"],
+                cwd=root,
+                input="binance\ntestnet\nPIPE_BINANCE_KEY\nPIPE_BINANCE_SECRET\n",
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            config = KairosProjectConfig.load(root / "kairos.toml")
+            self.assertEqual(config.get("providers.binance.testnet.api_key"), "env:PIPE_BINANCE_KEY")
+            self.assertEqual(config.get("providers.binance.testnet.api_secret"), "env:PIPE_BINANCE_SECRET")
+
+    def test_cli_init_interactive_accepts_piped_answers(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "desk"
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+
+            subprocess.run(
+                [sys.executable, "-m", "kairos", "init", "--interactive"],
+                cwd=root,
+                input=f"{target}\nInteractive Desk\nno\n",
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            config = KairosProjectConfig.load(target / "kairos.toml")
+            self.assertEqual(config.get("project.name"), "interactive-desk")
+
+    def test_run_control_console_and_json_output_are_separate(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+
+            human = subprocess.run(
+                [
+                    sys.executable, "-m", "kairos", "run", "backtest",
+                    "--fixture", "--fast", "5", "--slow", "15", "--artifact-root", str(root / "artifacts"),
+                    "--control",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertIn("Kairos Run Control", human.stdout)
+            self.assertIn("Kairos Run Summary", human.stdout)
+            self.assertIn("Next Steps", human.stdout)
+
+            machine = subprocess.run(
+                [
+                    sys.executable, "-m", "kairos", "--format", "json", "run", "backtest",
+                    "--fixture", "--fast", "5", "--slow", "15", "--artifact-root", str(root / "json-artifacts"),
+                    "--control",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            payload = json.loads(machine.stdout)
+            self.assertEqual(payload["mode"], "backtest")
+            self.assertNotIn("Kairos Run Control", machine.stdout)
 
 
 if __name__ == "__main__":

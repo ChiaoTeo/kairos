@@ -9,7 +9,7 @@ import pandas as pd
 
 from kairos.backtest.feed import HistoricalDataset
 from kairos.domain.product import ListedOptionSpec, OptionRight
-from kairos.pricing import ValuationService
+from kairos.pricing import OptionValuationService
 from kairos.study_platform.data_store import CollectionManifest
 
 
@@ -144,7 +144,7 @@ def build_panel(dataset: HistoricalDataset, config: StudyConfig = StudyConfig())
     labels are attached in a separate pass and are never used to form the signal.
     """
     catalog = dataset.reference_catalog()
-    valuation_service = ValuationService(
+    valuation_service = OptionValuationService(
         catalog,
         max_quote_age_seconds=Decimal(str(max(5, dataset.manifest.sampling_seconds))),
     )

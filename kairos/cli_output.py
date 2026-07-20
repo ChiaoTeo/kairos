@@ -325,6 +325,76 @@ def render_command_success(title: str, rows: Sequence[tuple[str, object]] = ()) 
     return render_key_value_panel(title, rows)
 
 
+def render_next_steps(steps: Sequence[str]) -> str:
+    if not steps:
+        return ""
+    rendered = _render_rich_next_steps(steps)
+    if rendered is not None:
+        return rendered
+    return "\n".join(_paragraph("Next Steps", "\n".join(steps))).rstrip()
+
+
+def render_data_catalog(products: Sequence[Mapping[str, object]]) -> str:
+    rows: list[dict[str, object]] = []
+    for product in products:
+        releases = product.get("releases")
+        release_count = len(releases) if isinstance(releases, list) else 0
+        rows.append({
+            "key": product.get("logical_key", ""),
+            "layer": product.get("layer", ""),
+            "releases": release_count,
+            "primary_time": product.get("primary_time", ""),
+            "title": product.get("title", ""),
+        })
+    return render_status_table(
+        "Kairos Data Catalog", rows,
+        columns=("key", "layer", "releases", "primary_time", "title"),
+    )
+
+
+def render_dataset_list(title: str, products: Sequence[Mapping[str, object]]) -> str:
+    rows = [{
+        "key": item.get("logical_key") or item.get("key") or item.get("dataset") or "",
+        "layer": item.get("layer", ""),
+        "primary_time": item.get("primary_time", ""),
+        "title": item.get("title", ""),
+    } for item in products]
+    return render_status_table(title, rows, columns=("key", "layer", "primary_time", "title"))
+
+
+def render_dataset_detail(title: str, payload: Mapping[str, object]) -> str:
+    rows = [(key.replace("_", " ").title(), value) for key, value in payload.items()
+            if key not in {"sources", "releases", "dimensions"}]
+    output = [render_key_value_panel(title, rows)]
+    dimensions = payload.get("dimensions")
+    if isinstance(dimensions, Mapping) and dimensions:
+        output.append(render_key_value_panel("Dimensions", tuple((str(key), value) for key, value in dimensions.items())))
+    releases = payload.get("releases")
+    if isinstance(releases, Sequence) and not isinstance(releases, (str, bytes)) and releases:
+        release_rows = [
+            {
+                "release_id": item.get("release_id", ""),
+                "quality": item.get("quality_level", ""),
+                "status": item.get("status", ""),
+                "provider": item.get("provider", ""),
+            }
+            for item in releases if isinstance(item, Mapping)
+        ]
+        output.append(render_status_table("Releases", release_rows, columns=("release_id", "quality", "status", "provider")))
+    return "\n\n".join(item for item in output if item)
+
+
+def render_generic_payload(title: str, payload: Mapping[str, object]) -> str:
+    rows = []
+    for key, value in payload.items():
+        if isinstance(value, (dict, list, tuple)):
+            continue
+        rows.append((key.replace("_", " ").title(), value))
+    if rows:
+        return render_key_value_panel(title, rows)
+    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+
+
 def _render_rich_status_table(
     title: str,
     rows: Sequence[Mapping[str, object]],
@@ -335,14 +405,15 @@ def _render_rich_status_table(
         from rich.table import Table
     except Exception:
         return None
-    console = Console(record=True, force_terminal=False, color_system=None, width=120)
+    console = Console(force_terminal=False, color_system=None, width=120)
     table = Table(title=title, show_header=True, header_style="bold")
     for column in columns:
         table.add_column(column.replace("_", " ").title())
     for row in rows:
         table.add_row(*(_display_status_cell(row.get(column, "")) for column in columns))
-    console.print(table)
-    return console.export_text().rstrip()
+    with console.capture() as capture:
+        console.print(table)
+    return capture.get().rstrip()
 
 
 def _render_rich_key_value_panel(title: str, rows: Sequence[tuple[str, object]]) -> str | None:
@@ -351,14 +422,28 @@ def _render_rich_key_value_panel(title: str, rows: Sequence[tuple[str, object]])
         from rich.table import Table
     except Exception:
         return None
-    console = Console(record=True, force_terminal=False, color_system=None, width=120)
+    console = Console(force_terminal=False, color_system=None, width=120)
     table = Table(title=title, show_header=False)
     table.add_column("Field")
     table.add_column("Value")
     for label, value in rows:
         table.add_row(label, _display_status_cell(value))
-    console.print(table)
-    return console.export_text().rstrip()
+    with console.capture() as capture:
+        console.print(table)
+    return capture.get().rstrip()
+
+
+def _render_rich_next_steps(steps: Sequence[str]) -> str | None:
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+    except Exception:
+        return None
+    console = Console(force_terminal=False, color_system=None, width=120)
+    body = "\n".join(f"{index}. {step}" for index, step in enumerate(steps, start=1))
+    with console.capture() as capture:
+        console.print(Panel(body, title="Next Steps"))
+    return capture.get().rstrip()
 
 
 def _display_status_cell(value: object) -> str:

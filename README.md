@@ -40,6 +40,8 @@ Study -> Factor -> Strategy -> Backtest -> Simulation -> Shadow -> Paper Fixture
 
 ## ⚡ 使用简介
 
+普通用户不需要复制本仓库。安装包只包含 Kairos 产品库和 CLI，不包含本仓库顶层 `studies/` 源码研究工作区。
+
 安装：
 
 ```bash
@@ -58,6 +60,12 @@ kairos doctor
 python studies/starter.py
 ```
 
+也可以用交互式初始化：
+
+```bash
+kairos init --interactive
+```
+
 配置外部 provider：
 
 ```bash
@@ -69,7 +77,7 @@ kairos configure massive
 kairos configure binance --environment testnet
 ```
 
-直接运行 `kairos configure` 会进入交互式向导；`kairos config show/path/set/unset/validate` 是底层 TOML 配置入口。CLI 默认输出面向人类的专业表格，脚本和 CI 使用稳定 JSON：
+直接运行 `kairos configure` 会进入交互式向导；`kairos config show/path/set/unset/validate` 是底层 TOML 配置入口。`kairos doctor` 会输出状态表和可执行的 Next Steps。CLI 默认输出面向人类的专业表格，脚本和 CI 使用稳定 JSON：
 
 ```bash
 kairos doctor
@@ -82,13 +90,19 @@ kairos --format json doctor
 python3 -m pip install 'kairospy[cli]'
 ```
 
-如果你从源码开发：
+如果你是从源码参与开发，再使用 editable 安装：
 
 ```bash
 python3 -m venv pyenv
 ./pyenv/bin/pip install -e '.[data,query,notebook]'
 ./pyenv/bin/kairos --help
 ./pyenv/bin/kairos tutorial sma
+```
+
+静态命名和打包边界检查：
+
+```bash
+./scripts/check_naming_static.sh
 ```
 
 运行一个无凭据、无下单的 SMA 教程：
@@ -101,7 +115,10 @@ kairos tutorial sma
 
 ```bash
 kairos run backtest --strategy sma-cross-v1 --fixture --fast 5 --slow 15
+kairos run backtest --strategy sma-cross-v1 --fixture --fast 5 --slow 15 --control
 ```
+
+`--control` 会显示 Run Control 控制台和 Run Summary，包含 pipeline、metrics、artifact、audit hash 和可执行的下一步命令；`--format json` 仍只输出稳定 JSON。
 
 Python API 示例：
 

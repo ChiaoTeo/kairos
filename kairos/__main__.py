@@ -117,6 +117,7 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--target", type=Path, default=Path("."), help="project directory; defaults to the current directory")
     init.add_argument("--name", help="project name; defaults to the target directory name")
     init.add_argument("--force", action="store_true", help="overwrite existing scaffold files")
+    init.add_argument("--interactive", action="store_true", help="prompt for project target, name and overwrite behavior")
     data = commands.add_parser("data", help="prepare and inspect governed market datasets")
     data_actions = data.add_subparsers(dest="action", required=True)
     data_download = data_actions.add_parser("download", help="download a registered Data Product by key")
@@ -294,22 +295,38 @@ def _parser() -> argparse.ArgumentParser:
     provider_flat_batch.add_argument("--end", required=True, help="exclusive date YYYY-MM-DD")
     provider_flat_batch.add_argument("--max-files", type=int, default=5, help="maximum non-local files to inspect/download in this run")
     provider_flat_batch.add_argument("--dry-run", action="store_true", help="only inspect cache status and write a plan")
-    prepare_spxw_daily_ohlcv = data_actions.add_parser("prepare-spxw-daily-ohlcv", help="inventory and convert downloaded OPRA daily OHLCV into governed SPXW Parquet")
+    prepare_spxw_daily_ohlcv = data_actions.add_parser("prepare-spxw-daily-ohlcv", help="inventory and convert downloaded OPRA daily OHLCV into governed SPXW Parquet; compatibility alias for prepare-spxw-daily-ohlcv")
     prepare_spxw_daily_ohlcv.add_argument("--dataset-id", required=True)
     prepare_spxw_daily_ohlcv.add_argument("--start", required=True, help="inclusive date YYYY-MM-DD")
     prepare_spxw_daily_ohlcv.add_argument("--end", required=True, help="exclusive date YYYY-MM-DD")
-    prepare_option_daily_ohlcv = data_actions.add_parser("prepare-option-daily-ohlcv", help="convert downloaded OPRA daily OHLCV for one OCC root")
+    prepare_spxw_day_aggs = data_actions.add_parser("prepare-spxw-day-aggs", help="compatibility alias for prepare-spxw-daily-ohlcv")
+    prepare_spxw_day_aggs.add_argument("--dataset-id", required=True)
+    prepare_spxw_day_aggs.add_argument("--start", required=True, help="inclusive date YYYY-MM-DD")
+    prepare_spxw_day_aggs.add_argument("--end", required=True, help="exclusive date YYYY-MM-DD")
+    prepare_option_daily_ohlcv = data_actions.add_parser("prepare-option-daily-ohlcv", help="convert downloaded OPRA daily OHLCV for one OCC root; compatibility alias for prepare-option-daily-ohlcv")
     prepare_option_daily_ohlcv.add_argument("--dataset-id", required=True)
     prepare_option_daily_ohlcv.add_argument("--option-root", required=True, help="OCC root without O: prefix, for example NVDA")
     prepare_option_daily_ohlcv.add_argument("--start", required=True)
     prepare_option_daily_ohlcv.add_argument("--end", required=True)
-    prepare_equity_daily_ohlcv = data_actions.add_parser("prepare-equity-daily-ohlcv", help="archive and convert provider equity daily OHLCV")
+    prepare_option_day_aggs = data_actions.add_parser("prepare-option-day-aggs", help="compatibility alias for prepare-option-daily-ohlcv")
+    prepare_option_day_aggs.add_argument("--dataset-id", required=True)
+    prepare_option_day_aggs.add_argument("--option-root", required=True, help="OCC root without O: prefix, for example NVDA")
+    prepare_option_day_aggs.add_argument("--start", required=True)
+    prepare_option_day_aggs.add_argument("--end", required=True)
+    prepare_equity_daily_ohlcv = data_actions.add_parser("prepare-equity-daily-ohlcv", help="archive and convert provider equity daily OHLCV; compatibility alias for prepare-equity-daily-ohlcv")
     prepare_equity_daily_ohlcv.add_argument("--provider", choices=("massive",), default="massive")
     prepare_equity_daily_ohlcv.add_argument("--dataset-id", required=True)
     prepare_equity_daily_ohlcv.add_argument("--ticker", required=True)
     prepare_equity_daily_ohlcv.add_argument("--start", required=True)
     prepare_equity_daily_ohlcv.add_argument("--end", required=True)
     prepare_equity_daily_ohlcv.add_argument("--view", choices=("raw", "vendor_adjusted"), default="vendor_adjusted")
+    prepare_equity_day_aggs = data_actions.add_parser("prepare-equity-day-aggs", help="compatibility alias for prepare-equity-daily-ohlcv")
+    prepare_equity_day_aggs.add_argument("--provider", choices=("massive",), default="massive")
+    prepare_equity_day_aggs.add_argument("--dataset-id", required=True)
+    prepare_equity_day_aggs.add_argument("--ticker", required=True)
+    prepare_equity_day_aggs.add_argument("--start", required=True)
+    prepare_equity_day_aggs.add_argument("--end", required=True)
+    prepare_equity_day_aggs.add_argument("--view", choices=("raw", "vendor_adjusted"), default="vendor_adjusted")
     prepare_option_close_iv = data_actions.add_parser("prepare-option-close-implied-volatility", help="materialize close-based implied volatility for an option daily OHLCV dataset")
     prepare_option_close_iv.add_argument("--dataset-id", required=True)
     prepare_option_close_iv.add_argument("--option-dataset", required=True)
@@ -730,12 +747,14 @@ def _parser() -> argparse.ArgumentParser:
                            help="duration for --execute-feeds/--execute-strategy supervised runtime")
     run_backtest_generic = run_actions.add_parser("backtest", help="run a Strategy Release through the unified backtest entry")
     run_backtest_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
+    _add_run_control_argument(run_backtest_generic)
     _add_sma_input_arguments(run_backtest_generic); _add_sma_run_arguments(run_backtest_generic)
     run_backtest_generic.add_argument("--artifact-root", type=Path)
     run_backtest_generic.add_argument("--execution-calibration", type=Path,
                                       help="ExecutionCalibrationRelease manifest to bind into the backtest artifact")
     run_simulate_generic = run_actions.add_parser("simulate", help="run a Strategy Release through historical simulation")
     run_simulate_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
+    _add_run_control_argument(run_simulate_generic)
     _add_sma_input_arguments(run_simulate_generic); _add_sma_run_arguments(run_simulate_generic)
     run_simulate_generic.add_argument("--run-root", type=Path, required=True)
     run_simulate_generic.add_argument("--artifact-root", type=Path)
@@ -744,6 +763,7 @@ def _parser() -> argparse.ArgumentParser:
     run_simulate_generic.add_argument("--quote-asset", default="USDT")
     run_paper_generic = run_actions.add_parser("paper", help="run a Strategy Release in live-market simulated execution")
     run_paper_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
+    _add_run_control_argument(run_paper_generic)
     run_paper_generic.add_argument("--capture", type=Path)
     run_paper_generic.add_argument("--fixture", action="store_true")
     _add_live_binance_bar_arguments(run_paper_generic)
@@ -755,6 +775,7 @@ def _parser() -> argparse.ArgumentParser:
     run_paper_generic.add_argument("--quote-asset", default="USDT")
     run_shadow_generic = run_actions.add_parser("shadow", help="run a Strategy Release on a capture without submitting orders")
     run_shadow_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
+    _add_run_control_argument(run_shadow_generic)
     run_shadow_generic.add_argument("--capture", type=Path)
     run_shadow_generic.add_argument("--fixture", action="store_true")
     _add_sma_run_arguments(run_shadow_generic)
@@ -800,6 +821,10 @@ def _add_live_binance_bar_arguments(parser):
     parser.add_argument("--live-binance-interval", default="1m", help="Binance kline interval for live-market paper input")
     parser.add_argument("--live-binance-limit", type=int, default=120, help="number of recent Binance klines to capture")
     parser.add_argument("--live-binance-base-url", default="https://data-api.binance.vision", help=argparse.SUPPRESS)
+
+
+def _add_run_control_argument(parser):
+    parser.add_argument("--control", action="store_true", help="show a professional run control console and summary")
 
 
 def _spec(args: argparse.Namespace) -> OptionChainCaptureSpec:
@@ -984,12 +1009,34 @@ def _doctor(args: argparse.Namespace) -> int:
 
 
 def _print_doctor(checks: list[dict[str, object]], output_format: str) -> None:
-    from kairos.cli_output import render_status_table
+    from kairos.cli_output import render_next_steps, render_status_table
+
+    next_steps = _doctor_next_steps(checks)
 
     if output_format == "json":
-        print(json.dumps({"checks": checks}, ensure_ascii=False, indent=2))
+        print(json.dumps({"checks": checks, "next_steps": next_steps}, ensure_ascii=False, indent=2))
         return
     print(render_status_table("Kairos Doctor", checks))
+    if next_steps:
+        print()
+        print(render_next_steps(next_steps))
+
+
+def _doctor_next_steps(checks: list[dict[str, object]]) -> list[str]:
+    steps: list[str] = []
+    by_name = {str(item.get("name")): str(item.get("status", "")).lower() for item in checks}
+    if by_name.get("project") == "error":
+        steps.append("kairos init")
+        return steps
+    if by_name.get("massive") in {"warning", "warn", "error"}:
+        steps.append("kairos configure massive")
+    if by_name.get("binance.testnet") in {"warning", "warn", "error"}:
+        steps.append("kairos configure binance --environment testnet")
+    if by_name.get("binance.live") in {"warning", "warn", "error"}:
+        steps.append("kairos configure binance --environment live")
+    if not steps:
+        steps.append("kairos data catalog")
+    return steps
 
 
 def _flatten_config(payload: dict[str, Any], prefix: str = "") -> list[tuple[str, object]]:
@@ -1021,6 +1068,10 @@ def _prompt_configure_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def _prompt_choice(label: str, choices: tuple[str, ...], *, default: str) -> str:
+    if not sys.stdin.isatty():
+        prompt = f"{label} [{'/'.join(choices)}] ({default}): "
+        value = input(prompt).strip()
+        return value if value in choices else default
     try:
         import questionary
     except Exception:
@@ -1032,6 +1083,9 @@ def _prompt_choice(label: str, choices: tuple[str, ...], *, default: str) -> str
 
 
 def _prompt_text(label: str, default: str) -> str:
+    if not sys.stdin.isatty():
+        value = input(f"{label} ({default}): ").strip()
+        return value or default
     try:
         import questionary
     except Exception:
@@ -1039,6 +1093,27 @@ def _prompt_text(label: str, default: str) -> str:
         return value or default
     value = questionary.text(label, default=default).ask()
     return str(value or default)
+
+
+def _prompt_bool(label: str, default: bool) -> bool:
+    if not sys.stdin.isatty():
+        value = input(f"{label} ({'yes' if default else 'no'}): ").strip().lower()
+        if value in {"y", "yes", "true", "1"}:
+            return True
+        if value in {"n", "no", "false", "0"}:
+            return False
+        return default
+    try:
+        import questionary
+    except Exception:
+        value = input(f"{label} ({'yes' if default else 'no'}): ").strip().lower()
+        if value in {"y", "yes", "true", "1"}:
+            return True
+        if value in {"n", "no", "false", "0"}:
+            return False
+        return default
+    value = questionary.confirm(label, default=default).ask()
+    return bool(default if value is None else value)
 
 
 def _massive_config(args: argparse.Namespace | None = None) -> MassiveConfig:
@@ -1135,6 +1210,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if payload.get("ready", True) else 2
     if args.group == "init":
         from kairos.project import initialize_project, render_project_init
+        if args.interactive:
+            args.target = Path(_prompt_text("Project directory", str(args.target)))
+            args.name = _prompt_text("Project name", args.name or args.target.name or "kairos-project")
+            args.force = _prompt_bool("Overwrite existing scaffold files", args.force)
         result = initialize_project(args.target, name=args.name, force=args.force)
         if args.format == "json":
             print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
@@ -1237,6 +1316,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _product_command(args: argparse.Namespace) -> int:
     import sys
+    from kairos.cli_control import initial_run_control_state, render_run_control, render_run_summary
     from kairos.cli_output import render_error, render_product_result, resolve_language
     from kairos.product_workflow import (
         activate_strategy_release,create_study, freeze_study, inspect_run, inspect_strategy_release, inspect_study,
@@ -1312,6 +1392,8 @@ def _product_command(args: argparse.Namespace) -> int:
     }
     try:
         _validate_strategy_scoped_run(args)
+        if _should_render_run_control(args):
+            print(render_run_control(initial_run_control_state(str(getattr(args, "strategy", "unknown")), args.action)))
         payload = handlers[(args.group, args.action)](args)
     except GracefulShutdown as error:
         print(f"Stopped cleanly: {error}", file=sys.stderr)
@@ -1324,9 +1406,19 @@ def _product_command(args: argparse.Namespace) -> int:
         return 0
     if args.format == "json":
         print(json.dumps(to_primitive(payload), ensure_ascii=False, indent=2, sort_keys=True))
+    elif _is_run_execution(args):
+        print(render_run_summary(str(getattr(args, "strategy", "unknown")), payload))
     else:
         print(render_product_result(args.group, args.action, payload, resolve_language(args.lang)))
     return 0
+
+
+def _is_run_execution(args: argparse.Namespace) -> bool:
+    return args.group == "run" and args.action in {"backtest", "simulate", "paper", "shadow"}
+
+
+def _should_render_run_control(args: argparse.Namespace) -> bool:
+    return _is_run_execution(args) and bool(getattr(args, "control", False)) and args.format != "json" and not args.quiet
 
 
 def _validate_strategy_scoped_run(args: argparse.Namespace) -> None:
@@ -1483,15 +1575,17 @@ def _data(args: argparse.Namespace) -> int:
                 raise SystemExit("--dimension key and value cannot be empty")
             dimensions[key.strip()] = value.strip()
         products = DatasetClient(args.lake_root).search(**dimensions)
-        print(json.dumps({"products": [DatasetClient(args.lake_root).describe(item) for item in products]},
-                         ensure_ascii=False, indent=2)); return 0
+        payload = {"products": [DatasetClient(args.lake_root).describe(item) for item in products]}
+        _emit_data_payload(args, "Kairos Data Search", payload)
+        return 0
     if args.action == "describe":
-        print(json.dumps(DatasetClient(args.lake_root).describe(args.dataset), ensure_ascii=False, indent=2)); return 0
+        _emit_data_payload(args, "Kairos Dataset", DatasetClient(args.lake_root).describe(args.dataset))
+        return 0
     if args.action in {"doctor", "diagnostics"}:
         from kairos.data.diagnostics import DataDiagnosticsService
         service = DataDiagnosticsService(args.lake_root)
         report = service.doctor(args.dataset) if args.action == "doctor" else service.audit()
-        print(json.dumps(report, ensure_ascii=False, indent=2))
+        _emit_data_payload(args, "Kairos Data Diagnostics", report)
         return 2 if args.action == "diagnostics" and args.strict and not report["healthy"] else 0
     if args.action == "us-equity-momentum-diagnostics":
         from kairos.features import UsEquityMomentumDiagnostics
@@ -1501,7 +1595,7 @@ def _data(args: argparse.Namespace) -> int:
     if args.action == "validate":
         from kairos.data.quality import DatasetQualityService
         assessment = DatasetQualityService(args.lake_root).assess(args.release)
-        print(json.dumps(to_primitive(assessment), ensure_ascii=False, indent=2))
+        _emit_data_payload(args, "Kairos Data Validation", to_primitive(assessment))
         return 0 if assessment.passed else 2
     if args.action == "prepare":
         register_default_products(args.lake_root)
@@ -1519,7 +1613,7 @@ def _data(args: argparse.Namespace) -> int:
             minimum_quality=QualityLevel(args.quality), provider=args.provider, venue=args.venue,
             acquire_missing=args.acquire_missing, promote=args.promote, actor=args.actor, reason=args.reason,
         )
-        print(json.dumps(to_primitive(prepared), ensure_ascii=False, indent=2)); return 0
+        _emit_data_payload(args, "Kairos Data Preparation", to_primitive(prepared)); return 0
     if args.action == "prepare-us-equity-momentum":
         result = _prepare_us_equity_momentum(args)
         print(json.dumps(to_primitive(result), ensure_ascii=False, indent=2))
@@ -1531,11 +1625,12 @@ def _data(args: argparse.Namespace) -> int:
             args.dataset, start=args.start, end=args.end, fields=tuple(args.field) or None,
         )
         rows = query.collect(OutputFormat.ROWS)
-        print(json.dumps({
+        payload = {
             "release_id": query.release_id, "explain": query.explain(),
             "returned_rows": min(len(rows), args.limit), "total_rows": len(rows),
             "rows": to_primitive(rows[:args.limit]),
-        }, ensure_ascii=False, indent=2)); return 0
+        }
+        _emit_data_payload(args, "Kairos Data Query", payload); return 0
     if args.action == "freeze":
         client = DatasetClient(args.lake_root)
         queries = tuple(client.get(dataset) for dataset in args.dataset)
@@ -1563,7 +1658,7 @@ def _data(args: argparse.Namespace) -> int:
                 "published_at": release.published_at, "aliases": list(release.aliases),
             } for release in catalog.releases(product)],
         } for product in catalog.products()]
-        print(json.dumps({"products": values}, ensure_ascii=False, indent=2)); return 0
+        _emit_data_payload(args, "Kairos Data Catalog", {"products": values}); return 0
     if args.action == "compare":
         comparison = DatasetClient(args.lake_root).compare(args.first, args.second)
         print(json.dumps(comparison, ensure_ascii=False, indent=2)); return 0
@@ -1592,14 +1687,14 @@ def _data(args: argparse.Namespace) -> int:
         start, end = datetime.fromisoformat(args.start), datetime.fromisoformat(args.end)
         plan = client.plan(args.dataset, start=start, end=end, provider=args.provider, venue=args.venue)
         if args.action == "plan":
-            print(json.dumps(to_primitive(plan), ensure_ascii=False, indent=2)); return 0
+            _emit_data_payload(args, "Kairos Acquisition Plan", to_primitive(plan)); return 0
         release = client.acquire(plan, refresh=args.refresh)
-        print(json.dumps(to_primitive(release), ensure_ascii=False, indent=2)); return 0
+        _emit_data_payload(args, "Kairos Data Release", to_primitive(release)); return 0
     if args.action == "promote":
         release = DataCatalog(args.lake_root).promote(
             args.release, args.status, actor=args.actor, reason=args.reason,
         )
-        print(json.dumps(to_primitive(release), ensure_ascii=False, indent=2)); return 0
+        _emit_data_payload(args, "Kairos Data Promotion", to_primitive(release)); return 0
     if args.action == "quarantine-insecure-provider-cache":
         moved = MassiveVendorArchiveClient.quarantine_non_https(args.lake_root)
         print(json.dumps({"quarantined": len(moved), "paths": [str(item) for item in moved]}, ensure_ascii=False, indent=2)); return 0
@@ -1665,17 +1760,17 @@ def _data(args: argparse.Namespace) -> int:
             date.fromisoformat(args.start), date.fromisoformat(args.end), max_files=args.max_files, dry_run=args.dry_run,
         )
         print(json.dumps(report, ensure_ascii=False, indent=2)); return 0
-    if args.action == "prepare-spxw-daily-ohlcv":
+    if args.action in {"prepare-spxw-daily-ohlcv", "prepare-spxw-day-aggs"}:
         manifest = SpxwDailyOhlcvPipeline(args.lake_root).prepare(
             args.dataset_id, date.fromisoformat(args.start), date.fromisoformat(args.end),
         )
         print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
-    if args.action == "prepare-option-daily-ohlcv":
+    if args.action in {"prepare-option-daily-ohlcv", "prepare-option-day-aggs"}:
         manifest = OptionDailyOhlcvPipeline(args.lake_root, args.option_root).prepare(
             args.dataset_id, date.fromisoformat(args.start), date.fromisoformat(args.end),
         )
         print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
-    if args.action == "prepare-equity-daily-ohlcv":
+    if args.action in {"prepare-equity-daily-ohlcv", "prepare-equity-day-aggs"}:
         manifest = MassiveEquityDailyOhlcvPipeline(
             args.lake_root, MassiveClient(_massive_config(args)),
         ).prepare(
@@ -1696,6 +1791,72 @@ def _data(args: argparse.Namespace) -> int:
     metadata = DatasetClient(args.lake_root).metadata(args.dataset)
     print(json.dumps(metadata, ensure_ascii=False, indent=2))
     return 0
+
+
+def _emit_data_payload(args: argparse.Namespace, title: str, payload: object) -> None:
+    from kairos.cli_output import (
+        render_data_catalog, render_dataset_detail, render_dataset_list, render_generic_payload,
+        render_key_value_panel, render_status_table,
+    )
+
+    primitive = to_primitive(payload)
+    if args.format == "json":
+        print(json.dumps(primitive, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    if not isinstance(primitive, dict):
+        print(json.dumps(primitive, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    if args.action == "catalog" and isinstance(primitive.get("products"), list):
+        print(render_data_catalog(primitive["products"]))
+        return
+    if args.action == "search" and isinstance(primitive.get("products"), list):
+        print(render_dataset_list(title, primitive["products"]))
+        return
+    if args.action == "describe":
+        print(render_dataset_detail(title, primitive))
+        return
+    if args.action in {"doctor", "diagnostics"}:
+        print(render_status_table(title, _diagnostic_rows(primitive)))
+        return
+    if args.action == "query":
+        print(_render_query_payload(title, primitive))
+        return
+    print(render_generic_payload(title, primitive))
+
+
+def _diagnostic_rows(payload: dict[str, object]) -> list[dict[str, object]]:
+    if isinstance(payload.get("checks"), list):
+        return [
+            {
+                "name": item.get("name", item.get("check", "check")),
+                "status": "ok" if item.get("passed", item.get("healthy", False)) else "warn",
+                "detail": item.get("detail", item.get("message", "")),
+            }
+            for item in payload["checks"] if isinstance(item, dict)
+        ]
+    summary = payload.get("summary")
+    if isinstance(summary, dict):
+        return [{"name": key, "status": "ok" if not value else "warn", "detail": value} for key, value in summary.items()]
+    healthy = payload.get("healthy", payload.get("passed", True))
+    return [{"name": "data", "status": "ok" if healthy else "warn", "detail": "healthy" if healthy else "needs attention"}]
+
+
+def _render_query_payload(title: str, payload: dict[str, object]) -> str:
+    from kairos.cli_output import render_key_value_panel, render_status_table
+
+    output = [render_key_value_panel(title, (
+        ("Release", payload.get("release_id", "-")),
+        ("Returned Rows", payload.get("returned_rows", "-")),
+        ("Total Rows", payload.get("total_rows", "-")),
+    ))]
+    rows = payload.get("rows")
+    if isinstance(rows, list) and rows:
+        fields = tuple(str(key) for key in rows[0].keys()) if isinstance(rows[0], dict) else ("row",)
+        table_rows = []
+        for row in rows:
+            table_rows.append({field: row.get(field, "") for field in fields} if isinstance(row, dict) else {"row": row})
+        output.append(render_status_table("Rows", table_rows, columns=fields))
+    return "\n\n".join(output)
 
 
 def _massive_request(args: argparse.Namespace) -> tuple[str, dict[str, object]]:

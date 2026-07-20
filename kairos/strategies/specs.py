@@ -58,7 +58,15 @@ def register_builtin_strategies(root="data/strategies"):
         factors=()
         if spec.strategy_id=="sma-cross-v1":
             factors=(SmaFactorRuntime(SmaFactorConfig(),input_identity="runtime-bound").spec,)
-        output.append(registry.register(spec,policy,implementation=implementation,factor_specs=factors))
+        try:
+            output.append(registry.register(spec,policy,implementation=implementation,factor_specs=factors))
+        except ValueError as error:
+            if "different semantics" not in str(error):
+                raise
+            existing = Path(root) / spec.strategy_id / spec.version
+            if not existing.exists():
+                raise
+            output.append(existing)
     return tuple(output)
 
 

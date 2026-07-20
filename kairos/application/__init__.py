@@ -26,13 +26,6 @@ from .modes import (
 from .strategy_run_loop import (
     CanonicalBarMarketProjection, GovernedStrategyRunLoop, StrategyRunResult,
 )
-from .strategy_runtime import (
-    PaperIntentExecutionBridge, RuntimeStrategyBinding, RuntimeStrategyModelRegistry,
-    RuntimeStrategyModelSpec, builtin_runtime_strategy_model_registry, strategy_runtime_runner_from_lock,
-)
-from .historical_simulation import (
-    HistoricalSimulationResult, build_simulated_spot_catalog, run_sma_historical_simulation,
-)
 from .run_artifact import RunArtifact, RunArtifactRepository
 from .attribution import (
     ExecutionAttribution,PortfolioAttribution,RunAttribution,SignalAttribution,build_run_attribution,
@@ -72,3 +65,22 @@ __all__ += [
     "ImmediateBacktestPortfolio", "ImmediateBacktestTrade", "ImmediateIntentBacktestResult",
     "run_immediate_target_backtest", "run_target_backtest",
 ]
+
+
+def __getattr__(name: str):
+    if name in {
+        "PaperIntentExecutionBridge",
+        "RuntimeStrategyBinding",
+        "RuntimeStrategyModelRegistry",
+        "RuntimeStrategyModelSpec",
+        "builtin_runtime_strategy_model_registry",
+        "strategy_runtime_runner_from_lock",
+    }:
+        from . import strategy_runtime
+
+        return getattr(strategy_runtime, name)
+    if name in {"HistoricalSimulationResult", "build_simulated_spot_catalog", "run_sma_historical_simulation"}:
+        from . import historical_simulation
+
+        return getattr(historical_simulation, name)
+    raise AttributeError(f"module 'kairos.application' has no attribute {name!r}")

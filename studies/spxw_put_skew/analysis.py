@@ -10,7 +10,7 @@ import pandas as pd
 from kairos.backtest.feed import HistoricalDataset
 from kairos.reference import ReferenceCatalog
 from kairos.domain.product import ListedOptionSpec
-from kairos.pricing import ValuationService
+from kairos.pricing import OptionValuationService
 
 
 def load_study_context(root):
@@ -35,7 +35,7 @@ def load_study_context(root):
 
 def data_quality_report(dataset: HistoricalDataset) -> tuple[pd.DataFrame, pd.DataFrame]:
     catalog = _catalog(dataset)
-    service = ValuationService(catalog)
+    service = OptionValuationService(catalog)
     rows = []
     for market in dataset.slices:
         _, valuation = service.value(market)
@@ -78,7 +78,7 @@ def data_quality_report(dataset: HistoricalDataset) -> tuple[pd.DataFrame, pd.Da
 
 def surface_observations(dataset: HistoricalDataset) -> pd.DataFrame:
     catalog = _catalog(dataset)
-    service = ValuationService(catalog)
+    service = OptionValuationService(catalog)
     rows = []
     for market in dataset.slices:
         _, valuation = service.value(market)

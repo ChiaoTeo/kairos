@@ -433,6 +433,8 @@ def data_download(args) -> dict[str, object]:
         "content_hash": release.content_hash,
         "contract_hash": evidence["contract_hash"],
         "manifest_hash": evidence["manifest_hash"],
+        "primary_time": evidence.get("primary_time"),
+        "fields": evidence.get("fields", []),
         "quality_level": release.quality_level.value,
         "artifact": str(Path(args.lake_root) / release.relative_path),
         "artifact_ref": evidence["artifact_ref"],
@@ -648,11 +650,7 @@ def _acquire_registered_provider_source(
     provider_path = _resolve_download_spec_file(str(source_value), spec_base)
     function_name = str(source_spec.get("function") or "acquire")
     provider_hash = sha256(provider_path.read_bytes()).hexdigest()
-    required_credentials = _provider_required_env_names(source_spec)
-    missing_credentials = [name for name in required_credentials if not os.environ.get(name)]
-    if missing_credentials:
-        raise ValueError(f"missing required provider credentials: {', '.join(missing_credentials)}")
-    credentials = {name: os.environ[name] for name in required_credentials}
+    credentials, credential_evidence = _provider_credentials(root, source_spec)
     module = _load_user_module(provider_path, f"kairos_data_provider_{provider_hash[:12]}")
     acquire = getattr(module, function_name, None)
     if not callable(acquire):
@@ -685,13 +683,44 @@ def _acquire_registered_provider_source(
         "path": str(provider_path),
         "function": function_name,
         "provider_code_hash": provider_hash,
-        "credentials": {
-            "required_env": required_credentials,
-            "provided": {name: True for name in required_credentials},
-        },
+        "credentials": credential_evidence,
         "row_count": len(rows),
         "staging_hash": staging_hash,
     }
+
+
+def _provider_credentials(root: Path, source_spec: dict[str, Any]) -> tuple[dict[str, str], dict[str, object]]:
+    required_env = _provider_required_env_names(source_spec)
+    missing_env = [name for name in required_env if not os.environ.get(name)]
+    if missing_env:
+        raise ValueError(f"missing required provider credentials: {', '.join(missing_env)}")
+    values = {name: os.environ[name] for name in required_env}
+    evidence: dict[str, object] = {
+        "required_env": required_env,
+        "provided": {name: True for name in required_env},
+    }
+    required_config = _provider_required_config_keys(source_spec)
+    if required_config:
+        try:
+            from kairos.configuration import KairosProjectConfig
+            config = KairosProjectConfig.discover(root)
+        except Exception as error:
+            raise ValueError("provider config credentials require kairos.toml") from error
+        config_sources: dict[str, str] = {}
+        missing_config: list[str] = []
+        for key in required_config:
+            resolved = config.resolve(key)
+            if resolved.resolved in (None, ""):
+                missing_config.append(key)
+                continue
+            values[key] = str(resolved.resolved)
+            config_sources[key] = resolved.source
+        if missing_config:
+            raise ValueError(f"missing required provider config credentials: {', '.join(missing_config)}")
+        evidence["required_config"] = required_config
+        evidence["config_sources"] = config_sources
+        evidence["config_provided"] = {name: True for name in required_config}
+    return values, evidence
 
 
 def _provider_required_env_names(source_spec: dict[str, Any]) -> list[str]:
@@ -710,6 +739,25 @@ def _provider_required_env_names(source_spec: dict[str, Any]) -> list[str]:
     clean = sorted({name for name in names if name})
     if len(clean) != len(names):
         raise ValueError("download spec provider credentials env names must not be empty")
+    return clean
+
+
+def _provider_required_config_keys(source_spec: dict[str, Any]) -> list[str]:
+    credentials = source_spec.get("credentials")
+    raw: object = source_spec.get("credential_config")
+    if isinstance(credentials, dict):
+        raw = credentials.get("config") or credentials.get("required_config") or raw
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        keys = [raw]
+    elif isinstance(raw, list):
+        keys = [str(item) for item in raw]
+    else:
+        raise ValueError("download spec provider credentials must declare config as a string or list")
+    clean = sorted({key for key in keys if key})
+    if len(clean) != len(keys):
+        raise ValueError("download spec provider credentials config keys must not be empty")
     return clean
 
 
@@ -773,6 +821,7 @@ def _factor_metadata_contract(
     dependencies = metadata.get("dependencies") or []
     if not isinstance(dependencies, list) or not all(isinstance(item, str) for item in dependencies):
         raise ValueError("factor metadata dependencies must be a list of strings")
+    runtime = _factor_runtime_contract(metadata.get("runtime") or {})
     contract = {
         "inputs": inputs,
         "parameters": _json_safe(parameters),
@@ -781,7 +830,7 @@ def _factor_metadata_contract(
         "point_in_time": point_in_time,
         "strategy_eligible": bool(metadata.get("strategy_eligible", True)),
         "dependencies": dependencies,
-        "runtime": _json_safe(metadata.get("runtime", {})),
+        "runtime": runtime,
     }
     _assert_json_serializable(contract, "factor metadata contract")
     parameters_hash = _stable_hash(parameters)
@@ -798,6 +847,7 @@ def _factor_metadata_contract(
         "point_in_time": point_in_time,
         "strategy_eligible": contract["strategy_eligible"],
         "dependencies": dependencies,
+        "runtime": runtime,
         "factor_contract_hash": factor_contract_hash,
     }
 
@@ -828,6 +878,29 @@ def _factor_output_schema(metadata: dict[str, Any]) -> dict[str, object]:
     return {
         "fields": fields,
         **({key: value for key, value in raw_schema.items() if key != "fields"} if isinstance(raw_schema, dict) else {}),
+    }
+
+
+def _factor_runtime_contract(raw_runtime: object) -> dict[str, object]:
+    if not isinstance(raw_runtime, dict):
+        raise ValueError("factor metadata runtime must be an object")
+    network = raw_runtime.get("network", raw_runtime.get("network_allowed", False))
+    if bool(network):
+        raise ValueError("factor metadata runtime cannot allow network access")
+    filesystem = str(raw_runtime.get("filesystem") or raw_runtime.get("filesystem_access") or "study_inputs_only")
+    if filesystem not in {"study_inputs_only", "none"}:
+        raise ValueError("factor metadata runtime filesystem access must be study_inputs_only or none")
+    paths = raw_runtime.get("paths") or raw_runtime.get("read_paths") or raw_runtime.get("allowed_paths") or []
+    if isinstance(paths, str):
+        paths = [paths]
+    if not isinstance(paths, list) or not all(isinstance(item, str) for item in paths):
+        raise ValueError("factor metadata runtime paths must be a list of strings")
+    if paths:
+        raise ValueError("factor metadata runtime cannot declare filesystem paths outside Study inputs")
+    return {
+        "network_allowed": False,
+        "filesystem_access": filesystem,
+        "paths": [],
     }
 
 
@@ -878,7 +951,15 @@ def _factor_run_profile(
     point_in_time = bool(factor.get("point_in_time"))
     declared_fields = list(factor.get("output_schema", {}).get("fields", []))
     missing_declared = sorted(set(declared_fields) - set(fields))
-    passed = bool(rows) and bool(primary_time) and primary_time in fields and not missing_primary and not missing_declared
+    pit_check = _factor_point_in_time_check(rows, primary_time, fields, point_in_time)
+    passed = (
+        bool(rows)
+        and bool(primary_time)
+        and primary_time in fields
+        and not missing_primary
+        and not missing_declared
+        and bool(pit_check["passed"])
+    )
     return {
         "kind": "factor.run.profile",
         "schema_version": 1,
@@ -893,12 +974,65 @@ def _factor_run_profile(
         "missing_primary_time_values": missing_primary,
         "missing_values": missing_values,
         "point_in_time": point_in_time,
-        "point_in_time_check": "declared" if point_in_time else "not_declared",
+        "point_in_time_check": pit_check["status"],
+        "lookahead_rows": pit_check["lookahead_rows"],
         "factor_contract_hash": factor.get("factor_contract_hash"),
         "parameters_hash": factor.get("parameters_hash"),
         "passed": passed,
         "ran_at": _now(),
     }
+
+
+def _factor_point_in_time_check(
+    rows: list[dict[str, object]],
+    primary_time: str,
+    fields: list[str],
+    point_in_time: bool,
+) -> dict[str, object]:
+    if not point_in_time:
+        return {"passed": True, "status": "not_declared", "lookahead_rows": 0}
+    if not primary_time or primary_time not in fields or "event_time" not in fields:
+        return {"passed": True, "status": "declared", "lookahead_rows": 0}
+    lookahead_rows = 0
+    for row in rows:
+        primary_value = _parse_factor_time(row.get(primary_time))
+        event_value = _parse_factor_time(row.get("event_time"))
+        if primary_value is not None and event_value is not None and primary_value < event_value:
+            lookahead_rows += 1
+    return {
+        "passed": lookahead_rows == 0,
+        "status": "passed" if lookahead_rows == 0 else "failed",
+        "lookahead_rows": lookahead_rows,
+    }
+
+
+def _parse_factor_time(value: object) -> datetime | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value)
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _factor_output_hash(profile: dict[str, object], rows: list[dict[str, object]]) -> str:
+    return _stable_hash({
+        "fields": profile.get("declared_fields") or profile.get("fields", []),
+        "primary_time": profile.get("primary_time"),
+        "rows": rows,
+    })
+
+
+def _factor_run_hash(profile: dict[str, object], rows: list[dict[str, object]]) -> str:
+    return _stable_hash({
+        "profile": {key: value for key, value in profile.items() if key not in {"run_hash", "factor_output_hash"}},
+        "rows": rows,
+    })
 
 
 def _study_readiness(study: dict[str, Any]) -> dict[str, object]:
@@ -1111,7 +1245,8 @@ def study_open(args) -> dict[str, object]:
         "factors": {},
         "created_at": _now(),
     }
-    _write_json(path, study)
+    _write_study_state(args.lake_root, args.study_id, study)
+    _append_study_lifecycle(args.lake_root, args.study_id, "opened", study)
     return study
 
 
@@ -1127,9 +1262,11 @@ def study_add_data(args) -> dict[str, object]:
         "contract_hash": evidence["contract_hash"],
         "manifest_hash": evidence["manifest_hash"],
         "artifact_ref": evidence["artifact_ref"],
+        "primary_time": evidence.get("primary_time"),
+        "fields": evidence.get("fields", []),
         "quality_level": release.quality_level.value,
     }
-    _write_json(_study_file(args.lake_root, workspace), study)
+    _write_study_state(args.lake_root, workspace, study)
     return {"product": "study", "operation": "add-data", "study_id": workspace, "name": args.name, **study["data"][args.name]}
 
 
@@ -1149,7 +1286,7 @@ def study_add_factor(args) -> dict[str, object]:
         **factor_metadata,
     }
     study.setdefault("factors", {})[args.name] = factor
-    _write_json(_study_file(args.lake_root, workspace), study)
+    _write_study_state(args.lake_root, workspace, study)
     return {
         "product": "study",
         "operation": "add-factor",
@@ -1191,8 +1328,9 @@ def study_factor_run(args) -> dict[str, object]:
     })
     rows = _rows_from_factor_output(result)
     profile = _factor_run_profile(args.study_id, args.name, factor, rows)
-    run_hash = _stable_hash({"profile": profile, "rows": rows})
-    profile = {**profile, "run_hash": run_hash}
+    factor_output_hash = _factor_output_hash(profile, rows)
+    run_hash = _factor_run_hash(profile, rows)
+    profile = {**profile, "factor_output_hash": factor_output_hash, "run_hash": run_hash}
     run_dir = _study_dir(args.lake_root, args.study_id) / "factor-runs" / args.name / run_hash[:12]
     _write_json(run_dir / "rows.json", rows)
     _write_json(run_dir / "profile.json", profile)
@@ -1200,11 +1338,12 @@ def study_factor_run(args) -> dict[str, object]:
         "profile": str(run_dir / "profile.json"),
         "rows": str(run_dir / "rows.json"),
         "run_hash": run_hash,
+        "factor_output_hash": factor_output_hash,
         "row_count": profile["row_count"],
         "fields": profile["fields"],
         "ran_at": profile["ran_at"],
     }
-    _write_json(_study_file(args.lake_root, args.study_id), study)
+    _write_study_state(args.lake_root, args.study_id, study)
     return {
         "product": "study",
         "operation": "factor-run",
@@ -1231,12 +1370,16 @@ def study_publish_factor(args) -> dict[str, object]:
     rows = _read_json(run["rows"])
     if not isinstance(rows, list) or not rows:
         raise ValueError(f"study factor {args.name!r} factor-run rows are empty")
+    expected_run_hash = str(profile.get("run_hash") or "")
+    if expected_run_hash and _factor_run_hash(profile, rows) != expected_run_hash:
+        raise ValueError(f"study factor {args.name!r} factor-run hash does not match rows")
     fields = list(factor.get("output_schema", {}).get("fields", [])) or list(profile.get("fields", []))
     if not fields:
         raise ValueError(f"study factor {args.name!r} has no output fields to publish")
     primary_time = str(factor.get("primary_time") or profile.get("primary_time") or "")
     if not primary_time:
         raise ValueError(f"study factor {args.name!r} has no primary_time to publish")
+    factor_output_hash = str(profile.get("factor_output_hash") or _factor_output_hash(profile, rows))
     dataset_id = str(args.as_dataset)
     publish_dir = _study_dir(args.lake_root, args.study_id) / "factor-publish" / args.name / str(profile["run_hash"])[:12]
     publish_dir.mkdir(parents=True, exist_ok=True)
@@ -1253,6 +1396,7 @@ def study_publish_factor(args) -> dict[str, object]:
             "factor_contract_hash": factor.get("factor_contract_hash"),
             "parameters_hash": factor.get("parameters_hash"),
             "factor_run_hash": profile.get("run_hash"),
+            "factor_output_hash": factor_output_hash,
         },
     }
     release = _write_historical_file(Path(args.lake_root), dataset_id, contract, csv_path)
@@ -1263,6 +1407,7 @@ def study_publish_factor(args) -> dict[str, object]:
         "name": args.name,
         "as_dataset": dataset_id,
         "factor_run_hash": profile.get("run_hash"),
+        "factor_output_hash": factor_output_hash,
         **release,
     }
     study.setdefault("published_factors", {})[args.name] = {
@@ -1276,10 +1421,11 @@ def study_publish_factor(args) -> dict[str, object]:
         "primary_time": release["primary_time"],
         "fields": release["fields"],
         "factor_run_hash": profile.get("run_hash"),
+        "factor_output_hash": factor_output_hash,
         "quality_report_hash": release.get("quality_report_hash"),
         "published_at": _now(),
     }
-    _write_json(_study_file(args.lake_root, args.study_id), study)
+    _write_study_state(args.lake_root, args.study_id, study)
     return result
 
 
@@ -1289,6 +1435,9 @@ def study_freeze(args) -> dict[str, object]:
     readiness = _study_readiness(study)
     if not readiness["passed"]:
         raise ValueError(f"Study is not ready to freeze: {', '.join(readiness['blocking_reasons'])}")
+    path = _study_dir(args.lake_root, args.study_id) / "locks" / version / "study.lock.json"
+    if path.exists():
+        raise ValueError(f"Study Lock version already exists: {args.study_id}@{version}")
     lock_body = {
         "product": "study",
         "kind": "study.lock",
@@ -1305,7 +1454,6 @@ def study_freeze(args) -> dict[str, object]:
     }
     lock_hash = _stable_hash(lock_body)
     lock = {**lock_body, "lock_hash": lock_hash}
-    path = _study_dir(args.lake_root, args.study_id) / "locks" / version / "study.lock.json"
     _write_json(path, lock)
     _write_json(path.parent / "readiness.json", readiness)
     study["status"] = "frozen"
@@ -1313,7 +1461,8 @@ def study_freeze(args) -> dict[str, object]:
     study["readiness"] = readiness
     study["latest_lock"] = str(path)
     study["latest_lock_hash"] = lock_hash
-    _write_json(_study_file(args.lake_root, args.study_id), study)
+    _write_study_state(args.lake_root, args.study_id, study)
+    _append_study_lifecycle(args.lake_root, args.study_id, "frozen", study, {"version": version, "lock_hash": lock_hash})
     return {**lock, "artifact": str(path)}
 
 
@@ -1353,7 +1502,7 @@ def strategy_bind_factor(args) -> dict[str, object]:
         key: published.get(key)
         for key in (
             "dataset", "release_id", "content_hash", "contract_hash", "manifest_hash",
-            "quality_level", "primary_time", "fields", "factor_run_hash", "quality_report_hash",
+            "quality_level", "primary_time", "fields", "factor_run_hash", "factor_output_hash", "quality_report_hash",
         )
         if isinstance(published, dict) and published.get(key) is not None
     }
@@ -1368,6 +1517,7 @@ def strategy_bind_factor(args) -> dict[str, object]:
         "primary_time": study_factor.get("primary_time"),
         "point_in_time": study_factor.get("point_in_time"),
         "output_schema": study_factor.get("output_schema"),
+        "runtime": study_factor.get("runtime"),
         "metadata_status": study_factor.get("metadata_status"),
         "strategy_eligible": study_factor.get("strategy_eligible"),
         "materialization_status": "published_feature" if materialized else "contract_only",
@@ -1456,7 +1606,7 @@ def strategy_set_model_code(args) -> dict[str, object]:
     source = _resolve_user_file(args.model_file, _strategy_dir(args.lake_root, args.strategy_id))
     source_bytes = source.read_bytes()
     code_hash = sha256(source_bytes).hexdigest()
-    artifact_path = _strategy_dir(args.lake_root, args.strategy_id) / "model" / source.name
+    artifact_path = _strategy_dir(args.lake_root, args.strategy_id) / "model" / code_hash[:12] / source.name
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     if not artifact_path.exists() or artifact_path.read_bytes() != source_bytes:
         artifact_path.write_bytes(source_bytes)
@@ -1493,6 +1643,9 @@ def strategy_freeze(args) -> dict[str, object]:
     derived = strategy["derived_from"]
     study_lock = _load_study_lock(args.lake_root, derived["study"], derived["version"])
     _assert_strategy_study_consistency(strategy, study_lock)
+    path = _strategy_dir(args.lake_root, args.strategy_id) / "locks" / args.version / "strategy.lock.json"
+    if path.exists():
+        raise ValueError(f"Strategy Lock version already exists: {args.strategy_id}@{args.version}")
     lock_body = {
         "product": "strategy",
         "kind": "strategy.lock",
@@ -1517,7 +1670,6 @@ def strategy_freeze(args) -> dict[str, object]:
     }
     lock_hash = _stable_hash(lock_body)
     lock = {**lock_body, "lock_hash": lock_hash}
-    path = _strategy_dir(args.lake_root, args.strategy_id) / "locks" / args.version / "strategy.lock.json"
     _write_json(path, lock)
     strategy["version"] = args.version
     strategy["latest_lock"] = str(path)
@@ -1534,12 +1686,15 @@ def run_start(args) -> dict[str, object]:
         target_kind = "study"
         target = _load_study(root, args.study)
         target_hash = _stable_hash(target)
+        target_source = str(_study_file(root, args.study))
     else:
         strategy_id, version = _split_ref(args.snapshot)
         target_id = strategy_id
         target_kind = "strategy"
         target = _load_strategy_lock(root, strategy_id, version)
         target_hash = target["lock_hash"]
+        target_source = str(_strategy_dir(root, strategy_id) / "locks" / version / "strategy.lock.json")
+    workspace_evidence = _run_target_workspace_evidence(root, target_kind, target_id, target, target_hash)
     live_bindings = _paper_live_subscription_bindings(root, target) if mode in {"paper", "live"} else ()
     feed_plan = runtime_feed_plan(mode, live_bindings) if live_bindings else None
     if getattr(args, "execute_feeds", False) and feed_plan is None:
@@ -1565,6 +1720,7 @@ def run_start(args) -> dict[str, object]:
     material = {"target_kind": target_kind, "target_id": target_id, "mode": mode, "target_hash": target_hash, "at": _now()}
     run_id = f"run_{sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:16]}"
     directory = root / "runs" / target_id / run_id
+    snapshot_artifact = directory / "snapshot.json"
     feed_runtime_execution = _execute_feed_runtime(root, directory, mode, feed_plan, execution_plan, strategy_plan, target, args) if (
         (feed_plan and getattr(args, "execute_feeds", False))
         or (strategy_plan is not None and getattr(args, "execute_strategy", False))
@@ -1578,7 +1734,15 @@ def run_start(args) -> dict[str, object]:
         "schema_version": 1,
         "run_id": run_id,
         "mode": mode,
-        "target": {"kind": target_kind, "id": target_id, "hash": target_hash},
+        "target": {
+            "kind": target_kind,
+            "id": target_id,
+            "hash": target_hash,
+            "snapshot_hash": target_hash,
+            "snapshot_source": target_source,
+            "snapshot_artifact": str(snapshot_artifact),
+            **workspace_evidence,
+        },
         "input_artifacts": _run_input_artifacts(target_kind, target),
         "runtime_contract": {
             "mode": mode,
@@ -1603,7 +1767,7 @@ def run_start(args) -> dict[str, object]:
             **({"strategy_decision": strategy_decision_execution["artifact"]} if strategy_decision_execution else {}),
         },
     }
-    _write_json(directory / "snapshot.json", target)
+    _write_json(snapshot_artifact, target)
     _write_json(directory / "manifest.json", manifest)
     _write_json(directory / "reports" / "summary.json", {
         "run_id": run_id,
@@ -1752,7 +1916,15 @@ def _execute_strategy_model_decision(
     if not callable(decide):
         raise ValueError("user strategy model.py must define decide(context)")
     context = StrategyDecisionContext(root, strategy_lock)
-    decision = _json_safe(decide(context))
+    try:
+        decision = _json_safe(decide(context))
+    except Exception as error:
+        diagnostic = _run_data_plane_diagnostic(strategy_lock, mode, error)
+        diagnostic_path = run_directory / "diagnostics" / "data_plane.json"
+        _write_json(diagnostic_path, diagnostic)
+        raise ValueError(
+            f"strategy model decision failed; data plane diagnostic: {diagnostic_path}"
+        ) from error
     payload = {
         "kind": "strategy.model_decision",
         "schema_version": 1,
@@ -1774,6 +1946,52 @@ def _execute_strategy_model_decision(
         "decision_hash": decision_hash,
         "model_code_hash": str(payload.get("model_code_hash") or ""),
         "model_contract_hash": str(payload.get("model_contract_hash") or ""),
+    }
+
+
+def _run_data_plane_diagnostic(strategy_lock: dict[str, Any], mode: str, error: Exception) -> dict[str, object]:
+    message = str(error)
+    issue = "strategy_model_error"
+    next_action = "Inspect the strategy model error and rerun after fixing the declared input contract."
+    if "factor contract without materialized InputTable" in message:
+        issue = "factor_runtime_missing_input"
+        next_action = "Run kairos study publish-factor for the referenced factor and refreeze the Study/Strategy."
+    elif "no dataset-readable data files" in message or isinstance(error, FileNotFoundError):
+        issue = "missing_history_release"
+        next_action = "Run kairos data download or republish the Data Release so DatasetClient can materialize it."
+    elif "not declared" in message:
+        issue = "missing_dataset_fields"
+        next_action = "Declare the input in Strategy model metadata or bind the missing Data/Factor input before freeze."
+    checks = []
+    for name, item in sorted(strategy_lock.get("data", {}).items()):
+        checks.append({
+            "name": name,
+            "kind": "data",
+            "dataset": item.get("dataset"),
+            "release_id": item.get("release_id"),
+            "materialized": bool(item.get("release_id")),
+        })
+    for name, item in sorted(strategy_lock.get("inputs", {}).items()):
+        checks.append({
+            "name": name,
+            "kind": item.get("kind", "input"),
+            "dataset": item.get("dataset"),
+            "release_id": item.get("release_id"),
+            "materialization_status": item.get("materialization_status", "unknown"),
+            "materialized": bool(item.get("release_id") and item.get("dataset")),
+        })
+    return {
+        "kind": "run.data_plane_diagnostic",
+        "schema_version": 1,
+        "strategy_id": strategy_lock.get("strategy_id"),
+        "mode": mode,
+        "passed": False,
+        "issue": issue,
+        "error_type": type(error).__name__,
+        "message": message,
+        "next_action": next_action,
+        "inputs": checks,
+        "diagnosed_at": _now(),
     }
 
 
@@ -1947,22 +2165,41 @@ def _data_release_evidence(root: Path, release: DatasetRelease) -> dict[str, obj
     if not manifest_path.exists():
         manifest_path = release_dir / "manifest.json"
     manifest = _read_json(manifest_path) if manifest_path.exists() else {}
+    schema_path = release_dir / "schema.json"
+    schema = _read_json(schema_path) if schema_path.exists() else {}
     try:
         spec = catalog.product_spec(release.product_key)
         contract_hash = DataSetContractArtifact.from_product_contract(spec).contract_hash
+        default_primary_time = spec.product.primary_time
     except KeyError:
         contract_hash = ""
+        default_primary_time = catalog.product(release.product_key).primary_time
     contract_hash = str(manifest.get("contract_hash") or contract_hash)
     manifest_hash = stable_artifact_hash(manifest) if manifest else ""
+    fields = _release_schema_fields(manifest, schema)
+    primary_time = str(manifest.get("primary_time") or schema.get("primary_time") or default_primary_time or "")
     return {
         "dataset": str(release.product_key),
         "release_id": release.release_id,
         "content_hash": release.content_hash,
         "contract_hash": contract_hash,
         "manifest_hash": manifest_hash,
+        "primary_time": primary_time,
+        "fields": fields,
         "artifact_ref": data_release_ref(str(release.product_key), release.release_id),
         "quality_level": release.quality_level.value,
     }
+
+
+def _release_schema_fields(manifest: dict[str, Any], schema: dict[str, Any]) -> list[str]:
+    raw_fields = manifest.get("fields")
+    if not raw_fields:
+        raw_fields = schema.get("fields") or schema.get("columns")
+    if isinstance(raw_fields, dict):
+        return [str(name) for name in raw_fields]
+    if isinstance(raw_fields, list):
+        return [str(item.get("name") if isinstance(item, dict) else item) for item in raw_fields]
+    return []
 
 
 def _study_evidence_chain(study: dict[str, Any]) -> dict[str, object]:
@@ -1986,6 +2223,9 @@ def _study_evidence_chain(study: dict[str, Any]) -> dict[str, object]:
                 "primary_time": item.get("primary_time"),
                 "point_in_time": item.get("point_in_time"),
                 "output_schema": item.get("output_schema"),
+                "runtime": item.get("runtime"),
+                "factor_run_hash": item.get("factor_run_hash"),
+                "factor_output_hash": item.get("factor_output_hash"),
                 "metadata_status": item.get("metadata_status"),
                 "strategy_eligible": item.get("strategy_eligible"),
                 "artifact_ref": item.get("artifact_ref"),
@@ -2002,6 +2242,7 @@ def _assert_strategy_study_consistency(strategy: dict[str, Any], study_lock: dic
     if strategy.get("data", {}) != study_lock.get("data", {}):
         raise ValueError("Strategy data release evidence must match the Frozen Study Lock")
     factors = study_lock.get("factors", {})
+    published_factors = study_lock.get("published_factors", {})
     for name, input_spec in strategy.get("inputs", {}).items():
         factor_name = input_spec.get("from_study_factor")
         if factor_name not in factors:
@@ -2014,6 +2255,11 @@ def _assert_strategy_study_consistency(strategy: dict[str, Any], study_lock: dic
                 raise ValueError(f"strategy input {name!r} {key} does not match the Frozen Study Lock")
         if factor.get("metadata_status") == "declared" and input_spec.get("strategy_eligible") is not True:
             raise ValueError(f"strategy input {name!r} factor is not strategy eligible")
+        published = published_factors.get(factor_name)
+        if isinstance(published, dict) and input_spec.get("materialization_status") == "published_feature":
+            for key in ("factor_run_hash", "factor_output_hash"):
+                if published.get(key) is not None and input_spec.get(key) != published.get(key):
+                    raise ValueError(f"strategy input {name!r} {key} does not match the published Feature evidence")
 
 
 def _run_input_artifacts(target_kind: str, target: dict[str, Any]) -> dict[str, object]:
@@ -2039,6 +2285,7 @@ def _run_input_artifacts(target_kind: str, target: dict[str, Any]) -> dict[str, 
             "primary_time": item.get("primary_time"),
             "point_in_time": item.get("point_in_time"),
             "output_schema": item.get("output_schema"),
+            "runtime": item.get("runtime"),
             "materialization_status": item.get("materialization_status"),
             "dataset": item.get("dataset"),
             "release_id": item.get("release_id"),
@@ -2047,6 +2294,7 @@ def _run_input_artifacts(target_kind: str, target: dict[str, Any]) -> dict[str, 
             "manifest_hash": item.get("manifest_hash"),
             "quality_level": item.get("quality_level"),
             "factor_run_hash": item.get("factor_run_hash"),
+            "factor_output_hash": item.get("factor_output_hash"),
             "feature_artifact_ref": item.get("feature_artifact_ref"),
             "artifact_ref": item.get("artifact_ref"),
             "contract": item.get("contract"),
@@ -2197,6 +2445,8 @@ def _strategy_model_contract(
     unknown = sorted(set(inputs) - available)
     if unknown:
         raise ValueError(f"strategy model metadata references undeclared inputs: {', '.join(unknown)}")
+    input_contracts = _strategy_model_input_contracts(metadata)
+    _validate_strategy_model_input_contracts(strategy, input_contracts)
     intent_schema = metadata.get("intent_schema") or metadata.get("outputs") or {}
     if not isinstance(intent_schema, dict) or not intent_schema:
         raise ValueError("strategy model metadata must declare intent_schema")
@@ -2205,6 +2455,7 @@ def _strategy_model_contract(
         raise ValueError("strategy model metadata must declare side_effects_allowed=false")
     contract = {
         "inputs": inputs,
+        "input_contracts": input_contracts,
         "intent_schema": _json_safe(intent_schema),
         "side_effects_allowed": False,
         "parameters": _json_safe(metadata.get("parameters", {})),
@@ -2215,6 +2466,7 @@ def _strategy_model_contract(
         "metadata_path": str(source),
         "metadata": contract,
         "inputs": inputs,
+        "input_contracts": input_contracts,
         "intent_schema": contract["intent_schema"],
         "side_effects_allowed": False,
         "parameters": contract["parameters"],
@@ -2233,6 +2485,72 @@ def _strategy_model_inputs(metadata: dict[str, Any]) -> list[str]:
     if not inputs:
         raise ValueError("strategy model metadata inputs must not be empty")
     return sorted(inputs)
+
+
+def _strategy_model_input_contracts(metadata: dict[str, Any]) -> dict[str, object]:
+    raw_inputs = metadata.get("inputs")
+    if not isinstance(raw_inputs, dict):
+        return {}
+    contracts: dict[str, object] = {}
+    for name, value in sorted(raw_inputs.items()):
+        if value is None:
+            continue
+        if not isinstance(value, dict):
+            raise ValueError(f"strategy model input {name!r} contract must be an object")
+        contract: dict[str, object] = {}
+        raw_fields = value.get("fields") or value.get("required_fields")
+        if raw_fields is not None:
+            if not isinstance(raw_fields, list) or not raw_fields:
+                raise ValueError(f"strategy model input {name!r} fields must be a non-empty list")
+            contract["fields"] = [str(item.get("name") if isinstance(item, dict) else item) for item in raw_fields]
+        primary_time = value.get("primary_time")
+        if not primary_time and isinstance(value.get("time"), dict):
+            primary_time = value["time"].get("primary_time")
+        if primary_time:
+            contract["primary_time"] = str(primary_time)
+        if contract:
+            contracts[str(name)] = contract
+    return contracts
+
+
+def _validate_strategy_model_input_contracts(strategy: dict[str, Any], input_contracts: dict[str, object]) -> None:
+    if not input_contracts:
+        return
+    available: dict[str, Any] = {
+        **{str(name): value for name, value in strategy.get("data", {}).items() if isinstance(value, dict)},
+        **{str(name): value for name, value in strategy.get("inputs", {}).items() if isinstance(value, dict)},
+    }
+    for name, contract in sorted(input_contracts.items()):
+        if not isinstance(contract, dict):
+            continue
+        source = available.get(name)
+        if not isinstance(source, dict):
+            raise ValueError(f"strategy model input {name!r} is not bound")
+        expected_fields = [str(item) for item in contract.get("fields", [])]
+        if expected_fields:
+            fields = _strategy_input_fields(source)
+            if not fields:
+                raise ValueError(f"strategy model input {name!r} has no declared fields to validate")
+            missing = sorted(set(expected_fields) - set(fields))
+            if missing:
+                raise ValueError(f"strategy model input {name!r} is missing fields: {', '.join(missing)}")
+        expected_primary_time = contract.get("primary_time")
+        if expected_primary_time:
+            primary_time = str(source.get("primary_time") or source.get("output_schema", {}).get("primary_time") or "")
+            if not primary_time:
+                raise ValueError(f"strategy model input {name!r} has no declared primary_time to validate")
+            if str(expected_primary_time) != primary_time:
+                raise ValueError(
+                    f"strategy model input {name!r} primary_time mismatch: "
+                    f"expected {expected_primary_time!r}, got {primary_time!r}"
+                )
+
+
+def _strategy_input_fields(source: dict[str, Any]) -> list[str]:
+    raw_fields = source.get("fields")
+    if raw_fields is None and isinstance(source.get("output_schema"), dict):
+        raw_fields = source["output_schema"].get("fields")
+    return [str(item.get("name") if isinstance(item, dict) else item) for item in raw_fields or []]
 
 
 def _validate_download_key(key: str) -> str:
@@ -2325,6 +2643,57 @@ def _study_dir(root: str | Path, study_id: str) -> Path:
 
 def _study_file(root: str | Path, study_id: str) -> Path:
     return _study_dir(root, study_id) / "study.json"
+
+
+def _study_workspace_file(root: str | Path, study_id: str) -> Path:
+    return _study_dir(root, study_id) / "workspace.json"
+
+
+def _study_lifecycle_file(root: str | Path, study_id: str) -> Path:
+    return _study_dir(root, study_id) / "lifecycle.jsonl"
+
+
+def _write_study_state(root: str | Path, study_id: str, study: dict[str, Any]) -> None:
+    _write_json(_study_file(root, study_id), study)
+    manifest = {
+        "product": "study",
+        "kind": "study.workspace_manifest",
+        "schema_version": 1,
+        "study_id": study_id,
+        "status": study.get("status"),
+        "lifecycle": study.get("lifecycle", "DRAFT"),
+        "data_count": len(study.get("data", {})),
+        "factor_count": len(study.get("factors", {})),
+        "published_factor_count": len(study.get("published_factors", {})),
+        "latest_lock": study.get("latest_lock"),
+        "latest_lock_hash": study.get("latest_lock_hash"),
+        "updated_at": _now(),
+    }
+    _write_json(_study_workspace_file(root, study_id), manifest)
+
+
+def _append_study_lifecycle(
+    root: str | Path,
+    study_id: str,
+    event: str,
+    study: dict[str, Any],
+    extra: dict[str, object] | None = None,
+) -> None:
+    path = _study_lifecycle_file(root, study_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "product": "study",
+        "kind": "study.lifecycle_event",
+        "schema_version": 1,
+        "study_id": study_id,
+        "event": event,
+        "status": study.get("status"),
+        "lifecycle": study.get("lifecycle", "DRAFT"),
+        "at": _now(),
+        **(extra or {}),
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
 
 
 def _strategy_dir(root: str | Path, strategy_id: str) -> Path:

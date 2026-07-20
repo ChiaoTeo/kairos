@@ -48,10 +48,30 @@ class ProductCliTests(unittest.TestCase):
                             "--name", "sma_signal", "--file", str(factor_file),
                             "--metadata", str(metadata_file))
             lock = command(root, "study", "freeze", "cli-factor-study", "--version", "1.0.0")
+            duplicate = subprocess.run(
+                [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root),
+                 "study", "freeze", "cli-factor-study", "--version", "1.0.0"],
+                cwd=ROOT, check=False, capture_output=True, text=True,
+            )
+            workspace_manifest = json.loads(
+                (root / "studies" / "cli-factor-study" / "workspace.json").read_text(encoding="utf-8")
+            )
+            lifecycle_events = [
+                json.loads(line)
+                for line in (root / "studies" / "cli-factor-study" / "lifecycle.jsonl").read_text(encoding="utf-8").splitlines()
+                if line
+            ]
 
         self.assertEqual(added["metadata_status"], "declared")
+        self.assertEqual(added["runtime"]["network_allowed"], False)
+        self.assertEqual(added["runtime"]["filesystem_access"], "study_inputs_only")
         self.assertEqual(len(added["factor_contract_hash"]), 64)
         self.assertEqual(lock["factors"]["sma_signal"]["parameters_hash"], added["parameters_hash"])
+        self.assertEqual(lock["factors"]["sma_signal"]["runtime"], added["runtime"])
+        self.assertEqual(duplicate.returncode, 2)
+        self.assertIn("Study Lock version already exists", json.loads(duplicate.stderr)["error"]["message"])
+        self.assertEqual(workspace_manifest["latest_lock_hash"], lock["lock_hash"])
+        self.assertEqual([item["event"] for item in lifecycle_events], ["opened", "frozen"])
 
     def test_study_factor_run_writes_profile_from_cli(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -89,6 +109,8 @@ class ProductCliTests(unittest.TestCase):
         self.assertEqual(published["operation"], "publish-factor")
         self.assertEqual(published["dataset_id"], "features.cli.signal")
         self.assertEqual(published["factor_run_hash"], result["run_hash"])
+        self.assertEqual(published["factor_output_hash"], result["factor_output_hash"])
+        self.assertEqual(profile["factor_output_hash"], result["factor_output_hash"])
         self.assertEqual(len(published["quality_report_hash"]), 64)
 
     def test_strategy_set_model_code_accepts_metadata_contract(self) -> None:
@@ -118,13 +140,24 @@ class ProductCliTests(unittest.TestCase):
                             "--metadata", str(metadata_file))
             model_file.write_text("def decide(context):\n    raise RuntimeError('draft file should not run')\n", encoding="utf-8")
             lock = command(root, "strategy", "freeze", "cli-model-strategy", "--version", "1.0.0")
+            duplicate = subprocess.run(
+                [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root),
+                 "strategy", "freeze", "cli-model-strategy", "--version", "1.0.0"],
+                cwd=ROOT, check=False, capture_output=True, text=True,
+            )
             started = command(root, "run", "start", "--snapshot", "cli-model-strategy@1.0.0",
                               "--mode", "backtest", "--execute-strategy")
             decision = json.loads(Path(started["outputs"]["strategy_decision"]).read_text(encoding="utf-8"))
+            snapshot_artifact_exists = Path(started["target"]["snapshot_artifact"]).exists()
 
         self.assertEqual(model["operation"], "set-model-code")
         self.assertEqual(len(model["model_contract_hash"]), 64)
         self.assertEqual(lock["model"]["model_contract_hash"], model["model_contract_hash"])
+        self.assertEqual(duplicate.returncode, 2)
+        self.assertIn("Strategy Lock version already exists", json.loads(duplicate.stderr)["error"]["message"])
+        self.assertEqual(started["target"]["snapshot_hash"], lock["lock_hash"])
+        self.assertTrue(started["target"]["snapshot_source"].endswith("strategies/cli-model-strategy/locks/1.0.0/strategy.lock.json"))
+        self.assertTrue(snapshot_artifact_exists)
         self.assertEqual(started["runtime_contract"]["strategy_decision_execution"]["decision_hash"], decision["decision_hash"])
         self.assertEqual(decision["decision"]["close"], "100")
 
@@ -185,6 +218,64 @@ class ProductCliTests(unittest.TestCase):
         self.assertEqual(bound["release_id"], published["release_id"])
         self.assertEqual(bound["factor_run_hash"], factor_run["run_hash"])
         self.assertEqual(decision["decision"]["signal"], 100)
+
+    def test_strategy_model_failure_writes_data_plane_diagnostic_from_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "factor.py"
+            factor_metadata = root / "factor.metadata.json"
+            model_file = root / "model.py"
+            model_metadata = root / "model.metadata.json"
+            factor_file.write_text("def compute(inputs, params, context):\n    return []\n", encoding="utf-8")
+            factor_metadata.write_text(json.dumps({
+                "inputs": ["bars"],
+                "parameters": {},
+                "primary_time": "available_time",
+                "fields": ["available_time", "signal"],
+                "point_in_time": True,
+            }), encoding="utf-8")
+            model_file.write_text(
+                "def decide(context):\n"
+                "    return {'rows': context.input('primary').rows()}\n",
+                encoding="utf-8",
+            )
+            model_metadata.write_text(json.dumps({
+                "inputs": ["primary"],
+                "intent_schema": {"kind": "diagnostic"},
+                "side_effects_allowed": False,
+            }), encoding="utf-8")
+
+            command(root, "data", "download", "tutorial-sma-data")
+            command(root, "study", "open", "cli-diagnostic-study")
+            command(root, "study", "add-data", "--workspace", "cli-diagnostic-study", "--name", "bars",
+                    "--dataset", "market.ohlcv.crypto.tutorial.btc-usdt.1h")
+            command(root, "study", "add-factor", "--workspace", "cli-diagnostic-study", "--name", "signal",
+                    "--file", str(factor_file), "--metadata", str(factor_metadata))
+            command(root, "study", "freeze", "cli-diagnostic-study", "--version", "1.0.0")
+            command(root, "strategy", "open", "cli-diagnostic-strategy",
+                    "--from-study", "cli-diagnostic-study@1.0.0")
+            bound = command(root, "strategy", "bind-factor", "--workspace", "cli-diagnostic-strategy",
+                            "--name", "primary", "--study-factor", "signal")
+            command(root, "strategy", "set-model-code", "cli-diagnostic-strategy", str(model_file),
+                    "--metadata", str(model_metadata))
+            command(root, "strategy", "freeze", "cli-diagnostic-strategy", "--version", "1.0.0")
+            failed = subprocess.run(
+                [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root),
+                 "run", "start", "--snapshot", "cli-diagnostic-strategy@1.0.0",
+                 "--mode", "backtest", "--execute-strategy"],
+                cwd=ROOT, check=False, capture_output=True, text=True,
+            )
+            diagnostics = list((root / "runs" / "cli-diagnostic-strategy").glob("*/diagnostics/data_plane.json"))
+            diagnostic = json.loads(diagnostics[0].read_text(encoding="utf-8"))
+            error = json.loads(failed.stderr)
+            primary_input = next(item for item in diagnostic["inputs"] if item["name"] == "primary")
+
+        self.assertEqual(bound["materialization_status"], "contract_only")
+        self.assertEqual(failed.returncode, 2)
+        self.assertIn("data plane diagnostic", error["error"]["message"])
+        self.assertEqual(diagnostic["issue"], "factor_runtime_missing_input")
+        self.assertEqual(primary_input["materialization_status"], "contract_only")
+        self.assertIn("publish-factor", diagnostic["next_action"])
 
     def test_registered_python_provider_download_from_cli(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -299,6 +390,61 @@ class ProductCliTests(unittest.TestCase):
         self.assertEqual(downloaded["source"]["provider"], "cli-provider")
         self.assertEqual(rows[0]["symbol"], "MSFT")
         self.assertEqual(rows[0]["score"], 9)
+
+    def test_provider_config_credentials_from_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.joinpath("kairos.toml").write_text(
+                "[project]\nname = \"cli-provider-config\"\n\n"
+                "[providers.test]\napi_key = \"env:KAIROS_TEST_CLI_CONFIG_PROVIDER_TOKEN\"\n",
+                encoding="utf-8",
+            )
+            provider = root / "provider.py"
+            contract = root / "config-provider.contract.json"
+            spec = root / "config-provider.download.json"
+            provider.write_text(
+                "def acquire(product, scope, context):\n"
+                "    token = context['credentials']['providers.test.api_key']\n"
+                "    value = 13 if token == 'cli-config-secret-token' else -1\n"
+                "    return [{'available_time': scope['as_of'], 'symbol': product['symbol'], 'value': value}]\n",
+                encoding="utf-8",
+            )
+            contract.write_text(json.dumps({
+                "dataset_id": "reference.provider.config.cli",
+                "primary_time": "available_time",
+                "fields": ["available_time", "symbol", "value"],
+            }), encoding="utf-8")
+            spec.write_text(json.dumps({
+                "kind": "data.download",
+                "scope": {"as_of": "2026-01-06T00:00:00Z"},
+                "source": {
+                    "kind": "python_provider",
+                    "path": "provider.py",
+                    "credentials": {"config": ["providers.test.api_key"]},
+                },
+                "products": [{
+                    "dataset_id": "reference.provider.config.cli",
+                    "symbol": "GOOG",
+                    "contract": "config-provider.contract.json",
+                }],
+            }), encoding="utf-8")
+
+            command(root, "data", "register-download", "--key", "cli-config-provider", "--spec", str(spec))
+            original_token = os.environ.pop("KAIROS_TEST_CLI_CONFIG_PROVIDER_TOKEN", None)
+            try:
+                os.environ["KAIROS_TEST_CLI_CONFIG_PROVIDER_TOKEN"] = "cli-config-secret-token"
+                downloaded = command(root, "data", "download", "cli-config-provider")
+                rows = DataProductApi(root).dataset("reference.provider.config.cli").rows(columns=("symbol", "value"))
+            finally:
+                if original_token is None:
+                    os.environ.pop("KAIROS_TEST_CLI_CONFIG_PROVIDER_TOKEN", None)
+                else:
+                    os.environ["KAIROS_TEST_CLI_CONFIG_PROVIDER_TOKEN"] = original_token
+
+        self.assertEqual(downloaded["source"]["credentials"]["required_config"], ["providers.test.api_key"])
+        self.assertEqual(rows[0]["symbol"], "GOOG")
+        self.assertEqual(rows[0]["value"], 13)
+        self.assertNotIn("cli-config-secret-token", json.dumps(downloaded))
 
     def test_product_cli_defaults_to_localized_text_and_keeps_json_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

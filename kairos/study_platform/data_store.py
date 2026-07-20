@@ -111,7 +111,7 @@ def merge_datasets(existing: MarketReplayDataset, chunk: MarketReplayDataset) ->
         key = (item.timestamp, item.sequence)
         previous = slices.get(key)
         if previous is not None and previous != item:
-            raise ValueError(f"conflicting market snapshot at {item.timestamp} sequence={item.sequence}")
+            raise ValueError(f"conflicting market slice/snapshot at {item.timestamp} sequence={item.sequence}")
         slices[key] = item
     ordered_slices = tuple(sorted(slices.values(), key=lambda item: (item.timestamp, item.sequence)))
     source = left.source if left.source == right.source else "+".join(sorted(set(left.source.split("+") + right.source.split("+"))))

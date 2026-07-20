@@ -34,7 +34,9 @@ from kairos.reference import (
 from kairos.reference.factory import publish_instrument
 from kairos.risk.portfolio_governance import PositionSizer
 from kairos.storage.codec import to_primitive
-from kairos.strategies import GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext
+from kairos.strategies.runtime import GovernedStrategyRuntime
+from kairos.strategies.sma_cross_strategy import SmaCrossStrategy, SmaCrossStrategyConfig
+from kairos.strategies.strategy_protocols import StrategyContext
 from kairos.strategies.specs import sma_strategy_spec
 
 
