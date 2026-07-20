@@ -18,7 +18,7 @@ from kairos.data.contracts import (
 from kairos.data.freshness import (
     PAPER_LIVE_FRESHNESS_POLICY, evaluate_live_view_freshness, live_view_channel_diagnostics,
     find_live_view_manifest, live_view_manifest_path, update_live_view_manifest_freshness,
-    write_live_view_manifest,
+    resolve_live_view_subscription, write_live_view_manifest,
 )
 from kairos.data.products import (
     BTC_SPOT_DAILY, US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MASSIVE_CORPORATE_ACTIONS,
@@ -388,6 +388,41 @@ class DataProductContractTests(unittest.TestCase):
 
         self.assertIsNotNone(selected)
         self.assertEqual(selected.live_view_id, "live:healthy")
+
+    def test_resolve_live_view_subscription_returns_runtime_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset_id = str(BTC_SPOT_DAILY.key)
+            contract_hash = DataSetContractArtifact.from_product_contract(BTC_SPOT_DAILY).contract_hash
+            manifest = LiveViewManifest(
+                dataset_id,
+                "live:subscription",
+                contract_hash,
+                "connector-hash",
+                "available_time",
+                ("available_time", "close"),
+                {
+                    "transport": "connector",
+                    "event_source_contract": "EventSource[DataSetRecord]",
+                    "channel_contract": "BoundedEventChannel",
+                    "freshness": {"max_age_seconds": 60},
+                    "channel_diagnostics": {"dropped": 0, "overflow": 0, "sequence_gaps": 0},
+                },
+                {"kind": "live_connector"},
+                "healthy",
+                "2026-07-20T00:00:00+00:00",
+            )
+            write_live_view_manifest(live_view_manifest_path(root, dataset_id, manifest.live_view_id), manifest)
+
+            binding = resolve_live_view_subscription(
+                root, name="bars", dataset_id=dataset_id, contract_hash=contract_hash,
+            )
+            primitive = binding.to_primitive()
+
+        self.assertEqual(binding.live_view_id, "live:subscription")
+        self.assertEqual(primitive["name"], "bars")
+        self.assertEqual(primitive["event_source_contract"], "EventSource[DataSetRecord]")
+        self.assertTrue(primitive["freshness_gate"]["passed"])
 
 
 if __name__ == "__main__":

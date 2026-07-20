@@ -89,12 +89,47 @@ class FourProductSurfaceTests(unittest.TestCase):
             started = run.start_snapshot("live-freshness-strategy@1.0.0", mode="paper")
 
         self.assertEqual(started["target"]["hash"], strategy_lock["lock_hash"])
+        feed = started["runtime_contract"]["feed_bindings"][0]
+        self.assertEqual(feed["name"], "sentiment")
+        self.assertEqual(feed["event_source_contract"], "EventSource[DataSetRecord]")
+        self.assertEqual(feed["channel_contract"], "BoundedEventChannel")
+        self.assertTrue(feed["freshness_gate"]["passed"])
         freshness = started["runtime_contract"]["freshness_gates"][0]
         self.assertTrue(freshness["passed"])
         self.assertEqual(freshness["freshness_status"], "healthy")
         self.assertEqual(freshness["max_age_seconds"], 60)
         self.assertEqual(freshness["channel_failures"], [])
         self.assertEqual(freshness["channel_diagnostics"]["dropped"], 0)
+
+    def test_live_data_write_requires_freshness_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            external = root / "external-input"
+            external.mkdir()
+            contract = external / "quotes.contract.json"
+            live_connector = external / "quotes_live.py"
+            contract.write_text(json.dumps({
+                "dataset_id": "market.quotes.equity.us",
+                "primary_time": "available_time",
+                "grain": {"kind": "event_stream"},
+                "fields": ["available_time", "instrument_id", "bid", "ask"],
+            }), encoding="utf-8")
+            live_connector.write_text("def subscribe(params, context):\n    yield {}\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "freshness.max_age_seconds"):
+                DataProductApi(root).write_live(
+                    live_connector, as_dataset="market.quotes.equity.us", contract=contract,
+                )
+
+            payload = json.loads(contract.read_text(encoding="utf-8"))
+            payload["freshness"] = {"max_age_seconds": "30"}
+            contract.write_text(json.dumps(payload), encoding="utf-8")
+
+            live_view = DataProductApi(root).write_live(
+                live_connector, as_dataset="market.quotes.equity.us", contract=contract,
+            )
+
+        self.assertEqual(live_view["live_data_plane"]["freshness"]["max_age_seconds"], 30)
 
     def test_python_product_apis_share_the_same_artifact_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

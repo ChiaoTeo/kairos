@@ -1288,7 +1288,8 @@ def decide(context):
 
 - `kairos data download <data_key>`：已支持 credential-free 的 `tutorial-sma-data`，走 Data Catalog 和 Release 产物；
 - `kairos data write --file ... --as <dataset_id> --contract <contract>`：已支持 CSV 时间序列按 Data Contract 写入 Release；
-- `kairos data write --live --connector ... --as <dataset_id> --contract <contract>`：已支持生成带 `live_data_plane` 证据的 Live View manifest；
+- `kairos data write --live --connector ... --as <dataset_id> --contract <contract>`：已支持校验
+  `freshness.max_age_seconds` 并生成带 `live_data_plane` 证据的 Live View manifest；
 - `kairos data live-binance/soak-binance`、`BoundedEventChannel`、`AsyncKairosRuntime`：已有 provider WebSocket 到 canonical async channel 的运行基线；
 - `kairos study open/add-data/add-factor/inspect/freeze`：已支持一个 Study workspace 绑定多个 Data Release 和 factor code hash；
 - `kairos strategy open/bind-factor/set-risk/inspect/freeze`：已支持从 Frozen Study 创建 Strategy workspace，并复用 Study factor hash；
@@ -1322,21 +1323,23 @@ def decide(context):
   `unhealthy`；
 - Live View manifest 已有统一读写/查找 API：`live_view_manifest_path`、`load_live_view_manifest`、
   `write_live_view_manifest`、`find_live_view_manifest`；四产品 surface 和 freshness 写回路径共享同一套解析逻辑；
+- `resolve_live_view_subscription` 已提供最小 Live View subscription binding，四产品 paper/live Run Manifest 会在
+  `runtime_contract.feed_bindings` 中记录 DataSet input 到 Live View/EventSource/channel 的绑定证据；
 - Python API：`DataProductApi`、`StudyProductApi`、`StrategyProductApi`、`RunProductApi` 已提供和 CLI 同源的最小调用面；
 - 完整示例：`examples/four_product_user_path.sh`；
 - 自动化验收：`tests/test_four_product_surface.py`。
 
 目标态剩余缺口：
 
-1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型，并接入四产品 surface、`publish_release`、columnar publishing 和 MarketReplayDataset metadata 补全路径；质量报告已开始区分 gate/diagnostic，DataPreparation 已有可配置 promotion policy profile，DataProductContract capabilities 已可声明产品默认 policy，内置 Q2/Q3/Q4 profile registry 已建立，freshness gate 已有最小 policy/result 模型并接入四产品 paper/live run 边界，channel diagnostics 已进入该 gate，`soak-binance` 可显式写回 Live View health/diagnostics，Live View manifest 读写/查找已有共享 API；剩余缺口是通用 freshness monitor 和实际实时 runtime 还没有自动持续写回 Live View health/diagnostics；
+1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型，并接入四产品 surface、`publish_release`、columnar publishing 和 MarketReplayDataset metadata 补全路径；质量报告已开始区分 gate/diagnostic，DataPreparation 已有可配置 promotion policy profile，DataProductContract capabilities 已可声明产品默认 policy，内置 Q2/Q3/Q4 profile registry 已建立，freshness gate 已有最小 policy/result 模型并接入四产品 paper/live run 边界，channel diagnostics 已进入该 gate，`soak-binance` 可显式写回 Live View health/diagnostics，Live View manifest 读写/查找已有共享 API，paper/live Run Manifest 已记录最小 Live View subscription binding；剩余缺口是通用 freshness monitor 和实际实时 runtime 还没有自动持续写回 Live View health/diagnostics，也还没有真正消费这些 feed binding；
 2. 旧 `StudyWorkspace` 仍以单 `input_release_id` 为主模型，新的 Study Product workspace 还没有替换旧模型；
 3. Study Product 的 Draft/Frozen 生命周期已最小落地，但状态机、质量门禁和目录结构还没有统一到正式模型；
 4. 本地 factor 已记录 code hash，但依赖、参数、输出 schema 和 point-in-time 检查还没有正式约定；
 5. Strategy Product workspace 已最小落地，但 `model.py`、risk/execution policy 和 promotion evidence 还不完整；
 6. Strategy 已要求从 Frozen Study 打开，但还没有完整自动检查 Data Release hash 与 Factor Output 语义一致；
 7. Study factor 与 Strategy model 的语义一致性还没有自动检查；
-8. Data Product 已有最小 `data download` 和 `data write` 入口，但 download spec、YAML contract、quality report 还没有完整实现；
-9. 实时数据流接入已能生成 Live View manifest，并已有 provider WebSocket/canonical channel 运行基线；四产品 paper/live run 已要求 healthy Live View freshness 和 channel diagnostics，`soak-binance` 已能把审计结果写回指定 Live View manifest，但通用 freshness monitor、订阅 API、持续诊断写回和历史回放归档还没有完整统一到 DataSet identity；
+8. Data Product 已有最小 `data download` 和 `data write` 入口，live write 已要求 freshness contract；但 download spec、YAML contract、quality report 还没有完整实现；
+9. 实时数据流接入已能生成 Live View manifest，并已有 provider WebSocket/canonical channel 运行基线；四产品 paper/live run 已要求 healthy Live View freshness 和 channel diagnostics，`soak-binance` 已能把审计结果写回指定 Live View manifest，Run Manifest 已记录 DataSet 到 Live View/EventSource/channel 的最小 subscription binding；但通用 freshness monitor、真实订阅执行、持续诊断写回和历史回放归档还没有完整统一到 DataSet identity；
 10. Run Product 已有最小 `run start/inspect/replay/compare` API，但还没有接入真实 InputTable、clock、feed 和 execution gateway；
 11. `data.dataset(name)`、`study.data(name)`、`study.factor(name)`、`strategy.decide(context)` 和 `run.start(...)` 这种用户 API 还没有完成；
 12. Factor Code decorator/metadata/hash 协议还没有完成；
@@ -1821,7 +1824,7 @@ Run Product 必须输出数据平面或运行契约缺口诊断。
 | Data Download | 下载内置/已注册数据并生成 Release、quality report、download report | 输出缺口，不创建可研究 Release |
 | Contract Boundary | Contract 不包含 provider、connector、CSV 路径或存储路径；manifest 记录具体产物证据 | 混入实现细节时拒绝 freeze/promote |
 | Data Write Historical | `data write --file` 必须校验 contract 并生成 Release | 无 contract 或 schema 不匹配时留在 Draft exploration，不允许 freeze |
-| Data Write Live | `data write --live` 必须校验 contract、identity、freshness 并生成 Live View | 缺 schema/identity/freshness 时拒绝 paper/live |
+| Data Write Live | `data write --live` 必须校验 contract、identity、freshness 并生成 Live View | 缺 schema/identity/freshness 时拒绝写入；缺 healthy diagnostics 时拒绝 paper/live |
 | Async Live Plane | WebSocket/实时 connector 只能产出 Live View、canonical event、channel metrics 和 capture evidence | Strategy 直接订阅 provider WebSocket 或静默丢 event 时拒绝 paper/live |
 | Study Draft | 可 add-data、add-factor、run | 未声明输入时 factor-run fail closed |
 | Factor Boundary | Exploration Artifact 不能被 strategy bind | 提示先 `study add-factor` |

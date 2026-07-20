@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import json
-from typing import Callable
+from typing import Callable, Mapping
 
 from kairos.data.contracts import RunMode
 from kairos.market_data.subscriptions import CapturePolicy
@@ -57,6 +57,49 @@ class RunModeComposition:
             ComponentBinding(self.event_source,event_source),ComponentBinding(self.clock,clock),
             ComponentBinding(self.execution_driver,execution_driver),ComponentBinding(self.persistence,persistence),
             ComponentBinding(self.safety_policy,safety_policy)),runner)
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeFeedServicePlan:
+    name: str
+    dataset: str
+    live_view_id: str
+    event_source_contract: str
+    channel_contract: str
+    capture_policy: CapturePolicy
+
+    def manifest(self) -> dict[str, str]:
+        return {
+            "name": self.name,
+            "dataset": self.dataset,
+            "live_view_id": self.live_view_id,
+            "event_source_contract": self.event_source_contract,
+            "channel_contract": self.channel_contract,
+            "capture_policy": self.capture_policy.value,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeFeedPlan:
+    mode: RunMode
+    services: tuple[RuntimeFeedServicePlan, ...]
+
+    def __post_init__(self) -> None:
+        if self.mode not in {RunMode.PAPER_TRADING, RunMode.LIVE}:
+            raise ValueError("runtime feed plan is only valid for paper/live modes")
+        if not self.services:
+            raise ValueError("paper/live runtime feed plan requires at least one feed binding")
+
+    @property
+    def plan_hash(self) -> str:
+        material = json.dumps(self.manifest(), sort_keys=True, separators=(",", ":"))
+        return sha256(material.encode()).hexdigest()
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "mode": self.mode.value,
+            "services": [item.manifest() for item in self.services],
+        }
 
 
 @dataclass(frozen=True,slots=True)
@@ -114,3 +157,28 @@ def live_composition(provider: str, execution_driver: str) -> RunModeComposition
         RunMode.LIVE, f"live:{provider}", "system", execution_driver, "runtime-store",
         "live-runtime-gates", CapturePolicy.RAW_AND_CANONICAL,
     )
+
+
+def runtime_feed_plan(mode: RunMode | str, feed_bindings: tuple[Mapping[str, object], ...]) -> RuntimeFeedPlan:
+    run_mode = _runtime_mode(mode)
+    services = []
+    for binding in feed_bindings:
+        gate = binding.get("freshness_gate")
+        if not isinstance(gate, Mapping) or not gate.get("passed"):
+            raise ValueError(f"feed binding {binding.get('name')!r} did not pass freshness gate")
+        services.append(RuntimeFeedServicePlan(
+            str(binding.get("name") or ""),
+            str(binding.get("dataset") or ""),
+            str(binding.get("live_view_id") or ""),
+            str(binding.get("event_source_contract") or ""),
+            str(binding.get("channel_contract") or ""),
+            CapturePolicy.RAW_AND_CANONICAL,
+        ))
+    return RuntimeFeedPlan(run_mode, tuple(services))
+
+
+def _runtime_mode(mode: RunMode | str) -> RunMode:
+    raw = mode.value if isinstance(mode, RunMode) else str(mode)
+    if raw == "paper":
+        return RunMode.PAPER_TRADING
+    return RunMode(raw)
