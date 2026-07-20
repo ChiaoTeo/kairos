@@ -125,7 +125,7 @@ def _parser() -> argparse.ArgumentParser:
         "register-download", help="register a reusable Data Product download entry",
     )
     data_register_download.add_argument("--key", required=True, help="stable Data Product key")
-    data_register_download.add_argument("--spec", type=Path, required=True, help="JSON Data Product download spec")
+    data_register_download.add_argument("--spec", type=Path, required=True, help="JSON or YAML Data Product download spec")
     data_write = data_actions.add_parser("write", help="write external data into the Data Contract")
     data_write.add_argument("--file", type=Path, help="CSV file to import as a historical time series")
     data_write.add_argument("--live", action="store_true", help="register a live data view instead of importing a file")
@@ -527,6 +527,7 @@ def _parser() -> argparse.ArgumentParser:
     study_add_factor.add_argument("--ws", dest="workspace", help=argparse.SUPPRESS)
     study_add_factor.add_argument("--name", required=True, help="workspace-local factor name")
     study_add_factor.add_argument("--file", required=True, help="factor code file")
+    study_add_factor.add_argument("--metadata", type=Path, help="JSON or YAML Factor metadata contract")
     study_create = study_actions.add_parser("create")
     study_create.add_argument("study_id"); study_create.add_argument("--version", default="1.0.0")
     study_create.add_argument("--hypothesis", required=True)
@@ -567,6 +568,13 @@ def _parser() -> argparse.ArgumentParser:
     study_data = study_actions.add_parser("data", help="preview rows from the Study input without storage plumbing")
     study_data.add_argument("study_id"); study_data.add_argument("--version", default="1.0.0")
     study_data.add_argument("--head", type=int, default=10); study_data.add_argument("--column", action="append")
+    study_factor_run = study_actions.add_parser("factor-run", help="execute a declared Study factor and write a factor profile")
+    study_factor_run.add_argument("study_id")
+    study_factor_run.add_argument("name")
+    study_publish_factor = study_actions.add_parser("publish-factor", help="publish latest factor-run rows as a Feature Data Release")
+    study_publish_factor.add_argument("study_id")
+    study_publish_factor.add_argument("name")
+    study_publish_factor.add_argument("--as", dest="as_dataset", required=True, help="Feature DataSet identity to publish")
     study_profile = study_actions.add_parser("profile", help="run basic point-in-time and OHLCV data checks")
     study_profile.add_argument("study_id"); study_profile.add_argument("--version", default="1.0.0")
     study_scaffold = study_actions.add_parser("scaffold", help="generate a minimal DataFrame study script")
@@ -628,6 +636,9 @@ def _parser() -> argparse.ArgumentParser:
     strategy_set_risk = strategy_actions.add_parser("set-risk", help="bind strategy risk code or configuration")
     strategy_set_risk.add_argument("strategy_id")
     strategy_set_risk.add_argument("risk_file")
+    strategy_set_execution = strategy_actions.add_parser("set-execution", help="bind strategy execution policy")
+    strategy_set_execution.add_argument("strategy_id")
+    strategy_set_execution.add_argument("execution_file")
     strategy_set_model = strategy_actions.add_parser("set-model", help="bind a built-in runtime model to a Strategy workspace")
     strategy_set_model.add_argument("strategy_id")
     strategy_set_model.add_argument("--kind", required=True, choices=("sma-cross-v1", "builtin.sma-cross-v1"))
@@ -635,6 +646,10 @@ def _parser() -> argparse.ArgumentParser:
     strategy_set_model.add_argument("--fast-window", type=int)
     strategy_set_model.add_argument("--slow-window", type=int)
     strategy_set_model.add_argument("--approved-capital")
+    strategy_set_model_code = strategy_actions.add_parser("set-model-code", help="bind user strategy model.py and optional metadata")
+    strategy_set_model_code.add_argument("strategy_id")
+    strategy_set_model_code.add_argument("model_file")
+    strategy_set_model_code.add_argument("--metadata", type=Path, help="JSON or YAML Strategy model metadata contract")
     strategy_freeze = strategy_actions.add_parser("freeze", help="freeze a Strategy workspace snapshot")
     strategy_freeze.add_argument("strategy_id")
     strategy_freeze.add_argument("--version", default="1.0.0")
@@ -987,6 +1002,8 @@ def _product_command(args: argparse.Namespace) -> int:
         ("study", "create"): create_study, ("study", "plan"): plan_governed_study,
         ("study", "start"): start_governed_study,
         ("study", "freeze"): _study_freeze_dispatch,
+        ("study", "factor-run"): product_surface.study_factor_run,
+        ("study", "publish-factor"): product_surface.study_publish_factor,
         ("study", "inspect"): _study_inspect_dispatch, ("study", "data"): preview_study_data,
         ("study", "profile"): profile_study, ("study", "scaffold"): scaffold_study,
         ("tutorial", "sma"): start_sma_tutorial,
@@ -994,7 +1011,9 @@ def _product_command(args: argparse.Namespace) -> int:
         ("strategy", "open"): product_surface.strategy_open,
         ("strategy", "bind-factor"): product_surface.strategy_bind_factor,
         ("strategy", "set-risk"): product_surface.strategy_set_risk,
+        ("strategy", "set-execution"): product_surface.strategy_set_execution,
         ("strategy", "set-model"): product_surface.strategy_set_model,
+        ("strategy", "set-model-code"): product_surface.strategy_set_model_code,
         ("strategy", "freeze"): product_surface.strategy_freeze,
         ("strategy", "register-sma"): register_sma_strategy,
         ("strategy","register-builtins"):register_builtin_strategy_releases,("strategy","inspect"):_strategy_inspect_dispatch,

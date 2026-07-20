@@ -23,6 +23,109 @@ def command(root: Path, *args: str) -> dict[str, object]:
 
 
 class ProductCliTests(unittest.TestCase):
+    def test_study_add_factor_accepts_metadata_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "factor.py"
+            metadata_file = root / "factor.metadata.json"
+            factor_file.write_text("def compute(inputs, params, context):\n    return inputs['bars']\n", encoding="utf-8")
+            metadata_file.write_text(json.dumps({
+                "inputs": ["bars"],
+                "parameters": {"fast": 5, "slow": 20},
+                "primary_time": "available_time",
+                "fields": ["instrument_id", "available_time", "signal"],
+                "point_in_time": True,
+                "dependencies": [],
+            }), encoding="utf-8")
+
+            command(root, "data", "download", "tutorial-sma-data")
+            command(root, "study", "open", "cli-factor-study")
+            command(root, "study", "add-data", "--workspace", "cli-factor-study", "--name", "bars",
+                    "--dataset", "market.ohlcv.crypto.tutorial.btc-usdt.1h")
+            added = command(root, "study", "add-factor", "--workspace", "cli-factor-study",
+                            "--name", "sma_signal", "--file", str(factor_file),
+                            "--metadata", str(metadata_file))
+            lock = command(root, "study", "freeze", "cli-factor-study", "--version", "1.0.0")
+
+        self.assertEqual(added["metadata_status"], "declared")
+        self.assertEqual(len(added["factor_contract_hash"]), 64)
+        self.assertEqual(lock["factors"]["sma_signal"]["parameters_hash"], added["parameters_hash"])
+
+    def test_study_factor_run_writes_profile_from_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "factor.py"
+            metadata_file = root / "factor.metadata.json"
+            factor_file.write_text(
+                "def compute(inputs, params, context):\n"
+                "    rows = inputs['bars'].rows(columns=('available_time', 'close'))\n"
+                "    return [{'available_time': rows[0]['available_time'], 'signal': rows[0]['close']}]\n",
+                encoding="utf-8",
+            )
+            metadata_file.write_text(json.dumps({
+                "inputs": ["bars"],
+                "parameters": {},
+                "primary_time": "available_time",
+                "fields": ["available_time", "signal"],
+                "point_in_time": True,
+            }), encoding="utf-8")
+
+            command(root, "data", "download", "tutorial-sma-data")
+            command(root, "study", "open", "cli-factor-run-study")
+            command(root, "study", "add-data", "--workspace", "cli-factor-run-study", "--name", "bars",
+                    "--dataset", "market.ohlcv.crypto.tutorial.btc-usdt.1h")
+            command(root, "study", "add-factor", "--workspace", "cli-factor-run-study", "--name", "signal",
+                    "--file", str(factor_file), "--metadata", str(metadata_file))
+            result = command(root, "study", "factor-run", "cli-factor-run-study", "signal")
+            published = command(root, "study", "publish-factor", "cli-factor-run-study", "signal",
+                                "--as", "features.cli.signal")
+            profile = json.loads(Path(result["profile"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(result["operation"], "factor-run")
+        self.assertEqual(result["row_count"], 1)
+        self.assertTrue(profile["passed"])
+        self.assertEqual(published["operation"], "publish-factor")
+        self.assertEqual(published["dataset_id"], "features.cli.signal")
+        self.assertEqual(published["factor_run_hash"], result["run_hash"])
+        self.assertEqual(len(published["quality_report_hash"]), 64)
+
+    def test_strategy_set_model_code_accepts_metadata_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_file = root / "model.py"
+            metadata_file = root / "model.metadata.json"
+            model_file.write_text(
+                "def decide(context):\n"
+                "    rows = context.data('bars').rows(columns=('available_time', 'close'))\n"
+                "    return {'intent': 'hold', 'close': rows[0]['close']}\n",
+                encoding="utf-8",
+            )
+            metadata_file.write_text(json.dumps({
+                "inputs": ["bars"],
+                "intent_schema": {"kind": "target_exposure"},
+                "side_effects_allowed": False,
+            }), encoding="utf-8")
+
+            command(root, "data", "download", "tutorial-sma-data")
+            command(root, "study", "open", "cli-model-study")
+            command(root, "study", "add-data", "--workspace", "cli-model-study", "--name", "bars",
+                    "--dataset", "market.ohlcv.crypto.tutorial.btc-usdt.1h")
+            command(root, "study", "freeze", "cli-model-study", "--version", "1.0.0")
+            command(root, "strategy", "open", "cli-model-strategy", "--from-study", "cli-model-study@1.0.0")
+            model = command(root, "strategy", "set-model-code", "cli-model-strategy", str(model_file),
+                            "--metadata", str(metadata_file))
+            model_file.write_text("def decide(context):\n    raise RuntimeError('draft file should not run')\n", encoding="utf-8")
+            lock = command(root, "strategy", "freeze", "cli-model-strategy", "--version", "1.0.0")
+            started = command(root, "run", "start", "--snapshot", "cli-model-strategy@1.0.0",
+                              "--mode", "backtest", "--execute-strategy")
+            decision = json.loads(Path(started["outputs"]["strategy_decision"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(model["operation"], "set-model-code")
+        self.assertEqual(len(model["model_contract_hash"]), 64)
+        self.assertEqual(lock["model"]["model_contract_hash"], model["model_contract_hash"])
+        self.assertEqual(started["runtime_contract"]["strategy_decision_execution"]["decision_hash"], decision["decision_hash"])
+        self.assertEqual(decision["decision"]["close"], "100")
+
     def test_product_cli_defaults_to_localized_text_and_keeps_json_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

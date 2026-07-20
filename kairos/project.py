@@ -31,7 +31,7 @@ def initialize_project(target: str | Path = ".", *, name: str | None = None, for
     if root.exists() and not root.is_dir():
         raise ValueError(f"Kairos project target is not a directory: {root}")
     root.mkdir(parents=True, exist_ok=True)
-    project_name = _project_name(name or root.name or "kairos-project")
+    project_name = _project_name(name or _default_project_name(root))
     created: list[str] = []
     reused: list[str] = []
 
@@ -143,6 +143,14 @@ def _project_name(value: str) -> str:
     return normalized or "kairos-project"
 
 
+def _default_project_name(root: Path) -> str:
+    if (root / "kairos").is_dir() and (root / "pyproject.toml").exists():
+        pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+        if re.search(r'(?m)^name\s*=\s*"(?:kairos|kairospy)"', pyproject):
+            return "kairos"
+    return root.name or "kairos-project"
+
+
 def _kairos_toml(project_name: str) -> str:
     return f"""[project]
 name = "{project_name}"
@@ -163,7 +171,7 @@ def _pyproject_toml(project_name: str) -> str:
 name = "{project_name}"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["kairos>=0.1.0"]
+dependencies = ["kairospy>=0.1.0"]
 
 [tool.kairos]
 config = "kairos.toml"

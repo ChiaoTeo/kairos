@@ -420,7 +420,13 @@ class FourProductSurfaceTests(unittest.TestCase):
             strategy.open("api-strategy", from_study="api-study@1.0.0")
             strategy.bind_factor("api-strategy", name="primary", study_factor="momentum_12_1")
             strategy_lock = strategy.freeze("api-strategy", version="1.0.0")
-            started = run.start_snapshot("api-strategy@1.0.0", mode="backtest")
+            dataset_ref = data.dataset("market.ohlcv.crypto.tutorial.btc-usdt.1h")
+            study_data_ref = study.data("api-study", "bars", version="1.0.0")
+            study_factor_ref = study.factor("api-study", "momentum_12_1", version="1.0.0")
+            dataset_rows = dataset_ref.rows(columns=("available_time", "close"))
+            study_rows = study_data_ref.rows(columns=("available_time", "close"))
+            started = run.start("api-strategy@1.0.0", mode="backtest")
+            study_started = run.start("api-study", mode="study")
             replayed = run.replay(started["run_id"])
 
         self.assertEqual(downloaded["release_id"], "fixture:sma-bars-v1")
@@ -436,7 +442,478 @@ class FourProductSurfaceTests(unittest.TestCase):
         self.assertEqual(started["target"]["hash"], strategy_lock["lock_hash"])
         self.assertEqual(started["input_artifacts"]["data"]["bars"]["contract_hash"], downloaded["contract_hash"])
         self.assertEqual(started["input_artifacts"]["inputs"]["primary"]["source_hash"], added_factor["code_hash"])
+        self.assertEqual(dataset_ref["artifact_ref"], downloaded["artifact_ref"])
+        self.assertEqual(study_data_ref["artifact_ref"], downloaded["artifact_ref"])
+        self.assertEqual(len(dataset_rows), 90)
+        self.assertEqual(study_rows[0]["close"], dataset_rows[0]["close"])
+        self.assertEqual(tuple(study_rows[0]), ("available_time", "close"))
+        self.assertEqual(study_factor_ref["code_hash"], added_factor["code_hash"])
+        self.assertNotIn("path", study_factor_ref)
+        self.assertEqual(study_started["target"]["kind"], "study")
         self.assertTrue(replayed["passed"])
+
+    def test_study_freeze_writes_readiness_gate_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "factor.py"
+            factor_file.write_text("def compute(inputs, params, context):\n    return inputs['bars']\n", encoding="utf-8")
+
+            data = DataProductApi(root)
+            study = StudyProductApi(root)
+            data.download("tutorial-sma-data")
+            study.open("readiness-study")
+            study.add_data(
+                "readiness-study",
+                name="bars",
+                dataset="market.ohlcv.crypto.tutorial.btc-usdt.1h",
+            )
+            study.add_factor("readiness-study", name="legacy_factor", file=factor_file)
+            study_lock = study.freeze("readiness-study", version="1.0.0")
+            readiness_path = root / "studies" / "readiness-study" / "locks" / "1.0.0" / "readiness.json"
+            readiness_exists = readiness_path.exists()
+            readiness_payload = json.loads(readiness_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(study_lock["lifecycle"], "FROZEN")
+        self.assertTrue(study_lock["readiness"]["passed"])
+        self.assertEqual(study_lock["readiness"]["diagnostics"]["factor_metadata_missing"], ["legacy_factor"])
+        self.assertTrue(readiness_exists)
+        self.assertEqual(readiness_payload["kind"], "study.readiness")
+
+    def test_study_freeze_requires_declared_data(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            study = StudyProductApi(root)
+            study.open("empty-study")
+            with self.assertRaisesRegex(ValueError, "missing_data"):
+                study.freeze("empty-study", version="1.0.0")
+
+    def test_registered_local_csv_download_publishes_data_release(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            external = root / "external-input"
+            external.mkdir()
+            contract = external / "custom-bars.contract.json"
+            csv_file = external / "custom-bars.csv"
+            spec = external / "custom-bars.download.json"
+            contract.write_text(json.dumps({
+                "dataset_id": "market.ohlcv.crypto.custom.1h",
+                "primary_time": "period_end",
+                "grain": {"kind": "bar", "interval": "1h"},
+                "fields": ["period_end", "instrument_id", "open", "high", "low", "close", "volume"],
+            }), encoding="utf-8")
+            csv_file.write_text(
+                "period_end,instrument_id,open,high,low,close,volume\n"
+                "2026-01-01T00:00:00Z,crypto:BTC-USDT,100,110,90,105,12\n",
+                encoding="utf-8",
+            )
+            spec.write_text(json.dumps({
+                "kind": "data.download",
+                "key": "custom-bars",
+                "dataset_id": "market.ohlcv.crypto.custom.1h",
+                "source": {"kind": "local_csv", "path": "custom-bars.csv"},
+                "contract": "custom-bars.contract.json",
+                "quality": {"minimum": "Q2"},
+            }), encoding="utf-8")
+
+            data = DataProductApi(root)
+            registered = data.register_download("custom-bars", spec)
+            downloaded = data.download("custom-bars")
+            added = StudyProductApi(root).open("custom-study")
+            bars = StudyProductApi(root).add_data(
+                "custom-study",
+                name="bars",
+                dataset="market.ohlcv.crypto.custom.1h",
+            )
+
+        self.assertEqual(registered["operation"], "register-download")
+        self.assertEqual(downloaded["operation"], "download")
+        self.assertEqual(downloaded["dataset_id"], "market.ohlcv.crypto.custom.1h")
+        self.assertEqual(downloaded["primary_time"], "period_end")
+        self.assertEqual(len(downloaded["download_spec_hash"]), 64)
+        self.assertEqual(len(downloaded["content_hash"]), 64)
+        self.assertEqual(len(downloaded["manifest_hash"]), 64)
+        self.assertEqual(len(downloaded["quality_report_hash"]), 64)
+        self.assertEqual(downloaded["artifact_ref"], f"data://market.ohlcv.crypto.custom.1h/releases/{downloaded['release_id']}")
+        self.assertEqual(bars["release_id"], downloaded["release_id"])
+        self.assertEqual(bars["manifest_hash"], downloaded["manifest_hash"])
+        self.assertEqual(added["status"], "draft")
+
+    def test_factor_metadata_contract_flows_from_study_to_strategy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "momentum_factor.py"
+            metadata_file = root / "momentum_factor.metadata.json"
+            factor_file.write_text("def compute(inputs, params, context):\n    return inputs['bars']\n", encoding="utf-8")
+            metadata_file.write_text(json.dumps({
+                "inputs": {"bars": "bars"},
+                "parameters": {"lookback_sessions": 252, "skip_recent_sessions": 21},
+                "primary_time": "decision_time",
+                "output_schema": {
+                    "grain": "instrument_time",
+                    "fields": ["instrument_id", "decision_time", "momentum_12_1"],
+                },
+                "point_in_time": True,
+                "strategy_eligible": True,
+                "dependencies": ["pandas"],
+            }), encoding="utf-8")
+
+            data = DataProductApi(root)
+            study = StudyProductApi(root)
+            strategy = StrategyProductApi(root)
+            data.download("tutorial-sma-data")
+            study.open("factor-metadata-study")
+            study.add_data(
+                "factor-metadata-study",
+                name="bars",
+                dataset="market.ohlcv.crypto.tutorial.btc-usdt.1h",
+            )
+            added_factor = study.add_factor(
+                "factor-metadata-study",
+                name="momentum_12_1",
+                file=factor_file,
+                metadata=metadata_file,
+            )
+            study_lock = study.freeze("factor-metadata-study", version="1.0.0")
+            strategy.open("factor-metadata-strategy", from_study="factor-metadata-study@1.0.0")
+            bound = strategy.bind_factor(
+                "factor-metadata-strategy",
+                name="primary",
+                study_factor="momentum_12_1",
+            )
+            strategy_lock = strategy.freeze("factor-metadata-strategy", version="1.0.0")
+            started = RunProductApi(root).start_snapshot("factor-metadata-strategy@1.0.0", mode="backtest")
+
+        frozen_factor = study_lock["factors"]["momentum_12_1"]
+        self.assertEqual(added_factor["metadata_status"], "declared")
+        self.assertEqual(frozen_factor["inputs"], ["bars"])
+        self.assertTrue(frozen_factor["point_in_time"])
+        self.assertEqual(frozen_factor["primary_time"], "decision_time")
+        self.assertEqual(frozen_factor["parameters"]["lookback_sessions"], 252)
+        self.assertEqual(frozen_factor["output_schema"]["fields"], ["instrument_id", "decision_time", "momentum_12_1"])
+        self.assertEqual(len(frozen_factor["factor_contract_hash"]), 64)
+        self.assertEqual(len(frozen_factor["parameters_hash"]), 64)
+        self.assertEqual(bound["factor_contract_hash"], frozen_factor["factor_contract_hash"])
+        self.assertEqual(bound["parameters_hash"], frozen_factor["parameters_hash"])
+        self.assertEqual(bound["output_schema"], frozen_factor["output_schema"])
+        self.assertTrue(bound["point_in_time"])
+        self.assertEqual(strategy_lock["inputs"]["primary"]["factor_contract_hash"], frozen_factor["factor_contract_hash"])
+        self.assertEqual(
+            started["input_artifacts"]["inputs"]["primary"]["factor_contract_hash"],
+            frozen_factor["factor_contract_hash"],
+        )
+        self.assertEqual(
+            started["input_artifacts"]["inputs"]["primary"]["parameters_hash"],
+            frozen_factor["parameters_hash"],
+        )
+
+    def test_study_factor_run_writes_profile_and_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "factor.py"
+            metadata_file = root / "factor.metadata.json"
+            factor_file.write_text(
+                "def compute(inputs, params, context):\n"
+                "    rows = inputs['bars'].rows(columns=('available_time', 'close'))\n"
+                "    return [{'available_time': row['available_time'], 'signal': row['close']} for row in rows[:2]]\n",
+                encoding="utf-8",
+            )
+            metadata_file.write_text(json.dumps({
+                "inputs": ["bars"],
+                "parameters": {},
+                "primary_time": "available_time",
+                "fields": ["available_time", "signal"],
+                "point_in_time": True,
+            }), encoding="utf-8")
+
+            data = DataProductApi(root)
+            study = StudyProductApi(root)
+            data.download("tutorial-sma-data")
+            study.open("factor-run-study")
+            study.add_data("factor-run-study", name="bars", dataset="market.ohlcv.crypto.tutorial.btc-usdt.1h")
+            added = study.add_factor("factor-run-study", name="signal", file=factor_file, metadata=metadata_file)
+            result = study.run_factor("factor-run-study", "signal")
+            published = study.publish_factor(
+                "factor-run-study",
+                "signal",
+                as_dataset="features.signal.crypto.tutorial",
+            )
+            feature_ref = data.dataset("features.signal.crypto.tutorial")
+            profile = json.loads(Path(result["profile"]).read_text(encoding="utf-8"))
+            rows = json.loads(Path(result["rows"]).read_text(encoding="utf-8"))
+
+        self.assertEqual(result["operation"], "factor-run")
+        self.assertEqual(result["row_count"], 2)
+        self.assertEqual(profile["factor_contract_hash"], added["factor_contract_hash"])
+        self.assertEqual(profile["point_in_time_check"], "declared")
+        self.assertTrue(profile["passed"])
+        self.assertEqual(rows[0]["signal"], "100")
+        self.assertEqual(published["dataset_id"], "features.signal.crypto.tutorial")
+        self.assertEqual(published["factor_run_hash"], result["run_hash"])
+        self.assertEqual(feature_ref["release_id"], published["release_id"])
+        self.assertEqual(len(published["manifest_hash"]), 64)
+        self.assertEqual(len(published["quality_report_hash"]), 64)
+
+    def test_study_factor_run_requires_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "factor.py"
+            factor_file.write_text("def compute(inputs, params, context):\n    return []\n", encoding="utf-8")
+            data = DataProductApi(root)
+            study = StudyProductApi(root)
+            data.download("tutorial-sma-data")
+            study.open("factor-run-metadata-study")
+            study.add_data("factor-run-metadata-study", name="bars", dataset="market.ohlcv.crypto.tutorial.btc-usdt.1h")
+            study.add_factor("factor-run-metadata-study", name="legacy", file=factor_file)
+
+            with self.assertRaisesRegex(ValueError, "requires metadata"):
+                study.run_factor("factor-run-metadata-study", "legacy")
+
+    def test_factor_metadata_rejects_undeclared_study_input_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "factor.py"
+            metadata_file = root / "factor.metadata.json"
+            factor_file.write_text("def compute(inputs, params, context):\n    return inputs['returns']\n", encoding="utf-8")
+            metadata_file.write_text(json.dumps({
+                "inputs": ["returns"],
+                "parameters": {},
+                "primary_time": "decision_time",
+                "fields": ["instrument_id", "decision_time", "signal"],
+                "point_in_time": True,
+            }), encoding="utf-8")
+
+            study = StudyProductApi(root)
+            study.open("bad-factor-study")
+            with self.assertRaisesRegex(ValueError, "undeclared study data aliases: returns"):
+                study.add_factor("bad-factor-study", name="bad_factor", file=factor_file, metadata=metadata_file)
+
+    def test_strategy_rejects_factor_metadata_marked_not_strategy_eligible(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "exploration_factor.py"
+            metadata_file = root / "exploration_factor.metadata.json"
+            factor_file.write_text("def compute(inputs, params, context):\n    return inputs['bars']\n", encoding="utf-8")
+            metadata_file.write_text(json.dumps({
+                "inputs": ["bars"],
+                "parameters": {"window": 5},
+                "primary_time": "available_time",
+                "fields": ["instrument_id", "available_time", "temporary_signal"],
+                "point_in_time": True,
+                "strategy_eligible": False,
+            }), encoding="utf-8")
+
+            data = DataProductApi(root)
+            study = StudyProductApi(root)
+            strategy = StrategyProductApi(root)
+            data.download("tutorial-sma-data")
+            study.open("exploration-factor-study")
+            study.add_data(
+                "exploration-factor-study",
+                name="bars",
+                dataset="market.ohlcv.crypto.tutorial.btc-usdt.1h",
+            )
+            study.add_factor(
+                "exploration-factor-study",
+                name="temporary_signal",
+                file=factor_file,
+                metadata=metadata_file,
+            )
+            study.freeze("exploration-factor-study", version="1.0.0")
+            strategy.open("exploration-factor-strategy", from_study="exploration-factor-study@1.0.0")
+
+            with self.assertRaisesRegex(ValueError, "not strategy eligible"):
+                strategy.bind_factor(
+                    "exploration-factor-strategy",
+                    name="primary",
+                    study_factor="temporary_signal",
+                )
+
+    def test_strategy_freeze_checks_factor_contract_hash_consistency(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "factor.py"
+            metadata_file = root / "factor.metadata.json"
+            factor_file.write_text("def compute(inputs, params, context):\n    return inputs['bars']\n", encoding="utf-8")
+            metadata_file.write_text(json.dumps({
+                "inputs": ["bars"],
+                "parameters": {"window": 12},
+                "primary_time": "available_time",
+                "fields": ["instrument_id", "available_time", "signal"],
+                "point_in_time": True,
+            }), encoding="utf-8")
+
+            data = DataProductApi(root)
+            study = StudyProductApi(root)
+            strategy = StrategyProductApi(root)
+            data.download("tutorial-sma-data")
+            study.open("contract-hash-study")
+            study.add_data(
+                "contract-hash-study",
+                name="bars",
+                dataset="market.ohlcv.crypto.tutorial.btc-usdt.1h",
+            )
+            study.add_factor("contract-hash-study", name="signal", file=factor_file, metadata=metadata_file)
+            study.freeze("contract-hash-study", version="1.0.0")
+            strategy.open("contract-hash-strategy", from_study="contract-hash-study@1.0.0")
+            strategy.bind_factor("contract-hash-strategy", name="primary", study_factor="signal")
+            strategy_file = root / "strategies" / "contract-hash-strategy" / "strategy.json"
+            payload = json.loads(strategy_file.read_text(encoding="utf-8"))
+            payload["inputs"]["primary"]["factor_contract_hash"] = "0" * 64
+            strategy_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "factor_contract_hash does not match"):
+                strategy.freeze("contract-hash-strategy", version="1.0.0")
+
+    def test_strategy_execution_policy_requires_execution_contract_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data = DataProductApi(root)
+            study = StudyProductApi(root)
+            strategy = StrategyProductApi(root)
+            bad_execution = root / "bad-execution.json"
+            good_execution = root / "execution.json"
+            bad_execution.write_text(json.dumps({"decision_time": "session_close"}), encoding="utf-8")
+            good_execution.write_text(json.dumps({
+                "kind": "strategy.execution",
+                "execution": {
+                    "decision_time": "session_close",
+                    "execution_time": "next_session_open",
+                    "order_style": "market_on_open_proxy",
+                },
+            }), encoding="utf-8")
+
+            data.download("tutorial-sma-data")
+            study.open("execution-policy-study")
+            study.add_data(
+                "execution-policy-study",
+                name="bars",
+                dataset="market.ohlcv.crypto.tutorial.btc-usdt.1h",
+            )
+            study.freeze("execution-policy-study", version="1.0.0")
+            strategy.open("execution-policy-strategy", from_study="execution-policy-study@1.0.0")
+            with self.assertRaisesRegex(ValueError, "execution policy must declare"):
+                strategy.set_execution("execution-policy-strategy", bad_execution)
+            execution = strategy.set_execution("execution-policy-strategy", good_execution)
+
+        self.assertEqual(execution["operation"], "set-execution")
+        self.assertEqual(len(execution["execution_policy_hash"]), 64)
+
+    def test_strategy_model_code_contract_enters_strategy_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            factor_file = root / "factor.py"
+            metadata_file = root / "factor.metadata.json"
+            model_file = root / "model.py"
+            model_metadata = root / "model.metadata.json"
+            factor_file.write_text("def compute(inputs, params, context):\n    return inputs['bars']\n", encoding="utf-8")
+            metadata_file.write_text(json.dumps({
+                "inputs": ["bars"],
+                "parameters": {},
+                "primary_time": "available_time",
+                "fields": ["instrument_id", "available_time", "signal"],
+                "point_in_time": True,
+            }), encoding="utf-8")
+            model_file.write_text(
+                "def decide(context):\n"
+                "    rows = context.input('bars').rows(columns=('available_time', 'close'))\n"
+                "    return {'intent': 'hold', 'observed_close': rows[0]['close']}\n",
+                encoding="utf-8",
+            )
+            model_metadata.write_text(json.dumps({
+                "inputs": ["primary", "bars"],
+                "intent_schema": {"kind": "target_exposure", "fields": ["instrument_id", "target_weight"]},
+                "side_effects_allowed": False,
+            }), encoding="utf-8")
+
+            data = DataProductApi(root)
+            study = StudyProductApi(root)
+            strategy = StrategyProductApi(root)
+            data.download("tutorial-sma-data")
+            study.open("model-code-study")
+            study.add_data("model-code-study", name="bars", dataset="market.ohlcv.crypto.tutorial.btc-usdt.1h")
+            study.add_factor("model-code-study", name="signal", file=factor_file, metadata=metadata_file)
+            study.freeze("model-code-study", version="1.0.0")
+            strategy.open("model-code-strategy", from_study="model-code-study@1.0.0")
+            strategy.bind_factor("model-code-strategy", name="primary", study_factor="signal")
+            model = strategy.set_model_code("model-code-strategy", model_file, metadata=model_metadata)
+            model_file.write_text("def decide(context):\n    raise RuntimeError('draft file should not run')\n", encoding="utf-8")
+            lock = strategy.freeze("model-code-strategy", version="1.0.0")
+            started = RunProductApi(root).start("model-code-strategy@1.0.0", mode="backtest", execute_strategy=True)
+            decision = json.loads(Path(started["outputs"]["strategy_decision"]).read_text(encoding="utf-8"))
+            model_artifact_exists = Path(model["artifact_path"]).exists()
+
+        self.assertEqual(model["metadata_status"], "declared")
+        self.assertEqual(len(model["model_code_hash"]), 64)
+        self.assertEqual(len(model["model_contract_hash"]), 64)
+        self.assertTrue(model_artifact_exists)
+        self.assertEqual(lock["model"]["model_contract_hash"], model["model_contract_hash"])
+        self.assertEqual(lock["consistency_checks"]["model_contract_hash"], "passed")
+        self.assertEqual(started["target"]["hash"], lock["lock_hash"])
+        self.assertEqual(started["runtime_contract"]["strategy_decision_execution"]["decision_hash"], decision["decision_hash"])
+        self.assertEqual(decision["decision"]["observed_close"], "100")
+
+    def test_strategy_model_metadata_rejects_undeclared_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_file = root / "model.py"
+            model_metadata = root / "model.metadata.json"
+            model_file.write_text("def decide(context):\n    return None\n", encoding="utf-8")
+            model_metadata.write_text(json.dumps({
+                "inputs": ["missing_signal"],
+                "intent_schema": {"kind": "target_exposure"},
+                "side_effects_allowed": False,
+            }), encoding="utf-8")
+            data = DataProductApi(root)
+            study = StudyProductApi(root)
+            strategy = StrategyProductApi(root)
+            data.download("tutorial-sma-data")
+            study.open("bad-model-study")
+            study.add_data("bad-model-study", name="bars", dataset="market.ohlcv.crypto.tutorial.btc-usdt.1h")
+            study.freeze("bad-model-study", version="1.0.0")
+            strategy.open("bad-model-strategy", from_study="bad-model-study@1.0.0")
+
+            with self.assertRaisesRegex(ValueError, "undeclared inputs: missing_signal"):
+                strategy.set_model_code("bad-model-strategy", model_file, metadata=model_metadata)
+
+    def test_cli_registered_download_resolves_paths_relative_to_spec(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            external = root / "specs"
+            external.mkdir()
+            contract = external / "sentiment.contract.json"
+            csv_file = external / "sentiment.csv"
+            spec = external / "sentiment.download.json"
+            contract.write_text(json.dumps({
+                "dataset_id": "reference.sentiment.cli",
+                "primary_time": "available_time",
+                "fields": ["available_time", "instrument_id", "sentiment"],
+            }), encoding="utf-8")
+            csv_file.write_text(
+                "available_time,instrument_id,sentiment\n"
+                "2026-01-01T00:00:00Z,equity:US:MSFT,0.7\n",
+                encoding="utf-8",
+            )
+            spec.write_text(json.dumps({
+                "kind": "data.download",
+                "source": {"kind": "local_csv", "path": "sentiment.csv"},
+                "products": [{
+                    "dataset_id": "reference.sentiment.cli",
+                    "contract": "sentiment.contract.json",
+                }],
+            }), encoding="utf-8")
+
+            registered = command(root, "data", "register-download", "--key", "cli-sentiment", "--spec", str(spec))
+            downloaded = command(root, "data", "download", "cli-sentiment")
+            report_exists = Path(downloaded["report"]).exists()
+            quality_report_exists = Path(downloaded["quality_report"]).exists()
+
+        self.assertEqual(registered["key"], "cli-sentiment")
+        self.assertEqual(downloaded["key"], "cli-sentiment")
+        self.assertEqual(downloaded["dataset_id"], "reference.sentiment.cli")
+        self.assertEqual(len(downloaded["releases"]), 1)
+        self.assertTrue(report_exists)
+        self.assertTrue(quality_report_exists)
+        self.assertEqual(len(downloaded["quality_report_hash"]), 64)
 
     def test_data_study_strategy_run_user_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -448,6 +925,7 @@ class FourProductSurfaceTests(unittest.TestCase):
             live_connector = external / "sentiment_live.py"
             factor_file = external / "momentum_factor.py"
             risk_file = external / "risk.json"
+            execution_file = external / "execution.json"
 
             contract.write_text(json.dumps({
                 "dataset_id": "reference.sentiment.equity.us",
@@ -472,6 +950,11 @@ class FourProductSurfaceTests(unittest.TestCase):
                 encoding="utf-8",
             )
             risk_file.write_text(json.dumps({"max_gross_exposure": 1.0}), encoding="utf-8")
+            execution_file.write_text(json.dumps({
+                "decision_time": "session_close",
+                "execution_time": "next_session_open",
+                "order_style": "market_on_open_proxy",
+            }), encoding="utf-8")
 
             downloaded = command(root, "data", "download", "tutorial-sma-data")
             written = command(
@@ -553,6 +1036,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "momentum_12_1",
             )
             risk = command(root, "strategy", "set-risk", "momentum-long-only", str(risk_file))
+            execution = command(root, "strategy", "set-execution", "momentum-long-only", str(execution_file))
             strategy_lock = command(root, "strategy", "freeze", "momentum-long-only", "--version", "1.0.0")
             backtest_run = command(root, "run", "start", "--snapshot", "momentum-long-only@1.0.0", "--mode", "backtest")
             inspected = command(root, "run", "inspect", "--run-id", backtest_run["run_id"])
@@ -574,6 +1058,7 @@ class FourProductSurfaceTests(unittest.TestCase):
         self.assertEqual(written["primary_time"], "available_time")
         self.assertEqual(len(written["contract_hash"]), 64)
         self.assertEqual(len(written["manifest_hash"]), 64)
+        self.assertEqual(len(written["quality_report_hash"]), 64)
         self.assertEqual(written["artifact_ref"], f"data://reference.sentiment.equity.us/releases/{written['release_id']}")
         self.assertEqual(live_view["kind"], "live_view_manifest")
         self.assertEqual(live_view["contract_hash"], written["contract_hash"])
@@ -599,7 +1084,13 @@ class FourProductSurfaceTests(unittest.TestCase):
         self.assertEqual(strategy["data"]["sentiment"]["content_hash"], study_lock["data"]["sentiment"]["content_hash"])
         self.assertEqual(bound_factor["source_hash"], factor["code_hash"])
         self.assertEqual(len(risk["risk_hash"]), 64)
+        self.assertEqual(len(risk["risk_policy_hash"]), 64)
+        self.assertEqual(len(execution["execution_policy_hash"]), 64)
         self.assertEqual(strategy_lock["data"]["sentiment"], study_lock["data"]["sentiment"])
+        self.assertEqual(strategy_lock["risk"]["risk_policy_hash"], risk["risk_policy_hash"])
+        self.assertEqual(strategy_lock["execution"]["execution_policy_hash"], execution["execution_policy_hash"])
+        self.assertEqual(strategy_lock["consistency_checks"]["risk_policy_hash"], "passed")
+        self.assertEqual(strategy_lock["consistency_checks"]["execution_policy_hash"], "passed")
         self.assertEqual(strategy_lock["consistency_checks"]["data_release_hashes"], "passed")
         self.assertEqual(strategy_lock["inputs"]["primary"]["source_hash"], factor["code_hash"])
         self.assertEqual(backtest_run["target"]["hash"], strategy_lock["lock_hash"])

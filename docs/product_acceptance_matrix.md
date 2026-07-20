@@ -99,7 +99,10 @@ Promotion gate 会复算外部 readiness/soak artifact 的 `audit_hash`；证据
 ## 全量仓库验收
 
 ```bash
+./scripts/check_naming_static.sh
 ./pyenv/bin/python -m compileall -q kairos examples tests studies
 ./pyenv/bin/python -m unittest discover -s tests
 git diff --check
 ```
+
+`check_naming_static.sh` 是非 Python 的命名/打包边界验收；它不构建 wheel，也不证明 `pip install` 后的外部项目体验。

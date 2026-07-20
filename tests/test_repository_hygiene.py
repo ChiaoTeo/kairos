@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import stat
 import subprocess
 import tomllib
 import unittest
@@ -72,9 +73,22 @@ class RepositoryHygieneTests(unittest.TestCase):
                 name = path.name
                 if name in forbidden_exact or any(fragment in name for fragment in forbidden_fragments):
                     offenders.append(str(relative))
-                if path.is_dir():
+                if path.is_dir() and not path.is_symlink():
                     stack.append(path)
         self.assertEqual(offenders, [])
+
+    def test_static_naming_acceptance_script_is_documented_and_executable(self):
+        script = ROOT / "scripts" / "check_naming_static.sh"
+        script_text = script.read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        audit = (ROOT / "docs" / "naming_audit.md").read_text(encoding="utf-8")
+        self.assertTrue(script.exists())
+        self.assertTrue(script.stat().st_mode & stat.S_IXUSR)
+        self.assertIn("git diff --check", script_text)
+        self.assertIn("MANIFEST.in", script_text)
+        self.assertIn("package-data", script_text)
+        self.assertIn("./scripts/check_naming_static.sh", readme)
+        self.assertIn("./scripts/check_naming_static.sh", audit)
 
     def test_readme_core_naming_table_has_unique_rows(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -83,6 +97,25 @@ class RepositoryHygieneTests(unittest.TestCase):
         allowed = {"DataProductDefinition"}
         offenders = [name for name in duplicates if name not in allowed]
         self.assertEqual(offenders, [])
+
+    def test_readme_separates_user_install_from_source_workspace_development(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        required = (
+            "普通用户不需要复制本仓库",
+            "python3 -m pip install kairospy",
+            "mkdir my-kairos-project",
+            "kairos init",
+            "python studies/starter.py",
+            "安装包只包含 Kairos 产品库和 CLI，不包含本仓库顶层 `studies/` 源码研究工作区",
+            "如果你是从源码参与开发，再使用 editable 安装",
+            "./pyenv/bin/pip install -e",
+        )
+        for marker in required:
+            self.assertIn(marker, readme)
+        self.assertLess(readme.index("python3 -m pip install kairospy"), readme.index("./pyenv/bin/pip install -e"))
+        self.assertNotIn("pip install kairos\nmkdir", readme)
+        self.assertNotIn("pip install trader", readme)
+        self.assertNotIn("trader init", readme)
 
     def test_generated_project_metadata_uses_portable_root(self):
         metadata = (ROOT / ".kairos" / "project.json").read_text(encoding="utf-8")
@@ -98,6 +131,49 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertNotIn("[research]", config)
         self.assertNotIn('name = "trader"', config)
 
+    def test_package_public_namespace_does_not_export_legacy_project_names(self):
+        packages = (
+            ROOT / "kairos" / "__init__.py",
+            ROOT / "kairos" / "connectors" / "__init__.py",
+            ROOT / "kairos" / "ports" / "__init__.py",
+            ROOT / "kairos" / "study_platform" / "__init__.py",
+        )
+        offenders = []
+        forbidden = ('"adapters"', '"research"', '"trader"', '"trading"', "Adapter", "ResearchSpec", "ResearchService")
+        for path in packages:
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                if token in text:
+                    offenders.append(f"{path.relative_to(ROOT)} contains {token}")
+        self.assertEqual(offenders, [])
+
+    def test_project_initializer_scaffold_uses_kairos_study_workspace_language(self):
+        source = (ROOT / "kairos" / "project.py").read_text(encoding="utf-8")
+        required = (
+            "project_name = _project_name(name or _default_project_name(root))",
+            "def _default_project_name(root: Path) -> str:",
+            're.search(r\'(?m)^name\\s*=\\s*"(?:kairos|kairospy)"\'',
+            'dependencies = ["kairospy>=0.1.0"]',
+            'Path("config/study.json")',
+            'Path("studies/starter.py")',
+            "python studies/starter.py",
+            "[study]",
+            "This is a Kairos quantitative study, backtest, and execution project.",
+        )
+        for marker in required:
+            self.assertIn(marker, source)
+        forbidden = (
+            'dependencies = ["trader',
+            'Path("config/research.json")',
+            'Path("research',
+            "python research/",
+            "[research]",
+            "from trading",
+            "import trading",
+        )
+        for marker in forbidden:
+            self.assertNotIn(marker, source)
+
     def test_examples_and_docs_do_not_contain_common_live_secret_shapes(self):
         matches = []
         for root in (ROOT / "examples", ROOT / "docs", ROOT / "README.md"):
@@ -112,18 +188,26 @@ class RepositoryHygieneTests(unittest.TestCase):
     def test_studies_workspace_is_not_packaged(self):
         config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         scripts = config["project"]["scripts"]
-        package_find = config["tool"]["setuptools"]["packages"]["find"]
+        setuptools_config = config["tool"]["setuptools"]
+        package_find = setuptools_config["packages"]["find"]
         includes = package_find["include"]
         excludes = package_find["exclude"]
+        forbidden_packaging_files = ("MANIFEST.in", "setup.py", "setup.cfg")
         self.assertTrue((ROOT / "kairos").is_dir())
         self.assertFalse((ROOT / "kairos" / "research").exists())
         self.assertFalse((ROOT / "trading").exists())
+        for filename in forbidden_packaging_files:
+            self.assertFalse((ROOT / filename).exists())
+        self.assertEqual(config["project"]["name"], "kairospy")
         self.assertIn("kairos", scripts)
         self.assertNotIn("trader", scripts)
         self.assertIn("kairos*", includes)
         self.assertNotIn("trading*", includes)
         self.assertNotIn("research*", includes)
         self.assertNotIn("studies*", includes)
+        self.assertNotIn("package-data", setuptools_config)
+        self.assertNotIn("include-package-data", setuptools_config)
+        self.assertNotIn("data-files", config.get("tool", {}).get("setuptools", {}))
         self.assertIn("kairos.research", excludes)
         self.assertIn("kairos.research.*", excludes)
         self.assertIn("research", excludes)
@@ -135,8 +219,8 @@ class RepositoryHygieneTests(unittest.TestCase):
         cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
         required = (
             'data_actions.add_parser("btc-options-readiness", help=argparse.SUPPRESS)',
-            'actions.add_parser("register-btc-iron-condor", help=argparse.SUPPRESS)',
-            'actions.add_parser("readiness", help=argparse.SUPPRESS)',
+            'study_actions.add_parser("register-btc-iron-condor", help=argparse.SUPPRESS)',
+            'study_actions.add_parser("readiness", help=argparse.SUPPRESS)',
         )
         for marker in required:
             self.assertIn(marker, cli)

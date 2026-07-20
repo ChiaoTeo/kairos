@@ -1,5 +1,5 @@
 [project]
-name = "kairos"
+name = "kairospy"
 version = "0.1.0"
 description = "Venue-independent multi-asset study, backtest, accounting, and execution orchestration"
 requires-python = ">=3.11"

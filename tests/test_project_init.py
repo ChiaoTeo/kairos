@@ -26,6 +26,7 @@ class KairosProjectInitTests(unittest.TestCase):
             self.assertTrue((root / "strategies" / "starter_sma.py").exists())
             self.assertTrue((root / ".kairos" / "project.json").exists())
             metadata = json.loads((root / ".kairos" / "project.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["name"], "alpha-desk")
             self.assertEqual(metadata["root"], ".")
 
             readme = root / "README.md"
@@ -55,6 +56,9 @@ class KairosProjectInitTests(unittest.TestCase):
 
             self.assertEqual(payload["name"], "external-desk")
             self.assertTrue((root / "studies" / "starter.py").exists())
+            metadata = json.loads((root / ".kairos" / "project.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["name"], "external-desk")
+            self.assertEqual(metadata["root"], ".")
 
             env = dict(os.environ)
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
@@ -67,6 +71,19 @@ class KairosProjectInitTests(unittest.TestCase):
                 env=env,
             )
             self.assertIn("final_equity", starter.stdout)
+
+    def test_source_repository_default_name_remains_kairos_even_when_directory_is_trader(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory) / "trader"
+            (root / "kairos").mkdir(parents=True)
+            (root / "pyproject.toml").write_text('[project]\nname = "kairospy"\n', encoding="utf-8")
+
+            result = initialize_project(root)
+            metadata = json.loads((root / ".kairos" / "project.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(result.name, "kairos")
+            self.assertEqual(metadata["name"], "kairos")
+            self.assertEqual(metadata["root"], ".")
 
 
 if __name__ == "__main__":

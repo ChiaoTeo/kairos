@@ -8,7 +8,7 @@
 - 多账户、多资产、reporting currency、Funding、公司行为、行权/指派、到期结算；
 - 确定性回测、paper/testnet 编排、对账、事件日志与 kill switch。
 
-`kairos` 是唯一的产品、CLI 和 Python 包名；外部系统边界统一使用 `connectors`、`ports`、`Gateway`、`Client`、`Provider` 等职责命名。
+`kairos` 是唯一的产品、CLI 和 Python import 包名；PyPI 分发名为 `kairospy`。外部系统边界统一使用 `connectors`、`ports`、`Gateway`、`Client`、`Provider` 等职责命名。
 
 > 第一次使用请从 [第一次 Study：从一个假设走到可拒绝的 SMA 策略](docs/tutorial_first_study.md) 开始，不要直接连接 Paper 或 Live。
 
@@ -17,7 +17,7 @@
 普通用户不需要复制本仓库。安装后可以在任意空文件夹初始化自己的量化项目：
 
 ```bash
-python3 -m pip install kairos
+python3 -m pip install kairospy
 mkdir my-kairos-project
 cd my-kairos-project
 kairos init
@@ -35,6 +35,17 @@ python3 -m venv pyenv
 ./pyenv/bin/pip install -e '.[data,query,notebook]'
 ./pyenv/bin/kairos --help
 ```
+
+不运行 Python 的命名和打包边界静态验收：
+
+```bash
+./scripts/check_naming_static.sh
+```
+
+该脚本只依赖 shell、`git`、`rg`、`find`、`awk`、`cut` 和 `head`，不会构建 wheel，也不会导入 Python 包。
+
+发布到 PyPI 时使用 `kairospy` 作为 distribution name，并通过 GitHub Actions Trusted Publisher 发布；
+具体配置见 [PyPI Release Guide](docs/release_pypi.md)。
 
 ## 新人先走这条路径
 
@@ -87,6 +98,7 @@ Dataset Release
 | `ProductId` | 经济产品是谁？ | 表示跨 Venue 的经济身份；不等于某个交易场所的具体挂牌。 |
 | `InstrumentId` | 系统内部稳定地指向哪个可定价/可交易标的？ | 业务代码、行情、策略、风险和账本统一使用它。不得从它反推交易所 symbol。 |
 | `InstrumentDefinition` | 该标的的正式合约定义是什么？ | 绑定 `InstrumentId`、产品类型、合约条款和生命周期，是产品事实；不包含特定 Venue 的交易规则。 |
+| `ListingDefinition` | 该标的在某个 Venue 如何挂牌和交易？ | 保存 Venue symbol、external id、tick、lot、最小名义金额等。Gateway 下单必须通过 Catalog 查它，不能猜 symbol。 |
 | `VenueId` | 在哪个交易场所？ | 如 `binance`、`ibkr`；Venue 与数据供应商不是同一概念。 |
 | `ProviderId` | 数据由谁提供？ | 如行情或参考数据供应商。Provider 可以覆盖多个 Venue，也可能不是 Venue。 |
 | `AccountKey` | 哪个机构下的哪个账户？ | 由 `InstitutionId + AccountType + account_id` 组成；不要只用裸 `account_id` 假设全局唯一。 |
