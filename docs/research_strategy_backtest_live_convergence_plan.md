@@ -171,7 +171,7 @@ Kairos 应被建设为：
 
 ### 断点四：当前实盘入口没有运行策略
 
-当前 `trade run --strategy ...` 仍要求用户提供 instrument、side、quantity 和 price，然后直接构造 OrderRequest。
+当前 `runtime soak --strategy ...` 仍要求用户提供 instrument、side、quantity 和 price，然后直接构造 OrderRequest。
 
 它验证了执行和运行安全链路，但不等于自动策略实盘。产品上应明确拆成：
 
@@ -209,7 +209,7 @@ StrategySpec 已经描述 features、signal、entry/exit 和 execution capabilit
 data search/prepare/freeze
 research readiness/governance-audit
 backtest run/validate/replay
-trade run
+runtime soak
 runtime reference-artifact/failure-policy/l4-preflight
 ```
 
@@ -836,7 +836,7 @@ RunRepository
 2. 加载 StrategyRelease/FactorRelease；
 3. 接入实时 Canonical Event Source；
 4. 接入正式 Portfolio/Risk/Coordinator；
-5. 将当前 `trade run` 调整为 `order submit` 兼容入口；
+5. 将当前 `runtime soak` 与真正的 `run paper/live` 自动策略运行入口打通；
 6. 保存 live canonical capture；
 7. 建立 live/replay parity；
 8. 完成 24h/72h soak、restart 和 kill-switch drill。

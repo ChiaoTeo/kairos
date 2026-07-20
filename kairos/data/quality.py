@@ -21,6 +21,7 @@ class QualityCheck:
     passed: bool
     value: object
     requirement: str
+    severity: str = "gate"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +76,7 @@ class DatasetQualityService:
                 checks = profiles[profile](rows, release)
         except KeyError as error:
             raise ValueError(f"unsupported dataset quality profile: {profile}") from error
-        passed = all(item.passed for item in checks)
+        passed = all(item.passed for item in checks if item.severity == "gate")
         if not passed:
             level = QualityLevel.ARCHIVED
         elif profile in {"market_snapshot", "market_slice"}:
@@ -99,6 +100,7 @@ class DatasetQualityService:
             "passed": passed,
             "checks": [
                 {"name": item.name, "passed": item.passed, "value": item.value, "requirement": item.requirement}
+                | ({"severity": item.severity} if item.severity != "gate" else {})
                 for item in checks
             ],
         }
@@ -225,10 +227,10 @@ class DatasetQualityService:
                 QualityCheck("non_negative_volume", int(invalid_volume) == 0, int(invalid_volume), "0 negative volumes"),
                 QualityCheck("point_in_time_order", int(invalid_time) == 0, int(invalid_time), "start < end <= event <= available"),
                 QualityCheck("deterministic_order", unordered == 0, unordered, "physical rows ordered by time/instrument"),
-                QualityCheck("coverage_ratio", ratio >= Decimal("0.99"), str(ratio), ">= 0.99"),
-                QualityCheck("missing_ranges", not missing, len(missing), "0 missing ranges"),
-                QualityCheck("backtest_history", count >= 365, count, ">= 365 observations"),
-                QualityCheck("streaming_execution", True, count, "quality computed without materializing rows"),
+                _diagnostic_check("coverage_ratio", ratio >= Decimal("0.99"), str(ratio), ">= 0.99"),
+                _diagnostic_check("missing_ranges", not missing, len(missing), "0 missing ranges"),
+                _diagnostic_check("backtest_history", count >= 365, count, ">= 365 observations"),
+                _diagnostic_check("streaming_execution", True, count, "quality computed without materializing rows"),
             ))
             return tuple(base)
         finally:
@@ -284,7 +286,7 @@ class DatasetQualityService:
                 QualityCheck("trade_point_in_time", int(invalid_time) == 0, int(invalid_time), "event_time <= available_time"),
                 QualityCheck("valid_trade_direction", invalid_direction == 0, invalid_direction, "direction is buy or sell"),
                 QualityCheck("deterministic_order", unordered == 0, unordered, "physical rows ordered by event time/trade ID"),
-                QualityCheck("streaming_execution", True, count, "quality computed without materializing rows"),
+                _diagnostic_check("streaming_execution", True, count, "quality computed without materializing rows"),
             ))
             return tuple(base)
         finally:
@@ -334,7 +336,7 @@ class DatasetQualityService:
                 QualityCheck("complete_source_identity", int(missing_identity) == 0, int(missing_identity), "source identity fields are non-empty"),
                 QualityCheck("event_point_in_time", int(invalid_time) == 0, int(invalid_time), "event_time <= available_time"),
                 QualityCheck("deterministic_order", unordered == 0, unordered, "physical rows ordered by available/event/source order"),
-                QualityCheck("streaming_execution", True, count, "quality computed without materializing rows"),
+                _diagnostic_check("streaming_execution", True, count, "quality computed without materializing rows"),
             ))
             return tuple(base)
         finally:
@@ -399,9 +401,9 @@ class DatasetQualityService:
             QualityCheck("non_negative_volume", invalid_volume == 0, invalid_volume, "0 negative volumes"),
             QualityCheck("point_in_time_order", invalid_time == 0, invalid_time, "start < end <= event <= available"),
             QualityCheck("deterministic_order", unordered == 0, unordered, "rows ordered by time/instrument"),
-            QualityCheck("coverage_ratio", ratio >= Decimal("0.99"), str(ratio), ">= 0.99"),
-            QualityCheck("missing_ranges", not missing, len(missing), "0 missing ranges"),
-            QualityCheck("backtest_history", len(rows) >= 365, len(rows), ">= 365 observations"),
+            _diagnostic_check("coverage_ratio", ratio >= Decimal("0.99"), str(ratio), ">= 0.99"),
+            _diagnostic_check("missing_ranges", not missing, len(missing), "0 missing ranges"),
+            _diagnostic_check("backtest_history", len(rows) >= 365, len(rows), ">= 365 observations"),
         ))
         return tuple(base)
 
@@ -679,7 +681,7 @@ class DatasetQualityService:
                 {"manifest": manifest.get("sha256"), "release": release.content_hash},
                 "Manifest hash equals Release hash",
             ),
-            QualityCheck("source_receipts", receipt_count > 0, receipt_count, "archived Massive source receipts are declared"),
+            _diagnostic_check("source_receipts", receipt_count > 0, receipt_count, "archived Massive source receipts are declared"),
             QualityCheck("supported_event_types", unsupported == 0, unsupported, "only split and cash dividend events are present"),
             QualityCheck("event_identity", invalid_identity == 0, invalid_identity, "events have instrument_id"),
             QualityCheck("event_dates", invalid_date == 0, invalid_date, "events have effective/ex dates"),
@@ -942,6 +944,10 @@ def _physical_order(fields: set[str]) -> str:
 
 def _required_check(required: set[str], fields: set[str], requirement: str) -> QualityCheck:
     return QualityCheck("required_fields", required <= fields, sorted(required - fields), requirement)
+
+
+def _diagnostic_check(name: str, passed: bool, value: object, requirement: str) -> QualityCheck:
+    return QualityCheck(name, passed, value, requirement, severity="diagnostic")
 
 
 def _instrument_value(value: object) -> str | None:

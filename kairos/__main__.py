@@ -10,7 +10,6 @@ import importlib
 import json
 import os
 import sys
-import warnings
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -466,30 +465,6 @@ def _parser() -> argparse.ArgumentParser:
     reconcile.add_argument("--account-id", default="default")
     reconcile.add_argument("--product", choices=("securities", "spot", "futures", "options"), default="spot")
     reconcile.add_argument("--inverse", action="store_true")
-    trade = commands.add_parser("trade", help="submit guarded paper, testnet, or explicitly confirmed live orders")
-    trade_actions = trade.add_subparsers(dest="action", required=True)
-    trade_run = trade_actions.add_parser("run")
-    trade_run.add_argument("--strategy", choices=("covered-call", "spot-perp-carry"), required=True)
-    trade_run.add_argument("--venue", choices=("ibkr", "binance", "simulated"), required=True)
-    trade_run.add_argument("--environment", choices=("paper", "testnet", "live"), required=True)
-    trade_run.add_argument("--confirm-live", action="store_true")
-    trade_run.add_argument("--account-id", default="default")
-    trade_run.add_argument("--product", choices=("securities", "spot", "futures", "options"), default="spot")
-    trade_run.add_argument("--instrument", required=True)
-    trade_run.add_argument("--side", choices=("buy", "sell"), required=True)
-    trade_run.add_argument("--quantity", type=Decimal, required=True)
-    trade_run.add_argument("--order-type", choices=("market", "limit"), default="limit")
-    trade_run.add_argument("--limit-price", type=Decimal)
-    trade_run.add_argument("--reduce-only", action="store_true")
-    trade_run.add_argument("--post-only", action="store_true")
-    trade_run.add_argument("--market-data-ready", action="store_true", help="explicit operational readiness acknowledgement for non-simulated venues")
-    trade_run.add_argument("--kill-switch-drill", action="store_true")
-    trade_run.add_argument("--soak-seconds", type=int, default=0, help="run the supervised runtime for this many wall-clock seconds")
-    trade_run.add_argument("--cycle-seconds", type=float, default=5.0, help="supervisor heartbeat/reconciliation interval")
-    trade_run.add_argument("--restart-drill", action="store_true", help="restart and recover the Application after the soak")
-    trade_run.add_argument("--soak-artifact", type=Path, help="explicit L4 soak manifest path")
-    trade_run.add_argument("--inverse", action="store_true")
-    trade_run.set_defaults(manual_order=False)
     order = commands.add_parser("order", help="submit an explicitly audited manual operations order")
     order_actions=order.add_subparsers(dest="action",required=True);order_submit=order_actions.add_parser("submit")
     order_submit.add_argument("--venue",choices=("ibkr","binance","simulated"),required=True)
@@ -536,6 +511,28 @@ def _parser() -> argparse.ArgumentParser:
     l4_preflight.add_argument("--instrument", required=True)
     l4_preflight.add_argument("--evidence-artifact", type=Path,
                               help="write a promotion-ready Paper/Testnet readiness evidence artifact")
+    runtime_soak = runtime_actions.add_parser("soak", help="run an externally gated runtime soak and write promotion evidence")
+    runtime_soak.add_argument("--strategy", choices=("covered-call", "spot-perp-carry"), required=True)
+    runtime_soak.add_argument("--venue", choices=("ibkr", "binance", "simulated"), required=True)
+    runtime_soak.add_argument("--environment", choices=("paper", "testnet", "live"), required=True)
+    runtime_soak.add_argument("--confirm-live", action="store_true")
+    runtime_soak.add_argument("--account-id", default="default")
+    runtime_soak.add_argument("--product", choices=("securities", "spot", "futures", "options"), default="spot")
+    runtime_soak.add_argument("--instrument", required=True)
+    runtime_soak.add_argument("--side", choices=("buy", "sell"), required=True)
+    runtime_soak.add_argument("--quantity", type=Decimal, required=True)
+    runtime_soak.add_argument("--order-type", choices=("market", "limit"), default="limit")
+    runtime_soak.add_argument("--limit-price", type=Decimal)
+    runtime_soak.add_argument("--reduce-only", action="store_true")
+    runtime_soak.add_argument("--post-only", action="store_true")
+    runtime_soak.add_argument("--market-data-ready", action="store_true", help="explicit operational readiness acknowledgement for non-simulated venues")
+    runtime_soak.add_argument("--kill-switch-drill", action="store_true")
+    runtime_soak.add_argument("--soak-seconds", type=int, default=0, help="run the supervised runtime for this many wall-clock seconds")
+    runtime_soak.add_argument("--cycle-seconds", type=float, default=5.0, help="supervisor heartbeat/reconciliation interval")
+    runtime_soak.add_argument("--restart-drill", action="store_true", help="restart and recover the Application after the soak")
+    runtime_soak.add_argument("--soak-artifact", type=Path, help="explicit L4 soak manifest path")
+    runtime_soak.add_argument("--inverse", action="store_true")
+    runtime_soak.set_defaults(manual_order=False)
 
     study = commands.add_parser("study", help="manage flexible research workspaces and frozen candidates")
     study_actions = study.add_subparsers(dest="action", required=True)
@@ -757,10 +754,10 @@ def main(argv: list[str] | None = None) -> int:
         return _catalog(args)
     if args.group == "account":
         return _account(args)
-    if args.group == "trade":
-        return _trade(args)
     if args.group == "order":
-        return _trade(args)
+        return _submit_order_or_runtime_soak(args)
+    if args.group == "runtime" and args.action == "soak":
+        return _submit_order_or_runtime_soak(args)
     if args.group == "runtime":
         if args.action == "reference-artifact":
             from kairos.application.runtime_reference_artifact import run_runtime_reference_artifact
@@ -2259,10 +2256,7 @@ def _write_l4_preflight_artifact(target: str | Path, payload: dict[str, object])
     return path
 
 
-def _trade(args: argparse.Namespace) -> int:
-    if not bool(getattr(args,"manual_order",False)):
-        warnings.warn("trade run is a compatibility facade; use order submit for manual orders or run paper/live for strategies",
-            DeprecationWarning,stacklevel=2)
+def _submit_order_or_runtime_soak(args: argparse.Namespace) -> int:
     environment = Environment(args.environment)
     if environment is Environment.LIVE and not args.confirm_live:
         raise SystemExit("live trading requires --confirm-live")

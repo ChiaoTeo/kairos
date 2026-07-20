@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from dataclasses import replace
 from decimal import Decimal
+from pathlib import Path
 
 from kairos.backtest.engine import BacktestEngine
 from kairos.backtest.synthetic_scenarios import SyntheticScenario, assess_dataset, build_synthetic_backtest_dataset
@@ -95,10 +97,17 @@ class BacktestEngineTests(unittest.TestCase):
             backtest_root = f"{directory}/backtests"
             dataset = build_synthetic_backtest_dataset()
             directory_path = MarketSnapshotStorageDriver(dataset_root).save(dataset)
-            register_market_replay_dataset(directory, dataset, directory_path,
+            release = register_market_replay_dataset(directory, dataset, directory_path,
                 DataProductDefinition(DatasetKey("curated.synthetic.profit_target.development"), "Synthetic development",
                                DatasetLayer.CURATED, primary_time="timestamp"),
                 provider="synthetic", venue="synthetic", synthetic=True)
+            release_directory = Path(directory) / release.relative_path
+            data_release_manifest = json.loads((release_directory / "data_release_manifest.json").read_text(encoding="utf-8"))
+            release_metadata = json.loads((release_directory / "release.json").read_text(encoding="utf-8"))
+            self.assertEqual(data_release_manifest["kind"], "data_release_manifest")
+            self.assertEqual(data_release_manifest["content_hash"], release.content_hash)
+            self.assertEqual(len(release_metadata["data_release_manifest_hash"]), 64)
+            self.assertEqual(release_metadata["artifact_ref"], f"data://{release.product_key}/releases/{release.release_id}")
             common = ["--lake-root", directory, "--dataset-root", dataset_root, "--backtest-root", backtest_root, "backtest"]
             with io.StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([*common, "run", "--dataset", dataset.manifest.dataset_id]), 0)

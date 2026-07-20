@@ -69,10 +69,10 @@ kairos strategy inspect|status|activate|rollback|check-promotion|promote
 kairos run backtest|simulate|shadow|paper|reference
 kairos run inspect|artifact-replay|capture-replay
 kairos order submit
-kairos runtime calibrate-execution|reference-artifact|failure-policy|l4-preflight
+kairos runtime calibrate-execution|reference-artifact|failure-policy|l4-preflight|soak
 ```
 
-旧 `trade run` 保留为兼容 facade，但不是自动策略入口；新代码应使用 `order submit` 或 `run ...`。
+人工订单使用 `order submit`；外部运行验收和 soak evidence 使用 `runtime soak`。
 
 ## 外部环境证据边界
 
@@ -92,7 +92,7 @@ decision-OOS L5 证据和 Paper/Testnet readiness evidence；`LIVE_LIMITED` / `L
 必须具备 passed external soak artifact，不能只凭本地 maximum_level 或 synthetic fixture 晋级。
 `runtime l4-preflight --evidence-artifact <path>` 会写出 promotion-ready readiness artifact；
 失败的 preflight artifact 只作诊断，不能通过 gate。
-`trade run ... --soak-artifact <path>` 会写出 `kind=runtime_l4_soak` 的 promotion-ready soak artifact；
+`runtime soak ... --soak-artifact <path>` 会写出 `kind=runtime_l4_soak` 的 promotion-ready soak artifact；
 失败或本地 simulated soak artifact 不能通过 LIVE gate。
 Promotion gate 会复算外部 readiness/soak artifact 的 `audit_hash`；证据内容被改动后不能继续晋级。
 

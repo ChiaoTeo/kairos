@@ -42,7 +42,7 @@ kairos \
   --catalog-path data/catalog/instruments.json \
   --runtime-db data/runtime/binance-testnet/runtime.sqlite3 \
   --event-log-path data/runtime/binance-testnet/events.jsonl \
-  trade run \
+  runtime soak \
   --strategy spot-perp-carry \
   --venue binance \
   --environment testnet \

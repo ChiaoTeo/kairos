@@ -106,6 +106,40 @@ class DatasetQualityAssessmentTests(unittest.TestCase):
             self.assertEqual(assessment.level, QualityLevel.ARCHIVED)
             self.assertEqual(DataCatalog(root).release(release.release_id).status, DatasetStatus.QUARANTINED)
 
+    def test_short_but_valid_local_ohlcv_history_is_diagnostic_not_failed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            product = DataProductDefinition(
+                DatasetKey("market.ohlcv.test.short"), "Short OHLCV", DatasetLayer.CANONICAL,
+                "Short but valid local fixture", {"frequency": "1d"}, "period_start", owner="test",
+            )
+            relative_path = "canonical/short-release"
+            start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+            end = start + timedelta(days=1)
+            manifest = write_daily_dataset(
+                root / relative_path, [{
+                    "instrument_id": "TEST", "period_start": start.isoformat(), "period_end": end.isoformat(),
+                    "event_time": end.isoformat(), "available_time": end.isoformat(),
+                    "open": 10, "high": 12, "low": 9, "close": 11, "volume": 1,
+                }], dataset_id="short-release",
+                schema={"schema_id": "market.ohlcv.v1", "primary_key": ["instrument_id", "period_start"]},
+                lineage={"source": {"provider": "fixture"}},
+            )
+            release = DatasetRelease(
+                "short-release", product.key, "1", "market.ohlcv.v1", "1", "fixture", "1",
+                relative_path, "parquet", str(manifest["dataset_sha256"]),
+            )
+            catalog = DataCatalog(root); catalog.register_product(product); catalog.register_release(release); catalog.save()
+
+            assessment = DatasetQualityService(root).assess(release.release_id)
+            checks = {item.name: item for item in assessment.checks}
+
+            self.assertTrue(assessment.passed)
+            self.assertEqual(assessment.level, QualityLevel.RESEARCH)
+            self.assertFalse(checks["backtest_history"].passed)
+            self.assertEqual(checks["backtest_history"].severity, "diagnostic")
+            self.assertEqual(DataCatalog(root).release(release.release_id).status, DatasetStatus.APPROVED_FOR_RESEARCH)
+
 
 if __name__ == "__main__":
     unittest.main()

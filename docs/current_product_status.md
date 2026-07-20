@@ -18,7 +18,7 @@
 - 晋级预检查入口：`kairos strategy check-promotion ... --evidence ...` 使用同一套 gate、hash 和生命周期顺序检查，但不会修改 Strategy Release。
 - 执行校准入口：`kairos runtime calibrate-execution ...` 可从 Runtime Store 的订单/成交事实生成 `ExecutionCalibrationRelease`。
 - 回测执行校准对比：`kairos run backtest ... --execution-calibration <manifest>` 会校验校准 release hash，在 Run Artifact 中记录绑定状态、release id/hash、样本数与适用 venue/environment，并给出按校准平均 `fee_bps` 重估的基线/校准后权益对比。
-- 人工订单与自动策略入口分离：新人工运维使用 `order submit`；旧 `trade run` 仅保留兼容。
+- 人工订单与自动策略入口分离：人工运维使用 `order submit`；外部运行验收使用 `runtime soak`。
 - Run Artifact 可解释：`run inspect --artifact ... --at ...`。
 - Replay 可验证：`run artifact-replay` 和 `run capture-replay`。
 - 公共 Binance Quote/OrderBook 短时 capture、rotation、restart 和 replay 机制已有自动化证据。
@@ -30,7 +30,7 @@
 - synthetic fixture、synthetic backtest、trade proxy 只能证明机制，不能作为 live promotion 或收益有效性证据。
 - Strategy promotion gate 已区分本地/外部证据：`PAPER_APPROVED` 需要非 fixture 的 decision-OOS L5 证据和显式 Paper/Testnet readiness；`LIVE_LIMITED`/`LIVE_APPROVED` 需要通过的外部 soak artifact。
 - `runtime l4-preflight --evidence-artifact ...` 可写出带 `kind=runtime_l4_preflight` 和 `audit_hash` 的 readiness evidence，用于 `PAPER_APPROVED` 晋级审计。
-- `trade run ... --soak-artifact ...` 写出的 soak artifact 带 `kind=runtime_l4_soak` 和 `audit_hash`；只有 `passed=true` 且全部 acceptance 通过的外部 artifact 才能用于 `LIVE_LIMITED`/`LIVE_APPROVED` 晋级。
+- `runtime soak ... --soak-artifact ...` 写出的 soak artifact 带 `kind=runtime_l4_soak` 和 `audit_hash`；只有 `passed=true` 且全部 acceptance 通过的外部 artifact 才能用于 `LIVE_LIMITED`/`LIVE_APPROVED` 晋级。
 - Promotion gate 会复算外部 readiness/soak artifact 的 `audit_hash`，证据内容被改动后会 fail-closed。
 - 公共行情短时 smoke 证明 capture/replay 机制可工作，不替代 24-72 小时持续 soak。
 

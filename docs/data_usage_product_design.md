@@ -126,6 +126,26 @@ Lock/Manifest 解决“产品之间如何证明没有语义漂移”
 - 不为每种资产单独设计一套 Study/Strategy API。
 - 不把 Data Layer 的实现细节透传给 Factor、Study 或 Strategy。
 
+Hash 的使用边界：
+
+```text
+路径用于编辑，hash 用于冻结和跨产物引用。
+```
+
+本地 Draft workspace、notebook exploration、临时 CSV 和用户正在编辑的 factor/model 文件，不需要每一步都重新 hash
+或 fail closed。系统可以提示 dirty、missing field 或 schema warning，但不应该把本地探索变成持续审计。
+
+只有在以下 artifact 边界收紧 hash：
+
+- Data Release / Live View 发布时记录 content/contract/manifest hash；
+- Study freeze 时记录 Data Release 和 Factor code hash；
+- Strategy freeze 时检查引用的 Study Lock、Factor hash 和 Data Release evidence；
+- Run Manifest 记录本次执行的 frozen snapshot 和 input artifact evidence；
+- replay/audit/promotion 使用 hash 复核冻结产物是否被替换。
+
+质量检查也按用途分层：artifact identity、contract、point-in-time 和安全语义是 gate；coverage、history length、
+source receipt 完整度、统计异常和运行指标默认是 diagnostic，除非某个 Q3/Q4 晋级策略明确把它们提升为 gate。
+
 ## 3. 用户心智模型
 
 用户首先理解四个产品：
@@ -1280,13 +1300,17 @@ def decide(context):
   `LiveViewManifest`；四产品 surface 的 Data write/live 和 release evidence 已使用这些模型生成稳定 hash/ref；
 - `publish_release` 主发布路径已写出 `data_release_manifest.json`，并在 `release.json` 中记录 `contract_hash`、
   `data_release_manifest_hash` 和 `artifact_ref`；四产品 Data evidence 优先读取正式 release manifest；
+- columnar publishing 经由 `publish_release` 产出正式 release manifest；MarketReplayDataset metadata 补全路径已把
+  `data_release_manifest.json` 纳入必备元数据，并在 `release.json` 中记录 manifest hash/ref；
+- `DatasetQualityService` 已开始区分 gate 与 diagnostic：artifact/contract/时间语义类检查仍可 fail closed，
+  coverage、history length、source receipt、streaming execution 等本地诊断不再默认阻塞 `assessment.passed`；
 - Python API：`DataProductApi`、`StudyProductApi`、`StrategyProductApi`、`RunProductApi` 已提供和 CLI 同源的最小调用面；
 - 完整示例：`examples/four_product_user_path.sh`；
 - 自动化验收：`tests/test_four_product_surface.py`。
 
 目标态剩余缺口：
 
-1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型，并接入四产品 surface 与 `publish_release` 主发布路径，但还没有贯穿 columnar/market replay 等所有旧发布路径、质量报告和 freshness gate；
+1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型，并接入四产品 surface、`publish_release`、columnar publishing 和 MarketReplayDataset metadata 补全路径；质量报告已开始区分 gate/diagnostic，但 Q3/Q4 promotion policy 和 freshness gate 还没有正式模型化；
 2. 旧 `StudyWorkspace` 仍以单 `input_release_id` 为主模型，新的 Study Product workspace 还没有替换旧模型；
 3. Study Product 的 Draft/Frozen 生命周期已最小落地，但状态机、质量门禁和目录结构还没有统一到正式模型；
 4. 本地 factor 已记录 code hash，但依赖、参数、输出 schema 和 point-in-time 检查还没有正式约定；

@@ -155,7 +155,7 @@ class RuntimeSupervisorTests(unittest.TestCase):
                     "--lake-root", str(root), "--reference-catalog-path", str(catalog_path),
                     "--event-log-path", str(root / "events.jsonl"),
                     "--runtime-db", str(root / "runtime.sqlite3"),
-                    "trade", "run", "--strategy", "spot-perp-carry", "--venue", "simulated",
+                    "runtime", "soak", "--strategy", "spot-perp-carry", "--venue", "simulated",
                     "--environment", "testnet", "--instrument", "BTC-USDT-SOAK",
                     "--side", "buy", "--quantity", "1", "--limit-price", "100",
                     "--soak-seconds", "1", "--cycle-seconds", "0.1",

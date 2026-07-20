@@ -205,7 +205,6 @@ research -> backtest -> historical-simulation -> shadow -> paper-kairos/testnet 
 | 接入外部账户前检查 | `kairos account reconcile` |
 | 外部 Paper/Testnet 验收 | `kairos runtime l4-preflight` 后按 runbook 执行 soak |
 | 从运行成交生成执行校准 | `kairos runtime calibrate-execution` |
-| 兼容旧人工订单入口 | `kairos trade run`；新代码不要继续扩展它 |
 
 更完整的边界说明见 [系统架构](docs/architecture.md)，研究数据使用见 [研究数据指南](docs/research_data_guide.md)，首次研究的逐步操作见 [新人教程](docs/tutorial_first_research.md)。
 
@@ -582,8 +581,7 @@ SPX/SPXW 是一个专用研究切片；它不会限制 IBKR 的股票能力：
   --actor operator@example --reason 'manual risk reduction'
 ```
 
-`trade run` 仍作为兼容 facade 保留；它不是自动 Strategy Release 运行主入口。`live` 额外要求
-`--confirm-live`。服务启动前强制进行 Catalog、行情、账户、执行与 Ledger/Venue reconciliation 检查；
+策略运行验收使用 `runtime soak`；`live` 额外要求 `--confirm-live`。服务启动前强制进行 Catalog、行情、账户、执行与 Ledger/Venue reconciliation 检查；
 kill switch 触发后只允许 reduce-only。
 
 已产生 Durable Runtime Store 成交事实后，可以生成执行校准 release：

@@ -50,8 +50,11 @@ class RepositoryHygieneTests(unittest.TestCase):
     def test_studies_workspace_is_not_packaged(self):
         config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         scripts = config["project"]["scripts"]
-        includes = config["tool"]["setuptools"]["packages"]["find"]["include"]
+        package_find = config["tool"]["setuptools"]["packages"]["find"]
+        includes = package_find["include"]
+        excludes = package_find["exclude"]
         self.assertTrue((ROOT / "kairos").is_dir())
+        self.assertFalse((ROOT / "kairos" / "research").exists())
         self.assertFalse((ROOT / "trading").exists())
         self.assertIn("kairos", scripts)
         self.assertNotIn("trader", scripts)
@@ -59,6 +62,9 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertNotIn("trading*", includes)
         self.assertNotIn("research*", includes)
         self.assertNotIn("studies*", includes)
+        self.assertIn("kairos.research*", excludes)
+        self.assertIn("research*", excludes)
+        self.assertIn("studies*", excludes)
 
     def test_source_workspace_study_commands_are_hidden_from_product_help(self):
         cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
@@ -227,9 +233,9 @@ class RepositoryHygieneTests(unittest.TestCase):
         application_init = (ROOT / "kairos" / "application" / "__init__.py").read_text(encoding="utf-8")
         pricing_init = (ROOT / "kairos" / "pricing" / "__init__.py").read_text(encoding="utf-8")
         treasury_init = (ROOT / "kairos" / "treasury" / "__init__.py").read_text(encoding="utf-8")
-        research_init = (ROOT / "kairos" / "research" / "__init__.py").read_text(encoding="utf-8")
         research_platform_init = (ROOT / "kairos" / "research_platform" / "__init__.py").read_text(encoding="utf-8")
         self.assertTrue((ROOT / "kairos" / "connectors" / "__init__.py").exists())
+        self.assertFalse((ROOT / "kairos" / "research").exists())
         self.assertNotIn('"adapters"', kairos_init)
         self.assertNotIn('"task_supervisor"', kairos_init)
         self.assertNotIn('"runtime_golden"', kairos_init)
@@ -250,7 +256,6 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertIn("paper_trading_composition", application_init)
         self.assertNotIn('"ValuationService"', pricing_init)
         self.assertNotIn('"TreasuryService"', treasury_init)
-        self.assertNotIn('"ResearchSpec"', research_init)
         self.assertNotIn('"ResearchSpec"', research_platform_init)
         self.assertNotIn('"service"', research_platform_init)
         self.assertNotIn('"analyzer"', research_platform_init)
@@ -542,8 +547,11 @@ class RepositoryHygieneTests(unittest.TestCase):
         cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
         self.assertIn('"reference-artifact"', cli)
         self.assertIn('"failure-policy"', cli)
+        self.assertIn('"soak"', cli)
         self.assertNotIn('"golden"', cli)
         self.assertNotIn('"failure-matrix"', cli)
+        self.assertNotIn('add_parser("trade"', cli)
+        self.assertNotIn('args.group == "trade"', cli)
         self.assertFalse((ROOT / "kairos" / "application" / "runtime_golden.py").exists())
         self.assertFalse((ROOT / "kairos" / "application" / "runtime_failure_matrix.py").exists())
 

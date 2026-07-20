@@ -43,7 +43,7 @@ class MultiAssetCliTests(unittest.TestCase):
             self.assertIn("test-operator",(root/"manual-events.jsonl").read_text(encoding="utf-8"))
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
-                    *common, "trade", "run", "--strategy", "spot-perp-carry", "--venue", "simulated",
+                    *common, "runtime", "soak", "--strategy", "spot-perp-carry", "--venue", "simulated",
                     "--environment", "testnet", "--instrument", "crypto:sim:spot:BTCUSDT", "--side", "buy",
                     "--quantity", "0.01", "--limit-price", "50000", "--kill-switch-drill",
                 ]), 0)
@@ -54,14 +54,14 @@ class MultiAssetCliTests(unittest.TestCase):
     def test_live_trade_requires_explicit_confirmation_before_credentials_or_network(self) -> None:
         with self.assertRaisesRegex(SystemExit, "confirm-live"):
             main([
-                "trade", "run", "--strategy", "covered-call", "--venue", "binance", "--environment", "live",
+                "runtime", "soak", "--strategy", "covered-call", "--venue", "binance", "--environment", "live",
                 "--instrument", "x", "--side", "buy", "--quantity", "1", "--limit-price", "1",
             ])
 
     def test_binance_options_testnet_is_rejected_before_credentials_or_network(self) -> None:
         with self.assertRaisesRegex(SystemExit, "live-only"):
             main([
-                "trade", "run", "--strategy", "covered-call", "--venue", "binance",
+                "runtime", "soak", "--strategy", "covered-call", "--venue", "binance",
                 "--environment", "testnet", "--product", "options",
                 "--instrument", "crypto:binance:option:BTC-250628-60000-C",
                 "--side", "buy", "--quantity", "1", "--limit-price", "100",

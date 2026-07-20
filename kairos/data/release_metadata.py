@@ -6,22 +6,25 @@ from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairos.storage.data_lake import write_json
 
 from .catalog import DataCatalog
+from .contracts import DataReleaseManifest, DataSetContractArtifact, DatasetStorageKind, QualityLevel
 
 
 REQUIRED_RELEASE_METADATA = (
     "schema.json", "lineage.json", "coverage.json", "quality.json", "manifest.json",
-    "capabilities.json", "usage.json", "release.json",
+    "data_release_manifest.json", "capabilities.json", "usage.json", "release.json",
 )
 
 
 def ensure_release_metadata(root: str | Path, release_id: str) -> dict[str, object]:
     """Complete and verify metadata for one release produced by the current publishers."""
     lake = Path(root)
-    release = DataCatalog(lake).release(release_id)
+    catalog = DataCatalog(lake)
+    release = catalog.release(release_id)
+    product = catalog.product(release.product_key)
     directory = lake / release.relative_path
     if not directory.exists():
         raise FileNotFoundError(f"release directory is missing: {directory}")
-    payloads = _market_replay_payloads(directory, release) if (directory / "dataset.json").exists() else _common_payloads(release)
+    payloads = _market_replay_payloads(directory, release, product) if (directory / "dataset.json").exists() else _common_payloads(release, product)
     written = []
     for name, payload in payloads.items():
         target = directory / name
@@ -42,7 +45,7 @@ def verify_release_metadata(root: str | Path, release_id: str) -> dict[str, obje
     return {"release_id": release_id, "missing": missing, "complete": not missing}
 
 
-def _market_replay_payloads(directory: Path, release) -> dict[str, object]:
+def _market_replay_payloads(directory: Path, release, product) -> dict[str, object]:
     dataset = MarketSnapshotStorageDriver(directory.parent).load(directory)
     parquet = directory / "slices.parquet"
     files = []
@@ -81,22 +84,52 @@ def _market_replay_payloads(directory: Path, release) -> dict[str, object]:
                               "point_in_time_universe": True, "synchronous_quotes": True,
                               "top_of_book": True, "maximum_validation_level": 2},
     }
-    common = _common_payloads(release)
+    common = _common_payloads(release, product, fields=("timestamp", "sequence", "slice_json"))
     common.pop("capabilities.json")
     payloads.update(common)
     return payloads
 
 
-def _common_payloads(release) -> dict[str, object]:
+def _common_payloads(release, product, *, fields: tuple[str, ...] = ()) -> dict[str, object]:
+    release_manifest = _data_release_manifest(release, product, fields=fields)
     return {
         "capabilities.json": {"capability_schema_version": 2, "dataset_id": release.release_id,
                               "point_in_time_universe": True, "maximum_validation_level": 2},
         "usage.json": {"usage_schema_version": 1, "logical_key": str(release.product_key),
                        "default_view": "raw-as-received", "known_limitations": []},
+        "data_release_manifest.json": release_manifest.to_primitive(),
         "release.json": {"release_schema_version": 1, "release_id": release.release_id,
                          "logical_key": str(release.product_key), "content_hash": release.content_hash,
                          "schema_id": release.schema_id, "schema_version": release.schema_version,
                          "transform_id": release.transform_id, "transform_version": release.transform_version,
+                         "contract_hash": release_manifest.contract_hash,
+                         "data_release_manifest_hash": release_manifest.manifest_hash,
+                         "artifact_ref": release_manifest.artifact_ref,
                          "provider": release.provider, "venue": release.venue, "status": release.status.value,
                          "quality_level": release.quality_level.value, "published_at": release.published_at},
     }
+
+
+def _data_release_manifest(release, product, *, fields: tuple[str, ...]) -> DataReleaseManifest:
+    contract = DataSetContractArtifact(
+        dataset_id=str(release.product_key),
+        title=product.title,
+        layer=product.layer,
+        primary_time=product.primary_time,
+        schema_id=release.schema_id,
+        storage_kind=release.storage_kind or DatasetStorageKind.TABULAR,
+        layout_version=release.layout_version,
+        quality_profile="market_snapshot" if release.storage_kind is DatasetStorageKind.MARKET_SNAPSHOTS else "generic",
+        minimum_publication_level=release.quality_level if isinstance(release.quality_level, QualityLevel) else QualityLevel.RESEARCH,
+    )
+    return DataReleaseManifest(
+        str(release.product_key),
+        release.release_id,
+        contract.contract_hash,
+        release.content_hash or "",
+        product.primary_time,
+        fields,
+        release.quality_level,
+        {"provider": release.provider, "venue": release.venue, "transform_id": release.transform_id, "transform_version": release.transform_version},
+        release.published_at or "",
+    )

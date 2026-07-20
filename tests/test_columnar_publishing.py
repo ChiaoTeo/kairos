@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import json
 from tempfile import TemporaryDirectory
 from pathlib import Path
 import unittest
@@ -43,9 +44,18 @@ class ColumnarPublishingTests(unittest.TestCase):
 
             assessment = DatasetQualityService(root).assess(result.release.release_id)
             checks = {item.name: item for item in assessment.checks}
+            release_directory = root / result.release.relative_path
+            release_manifest = (release_directory / "data_release_manifest.json")
+            release_metadata = json.loads((release_directory / "release.json").read_text(encoding="utf-8"))
+            release_manifest_payload = json.loads(release_manifest.read_text(encoding="utf-8"))
             self.assertTrue(checks["deterministic_order"].passed, checks["deterministic_order"])
             self.assertTrue(checks["streaming_execution"].passed)
             self.assertEqual(result.manifest["rows"], 3)
+            self.assertTrue(release_manifest.exists())
+            self.assertEqual(release_manifest_payload["kind"], "data_release_manifest")
+            self.assertEqual(release_manifest_payload["content_hash"], result.release.content_hash)
+            self.assertEqual(len(release_metadata["data_release_manifest_hash"]), 64)
+            self.assertEqual(release_metadata["artifact_ref"], f"data://{result.release.product_key}/releases/{result.release.release_id}")
 
 
 def _bar(symbol: str, start: datetime, price: int):
