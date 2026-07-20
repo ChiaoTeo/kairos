@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
-from .client import ResearchDataClient
+from .client import DatasetClient
 from .contracts import DatasetKey, DatasetLayer, DatasetLike, DataProductDefinition, QualityLevel
 from .products import DataProductContract
 from .publishing import content_release_id, publish_release, release_path
@@ -40,7 +40,7 @@ class ConsolidatedTradeBuilder:
     """Build an explicit cross-venue product; never acts as source fallback."""
 
     def __init__(self, root: str | Path = "data") -> None:
-        self.root, self.data = Path(root), ResearchDataClient(root)
+        self.root, self.data = Path(root), DatasetClient(root)
 
     def build(self, output_key: DatasetKey | str, title: str, inputs: tuple[ConsolidatedTradeInput, ...],
               policy: ConsolidatedTradePolicy, *, start, end):

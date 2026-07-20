@@ -1,14 +1,14 @@
 # 研究数据使用指南
 
-研究代码只依赖 `ResearchDataClient` 和类型化 Dataset Product。不要拼接 `data/` 物理路径，也
+研究代码只依赖 `DatasetClient` 和类型化 Dataset Product。不要拼接 `data/` 物理路径，也
 不要直接读取 Source 响应。物理目录存在不代表数据已经注册、验证或获准研究使用。
 
 ## 发现数据
 
 ```python
-from kairos.data import ResearchDataClient
+from kairos.data import DatasetClient
 
-data = ResearchDataClient("data")
+data = DatasetClient("data")
 products = data.search(asset_class="option", underlying="SPX")
 for product in products:
     print(data.describe(product))
@@ -21,10 +21,10 @@ Release。用户不需要先记住完整 Logical Key。
 ## 表格探索
 
 ```python
-from kairos.data import DataView, OptionQuoteFields, OutputFormat, ResearchDataClient
+from kairos.data import DataView, OptionQuoteFields, OutputFormat, DatasetClient
 from kairos.data.products import Datasets
 
-data = ResearchDataClient("data")
+data = DatasetClient("data")
 frame = data.get(
     Datasets.MARKET_EVENTS_OPTIONS_US_SPXW,
     start="2026-07-15T13:30:00Z",

@@ -14,7 +14,7 @@ from kairos.domain.intent import LegIntent, OpenStructureIntent
 from kairos.domain.market_data import Greeks, Quote
 from kairos.domain.product import ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
 from kairos.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
-from kairos.research_platform.snapshot import InstrumentSnapshot
+from kairos.study_platform.snapshot import InstrumentSnapshot
 from kairos.risk.engine import RiskDecisionType, RiskEngine
 from kairos.risk.limits import RiskLimits
 

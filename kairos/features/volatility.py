@@ -6,7 +6,7 @@ import math
 import statistics
 from pathlib import Path
 
-from kairos.data.client import ResearchDataClient
+from kairos.data.client import DatasetClient
 from kairos.data.contracts import QualityLevel
 from kairos.data.products import (
     BTC_DERIBIT_OPTION_TRADES, BTC_DERIBIT_TERM_SKEW_DAILY, BTC_DVOL_DAILY, BTC_IV_RV_DAILY,
@@ -41,7 +41,7 @@ def build_iv_rv_panel(spot_rows, dvol_rows, lookback=30):
 
 class BtcIvRvFeatureBuilder:
     def __init__(self, root: str | Path = "data") -> None:
-        self.root, self.data = Path(root), ResearchDataClient(root)
+        self.root, self.data = Path(root), DatasetClient(root)
 
     def build(self):
         spot_release = self.data.catalog.release(BTC_SPOT_DAILY.key)
@@ -76,7 +76,7 @@ class BtcTermSkewFeatureBuilder:
     TARGETS = (7, 14, 30, 60, 90)
 
     def __init__(self, root: str | Path = "data") -> None:
-        self.root, self.data = Path(root), ResearchDataClient(root)
+        self.root, self.data = Path(root), DatasetClient(root)
 
     def build(self):
         source_release = self.data.catalog.release(BTC_OPTION_QUOTES_HOURLY.key)
@@ -112,7 +112,7 @@ class BtcDeribitTradeSkewFeatureBuilder:
     TARGETS = (7, 14, 30, 60, 90)
 
     def __init__(self, root: str | Path = "data") -> None:
-        self.root, self.data = Path(root), ResearchDataClient(root)
+        self.root, self.data = Path(root), DatasetClient(root)
 
     def build(self):
         source_release = self.data.catalog.release(BTC_DERIBIT_OPTION_TRADES.key)

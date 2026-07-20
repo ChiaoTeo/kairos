@@ -12,8 +12,8 @@ from kairos.domain.product import FutureSpec, ListedOptionSpec, is_option_spec
 from kairos.reference.contracts import InstrumentDefinition
 from kairos.reference.catalog import ReferenceCatalog
 from kairos.reference.access import contract_spec
-from kairos.research_platform.snapshot import DataQualityIssue, InstrumentSnapshot
-from kairos.research_platform.series import SeriesCaptureSpec
+from kairos.study_platform.snapshot import DataQualityIssue, InstrumentSnapshot
+from kairos.study_platform.series import SeriesCaptureSpec
 
 
 class NormalizedQuoteProvider(Protocol):

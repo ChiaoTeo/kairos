@@ -7,7 +7,7 @@ from kairos.backtest.feed import MarketReplayDataset, build_manifest
 from kairos.storage.data_lake import write_json
 
 from .catalog import DataCatalog
-from .client import ResearchDataClient
+from .client import DatasetClient
 from .market_snapshot_storage import MarketSnapshotStorageDriver
 from .contracts import DataProductContract, DatasetStorageKind, QualityLevel
 from .publishing import register_market_replay_dataset
@@ -24,7 +24,7 @@ def curate_complete_market_snapshots(
     catalog = DataCatalog(lake)
     source_release = catalog.release(source_release_id)
     event_release = catalog.release(input_event_release_id)
-    source = ResearchDataClient(lake).replay_snapshots(source_release.release_id).dataset
+    source = DatasetClient(lake).replay_snapshots(source_release.release_id).dataset
     slices = tuple(
         market for market in source.slices
         if not any(issue.severity == "error" for issue in market.quality_issues)

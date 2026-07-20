@@ -9,13 +9,14 @@ import json
 from pathlib import Path
 import signal
 from threading import Event
+from types import SimpleNamespace
 
 from kairos.application import (
     GovernedStrategyRunLoop, RunArtifactRepository, build_simulated_spot_catalog,
     build_run_attribution,run_sma_historical_simulation,
 )
 from kairos.contracts import canonicalize_market_event
-from kairos.data import OutputFormat, ResearchDataClient, RunMode
+from kairos.data import OutputFormat, DatasetClient, RunMode
 from kairos.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId
 from kairos.domain.market_data import Bar
 from kairos.features import FactorRegistry, SmaFactorConfig, SmaFactorRuntime, batch_sma_factors, snapshots_hash
@@ -25,11 +26,11 @@ from kairos.contracts import BarPayload
 from kairos.ports import Environment
 from kairos.connectors.binance.rest_transport import BinanceTransport, UrllibBinanceTransport
 from kairos.orchestration.runtime_store import SQLiteRuntimeStore
-from kairos.research_platform import (
+from kairos.study_platform import (
     SMA_TUTORIAL_RELEASE_ID, StudyWorkspace, StudyWorkspaceRepository,
     ensure_sma_tutorial_dataset, open_study,
 )
-from kairos.research_platform.tutorial_data import tutorial_sma_bars
+from kairos.study_platform.tutorial_data import tutorial_sma_bars
 from kairos.storage.codec import to_primitive
 from kairos.strategies import (
     GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext,
@@ -97,7 +98,30 @@ def _plan_governed_study(args, stop_event: Event) -> dict[str, object]:
 
 
 def start_governed_study(args) -> dict[str, object]:
+    if not getattr(args, "start", None) and not getattr(args, "end", None):
+        result = start_sma_tutorial(SimpleNamespace(output_root=args.lake_root, study_id=args.study_id))
+        _ensure_legacy_study_product_manifest(args)
+        return result
     return _with_graceful_shutdown(lambda stop_event: _start_governed_study(args, stop_event))
+
+
+def _ensure_legacy_study_product_manifest(args) -> None:
+    path = Path(args.lake_root) / "studies" / args.study_id / "study.json"
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "product": "study",
+        "kind": "study.workspace",
+        "id": args.study_id,
+        "version": getattr(args, "version", "1.0.0"),
+        "hypothesis": getattr(args, "hypothesis", "legacy research compatibility workspace"),
+        "status": "draft",
+        "data": {},
+        "factors": {},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _with_graceful_shutdown(operation):
@@ -128,11 +152,13 @@ def _start_governed_study(args, stop_event: Event) -> dict[str, object]:
     from kairos.data.acquisition import AcquisitionLimits
     from kairos.data.quality import DatasetQualityService
 
+    if not getattr(args, "start", None) or not getattr(args, "end", None):
+        raise ValueError("study start requires both --start and --end for governed data acquisition")
     start, end = datetime.fromisoformat(args.start), datetime.fromisoformat(args.end)
     if start.tzinfo is None or end.tzinfo is None or start >= end:
         raise ValueError("study start requires timezone-aware increasing [start,end) timestamps")
     register_default_products(args.lake_root)
-    client = ResearchDataClient(
+    client = DatasetClient(
         args.lake_root, providers=default_provider_registry(
             args.lake_root, progress=None if getattr(args, "quiet", False) else _archive_progress,
             stop_event=stop_event,
@@ -253,7 +279,7 @@ def _start_us_equity_momentum_study(args) -> dict[str, object]:
     if start.tzinfo is None or end.tzinfo is None or start >= end:
         raise ValueError("study start requires timezone-aware increasing [start,end) timestamps")
     register_default_products(args.lake_root)
-    client = ResearchDataClient(args.lake_root)
+    client = DatasetClient(args.lake_root)
     release = client.catalog.release("features.momentum.equity.us.1d")
     quality = DatasetQualityService(args.lake_root)
     snapshot = _us_equity_momentum_input_snapshot(client, require_corporate_action_match=True)
@@ -307,7 +333,7 @@ def _start_us_equity_momentum_study(args) -> dict[str, object]:
 
 
 def _us_equity_momentum_input_snapshot(
-    client: ResearchDataClient, *, require_corporate_action_match: bool = False,
+    client: DatasetClient, *, require_corporate_action_match: bool = False,
 ) -> list[dict[str, object]]:
     snapshot = []
     for logical_key in (
@@ -369,7 +395,7 @@ def _us_equity_momentum_snapshot_keys(catalog) -> tuple[str, ...]:
     return (*base, *action, *identity)
 
 
-def _matched_us_equity_corporate_action_release(client: ResearchDataClient, *, require: bool):
+def _matched_us_equity_corporate_action_release(client: DatasetClient, *, require: bool):
     try:
         returns = client.catalog.release("market.returns.equity.us.1d")
     except KeyError:
@@ -399,7 +425,7 @@ def _matched_us_equity_corporate_action_release(client: ResearchDataClient, *, r
     return None
 
 
-def _matched_us_equity_identity_release(client: ResearchDataClient, *, require: bool):
+def _matched_us_equity_identity_release(client: DatasetClient, *, require: bool):
     try:
         universe = client.catalog.release("market.universe.equity.us.1d")
     except KeyError:
@@ -644,7 +670,7 @@ def freeze_study(args) -> dict[str, object]:
     payload = json.loads((directory/"study_candidate.json").read_text(encoding="utf-8"))
     return {"study_id": args.study_id, "version": args.version, "status": payload["status"],
             "candidate_hash": payload["candidate_hash"], "directory": str(directory),
-            "next": "register a Factor Release only after recording the research validation result"}
+            "next": "register a Factor Release only after recording the study evidence"}
 
 
 def register_sma_factor(args) -> dict[str, object]:
@@ -1022,7 +1048,7 @@ def load_bars(args) -> tuple[str, tuple[Bar, ...]]:
 
 
 def _dataset_bars(lake_root, dataset, start, end, *, include_release=False):
-    query = ResearchDataClient(lake_root, run_mode=RunMode.BACKTEST).get(
+    query = DatasetClient(lake_root, run_mode=RunMode.BACKTEST).get(
         dataset, start=start, end=end,
         fields=("instrument_id", "period_start", "period_end", "open", "high", "low", "close", "volume"),
     )
@@ -1045,7 +1071,7 @@ def _study_input_metadata(args) -> dict[str, str]:
     if dataset:
         if dataset == SMA_TUTORIAL_RELEASE_ID:
             ensure_sma_tutorial_dataset(args.lake_root)
-        client = ResearchDataClient(args.lake_root, run_mode=RunMode.RESEARCH)
+        client = DatasetClient(args.lake_root, run_mode=RunMode.STUDY)
         release = client.resolve(dataset)
         if not release.content_hash:
             raise ValueError(f"dataset release {release.release_id!r} has no frozen content hash")

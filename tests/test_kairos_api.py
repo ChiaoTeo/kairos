@@ -32,16 +32,16 @@ class KairosApiTests(unittest.TestCase):
         from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
         from kairos.domain.product import InstrumentContractSpec
         from kairos.ports.execution import ExecutionPort
-        from kairos.research_platform import open_study
-        from kairos.research_platform.spec import OptionChainCaptureSpec
+        from kairos.study_platform import open_study
+        from kairos.study_platform.spec import OptionChainCaptureSpec
         from kairos.backtest.synthetic_scenarios import SyntheticScenario as ImportedSyntheticScenario
         from kairos.connectors.massive import MassiveClient as ImportedMassiveClient
         from kairos.connectors.massive.close_implied_volatility import (
             OptionCloseImpliedVolatilityPipeline as ImportedOptionCloseImpliedVolatilityPipeline,
         )
         from kairos.ports.execution import ExecutionPort as ImportedExecutionPort
-        from kairos.research_platform import open_study as ImportedOpenStudy
-        from kairos.research_platform.spec import OptionChainCaptureSpec as ImportedOptionChainCaptureSpec
+        from kairos.study_platform import open_study as ImportedOpenStudy
+        from kairos.study_platform.spec import OptionChainCaptureSpec as ImportedOptionChainCaptureSpec
 
         self.assertIs(SyntheticScenario, ImportedSyntheticScenario)
         self.assertTrue(callable(MarketReplayDataset))

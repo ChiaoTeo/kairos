@@ -2,7 +2,7 @@
 
 状态：Proposed  
 日期：2026-07-17  
-适用范围：整个项目，重点包括 `kairos.data`、`kairos.research_platform`、`kairos.features`、`kairos.strategies`、`kairos.backtest`、`kairos.application`、`kairos.execution`、CLI、`examples/`、`studies/` 和 `data/` 中的治理产物。
+适用范围：整个项目，重点包括 `kairos.data`、`kairos.study_platform`、`kairos.features`、`kairos.strategies`、`kairos.backtest`、`kairos.application`、`kairos.execution`、CLI、`examples/`、`studies/` 和 `data/` 中的治理产物。
 
 ## 1. 文档目的
 
@@ -131,7 +131,7 @@ Kairos 应被建设为：
 
 ### 断点一：Research 的出口不明确
 
-用户可以通过 Notebook、`studies/<study>`、`kairos.research_platform.features`、`kairos.features` 等多种方式计算特征，但没有统一回答：
+用户可以通过 Notebook、`studies/<study>`、`kairos.study_platform.features`、`kairos.features` 等多种方式计算特征，但没有统一回答：
 
 - 哪些只是临时研究列；
 - 哪些是可复现因子；

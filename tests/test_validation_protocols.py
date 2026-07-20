@@ -1,6 +1,6 @@
 import unittest
 
-from kairos.research_platform.validation import (
+from kairos.study_platform.validation import (
     DataCapabilities, ProductProtocol, ReturnDriver, ValidationLevel,
     approximate_required_samples, assess_sample_sufficiency, build_data_gap_plan,
     validate_product_protocol,

@@ -11,7 +11,7 @@ class StrategyPromotionGateTest(unittest.TestCase):
         proxy={"state":{"maximum_level":3,"signal_status":"EXPLORATORY","strategy_status":"TRADE_PROXY_ONLY"},"out_of_sample":"time_oos"}
         self.assertFalse(evaluate_promotion_artifacts(StrategyLifecycle.LIVE_LIMITED,(proxy,)).passed)
         signal={"state":{"maximum_level":2,"signal_status":"SUPPORTED"}}
-        self.assertTrue(evaluate_promotion_artifacts(StrategyLifecycle.RESEARCH_VALIDATED,(signal,)).passed)
+        self.assertTrue(evaluate_promotion_artifacts(StrategyLifecycle.STUDY_VALIDATED,(signal,)).passed)
 
     def test_fixture_l5_cannot_promote_to_paper(self):
         fixture_l5={

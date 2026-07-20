@@ -29,7 +29,7 @@ from kairos.reference import (
     VenueType,
 )
 from kairos.reference.factory import publish_instrument
-from kairos.research_platform.snapshot import DataQualityIssue, InstrumentSnapshot
+from kairos.study_platform.snapshot import DataQualityIssue, InstrumentSnapshot
 
 from .feed import InstrumentLifecycleSnapshot, MarketReplayDataset, MarketSnapshot, SettlementType, build_manifest
 

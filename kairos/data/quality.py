@@ -11,7 +11,7 @@ from pathlib import Path
 from kairos.storage.data_lake import write_json
 
 from .catalog import DataCatalog
-from .client import ResearchDataClient
+from .client import DatasetClient
 from .contracts import DatasetRelease, QualityLevel
 
 
@@ -38,7 +38,7 @@ class DatasetQualityService:
     def __init__(self, root: str | Path = "data") -> None:
         self.root = Path(root)
         self.catalog = DataCatalog(self.root)
-        self.client = ResearchDataClient(self.root)
+        self.client = DatasetClient(self.root)
 
     def assess(self, dataset: str) -> QualityAssessment:
         release = self.catalog.release(dataset)
@@ -123,7 +123,7 @@ class DatasetQualityService:
 
     def _load_rows_for_assessment(self, release: DatasetRelease) -> list[dict[str, object]]:
         product = self.catalog.product(release.product_key)
-        table = ResearchDataClient._load_files(
+        table = DatasetClient._load_files(
             self.root / release.relative_path,
             start=None,
             end=None,

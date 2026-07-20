@@ -142,7 +142,7 @@ mkdir -p "$FIRST_RESEARCH_ROOT"
 系统会在 Workspace 中生成 `research.py`。运行输出中的下一条命令，或直接使用 Python API：
 
 ```python
-from kairos.research_platform import open_study
+from kairos.study_platform import open_study
 
 study = open_study(
     "btc-sma-first",

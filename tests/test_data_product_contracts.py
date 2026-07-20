@@ -17,7 +17,7 @@ from kairos.data.contracts import (
 )
 from kairos.data.freshness import (
     PAPER_LIVE_FRESHNESS_POLICY, evaluate_live_view_freshness, live_view_channel_diagnostics,
-    find_live_view_manifest, live_view_manifest_path, update_live_view_manifest_freshness,
+    find_live_view_manifest, live_view_freshness_evidence, live_view_manifest_path, update_live_view_manifest_freshness,
     resolve_live_view_subscription, write_live_view_manifest,
 )
 from kairos.data.products import (
@@ -273,6 +273,56 @@ class DataProductContractTests(unittest.TestCase):
         self.assertEqual(diagnostics["overflow"], 0)
         self.assertEqual(diagnostics["sequence_gaps"], 0)
         self.assertEqual(diagnostics["reconnects"], 2)
+
+    def test_live_view_freshness_evidence_reads_connector_service_metrics(self) -> None:
+        class Metrics:
+            capacity = 64
+            peak_depth = 4
+            dropped = 0
+
+        class Channel:
+            metrics = Metrics()
+
+        class Service:
+            raw_messages = 5
+            canonical_events = 5
+            ignored_messages = 0
+            reconnects = 1
+            canonical_capture = None
+
+        evidence = live_view_freshness_evidence(
+            Service(), Channel(), source="binance", stream_id="btcusdt@bookTicker",
+        )
+
+        self.assertTrue(evidence["passed"])
+        self.assertEqual(evidence["event_count"], 5)
+        self.assertEqual(evidence["channel_capacity"], 64)
+        self.assertEqual(evidence["peak_channel_depth"], 4)
+        self.assertEqual(evidence["reconnect_count"], 1)
+
+    def test_live_view_freshness_evidence_fails_on_ignored_or_dropped_events(self) -> None:
+        class Metrics:
+            capacity = 64
+            peak_depth = 64
+            dropped = 1
+
+        class Channel:
+            metrics = Metrics()
+
+        class Service:
+            raw_messages = 5
+            canonical_events = 4
+            ignored_messages = 1
+            reconnects = 0
+            canonical_capture = None
+
+        evidence = live_view_freshness_evidence(
+            Service(), Channel(), source="binance", stream_id="btcusdt@bookTicker",
+        )
+
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(evidence["channel_dropped"], 1)
+        self.assertEqual(evidence["sequence_gaps"], 1)
 
     def test_soak_evidence_updates_live_view_manifest_freshness(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

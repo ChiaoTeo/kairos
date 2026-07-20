@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import json
-from typing import Callable, Mapping
+from typing import Awaitable, Callable, Mapping
 
 from kairos.data.contracts import RunMode
 from kairos.market_data.subscriptions import CapturePolicy
+from .service_supervisor import ManagedServiceSpec, ServiceCriticality
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,8 +69,25 @@ class RuntimeFeedServicePlan:
     channel_contract: str
     capture_policy: CapturePolicy
 
+    def __post_init__(self) -> None:
+        required = {
+            "name": self.name,
+            "dataset": self.dataset,
+            "live_view_id": self.live_view_id,
+            "event_source_contract": self.event_source_contract,
+            "channel_contract": self.channel_contract,
+        }
+        missing = [name for name, value in required.items() if not str(value).strip()]
+        if missing:
+            raise ValueError(f"runtime feed service plan missing {', '.join(missing)}")
+
+    @property
+    def service_id(self) -> str:
+        return _runtime_feed_service_id(self)
+
     def manifest(self) -> dict[str, str]:
         return {
+            "service_id": self.service_id,
             "name": self.name,
             "dataset": self.dataset,
             "live_view_id": self.live_view_id,
@@ -89,6 +107,9 @@ class RuntimeFeedPlan:
             raise ValueError("runtime feed plan is only valid for paper/live modes")
         if not self.services:
             raise ValueError("paper/live runtime feed plan requires at least one feed binding")
+        service_ids = [item.service_id for item in self.services]
+        if len(service_ids) != len(set(service_ids)):
+            raise ValueError("runtime feed plan service ids must be unique")
 
     @property
     def plan_hash(self) -> str:
@@ -100,6 +121,101 @@ class RuntimeFeedPlan:
             "mode": self.mode.value,
             "services": [item.manifest() for item in self.services],
         }
+
+    @property
+    def service_bundle_hash(self) -> str:
+        material = json.dumps(self.service_bundle_manifest(), sort_keys=True, separators=(",", ":"))
+        return sha256(material.encode()).hexdigest()
+
+    def service_bundle_manifest(self) -> dict[str, object]:
+        return {
+            "plan_hash": self.plan_hash,
+            "feed_service_ids": [service.service_id for service in self.services],
+            "monitor_service_ids": [
+                _runtime_feed_monitor_service_id(service) for service in self.services
+            ],
+        }
+
+    def managed_services(
+        self,
+        runner_factory: Callable[[RuntimeFeedServicePlan], Callable[[], Awaitable[None]]] | None = None,
+    ) -> tuple[ManagedServiceSpec, ...]:
+        factory = runner_factory or _unconfigured_feed_runner
+        return tuple(
+            ManagedServiceSpec(
+                service.service_id,
+                factory(service),
+                ServiceCriticality.CRITICAL,
+                restart_limit=1,
+            )
+            for service in self.services
+        )
+
+    def managed_service_bundle(
+        self,
+        *,
+        feed_runner_factory: Callable[[RuntimeFeedServicePlan], Callable[[], Awaitable[None]]],
+        monitor_runner_factory: Callable[[RuntimeFeedServicePlan], Callable[[], Awaitable[None]]],
+    ) -> "RuntimeFeedServiceBundle":
+        if not callable(feed_runner_factory):
+            raise ValueError("runtime feed service bundle requires a feed runner factory")
+        if not callable(monitor_runner_factory):
+            raise ValueError("runtime feed service bundle requires a monitor runner factory")
+        specs = []
+        for service in self.services:
+            feed_runner = feed_runner_factory(service)
+            monitor_runner = monitor_runner_factory(service)
+            if not callable(feed_runner):
+                raise ValueError(f"feed runner factory returned a non-callable runner for {service.service_id}")
+            if not callable(monitor_runner):
+                raise ValueError(f"monitor runner factory returned a non-callable runner for {service.service_id}")
+            specs.extend((
+                ManagedServiceSpec(
+                    service.service_id,
+                    feed_runner,
+                    ServiceCriticality.CRITICAL,
+                    restart_limit=1,
+                ),
+                ManagedServiceSpec(
+                    _runtime_feed_monitor_service_id(service),
+                    monitor_runner,
+                    ServiceCriticality.CRITICAL,
+                    restart_limit=1,
+                ),
+            ))
+        return RuntimeFeedServiceBundle(self, tuple(specs))
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeFeedServiceBundle:
+    plan: RuntimeFeedPlan
+    services: tuple[ManagedServiceSpec, ...]
+
+    def __post_init__(self) -> None:
+        expected = {
+            name
+            for service in self.plan.services
+            for name in (service.service_id, _runtime_feed_monitor_service_id(service))
+        }
+        actual = {service.name for service in self.services}
+        if actual != expected:
+            raise ValueError(f"runtime feed service bundle differs: missing={expected-actual}, extra={actual-expected}")
+
+    @property
+    def bundle_hash(self) -> str:
+        material = json.dumps(self.manifest(), sort_keys=True, separators=(",", ":"))
+        return sha256(material.encode()).hexdigest()
+
+    def manifest(self) -> dict[str, object]:
+        return self.plan.service_bundle_manifest()
+
+
+def _runtime_feed_service_id(service: RuntimeFeedServicePlan) -> str:
+    return f"feed:{service.name}:{service.live_view_id}"
+
+
+def _runtime_feed_monitor_service_id(service: RuntimeFeedServicePlan) -> str:
+    return f"feed-monitor:{service.name}:{service.live_view_id}"
 
 
 @dataclass(frozen=True,slots=True)
@@ -125,11 +241,15 @@ class ExecutableRunComposition:
     def composition_hash(self):return self.declaration.composition_hash
 
 
-def research_composition() -> RunModeComposition:
+def study_composition() -> RunModeComposition:
     return RunModeComposition(
-        RunMode.RESEARCH, "frozen-release", "analysis", "none", "study-artifact",
-        "research-validation", CapturePolicy.NONE,
+        RunMode.STUDY, "frozen-release", "analysis", "none", "study-artifact",
+        "study-validation", CapturePolicy.NONE,
     )
+
+
+def research_composition() -> RunModeComposition:
+    return study_composition()
 
 
 def backtest_composition() -> RunModeComposition:
@@ -179,6 +299,15 @@ def runtime_feed_plan(mode: RunMode | str, feed_bindings: tuple[Mapping[str, obj
 
 def _runtime_mode(mode: RunMode | str) -> RunMode:
     raw = mode.value if isinstance(mode, RunMode) else str(mode)
+    if raw == "research":
+        return RunMode.STUDY
     if raw == "paper":
         return RunMode.PAPER_TRADING
     return RunMode(raw)
+
+
+def _unconfigured_feed_runner(service: RuntimeFeedServicePlan) -> Callable[[], Awaitable[None]]:
+    async def run() -> None:
+        raise RuntimeError(f"feed service {service.name!r} has no runtime connector bound")
+
+    return run

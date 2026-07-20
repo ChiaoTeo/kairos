@@ -30,6 +30,7 @@ from .order_book import (
     OrderBookSnapshotProvider,
 )
 from .stream import BinanceCanonicalStreamService
+from .runtime_feed import BinanceRuntimeFeed, BinanceRuntimeFeedFactory
 
 __all__ = [
     "BinanceAccountGateway",
@@ -49,6 +50,8 @@ __all__ = [
     "WebSocketClientConnector",
     "websocket_url",
     "BinanceCanonicalStreamService",
+    "BinanceRuntimeFeed",
+    "BinanceRuntimeFeedFactory",
     "BinanceOrderBookSnapshotProvider",
     "BinanceOrderBookSyncFault",
     "BinanceOrderBookSyncMetrics",

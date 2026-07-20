@@ -1,4 +1,4 @@
-"""Research platform services for studies, captures, validation, and workspaces."""
+"""Study platform services for captures, validation, and workspaces."""
 
 from __future__ import annotations
 

@@ -102,7 +102,7 @@ Frozen study datasets and deterministic backtests
 - `kairos.reference` 中内部 `InstrumentId` 与外部 listing 的映射；
 - `kairos.data` 中 Dataset Catalog、canonical pipeline 和 metadata；
 - `kairos.storage` 中原子写入、SHA-256、coverage 和 manifest；
-- `kairos.research_platform` 中 snapshot、series capture、追加式 session 和质量问题；
+- `kairos.study_platform` 中 snapshot、series capture、追加式 session 和质量问题；
 - `kairos.backtest` 中确定性 feed、point-in-time universe、审计哈希和 replay；
 - UTC、ISO 8601、`[start,end)` 和 `available_time` 数据湖规范；
 - source、canonical、features、studies 四层目录所有权。

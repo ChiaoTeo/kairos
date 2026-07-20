@@ -61,10 +61,10 @@ class StudyProfile:
 
 class StudySession:
     def __init__(self, root: str | Path, workspace: StudyWorkspace) -> None:
-        from kairos.data import ResearchDataClient, RunMode
+        from kairos.data import DatasetClient, RunMode
         self.root = Path(root)
         self.workspace = workspace
-        self.client = ResearchDataClient(self.root, run_mode=RunMode.RESEARCH)
+        self.client = DatasetClient(self.root, run_mode=RunMode.STUDY)
         release = self.client.resolve(workspace.input_release_id)
         if release.content_hash != workspace.input_content_hash:
             raise ValueError(
@@ -135,7 +135,7 @@ class StudySession:
         target = directory/"research.py"
         source = f'''"""Flexible exploration for {self.workspace.study_id}@{self.workspace.version}."""
 
-from kairos.research_platform import open_study
+from kairos.study_platform import open_study
 
 
 study = open_study({self.workspace.study_id!r}, root={str(self.root)!r}, version={self.workspace.version!r})

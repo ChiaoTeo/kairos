@@ -35,9 +35,12 @@ class StrategyGovernanceTest(unittest.TestCase):
         strategy = spec()
         with self.assertRaises(ValueError):
             strategy.promote(StrategyLifecycle.LIVE_APPROVED)
-        promoted = strategy.promote(StrategyLifecycle.RESEARCH_VALIDATED)
-        self.assertEqual(promoted.lifecycle, StrategyLifecycle.RESEARCH_VALIDATED)
+        promoted = strategy.promote(StrategyLifecycle.STUDY_VALIDATED)
+        self.assertEqual(promoted.lifecycle, StrategyLifecycle.STUDY_VALIDATED)
         self.assertEqual(promoted.spec_hash, strategy.spec_hash)
+
+    def test_legacy_research_validated_maps_to_study_validated(self):
+        self.assertIs(StrategyLifecycle("RESEARCH_VALIDATED"), StrategyLifecycle.STUDY_VALIDATED)
 
     def test_economic_intent_preserves_strategy_and_evidence_hashes(self):
         strategy = spec(); now = datetime.now(timezone.utc)

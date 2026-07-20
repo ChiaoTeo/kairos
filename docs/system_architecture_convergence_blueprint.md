@@ -383,7 +383,7 @@ Connector 不得：
 - offline 与 incremental 结果一致；
 - Feature 不以单个策略命名。
 
-### 4.10 `kairos.research_platform`
+### 4.10 `kairos.study_platform`
 
 职责：研究工作流、样本、报告、实验和验证产物。
 

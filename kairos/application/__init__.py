@@ -16,8 +16,10 @@ from .service_supervisor import (
 )
 from .async_runtime import AsyncKairosRuntime
 from .modes import (
-    ComponentBinding,ExecutableRunComposition,RunModeComposition, backtest_composition, historical_simulation_composition,
-    live_composition, paper_trading_composition, research_composition,
+    ComponentBinding,ExecutableRunComposition,RunModeComposition, RuntimeFeedPlan, RuntimeFeedServiceBundle,
+    RuntimeFeedServicePlan,
+    backtest_composition, historical_simulation_composition,
+    live_composition, paper_trading_composition, research_composition, runtime_feed_plan, study_composition,
 )
 from .strategy_run_loop import (
     CanonicalBarMarketProjection, GovernedStrategyRunLoop, StrategyRunResult,
@@ -40,8 +42,9 @@ __all__ = [
     "AsyncServiceSupervisor",
     "ManagedServiceSnapshot", "ManagedServiceSpec", "ManagedServiceStatus", "ServiceCriticality", "ServiceFault",
     "AsyncKairosRuntime",
-    "RunModeComposition", "backtest_composition", "historical_simulation_composition",
-    "live_composition", "paper_trading_composition", "research_composition",
+    "RunModeComposition", "RuntimeFeedPlan", "RuntimeFeedServiceBundle", "RuntimeFeedServicePlan",
+    "backtest_composition", "historical_simulation_composition",
+    "live_composition", "paper_trading_composition", "research_composition", "runtime_feed_plan", "study_composition",
     "CanonicalBarMarketProjection", "GovernedStrategyRunLoop", "StrategyRunResult",
     "HistoricalSimulationResult", "run_sma_historical_simulation",
     "build_simulated_spot_catalog",

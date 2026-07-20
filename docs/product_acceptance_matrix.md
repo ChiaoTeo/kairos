@@ -39,7 +39,7 @@ Spot/Perpetual Carry、Funding、Corporate Action、Assignment、Conservative/St
 
 | 要求 | 权威实现 | 证据 |
 |---|---|---|
-| Sandbox/Governed Research 分离 | `kairos.research_platform.workspace`、ValidationArtifactWriter | workspace 与 `data/studies` 不混用 |
+| Sandbox/Governed Research 分离 | `kairos.study_platform.workspace`、ValidationArtifactWriter | workspace 与 `data/studies` 不混用 |
 | Study 可直接使用绑定数据 | `StudySession`、`StudyData` | Dataset hash 校验、Pandas/Polars/Arrow、profile、scaffold |
 | Factor 一等公民 | FactorSpec/Snapshot/Runtime/Registry | SMA、SPXW skew、fear-cooling factors |
 | Strategy Release 绑定代码和因子 | StrategyRegistry | implementation.json、factor_bindings.json、manifest.json |

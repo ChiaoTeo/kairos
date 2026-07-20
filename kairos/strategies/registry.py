@@ -55,7 +55,7 @@ class StrategyReleaseStatus:
 @dataclass(frozen=True, slots=True)
 class PromotionEvidence:
     target: StrategyLifecycle
-    research_result_paths: tuple[str, ...]
+    evidence_paths: tuple[str, ...]
     evidence_hashes: tuple[str, ...]
     approved_by: str
     capital_limit: Decimal
@@ -65,8 +65,8 @@ class PromotionEvidence:
     gate_reasons: tuple[str,...]=()
 
     def __post_init__(self) -> None:
-        if not self.research_result_paths or len(self.research_result_paths)!=len(self.evidence_hashes):
-            raise ValueError("promotion requires matching research paths and hashes")
+        if not self.evidence_paths or len(self.evidence_paths)!=len(self.evidence_hashes):
+            raise ValueError("promotion requires matching evidence paths and hashes")
         if not self.approved_by or self.capital_limit<=0 or not self.rollback_condition:
             raise ValueError("approver, capital limit, and rollback condition are required")
         if not self.gate_passed:raise ValueError("promotion evidence gate did not pass")
@@ -129,7 +129,8 @@ class StrategyRegistry:
         lifecycle=payload.get("lifecycle");active=self.active_version(strategy_id)==version
         latest_bundle = self._latest_promotion_bundle(directory)
         next_stage={
-            "DRAFT":"RESEARCH_VALIDATED","RESEARCH_VALIDATED":"TRADE_PROXY_VALIDATED",
+            "DRAFT":"STUDY_VALIDATED","STUDY_VALIDATED":"TRADE_PROXY_VALIDATED",
+            "RESEARCH_VALIDATED":"TRADE_PROXY_VALIDATED",
             "TRADE_PROXY_VALIDATED":"EXECUTABLE_BACKTEST_VALIDATED","EXECUTABLE_BACKTEST_VALIDATED":"ROBUSTNESS_VALIDATED",
             "ROBUSTNESS_VALIDATED":"PAPER_APPROVED","PAPER_APPROVED":"LIVE_LIMITED","LIVE_LIMITED":"LIVE_APPROVED",
         }.get(lifecycle)
@@ -161,7 +162,7 @@ class StrategyRegistry:
         if evidence.target is not target: raise ValueError("promotion evidence target mismatch")
         directory=self._directory(spec)
         if not (directory/"strategy_spec.json").exists(): raise FileNotFoundError("strategy must be registered before promotion")
-        for path,expected in zip(evidence.research_result_paths,evidence.evidence_hashes):
+        for path,expected in zip(evidence.evidence_paths,evidence.evidence_hashes):
             actual=hashlib.sha256(Path(path).read_bytes()).hexdigest()
             if actual!=expected: raise ValueError(f"promotion evidence hash mismatch: {path}")
         promoted=spec.promote(target)

@@ -1,0 +1,11 @@
+[project]
+name = "trader"
+data_root = "data"
+timezone = "UTC"
+
+[research]
+default_study = "starter"
+
+[execution]
+default_environment = "simulated"
+live_trading_enabled = false

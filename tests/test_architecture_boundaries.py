@@ -22,7 +22,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             "kairos.market_data",
             "kairos.orchestration",
             "kairos.pricing",
-            "kairos.research_platform",
+            "kairos.study_platform",
             "kairos.risk",
             "kairos.storage",
             "kairos.strategies",

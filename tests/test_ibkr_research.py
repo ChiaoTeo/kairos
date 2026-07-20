@@ -16,7 +16,7 @@ from kairos.domain.product import (
     SettlementSession,
     SettlementType,
 )
-from kairos.research_platform.spec import OptionChainCaptureSpec
+from kairos.study_platform.spec import OptionChainCaptureSpec
 from kairos.reference import ReferenceCatalog
 from kairos.reference.contracts import InstrumentDefinition
 from tests.reference_support import publish_test_instrument

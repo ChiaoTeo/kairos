@@ -6,7 +6,7 @@ from pathlib import Path
 
 from kairos.data.bootstrap import register_default_products
 from kairos.data.catalog import DataCatalog
-from kairos.data.client import ResearchDataClient
+from kairos.data.client import DatasetClient
 from kairos.data.contracts import DatasetStatus, QualityLevel
 
 
@@ -360,7 +360,7 @@ class UsEquityMomentumDiagnostics:
                 "Build market.universe.equity.us.1d with kairos features build --feature-set us-equity-momentum-v1",
             )
         try:
-            rows = ResearchDataClient(self.root).load_rows(release.release_id)
+            rows = DatasetClient(self.root).load_rows(release.release_id)
         except Exception as error:
             return UsEquityReadinessCheck(
                 "universe_missing_status",

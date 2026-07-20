@@ -57,9 +57,9 @@ from kairos.orchestration.coordinator import ExecutionCoordinator
 from kairos.orchestration.event_log import PersistentEventLog
 from kairos.orchestration.kill_switch import KillSwitch
 from kairos.orchestration.reconciliation import ReconciliationService
-from kairos.research_platform.report import summarize
-from kairos.research_platform.option_capture import OptionResearchCaptureService
-from kairos.research_platform.spec import MarketDataType, OptionChainCaptureSpec
+from kairos.study_platform.report import summarize
+from kairos.study_platform.option_capture import OptionResearchCaptureService
+from kairos.study_platform.spec import MarketDataType, OptionChainCaptureSpec
 from kairos.storage.repository import FileResearchRepository
 from kairos.backtest.engine import BacktestEngine
 from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
@@ -71,14 +71,14 @@ from kairos.risk.limits import RiskLimits
 from kairos.storage.codec import from_primitive, restore_primitives, to_primitive
 from kairos.storage.data_lake import write_json
 from kairos.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
-from kairos.research_platform.series import SeriesCaptureProgress, SeriesCaptureService, SeriesCaptureSpec
-from kairos.research_platform.normalized_series import NormalizedSeriesCaptureService
+from kairos.study_platform.series import SeriesCaptureProgress, SeriesCaptureService, SeriesCaptureSpec
+from kairos.study_platform.normalized_series import NormalizedSeriesCaptureService
 from kairos.strategies.sma_cross_research_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross
 from kairos.pricing import PricingInput, PricingModel, OptionValuationService, implied_volatility, price_with_volatility
 from kairos.risk import RevaluationPosition, Scenario, ScenarioEngine, explain_scenario
 from kairos.data import (
     DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetQualityService, DatasetRelease,
-    DatasetStatus, DatasetStorageKind, OutputFormat, QualityLevel, ResearchDataClient, RunMode,
+    DatasetStatus, DatasetStorageKind, OutputFormat, QualityLevel, DatasetClient, RunMode,
     register_market_replay_dataset,
 )
 from kairos.data.bootstrap import default_provider_registry, register_configured_products, register_default_products
@@ -578,8 +578,8 @@ def _parser() -> argparse.ArgumentParser:
     study_start.add_argument(
         "--dataset", default="market.ohlcv.crypto.binance.usdm-perpetual.1h",
     )
-    study_start.add_argument("--start", required=True, help="inclusive ISO-8601 timestamp with timezone")
-    study_start.add_argument("--end", required=True, help="exclusive ISO-8601 timestamp with timezone")
+    study_start.add_argument("--start", help="inclusive ISO-8601 timestamp with timezone")
+    study_start.add_argument("--end", help="exclusive ISO-8601 timestamp with timezone")
     study_start.add_argument("--symbol", action="append", default=[],
                              help="optional Binance symbol for a bounded run; omit for full-market discovery")
     study_start.add_argument(
@@ -650,17 +650,17 @@ def _parser() -> argparse.ArgumentParser:
     strategy_check=strategy_actions.add_parser("check-promotion", help="check promotion evidence without changing strategy lifecycle")
     strategy_check.add_argument("strategy_id"); strategy_check.add_argument("--version", required=True)
     strategy_check.add_argument("--to", required=True, choices=(
-        "RESEARCH_VALIDATED", "TRADE_PROXY_VALIDATED", "EXECUTABLE_BACKTEST_VALIDATED",
+        "STUDY_VALIDATED", "RESEARCH_VALIDATED", "TRADE_PROXY_VALIDATED", "EXECUTABLE_BACKTEST_VALIDATED",
         "ROBUSTNESS_VALIDATED", "PAPER_APPROVED", "LIVE_LIMITED", "LIVE_APPROVED",
     ))
-    strategy_check.add_argument("--evidence", action="append", required=True, help="research, readiness or soak JSON evidence; repeatable")
+    strategy_check.add_argument("--evidence", action="append", required=True, help="study, readiness or soak JSON evidence; repeatable")
     strategy_promote=strategy_actions.add_parser("promote", help="promote a Strategy Release with hashed evidence")
     strategy_promote.add_argument("strategy_id"); strategy_promote.add_argument("--version", required=True)
     strategy_promote.add_argument("--to", required=True, choices=(
-        "RESEARCH_VALIDATED", "TRADE_PROXY_VALIDATED", "EXECUTABLE_BACKTEST_VALIDATED",
+        "STUDY_VALIDATED", "RESEARCH_VALIDATED", "TRADE_PROXY_VALIDATED", "EXECUTABLE_BACKTEST_VALIDATED",
         "ROBUSTNESS_VALIDATED", "PAPER_APPROVED", "LIVE_LIMITED", "LIVE_APPROVED",
     ))
-    strategy_promote.add_argument("--evidence", action="append", required=True, help="research or run result JSON evidence; repeatable")
+    strategy_promote.add_argument("--evidence", action="append", required=True, help="study or run result JSON evidence; repeatable")
     strategy_promote.add_argument("--actor", required=True); strategy_promote.add_argument("--capital-limit", type=Decimal, required=True)
     strategy_promote.add_argument("--rollback-condition", required=True)
 
@@ -668,9 +668,9 @@ def _parser() -> argparse.ArgumentParser:
     run_actions = run_product.add_subparsers(dest="action", required=True)
     run_start = run_actions.add_parser("start", help="start a Run workspace from a Study or Strategy snapshot")
     run_target = run_start.add_mutually_exclusive_group(required=True)
-    run_target.add_argument("--study", help="Study workspace id for research-mode execution")
+    run_target.add_argument("--study", help="Study workspace id for study-mode execution")
     run_target.add_argument("--snapshot", help="Strategy snapshot reference, for example my-strategy@1.0.0")
-    run_start.add_argument("--mode", required=True, choices=("research", "backtest", "historical-simulation", "paper", "live"))
+    run_start.add_argument("--mode", required=True, choices=("study", "research", "backtest", "historical-simulation", "paper", "live"))
     run_backtest_generic = run_actions.add_parser("backtest", help="run a Strategy Release through the unified backtest entry")
     run_backtest_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
     _add_sma_input_arguments(run_backtest_generic); _add_sma_run_arguments(run_backtest_generic)
@@ -854,7 +854,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "backtest":
         return _backtest(args)
     if args.action == "governance-audit":
-        from kairos.research_platform.validation import audit_governance
+        from kairos.study_platform.validation import audit_governance
         result=audit_governance(args.lake_root)
         print(json.dumps({"passed":result.passed,"checked_datasets":result.checked_datasets,
             "checked_studies":result.checked_studies,"checked_strategies":result.checked_strategies,
@@ -1160,11 +1160,11 @@ def _data(args: argparse.Namespace) -> int:
             if not key.strip() or not value.strip():
                 raise SystemExit("--dimension key and value cannot be empty")
             dimensions[key.strip()] = value.strip()
-        products = ResearchDataClient(args.lake_root).search(**dimensions)
-        print(json.dumps({"products": [ResearchDataClient(args.lake_root).describe(item) for item in products]},
+        products = DatasetClient(args.lake_root).search(**dimensions)
+        print(json.dumps({"products": [DatasetClient(args.lake_root).describe(item) for item in products]},
                          ensure_ascii=False, indent=2)); return 0
     if args.action == "describe":
-        print(json.dumps(ResearchDataClient(args.lake_root).describe(args.dataset), ensure_ascii=False, indent=2)); return 0
+        print(json.dumps(DatasetClient(args.lake_root).describe(args.dataset), ensure_ascii=False, indent=2)); return 0
     if args.action in {"doctor", "diagnostics"}:
         from kairos.data.diagnostics import DataDiagnosticsService
         service = DataDiagnosticsService(args.lake_root)
@@ -1190,7 +1190,7 @@ def _data(args: argparse.Namespace) -> int:
             args.lake_root, connector_config=args.connector_config,
             progress=None if args.quiet else _archive_progress,
         )
-        client = ResearchDataClient(args.lake_root, providers=providers)
+        client = DatasetClient(args.lake_root, providers=providers)
         from kairos.data.preparation import DataPreparationService
         prepared = DataPreparationService(client).prepare(
             args.dataset, start=datetime.fromisoformat(args.start), end=datetime.fromisoformat(args.end),
@@ -1205,7 +1205,7 @@ def _data(args: argparse.Namespace) -> int:
     if args.action == "query":
         if args.limit <= 0:
             raise SystemExit("--limit must be positive")
-        query = ResearchDataClient(args.lake_root).get(
+        query = DatasetClient(args.lake_root).get(
             args.dataset, start=args.start, end=args.end, fields=tuple(args.field) or None,
         )
         rows = query.collect(OutputFormat.ROWS)
@@ -1215,7 +1215,7 @@ def _data(args: argparse.Namespace) -> int:
             "rows": to_primitive(rows[:args.limit]),
         }, ensure_ascii=False, indent=2)); return 0
     if args.action == "freeze":
-        client = ResearchDataClient(args.lake_root)
+        client = DatasetClient(args.lake_root)
         queries = tuple(client.get(dataset) for dataset in args.dataset)
         target = client.freeze_study(
             args.output, args.study_id, queries, code_version=args.code_version,
@@ -1243,7 +1243,7 @@ def _data(args: argparse.Namespace) -> int:
         } for product in catalog.products()]
         print(json.dumps({"products": values}, ensure_ascii=False, indent=2)); return 0
     if args.action == "compare":
-        comparison = ResearchDataClient(args.lake_root).compare(args.first, args.second)
+        comparison = DatasetClient(args.lake_root).compare(args.first, args.second)
         print(json.dumps(comparison, ensure_ascii=False, indent=2)); return 0
     if args.action == "audit-artifact":
         from kairos.data.artifact_audit import audit_governed_artifact
@@ -1266,7 +1266,7 @@ def _data(args: argparse.Namespace) -> int:
             args.lake_root, connector_config=args.connector_config,
             progress=(None if args.quiet or args.action == "plan" else _archive_progress),
         )
-        client = ResearchDataClient(args.lake_root, providers=providers)
+        client = DatasetClient(args.lake_root, providers=providers)
         start, end = datetime.fromisoformat(args.start), datetime.fromisoformat(args.end)
         plan = client.plan(args.dataset, start=start, end=end, provider=args.provider, venue=args.venue)
         if args.action == "plan":
@@ -1371,7 +1371,7 @@ def _data(args: argparse.Namespace) -> int:
         module = _workspace_research_module("studies.btc_options_readiness")
         result = module.btc_options_readiness(args.lake_root); print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["signal_research_ready"] else 2
-    metadata = ResearchDataClient(args.lake_root).metadata(args.dataset)
+    metadata = DatasetClient(args.lake_root).metadata(args.dataset)
     print(json.dumps(metadata, ensure_ascii=False, indent=2))
     return 0
 
@@ -1410,7 +1410,7 @@ def _prepare_us_equity_momentum(args: argparse.Namespace) -> dict[str, object]:
         args.lake_root, connector_config=args.connector_config,
         progress=None if args.quiet else None,
     )
-    client = ResearchDataClient(args.lake_root, providers=providers)
+    client = DatasetClient(args.lake_root, providers=providers)
     prepared_raw = []
     raw_release_paths = []
     for raw_dataset in args.raw_dataset:
@@ -1820,7 +1820,7 @@ def _research_readiness(args: argparse.Namespace) -> int:
         "stop_loss_multiple", "commission_per_contract",
     }
     config = ResearchConfig(**{key: Decimal(str(value)) if key in decimal_fields else value for key, value in raw.items()})
-    client = ResearchDataClient(args.lake_root, run_mode=RunMode.BACKTEST)
+    client = DatasetClient(args.lake_root, run_mode=RunMode.BACKTEST)
     feed = client.replay_snapshots(args.dataset)
     dataset = feed.dataset
     collection = client.collection(args.dataset)
@@ -1859,7 +1859,7 @@ def _research_readiness(args: argparse.Namespace) -> int:
 
 
 def _vol(args: argparse.Namespace) -> int:
-    client = ResearchDataClient(args.lake_root, run_mode=RunMode.RESEARCH)
+    client = DatasetClient(args.lake_root, run_mode=RunMode.STUDY)
     feed = client.replay_snapshots(args.dataset)
     dataset = feed.dataset
     catalog = dataset.reference_catalog()
@@ -1932,7 +1932,7 @@ def _backtest(args: argparse.Namespace) -> int:
         return 0
     if args.action == "sma":
         from kairos.domain.market_data import Bar
-        client = ResearchDataClient(args.lake_root, run_mode=RunMode.BACKTEST)
+        client = DatasetClient(args.lake_root, run_mode=RunMode.BACKTEST)
         query = client.get(args.dataset, start=args.start, end=args.end, fields=(
             "instrument_id", "period_start", "period_end", "open", "high", "low", "close", "volume",
         ))
@@ -2007,7 +2007,7 @@ def _backtest(args: argparse.Namespace) -> int:
             return 0
         if not args.dataset:
             raise SystemExit("--dataset is required for bull-put-spread")
-        feed = ResearchDataClient(args.lake_root, dataset_root=args.dataset_root,
+        feed = DatasetClient(args.lake_root, dataset_root=args.dataset_root,
                                   run_mode=RunMode.BACKTEST).replay_snapshots(args.dataset)
         dataset = feed.dataset
         values = json.loads(args.config.read_text()) if args.config else {}
@@ -2022,7 +2022,7 @@ def _backtest(args: argparse.Namespace) -> int:
             print(f"{result.config.fill_model}: run={result.run_id} status={result.status.value} return={result.metrics['total_return']}")
         return 0
     if args.action == "validate":
-        client = ResearchDataClient(args.lake_root, dataset_root=args.dataset_root, run_mode=RunMode.BACKTEST)
+        client = DatasetClient(args.lake_root, dataset_root=args.dataset_root, run_mode=RunMode.BACKTEST)
         selected_feeds = tuple(client.replay_snapshots(value) for value in (args.development, args.validation, args.test))
         selected = tuple(feed.dataset for feed in selected_feeds)
         values = json.loads(args.config.read_text()) if args.config else {}
@@ -2060,7 +2060,7 @@ def _backtest(args: argparse.Namespace) -> int:
     config, raw_strategy, raw_risk = backtests.load_config(args.run_id)
     strategy_config = from_primitive(raw_strategy, BullPutSpreadConfig)
     risk_limits = from_primitive(raw_risk, RiskLimits)
-    dataset = ResearchDataClient(args.lake_root, run_mode=RunMode.BACKTEST).replay_snapshots(
+    dataset = DatasetClient(args.lake_root, run_mode=RunMode.BACKTEST).replay_snapshots(
         manifest["dataset_id"],
     ).dataset
     replayed = BacktestEngine(dataset, config, BullPutSpreadStrategy(strategy_config), risk_limits).run()

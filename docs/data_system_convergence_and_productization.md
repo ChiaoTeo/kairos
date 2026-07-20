@@ -1,7 +1,7 @@
 # 数据系统收敛、领域边界与产品化改造方案
 
 状态：Proposed
-适用范围：`kairos.domain`、`kairos.data`、`kairos.market_data`、`kairos.reference`、`kairos.research_platform`、`kairos.backtest`、数据 CLI 与 `data/` 目录
+适用范围：`kairos.domain`、`kairos.data`、`kairos.market_data`、`kairos.reference`、`kairos.study_platform`、`kairos.backtest`、数据 CLI 与 `data/` 目录
 目标：收敛系统运行路径，删除旧代码和旧数据，规范 Domain 与 Data 的关系，并形成可以被研究、回测和生产稳定消费的数据产品。
 
 ## 1. 执行摘要
@@ -44,7 +44,7 @@ Provider
 - 所有正式数据都有 Product、Release、Schema、Transform、content hash、lineage、coverage、quality 和 usage；
 - 所有数据读取都先解析为不可变 Release；
 - 回测和正式研究只能消费冻结的、达到相应质量等级的 Release；
-- Domain 不依赖 `kairos.data`、`kairos.reference`、`kairos.storage`、`kairos.research_platform` 或 `kairos.backtest`；
+- Domain 不依赖 `kairos.data`、`kairos.reference`、`kairos.storage`、`kairos.study_platform` 或 `kairos.backtest`；
 - Data 层保存的是 Domain 事实的持久化表达，不把供应商原始对象或研究专属对象伪装成 Domain；
 - CLI 为普通用户提供发现、准备、读取、验证、冻结和诊断的完整闭环；
 - 旧代码和旧数据有明确迁移清单、删除日期、回退方案和自动化验收证据。

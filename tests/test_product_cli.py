@@ -207,10 +207,12 @@ class ProductCliTests(unittest.TestCase):
             evidence = root / "research-result.json"
             evidence.write_text(json.dumps({"state": {"maximum_level": 2, "signal_status": "SUPPORTED"}}))
             checked = command(root, "strategy", "check-promotion", "sma-cross-v1", "--version", "1.2.0",
+                "--to", "STUDY_VALIDATED", "--evidence", str(evidence))
+            checked_legacy = command(root, "strategy", "check-promotion", "sma-cross-v1", "--version", "1.2.0",
                 "--to", "RESEARCH_VALIDATED", "--evidence", str(evidence))
             before = command(root, "strategy", "status", "sma-cross-v1", "--version", "1.2.0")
             promoted = command(root, "strategy", "promote", "sma-cross-v1", "--version", "1.2.0",
-                "--to", "RESEARCH_VALIDATED", "--evidence", str(evidence), "--actor", "reviewer",
+                "--to", "STUDY_VALIDATED", "--evidence", str(evidence), "--actor", "reviewer",
                 "--capital-limit", "10000", "--rollback-condition", "signal evidence invalidated")
             status = command(root, "strategy", "status", "sma-cross-v1", "--version", "1.2.0")
             bundle = json.loads(Path(promoted["evidence_bundle"]).read_text())
@@ -218,13 +220,15 @@ class ProductCliTests(unittest.TestCase):
         self.assertTrue(checked["gate_passed"])
         self.assertTrue(checked["transition_valid"])
         self.assertTrue(checked["would_promote"])
+        self.assertEqual(checked_legacy["target_status"], "STUDY_VALIDATED")
         self.assertEqual(before["lifecycle"], "DRAFT")
         self.assertTrue(promoted["gate_passed"])
-        self.assertEqual(promoted["status"], "RESEARCH_VALIDATED")
+        self.assertEqual(promoted["status"], "STUDY_VALIDATED")
         self.assertEqual(bundle["kind"], "strategy_promotion_evidence_bundle")
-        self.assertEqual(bundle["to"], "RESEARCH_VALIDATED")
+        self.assertEqual(bundle["to"], "STUDY_VALIDATED")
+        self.assertEqual(bundle["evidence"]["evidence_paths"], [str(evidence)])
         self.assertEqual(status["latest_promotion_bundle"], promoted["evidence_bundle"])
-        self.assertEqual(status["lifecycle"], "RESEARCH_VALIDATED")
+        self.assertEqual(status["lifecycle"], "STUDY_VALIDATED")
 
     def test_strategy_check_promotion_reports_external_gate_failure_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

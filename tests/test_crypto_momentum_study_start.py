@@ -9,7 +9,7 @@ from kairos.connectors.binance.datasets import BinanceUsdmPerpetualHourlyDataset
 from kairos.data.acquisition import ProviderRegistry
 from kairos.data.quality import DatasetQualityService
 from kairos.product_workflow import start_governed_study
-from kairos.research_platform import open_study
+from kairos.study_platform import open_study
 
 
 class _HourlyArchive:

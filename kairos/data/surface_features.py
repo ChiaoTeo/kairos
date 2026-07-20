@@ -9,7 +9,7 @@ from kairos.storage.data_lake import write_intraday_dataset
 from kairos.volatility.contracts import SurfaceSnapshot
 
 from .catalog import DataCatalog
-from .client import ResearchDataClient
+from .client import DatasetClient
 from .contracts import (
     DatasetKey, DatasetLayer, DataProductDefinition, DataProductContract, DatasetStorageKind, QualityLevel,
 )
@@ -117,6 +117,6 @@ class SurfaceFeaturePublisher:
 
 
 def load_surface_features(root: str | Path, dataset: str) -> tuple[SurfaceSnapshot, ...]:
-    rows = ResearchDataClient(root).load_rows(dataset)
+    rows = DatasetClient(root).load_rows(dataset)
     return tuple(from_primitive(json.loads(str(row["surface_json"])), SurfaceSnapshot) for row in rows)
 

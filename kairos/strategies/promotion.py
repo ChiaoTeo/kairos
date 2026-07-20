@@ -17,9 +17,9 @@ class PromotionGateDecision:
 def evaluate_promotion_artifacts(target: StrategyLifecycle,results: tuple[dict,...]) -> PromotionGateDecision:
     reasons=[]
     states=[value.get("state",{}) for value in results]
-    if target is StrategyLifecycle.RESEARCH_VALIDATED:
+    if target is StrategyLifecycle.STUDY_VALIDATED:
         if not any(state.get("maximum_level",0)>=2 and state.get("signal_status")=="SUPPORTED" for state in states):
-            reasons.append("research promotion requires supported L2 signal evidence")
+            reasons.append("study promotion requires supported L2 signal evidence")
     elif target is StrategyLifecycle.TRADE_PROXY_VALIDATED:
         if not any(state.get("maximum_level",0)>=3 and state.get("strategy_status") in ("TRADE_PROXY_ONLY","SUPPORTED") for state in states):
             reasons.append("trade-proxy promotion requires L3 mapping evidence")

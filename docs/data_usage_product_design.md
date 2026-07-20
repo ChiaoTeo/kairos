@@ -22,7 +22,7 @@ kairos data download us-equity-momentum-data
 kairos study open us-equity-momentum
 kairos study add-data --workspace us-equity-momentum --name returns --dataset market.returns.equity.us.1d
 kairos study add-factor --workspace us-equity-momentum --name momentum_12_1 --file factors/momentum_12_1.py
-kairos run start --study us-equity-momentum --mode research
+kairos run start --study us-equity-momentum --mode study
 kairos study freeze us-equity-momentum --version 1.0.0
 
 kairos strategy open us-equity-momentum-long-only --from-study us-equity-momentum@1.0.0
@@ -80,7 +80,7 @@ Run 依赖 Strategy Snapshot，不依赖编辑中的 Strategy Product workspace
 | Data Product | 独立数据产品 | 通过 download/write contract 扩展 | 下载内置数据；把外部数据写入契约；提供 Release、Live View、质量和 lineage |
 | Study Product | 独立研究产品 | 是 | 组合 Data、编写因子、验证假设、冻结研究证据 |
 | Strategy Product | 独立策略产品 | 是 | 把 Frozen Study 的信号变成决策、风险约束和可运行策略 |
-| Run Product | 独立执行产品 | 否；由系统生成运行工作区 | 执行 Study/Strategy 的冻结或候选目标，管理 research/backtest/paper/live、运行证据、回放和诊断 |
+| Run Product | 独立执行产品 | 否；由系统生成运行工作区 | 执行 Study/Strategy 的冻结或候选目标，管理 study/backtest/paper/live、运行证据、回放和诊断 |
 
 四个产品的核心产物：
 
@@ -90,7 +90,7 @@ Run 依赖 Strategy Snapshot，不依赖编辑中的 Strategy Product workspace
 | Live View | Data Product | 实时推进视图 |
 | Study Lock | Study Product | 冻结研究输入、因子代码、参数和证据 |
 | Strategy Lock | Strategy Product | 冻结策略代码、Study 证据、数据和执行约束 |
-| Run Workspace | Run Product | 单次 research/backtest/paper/live 执行目录，只运行明确 target |
+| Run Workspace | Run Product | 单次 study/backtest/paper/live 执行目录，只运行明确 target |
 | Run Manifest | Run Product | 记录一次运行的环境、输入、输出和 hash |
 
 每个产品都必须按同一套口径定义：
@@ -153,7 +153,7 @@ source receipt 完整度、统计异常和运行指标默认是 diagnostic，除
 1. **Data**：独立数据产品，负责下载内置数据、把外部数据写入契约，并产出 Data Release/Live View。
 2. **Study**：独立研究产品，负责探索数据、编写因子、验证假设，并产出 Study Lock。
 3. **Strategy**：独立策略产品，负责把 Frozen Study 的信号变成目标持仓、交易意图和风控约束，并产出 Strategy Lock。
-4. **Run**：独立执行产品，负责执行 Study research run 或 Strategy Snapshot，并产出 Run Workspace、Run Manifest 和运行结果。
+4. **Run**：独立执行产品，负责执行 Study run 或 Strategy Snapshot，并产出 Run Workspace、Run Manifest 和运行结果。
 
 配套概念：
 
@@ -351,9 +351,9 @@ kairos data compare returns_a returns_b
 ### 4.2 Python API
 
 ```python
-from kairos.data import ResearchDataClient
+from kairos.data import DatasetClient
 
-data = ResearchDataClient("data")
+data = DatasetClient("data")
 download = data.download("us-equity-momentum-data")
 external = data.write_file(
     file="analyst_estimates.csv",
@@ -739,7 +739,7 @@ labels:
 目标态 API：
 
 ```python
-from kairos.research_platform import open_study
+from kairos.study_platform import open_study
 
 study = open_study("us-equity-momentum")
 
@@ -757,7 +757,7 @@ study.add_factor("momentum_12_1", path="factors/momentum_12_1.py")
 study.freeze(version="1.0.0")
 ```
 
-当前仓库的 `kairos.research_platform.open_study`、`StudySession.data` 和 `kairos study create/start/freeze`
+当前仓库的 `kairos.study_platform.open_study`、`StudySession.data` 和 `kairos study create/start/freeze`
 仍是过渡形态；它们应逐步收敛到上面的多数据输入、命名 factor、Research Run Client 和 Study Lock 语义。
 
 ### 5.4 生命周期
@@ -780,7 +780,7 @@ study.freeze(version="1.0.0")
 - Python/package 版本；
 - 查询窗口；
 - quality 和 lineage 检查结果；
-- Run Product 生成的 research run manifest。
+- Run Product 生成的 study run manifest。
 
 ## 6. Strategy Product API
 
@@ -941,7 +941,7 @@ Run Product 定义：
 
 | 维度 | 内容 |
 |---|---|
-| 提供 | research/backtest/paper/live 执行、运行工作区、manifest、inspect、replay、compare、diagnostics |
+| 提供 | study/backtest/paper/live 执行、运行工作区、manifest、inspect、replay、compare、diagnostics |
 | 开放 | Run Contract、Runtime Contract、mode、clock、feed binding、execution gateway、safety gate |
 | Contract | Run Contract、Runtime Contract、Run Manifest Schema |
 | 产出 | Run Workspace、Run Manifest、decisions/intents/orders/fills、reports、diagnostics |
@@ -950,7 +950,7 @@ Run Product 定义：
 ### 7.1 CLI
 
 ```bash
-kairos run start --study us-equity-momentum --mode research
+kairos run start --study us-equity-momentum --mode study
 kairos run start --snapshot us-equity-momentum-long-only@1.0.0 --mode backtest
 kairos run inspect --run-id run_...
 kairos run replay --run-id run_...
@@ -961,7 +961,7 @@ kairos run compare --first run_... --second run_...
 
 ```python
 runs = open_run_client()
-research = runs.start(study="us-equity-momentum", mode="research")
+study = runs.start(study="us-equity-momentum", mode="study")
 backtest = runs.start(snapshot="us-equity-momentum-long-only@1.0.0", mode="backtest")
 report = runs.inspect(backtest.run_id)
 replay = runs.replay(backtest.run_id)
@@ -1277,7 +1277,7 @@ def decide(context):
 
 - Dataset Product、Release、Catalog；
 - Source/Canonical/Reference/Features/Studies 分层；
-- `ResearchDataClient`；
+- `DatasetClient`；
 - 一键准备受限版美股动量数据；
 - Study 启动时冻结美股动量相关输入快照；
 - StrategySpec、ExecutionPolicy、Strategy Registry；
@@ -1310,7 +1310,7 @@ def decide(context):
   需要升级为用途门禁；
 - `DataProductContract.capabilities["promotion_policy"]` 已可声明产品默认 promotion policy，DataPreparation 会优先使用
   产品契约中的 Q2/Q3/Q4 policy profile，再回退到默认宽松策略；
-- 内置 `research-default` / `backtest-default` / `production-default` promotion policy profile 已有只读 registry，
+- 内置 `study-default` / `backtest-default` / `production-default` promotion policy profile 已有只读 registry，
   产品契约可以直接引用内置 profile 名称；默认 profile 不把本地 diagnostic 自动升级为硬门禁；
 - `LiveViewFreshnessPolicy` / `LiveViewFreshnessGateResult` 已建立最小 freshness gate 模型，区分 Live View
   已配置 freshness 与 paper/live 所需的 healthy freshness；
@@ -1325,13 +1325,24 @@ def decide(context):
   `write_live_view_manifest`、`find_live_view_manifest`；四产品 surface 和 freshness 写回路径共享同一套解析逻辑；
 - `resolve_live_view_subscription` 已提供最小 Live View subscription binding，四产品 paper/live Run Manifest 会在
   `runtime_contract.feed_bindings` 中记录 DataSet input 到 Live View/EventSource/channel 的绑定证据；
+- paper/live Run Manifest 已生成 `runtime_contract.feed_runtime_plan`，把通过 freshness gate 的 Live View binding
+  转成 runtime 可消费的 service plan、capture policy 和 `plan_hash`；feed plan 缺少 EventSource 或 Channel
+  contract、或存在重复 `service_id` 时 fail closed；
+- `RuntimeFeedPlan.managed_services(...)` 已能把 feed runtime plan 适配为 `ManagedServiceSpec`，交由
+  `AsyncKairosRuntime` 监督启动；未绑定真实 connector runner 时会 fail closed；
+- `RuntimeFeedPlan.managed_service_bundle(...)` 已能把 feed connector runner 和 freshness monitor runner 按
+  Live View binding 成对组装成受监督 bundle，bundle manifest/hash 已进入 paper/live Run Manifest 审计链；
+- `LiveViewFreshnessMonitor` 已提供受监督的 Live View health/diagnostics 写回 runner，可由
+  `AsyncKairosRuntime` 作为 managed service 周期性刷新 manifest；
+- `live_view_freshness_evidence` 已能从 connector service counters、channel metrics 和 capture evidence 生成
+  monitor 可写回的 health/diagnostics evidence；
 - Python API：`DataProductApi`、`StudyProductApi`、`StrategyProductApi`、`RunProductApi` 已提供和 CLI 同源的最小调用面；
 - 完整示例：`examples/four_product_user_path.sh`；
 - 自动化验收：`tests/test_four_product_surface.py`。
 
 目标态剩余缺口：
 
-1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型，并接入四产品 surface、`publish_release`、columnar publishing 和 MarketReplayDataset metadata 补全路径；质量报告已开始区分 gate/diagnostic，DataPreparation 已有可配置 promotion policy profile，DataProductContract capabilities 已可声明产品默认 policy，内置 Q2/Q3/Q4 profile registry 已建立，freshness gate 已有最小 policy/result 模型并接入四产品 paper/live run 边界，channel diagnostics 已进入该 gate，`soak-binance` 可显式写回 Live View health/diagnostics，Live View manifest 读写/查找已有共享 API，paper/live Run Manifest 已记录最小 Live View subscription binding；剩余缺口是通用 freshness monitor 和实际实时 runtime 还没有自动持续写回 Live View health/diagnostics，也还没有真正消费这些 feed binding；
+1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型，并接入四产品 surface、`publish_release`、columnar publishing 和 MarketReplayDataset metadata 补全路径；质量报告已开始区分 gate/diagnostic，DataPreparation 已有可配置 promotion policy profile，DataProductContract capabilities 已可声明产品默认 policy，内置 Q2/Q3/Q4 profile registry 已建立，freshness gate 已有最小 policy/result 模型并接入四产品 paper/live run 边界，channel diagnostics 已进入该 gate，`soak-binance` 可显式写回 Live View health/diagnostics，Live View manifest 读写/查找已有共享 API，paper/live Run Manifest 已记录最小 Live View subscription binding、runtime feed plan 和 feed/monitor bundle hash，feed plan 已可适配为 `AsyncKairosRuntime` 监督的 `ManagedServiceSpec`，`LiveViewFreshnessMonitor` 已能作为 managed service 持续写回 manifest，connector service metrics 已可转成 monitor evidence，feed connector runner 和 freshness monitor runner 已可按 Live View binding 成对组装；剩余缺口是 provider-specific 的真实实时 connector runner factory、订阅执行和历史回放归档还没有完整统一到 DataSet identity；
 2. 旧 `StudyWorkspace` 仍以单 `input_release_id` 为主模型，新的 Study Product workspace 还没有替换旧模型；
 3. Study Product 的 Draft/Frozen 生命周期已最小落地，但状态机、质量门禁和目录结构还没有统一到正式模型；
 4. 本地 factor 已记录 code hash，但依赖、参数、输出 schema 和 point-in-time 检查还没有正式约定；
@@ -1339,7 +1350,7 @@ def decide(context):
 6. Strategy 已要求从 Frozen Study 打开，但还没有完整自动检查 Data Release hash 与 Factor Output 语义一致；
 7. Study factor 与 Strategy model 的语义一致性还没有自动检查；
 8. Data Product 已有最小 `data download` 和 `data write` 入口，live write 已要求 freshness contract；但 download spec、YAML contract、quality report 还没有完整实现；
-9. 实时数据流接入已能生成 Live View manifest，并已有 provider WebSocket/canonical channel 运行基线；四产品 paper/live run 已要求 healthy Live View freshness 和 channel diagnostics，`soak-binance` 已能把审计结果写回指定 Live View manifest，Run Manifest 已记录 DataSet 到 Live View/EventSource/channel 的最小 subscription binding；但通用 freshness monitor、真实订阅执行、持续诊断写回和历史回放归档还没有完整统一到 DataSet identity；
+9. 实时数据流接入已能生成 Live View manifest，并已有 provider WebSocket/canonical channel 运行基线；四产品 paper/live run 已要求 healthy Live View freshness 和 channel diagnostics，`soak-binance` 已能把审计结果写回指定 Live View manifest，Run Manifest 已记录 DataSet 到 Live View/EventSource/channel 的最小 subscription binding、runtime feed plan 和 feed/monitor bundle hash，feed plan 已能生成 `ManagedServiceSpec` 并被 `AsyncKairosRuntime` 监督，`LiveViewFreshnessMonitor` 已能持续写回 manifest，connector service metrics 已能生成 monitor evidence，feed/monitor 已能按 binding 成对组装为 runtime bundle；但 provider-specific 真实 connector runner factory、订阅执行和历史回放归档还没有完整统一到 DataSet identity；
 10. Run Product 已有最小 `run start/inspect/replay/compare` API，但还没有接入真实 InputTable、clock、feed 和 execution gateway；
 11. `data.dataset(name)`、`study.data(name)`、`study.factor(name)`、`strategy.decide(context)` 和 `run.start(...)` 这种用户 API 还没有完成；
 12. Factor Code decorator/metadata/hash 协议还没有完成；
@@ -1395,7 +1406,7 @@ def decide(context):
 ### 阶段 E：推出 Run Product
 
 - 增加 `kairos run start --snapshot <strategy_id>@<version> --mode <mode>`；
-- 增加 `kairos run start --study <study_id> --mode research`；
+- 增加 `kairos run start --study <study_id> --mode study`；
 - 增加 `kairos run inspect/replay/compare`；
 - 生成独立 Run Workspace；
 - `run start` 只接受明确 target，运行前比较 workspace hash 与 target hash；
@@ -1435,7 +1446,7 @@ def decide(context):
 - 从 Frozen Study 创建 Strategy Product；
 - Strategy 复用 Study 的 factor 和 data，不产生语义漂移；
 - Strategy 是代码项目，但不直接负责执行；
-- Run Product 执行 Study research target 或 Strategy snapshot，每次执行都有独立 Run Workspace；
+- Run Product 执行 Study target 或 Strategy snapshot，每次执行都有独立 Run Workspace；
 - 同一个 Strategy Lock 可以进入 backtest、paper 和 live 晋级链路；
 - 报告能解释每一列数据、每个信号、每个策略决策来自哪个 Release 或代码 hash；
 - 数据或策略质量不够时，系统给出明确下一步。
@@ -1653,7 +1664,7 @@ factors:
 用户命令：
 
 ```bash
-kairos run start --study us-equity-momentum --mode research
+kairos run start --study us-equity-momentum --mode study
 kairos study freeze us-equity-momentum --version 1.0.0
 ```
 
@@ -1813,7 +1824,7 @@ Run Product 必须输出数据平面或运行契约缺口诊断。
 | 统一身份通道 | 平台 util 数据和用户接入数据都经过同一个 DataSet identity/contract/gate |
 | 历史与实时 | Historical View 和 Live View 共 `dataset_id`、schema 语义、primary_time、grain 和 identity |
 | 策略输入 | Strategy 通过统一 `InputTable` 消费 Data 和 Factor |
-| 晋级路径 | Q2/Q3/Q4 对 research/backtest/paper-live 的边界清楚 |
+| 晋级路径 | Q2/Q3/Q4 对 study/backtest/paper-live 的边界清楚 |
 | 场景完整性 | 至少包含 Data download/write、Study、Factor、Study Lock、Strategy、Strategy Lock、Run、缺口诊断 |
 | 冲突检查 | 不存在“随意探索列也是 Factor”或“Strategy 可重写因子”的描述 |
 

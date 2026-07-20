@@ -122,7 +122,7 @@ AssetId = 记账单位
 | `QualityLevel` | 使用门槛：Q0 归档、Q1 完整性、Q2 研究、Q3 回测、Q4 生产 | 不代表数据所在 Layer |
 | `DatasetStatus` | 治理状态，如 validated、approved、quarantined | 不等于质量等级；审批状态与质量证据是两个维度 |
 
-原则：探索时可通过逻辑 Dataset 名发现数据；形成研究结论、回测结果或运行产物时，必须固定到不可变 `DatasetRelease` 和内容 hash。Notebook 和策略代码应通过 `ResearchDataClient` 读取，不直接依赖 `data/` 下的物理路径。
+原则：探索时可通过逻辑 Dataset 名发现数据；形成研究结论、回测结果或运行产物时，必须固定到不可变 `DatasetRelease` 和内容 hash。Notebook 和策略代码应通过 `DatasetClient` 读取，不直接依赖 `data/` 下的物理路径。
 
 ### Study、Factor、Strategy 与 Run
 
@@ -309,12 +309,12 @@ print(result.explain(at="2026-01-02T00:00:00Z"))
 ```bash
 ./pyenv/bin/kairos --format json strategy check-promotion sma-cross-v1 \
   --version 1.2.0 \
-  --to RESEARCH_VALIDATED \
+  --to STUDY_VALIDATED \
   --evidence data/studies/<study>/<version>/results.json
 
 ./pyenv/bin/kairos --format json strategy promote sma-cross-v1 \
   --version 1.2.0 \
-  --to RESEARCH_VALIDATED \
+  --to STUDY_VALIDATED \
   --evidence data/studies/<study>/<version>/results.json \
   --actor reviewer@example \
   --capital-limit 10000 \
@@ -482,7 +482,7 @@ IV Feature Dataset 对所有输入行保留 `solver_status`；到期日收盘或
 
 ### 治理 OHLCV、Notebook 与 SMA 回测
 
-历史 OHLCV 统一通过 Dataset Catalog 和 `ResearchDataClient` 使用，不再写入独立的
+历史 OHLCV 统一通过 Dataset Catalog 和 `DatasetClient` 使用，不再写入独立的
 `data/history` CSV。先发现、诊断并准备达到 Q3 的不可变 Release：
 
 ```bash
@@ -497,9 +497,9 @@ IV Feature Dataset 对所有输入行保留 `solver_status`；到期日收盘或
 Notebook 按逻辑产品或冻结 Release 读取，不接触物理路径：
 
 ```python
-from kairos.data import OutputFormat, ResearchDataClient
+from kairos.data import OutputFormat, DatasetClient
 
-data = ResearchDataClient("data")
+data = DatasetClient("data")
 df = data.get(
     "market.ohlcv.crypto.binance.btc-usdt.1h",
     start="2026-01-01T00:00:00Z",

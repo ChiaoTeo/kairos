@@ -15,7 +15,8 @@ from .product import ProductType
 
 class StrategyLifecycle(StrEnum):
     DRAFT = "DRAFT"
-    RESEARCH_VALIDATED = "RESEARCH_VALIDATED"
+    STUDY_VALIDATED = "STUDY_VALIDATED"
+    RESEARCH_VALIDATED = "STUDY_VALIDATED"
     TRADE_PROXY_VALIDATED = "TRADE_PROXY_VALIDATED"
     EXECUTABLE_BACKTEST_VALIDATED = "EXECUTABLE_BACKTEST_VALIDATED"
     ROBUSTNESS_VALIDATED = "ROBUSTNESS_VALIDATED"
@@ -25,10 +26,16 @@ class StrategyLifecycle(StrEnum):
     SUSPENDED = "SUSPENDED"
     RETIRED = "RETIRED"
 
+    @classmethod
+    def _missing_(cls, value: object):
+        if str(value) == "RESEARCH_VALIDATED":
+            return cls.STUDY_VALIDATED
+        return None
+
 
 _PROMOTIONS = {
-    StrategyLifecycle.DRAFT: StrategyLifecycle.RESEARCH_VALIDATED,
-    StrategyLifecycle.RESEARCH_VALIDATED: StrategyLifecycle.TRADE_PROXY_VALIDATED,
+    StrategyLifecycle.DRAFT: StrategyLifecycle.STUDY_VALIDATED,
+    StrategyLifecycle.STUDY_VALIDATED: StrategyLifecycle.TRADE_PROXY_VALIDATED,
     StrategyLifecycle.TRADE_PROXY_VALIDATED: StrategyLifecycle.EXECUTABLE_BACKTEST_VALIDATED,
     StrategyLifecycle.EXECUTABLE_BACKTEST_VALIDATED: StrategyLifecycle.ROBUSTNESS_VALIDATED,
     StrategyLifecycle.ROBUSTNESS_VALIDATED: StrategyLifecycle.PAPER_APPROVED,

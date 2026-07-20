@@ -7,7 +7,7 @@ import unittest
 from kairos.backtest.feed import MarketSnapshot
 from kairos.domain.identity import InstrumentId
 from kairos.domain.market_data import Quote
-from kairos.research_platform.snapshot import InstrumentSnapshot
+from kairos.study_platform.snapshot import InstrumentSnapshot
 from kairos.strategies import GovernedStrategyRuntime,StrategyContext
 from kairos.strategies.cash_and_carry import CashAndCarryConfig,CashAndCarryStrategy
 from kairos.strategies.covered_call import CoveredCallStrategy

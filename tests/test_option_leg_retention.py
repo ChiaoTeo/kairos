@@ -10,8 +10,8 @@ from kairos.backtest.feed import MarketSnapshot
 from kairos.domain.identity import AssetId, InstrumentId, VenueId
 from kairos.domain.market_data import Greeks, Quote
 from kairos.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from kairos.research_platform.retention import DeltaLegWatchlist
-from kairos.research_platform.snapshot import InstrumentSnapshot
+from kairos.study_platform.retention import DeltaLegWatchlist
+from kairos.study_platform.snapshot import InstrumentSnapshot
 from kairos.reference import ReferenceCatalog
 from kairos.reference.contracts import InstrumentDefinition
 from tests.reference_support import publish_test_instrument

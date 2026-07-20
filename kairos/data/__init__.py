@@ -3,7 +3,7 @@ from .acquisition import (
     AcquisitionEstimate, AcquisitionLimits, AcquisitionPlan, AcquisitionRequest, CoveragePlanner, ProviderConnector,
     ProviderRegistry, TimeRange,
 )
-from .client import DataQuery, DataUnavailableError, ResearchDataClient
+from .client import DataQuery, DataUnavailableError, DatasetClient, ResearchDataClient
 from .release_metadata import ensure_release_metadata, verify_release_metadata
 from .feed import ReplayEventFeed, ReplaySnapshotFeed, ReplaySpec
 from .contracts import (
@@ -19,9 +19,10 @@ from .curated import ConsolidatedTradeBuilder, ConsolidatedTradeInput, Consolida
 from .diagnostics import DataDiagnosticIssue, DataDiagnosticsService
 from .freshness import (
     LIVE_VIEW_CONFIGURED_FRESHNESS_POLICY, LIVE_VIEW_FRESHNESS_POLICIES, PAPER_LIVE_FRESHNESS_POLICY,
-    LiveViewFreshnessGateResult, LiveViewFreshnessPolicy, LiveViewSubscriptionBinding,
+    LiveViewFreshnessGateResult, LiveViewFreshnessMonitor, LiveViewFreshnessPolicy, LiveViewSubscriptionBinding,
     evaluate_live_view_freshness, freshness_gate_to_primitive,
-    find_live_view_manifest, live_view_channel_diagnostics, live_view_freshness_policy,
+    find_live_view_manifest, live_view_channel_diagnostics, live_view_freshness_evidence,
+    live_view_freshness_policy,
     live_view_manifest_path, load_live_view_manifest, update_live_view_manifest_freshness,
     resolve_live_view_subscription, write_live_view_manifest,
 )
@@ -29,10 +30,11 @@ from .quality import DatasetQualityService, QualityAssessment, QualityCheck
 from .preparation import (
     DataPreparationService, DataPromotionPolicyProfile, DataPromotionPolicyResult, PreparedDataset,
     BACKTEST_DEFAULT_POLICY, DATA_PROMOTION_POLICY_PROFILES, PRODUCTION_DEFAULT_POLICY, RESEARCH_DEFAULT_POLICY,
+    STUDY_DEFAULT_POLICY,
     data_promotion_policy_profile, evaluate_data_promotion_policy,
 )
 
-__all__ = ["DataCatalog", "ResearchDataClient", "ensure_release_metadata", "verify_release_metadata",
+__all__ = ["DataCatalog", "DatasetClient", "ResearchDataClient", "ensure_release_metadata", "verify_release_metadata",
            "AcquirePolicy", "CommonFields", "DataView",
            "DataProduct", "DataProductDefinition",
            "DataProductContract", "DataReleaseManifest", "DataSetContractArtifact",
@@ -48,9 +50,11 @@ __all__ = ["DataCatalog", "ResearchDataClient", "ensure_release_metadata", "veri
 __all__ += ["DataDiagnosticIssue", "DataDiagnosticsService"]
 __all__ += [
     "LIVE_VIEW_CONFIGURED_FRESHNESS_POLICY", "LIVE_VIEW_FRESHNESS_POLICIES", "PAPER_LIVE_FRESHNESS_POLICY",
-    "LiveViewFreshnessGateResult", "LiveViewFreshnessPolicy", "LiveViewSubscriptionBinding",
+    "LiveViewFreshnessGateResult", "LiveViewFreshnessMonitor", "LiveViewFreshnessPolicy",
+    "LiveViewSubscriptionBinding",
     "evaluate_live_view_freshness", "freshness_gate_to_primitive",
-    "find_live_view_manifest", "live_view_channel_diagnostics", "live_view_freshness_policy",
+    "find_live_view_manifest", "live_view_channel_diagnostics", "live_view_freshness_evidence",
+    "live_view_freshness_policy",
     "live_view_manifest_path", "load_live_view_manifest", "update_live_view_manifest_freshness",
     "resolve_live_view_subscription", "write_live_view_manifest",
 ]
@@ -58,5 +62,6 @@ __all__ += ["DatasetQualityService", "QualityAssessment", "QualityCheck"]
 __all__ += [
     "DataPreparationService", "DataPromotionPolicyProfile", "DataPromotionPolicyResult", "PreparedDataset",
     "BACKTEST_DEFAULT_POLICY", "DATA_PROMOTION_POLICY_PROFILES", "PRODUCTION_DEFAULT_POLICY",
-    "RESEARCH_DEFAULT_POLICY", "data_promotion_policy_profile", "evaluate_data_promotion_policy",
+    "RESEARCH_DEFAULT_POLICY", "STUDY_DEFAULT_POLICY", "data_promotion_policy_profile",
+    "evaluate_data_promotion_policy",
 ]

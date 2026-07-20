@@ -26,16 +26,17 @@ class StrategyRegistryTest(unittest.TestCase):
             root=Path(directory);registry=StrategyRegistry(root/"strategies");target=registry.register(spec,policy)
             evidence_file=root/"results.json";evidence_file.write_text("{}")
             digest=hashlib.sha256(evidence_file.read_bytes()).hexdigest()
-            evidence=PromotionEvidence(StrategyLifecycle.RESEARCH_VALIDATED,(str(evidence_file),),(digest,),"research-review",
+            evidence=PromotionEvidence(StrategyLifecycle.STUDY_VALIDATED,(str(evidence_file),),(digest,),"study-review",
                 Decimal("10000"),"signal evidence invalidated",datetime.now(timezone.utc).isoformat(),True)
-            promoted=registry.promote(spec,StrategyLifecycle.RESEARCH_VALIDATED,evidence)
-            self.assertEqual(promoted.lifecycle,StrategyLifecycle.RESEARCH_VALIDATED)
+            promoted=registry.promote(spec,StrategyLifecycle.STUDY_VALIDATED,evidence)
+            self.assertEqual(promoted.lifecycle,StrategyLifecycle.STUDY_VALIDATED)
             self.assertTrue((target/"promotions.jsonl").exists())
             record=json.loads((target/"promotions.jsonl").read_text().splitlines()[-1])
             bundle=target/record["evidence_bundle"]
             manifest=json.loads(bundle.read_text())
             self.assertEqual(manifest["kind"],"strategy_promotion_evidence_bundle")
-            self.assertEqual(manifest["to"],StrategyLifecycle.RESEARCH_VALIDATED.value)
+            self.assertEqual(manifest["to"],StrategyLifecycle.STUDY_VALIDATED.value)
+            self.assertEqual(manifest["evidence"]["evidence_paths"],[str(evidence_file)])
             self.assertEqual(manifest["evidence"]["evidence_hashes"],[digest])
             self.assertEqual(registry.status(spec.strategy_id,spec.version).latest_promotion_bundle,str(bundle))
             self.assertTrue((target/"manifest.json").exists())

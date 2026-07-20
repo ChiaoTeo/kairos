@@ -65,11 +65,20 @@ class OutputFormat(StrEnum):
 
 
 class RunMode(StrEnum):
-    RESEARCH = "research"
+    STUDY = "study"
+    RESEARCH = "study"
     BACKTEST = "backtest"
     HISTORICAL_SIMULATION = "historical-simulation"
     PAPER_TRADING = "paper-trading"
     LIVE = "live"
+
+    @classmethod
+    def _missing_(cls, value: object):
+        if str(value) == "research":
+            return cls.STUDY
+        if str(value) == "paper":
+            return cls.PAPER_TRADING
+        return None
 
 
 @dataclass(frozen=True, slots=True)

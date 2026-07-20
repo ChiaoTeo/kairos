@@ -13,9 +13,9 @@ from kairos.domain.identity import AssetId, InstrumentId, VenueId
 from kairos.domain.market_data import OptionChain
 from kairos.domain.market_data import Greeks, Quote
 from kairos.domain.product import IndexSpec, OptionRight, ProductType
-from kairos.research_platform.series import SeriesCaptureService, SeriesCaptureSpec
-from kairos.research_platform.data_store import MarketSnapshotCollectionPublisher
-from kairos.research_platform.spec import OptionChainCaptureSpec
+from kairos.study_platform.series import SeriesCaptureService, SeriesCaptureSpec
+from kairos.study_platform.data_store import MarketSnapshotCollectionPublisher
+from kairos.study_platform.spec import OptionChainCaptureSpec
 from kairos.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 

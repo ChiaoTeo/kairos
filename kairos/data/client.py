@@ -40,9 +40,9 @@ class DataUnavailableError(RuntimeError):
 
 
 class DataQuery:
-    """Lazy, reusable research query resolved against one immutable release at collection time."""
+    """Lazy, reusable dataset query resolved against one immutable release at collection time."""
 
-    def __init__(self, client: ResearchDataClient, dataset: DatasetLike, release_id: str, *, version: str | None,
+    def __init__(self, client: DatasetClient, dataset: DatasetLike, release_id: str, *, version: str | None,
                  start: datetime | str | None, end: datetime | str | None,
                  instruments: Iterable[str | InstrumentId] | None,
                  event_types: Iterable[str | MarketEventType] | None, fields: Iterable[FieldLike] | None,
@@ -95,17 +95,17 @@ class DataQuery:
         )
 
 
-class ResearchDataClient:
-    """One point-in-time-safe entry point for research data.
+class DatasetClient:
+    """One point-in-time-safe entry point for governed dataset releases.
 
-    Researchers address datasets by catalog ID/logical alias and never need to know
+    Users address datasets by catalog ID/logical alias and never need to know
     whether the physical source is typed Parquet, event Parquet, or a
     MarketReplayDataset.  Arrow is the native return type; pandas/polars are conversion formats.
     """
 
     def __init__(self, root: str | Path = "data", *, catalog_path: str | Path | None = None,
                  dataset_root: str | Path | None = None, providers: ProviderRegistry | None = None,
-                 run_mode: RunMode | str = RunMode.RESEARCH, acquisition_limits: AcquisitionLimits = AcquisitionLimits()) -> None:
+                 run_mode: RunMode | str = RunMode.STUDY, acquisition_limits: AcquisitionLimits = AcquisitionLimits()) -> None:
         self.root = Path(root)
         self.catalog = DataCatalog(self.root, catalog_path)
         self.events = ParquetMarketEventRepository(self.root / "canonical" / "market")
@@ -122,7 +122,7 @@ class ResearchDataClient:
             DatasetStatus.APPROVED_FOR_PRODUCTION,
         }:
             raise PermissionError(
-                f"dataset release {release.release_id!r} has status {release.status.value!r} and is not approved for research"
+                f"dataset release {release.release_id!r} has status {release.status.value!r} and is not approved for governed use"
             )
         return release
 
@@ -352,7 +352,7 @@ class ResearchDataClient:
         path = self.root / release.relative_path / "collection.json"
         if not path.exists():
             return None
-        from kairos.research_platform.data_store import CollectionManifest
+        from kairos.study_platform.data_store import CollectionManifest
         from kairos.storage.codec import from_primitive
         return from_primitive(json.loads(path.read_text(encoding="utf-8")), CollectionManifest)
 
@@ -377,7 +377,7 @@ class ResearchDataClient:
         if self.run_mode in {RunMode.PAPER_TRADING, RunMode.LIVE}:
             if release.status is not DatasetStatus.APPROVED_FOR_PRODUCTION or release.quality_level is not QualityLevel.PRODUCTION:
                 raise PermissionError(f"{self.run_mode.value} requires approved_for_production Q4 data")
-        if self.run_mode is not RunMode.RESEARCH and release.content_hash is None:
+        if self.run_mode is not RunMode.STUDY and release.content_hash is None:
             raise ValueError(f"{self.run_mode.value} requires a frozen release content hash")
 
     def sql(self, query: str, *, datasets: dict[str, str], output: Literal["arrow", "pandas", "rows"] = "arrow"):
@@ -672,10 +672,13 @@ def _arrow():
         import pyarrow.csv as csv
         import pyarrow.dataset as ds
     except ImportError as error:
-        raise RuntimeError("ResearchDataClient requires the 'data' optional dependency") from error
+        raise RuntimeError("DatasetClient requires the 'data' optional dependency") from error
     return pa, csv, ds
 
 
 _DECIMAL_FIELDS = frozenset({"bid", "ask", "bid_size", "ask_size", "price", "size", "open", "high", "low",
                              "close", "volume", "vwap", "last_trade_price", "last_trade_size",
                              "vendor_implied_volatility", "vendor_open_interest", "vendor_fmv"})
+
+
+ResearchDataClient = DatasetClient

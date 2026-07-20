@@ -16,8 +16,8 @@ from kairos.domain.market_data import OptionChain
 from kairos.domain.market_data import Greeks, Quote
 from kairos.domain.product import IndexSpec, ProductType
 from kairos.__main__ import main
-from kairos.research_platform.option_capture import OptionResearchCaptureService
-from kairos.research_platform.spec import OptionChainCaptureSpec
+from kairos.study_platform.option_capture import OptionResearchCaptureService
+from kairos.study_platform.spec import OptionChainCaptureSpec
 from kairos.storage.repository import FileResearchRepository
 from kairos.reference import ReferenceCatalog
 from kairos.reference.contracts import InstrumentDefinition

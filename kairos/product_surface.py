@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from kairos.application import runtime_feed_plan
 from kairos.data import (
     DataCatalog,
     DataReleaseManifest,
@@ -30,7 +31,7 @@ from kairos.data import (
     stable_artifact_hash,
     write_live_view_manifest,
 )
-from kairos.research_platform import ensure_sma_tutorial_dataset
+from kairos.study_platform import ensure_sma_tutorial_dataset
 
 
 BUILTIN_DOWNLOAD_KEYS = {
@@ -106,7 +107,7 @@ class StrategyProductApi:
 class RunProductApi:
     root: str | Path = "data"
 
-    def start_study(self, study: str, *, mode: str = "research") -> dict[str, object]:
+    def start_study(self, study: str, *, mode: str = "study") -> dict[str, object]:
         return run_start(_args(self.root, study=study, snapshot=None, mode=mode))
 
     def start_snapshot(self, snapshot: str, *, mode: str) -> dict[str, object]:
@@ -406,6 +407,7 @@ def strategy_freeze(args) -> dict[str, object]:
 
 def run_start(args) -> dict[str, object]:
     root = Path(args.lake_root)
+    mode = _canonical_run_mode(args.mode)
     if args.study:
         target_id = args.study
         target_kind = "study"
@@ -417,12 +419,13 @@ def run_start(args) -> dict[str, object]:
         target_kind = "strategy"
         target = _load_strategy_lock(root, strategy_id, version)
         target_hash = target["lock_hash"]
-    live_bindings = _paper_live_subscription_bindings(root, target) if args.mode in {"paper", "live"} else ()
+    live_bindings = _paper_live_subscription_bindings(root, target) if mode in {"paper", "live"} else ()
+    feed_plan = runtime_feed_plan(mode, live_bindings) if live_bindings else None
     freshness_gates = tuple(
         {"name": item["name"], "dataset": item["dataset"], **item["freshness_gate"]}
         for item in live_bindings
     )
-    material = {"target_kind": target_kind, "target_id": target_id, "mode": args.mode, "target_hash": target_hash, "at": _now()}
+    material = {"target_kind": target_kind, "target_id": target_id, "mode": mode, "target_hash": target_hash, "at": _now()}
     run_id = f"run_{sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:16]}"
     directory = root / "runs" / target_id / run_id
     manifest = {
@@ -430,12 +433,16 @@ def run_start(args) -> dict[str, object]:
         "kind": "run.manifest",
         "schema_version": 1,
         "run_id": run_id,
-        "mode": args.mode,
+        "mode": mode,
         "target": {"kind": target_kind, "id": target_id, "hash": target_hash},
         "input_artifacts": _run_input_artifacts(target_kind, target),
         "runtime_contract": {
-            "mode": args.mode,
+            "mode": mode,
             **({"feed_bindings": list(live_bindings)} if live_bindings else {}),
+            **({"feed_runtime_plan": {**feed_plan.manifest(), "plan_hash": feed_plan.plan_hash}} if feed_plan else {}),
+            **({"feed_runtime_bundle": {
+                **feed_plan.service_bundle_manifest(), "bundle_hash": feed_plan.service_bundle_hash,
+            }} if feed_plan else {}),
             **({"freshness_gates": list(freshness_gates)} if freshness_gates else {}),
         },
         "started_at": material["at"],
@@ -445,6 +452,12 @@ def run_start(args) -> dict[str, object]:
     _write_json(directory / "manifest.json", manifest)
     _write_json(directory / "reports" / "summary.json", {"run_id": run_id, "passed": True, "target_hash": target_hash})
     return {**manifest, "workspace": str(directory), "manifest": str(directory / "manifest.json")}
+
+
+def _canonical_run_mode(mode: str) -> str:
+    if mode == "research":
+        return "study"
+    return mode
 
 
 def run_inspect(args) -> dict[str, object]:

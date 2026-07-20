@@ -12,7 +12,7 @@ from kairos.domain.identity import InstrumentId
 from kairos.reference.catalog import ReferenceCatalog
 from kairos.reference.contracts import EconomicProduct, InstrumentDefinition, InstrumentReference, SettlementTermsDefinition
 from kairos.reference.repository import instrument_to_primitive
-from kairos.research_platform.snapshot import DataQualityIssue, InstrumentSnapshot
+from kairos.study_platform.snapshot import DataQualityIssue, InstrumentSnapshot
 from kairos.storage.codec import to_primitive
 
 

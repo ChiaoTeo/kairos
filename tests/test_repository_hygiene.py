@@ -244,7 +244,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         application_init = (ROOT / "kairos" / "application" / "__init__.py").read_text(encoding="utf-8")
         pricing_init = (ROOT / "kairos" / "pricing" / "__init__.py").read_text(encoding="utf-8")
         treasury_init = (ROOT / "kairos" / "treasury" / "__init__.py").read_text(encoding="utf-8")
-        research_platform_init = (ROOT / "kairos" / "research_platform" / "__init__.py").read_text(encoding="utf-8")
+        study_platform_init = (ROOT / "kairos" / "study_platform" / "__init__.py").read_text(encoding="utf-8")
         self.assertTrue((ROOT / "kairos" / "connectors" / "__init__.py").exists())
         self.assertFalse((ROOT / "kairos" / "research").exists())
         self.assertNotIn('"adapters"', kairos_init)
@@ -254,7 +254,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertNotIn('"market_slice_storage"', kairos_init)
         self.assertNotIn('"market_slice_curation"', kairos_init)
         self.assertNotIn('"research"', kairos_init)
-        self.assertIn('"research_platform"', kairos_init)
+        self.assertIn('"study_platform"', kairos_init)
         self.assertNotIn('"Trader"', kairos_init)
         self.assertNotIn("TradingApplication", application_init)
         self.assertNotIn("AsyncTradingRuntime", application_init)
@@ -265,15 +265,16 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertNotIn('"ProductSpec"', domain_init)
         self.assertNotIn("live_paper_composition", application_init)
         self.assertIn("paper_trading_composition", application_init)
+        self.assertIn("study_composition", application_init)
         self.assertNotIn('"ValuationService"', pricing_init)
         self.assertNotIn('"TreasuryService"', treasury_init)
-        self.assertNotIn('"ResearchSpec"', research_platform_init)
-        self.assertNotIn('"service"', research_platform_init)
-        self.assertNotIn('"analyzer"', research_platform_init)
-        self.assertNotIn('"selector"', research_platform_init)
-        self.assertIn('"option_capture"', research_platform_init)
-        self.assertIn('"option_snapshot_analysis"', research_platform_init)
-        self.assertIn('"option_universe_selector"', research_platform_init)
+        self.assertNotIn('"ResearchSpec"', study_platform_init)
+        self.assertNotIn('"service"', study_platform_init)
+        self.assertNotIn('"analyzer"', study_platform_init)
+        self.assertNotIn('"selector"', study_platform_init)
+        self.assertIn('"option_capture"', study_platform_init)
+        self.assertIn('"option_snapshot_analysis"', study_platform_init)
+        self.assertIn('"option_universe_selector"', study_platform_init)
         for path in (
             ROOT / "kairos" / "connectors" / "__init__.py",
             ROOT / "kairos" / "connectors" / "__init__.py",
@@ -312,8 +313,8 @@ class RepositoryHygieneTests(unittest.TestCase):
             "import kairos.treasury.transfer_models",
             "from kairos.volatility.models",
             "import kairos.volatility.models",
-            "from kairos.research_platform.validation.models",
-            "import kairos.research_platform.validation.models",
+            "from kairos.study_platform.validation.models",
+            "import kairos.study_platform.validation.models",
             "from kairos.reference.models",
             "import kairos.reference.models",
             "from kairos.pricing.models",
@@ -333,6 +334,52 @@ class RepositoryHygieneTests(unittest.TestCase):
                     stripped = line.strip()
                     if stripped.startswith(legacy_imports):
                         offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
+        self.assertEqual(offenders, [])
+
+    def test_user_data_guides_use_dataset_client_as_public_name(self):
+        offenders = []
+        for path in (
+            ROOT / "README.md",
+            ROOT / "docs" / "data_layout.md",
+            ROOT / "docs" / "research_data_guide.md",
+            ROOT / "docs" / "data_usage_product_design.md",
+        ):
+            text = path.read_text(encoding="utf-8")
+            if "ResearchDataClient" in text:
+                offenders.append(str(path.relative_to(ROOT)))
+        data_init = (ROOT / "kairos" / "data" / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn('"DatasetClient"', data_init)
+        self.assertEqual(offenders, [])
+
+    def test_run_product_guides_use_study_mode_as_public_name(self):
+        offenders = []
+        for path in (
+            ROOT / "docs" / "data_usage_product_design.md",
+            ROOT / "README.md",
+        ):
+            text = path.read_text(encoding="utf-8")
+            if "--mode research" in text:
+                offenders.append(str(path.relative_to(ROOT)))
+        application_modes = (ROOT / "kairos" / "application" / "modes.py").read_text(encoding="utf-8")
+        data_contracts = (ROOT / "kairos" / "data" / "contracts.py").read_text(encoding="utf-8")
+        self.assertIn("def study_composition", application_modes)
+        self.assertIn('STUDY = "study"', data_contracts)
+        self.assertEqual(offenders, [])
+
+    def test_strategy_guides_use_study_validated_as_public_lifecycle_name(self):
+        offenders = []
+        for path in (
+            ROOT / "README.md",
+            ROOT / "docs" / "data_usage_product_design.md",
+        ):
+            text = path.read_text(encoding="utf-8")
+            for marker in ("RESEARCH_VALIDATED", "research-default"):
+                if marker in text:
+                    offenders.append(f"{path.relative_to(ROOT)} contains {marker}")
+        strategy_contract = (ROOT / "kairos" / "domain" / "strategy_contract.py").read_text(encoding="utf-8")
+        data_init = (ROOT / "kairos" / "data" / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn("STUDY_VALIDATED", strategy_contract)
+        self.assertIn('"STUDY_DEFAULT_POLICY"', data_init)
         self.assertEqual(offenders, [])
 
     def test_new_code_does_not_import_legacy_connector_base_or_service_modules(self):

@@ -7,7 +7,8 @@ import unittest
 
 from kairos.data import (
     DataCatalog, DataProductContract, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease, DatasetStatus,
-    DataPreparationService, DataPromotionPolicyProfile, DatasetQualityService, QualityLevel, ResearchDataClient,
+    DataPreparationService, DataPromotionPolicyProfile, DatasetQualityService, QualityLevel, DatasetClient,
+    STUDY_DEFAULT_POLICY,
     data_promotion_policy_profile,
 )
 from kairos.storage.data_lake import write_daily_dataset
@@ -59,7 +60,7 @@ class DatasetQualityAssessmentTests(unittest.TestCase):
             self.assertEqual(assessment.level, QualityLevel.BACKTEST)
             assessed = DataCatalog(root).release(release.release_id)
             self.assertEqual(assessed.quality_level, QualityLevel.BACKTEST)
-            prepared = DataPreparationService(ResearchDataClient(root)).prepare(
+            prepared = DataPreparationService(DatasetClient(root)).prepare(
                 release.release_id, start=start, end=start + timedelta(days=400),
                 minimum_quality=QualityLevel.BACKTEST, promote=True,
                 actor="test", reason="typed OHLCV quality passed",
@@ -140,14 +141,14 @@ class DatasetQualityAssessmentTests(unittest.TestCase):
             self.assertFalse(checks["backtest_history"].passed)
             self.assertEqual(checks["backtest_history"].severity, "diagnostic")
             self.assertEqual(DataCatalog(root).release(release.release_id).status, DatasetStatus.APPROVED_FOR_RESEARCH)
-            prepared = DataPreparationService(ResearchDataClient(root)).prepare(
+            prepared = DataPreparationService(DatasetClient(root)).prepare(
                 release.release_id, start=start, end=end,
                 minimum_quality=QualityLevel.RESEARCH, promote=False,
             )
             self.assertEqual(prepared.policy.diagnostics, ("backtest_history",))
             self.assertTrue(prepared.policy.passed)
             with self.assertRaisesRegex(RuntimeError, "requires Q3"):
-                DataPreparationService(ResearchDataClient(root)).prepare(
+                DataPreparationService(DatasetClient(root)).prepare(
                     release.release_id, start=start, end=end,
                     minimum_quality=QualityLevel.BACKTEST, promote=True,
                 )
@@ -181,7 +182,7 @@ class DatasetQualityAssessmentTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(RuntimeError, "strict-research"):
-                DataPreparationService(ResearchDataClient(root)).prepare(
+                DataPreparationService(DatasetClient(root)).prepare(
                     release.release_id, start=start, end=end,
                     minimum_quality=QualityLevel.RESEARCH, promotion_policy=strict_research_policy,
                 )
@@ -229,12 +230,14 @@ class DatasetQualityAssessmentTests(unittest.TestCase):
             catalog.save()
 
             with self.assertRaisesRegex(RuntimeError, "contract-q2-strict"):
-                DataPreparationService(ResearchDataClient(root)).prepare(
+                DataPreparationService(DatasetClient(root)).prepare(
                     release.release_id, start=start, end=end,
                     minimum_quality=QualityLevel.RESEARCH,
                 )
 
     def test_product_contract_can_reference_builtin_promotion_policy_profile(self) -> None:
+        self.assertIs(data_promotion_policy_profile("study-default"), STUDY_DEFAULT_POLICY)
+        self.assertIs(data_promotion_policy_profile("research-default"), STUDY_DEFAULT_POLICY)
         self.assertEqual(
             data_promotion_policy_profile("backtest-default").minimum_assessment_level,
             QualityLevel.BACKTEST,
@@ -277,7 +280,7 @@ class DatasetQualityAssessmentTests(unittest.TestCase):
             catalog.register_release(release)
             catalog.save()
 
-            prepared = DataPreparationService(ResearchDataClient(root)).prepare(
+            prepared = DataPreparationService(DatasetClient(root)).prepare(
                 release.release_id, start=start, end=start + timedelta(days=400),
                 minimum_quality=QualityLevel.BACKTEST, promote=True,
                 actor="test", reason="builtin policy profile passed",

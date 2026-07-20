@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import Mapping
 
 from .catalog import DataCatalog
-from .client import DataUnavailableError, ResearchDataClient
+from .client import DataUnavailableError, DatasetClient
 from .contracts import DatasetStatus, QualityLevel
 from .quality import DatasetQualityService, QualityAssessment
 
@@ -42,19 +42,21 @@ class DataPromotionPolicyProfile:
     required_diagnostics: tuple[str, ...] = ()
 
 
-RESEARCH_DEFAULT_POLICY = DataPromotionPolicyProfile("research-default", QualityLevel.RESEARCH)
+STUDY_DEFAULT_POLICY = DataPromotionPolicyProfile("study-default", QualityLevel.RESEARCH)
+RESEARCH_DEFAULT_POLICY = STUDY_DEFAULT_POLICY
 BACKTEST_DEFAULT_POLICY = DataPromotionPolicyProfile("backtest-default", QualityLevel.BACKTEST)
 PRODUCTION_DEFAULT_POLICY = DataPromotionPolicyProfile("production-default", QualityLevel.PRODUCTION)
 
 DATA_PROMOTION_POLICY_PROFILES: Mapping[str, DataPromotionPolicyProfile] = MappingProxyType({
-    RESEARCH_DEFAULT_POLICY.name: RESEARCH_DEFAULT_POLICY,
+    "research-default": STUDY_DEFAULT_POLICY,
+    STUDY_DEFAULT_POLICY.name: STUDY_DEFAULT_POLICY,
     BACKTEST_DEFAULT_POLICY.name: BACKTEST_DEFAULT_POLICY,
     PRODUCTION_DEFAULT_POLICY.name: PRODUCTION_DEFAULT_POLICY,
 })
 
 
 class DataPreparationService:
-    def __init__(self, client: ResearchDataClient) -> None:
+    def __init__(self, client: DatasetClient) -> None:
         self.client = client
 
     def prepare(self, dataset, *, start: datetime, end: datetime, minimum_quality: QualityLevel,

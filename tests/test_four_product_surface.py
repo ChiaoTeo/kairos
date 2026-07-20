@@ -94,6 +94,16 @@ class FourProductSurfaceTests(unittest.TestCase):
         self.assertEqual(feed["event_source_contract"], "EventSource[DataSetRecord]")
         self.assertEqual(feed["channel_contract"], "BoundedEventChannel")
         self.assertTrue(feed["freshness_gate"]["passed"])
+        plan = started["runtime_contract"]["feed_runtime_plan"]
+        self.assertEqual(plan["services"][0]["service_id"], f"feed:sentiment:{feed['live_view_id']}")
+        self.assertEqual(plan["services"][0]["live_view_id"], feed["live_view_id"])
+        self.assertEqual(plan["services"][0]["capture_policy"], "raw_and_canonical")
+        self.assertEqual(len(plan["plan_hash"]), 64)
+        bundle = started["runtime_contract"]["feed_runtime_bundle"]
+        self.assertEqual(bundle["plan_hash"], plan["plan_hash"])
+        self.assertEqual(bundle["feed_service_ids"], [f"feed:sentiment:{feed['live_view_id']}"])
+        self.assertEqual(bundle["monitor_service_ids"], [f"feed-monitor:sentiment:{feed['live_view_id']}"])
+        self.assertEqual(len(bundle["bundle_hash"]), 64)
         freshness = started["runtime_contract"]["freshness_gates"][0]
         self.assertTrue(freshness["passed"])
         self.assertEqual(freshness["freshness_status"], "healthy")
@@ -272,7 +282,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "--file",
                 str(factor_file),
             )
-            research_run = command(root, "run", "start", "--study", "momentum-study", "--mode", "research")
+            study_run = command(root, "run", "start", "--study", "momentum-study", "--mode", "study")
             study_lock = command(root, "study", "freeze", "momentum-study", "--version", "1.0.0")
             strategy = command(
                 root,
@@ -303,7 +313,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "run",
                 "compare",
                 "--first",
-                research_run["run_id"],
+                study_run["run_id"],
                 "--second",
                 backtest_run["run_id"],
             )
@@ -322,6 +332,8 @@ class FourProductSurfaceTests(unittest.TestCase):
         self.assertEqual(live_view["live_data_plane"]["channel_contract"], "BoundedEventChannel")
         self.assertEqual(live_view["live_data_plane"]["freshness"]["max_age_seconds"], 60)
         self.assertEqual(study["product"], "study")
+        self.assertEqual(study_run["mode"], "study")
+        self.assertEqual(study_run["runtime_contract"]["mode"], "study")
         self.assertEqual(bars["release_id"], "fixture:sma-bars-v1")
         self.assertEqual(sentiment["release_id"], written["release_id"])
         self.assertEqual(sentiment["contract_hash"], written["contract_hash"])
@@ -348,3 +360,13 @@ class FourProductSurfaceTests(unittest.TestCase):
         self.assertFalse(compared["same_target"])
         self.assertFalse(compared["same_mode"])
         self.assertTrue(backtest_manifest_exists)
+
+    def test_legacy_research_run_mode_writes_study_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            command(root, "init")
+            command(root, "study", "start", "legacy-mode-study")
+            started = command(root, "run", "start", "--study", "legacy-mode-study", "--mode", "research")
+
+        self.assertEqual(started["mode"], "study")
+        self.assertEqual(started["runtime_contract"]["mode"], "study")

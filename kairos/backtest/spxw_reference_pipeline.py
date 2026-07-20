@@ -7,7 +7,7 @@ from pathlib import Path
 from kairos.backtest.repository import BacktestRepository
 from kairos.backtest.result import BacktestConfig
 from kairos.backtest.experiment_runner import BacktestExperimentRunner
-from kairos.data import DatasetStatus, QualityLevel, ResearchDataClient, RunMode
+from kairos.data import DatasetStatus, QualityLevel, DatasetClient, RunMode
 from kairos.risk.limits import RiskLimits
 from kairos.strategies.bull_put_spread import BullPutSpreadConfig
 
@@ -21,7 +21,7 @@ def build_spxw_reference_pipeline(
     curated_slice_release_id: str,
 ) -> dict[str, object]:
     lake = Path(lake_root)
-    client = ResearchDataClient(lake, run_mode=RunMode.BACKTEST)
+    client = DatasetClient(lake, run_mode=RunMode.BACKTEST)
     catalog = client.catalog
     event_release = catalog.release(event_release_id)
     source_release = catalog.release(source_slice_release_id)

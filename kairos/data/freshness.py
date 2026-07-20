@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
+from inspect import isawaitable
 import json
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping
+from typing import Awaitable, Callable, Mapping
 
 from .contracts import LiveViewManifest
 
@@ -53,6 +55,28 @@ class LiveViewSubscriptionBinding:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class LiveViewFreshnessMonitor:
+    manifest_path: Path
+    evidence_provider: Callable[[], Mapping[str, object] | Awaitable[Mapping[str, object]]]
+    interval_seconds: float = 5.0
+
+    def __post_init__(self) -> None:
+        if self.interval_seconds <= 0:
+            raise ValueError("Live View freshness monitor interval must be positive")
+
+    async def run(self) -> None:
+        while True:
+            await self.poll_once()
+            await asyncio.sleep(self.interval_seconds)
+
+    async def poll_once(self) -> LiveViewManifest:
+        evidence = self.evidence_provider()
+        if isawaitable(evidence):
+            evidence = await evidence
+        return update_live_view_manifest_freshness(self.manifest_path, evidence)
+
+
 LIVE_VIEW_CONFIGURED_FRESHNESS_POLICY = LiveViewFreshnessPolicy(
     "live-view-configured",
     require_max_age=True,
@@ -88,6 +112,41 @@ def live_view_channel_diagnostics(value: Mapping[str, object]) -> Mapping[str, o
         "sequence_gaps": _optional_int(value.get("sequence_gaps") or value.get("sequence_gap_count")) or 0,
         "conflated": _optional_int(value.get("conflated")) or 0,
         "reconnects": _optional_int(value.get("reconnect_count") or value.get("reconnects")) or 0,
+    }
+
+
+def live_view_freshness_evidence(
+    service: object,
+    channel: object,
+    *,
+    source: str,
+    stream_id: str,
+) -> Mapping[str, object]:
+    metrics = getattr(channel, "metrics", None)
+    capture = getattr(service, "canonical_capture", None)
+    capture_manifest = getattr(capture, "_finalized", None)
+    event_count = _optional_int(getattr(service, "canonical_events", None)) or 0
+    ignored = _optional_int(getattr(service, "ignored_messages", None)) or 0
+    dropped = _optional_int(getattr(metrics, "dropped", None)) or 0
+    overflow = _optional_int(getattr(metrics, "overflow", None)) or 0
+    sequence_gaps = _optional_int(getattr(metrics, "sequence_gaps", None)) or dropped
+    passed = event_count > 0 and ignored == 0 and dropped == 0 and overflow == 0 and sequence_gaps == 0
+    return {
+        "passed": passed,
+        "source": source,
+        "stream_id": stream_id,
+        "event_count": event_count,
+        "raw_message_count": _optional_int(getattr(service, "raw_messages", None)) or event_count,
+        "canonical_event_count": event_count,
+        "ignored_message_count": ignored,
+        "reconnect_count": _optional_int(getattr(service, "reconnects", None)) or 0,
+        "channel_capacity": _optional_int(getattr(metrics, "capacity", None)),
+        "peak_channel_depth": _optional_int(getattr(metrics, "peak_depth", None)),
+        "channel_dropped": dropped,
+        "channel_overflow": overflow,
+        "sequence_gaps": sequence_gaps,
+        "artifact": str(getattr(capture_manifest, "event_path", "") or ""),
+        "audit_hash": str(getattr(capture_manifest, "content_sha256", "") or ""),
     }
 
 

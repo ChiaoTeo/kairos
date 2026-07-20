@@ -43,7 +43,7 @@ Risk Analytics
 
 - `kairos.domain`：Instrument、InstrumentContractSpec、MarketEvent、Intent；
 - `kairos.reference`：内部 InstrumentId 与 ListingDefinition 的 point-in-time 映射；
-- `kairos.research_platform`：snapshot、series capture、数据质量问题；
+- `kairos.study_platform`：snapshot、series capture、数据质量问题；
 - `kairos.backtest`：确定性 feed/clock、无同 slice 成交、fill model、结算和 replay；
 - `kairos.accounting`：Ledger 与 Portfolio；
 - `kairos.execution` / `kairos.orchestration`：执行计划、路由、对账和 kill switch；
