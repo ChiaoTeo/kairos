@@ -102,7 +102,7 @@ Frozen study datasets and deterministic backtests
 - `kairos.reference` 中内部 `InstrumentId` 与外部 listing 的映射；
 - `kairos.data` 中 Dataset Catalog、canonical pipeline 和 metadata；
 - `kairos.storage` 中原子写入、SHA-256、coverage 和 manifest；
-- `kairos.research` 中 snapshot、series capture、追加式 session 和质量问题；
+- `kairos.research_platform` 中 snapshot、series capture、追加式 session 和质量问题；
 - `kairos.backtest` 中确定性 feed、point-in-time universe、审计哈希和 replay；
 - UTC、ISO 8601、`[start,end)` 和 `available_time` 数据湖规范；
 - source、canonical、features、studies 四层目录所有权。
@@ -780,7 +780,7 @@ Massive：
 | 研究与回测桥接 | `MassiveMarketSnapshotBuilder` 生成现有 `MarketReplayDataset/MarketSnapshot` |
 | SPXW 合成远期 | 缺少官方指数 bar 时，用新鲜 Call/Put 配对报价按 put-call parity 构造中位数远期；质量信息和 manifest source 显式标记 |
 | 实时恢复 | raw journal、reconnect、sequence-gap 和 historical-backfill hooks |
-| 人工数据体检 | `massive_data_quality.ipynb` 与 `massive_research_readiness.ipynb`，均已用 HTTPS smoke 数据无界面执行 |
+| 人工数据体检 | `massive_data_quality.ipynb` 与 `massive_research_diagnostics.ipynb`，均已用 HTTPS smoke 数据无界面执行 |
 | 热门合约探索 | `spxw_popular_options_2026.ipynb` 读取受管 Day Aggregates Dataset，展示具体 ticker 排名和每日滚动的最活跃/0DTE ATM Call-Put 日线；不在 Notebook 下载数据 |
 | NVDA 年度探索 | `nvda_options_2026.ipynb` 读取受管 NVDA 股票/期权/IV Dataset，展示日 K、全量 IV 密度、近 ATM IV 和最新微笑；不在 Notebook 下载数据 |
 

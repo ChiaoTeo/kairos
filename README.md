@@ -8,7 +8,7 @@
 - 多账户、多资产、reporting currency、Funding、公司行为、行权/指派、到期结算；
 - 确定性回测、paper/testnet 编排、对账、事件日志与 kill switch。
 
-`kairos` 是唯一的产品、CLI 和 Python 包名；旧 adapter 命名只作为兼容实现层逐步收敛。
+`kairos` 是唯一的产品、CLI 和 Python 包名；外部系统边界统一使用 `connectors`、`ports`、`Gateway`、`Client`、`Provider` 等职责命名。
 
 > 第一次使用请从 [第一次研究：从一个假设走到可拒绝的 SMA 策略](docs/tutorial_first_research.md) 开始，不要直接连接 Paper 或 Live。
 
@@ -115,7 +115,7 @@ AssetId = 记账单位
 
 | 名称 | 定义 | 不应被当成什么 |
 | --- | --- | --- |
-| `DataProductDefinition` / `DatasetKey` | 稳定的逻辑数据名，如 `market.ohlcv.crypto.binance.btc-usdt.1h` | 不是某次下载，也不保证内容永远不变；`DataProductDefinition` 是兼容别名 |
+| `DataProductDefinition` / `DataProduct` / `DatasetKey` | 稳定的逻辑数据名，如 `market.ohlcv.crypto.binance.btc-usdt.1h` | 不是某次下载，也不保证内容永远不变；`DataProduct` 是 `DataProductDefinition` 的短别名 |
 | `DatasetRelease` | 某个逻辑数据产品的一次不可变发布，带版本、内容 hash、时间范围和质量状态 | 不是“latest”这样的浮动引用 |
 | Alias | 指向 Release 的便利名称 | 不能用于要求严格复现的最终证据；应记录解析后的 Release ID/hash |
 | `DatasetLayer` | 数据加工层级：Source、Canonical、Curated、Features、Studies | 不是质量等级 |
@@ -275,8 +275,7 @@ SMA 主链使用新的 Strategy Release 入口：
   --artifact-root example-output/sma-shadow/artifacts
 ```
 
-`run backtest-sma`、`run simulate-sma`、`run paper-sma` 和 `run shadow-sma`
-仍保留兼容；新脚本优先使用带 `--strategy` 的通用入口。
+新脚本统一使用带 `--strategy` 的通用入口；旧的策略专用运行命令不再作为产品入口展示。
 
 真实行情模拟盘不需要账户凭据，也不会向 Binance 下单；它只拉公共现货 K 线，保存为可重放 capture，
 再进入模拟成交链路：
@@ -432,7 +431,7 @@ OCC ticker、OHLC 和 `window_start`，再写入按月分区的 ZSTD Parquet。N
 数据落地后用两本 Notebook 做人工体检；它们只读取受管数据，不会发起 API 请求：
 
 - [`examples/massive_data_quality.ipynb`](examples/massive_data_quality.ipynb)：HTTPS lineage、Source receipt、事件覆盖、延迟、点差和重放视图；
-- [`examples/massive_research_readiness.ipynb`](examples/massive_research_readiness.ipynb)：MarketSnapshot、报价覆盖、标的价格、内部 IV/Greeks 和 feature。
+- [`examples/massive_research_diagnostics.ipynb`](examples/massive_research_diagnostics.ipynb)：MarketSnapshot、报价覆盖、标的价格、内部 IV/Greeks 和 feature。
 - [`examples/spxw_popular_options_2026.ipynb`](examples/spxw_popular_options_2026.ipynb)：读取完整 2026 YTD Day Aggregates，展示具体 ticker 热门榜，以及每日滚动的最活跃 Call/Put、0DTE ATM Call/Put、成交量和活跃合约数。
 - [`examples/nvda_options_2026.ipynb`](examples/nvda_options_2026.ipynb)：展示 NVDA 2026 YTD 调整后日 K 线，并对全部 NVDA OPRA 期权日聚合展示内部 close-based IV 密度、近 ATM IV 时间序列和波动率微笑。
 

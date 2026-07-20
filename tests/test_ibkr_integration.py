@@ -10,7 +10,7 @@ from kairos.connectors.ibkr.account_gateway import IbkrAccountGateway
 from kairos.connectors.ibkr.session import IbkrSession
 from kairos.connectors.ibkr.research import IbkrSpxwResearchProvider
 from kairos.domain.identity import AccountKey, AccountType, VenueId
-from kairos.research.spec import OptionChainCaptureSpec
+from kairos.research_platform.spec import OptionChainCaptureSpec
 
 
 @unittest.skipUnless(os.getenv("RUN_IBKR_INTEGRATION") == "1", "set RUN_IBKR_INTEGRATION=1 to connect to IBKR")

@@ -12,8 +12,8 @@ from kairos.domain.market_data import Quote
 from kairos.domain.product import ContractType, FutureSpec, ProductType
 from kairos.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
-from kairos.research.normalized_series import NormalizedSeriesCaptureService
-from kairos.research.series import SeriesCaptureSpec
+from kairos.research_platform.normalized_series import NormalizedSeriesCaptureService
+from kairos.research_platform.series import SeriesCaptureSpec
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)

@@ -11,8 +11,8 @@ from .supervisor import (
     write_soak_artifact,
 )
 from .service_supervisor import (
-    AsyncServiceSupervisor, AsyncTaskSupervisor, ManagedServiceSnapshot, ManagedServiceSpec, ManagedServiceStatus,
-    ManagedTaskSnapshot, ManagedTaskSpec, ManagedTaskStatus, ServiceCriticality, ServiceFault, TaskCriticality, TaskFault,
+    AsyncServiceSupervisor, ManagedServiceSnapshot, ManagedServiceSpec, ManagedServiceStatus,
+    ServiceCriticality, ServiceFault,
 )
 from .async_runtime import AsyncKairosRuntime
 from .modes import (
@@ -37,7 +37,7 @@ __all__ = [
     "RuntimeStatus", "SystemClock", "KairosApplication",
     "RecoveryBackgroundService", "RuntimeBackgroundService", "RuntimeSupervisor", "SupervisorCycle",
     "write_soak_artifact",
-    "AsyncServiceSupervisor", "AsyncTaskSupervisor",
+    "AsyncServiceSupervisor",
     "ManagedServiceSnapshot", "ManagedServiceSpec", "ManagedServiceStatus", "ServiceCriticality", "ServiceFault",
     "AsyncKairosRuntime",
     "RunModeComposition", "backtest_composition", "historical_simulation_composition",

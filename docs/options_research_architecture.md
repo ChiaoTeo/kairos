@@ -43,7 +43,7 @@ Risk Analytics
 
 - `kairos.domain`：Instrument、InstrumentContractSpec、MarketEvent、Intent；
 - `kairos.reference`：内部 InstrumentId 与 ListingDefinition 的 point-in-time 映射；
-- `kairos.research`：snapshot、series capture、数据质量问题；
+- `kairos.research_platform`：snapshot、series capture、数据质量问题；
 - `kairos.backtest`：确定性 feed/clock、无同 slice 成交、fill model、结算和 replay；
 - `kairos.accounting`：Ledger 与 Portfolio；
 - `kairos.execution` / `kairos.orchestration`：执行计划、路由、对账和 kill switch；
@@ -406,7 +406,7 @@ optional contract
 - CLI：capture、calibrate、surface show、backtest、risk scenario；
 - Notebook 示例和运行手册；
 - 全量测试、compile、diff check；
-- SPXW 固定数据端到端 golden scenario。
+- SPXW 固定数据端到端 reference scenario。
 
 验收命令：
 
@@ -443,4 +443,4 @@ git diff --check
 | Risk | spot/vol/skew/term/rate/time 完整重估、结构/账户归因、PnL explain、historical VaR/ES | `test_risk_analytics.py` |
 | CLI | `pricing option`、`vol calibrate`、`risk scenario` | `test_options_research_cli.py` |
 
-SPXW golden 流程使用满足静态价格边界的五档期权链，不包含 vendor Greeks。测试证明从 quote 到 IV、SVI、surface delta 选腿、下一 slice 成交、风险情景和 replay 的闭环是确定性的。
+SPXW reference 流程使用满足静态价格边界的五档期权链，不包含 vendor Greeks。测试证明从 quote 到 IV、SVI、surface delta 选腿、下一 slice 成交、风险情景和 replay 的闭环是确定性的。

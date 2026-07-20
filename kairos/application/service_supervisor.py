@@ -167,11 +167,3 @@ class AsyncServiceSupervisor:
             or state.spec.criticality is ServiceCriticality.OPTIONAL
             for state in self._states.values()
         )
-
-
-AsyncTaskSupervisor = AsyncServiceSupervisor
-ManagedTaskSpec = ManagedServiceSpec
-ManagedTaskStatus = ManagedServiceStatus
-ManagedTaskSnapshot = ManagedServiceSnapshot
-TaskCriticality = ServiceCriticality
-TaskFault = ServiceFault

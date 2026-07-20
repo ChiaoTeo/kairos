@@ -16,14 +16,14 @@ from kairos.connectors.massive.equity_daily_ohlcv import MassiveEquityDailyOhlcv
 from kairos.data import DataCatalog, DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel
 from kairos.data.bootstrap import register_configured_products, register_default_products
 from kairos.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
-from kairos.research import StudyWorkspace, StudyWorkspaceRepository, ensure_sma_tutorial_dataset, open_study
-from kairos.research.tutorial_data import tutorial_sma_bars
+from kairos.research_platform import StudyWorkspace, StudyWorkspaceRepository, ensure_sma_tutorial_dataset, open_study
+from kairos.research_platform.tutorial_data import tutorial_sma_bars
 from tests.test_massive_daily_ohlcv import _EquitySource
 
 
 class StudySessionTests(unittest.TestCase):
     def test_open_study_is_a_static_public_symbol_for_ide_navigation(self) -> None:
-        self.assertEqual(open_study.__module__, "kairos.research.session")
+        self.assertEqual(open_study.__module__, "kairos.research_platform.session")
 
     def _study(self, root: Path):
         release = ensure_sma_tutorial_dataset(root)

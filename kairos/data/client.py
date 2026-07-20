@@ -352,7 +352,7 @@ class ResearchDataClient:
         path = self.root / release.relative_path / "collection.json"
         if not path.exists():
             return None
-        from kairos.research.data_store import CollectionManifest
+        from kairos.research_platform.data_store import CollectionManifest
         from kairos.storage.codec import from_primitive
         return from_primitive(json.loads(path.read_text(encoding="utf-8")), CollectionManifest)
 

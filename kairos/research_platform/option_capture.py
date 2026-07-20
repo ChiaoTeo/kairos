@@ -103,9 +103,6 @@ class OptionResearchCaptureService:
         finally:
             provider.disconnect()
 
-    def capture(self, provider: SpxwResearchProvider, spec: OptionChainCaptureSpec) -> tuple[ResearchSnapshot, OptionSnapshotAnalysis]:
-        return self.capture_snapshot(provider, spec)
-
     def analyze_offline(self, run_id: UUID | str) -> OptionSnapshotAnalysis:
         snapshot = self.repository.load_snapshot(run_id)
         result = analyze_option_snapshot(snapshot)

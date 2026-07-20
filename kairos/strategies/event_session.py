@@ -10,7 +10,7 @@ from kairos.contracts import CanonicalEventEnvelope, MarketEventKind, QuotePaylo
 from kairos.domain.market_data import Quote
 from kairos.domain.intent import Intent
 from kairos.market_data.stream import EventSource
-from kairos.research.snapshot import InstrumentSnapshot
+from kairos.research_platform.snapshot import InstrumentSnapshot
 from kairos.storage.codec import to_primitive
 
 from .strategy_protocols import Strategy, StrategyContext, StrategyDecision

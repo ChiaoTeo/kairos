@@ -1273,13 +1273,18 @@ def decide(context):
 - `kairos study open/add-data/add-factor/inspect/freeze`：已支持一个 Study workspace 绑定多个 Data Release 和 factor code hash；
 - `kairos strategy open/bind-factor/set-risk/inspect/freeze`：已支持从 Frozen Study 创建 Strategy workspace，并复用 Study factor hash；
 - `kairos run start/inspect/replay/compare`：已支持从 Study 或 Strategy snapshot 创建 Run Workspace 和 Run Manifest；
+- 最小四产品 surface 已开始记录 P0 证据链：Data download/write/live manifest 暴露 `contract_hash`、`manifest_hash` 和 `artifact_ref`；
+  Study Lock 记录 Data Release evidence 和 factor code hash；Strategy Lock 继承 Frozen Study 的 Data evidence 并执行
+  study/factor/data hash 一致性检查；Run Manifest 记录 `input_artifacts`，把本次执行指回 Data Release 和 Frozen Factor 证据；
+- `kairos.data.contracts` 已提供最小正式 artifact 模型：`DataSetContractArtifact`、`DataReleaseManifest` 和
+  `LiveViewManifest`；四产品 surface 的 Data write/live 和 release evidence 已使用这些模型生成稳定 hash/ref；
 - Python API：`DataProductApi`、`StudyProductApi`、`StrategyProductApi`、`RunProductApi` 已提供和 CLI 同源的最小调用面；
 - 完整示例：`examples/four_product_user_path.sh`；
 - 自动化验收：`tests/test_four_product_surface.py`。
 
 目标态剩余缺口：
 
-1. DataSet Contract、Data Release Manifest、Live View Manifest 的边界还没有显式模型化；
+1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型并接入四产品 surface，但还没有贯穿所有旧数据发布路径、质量报告和 freshness gate；
 2. 旧 `StudyWorkspace` 仍以单 `input_release_id` 为主模型，新的 Study Product workspace 还没有替换旧模型；
 3. Study Product 的 Draft/Frozen 生命周期已最小落地，但状态机、质量门禁和目录结构还没有统一到正式模型；
 4. 本地 factor 已记录 code hash，但依赖、参数、输出 schema 和 point-in-time 检查还没有正式约定；

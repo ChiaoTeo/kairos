@@ -12,29 +12,29 @@ from kairos.ports.account import AccountPort as AccountPortModuleExport
 from kairos.ports.execution import ExecutionPort as ExecutionPortModuleExport
 from kairos.ports.market_data import MarketDataPort as MarketDataPortModuleExport
 from kairos.ports.reference_data import ReferenceDataPort as ReferenceDataPortModuleExport
-from kairos.adapters.binance import (
+from kairos.connectors.binance import (
     BinanceAccountGateway,
     BinanceExecutionGateway,
     BinanceMarketDataClient,
     BinanceSpotReferenceDataClient,
 )
-from kairos.adapters.ibkr import (
+from kairos.connectors.ibkr import (
     IbkrAccountGateway,
     IbkrExecutionGateway,
     IbkrMarketDataClient,
     IbkrReferenceDataClient,
 )
-from kairos.adapters.ibkr.research import IbkrSpxwResearchProvider
-from kairos.adapters.market_data_router import CompositeMarketDataClient
-from kairos.adapters.massive import (
+from kairos.connectors.ibkr.research import IbkrSpxwResearchProvider
+from kairos.connectors.market_data_router import CompositeMarketDataClient
+from kairos.connectors.massive import (
     MassiveEquityDailyOhlcvDatasetConnector,
     MassiveEquityDailyOhlcvPipeline,
     MassiveEquityDailyOhlcvProductConfig,
     OptionDailyOhlcvPipeline,
     SpxwDailyOhlcvPipeline,
 )
-from kairos.adapters.simulated import SimulatedExecutionAccountGateway
-from kairos.adapters.transfer import (
+from kairos.connectors.simulated import SimulatedExecutionAccountGateway
+from kairos.connectors.transfer import (
     BankTransferGateway,
     BinanceTransferGateway,
 )

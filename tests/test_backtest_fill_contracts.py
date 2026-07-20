@@ -113,7 +113,7 @@ class BacktestFillContractTests(unittest.TestCase):
 
     def test_single_sided_quote_uses_directional_fallback_and_is_counted(self) -> None:
         from dataclasses import replace
-        from kairos.research.snapshot import InstrumentSnapshot
+        from kairos.research_platform.snapshot import InstrumentSnapshot
         portfolio = BacktestPortfolio(Decimal("100000"), self.catalog, self.account)
         structure_id = uuid4()
         portfolio.apply_fill(Fill(uuid4(), uuid4(), uuid4(), "test", structure_id, self.second.timestamp, (LegFill(self.long, TradeSide.BUY, 1, Decimal("2.2")),), Decimal("-2.2"), 1, Decimal("1"), Decimal("0"), False))

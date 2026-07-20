@@ -302,7 +302,3 @@ def _case(name: str, passed: bool, proof: str) -> dict[str, object]:
 
 def _hash(payload: dict[str, object]) -> str:
     return sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-
-
-FAILURE_MATRIX_ID = RUNTIME_FAILURE_POLICY_ID
-run_runtime_failure_matrix = run_runtime_failure_policy

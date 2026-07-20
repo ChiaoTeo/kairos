@@ -16,7 +16,7 @@ ROOT = Path(__file__).parent
 
 
 def produce() -> tuple[dict[str, object], ...]:
-    vectors = json.loads((ROOT / "golden_vectors.json").read_text())
+    vectors = json.loads((ROOT / "contract_vectors.json").read_text())
     events = []
     for receive_sequence, vector in enumerate(vectors):
         instrument = InstrumentId(vector["instrument_id"])

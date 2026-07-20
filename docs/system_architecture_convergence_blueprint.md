@@ -383,7 +383,7 @@ Connector 不得：
 - offline 与 incremental 结果一致；
 - Feature 不以单个策略命名。
 
-### 4.10 `kairos.research`
+### 4.10 `kairos.research_platform`
 
 职责：研究工作流、样本、报告、实验和验证产物。
 
@@ -950,7 +950,7 @@ quarantine
 
 ### 11.4 DataProductContract
 
-统一当前分散的 Datasets、ManagedDataset 和 Provider 配置：
+统一当前分散的 Dataset 定义和 Provider 配置：
 
 ```text
 identity
@@ -1532,10 +1532,10 @@ rg 'read_(csv|parquet)|open\(.+data/' examples studies
 | P0 | Reconciliation READY Gate | Ledger、Position、Balance、Open Order 的启动对账 | matched 才 READY；mismatch 进入 UNKNOWN_EXTERNAL_STATE 或 REDUCE_ONLY |
 | P0 | 真实 connector Durable Ingestion | Binance/IBKR WebSocket 与 REST backfill 接入事务 ingestion | 重复事件幂等、cursor 可恢复、断线不丢成交 |
 | P1 | Ledger Repository 收敛 | SQLite 成为运行时 Ledger 唯一事实源，JSON 仅作迁移/导出 | CLI 与 Runtime 均从 SQLite 恢复；旧 JSON 可一次性迁移 |
-| P1 | DataProductContract | 合并 Datasets、ManagedDataset 和动态 Provider 配置 | 一个 Product 只有一个编译后 Spec，Catalog health 可验证 |
+| P1 | DataProductContract | 合并 Dataset 定义和动态 Provider 配置 | 一个 Product 只有一个编译后 Spec，Catalog health 可验证 |
 | P1 | Typed Quality Profiles | Quote、Trade、Market Event、Option Snapshot、Feature、Reference 质量规则 | 质量等级由 Engine 计算，调用方不能任意声明 Q3/Q4 |
 | P1 | Dataset/Surface 迁移 | DatasetRepository 内部化，Surface 转 Feature Release | 正式消费者不再直接使用旧 Repository 或物理目录 |
-| P2 | Golden 与 Failure Matrix | SPXW reference pipeline、全部 crash-window 场景 | L2/L3 自动化通过，固定 input/output/audit hash |
+| P2 | Reference 与 Failure Policy | SPXW reference pipeline、全部 crash-window 场景 | L2/L3 自动化通过，固定 input/output/audit hash |
 | P2 | Paper/Testnet Soak | 24–72 小时运行、重连、重启、Kill Switch 演练 | L4 报告无未解释 UNKNOWN、账务差异或 Critical Alert |
 
 每项工作开始前应明确将删除的旧路径；完成时必须同时提交代码、迁移证据、测试和文档更新。只增加新实现而保留平行旧入口，不视为完成。

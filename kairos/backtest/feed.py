@@ -12,7 +12,7 @@ from kairos.domain.identity import InstrumentId
 from kairos.reference.catalog import ReferenceCatalog
 from kairos.reference.contracts import EconomicProduct, InstrumentDefinition, InstrumentReference, SettlementTermsDefinition
 from kairos.reference.repository import instrument_to_primitive
-from kairos.research.snapshot import DataQualityIssue, InstrumentSnapshot
+from kairos.research_platform.snapshot import DataQualityIssue, InstrumentSnapshot
 from kairos.storage.codec import to_primitive
 
 
@@ -166,10 +166,3 @@ def build_manifest(
         Decimal(greek_count) / denominator, Decimal(stale_count) / denominator,
         source, market_data_type, code_version, content_hash, split, synthetic,
     )
-
-
-ContractMetadata = InstrumentLifecycleSnapshot
-HistoricalDataset = MarketReplayDataset
-HistoricalFeed = MarketSnapshotReplayFeed
-MarketSlice = MarketSnapshot
-MarketSliceFeed = MarketSnapshotFeed

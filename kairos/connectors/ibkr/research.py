@@ -11,7 +11,7 @@ from kairos.domain.event import GreeksUpdated, MarketEvent, QuoteUpdated, TradeU
 from kairos.domain.identity import AssetId, InstrumentId, VenueId
 from kairos.domain.market_data import Greeks, OptionChain, Quote, Trade
 from kairos.domain.product import IndexSpec, ListedOptionSpec, OptionRight, ProductType
-from kairos.research.spec import OptionChainCaptureSpec
+from kairos.research_platform.spec import OptionChainCaptureSpec
 from kairos.reference import (
     AssetDefinition, AssetType, ListingDefinition, ListingId, ReferenceCatalog,
     TradingRules, VenueDefinition, VenueType,

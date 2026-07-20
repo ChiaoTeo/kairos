@@ -14,7 +14,7 @@ from kairos.domain.intent import CloseStructureIntent, LegIntent
 from kairos.domain.order import Fill, Order, OrderStatus, TimeInForce
 from kairos.domain.product import is_option_spec, option_multiplier
 from kairos.pricing.option_valuation import OptionValuationService
-from kairos.research.features import FeatureEngine, build_features
+from kairos.research_platform.features import FeatureEngine, build_features
 from kairos.risk.engine import RiskDecisionType, RiskEngine
 from kairos.risk.limits import RiskLimits
 from kairos.risk.analytics import historical_var_es

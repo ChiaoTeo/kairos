@@ -25,11 +25,11 @@ from kairos.contracts import BarPayload
 from kairos.ports import Environment
 from kairos.connectors.binance.rest_transport import BinanceTransport, UrllibBinanceTransport
 from kairos.orchestration.runtime_store import SQLiteRuntimeStore
-from kairos.research import (
+from kairos.research_platform import (
     SMA_TUTORIAL_RELEASE_ID, StudyWorkspace, StudyWorkspaceRepository,
     ensure_sma_tutorial_dataset, open_study,
 )
-from kairos.research.tutorial_data import tutorial_sma_bars
+from kairos.research_platform.tutorial_data import tutorial_sma_bars
 from kairos.storage.codec import to_primitive
 from kairos.strategies import (
     GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext,
@@ -971,7 +971,7 @@ def inspect_run(args) -> dict[str, object]:
             "entries": len(ledger.entries), "unresolved_orders": [to_primitive(item) for item in unresolved]}
 
 
-def replay_sma_run(args) -> dict[str, object]:
+def replay_run_artifact(args) -> dict[str, object]:
     repository=RunArtifactRepository(Path(args.artifact).parents[2]);artifact=repository.load(args.artifact)
     config=artifact.payload["config"]
     args.fast=int(config["fast"]);args.slow=int(config["slow"]);args.initial_cash=Decimal(str(config["initial_cash"]))
@@ -984,7 +984,7 @@ def replay_sma_run(args) -> dict[str, object]:
             "passed":all(comparisons.values()),"replay_audit_hash":replay.audit_hash}
 
 
-def replay_sma_capture(args) -> dict[str, object]:
+def replay_capture_artifact(args) -> dict[str, object]:
     artifact=RunArtifactRepository(Path(args.artifact).parents[2]).load(args.artifact);config=artifact.payload["config"]
     events=asyncio.run(_captured_events(Path(args.capture)));bars=tuple(_bar_from_event(event) for event in events)
     identity=f"capture:{sha256(Path(args.capture).read_bytes()).hexdigest()}"

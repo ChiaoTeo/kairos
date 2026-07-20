@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import sys
 
-from kairos.research import (
+from kairos.research_platform import (
     MarketDataType,
     OptionChainCaptureSpec,
     SMA_TUTORIAL_RELEASE_ID,
@@ -41,7 +41,7 @@ _ALIASED_MODULES = (
 
 def _install_research_platform_aliases() -> None:
     for name in _ALIASED_MODULES:
-        sys.modules.setdefault(f"{__name__}.{name}", importlib.import_module(f"kairos.research.{name}"))
+        sys.modules.setdefault(f"{__name__}.{name}", importlib.import_module(f"kairos.research_platform.{name}"))
 
 
 _install_research_platform_aliases()

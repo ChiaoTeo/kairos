@@ -13,7 +13,7 @@ from kairos.reference import ReferenceCatalog
 from kairos.reference.access import contract_spec, definition_at
 
 from .runtime import FactorQuality, FactorSnapshot, FactorSpec, implementation_hash
-from kairos.research.features import FeatureEngine
+from kairos.research_platform.features import FeatureEngine
 
 
 @dataclass(frozen=True, slots=True)

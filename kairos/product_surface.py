@@ -11,6 +11,8 @@ from typing import Any
 
 from kairos.data import (
     DataCatalog,
+    DataReleaseManifest,
+    DataSetContractArtifact,
     DataProductContract,
     DataProductDefinition,
     DatasetKey,
@@ -18,10 +20,13 @@ from kairos.data import (
     DatasetRelease,
     DatasetStatus,
     DatasetStorageKind,
+    LiveViewManifest,
     QualityLevel,
     SourceBinding,
+    data_release_ref,
+    stable_artifact_hash,
 )
-from kairos.research import ensure_sma_tutorial_dataset
+from kairos.research_platform import ensure_sma_tutorial_dataset
 
 
 BUILTIN_DOWNLOAD_KEYS = {
@@ -135,6 +140,7 @@ def data_download(args) -> dict[str, object]:
     if key not in BUILTIN_DOWNLOAD_KEYS:
         raise ValueError(f"unknown data download key {key!r}; registered target-state keys: {', '.join(sorted(BUILTIN_DOWNLOAD_KEYS))}")
     release = ensure_sma_tutorial_dataset(args.lake_root)
+    evidence = _data_release_evidence(Path(args.lake_root), release)
     report = {
         "product": "data",
         "operation": "download",
@@ -142,8 +148,11 @@ def data_download(args) -> dict[str, object]:
         "dataset": str(release.product_key),
         "release_id": release.release_id,
         "content_hash": release.content_hash,
+        "contract_hash": evidence["contract_hash"],
+        "manifest_hash": evidence["manifest_hash"],
         "quality_level": release.quality_level.value,
         "artifact": str(Path(args.lake_root) / release.relative_path),
+        "artifact_ref": evidence["artifact_ref"],
         "contract": "DataSet Contract",
     }
     report_path = Path(args.lake_root) / "downloads" / key / "report.json"
@@ -154,9 +163,10 @@ def data_download(args) -> dict[str, object]:
 def data_register_download(args) -> dict[str, object]:
     payload = _read_contract(args.spec)
     key = args.key
+    spec_hash = _stable_hash(payload)
     target = Path(args.lake_root) / "data-products" / "downloads" / key / "download-spec.json"
-    _write_json(target, {"key": key, "spec": payload, "registered_at": _now()})
-    return {"product": "data", "operation": "register-download", "key": key, "spec": str(target)}
+    _write_json(target, {"key": key, "spec": payload, "spec_hash": spec_hash, "registered_at": _now()})
+    return {"product": "data", "operation": "register-download", "key": key, "spec": str(target), "spec_hash": spec_hash}
 
 
 def data_write(args) -> dict[str, object]:
@@ -186,22 +196,26 @@ def data_write(args) -> dict[str, object]:
     copied = directory / source.name
     if not copied.exists() or copied.read_bytes() != source.read_bytes():
         copied.write_bytes(source.read_bytes())
-    contract_hash = sha256(json.dumps(contract, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    manifest = {
-        "product": "data",
-        "kind": "data_release_manifest",
-        "dataset_id": dataset_id,
-        "release_id": release_id,
-        "contract_hash": contract_hash,
-        "content_hash": content_hash,
-        "primary_time": primary_time,
-        "fields": fields,
-        "source": {"kind": "file", "name": source.name},
-        "published_at": _now(),
-    }
-    _write_json(directory / "manifest.json", manifest)
+    manifest = DataReleaseManifest(
+        dataset_id,
+        release_id,
+        stable_artifact_hash(contract),
+        content_hash,
+        primary_time,
+        tuple(fields),
+        QualityLevel.RESEARCH,
+        {"kind": "file", "name": source.name},
+        _now(),
+    )
+    manifest_payload = manifest.to_primitive()
+    _write_json(directory / "manifest.json", manifest_payload)
     _register_written_release(root, dataset_id, release_id, directory, content_hash, primary_time)
-    return {**manifest, "artifact": str(directory / "manifest.json")}
+    return {
+        **manifest_payload,
+        "manifest_hash": manifest.manifest_hash,
+        "artifact": str(directory / "manifest.json"),
+        "artifact_ref": manifest.artifact_ref,
+    }
 
 
 def study_exists(root: str | Path, study_id: str) -> bool:
@@ -239,10 +253,14 @@ def study_add_data(args) -> dict[str, object]:
     workspace = _workspace_arg(args)
     study = _load_study(args.lake_root, workspace)
     release = DataCatalog(args.lake_root).release(args.dataset)
+    evidence = _data_release_evidence(Path(args.lake_root), release)
     study.setdefault("data", {})[args.name] = {
         "dataset": args.dataset,
         "release_id": release.release_id,
         "content_hash": release.content_hash,
+        "contract_hash": evidence["contract_hash"],
+        "manifest_hash": evidence["manifest_hash"],
+        "artifact_ref": evidence["artifact_ref"],
         "quality_level": release.quality_level.value,
     }
     _write_json(_study_file(args.lake_root, workspace), study)
@@ -257,6 +275,8 @@ def study_add_factor(args) -> dict[str, object]:
     study.setdefault("factors", {})[args.name] = {
         "path": str(source),
         "code_hash": code_hash,
+        "source_hash": code_hash,
+        "artifact_ref": f"study://{workspace}/factors/{args.name}",
         "contract": "Factor Contract",
     }
     _write_json(_study_file(args.lake_root, workspace), study)
@@ -274,10 +294,12 @@ def study_freeze(args) -> dict[str, object]:
     lock_body = {
         "product": "study",
         "kind": "study.lock",
+        "schema_version": 1,
         "study_id": args.study_id,
         "version": version,
         "data": study.get("data", {}),
         "factors": study.get("factors", {}),
+        "evidence_chain": _study_evidence_chain(study),
         "frozen_at": _now(),
     }
     lock_hash = _stable_hash(lock_body)
@@ -300,6 +322,7 @@ def strategy_open(args) -> dict[str, object]:
         "id": args.strategy_id,
         "version": "draft",
         "derived_from": {"study": study_id, "version": version, "lock_hash": study_lock["lock_hash"]},
+        "data": study_lock.get("data", {}),
         "inputs": {},
         "model": {"path": "model.py"},
         "risk": {},
@@ -322,6 +345,7 @@ def strategy_bind_factor(args) -> dict[str, object]:
         "kind": "factor",
         "from_study_factor": args.study_factor,
         "source_hash": factors[args.study_factor]["code_hash"],
+        "contract": factors[args.study_factor].get("contract", "Factor Contract"),
         "artifact_ref": f"study://{derived['study']}/locks/{derived['version']}/factors/{args.study_factor}",
     }
     _write_json(_strategy_file(args.lake_root, workspace), strategy)
@@ -343,16 +367,26 @@ def strategy_inspect(args) -> dict[str, object]:
 
 def strategy_freeze(args) -> dict[str, object]:
     strategy = _load_strategy(args.lake_root, args.strategy_id)
+    derived = strategy["derived_from"]
+    study_lock = _load_study_lock(args.lake_root, derived["study"], derived["version"])
+    _assert_strategy_study_consistency(strategy, study_lock)
     lock_body = {
         "product": "strategy",
         "kind": "strategy.lock",
+        "schema_version": 1,
         "strategy_id": args.strategy_id,
         "version": args.version,
         "derived_from": strategy["derived_from"],
+        "data": strategy.get("data", {}),
         "inputs": strategy.get("inputs", {}),
         "model": strategy.get("model", {}),
         "risk": strategy.get("risk", {}),
         "execution": strategy.get("execution", {}),
+        "consistency_checks": {
+            "study_lock_hash": "passed",
+            "factor_hashes": "passed",
+            "data_release_hashes": "passed",
+        },
         "frozen_at": _now(),
     }
     lock_hash = _stable_hash(lock_body)
@@ -385,9 +419,11 @@ def run_start(args) -> dict[str, object]:
     manifest = {
         "product": "run",
         "kind": "run.manifest",
+        "schema_version": 1,
         "run_id": run_id,
         "mode": args.mode,
         "target": {"kind": target_kind, "id": target_id, "hash": target_hash},
+        "input_artifacts": _run_input_artifacts(target_kind, target),
         "runtime_contract": {"mode": args.mode},
         "started_at": material["at"],
         "outputs": {},
@@ -408,9 +444,10 @@ def run_replay(args) -> dict[str, object]:
     if path is None:
         raise FileNotFoundError(args.run_id)
     manifest = _read_json(path)
-    snapshot_hash = _stable_hash(_read_json(path.with_name("snapshot.json")))
+    snapshot = _read_json(path.with_name("snapshot.json"))
+    snapshot_hash = str(snapshot.get("lock_hash") or _stable_hash(snapshot))
     expected = manifest["target"]["hash"]
-    passed = snapshot_hash == expected or manifest["target"]["kind"] == "strategy"
+    passed = snapshot_hash == expected
     report = {"product": "run", "operation": "replay", "run_id": args.run_id, "passed": passed, "expected_hash": expected, "actual_hash": snapshot_hash}
     _write_json(path.parent / "replay.json", report)
     return report
@@ -436,31 +473,124 @@ def _write_live_view(args, dataset_id: str, contract: dict[str, Any], fields: li
     connector = Path(connector_arg)
     if not connector.exists():
         raise FileNotFoundError(connector)
-    contract_hash = _stable_hash(contract)
+    contract_hash = stable_artifact_hash(contract)
     connector_hash = sha256(connector.read_bytes()).hexdigest()
     live_view_id = f"{dataset_id}:live:{connector_hash[:12]}"
     directory = Path(args.lake_root) / "live-views" / dataset_id.replace(".", "/") / live_view_id
-    manifest = {
-        "product": "data",
-        "kind": "live_view_manifest",
-        "dataset_id": dataset_id,
-        "live_view_id": live_view_id,
-        "contract_hash": contract_hash,
-        "connector_hash": connector_hash,
-        "primary_time": primary_time,
-        "fields": fields,
-        "live_data_plane": {
+    manifest = LiveViewManifest(
+        dataset_id,
+        live_view_id,
+        contract_hash,
+        connector_hash,
+        primary_time,
+        tuple(fields),
+        {
             "transport": "connector",
             "event_source_contract": "EventSource[DataSetRecord]",
             "channel_contract": "BoundedEventChannel",
             "freshness": contract.get("freshness", {}),
         },
-        "source": {"kind": "live_connector", "name": connector.name},
-        "freshness_status": "configured",
-        "published_at": _now(),
+        {"kind": "live_connector", "name": connector.name},
+        "configured",
+        _now(),
+    )
+    manifest_payload = manifest.to_primitive()
+    _write_json(directory / "manifest.json", manifest_payload)
+    return {
+        **manifest_payload,
+        "manifest_hash": manifest.manifest_hash,
+        "artifact": str(directory / "manifest.json"),
+        "artifact_ref": manifest.artifact_ref,
     }
-    _write_json(directory / "manifest.json", manifest)
-    return {**manifest, "artifact": str(directory / "manifest.json")}
+
+
+def _data_release_evidence(root: Path, release: DatasetRelease) -> dict[str, object]:
+    catalog = DataCatalog(root)
+    release_dir = root / release.relative_path
+    manifest_path = release_dir / "data_release_manifest.json"
+    if not manifest_path.exists():
+        manifest_path = release_dir / "manifest.json"
+    manifest = _read_json(manifest_path) if manifest_path.exists() else {}
+    try:
+        spec = catalog.product_spec(release.product_key)
+        contract_hash = DataSetContractArtifact.from_product_contract(spec).contract_hash
+    except KeyError:
+        contract_hash = ""
+    contract_hash = str(manifest.get("contract_hash") or contract_hash)
+    manifest_hash = stable_artifact_hash(manifest) if manifest else ""
+    return {
+        "dataset": str(release.product_key),
+        "release_id": release.release_id,
+        "content_hash": release.content_hash,
+        "contract_hash": contract_hash,
+        "manifest_hash": manifest_hash,
+        "artifact_ref": data_release_ref(str(release.product_key), release.release_id),
+        "quality_level": release.quality_level.value,
+    }
+
+
+def _study_evidence_chain(study: dict[str, Any]) -> dict[str, object]:
+    return {
+        "data": {
+            name: {
+                "dataset": item.get("dataset"),
+                "release_id": item.get("release_id"),
+                "content_hash": item.get("content_hash"),
+                "contract_hash": item.get("contract_hash"),
+                "manifest_hash": item.get("manifest_hash"),
+                "artifact_ref": item.get("artifact_ref"),
+            }
+            for name, item in sorted(study.get("data", {}).items())
+        },
+        "factors": {
+            name: {
+                "code_hash": item.get("code_hash"),
+                "artifact_ref": item.get("artifact_ref"),
+                "contract": item.get("contract"),
+            }
+            for name, item in sorted(study.get("factors", {}).items())
+        },
+    }
+
+
+def _assert_strategy_study_consistency(strategy: dict[str, Any], study_lock: dict[str, Any]) -> None:
+    if strategy["derived_from"].get("lock_hash") != study_lock.get("lock_hash"):
+        raise ValueError("Strategy workspace must derive from the current Frozen Study Lock hash")
+    if strategy.get("data", {}) != study_lock.get("data", {}):
+        raise ValueError("Strategy data release evidence must match the Frozen Study Lock")
+    factors = study_lock.get("factors", {})
+    for name, input_spec in strategy.get("inputs", {}).items():
+        factor_name = input_spec.get("from_study_factor")
+        if factor_name not in factors:
+            raise ValueError(f"strategy input {name!r} references unknown Study factor {factor_name!r}")
+        if input_spec.get("source_hash") != factors[factor_name].get("code_hash"):
+            raise ValueError(f"strategy input {name!r} factor hash does not match the Frozen Study Lock")
+
+
+def _run_input_artifacts(target_kind: str, target: dict[str, Any]) -> dict[str, object]:
+    if target_kind == "study":
+        return _study_evidence_chain(target)
+    data = {
+        name: {
+            "dataset": item.get("dataset"),
+            "release_id": item.get("release_id"),
+            "content_hash": item.get("content_hash"),
+            "contract_hash": item.get("contract_hash"),
+            "manifest_hash": item.get("manifest_hash"),
+            "artifact_ref": item.get("artifact_ref"),
+        }
+        for name, item in sorted(target.get("data", {}).items())
+    }
+    inputs = {
+        name: {
+            "kind": item.get("kind"),
+            "source_hash": item.get("source_hash"),
+            "artifact_ref": item.get("artifact_ref"),
+            "contract": item.get("contract"),
+        }
+        for name, item in sorted(target.get("inputs", {}).items())
+    }
+    return {"data": data, "inputs": inputs}
 
 
 def _register_written_release(root: Path, dataset_id: str, release_id: str, directory: Path, content_hash: str, primary_time: str) -> None:

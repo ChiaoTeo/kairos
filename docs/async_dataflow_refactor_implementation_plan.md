@@ -162,7 +162,7 @@ Capture、Replay 和调试能力必须与主链路同步建设，不能等功能
 - 定义 execution/account/control command 和 event；
 - 定义 Schema ID、版本和兼容规则；
 - 定义 Decimal、时间、ID、enum 和 optional 字段编码；
-- 建立 Python golden vectors；
+- 建立 Python contract vectors；
 - 为未来 Rust binding 准备语言无关 schema。
 
 ### 6.2 如何完成
@@ -172,7 +172,7 @@ Capture、Replay 和调试能力必须与主链路同步建设，不能等功能
 3. 为 Quote、Trade、Bar、Book、Mark、Index、Funding、Greeks、Trading Status 建立 typed payload；
 4. 编写旧模型到新模型的单向迁移 Connector；
 5. 禁止新代码直接扩展旧模型；
-6. 为每个消息类型生成 JSON/binary golden vectors；
+6. 为每个消息类型生成 JSON/binary contract vectors；
 7. 定义兼容测试：旧 reader 读新 optional 字段、新 reader 读旧版本、未知 enum 处理；
 8. 迁移完成后删除旧模型和转换层。
 
@@ -187,7 +187,7 @@ Capture、Replay 和调试能力必须与主链路同步建设，不能等功能
 -每个消息有 schema ID/version；
 -每个消息有稳定 identity、source、partition 和因果字段；
 -旧模型消费者迁移清单归零后才允许删除旧模型；
-- Python golden vectors 全部通过；
+- Python contract vectors 全部通过；
 -同 identity 冲突内容能够被检测。
 
 不在本 Workstream 内完成：
@@ -409,7 +409,7 @@ Transport
 -subscribe/unsubscribe；
 -reconnect/resubscribe；
 -raw capture；
--decode golden vector；
+-decode contract vector；
 -sequence/gap；
 -malformed payload；
 -slow consumer；
@@ -635,7 +635,7 @@ elif backtest:
 
 ### 16.3 验收边界
 
-- Python/Rust golden vectors 完全一致；
+- Python/Rust contract vectors 完全一致；
 -上层 Runtime 无需修改 Strategy/Projector 即可切换；
 -process restart 能检测 writer epoch；
 -慢消费者能够检测 overflow；
@@ -945,7 +945,7 @@ Retry owner 规则：
 2. 盘点两套 Market Event 模型的全部生产者和消费者；
 3. 定义 `CanonicalEventEnvelope`；
 4. 定义 Quote/Trade/Bar/Book typed payload；
-5. 建立 golden vectors 和兼容测试；
+5. 建立 contract vectors 和兼容测试；
 6. 定义异步 EventSource/EventSink；
 7. 实现有界内存 Channel 和 overflow matrix；
 8. 将现有 `ReplayEventFeed` 适配为异步 EventSource；

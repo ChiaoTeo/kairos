@@ -10,10 +10,10 @@ from uuid import UUID
 
 from kairos.domain.event import EventEnvelope
 from kairos.domain.market_data import OptionChain
-from kairos.research.option_snapshot_analysis import OptionSnapshotAnalysis
-from kairos.research.report import write_csv
-from kairos.research.snapshot import ResearchSnapshot
-from kairos.research.spec import OptionChainCaptureSpec
+from kairos.research_platform.option_snapshot_analysis import OptionSnapshotAnalysis
+from kairos.research_platform.report import write_csv
+from kairos.research_platform.snapshot import ResearchSnapshot
+from kairos.research_platform.spec import OptionChainCaptureSpec
 
 from .codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, snapshot_to_primitive, to_primitive
 

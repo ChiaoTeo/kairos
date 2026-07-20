@@ -32,7 +32,7 @@ from kairos.strategies.covered_call import CoveredCallStrategy
 from kairos.strategies import GovernedStrategyRuntime,StrategyContext
 from kairos.strategies.specs import builtin_strategy_specs
 from kairos.backtest.feed import MarketSnapshot
-from kairos.research.snapshot import InstrumentSnapshot
+from kairos.research_platform.snapshot import InstrumentSnapshot
 
 
 @dataclass(frozen=True, slots=True)

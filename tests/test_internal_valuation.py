@@ -8,9 +8,9 @@ from kairos.backtest.engine import BacktestEngine
 from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
 from kairos.backtest.result import BacktestConfig
 from kairos.pricing import SolverStatus, OptionValuationService
-from kairos.research.snapshot import InstrumentSnapshot
+from kairos.research_platform.snapshot import InstrumentSnapshot
 from kairos.risk.limits import RiskLimits
-from kairos.research.features import FeatureEngine, build_features
+from kairos.research_platform.features import FeatureEngine, build_features
 from kairos.strategies.bull_put_spread import BullPutSpreadStrategy
 
 

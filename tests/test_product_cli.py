@@ -119,15 +119,16 @@ class ProductCliTests(unittest.TestCase):
             verified = command(root, "factor", "verify-sma", "--fixture", "--fast", "5", "--slow", "15")
             strategy = command(root, "strategy", "register-sma", "--input-identity", "fixture:sma-bars-v1",
                 "--fast", "5", "--slow", "15")
-            generic_backtest = command(root, "run", "backtest", "--strategy", "sma-cross-v1@1.2.0",
+            backtest = command(root, "run", "backtest", "--strategy", "sma-cross-v1@1.2.0",
                 "--fixture", "--fast", "5", "--slow", "15")
-            backtest = command(root, "run", "backtest-sma", "--fixture", "--fast", "5", "--slow", "15")
             run_root = root/"runs"/"sma"
-            simulation = command(root, "run", "simulate-sma", "--fixture", "--fast", "5", "--slow", "15",
+            simulation = command(root, "run", "simulate", "--strategy", "sma-cross-v1@1.2.0",
+                "--fixture", "--fast", "5", "--slow", "15",
                 "--run-root", str(run_root))
             generic_simulation = command(root, "run", "simulate", "--strategy", "sma-cross-v1@1.2.0",
                 "--fixture", "--fast", "5", "--slow", "15", "--run-root", str(root/"runs"/"sma-generic"))
-            high_fee_simulation = command(root, "run", "simulate-sma", "--fixture", "--fast", "5", "--slow", "15",
+            high_fee_simulation = command(root, "run", "simulate", "--strategy", "sma-cross-v1@1.2.0",
+                "--fixture", "--fast", "5", "--slow", "15",
                 "--fee-bps", "25", "--run-root", str(root/"runs"/"sma-high-fee"))
             calibration = command(root, "runtime", "calibrate-execution",
                 "--db", high_fee_simulation["runtime_database"], "--output-root", str(root/"calibration"),
@@ -138,17 +139,17 @@ class ProductCliTests(unittest.TestCase):
             inspected = command(root, "run", "inspect", "--db", simulation["runtime_database"])
             explained = command(root, "run", "inspect", "--artifact", simulation["artifact"],
                 "--at", "2026-01-02T00:00:00Z")
-            replayed = command(root, "run", "replay-sma", "--artifact", simulation["artifact"], "--fixture")
-            paper=command(root,"run","paper-sma","--fixture","--fast","5","--slow","15",
+            replayed = command(root, "run", "artifact-replay", "--artifact", simulation["artifact"], "--fixture")
+            paper=command(root,"run","paper","--strategy","sma-cross-v1@1.2.0","--fixture","--fast","5","--slow","15",
                 "--run-root",str(root/"paper-runtime"),"--artifact-root",str(root/"paper-artifacts"))
             generic_paper=command(root,"run","paper","--strategy","sma-cross-v1@1.2.0","--fixture","--fast","5","--slow","15",
                 "--run-root",str(root/"paper-runtime-generic"),"--artifact-root",str(root/"paper-artifacts-generic"))
-            paper_replay=command(root,"run","replay-sma-capture","--artifact",paper["artifact"],"--capture",paper["capture"])
-            shadow=command(root,"run","shadow-sma","--capture",paper["capture"],"--fast","5","--slow","15",
+            paper_replay=command(root,"run","capture-replay","--artifact",paper["artifact"],"--capture",paper["capture"])
+            shadow=command(root,"run","shadow","--strategy","sma-cross-v1@1.2.0","--capture",paper["capture"],"--fast","5","--slow","15",
                 "--run-root",str(root/"shadow-runtime"),"--artifact-root",str(root/"shadow-artifacts"))
             generic_shadow=command(root,"run","shadow","--strategy","sma-cross-v1@1.2.0","--capture",paper["capture"],"--fast","5","--slow","15",
                 "--run-root",str(root/"shadow-runtime-generic"),"--artifact-root",str(root/"shadow-artifacts-generic"))
-            shadow_replay=command(root,"run","replay-sma-capture","--artifact",shadow["artifact"],"--capture",shadow["capture"])
+            shadow_replay=command(root,"run","capture-replay","--artifact",shadow["artifact"],"--capture",shadow["capture"])
             unsupported = subprocess.run(
                 [sys.executable, "-m", "kairos", "--format", "json", "--lake-root", str(root),
                  "run", "shadow", "--strategy", "covered-call-v1@1.1.0", "--fixture",
@@ -161,7 +162,6 @@ class ProductCliTests(unittest.TestCase):
         self.assertEqual(len(factor["factor_spec_hash"]), 64)
         self.assertTrue(verified["batch_replay_equal"])
         self.assertEqual(strategy["factor_spec_hash"], factor["factor_spec_hash"])
-        self.assertEqual(generic_backtest["audit_hash"], backtest["audit_hash"])
         self.assertEqual(calibrated_backtest["execution_calibration"]["status"], "bound")
         self.assertEqual(calibrated_backtest["execution_calibration"]["release_hash"], calibration["release_hash"])
         self.assertEqual(calibrated_backtest["execution_calibration"]["sample_count"], calibration["sample_count"])
@@ -297,7 +297,7 @@ class ProductCliTests(unittest.TestCase):
             paper = command(root, "run", "paper", "--strategy", "sma-cross-v1@1.2.0",
                 "--capture", str(capture), "--fast", "3", "--slow", "5",
                 "--run-root", str(root/"paper-runtime"), "--artifact-root", str(root/"paper-artifacts"))
-            replay = command(root, "run", "replay-sma-capture",
+            replay = command(root, "run", "capture-replay",
                 "--artifact", paper["artifact"], "--capture", paper["capture"])
             artifact_exists = Path(paper["artifact"]).exists()
 

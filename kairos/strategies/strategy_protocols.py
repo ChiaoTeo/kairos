@@ -13,7 +13,7 @@ if TYPE_CHECKING:
     from kairos.backtest.portfolio import PortfolioSnapshot
     from kairos.reference.catalog import ReferenceCatalog
     from kairos.pricing.option_valuation import ValuationSnapshot
-    from kairos.research.features import FeatureSnapshot
+    from kairos.research_platform.features import FeatureSnapshot
     from kairos.volatility.contracts import SurfaceSnapshot
     from kairos.features.runtime import FactorSnapshot
     from kairos.execution.intent_status import IntentExecutionView, IntentScope

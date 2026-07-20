@@ -11,7 +11,7 @@ from kairos.reference import (
     ListingDefinition, ListingId, ProductId, ReferenceCatalog, TradingRules,
     VenueDefinition, VenueType,
 )
-from kairos.research.snapshot import build_reference_evidence
+from kairos.research_platform.snapshot import build_reference_evidence
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)

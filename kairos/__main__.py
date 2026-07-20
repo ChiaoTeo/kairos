@@ -58,9 +58,9 @@ from kairos.orchestration.coordinator import ExecutionCoordinator
 from kairos.orchestration.event_log import PersistentEventLog
 from kairos.orchestration.kill_switch import KillSwitch
 from kairos.orchestration.reconciliation import ReconciliationService
-from kairos.research.report import summarize
-from kairos.research.option_capture import OptionResearchCaptureService
-from kairos.research.spec import MarketDataType, OptionChainCaptureSpec
+from kairos.research_platform.report import summarize
+from kairos.research_platform.option_capture import OptionResearchCaptureService
+from kairos.research_platform.spec import MarketDataType, OptionChainCaptureSpec
 from kairos.storage.repository import FileResearchRepository
 from kairos.backtest.engine import BacktestEngine
 from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
@@ -72,8 +72,8 @@ from kairos.risk.limits import RiskLimits
 from kairos.storage.codec import from_primitive, restore_primitives, to_primitive
 from kairos.storage.data_lake import write_json
 from kairos.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
-from kairos.research.series import SeriesCaptureProgress, SeriesCaptureService, SeriesCaptureSpec
-from kairos.research.normalized_series import NormalizedSeriesCaptureService
+from kairos.research_platform.series import SeriesCaptureProgress, SeriesCaptureService, SeriesCaptureSpec
+from kairos.research_platform.normalized_series import NormalizedSeriesCaptureService
 from kairos.strategies.sma_cross_research_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross
 from kairos.pricing import PricingInput, PricingModel, OptionValuationService, implied_volatility, price_with_volatility
 from kairos.risk import RevaluationPosition, Scenario, ScenarioEngine, explain_scenario
@@ -131,7 +131,6 @@ def _parser() -> argparse.ArgumentParser:
     data_write.add_argument("--file", type=Path, help="CSV file to import as a historical time series")
     data_write.add_argument("--live", action="store_true", help="register a live data view instead of importing a file")
     data_write.add_argument("--connector", type=Path, help="live connector code file used with --live")
-    data_write.add_argument("--adapter", type=Path, help=argparse.SUPPRESS)
     data_write.add_argument("--as", dest="as_dataset", required=True, help="logical dataset identity to publish")
     data_write.add_argument("--contract", type=Path, required=True, help="JSON Data Contract")
     live_binance = data_actions.add_parser(
@@ -459,10 +458,6 @@ def _parser() -> argparse.ArgumentParser:
     reference_spxw.add_argument("--event-release", required=True)
     reference_spxw.add_argument("--source-slices", required=True)
     reference_spxw.add_argument("--curated-slices", required=True)
-    golden_spxw = backtest_actions.add_parser("golden-spxw", help=argparse.SUPPRESS)
-    golden_spxw.add_argument("--event-release", required=True)
-    golden_spxw.add_argument("--source-slices", required=True)
-    golden_spxw.add_argument("--curated-slices", required=True)
     account = commands.add_parser("account", help="reconcile Ledger balances and positions with a venue")
     account_actions = account.add_subparsers(dest="action", required=True)
     reconcile = account_actions.add_parser("reconcile")
@@ -514,18 +509,10 @@ def _parser() -> argparse.ArgumentParser:
         "reference-artifact", help="run the deterministic L2 order/fill/restart/reconciliation reference artifact",
     )
     runtime_reference.add_argument("--root", type=Path, required=True, help="isolated output root for runtime state and audit artifacts")
-    runtime_reference_alias = runtime_actions.add_parser(
-        "golden", help=argparse.SUPPRESS,
-    )
-    runtime_reference_alias.add_argument("--root", type=Path, required=True, help="isolated output root for runtime state and audit artifacts")
     runtime_failure_policy = runtime_actions.add_parser(
         "failure-policy", help="run deterministic L3 crash-window and restart acceptance drills",
     )
     runtime_failure_policy.add_argument("--root", type=Path, required=True, help="isolated output root for drill state and audit artifacts")
-    runtime_failure_policy_alias = runtime_actions.add_parser(
-        "failure-matrix", help=argparse.SUPPRESS,
-    )
-    runtime_failure_policy_alias.add_argument("--root", type=Path, required=True, help="isolated output root for drill state and audit artifacts")
     runtime_orders = runtime_actions.add_parser("orders", help="inspect or explicitly resolve durable unresolved orders")
     runtime_orders.add_argument("--db", type=Path, required=True, help="SQLite Runtime Store path")
     runtime_orders.add_argument("--client-order-id")
@@ -681,10 +668,6 @@ def _parser() -> argparse.ArgumentParser:
     run_backtest_generic.add_argument("--artifact-root", type=Path)
     run_backtest_generic.add_argument("--execution-calibration", type=Path,
                                       help="ExecutionCalibrationRelease manifest to bind into the backtest artifact")
-    run_backtest = run_actions.add_parser("backtest-sma"); _add_sma_input_arguments(run_backtest)
-    _add_sma_run_arguments(run_backtest); run_backtest.add_argument("--artifact-root",type=Path)
-    run_backtest.add_argument("--execution-calibration", type=Path,
-                              help="ExecutionCalibrationRelease manifest to bind into the backtest artifact")
     run_simulate_generic = run_actions.add_parser("simulate", help="run a Strategy Release through historical simulation")
     run_simulate_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
     _add_sma_input_arguments(run_simulate_generic); _add_sma_run_arguments(run_simulate_generic)
@@ -693,11 +676,6 @@ def _parser() -> argparse.ArgumentParser:
     run_simulate_generic.add_argument("--account-id", default="sma-simulation")
     run_simulate_generic.add_argument("--base-asset", default="BTC")
     run_simulate_generic.add_argument("--quote-asset", default="USDT")
-    run_simulate = run_actions.add_parser("simulate-sma"); _add_sma_input_arguments(run_simulate)
-    _add_sma_run_arguments(run_simulate); run_simulate.add_argument("--run-root", type=Path, required=True)
-    run_simulate.add_argument("--artifact-root",type=Path)
-    run_simulate.add_argument("--account-id", default="sma-simulation"); run_simulate.add_argument("--base-asset", default="BTC")
-    run_simulate.add_argument("--quote-asset", default="USDT")
     run_paper_generic = run_actions.add_parser("paper", help="run a Strategy Release in live-market simulated execution")
     run_paper_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
     run_paper_generic.add_argument("--capture", type=Path)
@@ -709,11 +687,6 @@ def _parser() -> argparse.ArgumentParser:
     run_paper_generic.add_argument("--account-id", default="sma-paper")
     run_paper_generic.add_argument("--base-asset", default="BTC")
     run_paper_generic.add_argument("--quote-asset", default="USDT")
-    run_paper=run_actions.add_parser("paper-sma");run_paper.add_argument("--capture",type=Path)
-    run_paper.add_argument("--fixture",action="store_true");_add_live_binance_bar_arguments(run_paper);_add_sma_run_arguments(run_paper)
-    run_paper.add_argument("--run-root",type=Path,required=True);run_paper.add_argument("--artifact-root",type=Path)
-    run_paper.add_argument("--account-id",default="sma-paper");run_paper.add_argument("--base-asset",default="BTC")
-    run_paper.add_argument("--quote-asset",default="USDT")
     run_shadow_generic = run_actions.add_parser("shadow", help="run a Strategy Release on a capture without submitting orders")
     run_shadow_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
     run_shadow_generic.add_argument("--capture", type=Path)
@@ -721,10 +694,6 @@ def _parser() -> argparse.ArgumentParser:
     _add_sma_run_arguments(run_shadow_generic)
     run_shadow_generic.add_argument("--run-root", type=Path, required=True)
     run_shadow_generic.add_argument("--artifact-root", type=Path)
-    run_shadow=run_actions.add_parser("shadow-sma", help="run SMA on a capture without submitting orders")
-    run_shadow.add_argument("--capture",type=Path);run_shadow.add_argument("--fixture",action="store_true")
-    _add_sma_run_arguments(run_shadow);run_shadow.add_argument("--run-root",type=Path,required=True)
-    run_shadow.add_argument("--artifact-root",type=Path)
     run_inspect = run_actions.add_parser("inspect"); run_inspect.add_argument("--db", type=Path)
     run_inspect.add_argument("--artifact",type=Path);run_inspect.add_argument("--at")
     run_inspect.add_argument("--run-id")
@@ -733,9 +702,11 @@ def _parser() -> argparse.ArgumentParser:
     target_run_compare = run_actions.add_parser("compare", help="compare two Run workspaces")
     target_run_compare.add_argument("--first", required=True)
     target_run_compare.add_argument("--second", required=True)
-    run_replay=run_actions.add_parser("replay-sma");run_replay.add_argument("--artifact",type=Path,required=True)
+    run_replay=run_actions.add_parser("artifact-replay", help="replay a governed run artifact")
+    run_replay.add_argument("--artifact",type=Path,required=True)
     _add_sma_input_arguments(run_replay)
-    replay_capture=run_actions.add_parser("replay-sma-capture");replay_capture.add_argument("--artifact",type=Path,required=True)
+    replay_capture=run_actions.add_parser("capture-replay", help="replay a run artifact against a canonical capture")
+    replay_capture.add_argument("--artifact",type=Path,required=True)
     replay_capture.add_argument("--capture",type=Path,required=True)
     run_reference=run_actions.add_parser("reference");run_reference.add_argument("--strategy",choices=("covered-call","spot-perp-carry"),required=True)
 
@@ -791,7 +762,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "order":
         return _trade(args)
     if args.group == "runtime":
-        if args.action in {"reference-artifact", "golden"}:
+        if args.action == "reference-artifact":
             from kairos.application.runtime_reference_artifact import run_runtime_reference_artifact
             result = run_runtime_reference_artifact(args.root)
             payload = {
@@ -799,7 +770,7 @@ def main(argv: list[str] | None = None) -> int:
                 "audit_hash": result.audit_hash,
                 "artifact": str(result.artifact),
             }
-        elif args.action in {"failure-policy", "failure-matrix"}:
+        elif args.action == "failure-policy":
             from kairos.application.runtime_failure_policy import run_runtime_failure_policy
             result = run_runtime_failure_policy(args.root)
             payload = {
@@ -869,7 +840,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.group == "backtest":
         return _backtest(args)
     if args.action == "governance-audit":
-        from kairos.research.validation import audit_governance
+        from kairos.research_platform.validation import audit_governance
         result=audit_governance(args.lake_root)
         print(json.dumps({"passed":result.passed,"checked_datasets":result.checked_datasets,
             "checked_studies":result.checked_studies,"checked_strategies":result.checked_strategies,
@@ -942,7 +913,7 @@ def _product_command(args: argparse.Namespace) -> int:
         check_strategy_promotion,
         promote_strategy_release,register_btc_iron_condor_candidate,register_builtin_strategy_releases,rollback_strategy_release,strategy_release_status,
         register_sma_factor, register_sma_strategy,
-        replay_sma_capture, replay_sma_run, run_sma_backtest_workflow, run_sma_paper_workflow, run_sma_shadow_workflow,
+        replay_capture_artifact, replay_run_artifact, run_sma_backtest_workflow, run_sma_paper_workflow, run_sma_shadow_workflow,
         run_strategy_backtest_workflow,
         preview_study_data, profile_study, run_reference_strategy_workflow, run_sma_simulation_workflow,
         plan_governed_study, scaffold_study, start_governed_study, start_sma_tutorial, verify_sma_factor,
@@ -995,16 +966,13 @@ def _product_command(args: argparse.Namespace) -> int:
         ("strategy","check-promotion"):check_strategy_promotion,
         ("run", "start"): product_surface.run_start,
         ("run", "backtest"): run_strategy_backtest_workflow,
-        ("run", "backtest-sma"): run_sma_backtest_workflow,
-        ("run", "simulate"): run_sma_simulation_workflow,
-        ("run", "simulate-sma"): run_sma_simulation_workflow, ("run", "inspect"): _run_inspect_dispatch,
+        ("run", "simulate"): run_sma_simulation_workflow, ("run", "inspect"): _run_inspect_dispatch,
         ("run","replay"): product_surface.run_replay,
         ("run","compare"): product_surface.run_compare,
-        ("run","replay-sma"):replay_sma_run,
+        ("run","artifact-replay"):replay_run_artifact,
         ("run","paper"):run_sma_paper_workflow,
-        ("run","paper-sma"):run_sma_paper_workflow,("run","replay-sma-capture"):replay_sma_capture,
+        ("run","capture-replay"):replay_capture_artifact,
         ("run","shadow"):run_sma_shadow_workflow,
-        ("run","shadow-sma"):run_sma_shadow_workflow,
         ("run","reference"):run_reference_strategy_workflow,
     }
     try:
@@ -1927,7 +1895,7 @@ def _risk_analytics(args: argparse.Namespace) -> int:
 
 
 def _backtest(args: argparse.Namespace) -> int:
-    if args.action in {"spxw-reference-scenario", "golden-spxw"}:
+    if args.action == "spxw-reference-scenario":
         from kairos.backtest.spxw_reference_pipeline import build_spxw_reference_pipeline
         payload = build_spxw_reference_pipeline(
             args.lake_root,

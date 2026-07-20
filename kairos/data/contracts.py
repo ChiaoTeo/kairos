@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from enum import StrEnum
+from hashlib import sha256
 from typing import Mapping
 
 
@@ -67,7 +69,6 @@ class RunMode(StrEnum):
     BACKTEST = "backtest"
     HISTORICAL_SIMULATION = "historical-simulation"
     PAPER_TRADING = "paper-trading"
-    LIVE_PAPER = "live-paper"
     LIVE = "live"
 
 
@@ -157,9 +158,6 @@ class DataProductContract:
         return self.product.key
 
 
-DatasetProductSpec = DataProductContract
-
-
 @dataclass(frozen=True, slots=True)
 class DatasetRelease:
     release_id: str
@@ -188,6 +186,186 @@ class DatasetRelease:
                 raise ValueError(f"dataset release {name} cannot be empty")
 
 
+@dataclass(frozen=True, slots=True)
+class DataSetContractArtifact:
+    """Stable upper-layer contract evidence for a Data Product.
+
+    This is intentionally narrower than DataProductContract: it keeps logical
+    identity, schema, time, storage kind, and quality semantics, but excludes
+    physical lake paths and connector details that Study/Strategy must not
+    depend on.
+    """
+
+    dataset_id: str
+    title: str
+    layer: DatasetLayer
+    primary_time: str
+    schema_id: str
+    storage_kind: DatasetStorageKind = DatasetStorageKind.TABULAR
+    layout_version: str = "1"
+    quality_profile: str = "generic"
+    minimum_publication_level: QualityLevel = QualityLevel.RESEARCH
+    capabilities: Mapping[str, object] = field(default_factory=dict)
+    schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        for name in ("dataset_id", "title", "primary_time", "schema_id", "layout_version", "quality_profile"):
+            if not str(getattr(self, name)).strip():
+                raise ValueError(f"DataSet Contract artifact {name} cannot be empty")
+        DatasetKey(self.dataset_id)
+
+    @classmethod
+    def from_product_contract(cls, contract: DataProductContract) -> "DataSetContractArtifact":
+        product = contract.product
+        return cls(
+            dataset_id=str(product.key),
+            title=product.title,
+            layer=product.layer,
+            primary_time=product.primary_time,
+            schema_id=contract.schema_id,
+            storage_kind=contract.storage_kind,
+            layout_version=contract.layout_version,
+            quality_profile=contract.quality_profile,
+            minimum_publication_level=contract.minimum_publication_level,
+            capabilities=dict(contract.capabilities),
+        )
+
+    @property
+    def contract_hash(self) -> str:
+        return stable_artifact_hash(self.to_primitive())
+
+    def to_primitive(self) -> dict[str, object]:
+        return {
+            "kind": "data_set_contract",
+            "schema_version": self.schema_version,
+            "dataset_id": self.dataset_id,
+            "title": self.title,
+            "layer": self.layer.value,
+            "primary_time": self.primary_time,
+            "schema_id": self.schema_id,
+            "storage": {
+                "kind": self.storage_kind.value,
+                "layout_version": self.layout_version,
+            },
+            "quality": {
+                "profile": self.quality_profile,
+                "minimum_publication_level": self.minimum_publication_level.value,
+            },
+            "capabilities": dict(sorted(self.capabilities.items())),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class DataReleaseManifest:
+    dataset_id: str
+    release_id: str
+    contract_hash: str
+    content_hash: str
+    primary_time: str
+    fields: tuple[str, ...] = ()
+    quality_level: QualityLevel | None = None
+    source: Mapping[str, object] = field(default_factory=dict)
+    published_at: str = ""
+    schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        _validate_dataset_manifest_identity(self.dataset_id, self.release_id, self.contract_hash, self.content_hash, self.primary_time)
+
+    @property
+    def artifact_ref(self) -> str:
+        return data_release_ref(self.dataset_id, self.release_id)
+
+    @property
+    def manifest_hash(self) -> str:
+        return stable_artifact_hash(self.to_primitive())
+
+    def to_primitive(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "product": "data",
+            "kind": "data_release_manifest",
+            "schema_version": self.schema_version,
+            "dataset_id": self.dataset_id,
+            "release_id": self.release_id,
+            "contract_hash": self.contract_hash,
+            "content_hash": self.content_hash,
+            "primary_time": self.primary_time,
+            "fields": list(self.fields),
+            "source": dict(self.source),
+            "published_at": self.published_at,
+        }
+        if self.quality_level is not None:
+            payload["quality_level"] = self.quality_level.value
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
+class LiveViewManifest:
+    dataset_id: str
+    live_view_id: str
+    contract_hash: str
+    connector_hash: str
+    primary_time: str
+    fields: tuple[str, ...] = ()
+    live_data_plane: Mapping[str, object] = field(default_factory=dict)
+    source: Mapping[str, object] = field(default_factory=dict)
+    freshness_status: str = "configured"
+    published_at: str = ""
+    schema_version: int = 1
+
+    def __post_init__(self) -> None:
+        _validate_dataset_manifest_identity(self.dataset_id, self.live_view_id, self.contract_hash, self.connector_hash, self.primary_time)
+        if not self.freshness_status.strip():
+            raise ValueError("Live View Manifest freshness_status cannot be empty")
+
+    @property
+    def artifact_ref(self) -> str:
+        return f"data://{self.dataset_id}/live-views/{self.live_view_id}"
+
+    @property
+    def manifest_hash(self) -> str:
+        return stable_artifact_hash(self.to_primitive())
+
+    def to_primitive(self) -> dict[str, object]:
+        return {
+            "product": "data",
+            "kind": "live_view_manifest",
+            "schema_version": self.schema_version,
+            "dataset_id": self.dataset_id,
+            "live_view_id": self.live_view_id,
+            "contract_hash": self.contract_hash,
+            "connector_hash": self.connector_hash,
+            "primary_time": self.primary_time,
+            "fields": list(self.fields),
+            "live_data_plane": dict(self.live_data_plane),
+            "source": dict(self.source),
+            "freshness_status": self.freshness_status,
+            "published_at": self.published_at,
+        }
+
+
+def data_release_ref(dataset_id: str, release_id: str) -> str:
+    DatasetKey(dataset_id)
+    if not release_id.strip():
+        raise ValueError("Data Release artifact ref requires release_id")
+    return f"data://{dataset_id}/releases/{release_id}"
+
+
+def stable_artifact_hash(value: object) -> str:
+    return sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _validate_dataset_manifest_identity(dataset_id: str, artifact_id: str, contract_hash: str, content_hash: str, primary_time: str) -> None:
+    DatasetKey(dataset_id)
+    for name, value in (
+        ("artifact_id", artifact_id),
+        ("contract_hash", contract_hash),
+        ("content_hash", content_hash),
+        ("primary_time", primary_time),
+    ):
+        if not value.strip():
+            raise ValueError(f"Data manifest {name} cannot be empty")
+
+
 class CommonFields:
     AVAILABLE_TIME = FieldRef("available_time")
     EVENT_TIME = FieldRef("event_time")
@@ -206,6 +384,5 @@ class OptionQuoteFields:
 
 
 DataProduct = DataProductDefinition
-DatasetProduct = DataProductDefinition
 DatasetLike = DataProductDefinition | DatasetKey | str
 FieldLike = FieldRef | str

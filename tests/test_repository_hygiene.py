@@ -107,11 +107,15 @@ class RepositoryHygieneTests(unittest.TestCase):
     def test_deleted_legacy_product_names_do_not_return(self):
         deleted_paths = (
             ROOT / "kairos" / "backtest" / "mock.py",
+            ROOT / "kairos" / "adapters",
             ROOT / "kairos" / "adapters" / "massive" / "day_aggs.py",
             ROOT / "kairos" / "adapters" / "massive" / "equity_day_aggs.py",
             ROOT / "kairos" / "adapters" / "massive" / "option_iv.py",
             ROOT / "kairos" / "adapters" / "massive" / "readiness.py",
             ROOT / "kairos" / "adapters" / "base.py",
+            ROOT / "kairos" / "adapters" / "binance" / "adapter.py",
+            ROOT / "kairos" / "adapters" / "ibkr" / "adapter.py",
+            ROOT / "kairos" / "adapters" / "composite.py",
             ROOT / "kairos" / "backtest" / "service.py",
             ROOT / "kairos" / "data" / "health.py",
             ROOT / "kairos" / "features" / "us_equity_momentum_readiness.py",
@@ -127,6 +131,17 @@ class RepositoryHygieneTests(unittest.TestCase):
             ROOT / "kairos" / "treasury" / "transfer_models.py",
             ROOT / "kairos" / "volatility" / "models.py",
             ROOT / "kairos" / "strategies" / "base.py",
+            ROOT / "kairos" / "treasury" / "adapter.py",
+            ROOT / "kairos" / "application" / "runtime_failure_matrix.py",
+            ROOT / "kairos" / "application" / "runtime_golden.py",
+            ROOT / "kairos" / "application" / "task_supervisor.py",
+            ROOT / "kairos" / "backtest" / "golden.py",
+            ROOT / "kairos" / "data" / "market_slice_curation.py",
+            ROOT / "kairos" / "data" / "market_slice_storage.py",
+            ROOT / "kairos" / "research" / "analyzer.py",
+            ROOT / "kairos" / "research" / "selector.py",
+            ROOT / "kairos" / "strategies" / "sma_cross.py",
+            ROOT / "kairos" / "strategies" / "sma_strategy.py",
         )
         for path in deleted_paths:
             self.assertFalse(path.exists(), str(path.relative_to(ROOT)))
@@ -140,6 +155,42 @@ class RepositoryHygieneTests(unittest.TestCase):
             "DataHealth",
             "UsEquityMomentumReadiness",
             "TRADER_LAKE_ROOT",
+            "AccountAdapter",
+            "ExecutionAdapter",
+            "MarketDataAdapter",
+            "ReferenceAdapter",
+            "ReferenceDataAdapter",
+            "TransferAdapter",
+            "CompositeMarketDataAdapter",
+            "SimulatedExecutionAccountAdapter",
+            "AsyncTaskSupervisor",
+            "ManagedTaskSpec",
+            "ManagedTaskStatus",
+            "ManagedTaskSnapshot",
+            "TaskCriticality",
+            "TaskFault",
+            "RuntimeGoldenResult",
+            "run_runtime_golden",
+            "GOLDEN_SCHEMA_VERSION",
+            "GOLDEN_SCENARIO_ID",
+            "FAILURE_MATRIX_ID",
+            "run_runtime_failure_matrix",
+            "MassiveSourceArchive",
+            "MarketSliceCollectionPublisher",
+            "MarketSliceFeed",
+            "HistoricalFeed",
+            "build_spxw_golden_pipeline",
+            "ResearchSpec",
+            "DatasetProductSpec",
+            "DatasetProduct",
+            "ProductSpec",
+            "LIVE_PAPER",
+            "live_paper_composition",
+            "register_historical_dataset",
+            "ReplaySliceFeed",
+            "ManagedDataset",
+            "ResearchRow",
+            "ResearchResult",
         )
         forbidden_exact_names = re.compile(r"\b(BacktestService|ValuationService|ResearchService|TreasuryService)\b")
         offenders = []
@@ -155,17 +206,12 @@ class RepositoryHygieneTests(unittest.TestCase):
                     offenders.append(f"{path.relative_to(ROOT)} contains a deleted generic service name")
         self.assertEqual(offenders, [])
 
-    def test_packaged_modules_use_connectors_outside_legacy_adapter_layer(self):
+    def test_packaged_modules_do_not_import_legacy_adapter_namespace(self):
+        self.assertFalse((ROOT / "kairos" / "adapters").exists())
         offenders = []
-        allowed = {
-            ROOT / "kairos" / "connectors" / "__init__.py",
-            ROOT / "tests" / "test_naming_migration.py",
-        }
         for root in (ROOT / "kairos", ROOT / "tests", ROOT / "examples"):
             for path in root.rglob("*.py"):
-                if ROOT / "kairos" / "adapters" in path.parents:
-                    continue
-                if path in allowed:
+                if path == ROOT / "tests" / "test_repository_hygiene.py":
                     continue
                 text = path.read_text(encoding="utf-8")
                 for line_number, line in enumerate(text.splitlines(), start=1):
@@ -236,39 +282,10 @@ class RepositoryHygieneTests(unittest.TestCase):
             self.assertNotIn("DayAgg", text)
             self.assertNotIn("DayIv", text)
             self.assertNotIn("Readiness", text)
-        self.assertFalse((ROOT / "kairos" / "adapters" / "massive" / "day_aggs.py").exists())
-        self.assertFalse((ROOT / "kairos" / "adapters" / "massive" / "equity_day_aggs.py").exists())
-        self.assertFalse((ROOT / "kairos" / "adapters" / "massive" / "option_iv.py").exists())
-        self.assertFalse((ROOT / "kairos" / "adapters" / "massive" / "readiness.py").exists())
-        massive_adapter_init = (ROOT / "kairos" / "adapters" / "massive" / "__init__.py").read_text(encoding="utf-8")
-        self.assertNotIn("DayAgg", massive_adapter_init)
-        self.assertNotIn("DayIv", massive_adapter_init)
-        self.assertNotIn("MassiveReadiness", massive_adapter_init)
-
-    def test_legacy_naming_modules_remain_thin_compatibility_shims(self):
-        legacy_modules = (
-            ROOT / "kairos" / "application" / "runtime_failure_matrix.py",
-            ROOT / "kairos" / "application" / "runtime_golden.py",
-            ROOT / "kairos" / "application" / "task_supervisor.py",
-            ROOT / "kairos" / "backtest" / "golden.py",
-            ROOT / "kairos" / "adapters" / "binance" / "adapter.py",
-            ROOT / "kairos" / "adapters" / "ibkr" / "adapter.py",
-            ROOT / "kairos" / "adapters" / "massive" / "source.py",
-            ROOT / "kairos" / "adapters" / "composite.py",
-            ROOT / "kairos" / "data" / "market_slice_curation.py",
-            ROOT / "kairos" / "data" / "market_slice_storage.py",
-            ROOT / "kairos" / "research" / "analyzer.py",
-            ROOT / "kairos" / "research" / "selector.py",
-            ROOT / "kairos" / "strategies" / "sma_cross.py",
-            ROOT / "kairos" / "strategies" / "sma_strategy.py",
-            ROOT / "kairos" / "treasury" / "adapter.py",
-        )
-        offenders = []
-        for path in legacy_modules:
-            text = path.read_text(encoding="utf-8")
-            if "Compatibility" not in text or "class " in text or "def " in text:
-                offenders.append(str(path.relative_to(ROOT)))
-        self.assertEqual(offenders, [])
+        self.assertFalse((ROOT / "kairos" / "connectors" / "massive" / "day_aggs.py").exists())
+        self.assertFalse((ROOT / "kairos" / "connectors" / "massive" / "equity_day_aggs.py").exists())
+        self.assertFalse((ROOT / "kairos" / "connectors" / "massive" / "option_iv.py").exists())
+        self.assertFalse((ROOT / "kairos" / "connectors" / "massive" / "readiness.py").exists())
 
     def test_new_data_contract_imports_do_not_use_models_module(self):
         offenders = []
@@ -279,8 +296,8 @@ class RepositoryHygieneTests(unittest.TestCase):
             "import kairos.treasury.transfer_models",
             "from kairos.volatility.models",
             "import kairos.volatility.models",
-            "from kairos.research.validation.models",
-            "import kairos.research.validation.models",
+            "from kairos.research_platform.validation.models",
+            "import kairos.research_platform.validation.models",
             "from kairos.reference.models",
             "import kairos.reference.models",
             "from kairos.pricing.models",
@@ -302,21 +319,18 @@ class RepositoryHygieneTests(unittest.TestCase):
                         offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
         self.assertEqual(offenders, [])
 
-    def test_new_code_does_not_import_legacy_base_or_service_modules(self):
+    def test_new_code_does_not_import_legacy_connector_base_or_service_modules(self):
         offenders = []
         legacy_imports = (
-            "from kairos.adapters.base",
-            "import kairos.adapters.base",
+            "from kairos.connectors.base",
+            "import kairos.connectors.base",
             "from kairos.strategies.base",
             "import kairos.strategies.base",
         )
-        compatibility_modules = {
-            ROOT / "tests" / "test_naming_migration.py",
-        }
         roots = (ROOT / "kairos", ROOT / "tests", ROOT / "examples")
         for root in roots:
             for path in root.rglob("*.py"):
-                if path in compatibility_modules:
+                if path == ROOT / "tests" / "test_repository_hygiene.py":
                     continue
                 text = path.read_text(encoding="utf-8")
                 for line_number, line in enumerate(text.splitlines(), start=1):
@@ -329,8 +343,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         allowed = {
             ROOT / "kairos" / "__main__.py",
             ROOT / "kairos" / "product_surface.py",
-            ROOT / "kairos" / "adapters" / "composite.py",
-            ROOT / "kairos" / "adapters" / "binance" / "funding_ingestion.py",
+            ROOT / "kairos" / "connectors" / "binance" / "funding_ingestion.py",
             ROOT / "tests" / "test_naming_migration.py",
             ROOT / "tests" / "test_repository_hygiene.py",
         }
@@ -346,7 +359,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         )
         for root in (ROOT / "kairos", ROOT / "tests"):
             for path in root.rglob("*.py"):
-                if path in allowed or ("adapters" in path.parts and path.name == "adapter.py"):
+                if path in allowed:
                     continue
                 text = path.read_text(encoding="utf-8")
                 for token in forbidden:
@@ -354,90 +367,40 @@ class RepositoryHygieneTests(unittest.TestCase):
                         offenders.append(f"{path.relative_to(ROOT)} contains {token}")
         self.assertEqual(offenders, [])
 
-    def test_binance_adapter_imports_use_dedicated_modules(self):
-        forbidden_names = (
-            "BinanceStreamSession",
-            "WebSocketClientConnector",
-            "parse_market_stream_event",
-            "websocket_url",
-            "BinanceTransport",
-            "UrllibBinanceTransport",
-            "RateLimiter",
-            "BinanceSigner",
-            "synchronize_clock",
-            "BinanceSpotReferenceDataClient",
-            "BinanceFuturesReferenceDataClient",
-            "BinanceOptionsReferenceDataClient",
-            "BinanceMarketDataClient",
-            "BINANCE_SPOT_MARKET_DATA_CAPABILITIES",
-            "BINANCE_FUTURES_MARKET_DATA_CAPABILITIES",
-            "BINANCE_OPTIONS_MARKET_DATA_CAPABILITIES",
-            "BinanceExecutionGateway",
-            "BinanceOptionsExecutionGateway",
-            "BINANCE_SPOT_EXECUTION_CAPABILITIES",
-            "BINANCE_FUTURES_EXECUTION_CAPABILITIES",
-            "BINANCE_OPTIONS_EXECUTION_CAPABILITIES",
-            "BinanceAccountGateway",
-            "BinanceOptionsAccountGateway",
-            "BinanceFundingSettlementClient",
-            "UserFillUpdate",
-            "BalanceUpdate",
-            "BinanceUserDataStreamService",
-            "BinanceUserStreamProcessor",
-            "parse_user_stream_event",
-            "OptionMarketSnapshot",
-            "parse_option_market_snapshot",
-            "BinanceRecoveryService",
+    def test_deleted_adapter_aggregation_modules_do_not_return(self):
+        deleted_paths = (
+            ROOT / "kairos" / "connectors" / "binance" / "adapter.py",
+            ROOT / "kairos" / "connectors" / "ibkr" / "adapter.py",
+            ROOT / "kairos" / "connectors" / "composite.py",
+            ROOT / "kairos" / "treasury" / "adapter.py",
         )
-        offenders = []
-        roots = (ROOT / "kairos", ROOT / "tests", ROOT / "examples")
-        for root in roots:
-            for path in root.rglob("*.py"):
-                lines = path.read_text(encoding="utf-8").splitlines()
-                for line_number, line in enumerate(lines, start=1):
-                    if "binance.adapter import" not in line:
-                        continue
-                    import_block = line
-                    if "(" in line and ")" not in line:
-                        for continuation in lines[line_number:]:
-                            import_block += "\n" + continuation
-                            if ")" in continuation:
-                                break
-                    for name in forbidden_names:
-                        if name in import_block:
-                            offenders.append(f"{path.relative_to(ROOT)}:{line_number} imports {name} from binance adapter")
-        self.assertEqual(offenders, [])
+        for path in deleted_paths:
+            self.assertFalse(path.exists(), str(path.relative_to(ROOT)))
 
-    def test_ibkr_adapter_imports_use_dedicated_modules(self):
-        forbidden_names = (
-            "IbkrSession",
-            "IbkrAccountGateway",
-            "IbkrReferenceDataClient",
-            "IbkrMarketDataClient",
-            "IbkrExecutionGateway",
-            "normalize_ibkr_execution",
-        )
         offenders = []
+        forbidden_imports = (
+            "from kairos.connectors.binance.adapter",
+            "import kairos.connectors.binance.adapter",
+            "from kairos.connectors.ibkr.adapter",
+            "import kairos.connectors.ibkr.adapter",
+            "from kairos.connectors.composite",
+            "import kairos.connectors.composite",
+            "from kairos.treasury.adapter",
+            "import kairos.treasury.adapter",
+        )
         roots = (ROOT / "kairos", ROOT / "tests", ROOT / "examples")
         for root in roots:
             for path in root.rglob("*.py"):
-                lines = path.read_text(encoding="utf-8").splitlines()
-                for line_number, line in enumerate(lines, start=1):
-                    if "ibkr.adapter import" not in line:
-                        continue
-                    import_block = line
-                    if "(" in line and ")" not in line:
-                        for continuation in lines[line_number:]:
-                            import_block += "\n" + continuation
-                            if ")" in continuation:
-                                break
-                    for name in forbidden_names:
-                        if name in import_block:
-                            offenders.append(f"{path.relative_to(ROOT)}:{line_number} imports {name} from ibkr adapter")
+                if path == ROOT / "tests" / "test_repository_hygiene.py":
+                    continue
+                for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                    stripped = line.strip()
+                    if stripped.startswith(forbidden_imports):
+                        offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
         self.assertEqual(offenders, [])
 
     def test_transfer_package_public_api_uses_gateway_names(self):
-        text = (ROOT / "kairos" / "adapters" / "transfer" / "__init__.py").read_text(encoding="utf-8")
+        text = (ROOT / "kairos" / "connectors" / "transfer" / "__init__.py").read_text(encoding="utf-8")
         self.assertIn("BinanceTransferGateway", text)
         self.assertIn("BankTransferGateway", text)
         self.assertNotIn("BinanceTransferAdapter", text)
@@ -451,9 +414,9 @@ class RepositoryHygieneTests(unittest.TestCase):
 
     def test_connector_package_public_api_does_not_reexport_adapter_aliases(self):
         packages = (
-            ROOT / "kairos" / "adapters" / "binance" / "__init__.py",
-            ROOT / "kairos" / "adapters" / "ibkr" / "__init__.py",
-            ROOT / "kairos" / "adapters" / "transfer" / "__init__.py",
+            ROOT / "kairos" / "connectors" / "binance" / "__init__.py",
+            ROOT / "kairos" / "connectors" / "ibkr" / "__init__.py",
+            ROOT / "kairos" / "connectors" / "transfer" / "__init__.py",
         )
         offenders = []
         for path in packages:
@@ -544,7 +507,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
         self.assertIn('"massive-entitlement-diagnostics"', cli)
         self.assertNotIn('"massive-readiness"', cli)
-        self.assertFalse((ROOT / "kairos" / "adapters" / "massive" / "readiness.py").exists())
+        self.assertFalse((ROOT / "kairos" / "connectors" / "massive" / "readiness.py").exists())
         docs = [
             path
             for path in (ROOT / "docs").glob("*.md")
@@ -575,17 +538,25 @@ class RepositoryHygieneTests(unittest.TestCase):
                     offenders.append(str(path.relative_to(ROOT)))
         self.assertEqual(offenders, [])
 
+    def test_runtime_reference_and_failure_policy_are_the_public_cli_names(self):
+        cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
+        self.assertIn('"reference-artifact"', cli)
+        self.assertIn('"failure-policy"', cli)
+        self.assertNotIn('"golden"', cli)
+        self.assertNotIn('"failure-matrix"', cli)
+        self.assertFalse((ROOT / "kairos" / "application" / "runtime_golden.py").exists())
+        self.assertFalse((ROOT / "kairos" / "application" / "runtime_failure_matrix.py").exists())
+
     def test_spxw_reference_scenario_is_the_public_backtest_cli_name(self):
         cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
         self.assertIn('"spxw-reference-scenario"', cli)
-        self.assertIn('"golden-spxw"', cli)
-        self.assertIn('backtest_actions.add_parser("golden-spxw", help=argparse.SUPPRESS)', cli)
+        self.assertNotIn('"golden-spxw"', cli)
         self.assertTrue((ROOT / "kairos" / "backtest" / "spxw_reference_pipeline.py").exists())
+        self.assertFalse((ROOT / "kairos" / "backtest" / "golden.py").exists())
         offenders = []
         for root in (ROOT / "kairos", ROOT / "tests", ROOT / "examples"):
             for path in root.rglob("*.py"):
                 if path in {
-                    ROOT / "kairos" / "backtest" / "golden.py",
                     ROOT / "tests" / "test_repository_hygiene.py",
                 }:
                     continue

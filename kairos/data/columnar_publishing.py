@@ -10,7 +10,7 @@ from uuid import uuid4
 from kairos.storage.data_lake import sha256_bytes, write_json
 
 from .contracts import DatasetRelease, QualityLevel
-from .products import ManagedDataset
+from .products import DataProductContract
 from .publishing import publish_release, release_path
 from .quality import DatasetQualityService
 
@@ -23,7 +23,7 @@ class IntradayColumnarRelease:
 
 def publish_intraday_staging_parquet(
     lake: str | Path,
-    product: ManagedDataset,
+    product: DataProductContract,
     staging_root: str | Path,
     *,
     schema: dict[str, object],
@@ -206,7 +206,7 @@ def _sql_string(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def _content_hash_release_id(product: ManagedDataset, content_hash: str) -> str:
+def _content_hash_release_id(product: DataProductContract, content_hash: str) -> str:
     digest = sha256(str(product.key).encode() + b"\0" + content_hash.encode()).hexdigest()[:24]
     return f"ds_{digest}"
 

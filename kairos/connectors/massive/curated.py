@@ -10,7 +10,7 @@ from kairos.backtest.feed import InstrumentLifecycleSnapshot, MarketReplayDatase
 from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairos.reference import ReferenceCatalog, ReferenceCatalogRepository, ReferenceRole
 from kairos.reference.access import contract_spec, product_type
-from kairos.research.snapshot import build_reference_evidence
+from kairos.research_platform.snapshot import build_reference_evidence
 from kairos.data.catalog import DataCatalog
 from kairos.data.contracts import (
     DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel,
@@ -18,8 +18,8 @@ from kairos.data.contracts import (
 from kairos.domain.market_data import Quote
 from kairos.domain.product import ListedOptionSpec, OptionRight, ProductType, SettlementSession
 from kairos.market_data import MarketEventType, ParquetMarketEventRepository
-from kairos.research.data_store import MarketSnapshotCollectionPublisher
-from kairos.research.snapshot import DataQualityIssue, InstrumentSnapshot
+from kairos.research_platform.data_store import MarketSnapshotCollectionPublisher
+from kairos.research_platform.snapshot import DataQualityIssue, InstrumentSnapshot
 from kairos.storage.data_lake import sha256_bytes, write_json
 
 

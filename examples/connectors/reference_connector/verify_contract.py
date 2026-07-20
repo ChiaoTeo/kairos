@@ -18,7 +18,7 @@ def verify(command: str) -> dict[str, object]:
         shlex.split(command), cwd=Path.cwd(), check=True, capture_output=True, text=True,
     )
     observed = tuple(json.loads(line) for line in completed.stdout.splitlines() if line.strip())
-    vectors = json.loads((ROOT / "golden_vectors.json").read_text())
+    vectors = json.loads((ROOT / "contract_vectors.json").read_text())
     if len(observed) != len(vectors):
         raise RuntimeError(f"gateway emitted {len(observed)} events for {len(vectors)} vectors")
     for event, vector in zip(observed, vectors):

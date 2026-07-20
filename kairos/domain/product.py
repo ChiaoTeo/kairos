@@ -153,7 +153,6 @@ InstrumentContractSpec: TypeAlias = (
     IndexSpec | EquitySpec | ListedOptionSpec | CryptoSpotSpec | FutureSpec
     | PerpetualSpec | CryptoOptionSpec | TokenizedEquitySpec
 )
-ProductSpec: TypeAlias = InstrumentContractSpec
 
 
 def is_option_spec(spec: object) -> TypeGuard[OptionSpec]:

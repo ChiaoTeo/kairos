@@ -73,7 +73,7 @@ def run_runtime_reference_artifact(root: str | Path) -> RuntimeReferenceArtifact
     store = SQLiteRuntimeStore(paths.runtime_database)
     catalog = _catalog()
     instrument_id = InstrumentId("BTC-USDT-SPOT-GOLDEN")
-    account = AccountKey(InstitutionId("simulated"), "runtime-golden", AccountType.CRYPTO_SPOT)
+    account = AccountKey(InstitutionId("simulated"), "runtime-reference", AccountType.CRYPTO_SPOT)
     clock = FixedClock(STARTED_AT)
     venue = SimulatedExecutionAccountGateway(VenueId("simulated"), account, clock=clock)
     recovery = RuntimeRecoveryService(
@@ -81,7 +81,7 @@ def run_runtime_reference_artifact(root: str | Path) -> RuntimeReferenceArtifact
     )
     application = KairosApplication(
         ApplicationConfig(Environment.TESTNET, paths), store,
-        runtime_id="runtime-golden-before-restart", accounts=(account,), recovery=recovery, clock=clock,
+        runtime_id="runtime-reference-before-restart", accounts=(account,), recovery=recovery, clock=clock,
         probes=(
             FunctionProbe("market_data", lambda: (True, "frozen quote is current")),
             FunctionProbe("execution", lambda: (venue.connected, "simulated venue connected")),
@@ -125,7 +125,7 @@ def run_runtime_reference_artifact(root: str | Path) -> RuntimeReferenceArtifact
     )
     ingestion = DurableExecutionIngestionService(LedgerService(store.load_ledger(), catalog), store)
     transaction = ingestion.ingest(
-        execution, external_key="simulated:runtime-golden:fill-1",
+        execution, external_key="simulated:runtime-reference:fill-1",
         client_order_id=order.client_order_id, fully_filled=True,
         cursor_name=f"simulated:fills:{account.value}", cursor_value="1",
     )
@@ -145,7 +145,7 @@ def run_runtime_reference_artifact(root: str | Path) -> RuntimeReferenceArtifact
     )
     restarted = KairosApplication(
         ApplicationConfig(Environment.TESTNET, paths), restarted_store,
-        runtime_id="runtime-golden-after-restart", accounts=(account,), clock=clock,
+        runtime_id="runtime-reference-after-restart", accounts=(account,), clock=clock,
         recovery=RuntimeRecoveryService(
             restarted_store, catalog, AssetId("USDT"), {account: restarted_venue},
             marks={instrument_id: Decimal("100")},
@@ -200,7 +200,7 @@ def _strategy_decision(quote: Quote) -> TargetPositionIntent:
         raise ValueError("strategy requires a valid two-sided quote")
     return TargetPositionIntent(
         uuid5(NAMESPACE_URL, f"{RUNTIME_REFERENCE_SCENARIO_ID}:{quote.instrument_id.value}"),
-        "runtime-golden-strategy-v1", quote.instrument_id, Decimal("1"),
+        "runtime-reference-strategy-v1", quote.instrument_id, Decimal("1"),
         "deterministic target generated from governed quote",
     )
 
@@ -223,7 +223,7 @@ def _catalog() -> ReferenceCatalog:
         venue_definitions=(VenueDefinition(VenueId("simulated"), VenueType.CRYPTO_EXCHANGE, "Simulated", "UTC", effective_from),),
     )
     listing_id = ListingId("listing:simulated:BTCUSDT")
-    for account_id in ("runtime-golden", "failure-matrix"):
+    for account_id in ("runtime-reference", "failure-policy"):
         account = AccountKey(InstitutionId("simulated"), account_id, AccountType.CRYPTO_SPOT)
         catalog.routes.add(ExecutionRoute(
             RouteId(f"route:simulated:{account_id}"), BrokerId("simulated"), account, listing_id, effective_from,
@@ -234,9 +234,3 @@ def _catalog() -> ReferenceCatalog:
 def _hash(payload: dict[str, object]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return sha256(encoded.encode("utf-8")).hexdigest()
-
-
-GOLDEN_SCHEMA_VERSION = RUNTIME_REFERENCE_SCHEMA_VERSION
-GOLDEN_SCENARIO_ID = RUNTIME_REFERENCE_SCENARIO_ID
-RuntimeGoldenResult = RuntimeReferenceArtifactResult
-run_runtime_golden = run_runtime_reference_artifact

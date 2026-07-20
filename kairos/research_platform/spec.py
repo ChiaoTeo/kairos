@@ -71,6 +71,3 @@ class OptionChainCaptureSpec:
         if self.retention_until_dte < 0 or not self.retention_target_deltas:
             raise ValueError("invalid retained-leg configuration")
         time.fromisoformat(self.retention_evaluation_time)
-
-
-ResearchSpec = OptionChainCaptureSpec

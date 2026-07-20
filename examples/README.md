@@ -87,14 +87,13 @@ kairos --lake-root example-output/sma-lifecycle run inspect \
   --db example-output/sma-lifecycle/runs/sma/runtime/runtime.sqlite3
 ```
 
-`run backtest-sma`、`run simulate-sma` 和 `run shadow-sma` 仍作为兼容入口保留；新示例优先使用带
-`--strategy` 的通用入口。所有运行入口都会返回不可变 Run Artifact 路径。
+示例统一使用带 `--strategy` 的通用入口。所有运行入口都会返回不可变 Run Artifact 路径。
 Shadow 使用同一 Factor/Strategy，但只记录假设 Intent，`orders=0` 且 `fills=0`。可以解释指定时刻的
 因子、决策和 EconomicIntent，或使用相同输入离线重放：
 
 ```bash
 kairos run inspect --artifact '<manifest.json>' --at 2026-01-02T00:00:00Z
-kairos run replay-sma --artifact '<manifest.json>' --fixture
+kairos run artifact-replay --artifact '<manifest.json>' --fixture
 ```
 
 Replay 会分别比较 factor、decision、intent 和完整 strategy-run audit hash；任一项不一致都会返回
@@ -119,7 +118,7 @@ kairos run shadow --fixture --fast 5 --slow 15 \
 kairos run paper --fixture --fast 5 --slow 15 \
   --run-root example-output/sma-paper/runtime \
   --artifact-root example-output/sma-paper/artifacts
-kairos run replay-sma-capture --artifact '<manifest.json>' --capture '<capture.jsonl>'
+kairos run capture-replay --artifact '<manifest.json>' --capture '<capture.jsonl>'
 ```
 
 Shadow 和 deterministic Paper acceptance 都不需要账户凭据。真实 Binance Testnet/IBKR Paper 仍必须经过
@@ -260,7 +259,7 @@ simulation，并要求二者在 execution driver 之前的 factor、decision 和
 ./pyenv/bin/python examples/connectors/reference_connector/verify_contract.py
 ```
 
-详细说明见 [reference_connector/README.md](connectors/reference_connector/README.md)。未来 Rust gateway 必须使用相同 golden vectors 和 verifier，不能要求上层策略修改接口。
+详细说明见 [reference_connector/README.md](connectors/reference_connector/README.md)。未来 Rust gateway 必须使用相同 contract vectors 和 verifier，不能要求上层策略修改接口。
 
 ## 6. 长时间行情 Soak
 

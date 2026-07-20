@@ -49,7 +49,7 @@
 - `kairos/application/service_supervisor.py`
 - `kairos/application/async_runtime.py`
 - `kairos/market_data/subscriptions.py`
-- `kairos/adapters/massive/websocket.py`
+- `kairos/connectors/massive/websocket.py`
 - `tests/test_async_runtime_subscription.py`
 - `tests/test_async_live_pipeline.py`
 - `tests/test_massive_websocket.py`
@@ -120,7 +120,7 @@
 - [x] 新增可离线执行的 SMA batch/async Canonical parity example，并可切换到正式 Q3/Q4 Dataset Release。
 - [x] 新增无需账户凭据的 Binance Quote Capture example，输出 Raw/Canonical Capture 和 Strategy Projection/Decision/Intent/Audit Hash。
 - [x] 新增 Binance REST Snapshot + WebSocket Delta example，输出对齐指标、有效盘口与 Replay equality。
-- [x] 新增 Live-vs-Replay Strategy example、五模式 Composition example 和 Python/Rust 共用 connector golden-vector verifier。
+- [x] 新增 Live-vs-Replay Strategy example、五模式 Composition example 和 Python/Rust 共用 connector contract-vector verifier。
 - [x] 新增 Examples subprocess smoke tests 与 Repository hygiene tests，示例不再只靠文档声明可运行。
 - [x] 真实治理 Release example 通过：4344 bars、84 trades、batch/replay 相同，audit `65dee8f2a7c104db803bf7fc9d6240350855ffc8eaf9ed6986c6ac33ab752f35`。
 - [x] 真实公共 Quote example 通过：3 events、0 reconnect、Strategy live/replay 相同。
@@ -134,8 +134,8 @@
 证据：
 
 - `kairos/application/modes.py`
-- `kairos/adapters/binance/stream.py`
-- `kairos/adapters/binance/order_book.py`
+- `kairos/connectors/binance/stream.py`
+- `kairos/connectors/binance/order_book.py`
 - `kairos/market_data/capture.py`
 - `kairos/market_data/soak.py`
 - `kairos/market_data/projections.py`
@@ -256,7 +256,7 @@
 - [x] Catalog schema v4 持久化 DataProductContract；当前 15 个 Product 全部拥有统一 Contract。
 - [x] 内置产品、动态 Massive 配置、Provider Registry、Catalog Bootstrap 和 Publisher 消费同一 DataProductContract。
 - [x] 删除 `models.Datasets` 的平行产品定义；兼容 Datasets handle 由权威 DataProductContract 派生。
-- [x] ManagedDataset 降为 DataProductContract 的兼容别名，不再是第二种产品模型。
+- [x] 旧受管数据集概念已收敛到 DataProductContract，不再是第二种产品模型。
 - [x] DataProductContract 发布门禁阻止低于声明最低质量等级的 Release。
 - [x] Quote Profile：价格有效性、bid/ask 非交叉、主键、point-in-time 和确定性顺序。
 - [x] Trade Profile：trade ID、价格/数量、方向、point-in-time、去重和确定性顺序。
@@ -271,7 +271,7 @@
 - [x] MarketSnapshot Profile：Manifest/Release 身份、切片顺序、Universe Definition、合约/报价覆盖、staleness、future fact、crossed quote、critical issue 和冻结输入。
 - [x] 从 Massive SPXW Event 与旧 MarketSnapshot 双重冻结输入生成新的完整 Curated MarketSnapshot Release。
 - [x] 新 SPXW Release 过滤首个缺失行情切片后达到 4 slices、100% contract/quote coverage、0 stale、0 future fact、0 critical issue，并晋级 Q3。
-- [x] 新增 `backtest spxw-reference-scenario`，固定 Event、Source Snapshot、Curated Snapshot、Quality Report 和 conservative/stress audit hash；旧 `golden-spxw` 仅作为兼容别名。
+- [x] 新增 `backtest spxw-reference-scenario`，固定 Event、Source Snapshot、Curated Snapshot、Quality Report 和 conservative/stress audit hash；旧固定回放兼容命令已删除。
 - [x] Trade/Market Event Profile 改为 DuckDB 流式聚合，不再通过 load_rows 物化全量数据。
 - [x] 21,930,528 条 Deribit Trade 在约 3 秒内完成去重、值域、point-in-time 和物理顺序检查。
 - [x] 原 Deribit Trade Release 识别出 8,620 处亚秒级 ISO 字符串物理乱序并隔离为 Q0。
@@ -336,9 +336,9 @@
 
 ### 数据产品
 
-- [x] 合并 Datasets、ManagedDataset 和动态配置为 DataProductContract。
+- [x] 合并 Dataset 定义和动态配置为 DataProductContract。
 - [x] 为 Quote、Trade、Market Event、Option Snapshot、Feature、Reference 实现 typed Quality Profile。
-- [x] 正式 Research Readiness 和 Golden/SMA Backtest 只消费冻结 Q3/Q4 Release，并可通过 `data audit-artifact` 独立核验 Release ID、content hash、质量和批准状态。
+- [x] 正式 Research Diagnostics 和 Reference/SMA Backtest 只消费冻结 Q3/Q4 Release，并可通过 `data audit-artifact` 独立核验 Release ID、content hash、质量和批准状态。
 - [x] 数据专项最终验收通过：92 项数据/研究/回测测试、离线 search/describe/query/freeze/replay/backtest/audit 用户路径和 Catalog strict health 全部通过；详见 `docs/data_system_final_acceptance.md`。
 
 ### 旧系统删除

@@ -5,15 +5,16 @@ from .acquisition import (
 )
 from .client import DataQuery, DataUnavailableError, ResearchDataClient
 from .release_metadata import ensure_release_metadata, verify_release_metadata
-from .feed import ReplayEventFeed, ReplaySnapshotFeed, ReplaySliceFeed, ReplaySpec
+from .feed import ReplayEventFeed, ReplaySnapshotFeed, ReplaySpec
 from .contracts import (
-    AcquirePolicy, CommonFields, DataProduct, DataProductDefinition, DataProductContract, DataView, DatasetKey, DatasetLayer, DatasetRelease,
+    AcquirePolicy, CommonFields, DataProduct, DataProductDefinition, DataProductContract, DataReleaseManifest,
+    DataSetContractArtifact, DataView, DatasetKey, DatasetLayer, DatasetRelease,
     DatasetStatus, DatasetStorageKind, FieldRef, OptionQuoteFields, OutputFormat, QualityLevel, RunMode,
-    SourceBinding,
+    LiveViewManifest, SourceBinding, data_release_ref, stable_artifact_hash,
 )
 from .products import Datasets
 from .snapshot import StudyInputSnapshot, write_study_snapshot
-from .publishing import register_historical_dataset, register_market_replay_dataset
+from .publishing import register_market_replay_dataset
 from .curated import ConsolidatedTradeBuilder, ConsolidatedTradeInput, ConsolidatedTradePolicy
 from .diagnostics import DataDiagnosticIssue, DataDiagnosticsService
 from .quality import DatasetQualityService, QualityAssessment, QualityCheck
@@ -22,13 +23,15 @@ from .preparation import DataPreparationService, PreparedDataset
 __all__ = ["DataCatalog", "ResearchDataClient", "ensure_release_metadata", "verify_release_metadata",
            "AcquirePolicy", "CommonFields", "DataView",
            "DataProduct", "DataProductDefinition",
-           "DataProductContract", "DatasetKey", "DatasetLayer", "DatasetRelease", "DatasetStatus", "DatasetStorageKind",
+           "DataProductContract", "DataReleaseManifest", "DataSetContractArtifact",
+           "DatasetKey", "DatasetLayer", "DatasetRelease", "DatasetStatus", "DatasetStorageKind",
            "Datasets", "FieldRef",
-           "OptionQuoteFields", "OutputFormat", "QualityLevel", "RunMode", "SourceBinding", "AcquisitionPlan",
+           "LiveViewManifest", "OptionQuoteFields", "OutputFormat", "QualityLevel", "RunMode", "SourceBinding",
+           "data_release_ref", "stable_artifact_hash", "AcquisitionPlan",
            "AcquisitionRequest", "AcquisitionEstimate", "AcquisitionLimits", "CoveragePlanner", "ProviderConnector",
            "ProviderRegistry", "TimeRange", "DataQuery",
-           "DataUnavailableError", "ReplayEventFeed", "ReplaySnapshotFeed", "ReplaySliceFeed", "ReplaySpec", "StudyInputSnapshot",
-           "write_study_snapshot", "register_market_replay_dataset", "register_historical_dataset", "ConsolidatedTradeBuilder",
+           "DataUnavailableError", "ReplayEventFeed", "ReplaySnapshotFeed", "ReplaySpec", "StudyInputSnapshot",
+           "write_study_snapshot", "register_market_replay_dataset", "ConsolidatedTradeBuilder",
            "ConsolidatedTradeInput", "ConsolidatedTradePolicy"]
 __all__ += ["DataDiagnosticIssue", "DataDiagnosticsService"]
 __all__ += ["DatasetQualityService", "QualityAssessment", "QualityCheck"]

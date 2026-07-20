@@ -37,6 +37,13 @@ class FourProductSurfaceTests(unittest.TestCase):
             run = RunProductApi(root)
 
             downloaded = data.download("tutorial-sma-data")
+            downloaded_release_manifest = (
+                root / "canonical" / "tutorial" / "market" / "ohlcv" /
+                "instrument=BTC-USDT" / "interval=1h" / "release=fixture:sma-bars-v1" /
+                "data_release_manifest.json"
+            )
+            downloaded_release_manifest_exists = downloaded_release_manifest.exists()
+            downloaded_release_manifest_payload = json.loads(downloaded_release_manifest.read_text(encoding="utf-8"))
             study.open("api-study", hypothesis="api path")
             study.add_data(
                 "api-study",
@@ -52,9 +59,18 @@ class FourProductSurfaceTests(unittest.TestCase):
             replayed = run.replay(started["run_id"])
 
         self.assertEqual(downloaded["release_id"], "fixture:sma-bars-v1")
+        self.assertTrue(downloaded_release_manifest_exists)
+        self.assertEqual(downloaded_release_manifest_payload["kind"], "data_release_manifest")
+        self.assertEqual(len(downloaded["contract_hash"]), 64)
+        self.assertEqual(len(downloaded["manifest_hash"]), 64)
         self.assertEqual(study_lock["factors"]["momentum_12_1"]["code_hash"], added_factor["code_hash"])
+        self.assertEqual(study_lock["data"]["bars"]["contract_hash"], downloaded["contract_hash"])
+        self.assertEqual(study_lock["evidence_chain"]["data"]["bars"]["artifact_ref"], downloaded["artifact_ref"])
+        self.assertEqual(strategy_lock["data"]["bars"], study_lock["data"]["bars"])
         self.assertEqual(strategy_lock["inputs"]["primary"]["source_hash"], added_factor["code_hash"])
         self.assertEqual(started["target"]["hash"], strategy_lock["lock_hash"])
+        self.assertEqual(started["input_artifacts"]["data"]["bars"]["contract_hash"], downloaded["contract_hash"])
+        self.assertEqual(started["input_artifacts"]["inputs"]["primary"]["source_hash"], added_factor["code_hash"])
         self.assertTrue(replayed["passed"])
 
     def test_data_study_strategy_run_user_path(self) -> None:
@@ -185,27 +201,44 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "--second",
                 backtest_run["run_id"],
             )
+            backtest_manifest_exists = Path(backtest_run["manifest"]).exists()
 
         self.assertEqual(downloaded["product"], "data")
         self.assertEqual(downloaded["release_id"], "fixture:sma-bars-v1")
         self.assertEqual(written["dataset_id"], "reference.sentiment.equity.us")
         self.assertEqual(written["primary_time"], "available_time")
+        self.assertEqual(len(written["contract_hash"]), 64)
+        self.assertEqual(len(written["manifest_hash"]), 64)
+        self.assertEqual(written["artifact_ref"], f"data://reference.sentiment.equity.us/releases/{written['release_id']}")
         self.assertEqual(live_view["kind"], "live_view_manifest")
+        self.assertEqual(live_view["contract_hash"], written["contract_hash"])
+        self.assertEqual(len(live_view["manifest_hash"]), 64)
         self.assertEqual(live_view["live_data_plane"]["channel_contract"], "BoundedEventChannel")
         self.assertEqual(live_view["live_data_plane"]["freshness"]["max_age_seconds"], 60)
         self.assertEqual(study["product"], "study")
         self.assertEqual(bars["release_id"], "fixture:sma-bars-v1")
         self.assertEqual(sentiment["release_id"], written["release_id"])
+        self.assertEqual(sentiment["contract_hash"], written["contract_hash"])
+        self.assertEqual(sentiment["manifest_hash"], written["manifest_hash"])
+        self.assertEqual(sentiment["artifact_ref"], written["artifact_ref"])
         self.assertEqual(len(factor["code_hash"]), 64)
         self.assertEqual(study_lock["data"]["bars"]["release_id"], "fixture:sma-bars-v1")
+        self.assertEqual(study_lock["data"]["sentiment"]["contract_hash"], written["contract_hash"])
+        self.assertEqual(study_lock["evidence_chain"]["data"]["sentiment"]["manifest_hash"], written["manifest_hash"])
         self.assertEqual(study_lock["factors"]["momentum_12_1"]["code_hash"], factor["code_hash"])
         self.assertEqual(strategy["derived_from"]["lock_hash"], study_lock["lock_hash"])
+        self.assertEqual(strategy["data"]["sentiment"]["content_hash"], study_lock["data"]["sentiment"]["content_hash"])
         self.assertEqual(bound_factor["source_hash"], factor["code_hash"])
         self.assertEqual(len(risk["risk_hash"]), 64)
+        self.assertEqual(strategy_lock["data"]["sentiment"], study_lock["data"]["sentiment"])
+        self.assertEqual(strategy_lock["consistency_checks"]["data_release_hashes"], "passed")
         self.assertEqual(strategy_lock["inputs"]["primary"]["source_hash"], factor["code_hash"])
         self.assertEqual(backtest_run["target"]["hash"], strategy_lock["lock_hash"])
+        self.assertEqual(backtest_run["input_artifacts"]["data"]["sentiment"]["manifest_hash"], written["manifest_hash"])
+        self.assertEqual(backtest_run["input_artifacts"]["inputs"]["primary"]["source_hash"], factor["code_hash"])
         self.assertEqual(inspected["run_id"], backtest_run["run_id"])
+        self.assertEqual(inspected["input_artifacts"], backtest_run["input_artifacts"])
         self.assertTrue(replayed["passed"])
         self.assertFalse(compared["same_target"])
         self.assertFalse(compared["same_mode"])
-        self.assertTrue(Path(backtest_run["manifest"]).exists())
+        self.assertTrue(backtest_manifest_exists)

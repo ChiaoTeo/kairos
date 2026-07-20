@@ -21,8 +21,8 @@ from kairos.domain.event import (
 )
 from kairos.domain.identity import AccountKey, InstitutionId, InstrumentId
 from kairos.domain.market_data import FundingRate, Greeks, IndexPrice, MarkPrice, OpenInterest, OptionChain, Quote, Trade, TradingStatus, VolatilitySurfacePoint
-from kairos.research.snapshot import DataQualityIssue, InstrumentSnapshot, ResearchSnapshot
-from kairos.research.spec import MarketDataType, OptionChainCaptureSpec
+from kairos.research_platform.snapshot import DataQualityIssue, InstrumentSnapshot, ResearchSnapshot
+from kairos.research_platform.spec import MarketDataType, OptionChainCaptureSpec
 
 PAYLOAD_TYPES = {
     cls.__name__: cls

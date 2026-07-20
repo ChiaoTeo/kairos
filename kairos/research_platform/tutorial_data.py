@@ -84,7 +84,7 @@ def ensure_sma_tutorial_dataset(root: str | Path):
     }
     lineage = {
         "lineage_version": 2, "dataset_id": SMA_TUTORIAL_RELEASE_ID,
-        "producer": {"name": "kairos.research.tutorial_data", "version": "1"},
+        "producer": {"name": "kairos.research_platform.tutorial_data", "version": "1"},
         "source": {"provider": "synthetic-fixture"}, "point_in_time_safe": True,
         "synthetic": True,
     }

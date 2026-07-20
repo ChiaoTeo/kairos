@@ -183,8 +183,3 @@ def analyze_option_snapshot(snapshot: ResearchSnapshot) -> OptionSnapshotAnalysi
         smiles,
         tuple(pairs),
     )
-
-
-ResearchRow = OptionSnapshotMetricRow
-ResearchResult = OptionSnapshotAnalysis
-analyze = analyze_option_snapshot

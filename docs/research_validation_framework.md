@@ -220,12 +220,12 @@ Operations负责：
 
 |契约|生产者|消费者|回答的问题|
 |---|---|---|---|
-|`ResearchResult`|研究验证|研究门禁/治理|信号证据到了哪里|
+|`ResearchEvidence`|研究验证|研究门禁/治理|信号证据到了哪里|
 |`StrategySpec`|策略研究|Strategy Model|信号如何变成经济持仓|
 |`EconomicIntent`|Strategy Model|Portfolio & Risk|现在希望持有什么风险|
 |`ExecutionPolicy`|策略与执行共同配置|Execution Platform|允许怎样成交|
 
-`ResearchResult` 至少包含假设、效应量、样本、证据等级、多维状态和限制。
+`ResearchEvidence` 至少包含假设、效应量、样本、证据等级、多维状态和限制。
 
 `StrategySpec` 至少包含：
 
@@ -1031,7 +1031,7 @@ data_gap_plan.json      # 数据缺口、补数计划和重评条件
 
 ### Phase A：治理基础
 
-1. `ResearchResult`、多维状态和验证层级；
+1. `ResearchEvidence`、多维状态和验证层级；
 2. `StrategySpec`、`spec_hash` 和研究预注册；
 3. 数据能力契约与数据缺口分类；
 4. 时间切分、测试集消耗和audit hash；

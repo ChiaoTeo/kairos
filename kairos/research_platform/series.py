@@ -16,11 +16,11 @@ from kairos.domain.event import UnderlyingPriceUpdated
 from kairos.domain.market_state import MarketState, apply_market_event
 from kairos.domain.product import ListedOptionSpec
 from kairos.reference.access import contract_spec
-from kairos.research.option_universe_selector import select_instruments
-from kairos.research.snapshot import DataQualityIssue, InstrumentSnapshot
-from kairos.research.spec import OptionChainCaptureSpec
-from kairos.research.data_store import MarketSnapshotCollectionPublisher
-from kairos.research.retention import DeltaLegWatchlist
+from kairos.research_platform.option_universe_selector import select_instruments
+from kairos.research_platform.snapshot import DataQualityIssue, InstrumentSnapshot
+from kairos.research_platform.spec import OptionChainCaptureSpec
+from kairos.research_platform.data_store import MarketSnapshotCollectionPublisher
+from kairos.research_platform.retention import DeltaLegWatchlist
 from kairos.pricing import OptionValuationService
 from kairos.market_data import OptionMarketObservation, validate_option_observation
 

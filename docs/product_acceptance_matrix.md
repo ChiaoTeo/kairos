@@ -39,7 +39,7 @@ Spot/Perpetual Carry、Funding、Corporate Action、Assignment、Conservative/St
 
 | 要求 | 权威实现 | 证据 |
 |---|---|---|
-| Sandbox/Governed Research 分离 | `kairos.research.workspace`、ValidationArtifactWriter | workspace 与 `data/studies` 不混用 |
+| Sandbox/Governed Research 分离 | `kairos.research_platform.workspace`、ValidationArtifactWriter | workspace 与 `data/studies` 不混用 |
 | Study 可直接使用绑定数据 | `StudySession`、`StudyData` | Dataset hash 校验、Pandas/Polars/Arrow、profile、scaffold |
 | Factor 一等公民 | FactorSpec/Snapshot/Runtime/Registry | SMA、SPXW skew、fear-cooling factors |
 | Strategy Release 绑定代码和因子 | StrategyRegistry | implementation.json、factor_bindings.json、manifest.json |
@@ -48,7 +48,7 @@ Spot/Perpetual Carry、Funding、Corporate Action、Assignment、Conservative/St
 | 跨模式一致性 | factor/decision/intent/audit hashes | Full product acceptance |
 | 运行恢复 | SQLite Runtime Store、RuntimeRecoveryService | historical simulation / paper restart_ready |
 | 决策解释 | RunArtifactRepository.explain | `run inspect --artifact --at` |
-| Live replay | CanonicalCaptureWriter/Source | `run replay-sma-capture` |
+| Live replay | CanonicalCaptureWriter/Source | `run capture-replay` |
 | 执行校准 release | ExecutionCalibrationRelease | `runtime calibrate-execution`、`test_execution_calibration.py` |
 | 回测绑定执行校准 | `run backtest --execution-calibration` | Run Artifact 记录 fill_model、release_id、release_hash、样本数、适用范围和校准后权益对比 |
 | 三层归因 | RunAttribution | signal / portfolio / execution |
@@ -67,7 +67,7 @@ kairos factor register-sma|verify-sma
 kairos strategy register-sma|register-builtins|register-btc-iron-condor
 kairos strategy inspect|status|activate|rollback|check-promotion|promote
 kairos run backtest|simulate|shadow|paper|reference
-kairos run inspect|replay-sma|replay-sma-capture
+kairos run inspect|artifact-replay|capture-replay
 kairos order submit
 kairos runtime calibrate-execution|reference-artifact|failure-policy|l4-preflight
 ```

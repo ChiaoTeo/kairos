@@ -9,7 +9,7 @@ from decimal import Decimal
 from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
 from kairos.domain.market_data import Quote
-from kairos.research.data_store import MarketSnapshotCollectionPublisher, merge_datasets
+from kairos.research_platform.data_store import MarketSnapshotCollectionPublisher, merge_datasets
 
 
 class ResearchDataStoreTests(unittest.TestCase):

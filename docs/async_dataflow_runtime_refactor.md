@@ -878,7 +878,7 @@ contracts/
 -UTC nanosecond 时间；
 -向前/向后兼容规则；
 -未知字段处理；
--跨语言 golden vectors；
+-跨语言 contract vectors；
 -编码、解码和 round-trip 测试；
 -错误输入和边界值测试。
 
@@ -939,7 +939,7 @@ Python Runtime 仍负责：
 - subscription apply/reconcile；
 - reconnect 后恢复目标订阅；
 - sequence/gap detection；
-- raw -> canonical golden vector；
+- raw -> canonical contract vector；
 - Decimal/time round-trip；
 - unknown field compatibility；
 - slow consumer overflow；
@@ -1159,7 +1159,7 @@ Paper/Testnet L4 至少验证：
 -定义 typed market payload；
 -定义 EventSource/CommandSink；
 -将 Dataset Release Replay 适配到统一异步 EventSource；
--建立 Python contract golden vectors；
+-建立 Python contract contract vectors；
 -为现有 Strategy 建立流式运行入口。
 
 退出标准：同一 Strategy 可从 Release EventSource 和 Synthetic Live EventSource 运行。
@@ -1219,7 +1219,7 @@ Paper/Testnet L4 至少验证：
 -控制面使用 Unix socket/gRPC；
 -数据面先比较 framed socket 与 shared memory；
 -实现 writer epoch、gap detection、schema negotiation；
--运行相同 contract/golden/fault tests；
+-运行相同 contract/contract/fault tests；
 -对比延迟、吞吐、CPU、内存和调试成本。
 
 退出标准：Rust 与 Python EventSource 可互换，上层 hash 和行为一致。

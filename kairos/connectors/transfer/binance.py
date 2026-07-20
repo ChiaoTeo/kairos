@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from kairos.adapters.binance.request_signing import BinanceSigner
-from kairos.adapters.binance.rest_transport import BinanceTransport, RateLimiter
+from kairos.connectors.binance.request_signing import BinanceSigner
+from kairos.connectors.binance.rest_transport import BinanceTransport, RateLimiter
 from kairos.domain.identity import AssetId
 from kairos.reference import ReferenceCatalog
 from kairos.reference.identity import LocationId

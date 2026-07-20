@@ -109,11 +109,6 @@ def paper_trading_composition(provider: str) -> RunModeComposition:
         "paper-runtime-gates", CapturePolicy.RAW_AND_CANONICAL,
     )
 
-
-def live_paper_composition(provider: str) -> RunModeComposition:
-    return paper_trading_composition(provider)
-
-
 def live_composition(provider: str, execution_driver: str) -> RunModeComposition:
     return RunModeComposition(
         RunMode.LIVE, f"live:{provider}", "system", execution_driver, "runtime-store",

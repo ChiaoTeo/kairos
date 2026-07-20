@@ -11,7 +11,7 @@ from kairos.backtest.synthetic_scenarios import _put, build_synthetic_backtest_d
 from kairos.backtest.result import BacktestConfig
 from kairos.domain.market_data import Quote
 from kairos.pricing import PricingInput, black76
-from kairos.research.snapshot import InstrumentSnapshot
+from kairos.research_platform.snapshot import InstrumentSnapshot
 from kairos.risk.limits import RiskLimits
 from kairos.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
 

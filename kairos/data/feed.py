@@ -102,6 +102,3 @@ class ReplaySnapshotFeed:
 
     def between(self, start: datetime, end: datetime) -> Iterator[MarketSnapshot]:
         yield from self._feed.between(start, end)
-
-
-ReplaySliceFeed = ReplaySnapshotFeed

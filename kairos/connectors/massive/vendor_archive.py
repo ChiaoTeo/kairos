@@ -132,10 +132,6 @@ class MassiveVendorArchiveClient:
             directory.replace(target); moved.append(target)
         return tuple(moved)
 
-
-MassiveSourceArchive = MassiveVendorArchiveClient
-
-
 class MassiveFlatFileClient:
     def __init__(self, root: str | Path, client: MassiveClient, *, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
                  stream_download: Callable[[str, Path], tuple[int, dict[str, str], int, str]] | None = None) -> None:

@@ -40,8 +40,8 @@ class KairosApiTests(unittest.TestCase):
             OptionCloseImpliedVolatilityPipeline as ImportedOptionCloseImpliedVolatilityPipeline,
         )
         from kairos.ports.execution import ExecutionPort as ImportedExecutionPort
-        from kairos.research import open_study as ImportedOpenStudy
-        from kairos.research.spec import OptionChainCaptureSpec as ImportedOptionChainCaptureSpec
+        from kairos.research_platform import open_study as ImportedOpenStudy
+        from kairos.research_platform.spec import OptionChainCaptureSpec as ImportedOptionChainCaptureSpec
 
         self.assertIs(SyntheticScenario, ImportedSyntheticScenario)
         self.assertTrue(callable(MarketReplayDataset))

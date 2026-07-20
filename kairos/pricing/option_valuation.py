@@ -9,7 +9,7 @@ from kairos.domain.identity import InstrumentId
 from kairos.domain.market_data import Greeks
 from kairos.domain.product import ListedOptionSpec, ProductType, SettlementType
 from kairos.market_data import OptionMarketObservation, blocking_issues, validate_option_observation
-from kairos.research.snapshot import InstrumentSnapshot
+from kairos.research_platform.snapshot import InstrumentSnapshot
 from kairos.volatility import SurfaceSnapshot, VolObservation, build_surface, surface_implied_volatility
 from kairos.reference.catalog import ReferenceCatalog
 from kairos.reference.contracts import ReferenceRole

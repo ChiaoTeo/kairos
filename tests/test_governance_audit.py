@@ -2,7 +2,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairos.research.validation import audit_governance
+from kairos.research_platform.validation import audit_governance
 from kairos.storage.data_lake import write_daily_dataset
 from kairos.data import DatasetRelease
 from kairos.data.products import BTC_SPOT_DAILY

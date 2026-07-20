@@ -7,11 +7,6 @@ from .contracts import (
     SourceBinding,
 )
 
-
-# Compatibility name for pipeline code while DataProductContract becomes the sole contract.
-ManagedDataset = DataProductContract
-
-
 def _governed(product, description: str):
     owner = "research-platform" if product.layer.value in {"features", "studies"} else "data-platform"
     return replace(product, description=description, owner=owner)
@@ -150,13 +145,13 @@ def _capabilities(*, point_in_time_universe=False, synchronous_quotes=False, top
     }
 
 
-BTC_SPOT_DAILY = ManagedDataset(
+BTC_SPOT_DAILY = DataProductContract(
     _governed(_BTC_SPOT_DAILY_PRODUCT, "Point-in-time Binance BTC/USDT daily OHLCV bars."),
     "canonical/market/ohlcv/asset_class=crypto/venue=binance/instrument=BTC-USDT/interval=1d",
     "market.ohlcv.v1", _capabilities(point_in_time_universe=True, products=("spot",)),
     quality_profile="ohlcv", minimum_publication_level=QualityLevel.BACKTEST,
 )
-BINANCE_USDM_PERPETUAL_HOURLY = ManagedDataset(
+BINANCE_USDM_PERPETUAL_HOURLY = DataProductContract(
     _governed(
         _BINANCE_USDM_PERPETUAL_HOURLY_PRODUCT,
         "Point-in-time Binance USD-M USDT perpetual full-market hourly OHLCV bars.",
@@ -166,7 +161,7 @@ BINANCE_USDM_PERPETUAL_HOURLY = ManagedDataset(
     _capabilities(point_in_time_universe=True, products=("perpetual",), maximum_validation_level=3),
     quality_profile="ohlcv", minimum_publication_level=QualityLevel.BACKTEST,
 )
-US_EQUITY_MASSIVE_RAW_DAILY = ManagedDataset(
+US_EQUITY_MASSIVE_RAW_DAILY = DataProductContract(
     _governed(
         _US_EQUITY_MASSIVE_RAW_DAILY_PRODUCT,
         "Massive US equity raw daily OHLCV bars. Full-market releases must use stable instrument identity and point-in-time reference.",
@@ -177,7 +172,7 @@ US_EQUITY_MASSIVE_RAW_DAILY = ManagedDataset(
     quality_profile="equity_ohlcv",
     minimum_publication_level=QualityLevel.RESEARCH,
 )
-US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY = ManagedDataset(
+US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY = DataProductContract(
     _governed(
         _US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY_PRODUCT,
         "Massive US equity vendor-adjusted daily OHLCV bars for reconciliation against internally adjusted returns.",
@@ -188,7 +183,7 @@ US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY = ManagedDataset(
     quality_profile="equity_ohlcv",
     minimum_publication_level=QualityLevel.RESEARCH,
 )
-US_EQUITY_MASSIVE_CORPORATE_ACTIONS = ManagedDataset(
+US_EQUITY_MASSIVE_CORPORATE_ACTIONS = DataProductContract(
     _governed(
         _US_EQUITY_MASSIVE_CORPORATE_ACTIONS_PRODUCT,
         "Massive US equity split and cash dividend events archived for internal adjustment.",
@@ -200,7 +195,7 @@ US_EQUITY_MASSIVE_CORPORATE_ACTIONS = ManagedDataset(
     quality_profile="corporate_action",
     minimum_publication_level=QualityLevel.RESEARCH,
 )
-US_EQUITY_MASSIVE_IDENTITY = ManagedDataset(
+US_EQUITY_MASSIVE_IDENTITY = DataProductContract(
     _governed(
         _US_EQUITY_MASSIVE_IDENTITY_PRODUCT,
         "Massive US equity stable instrument identities, symbol mappings and quarantine records.",
@@ -212,7 +207,7 @@ US_EQUITY_MASSIVE_IDENTITY = ManagedDataset(
     quality_profile="equity_identity",
     minimum_publication_level=QualityLevel.RESEARCH,
 )
-US_EQUITY_RETURNS_DAILY = ManagedDataset(
+US_EQUITY_RETURNS_DAILY = DataProductContract(
     _governed(
         _US_EQUITY_RETURNS_DAILY_PRODUCT,
         "Internally adjusted US equity split-adjusted and total-return series.",
@@ -223,7 +218,7 @@ US_EQUITY_RETURNS_DAILY = ManagedDataset(
     quality_profile="equity_returns",
     minimum_publication_level=QualityLevel.BACKTEST,
 )
-US_EQUITY_UNIVERSE_DAILY = ManagedDataset(
+US_EQUITY_UNIVERSE_DAILY = DataProductContract(
     _governed(
         _US_EQUITY_UNIVERSE_DAILY_PRODUCT,
         "Point-in-time US equity daily universe and eligibility exclusions.",
@@ -234,7 +229,7 @@ US_EQUITY_UNIVERSE_DAILY = ManagedDataset(
     quality_profile="equity_universe",
     minimum_publication_level=QualityLevel.BACKTEST,
 )
-US_EQUITY_LIQUIDITY_DAILY = ManagedDataset(
+US_EQUITY_LIQUIDITY_DAILY = DataProductContract(
     _governed(_US_EQUITY_LIQUIDITY_DAILY_PRODUCT, "Daily US equity liquidity features such as trailing ADV."),
     "features/equity/region=us/feature_set=liquidity-v1/frequency=1d",
     "features.liquidity.equity.us.1d.v1",
@@ -242,7 +237,7 @@ US_EQUITY_LIQUIDITY_DAILY = ManagedDataset(
     quality_profile="equity_feature",
     minimum_publication_level=QualityLevel.BACKTEST,
 )
-US_EQUITY_MOMENTUM_DAILY = ManagedDataset(
+US_EQUITY_MOMENTUM_DAILY = DataProductContract(
     _governed(
         _US_EQUITY_MOMENTUM_DAILY_PRODUCT,
         "Daily US equity cross-sectional momentum features including 12-1, 6-1 and 3-1 returns.",
@@ -253,43 +248,43 @@ US_EQUITY_MOMENTUM_DAILY = ManagedDataset(
     quality_profile="equity_feature",
     minimum_publication_level=QualityLevel.BACKTEST,
 )
-BTC_DVOL_DAILY = ManagedDataset(
+BTC_DVOL_DAILY = DataProductContract(
     _governed(_BTC_DVOL_DAILY_PRODUCT, "Deribit BTC DVOL observations for volatility research."),
     "canonical/analytics/vendor_volatility_indices/provider=deribit/underlying=BTC/index=DVOL/interval=1d",
     "analytics.vendor_volatility_index.v1", _capabilities(), quality_profile="generic",
 )
-BTC_IV_RV_DAILY = ManagedDataset(
+BTC_IV_RV_DAILY = DataProductContract(
     _governed(_BTC_IV_RV_DAILY_PRODUCT, "Daily BTC implied-versus-realized volatility features."),
     "features/volatility/underlying=BTC/frequency=1d/feature_set=iv_rv_v1",
     "features.volatility.iv_rv_daily.v1", _capabilities(), quality_profile="feature",
 )
-BTC_OPTION_QUOTES_HOURLY = ManagedDataset(
+BTC_OPTION_QUOTES_HOURLY = DataProductContract(
     _governed(_BTC_OPTION_QUOTES_HOURLY_PRODUCT, "Hourly Binance BTC option quote snapshots."),
     "canonical/derivatives/option_quotes/asset_class=crypto/venue=binance/underlying=BTC-USDT/interval=1h",
     "derivatives.option_quote_summary.v1",
     _capabilities(point_in_time_universe=True, synchronous_quotes=True, top_of_book=True, products=("option",), maximum_validation_level=3),
     quality_profile="option_snapshot",
 )
-BTC_TERM_SKEW_HOURLY = ManagedDataset(
+BTC_TERM_SKEW_HOURLY = DataProductContract(
     _governed(_BTC_TERM_SKEW_HOURLY_PRODUCT, "Hourly BTC volatility term-skew features."),
     "features/volatility_surface/underlying=BTC/frequency=1h/feature_set=term_skew_v1",
     "features.volatility_surface.term_skew.v1", _capabilities(point_in_time_universe=True, products=("option",)),
     quality_profile="feature",
 )
-BTC_DERIBIT_OPTION_TRADES = ManagedDataset(
+BTC_DERIBIT_OPTION_TRADES = DataProductContract(
     _governed(_BTC_DERIBIT_OPTION_TRADES_PRODUCT, "Canonical Deribit BTC option trade events."),
     "canonical/derivatives/option_trades/asset_class=crypto/venue=deribit/underlying=BTC",
     "derivatives.option_trade.v1",
     _capabilities(point_in_time_universe=True, trade_events=True, trade_direction=True, products=("option",), maximum_validation_level=3),
     quality_profile="trade",
 )
-BTC_DERIBIT_TERM_SKEW_DAILY = ManagedDataset(
+BTC_DERIBIT_TERM_SKEW_DAILY = DataProductContract(
     _governed(_BTC_DERIBIT_TERM_SKEW_DAILY_PRODUCT, "Daily BTC term-skew features derived from Deribit trades."),
     "features/volatility_surface/underlying=BTC/frequency=1d/feature_set=deribit_trade_term_skew_v1",
     "features.volatility_surface.trade_term_skew.v1", _capabilities(point_in_time_universe=True, products=("option",)),
     quality_profile="feature",
 )
-BTC_DERIBIT_OPTION_QUOTES = ManagedDataset(
+BTC_DERIBIT_OPTION_QUOTES = DataProductContract(
     _governed(_BTC_DERIBIT_OPTION_QUOTES_PRODUCT, "Point-in-time Deribit BTC option-chain snapshots."),
     "canonical/derivatives/option_quotes/asset_class=crypto/venue=deribit/underlying=BTC",
     "derivatives.option_chain_summary.v1",
@@ -298,12 +293,12 @@ BTC_DERIBIT_OPTION_QUOTES = ManagedDataset(
 )
 
 
-def capabilities_payload(dataset: ManagedDataset, release_id: str) -> dict[str, object]:
+def capabilities_payload(dataset: DataProductContract, release_id: str) -> dict[str, object]:
     return {"capability_schema_version": 2, "dataset_id": release_id, **dict(dataset.capabilities)}
 
 
 class Datasets:
-    """Compatibility handles backed by the authoritative DataProductContract objects."""
+    """Product handles backed by the authoritative DataProductContract objects."""
 
     MARKET_OHLCV_CRYPTO_BINANCE_BTC_USDT_1D = BTC_SPOT_DAILY.product
     MARKET_OHLCV_CRYPTO_BINANCE_USDM_PERPETUAL_1H = BINANCE_USDM_PERPETUAL_HOURLY.product

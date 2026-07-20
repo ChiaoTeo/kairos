@@ -124,6 +124,3 @@ def merge_datasets(existing: MarketReplayDataset, chunk: MarketReplayDataset) ->
     return MarketReplayDataset(
         manifest, ordered_slices, ordered_contracts, ordered_definitions, products, references, settlements,
     )
-
-
-MarketSliceCollectionPublisher = MarketSnapshotCollectionPublisher

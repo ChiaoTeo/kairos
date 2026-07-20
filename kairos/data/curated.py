@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .client import ResearchDataClient
 from .contracts import DatasetKey, DatasetLayer, DatasetLike, DataProductDefinition, QualityLevel
-from .products import ManagedDataset
+from .products import DataProductContract
 from .publishing import content_release_id, publish_release, release_path
 from kairos.storage.data_lake import write_event_dataset
 
@@ -79,7 +79,7 @@ class ConsolidatedTradeBuilder:
             dimensions={"data_type": "consolidated_trade", "instrument_type": next(iter(instrument_types)),
                         "currency": policy.target_currency, "venue_scope": "multi"},
         )
-        managed = ManagedDataset(product, f"curated/consolidated_trades/product={key}",
+        managed = DataProductContract(product, f"curated/consolidated_trades/product={key}",
                                  "curated.consolidated_trade.v1", {"point_in_time_universe": True,
                                  "trade_events": True, "maximum_validation_level": 2})
         material = {"inputs": lineage_inputs, "policy": {"id": policy.policy_id, "version": policy.version,

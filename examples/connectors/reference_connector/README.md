@@ -2,7 +2,7 @@
 
 这个目录展示 connector 的语言边界，而不是复制 Python 领域模型。
 
-输入是 `golden_vectors.json` 中的 Venue Raw Frame，输出是符合 `canonical_event.schema.json` 的 JSONL Canonical Event。Python 和未来 Rust gateway 必须通过同一 verifier。
+输入是 `contract_vectors.json` 中的 Venue Raw Frame，输出是符合 `canonical_event.schema.json` 的 JSONL Canonical Event。Python 和未来 Rust gateway 必须通过同一 verifier。
 
 验证 Python reference：
 
@@ -14,7 +14,7 @@
 
 ```bash
 ./pyenv/bin/python examples/connectors/reference_connector/verify_contract.py \
-  --command './target/release/kairos-binance-gateway --golden-vectors examples/connectors/reference_connector/golden_vectors.json'
+  --command './target/release/kairos-binance-gateway --contract-vectors examples/connectors/reference_connector/contract_vectors.json'
 ```
 
 接入约束：

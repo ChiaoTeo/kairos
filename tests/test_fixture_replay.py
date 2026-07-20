@@ -11,9 +11,9 @@ from kairos.domain.identity import AssetId, InstrumentId, VenueId
 from kairos.domain.market_data import OptionChain
 from kairos.domain.market_state import MarketState, apply_market_event
 from kairos.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from kairos.research.option_snapshot_analysis import analyze_option_snapshot
-from kairos.research.snapshot import build_snapshot
-from kairos.research.spec import OptionChainCaptureSpec
+from kairos.research_platform.option_snapshot_analysis import analyze_option_snapshot
+from kairos.research_platform.snapshot import build_snapshot
+from kairos.research_platform.spec import OptionChainCaptureSpec
 from kairos.storage.codec import event_from_primitive
 from kairos.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument

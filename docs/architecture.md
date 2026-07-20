@@ -121,7 +121,7 @@ SPXW `BacktestEngine` 使用 Catalog 和 Ledger-backed `BacktestPortfolio`，保
 | 股票/期权公司行为、exercise/assignment、Protective Put | `test_equity_options.py`, `test_product_events.py` |
 | linear/inverse/quanto、Funding 回补、delivery future、crypto option | `test_crypto_products.py`, `test_product_events.py` |
 | 股票/期权/现货/永续/交割合约/加密期权 Conservative/Stress 与无前视 | `test_backtest_fill_contracts.py`, `test_multi_asset_backtest.py`, `test_reference_scenarios.py` |
-| SPXW golden、split、replay/audit hash | `test_backtest_engine.py`, `test_settlement.py` |
+| SPXW reference、split、replay/audit hash | `test_backtest_engine.py`, `test_settlement.py` |
 | 股票+加密通用 MarketSnapshot | `test_normalized_series.py` |
 | reconnect/backfill、重复 fill、rate limit/clock skew | `test_crypto_products.py` |
 | 完整 Intent、native combo、Cancel、readiness、reconciliation、重启幂等、kill switch | `test_orchestration.py` |

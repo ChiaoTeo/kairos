@@ -9,18 +9,21 @@ from kairos.storage.codec import to_primitive
 from kairos.storage.data_lake import write_json
 
 from .catalog import DataCatalog
-from .contracts import DataProductDefinition, DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel
-from .products import ManagedDataset
+from .contracts import (
+    DataProductDefinition, DataReleaseManifest, DataSetContractArtifact, DatasetRelease, DatasetStatus,
+    DatasetStorageKind, QualityLevel,
+)
+from .products import DataProductContract
 
 
-def content_release_id(product: ManagedDataset, material: object) -> str:
+def content_release_id(product: DataProductContract, material: object) -> str:
     payload = json.dumps(to_primitive(material), ensure_ascii=False, sort_keys=True,
                          separators=(",", ":"), default=str).encode()
     digest = sha256(str(product.key).encode() + b"\0" + payload).hexdigest()[:24]
     return f"ds_{digest}"
 
 
-def content_release_id_from_rows(product: ManagedDataset, rows: list[dict[str, object]]) -> str:
+def content_release_id_from_rows(product: DataProductContract, rows: list[dict[str, object]]) -> str:
     digest = sha256(str(product.key).encode() + b"\0")
     fields = tuple(sorted(rows[0])) if rows else ()
     digest.update("\x1f".join(fields).encode())
@@ -32,7 +35,7 @@ def content_release_id_from_rows(product: ManagedDataset, rows: list[dict[str, o
     return f"ds_{digest.hexdigest()[:24]}"
 
 
-def release_path(product: ManagedDataset, release_id: str) -> str:
+def release_path(product: DataProductContract, release_id: str) -> str:
     return f"{product.relative_path}/release={release_id}"
 
 
@@ -76,7 +79,7 @@ def _primary_key_value(name: str, value: object) -> str:
     return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def publish_release(root: str | Path, product: ManagedDataset, release_id: str, manifest: dict[str, object], *,
+def publish_release(root: str | Path, product: DataProductContract, release_id: str, manifest: dict[str, object], *,
                     provider: str, venue: str | None, transform_id: str, transform_version: str,
                     quality_level: QualityLevel = QualityLevel.RESEARCH) -> DatasetRelease:
     lake = Path(root)
@@ -109,6 +112,18 @@ def publish_release(root: str | Path, product: ManagedDataset, release_id: str, 
             raise ValueError(f"release ID {release_id!r} already refers to different content")
         return existing
     published_at = datetime.now(timezone.utc).isoformat()
+    release_manifest = DataReleaseManifest(
+        str(product.key),
+        release_id,
+        DataSetContractArtifact.from_product_contract(product).contract_hash,
+        content_hash,
+        product.product.primary_time,
+        _schema_fields(directory),
+        quality_level,
+        {"provider": provider, "venue": venue, "transform_id": transform_id, "transform_version": transform_version},
+        published_at,
+    )
+    write_json(directory / "data_release_manifest.json", release_manifest.to_primitive())
     release = DatasetRelease(
         release_id, product.key, f"content.{content_hash[:16]}",
         product.schema_id, _schema_version(product.schema_id), transform_id, transform_version,
@@ -121,6 +136,9 @@ def publish_release(root: str | Path, product: ManagedDataset, release_id: str, 
         "release_version": release.release_version, "schema_id": release.schema_id,
         "schema_version": release.schema_version, "transform_id": release.transform_id,
         "transform_version": release.transform_version, "content_hash": release.content_hash,
+        "contract_hash": release_manifest.contract_hash,
+        "data_release_manifest_hash": release_manifest.manifest_hash,
+        "artifact_ref": release_manifest.artifact_ref,
         "provider": release.provider, "venue": release.venue, "status": release.status.value,
         "quality_level": release.quality_level.value, "published_at": release.published_at,
     })
@@ -157,10 +175,28 @@ def register_market_replay_dataset(root: str | Path, dataset, directory: str | P
     ensure_release_metadata(lake, release.release_id)
     return release
 
-
-register_historical_dataset = register_market_replay_dataset
-
-
 def _schema_version(schema_id: str) -> str:
     tail = schema_id.rsplit(".", 1)[-1]
     return tail[1:] if tail.startswith("v") and tail[1:].isdigit() else "1"
+
+
+def _schema_fields(directory: Path) -> tuple[str, ...]:
+    path = directory / "schema.json"
+    if not path.exists():
+        return ()
+    schema = json.loads(path.read_text(encoding="utf-8"))
+    fields = schema.get("fields")
+    if isinstance(fields, dict):
+        return tuple(str(name) for name in fields)
+    if isinstance(fields, list):
+        result = []
+        for item in fields:
+            result.append(str(item.get("name") if isinstance(item, dict) else item))
+        return tuple(result)
+    columns = schema.get("columns")
+    if isinstance(columns, list):
+        result = []
+        for item in columns:
+            result.append(str(item.get("name") if isinstance(item, dict) else item))
+        return tuple(result)
+    return ()

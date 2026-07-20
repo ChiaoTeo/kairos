@@ -135,7 +135,7 @@ class StudySession:
         target = directory/"research.py"
         source = f'''"""Flexible exploration for {self.workspace.study_id}@{self.workspace.version}."""
 
-from kairos.research import open_study
+from kairos.research_platform import open_study
 
 
 study = open_study({self.workspace.study_id!r}, root={str(self.root)!r}, version={self.workspace.version!r})

@@ -20,12 +20,12 @@
 - 回测执行校准对比：`kairos run backtest ... --execution-calibration <manifest>` 会校验校准 release hash，在 Run Artifact 中记录绑定状态、release id/hash、样本数与适用 venue/environment，并给出按校准平均 `fee_bps` 重估的基线/校准后权益对比。
 - 人工订单与自动策略入口分离：新人工运维使用 `order submit`；旧 `trade run` 仅保留兼容。
 - Run Artifact 可解释：`run inspect --artifact ... --at ...`。
-- Capture Replay 可验证：`run replay-sma` 和 `run replay-sma-capture`。
+- Replay 可验证：`run artifact-replay` 和 `run capture-replay`。
 - 公共 Binance Quote/OrderBook 短时 capture、rotation、restart 和 replay 机制已有自动化证据。
 
 ## 本地可用但不能冒充外部就绪
 
-- `run shadow --fixture` 和 `run paper --fixture` 是 deterministic acceptance，不需要凭据，也不会证明真实外部运行稳定；`run paper --live-binance-symbol ...` 可验证真实行情输入下的模拟盘链路，但仍不是实盘下单证据；`shadow-sma`/`paper-sma` 仅作为兼容入口保留。
+- `run shadow --fixture` 和 `run paper --fixture` 是 deterministic acceptance，不需要凭据，也不会证明真实外部运行稳定；`run paper --live-binance-symbol ...` 可验证真实行情输入下的模拟盘链路，但仍不是实盘下单证据。
 - 本地 `ExecutionCalibrationRelease` 证明校准机制可工作；只有真实 Paper/Testnet/Live 样本生成的 release 才能用于外部执行质量判断。
 - synthetic fixture、synthetic backtest、trade proxy 只能证明机制，不能作为 live promotion 或收益有效性证据。
 - Strategy promotion gate 已区分本地/外部证据：`PAPER_APPROVED` 需要非 fixture 的 decision-OOS L5 证据和显式 Paper/Testnet readiness；`LIVE_LIMITED`/`LIVE_APPROVED` 需要通过的外部 soak artifact。
