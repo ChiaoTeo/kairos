@@ -2,5 +2,5 @@
   "default_dataset": "fixture:sma-bars-v1",
   "default_strategy": "sma-cross-v1",
   "lake_root": "data",
-  "project": "trader"
+  "project": "kairos"
 }

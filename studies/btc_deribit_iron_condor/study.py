@@ -9,12 +9,12 @@ import statistics
 
 from kairos import __version__
 from studies.btc_options_stats import block_bootstrap_ci, percentile
-from kairos.data import ResearchDataClient
+from kairos.data import DatasetClient
 from kairos.data.products import BTC_DERIBIT_OPTION_TRADES, BTC_DERIBIT_TERM_SKEW_DAILY
 from kairos.storage.data_lake import write_json
-from kairos.research.validation import (
+from kairos.study_platform.validation import (
     CapitalSpec, DataCapabilities, EvidenceStatus, ExecutionArchetype,
-    OutOfSampleEvidence, ProductProtocol, ResearchValidationResult, ReturnDriver,
+    OutOfSampleEvidence, ProductProtocol, StudyValidationResult, ReturnDriver,
     SampleSufficiency, StudyRegistration, ValidationArtifactWriter,
     ValidationLevel, ValidationState, approximate_required_samples, build_data_gap_plan,
     TestWindowRegistry, TestWindowUse,
@@ -28,7 +28,7 @@ STRUCTURES = ("symmetric", "delta_neutral_skewed")
 
 
 def execute(root: str | Path = "data", commission_per_contract_leg_usd: float = 5.0):
-    repository = ResearchDataClient(root)
+    repository = DatasetClient(root)
     features = sorted(repository.load_rows(BTC_DERIBIT_TERM_SKEW_DAILY.product),
                       key=lambda row: row["period_start"])
     split = int(len(features) * .70)
@@ -270,7 +270,7 @@ def main(argv=None):
     parser.add_argument("--commission-per-contract-leg-usd", type=float, default=5.0); args = parser.parse_args(argv)
     trades, result = execute(args.data_root, args.commission_per_contract_leg_usd)
     output = args.data_root / "studies" / result["study_id"]; output.mkdir(parents=True, exist_ok=True)
-    ResearchDataClient(args.data_root).freeze_products(output / "data_snapshot.json", result["study_id"],
+    DatasetClient(args.data_root).freeze_products(output / "data_snapshot.json", result["study_id"],
         (BTC_DERIBIT_OPTION_TRADES.product, BTC_DERIBIT_TERM_SKEW_DAILY.product), code_version=__version__)
     write_json(output / "study_spec.json", {key: result[key] for key in ("study_id", "hypotheses", "split", "holding_rule")})
     write_json(output / "trades.json", trades); write_json(output / "results.json", result)
@@ -296,7 +296,7 @@ def _write_governed_artifacts(root, result, trades=None):
         "mean_return_on_max_loss", required_samples, "conditional mean return > unconditional with CI above zero",
         "conditional upper confidence bound <= 0", ("synchronous_quotes", "quote_size", "settlement_price"), capital,
     )
-    data = ResearchDataClient(root)
+    data = DatasetClient(root)
     capabilities = DataCapabilities(
         (data.catalog.release(BTC_DERIBIT_OPTION_TRADES.key).release_id,
          data.catalog.release(BTC_DERIBIT_TERM_SKEW_DAILY.key).release_id),
@@ -306,7 +306,7 @@ def _write_governed_artifacts(root, result, trades=None):
     missing = ("synchronous_multi_leg_quotes", "quote_size", "settlement_price", "option_lifecycle_events")
     gaps = build_data_gap_plan(missing, target_samples=required_samples, collection_frequency="hourly",
                                collection_started_at="2026-07-15T00:00:00Z")
-    governed = ResearchValidationResult(
+    governed = StudyValidationResult(
         registration,
         ValidationState(EvidenceStatus.READY, EvidenceStatus.EXPLORATORY,
             EvidenceStatus.DATA_NOT_READY, EvidenceStatus.TRADE_PROXY_ONLY,

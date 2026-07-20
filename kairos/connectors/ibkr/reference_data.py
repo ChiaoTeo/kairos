@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairos.connectors.ibkr.research import decimal_or_none
+from kairos.connectors.ibkr.option_chain_provider import decimal_or_none
 from kairos.domain.capability import ReferenceCapabilities
 from kairos.domain.identity import AssetId, InstrumentId, VenueId
 from kairos.domain.product import (

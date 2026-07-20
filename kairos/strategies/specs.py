@@ -12,7 +12,7 @@ from .bull_put_spread import BullPutSpreadConfig
 from .cash_and_carry import CashAndCarryConfig
 from .covered_call import CoveredCallConfig
 from .protective_put import ProtectivePutConfig
-from .sma_cross_research_backtest import SmaCrossConfig
+from .sma_cross_study_backtest import SmaCrossConfig
 
 
 def builtin_strategy_specs() -> tuple[tuple[StrategySpec,ExecutionPolicy],...]:

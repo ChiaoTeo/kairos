@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .contracts import ResearchValidationResult
+from .contracts import StudyValidationResult
 
 
 class ValidationArtifactWriter:
@@ -15,7 +15,7 @@ class ValidationArtifactWriter:
     def __init__(self, data_root: str | Path = "data") -> None:
         self.data_root = Path(data_root)
 
-    def write(self, result: ResearchValidationResult, *, report: str,
+    def write(self, result: StudyValidationResult, *, report: str,
               extra_artifacts: dict[str, Any] | None = None,
               extra_audit: dict[str, Any] | None = None) -> Path:
         output = self.data_root / "studies" / result.registration.study_id / result.registration.version

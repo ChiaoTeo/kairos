@@ -10,12 +10,12 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from kairos.research_platform import open_study
+from kairos.study_platform import open_study
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--lake-root", default="example-output/first-research")
+    parser.add_argument("--lake-root", default="example-output/first-study")
     parser.add_argument("--study-id", default="btc-sma-first")
     parser.add_argument("--version", default="1.0.0")
     args = parser.parse_args()

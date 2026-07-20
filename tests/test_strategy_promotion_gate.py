@@ -7,7 +7,7 @@ from kairos.strategies.promotion import evaluate_promotion_artifacts
 
 
 class StrategyPromotionGateTest(unittest.TestCase):
-    def test_l3_proxy_cannot_promote_to_live_but_supported_signal_can_promote_research(self):
+    def test_l3_proxy_cannot_promote_to_live_but_supported_signal_can_promote_study(self):
         proxy={"state":{"maximum_level":3,"signal_status":"EXPLORATORY","strategy_status":"TRADE_PROXY_ONLY"},"out_of_sample":"time_oos"}
         self.assertFalse(evaluate_promotion_artifacts(StrategyLifecycle.LIVE_LIMITED,(proxy,)).passed)
         signal={"state":{"maximum_level":2,"signal_status":"SUPPORTED"}}

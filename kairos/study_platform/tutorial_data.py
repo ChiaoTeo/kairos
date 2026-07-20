@@ -21,11 +21,11 @@ SMA_TUTORIAL_DATASET = DataProductContract(
         DatasetKey("market.ohlcv.crypto.tutorial.btc-usdt.1h"),
         "Deterministic BTC/USDT hourly tutorial bars",
         DatasetLayer.CANONICAL,
-        description="Synthetic point-in-time OHLCV bars for the first research tutorial.",
+        description="Synthetic point-in-time OHLCV bars for the first study tutorial.",
         dimensions={"asset_class": "crypto", "venue": "tutorial", "instrument": "BTC-USDT", "frequency": "1h"},
         primary_time="available_time",
         sources=(SourceBinding("synthetic-fixture", "tutorial", 100, QualityLevel.BACKTEST, ("bundled",)),),
-        owner="research-platform",
+        owner="study-platform",
     ),
     "canonical/tutorial/market/ohlcv/instrument=BTC-USDT/interval=1h",
     "market.ohlcv.v1",
@@ -51,7 +51,7 @@ def tutorial_sma_bars() -> tuple[Bar, ...]:
 
 
 def ensure_sma_tutorial_dataset(root: str | Path):
-    """Publish the bundled fixture through the same governed path used by real research data."""
+    """Publish the bundled fixture through the same governed path used by real study data."""
     lake = Path(root)
     catalog = DataCatalog(lake)
     try:

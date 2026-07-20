@@ -44,6 +44,60 @@ class RepositoryHygieneTests(unittest.TestCase):
         files = [path for path in ROOT.rglob("*") if path.is_file() and ".ipynb_checkpoints" in path.parts]
         self.assertEqual(files, [])
 
+    def test_workspace_file_names_do_not_reintroduce_legacy_or_generic_terms(self):
+        ignored_parts = {".git", "pyenv", ".venv", ".pytest_cache"}
+        forbidden_exact = {
+            "adapters",
+            "base.py",
+            "handler.py",
+            "helpers.py",
+            "manager.py",
+            "models.py",
+            "research",
+            "research.py",
+            "service.py",
+            "trader",
+            "trading",
+            "utils.py",
+        }
+        forbidden_fragments = ("adapter", "research")
+        offenders = []
+        stack = [ROOT]
+        while stack:
+            current = stack.pop()
+            for path in current.iterdir():
+                relative = path.relative_to(ROOT)
+                if path.is_dir() and path.name in ignored_parts:
+                    continue
+                name = path.name
+                if name in forbidden_exact or any(fragment in name for fragment in forbidden_fragments):
+                    offenders.append(str(relative))
+                if path.is_dir():
+                    stack.append(path)
+        self.assertEqual(offenders, [])
+
+    def test_readme_core_naming_table_has_unique_rows(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        rows = re.findall(r"^\| `([^`]+)` \|", readme, flags=re.MULTILINE)
+        duplicates = sorted({name for name in rows if rows.count(name) > 1})
+        allowed = {"DataProductDefinition"}
+        offenders = [name for name in duplicates if name not in allowed]
+        self.assertEqual(offenders, [])
+
+    def test_generated_project_metadata_uses_portable_root(self):
+        metadata = (ROOT / ".kairos" / "project.json").read_text(encoding="utf-8")
+        self.assertIn('"name": "kairos"', metadata)
+        self.assertIn('"root": "."', metadata)
+        self.assertNotIn(str(ROOT), metadata)
+        self.assertNotIn('"name": "trader"', metadata)
+
+    def test_root_kairos_toml_uses_study_section(self):
+        config = (ROOT / "kairos.toml").read_text(encoding="utf-8")
+        self.assertIn('name = "kairos"', config)
+        self.assertIn("[study]", config)
+        self.assertNotIn("[research]", config)
+        self.assertNotIn('name = "trader"', config)
+
     def test_examples_and_docs_do_not_contain_common_live_secret_shapes(self):
         matches = []
         for root in (ROOT / "examples", ROOT / "docs", ROOT / "README.md"):
@@ -143,6 +197,7 @@ class RepositoryHygieneTests(unittest.TestCase):
             ROOT / "kairos" / "reference" / "models.py",
             ROOT / "kairos" / "research" / "validation" / "models.py",
             ROOT / "kairos" / "research" / "service.py",
+            ROOT / "kairos" / "connectors" / "ibkr" / "research.py",
             ROOT / "kairos" / "treasury" / "service.py",
             ROOT / "kairos" / "treasury" / "models.py",
             ROOT / "kairos" / "treasury" / "transfer_models.py",
@@ -157,6 +212,20 @@ class RepositoryHygieneTests(unittest.TestCase):
             ROOT / "kairos" / "data" / "market_slice_storage.py",
             ROOT / "kairos" / "research" / "analyzer.py",
             ROOT / "kairos" / "research" / "selector.py",
+            ROOT / "kairos" / "connectors" / "ibkr" / "study.py",
+            ROOT / "tests" / "test_ibkr_study.py",
+            ROOT / "tests" / "test_research_data_client.py",
+            ROOT / "tests" / "test_option_research_capture.py",
+            ROOT / "tests" / "test_crypto_option_research.py",
+            ROOT / "tests" / "test_options_research_cli.py",
+            ROOT / "tests" / "test_options_research_end_to_end.py",
+            ROOT / "tests" / "test_research_data_store.py",
+            ROOT / "tests" / "test_research_reference_evidence.py",
+            ROOT / "tests" / "test_research_validation_framework.py",
+            ROOT / "tests" / "test_spxw_research_analysis.py",
+            ROOT / "kairos" / "strategies" / "sma_cross_research_backtest.py",
+            ROOT / "examples" / "massive_research_diagnostics.ipynb",
+            ROOT / "config" / "research.json",
             ROOT / "kairos" / "strategies" / "sma_cross.py",
             ROOT / "kairos" / "strategies" / "sma_strategy.py",
         )
@@ -208,6 +277,29 @@ class RepositoryHygieneTests(unittest.TestCase):
             "ManagedDataset",
             "ResearchRow",
             "ResearchResult",
+            "ResearchDataClient",
+            "ResearchValidationResult",
+            "ResearchSnapshot",
+            "OptionResearchCaptureService",
+            "FileResearchRepository",
+            "OptionResearchCaptureTests",
+            "IbkrSpxwResearchProvider",
+            "SpxwResearchProvider",
+            "research_composition",
+            "sma_cross_research_backtest",
+            "research_spec_hash",
+            "research-spec-hash",
+            "RESEARCH_VALIDATED",
+            "research-default",
+            "RESEARCH_DEFAULT_POLICY",
+            "QualityLevel.RESEARCH",
+            "APPROVED_FOR_RESEARCH",
+            "approved_for_research",
+            "@research",
+            "@latest-research",
+            "latest-research",
+            "research_quality",
+            "research-approved",
         )
         forbidden_exact_names = re.compile(r"\b(BacktestService|ValuationService|ResearchService|TreasuryService)\b")
         offenders = []
@@ -247,6 +339,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         study_platform_init = (ROOT / "kairos" / "study_platform" / "__init__.py").read_text(encoding="utf-8")
         self.assertTrue((ROOT / "kairos" / "connectors" / "__init__.py").exists())
         self.assertFalse((ROOT / "kairos" / "research").exists())
+        self.assertFalse((ROOT / "kairos" / "research_platform").exists())
         self.assertNotIn('"adapters"', kairos_init)
         self.assertNotIn('"task_supervisor"', kairos_init)
         self.assertNotIn('"runtime_golden"', kairos_init)
@@ -268,6 +361,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertIn("study_composition", application_init)
         self.assertNotIn('"ValuationService"', pricing_init)
         self.assertNotIn('"TreasuryService"', treasury_init)
+        self.assertNotIn("Research platform", study_platform_init)
         self.assertNotIn('"ResearchSpec"', study_platform_init)
         self.assertNotIn('"service"', study_platform_init)
         self.assertNotIn('"analyzer"', study_platform_init)
@@ -336,12 +430,26 @@ class RepositoryHygieneTests(unittest.TestCase):
                         offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
         self.assertEqual(offenders, [])
 
+    def test_new_code_does_not_import_legacy_research_platform_package(self):
+        offenders = []
+        roots = (ROOT / "kairos", ROOT / "tests", ROOT / "examples")
+        for root in roots:
+            for path in root.rglob("*.py"):
+                if path == ROOT / "tests" / "test_repository_hygiene.py":
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for line_number, line in enumerate(text.splitlines(), start=1):
+                    stripped = line.strip()
+                    if stripped.startswith(("from kairos.research_platform", "import kairos.research_platform")):
+                        offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
+        self.assertEqual(offenders, [])
+
     def test_user_data_guides_use_dataset_client_as_public_name(self):
         offenders = []
         for path in (
             ROOT / "README.md",
             ROOT / "docs" / "data_layout.md",
-            ROOT / "docs" / "research_data_guide.md",
+            ROOT / "docs" / "study_data_guide.md",
             ROOT / "docs" / "data_usage_product_design.md",
         ):
             text = path.read_text(encoding="utf-8")
@@ -365,6 +473,14 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertIn("def study_composition", application_modes)
         self.assertIn('STUDY = "study"', data_contracts)
         self.assertEqual(offenders, [])
+
+    def test_public_cli_does_not_expose_research_command_group(self):
+        cli = (ROOT / "kairos" / "__main__.py").read_text(encoding="utf-8")
+        self.assertNotIn('commands.add_parser("research"', cli)
+        self.assertNotIn('args.group == "research"', cli)
+        self.assertIn('commands.add_parser("study"', cli)
+        self.assertIn('study_actions.add_parser("capture"', cli)
+        self.assertIn('study_actions.add_parser("capture-series"', cli)
 
     def test_strategy_guides_use_study_validated_as_public_lifecycle_name(self):
         offenders = []
@@ -524,7 +640,7 @@ class RepositoryHygieneTests(unittest.TestCase):
             ROOT / "docs" / "architecture.md",
             ROOT / "docs" / "system_convergence_progress.md",
             ROOT / "docs" / "system_architecture_convergence_blueprint.md",
-            ROOT / "docs" / "research_strategy_backtest_live_convergence_plan.md",
+            ROOT / "docs" / "study_strategy_backtest_live_convergence_plan.md",
         )
         offenders = []
         for path in docs:
@@ -559,8 +675,8 @@ class RepositoryHygieneTests(unittest.TestCase):
             ROOT / "README.md",
             ROOT / "docs" / "data_layout.md",
             ROOT / "docs" / "data_usage_product_design.md",
-            ROOT / "docs" / "research_data_guide.md",
-            ROOT / "docs" / "tutorial_first_research.md",
+            ROOT / "docs" / "study_data_guide.md",
+            ROOT / "docs" / "tutorial_first_study.md",
             ROOT / "examples",
         ]
         offenders = []
@@ -573,6 +689,8 @@ class RepositoryHygieneTests(unittest.TestCase):
                 for line_number, line in enumerate(text.splitlines(), start=1):
                     stripped = line.strip().lstrip('"')
                     if stripped.startswith(("from trading", "import trading")) or "trading." in stripped:
+                        offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}")
+                    if "kairos.research_platform" in stripped or "ResearchDataClient" in stripped:
                         offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}")
         self.assertEqual(offenders, [])
 

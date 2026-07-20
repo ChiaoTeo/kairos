@@ -14,12 +14,12 @@ from kairos.strategies.btc_iron_condor import BtcIronCondorStrategy
 from kairos.strategies.registry import PromotionEvidence,StrategyImplementation,StrategyRegistry
 from kairos.features import SmaFactorConfig,SmaFactorRuntime
 from kairos.strategies.specs import sma_strategy_spec
-from kairos.strategies.sma_cross_research_backtest import SmaCrossConfig
+from kairos.strategies.sma_cross_study_backtest import SmaCrossConfig
 
 
 class StrategyRegistryTest(unittest.TestCase):
     def test_registry_requires_hashed_evidence_and_records_promotion(self):
-        base=BtcIronCondorStrategy(research_spec_hash="r").strategy_spec
+        base=BtcIronCondorStrategy(study_spec_hash="r").strategy_spec
         spec=replace(base,lifecycle=StrategyLifecycle.DRAFT)
         policy=ExecutionPolicy("taker-combo-v1","1",ExecutionMode.TAKER,TimeInForce.IOC,Decimal("10"))
         with TemporaryDirectory() as directory:
@@ -42,7 +42,7 @@ class StrategyRegistryTest(unittest.TestCase):
             self.assertTrue((target/"manifest.json").exists())
 
     def test_same_strategy_version_rejects_execution_semantic_change(self):
-        base=BtcIronCondorStrategy(research_spec_hash="r").strategy_spec
+        base=BtcIronCondorStrategy(study_spec_hash="r").strategy_spec
         policy=ExecutionPolicy("taker-combo-v1","1",ExecutionMode.TAKER,TimeInForce.IOC,Decimal("10"))
         with TemporaryDirectory() as directory:
             registry=StrategyRegistry(directory);registry.register(base,policy)
@@ -50,7 +50,7 @@ class StrategyRegistryTest(unittest.TestCase):
             with self.assertRaises(ValueError):registry.register(base,changed)
 
     def test_registry_cannot_bootstrap_directly_into_live(self):
-        base=BtcIronCondorStrategy(research_spec_hash="r").strategy_spec
+        base=BtcIronCondorStrategy(study_spec_hash="r").strategy_spec
         live=replace(base,lifecycle=StrategyLifecycle.LIVE_APPROVED)
         policy=ExecutionPolicy("taker-combo-v1","1",ExecutionMode.TAKER,TimeInForce.IOC,Decimal("10"))
         with TemporaryDirectory() as directory:

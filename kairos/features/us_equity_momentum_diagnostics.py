@@ -95,10 +95,10 @@ class UsEquityMomentumDiagnostics:
                         "reference.corporate_actions.equity.us.massive",
                         "reference.identity.equity.us.massive",
                     }
-                    else release.quality_level in {QualityLevel.RESEARCH, QualityLevel.BACKTEST, QualityLevel.PRODUCTION}
+                    else release.quality_level in {QualityLevel.STUDY, QualityLevel.BACKTEST, QualityLevel.PRODUCTION}
                 )
                 and release.status in {
-                    DatasetStatus.APPROVED_FOR_RESEARCH,
+                    DatasetStatus.APPROVED_FOR_STUDY,
                     DatasetStatus.APPROVED_FOR_BACKTEST,
                     DatasetStatus.APPROVED_FOR_PRODUCTION,
                 },
@@ -108,7 +108,7 @@ class UsEquityMomentumDiagnostics:
                     "quality_level": release.quality_level.value,
                     "status": release.status.value,
                 },
-                "Release meets its governed quality target and is approved for research use",
+                "Release meets its governed quality target and is approved for study use",
                 f"Run kairos data validate --release {release.release_id}",
             ))
             directory = self.root / release.relative_path

@@ -1,4 +1,4 @@
-from kairos.research_platform import open_study
+from kairos.study_platform import open_study
 
 study = open_study("crypto-hourly-momentum", root="data", version="1.0.0")
 print(study.describe_table())

@@ -1,4 +1,4 @@
-"""Governed research validation contracts and gates."""
+"""Governed study validation contracts and gates."""
 
 from .artifacts import ValidationArtifactWriter
 from .audit import GovernanceAudit, audit_governance
@@ -14,7 +14,7 @@ from .contracts import (
     ExecutionArchetype,
     OutOfSampleEvidence,
     ProductProtocol,
-    ResearchValidationResult,
+    StudyValidationResult,
     ReturnDriver,
     SampleSufficiency,
     StudyRegistration,
@@ -33,7 +33,7 @@ from .split import TimeSplit,chronological_split,walk_forward_splits
 __all__ = [
     "CapitalSpec", "ClaimDecision", "DataCapabilities", "DataGap", "DataGapPlan", "EvidenceStatus",
     "ExecutionArchetype", "GateDecision", "GateRequirement", "GovernanceAudit", "OutOfSampleEvidence",
-    "PredictabilityResult", "ProductProtocol", "ProtocolDecision", "ResearchValidationResult", "ReturnDriver", "RobustnessResult", "SampleSufficiency",
+    "PredictabilityResult", "ProductProtocol", "ProtocolDecision", "StudyValidationResult", "ReturnDriver", "RobustnessResult", "SampleSufficiency",
     "StudyRegistration", "TestWindowRegistry", "TestWindowUse", "TimeSplit", "ValidationArtifactWriter", "ValidationGate", "ValidationLevel",
     "ValidationState", "assess_sample_sufficiency", "approximate_required_samples", "audit_governance",
     "assess_robustness", "authorize_claim", "block_bootstrap_mean_ci", "build_data_gap_plan", "chronological_split",

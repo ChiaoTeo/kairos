@@ -5,7 +5,7 @@ from kairos.connectors.deribit.trade_history import normalize_deribit_trades
 from kairos.features.volatility import build_term_skew_panel
 
 
-class CryptoOptionResearchTest(unittest.TestCase):
+class CryptoOptionStudyTest(unittest.TestCase):
     def test_deribit_trade_normalization_converts_iv_percent_to_absolute(self):
         rows = normalize_deribit_trades([{"timestamp": 1705276800075, "iv": 53.3, "price": 0.036, "amount": 0.1,
             "direction": "sell", "instrument_name": "BTC-23FEB24-46000-C", "index_price": 41701.94,

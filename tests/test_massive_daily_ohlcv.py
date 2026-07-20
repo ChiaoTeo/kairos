@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 from kairos.connectors.massive import MassiveEquityDailyOhlcvPipeline, SpxwDailyOhlcvPipeline
 from kairos.connectors.massive.vendor_archive import MassiveFlatFileBatchDownloader, request_fingerprint
-from kairos.data import DataCatalog, DatasetQualityService, QualityLevel, ResearchDataClient
+from kairos.data import DataCatalog, DatasetQualityService, QualityLevel, DatasetClient
 from kairos.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
 
 
@@ -123,7 +123,7 @@ class MassiveDailyOhlcvTests(unittest.TestCase):
             self.assertTrue(universe_rows[2]["eligible"])
             catalog = DataCatalog(root)
             self.assertEqual(catalog.release("features.momentum.equity.us.1d").release_id, momentum_release)
-            queried = ResearchDataClient(root).load_rows("features.momentum.equity.us.1d")
+            queried = DatasetClient(root).load_rows("features.momentum.equity.us.1d")
             self.assertEqual(len(queried), 3)
             self.assertEqual(queried[2]["short_term_reversal_1m"], Decimal("0.1"))
             assessment = DatasetQualityService(root).assess(momentum_release)

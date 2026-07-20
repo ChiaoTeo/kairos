@@ -41,7 +41,7 @@ class MassiveEntitlementDiagnosticsTests(unittest.TestCase):
         self.assertTrue(all(url.startswith("https://api.massiveprivateserver.site/") for url in transport.urls))
         self.assertNotIn("secret", "".join(transport.urls))
 
-    def test_spx_is_research_ready_with_synthetic_forward_when_index_aggregates_are_forbidden(self):
+    def test_spx_is_study_ready_with_synthetic_forward_when_index_aggregates_are_forbidden(self):
         transport = IndexAggregateForbiddenTransport()
         report = MassiveEntitlementDiagnostics(MassiveClient(MassiveConfig("secret"), transport)).check(
             underlying="SPX", option_ticker="O:SPXW251103C06000000", date="2025-11-03")

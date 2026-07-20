@@ -12,7 +12,7 @@ import unittest
 from kairos.data import (
     AcquirePolicy, AcquisitionLimits, DataCatalog, DataUnavailableError, DatasetKey, DatasetLayer,
     DataProductDefinition, DatasetRelease, DatasetStatus, DatasetStorageKind, FieldRef, OutputFormat, ProviderRegistry,
-    QualityLevel, ResearchDataClient, RunMode, SourceBinding, TimeRange,
+    QualityLevel, DatasetClient, RunMode, SourceBinding, TimeRange,
     ConsolidatedTradeBuilder, ConsolidatedTradeInput, ConsolidatedTradePolicy,
 )
 from kairos.domain.identity import InstrumentId
@@ -39,7 +39,7 @@ def register_managed(catalog, dataset, *, release_id=None, version="1", aliases=
     return release
 
 
-class ResearchDataClientTests(unittest.TestCase):
+class DatasetClientTests(unittest.TestCase):
     def test_incremental_merge_normalizes_equivalent_utc_primary_keys(self):
         rows = merge_release_rows("/tmp/unused", None, [
             {"period_start": "2026-01-01T00:00:00Z", "instrument_id": "BTC", "close": 1},
@@ -70,15 +70,15 @@ class ResearchDataClientTests(unittest.TestCase):
             catalog.register_release(DatasetRelease(
                 "ds_btc_1", product.key, "2026.07.16.1", "market.trade", "1", "binance.trades", "1",
                 "canonical/market/dataset=ds_btc_1", "parquet", "sha256:test", "binance", "binance",
-                ("btc-trades@research",), DatasetStatus.APPROVED_FOR_BACKTEST, QualityLevel.BACKTEST,
+                ("btc-trades@study",), DatasetStatus.APPROVED_FOR_BACKTEST, QualityLevel.BACKTEST,
             ))
             catalog.save()
             loaded = DataCatalog(temporary)
             self.assertEqual(loaded.product(product.key).dimensions["venue"], "binance")
             self.assertEqual(loaded.product(product.key).source_policy_version, "priority-v1")
-            self.assertEqual(loaded.release("btc-trades@research").release_id, "ds_btc_1")
+            self.assertEqual(loaded.release("btc-trades@study").release_id, "ds_btc_1")
             self.assertEqual(loaded.search(venue="binance"), (product,))
-            client = ResearchDataClient(temporary)
+            client = DatasetClient(temporary)
             self.assertEqual(client.search(venue="binance"), (product,))
             self.assertEqual(client.describe(product)["selected_release"]["release_id"], "ds_btc_1")
 
@@ -114,7 +114,7 @@ class ResearchDataClientTests(unittest.TestCase):
             self.assertEqual(loaded.resolve("market.quotes.options.us.tick").release_id, "quotes.v2")
             self.assertEqual(loaded.resolve("quotes@latest").release_id, "quotes.v2")
             self.assertEqual(loaded.resolve("market.quotes.options.us.tick", version="1").release_id, "quotes.v1")
-            comparison = ResearchDataClient(temporary).compare("quotes.v1", "quotes.v2")
+            comparison = DatasetClient(temporary).compare("quotes.v1", "quotes.v2")
             self.assertFalse(comparison["identity"]["release_version"]["equal"])
             self.assertFalse(comparison["identity"]["schema_id"]["equal"])
             self.assertEqual((comparison["first"], comparison["second"]), ("quotes.v1", "quotes.v2"))
@@ -134,7 +134,7 @@ class ResearchDataClientTests(unittest.TestCase):
                     f"canonical/{release_id}", "parquet", f"hash-{release_id}",
                 ))
             catalog.save()
-            compatibility = ResearchDataClient(temporary).compare("schema-v1", "schema-v2")["schema_compatibility"]
+            compatibility = DatasetClient(temporary).compare("schema-v1", "schema-v2")["schema_compatibility"]
             self.assertEqual(compatibility["status"], "incompatible")
             self.assertIn("column type changed: price", compatibility["reasons"][0])
 
@@ -151,7 +151,7 @@ class ResearchDataClientTests(unittest.TestCase):
                 {"period_start": "2026-01-02T00:00:00Z", "close": "101"},
             ], dataset_id=str(BTC_SPOT_DAILY.key),
                 schema={"schema_id": "market.ohlcv.v1"}, lineage={"source": "test"})
-            client = ResearchDataClient(temporary)
+            client = DatasetClient(temporary)
             rows = client.load_rows(BTC_SPOT_DAILY.product,
                                     start="2026-01-02T00:00:00Z", fields=("period_start", "close"))
             self.assertEqual(len(rows), 1)
@@ -170,7 +170,7 @@ class ResearchDataClientTests(unittest.TestCase):
                 {"period_start": "2026-01-02T00:00:00Z", "close": "101"},
             ], dataset_id=release.release_id, schema={"schema_id": "market.ohlcv.v1"},
                lineage={"source": "test"})
-            query = ResearchDataClient(temporary).get(
+            query = DatasetClient(temporary).get(
                 DatasetKey(str(release.product_key)), start="2026-01-02T00:00:00Z",
                 fields=(FieldRef("period_start"), FieldRef("close")),
             )
@@ -178,7 +178,7 @@ class ResearchDataClientTests(unittest.TestCase):
             self.assertEqual(query.collect(OutputFormat.ROWS), [
                 {"period_start": "2026-01-02T00:00:00Z", "close": "101"},
             ])
-            batches = tuple(ResearchDataClient(temporary).get(
+            batches = tuple(DatasetClient(temporary).get(
                 release.release_id, fields=("period_start", "close"),
             ).stream(batch_size=1))
             self.assertEqual([batch.num_rows for batch in batches], [1, 1])
@@ -195,7 +195,7 @@ class ResearchDataClientTests(unittest.TestCase):
                 {"period_start": "2026-01-02T00:00:00Z", "close": 101, "unused": "b"},
                 {"period_start": "2026-02-01T00:00:00Z", "close": 102, "unused": "c"},
             ], dataset_id=release.release_id, schema={"schema_id": release.schema_id}, lineage={"source": "test"})
-            query = ResearchDataClient(temporary).get(
+            query = DatasetClient(temporary).get(
                 release.product_key, start="2026-01-01T00:00:00Z", end="2026-02-01T00:00:00Z",
                 fields=("close",),
             )
@@ -220,7 +220,7 @@ class ResearchDataClientTests(unittest.TestCase):
                            base / "part-00000.parquet")
             pq.write_table(pa.table({"period_start": ["2026-01-01T00:00:00Z"], "close": [2]}),
                            nested / "part-00000.parquet")
-            rows = ResearchDataClient(temporary).get(release.product_key, fields=("close",)).collect("rows")
+            rows = DatasetClient(temporary).get(release.product_key, fields=("close",)).collect("rows")
             self.assertEqual(rows, [{"close": 1}])
 
     def test_parquet_reader_unifies_null_and_numeric_partition_schemas(self):
@@ -238,7 +238,7 @@ class ResearchDataClientTests(unittest.TestCase):
                            january / "part-00000.parquet")
             pq.write_table(pa.table({"period_start": ["2026-02-01T00:00:00Z"], "metric": [1.5]}),
                            february / "part-00000.parquet")
-            rows = ResearchDataClient(temporary).get(release.product_key, fields=("metric",)).collect("rows")
+            rows = DatasetClient(temporary).get(release.product_key, fields=("metric",)).collect("rows")
             self.assertEqual(rows, [{"metric": None}, {"metric": 1.5}])
 
     def test_parquet_reader_unifies_timestamp_and_iso_string_time_partitions(self):
@@ -256,7 +256,7 @@ class ResearchDataClientTests(unittest.TestCase):
                            january / "part-00000.parquet")
             pq.write_table(pa.table({"period_start": ["2026-02-01T00:00:00Z"], "close": [2.0]}),
                            february / "part-00000.parquet")
-            rows = ResearchDataClient(temporary).get(
+            rows = DatasetClient(temporary).get(
                 release.product_key, start="2026-01-01T00:00:00Z", end="2026-03-01T00:00:00Z",
                 fields=("period_start", "close"),
             ).collect("rows")
@@ -273,17 +273,17 @@ class ResearchDataClientTests(unittest.TestCase):
                                      primary_time="period_start")
             catalog.register_product(product)
             first = DatasetRelease("prices.v1", product.key, "1", "market.ohlcv.v1", "1", "test", "1",
-                                   "canonical/prices-v1", "parquet", "hash-1", aliases=("prices@research",))
+                                   "canonical/prices-v1", "parquet", "hash-1", aliases=("prices@study",))
             catalog.register_release(first); catalog.save()
             write_daily_dataset(
                 Path(temporary) / first.relative_path,
                 [{"period_start": "2026-01-01T00:00:00Z", "close": 1}], dataset_id=first.release_id,
                 schema={"schema_id": first.schema_id, "primary_key": ["period_start"]}, lineage={"source": "test"},
             )
-            client = ResearchDataClient(temporary)
-            query = client.get("prices@research", fields=("close",))
+            client = DatasetClient(temporary)
+            query = client.get("prices@study", fields=("close",))
             second = DatasetRelease("prices.v2", product.key, "2", "market.ohlcv.v1", "1", "test", "2",
-                                    "canonical/prices-v2", "parquet", "hash-2", aliases=("prices@research",))
+                                    "canonical/prices-v2", "parquet", "hash-2", aliases=("prices@study",))
             write_daily_dataset(
                 Path(temporary) / second.relative_path,
                 [{"period_start": "2026-01-01T00:00:00Z", "close": 2}], dataset_id=second.release_id,
@@ -291,7 +291,7 @@ class ResearchDataClientTests(unittest.TestCase):
             )
             client.catalog.register_release(second)
             self.assertEqual(query.collect(OutputFormat.ROWS), [{"close": 1}])
-            self.assertEqual(client.get("prices@research", fields=("close",)).collect(OutputFormat.ROWS), [{"close": 2}])
+            self.assertEqual(client.get("prices@study", fields=("close",)).collect(OutputFormat.ROWS), [{"close": 2}])
 
     def test_local_multi_source_selection_requires_matching_provider_and_venue(self):
         try:
@@ -318,7 +318,7 @@ class ResearchDataClientTests(unittest.TestCase):
                     release_id, product.key, "1", "market.trade", "1", "test", "1",
                     f"canonical/{release_id}", "parquet", str(manifest["dataset_sha256"]), provider, venue,
                 ))
-            catalog.save(); client = ResearchDataClient(temporary)
+            catalog.save(); client = DatasetClient(temporary)
             binance = client.get(product, provider="vendor-a", venue="binance", fields=("price",)).collect("rows")
             deribit = client.get(product, provider="vendor-b", venue="deribit", fields=("price",)).collect("rows")
             self.assertEqual(binance, [{"price": 100}])
@@ -375,7 +375,7 @@ class ResearchDataClientTests(unittest.TestCase):
                 ), ConsolidatedTradePolicy("btc_spot_union", "1", "USD", {"USDT": Decimal("1"), "USD": Decimal("1")}),
                 start="2026-01-01T00:00:00Z", end="2026-01-02T00:00:00Z",
             )
-            rows = ResearchDataClient(temporary).get(release.release_id).collect("rows")
+            rows = DatasetClient(temporary).get(release.release_id).collect("rows")
             self.assertEqual({row["venue"] for row in rows}, {"binance", "deribit"})
             self.assertEqual({row["source_release_id"] for row in rows}, {"source-a", "source-b"})
             with self.assertRaisesRegex(ValueError, "cannot be mixed"):
@@ -409,7 +409,7 @@ class ResearchDataClientTests(unittest.TestCase):
             catalog.register_product(product); catalog.save()
             connector = Connector(); providers = ProviderRegistry(); providers.register(connector)
             start, end = NOW, NOW + timedelta(hours=1)
-            client = ResearchDataClient(temporary, providers=providers)
+            client = DatasetClient(temporary, providers=providers)
             plan = client.plan(product.key, start=start, end=end)
             self.assertFalse(plan.complete)
             self.assertEqual(plan.selected.provider, "test-provider")
@@ -420,7 +420,7 @@ class ResearchDataClientTests(unittest.TestCase):
             release = client.acquire(plan)
             self.assertEqual(release.release_id, "ds_test_1")
             self.assertEqual(len(connector.requests), 1)
-            backtest = ResearchDataClient(temporary, providers=providers, run_mode=RunMode.BACKTEST)
+            backtest = DatasetClient(temporary, providers=providers, run_mode=RunMode.BACKTEST)
             with self.assertRaisesRegex(RuntimeError, "forbids data acquisition"):
                 backtest.acquire(plan)
 
@@ -435,7 +435,7 @@ class ResearchDataClientTests(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             catalog = DataCatalog(temporary); catalog.register_product(BTC_SPOT_DAILY.product); catalog.save()
             archive = Archive(); providers = ProviderRegistry(); providers.register(BinanceSpotDatasetConnector(temporary, archive))
-            client = ResearchDataClient(
+            client = DatasetClient(
                 temporary, providers=providers, acquisition_limits=AcquisitionLimits(maximum_requests=1),
             )
             with self.assertRaisesRegex(RuntimeError, "estimates 2 requests"):
@@ -462,7 +462,7 @@ class ResearchDataClientTests(unittest.TestCase):
                 "gapped-v1", product.key, "1", "market.ohlcv", "1", "test", "1", "canonical/gapped",
                 "parquet", str(manifest["dataset_sha256"]), "test-provider", "test",
             )); catalog.save()
-            plan = ResearchDataClient(temporary).plan(
+            plan = DatasetClient(temporary).plan(
                 product, start=datetime(2026, 1, 1, tzinfo=timezone.utc),
                 end=datetime(2026, 1, 4, tzinfo=timezone.utc),
             )
@@ -496,9 +496,9 @@ class ResearchDataClientTests(unittest.TestCase):
             self.assertEqual(DataCatalog(temporary).release(BTC_SPOT_DAILY.key).release_id, release_id)
             self.assertTrue((target / "release.json").exists())
             self.assertTrue((target / "usage.json").exists())
-            query = ResearchDataClient(temporary).get(BTC_SPOT_DAILY.product, fields=("period_start", "close"))
+            query = DatasetClient(temporary).get(BTC_SPOT_DAILY.product, fields=("period_start", "close"))
             snapshot_path = Path(temporary) / "studies" / "example" / "data_snapshot.json"
-            ResearchDataClient.freeze_study(snapshot_path, "example", (query,), code_version="test-commit")
+            DatasetClient.freeze_study(snapshot_path, "example", (query,), code_version="test-commit")
             snapshot = json.loads(snapshot_path.read_text())
             self.assertEqual(snapshot["inputs"][0]["release_id"], release_id)
             self.assertEqual(snapshot["inputs"][0]["content_hash"], manifest["dataset_sha256"])
@@ -525,7 +525,7 @@ class ResearchDataClientTests(unittest.TestCase):
             catalog = DataCatalog(temporary); catalog.register_product(BTC_SPOT_DAILY.product); catalog.save()
             archive = Archive(); providers = ProviderRegistry()
             providers.register(BinanceSpotDatasetConnector(temporary, archive))
-            client = ResearchDataClient(temporary, providers=providers)
+            client = DatasetClient(temporary, providers=providers)
             rows = client.get(
                 BTC_SPOT_DAILY.product, start="2026-01-01T00:00:00Z", end="2026-01-02T00:00:00Z",
                 fields=("period_start", "close"), acquire=AcquirePolicy.IF_MISSING,
@@ -564,10 +564,10 @@ class ResearchDataClientTests(unittest.TestCase):
             catalog.register_release(DatasetRelease(
                 "quotes.test.v1", product.key, "1", "market.event_envelope", "1", "test", "1",
                 "canonical/market/dataset=quotes.test.v1", "parquet", str(manifest["dataset_sha256"]),
-                "massive", "opra", (), DatasetStatus.APPROVED_FOR_RESEARCH, QualityLevel.RESEARCH,
+                "massive", "opra", (), DatasetStatus.APPROVED_FOR_STUDY, QualityLevel.STUDY,
                 storage_kind=DatasetStorageKind.MARKET_EVENTS,
             )); catalog.save()
-            client = ResearchDataClient(temporary)
+            client = DatasetClient(temporary)
             table = client.get("quotes.test.v1", start=NOW, end=NOW + timedelta(seconds=1),
                                fields=("instrument_id", "bid", "ask")).collect(OutputFormat.ARROW)
             self.assertEqual(table.column_names, ["instrument_id", "bid", "ask"])
@@ -596,11 +596,11 @@ class ResearchDataClientTests(unittest.TestCase):
             catalog.register_release(DatasetRelease(
                 "quotes.replay.v1", product.key, "1", "market.event_envelope", "1", "massive.quotes", "1",
                 "canonical/market/dataset=quotes.replay.v1", "parquet", str(manifest["dataset_sha256"]),
-                "massive", "opra", ("quotes@research",), DatasetStatus.APPROVED_FOR_BACKTEST,
+                "massive", "opra", ("quotes@study",), DatasetStatus.APPROVED_FOR_BACKTEST,
                 QualityLevel.BACKTEST, storage_kind=DatasetStorageKind.MARKET_EVENTS,
             )); catalog.save()
-            client = ResearchDataClient(temporary, run_mode=RunMode.BACKTEST)
-            feed = client.replay("quotes@research", NOW, NOW + timedelta(seconds=2))
+            client = DatasetClient(temporary, run_mode=RunMode.BACKTEST)
+            feed = client.replay("quotes@study", NOW, NOW + timedelta(seconds=2))
             first = tuple(item.event_key for item in feed)
             second = tuple(item.event_key for item in feed)
             self.assertEqual(first, second)
@@ -620,7 +620,7 @@ class ResearchDataClientTests(unittest.TestCase):
                 "synthetic", "synthetic", (), DatasetStatus.APPROVED_FOR_BACKTEST, QualityLevel.BACKTEST,
                 storage_kind=DatasetStorageKind.MARKET_SNAPSHOTS,
             )); catalog.save()
-            feed = ResearchDataClient(temporary, run_mode=RunMode.BACKTEST).replay_snapshots(product)
+            feed = DatasetClient(temporary, run_mode=RunMode.BACKTEST).replay_snapshots(product)
             first = tuple(item.timestamp for item in feed.between(dataset.manifest.start, dataset.manifest.end))
             second = tuple(item.timestamp for item in feed.between(dataset.manifest.start, dataset.manifest.end))
             self.assertEqual(first, second)
@@ -632,14 +632,14 @@ class ResearchDataClientTests(unittest.TestCase):
             product = DataProductDefinition(DatasetKey("market.events.test"), "Test events", DatasetLayer.CANONICAL)
             catalog.register_product(product)
             catalog.register_release(DatasetRelease(
-                "research-only", product.key, "1", "market.event", "1", "test", "1",
-                "canonical/market/dataset=research-only", "parquet", "hash", status=DatasetStatus.APPROVED_FOR_RESEARCH,
-                quality_level=QualityLevel.RESEARCH,
+                "study-only", product.key, "1", "market.event", "1", "test", "1",
+                "canonical/market/dataset=study-only", "parquet", "hash", status=DatasetStatus.APPROVED_FOR_STUDY,
+                quality_level=QualityLevel.STUDY,
             )); catalog.save()
             with self.assertRaisesRegex(PermissionError, "approved_for_backtest"):
-                ResearchDataClient(temporary, run_mode=RunMode.BACKTEST).get(product)
+                DatasetClient(temporary, run_mode=RunMode.BACKTEST).get(product)
             with self.assertRaisesRegex(PermissionError, "approved_for_production"):
-                ResearchDataClient(temporary, run_mode=RunMode.LIVE).get(product)
+                DatasetClient(temporary, run_mode=RunMode.LIVE).get(product)
 
     def test_release_promotion_is_quality_gated_and_audited(self):
         with TemporaryDirectory() as temporary:
@@ -648,7 +648,7 @@ class ResearchDataClientTests(unittest.TestCase):
             catalog.register_product(product)
             catalog.register_release(DatasetRelease(
                 "promote-v1", product.key, "1", "market.event", "1", "test", "1", "canonical/test",
-                "parquet", "hash", status=DatasetStatus.APPROVED_FOR_RESEARCH,
+                "parquet", "hash", status=DatasetStatus.APPROVED_FOR_STUDY,
                 quality_level=QualityLevel.BACKTEST,
             )); catalog.save()
             promoted = catalog.promote(
@@ -659,8 +659,8 @@ class ResearchDataClientTests(unittest.TestCase):
             self.assertIn("quality review passed", audit)
             with self.assertRaisesRegex(ValueError, "requires a higher quality"):
                 low = DatasetRelease("low", product.key, "2", "market.event", "1", "test", "1", "canonical/low",
-                    "parquet", "hash2", status=DatasetStatus.APPROVED_FOR_RESEARCH,
-                    quality_level=QualityLevel.RESEARCH)
+                    "parquet", "hash2", status=DatasetStatus.APPROVED_FOR_STUDY,
+                    quality_level=QualityLevel.STUDY)
                 catalog.register_release(low)
                 catalog.promote("low", DatasetStatus.APPROVED_FOR_BACKTEST, actor="test", reason="not enough")
 
@@ -673,10 +673,10 @@ class ResearchDataClientTests(unittest.TestCase):
             for version in ("1", "2"):
                 release = DatasetRelease(
                     f"alias-v{version}", product.key, version, "event", "1", "test", version,
-                    f"canonical/v{version}", "parquet", f"hash-{version}", status=DatasetStatus.APPROVED_FOR_RESEARCH,
+                    f"canonical/v{version}", "parquet", f"hash-{version}", status=DatasetStatus.APPROVED_FOR_STUDY,
                 )
                 catalog.register_release(release); releases.append(release)
-            alias = f"{product.key}@research"
+            alias = f"{product.key}@study"
             catalog.promote_alias(alias, releases[0].release_id, actor="reviewer", reason="initial approval",
                                   quality_report_hash="quality-1")
             catalog.promote_alias(alias, releases[1].release_id, actor="reviewer", reason="new release approved",

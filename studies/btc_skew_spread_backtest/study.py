@@ -9,13 +9,13 @@ import statistics
 
 from kairos import __version__
 from studies.btc_options_stats import block_bootstrap_ci, percentile
-from kairos.data import ResearchDataClient
+from kairos.data import DatasetClient
 from kairos.data.products import BTC_OPTION_QUOTES_HOURLY, BTC_TERM_SKEW_HOURLY
 from kairos.storage.data_lake import write_json
 
 
 def execute(root: str | Path = "data", target_dte=30, holding_days=7, lookback=60, commission=1.0):
-    repository = ResearchDataClient(root)
+    repository = DatasetClient(root)
     quotes = repository.load_rows(BTC_OPTION_QUOTES_HOURLY.product)
     features = repository.load_rows(BTC_TERM_SKEW_HOURLY.product)
     books = {}
@@ -87,7 +87,7 @@ def _nonnegative(value):
 def main(argv=None):
     parser=argparse.ArgumentParser(); parser.add_argument("--data-root",type=Path,default=Path("data")); args=parser.parse_args(argv)
     trades,result=execute(args.data_root); output=args.data_root/"studies"/"btc_skew_spread_backtest_v1"; output.mkdir(parents=True,exist_ok=True)
-    ResearchDataClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_skew_spread_backtest_v1",
+    DatasetClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_skew_spread_backtest_v1",
         (BTC_OPTION_QUOTES_HOURLY.product, BTC_TERM_SKEW_HOURLY.product), code_version=__version__)
     write_json(output/"study_spec.json", {"study_id":"btc_skew_spread_backtest_v1","short_delta":-.25,"long_delta":-.10,
         "target_dte":30,"holding_days":7,"signal":"30D put skew above trailing 60-day 80th percentile"})

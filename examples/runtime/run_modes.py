@@ -6,13 +6,13 @@ import json
 
 from kairos.application import (
     backtest_composition, historical_simulation_composition, live_composition,
-    paper_trading_composition, research_composition,
+    paper_trading_composition, study_composition,
 )
 
 
 def main() -> None:
     compositions = (
-        research_composition(), backtest_composition(), historical_simulation_composition(),
+        study_composition(), backtest_composition(), historical_simulation_composition(),
         paper_trading_composition("binance"), live_composition("binance", "binance-testnet-or-live"),
     )
     print(json.dumps({

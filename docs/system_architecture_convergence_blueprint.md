@@ -13,7 +13,7 @@
 1. `kairos` 各模块分别负责什么，相互之间应如何依赖；
 2. 当前系统哪些能力已经成立，哪些只是模块级能力、尚未形成完整运行闭环；
 3. 如何收敛研究数据、回测、模拟、paper/testnet/live 的运行路径；
-4. 如何规范 Domain、Data、Catalog、Research、Backtest 和 Runtime 的边界；
+4. 如何规范 Domain、Data、Catalog、Study、Backtest 和 Runtime 的边界；
 5. 哪些旧代码和旧数据需要迁移、降级为内部实现或删除；
 6. 如何逐阶段实施，以及每个阶段用什么证据验收。
 
@@ -21,8 +21,8 @@
 
 - `architecture.md` 中的多资产领域模型和运行安全方向；
 - `data_system_convergence_and_productization.md` 中的数据系统收敛方案；
-- `research_data_platform_redesign.md` 中的数据产品身份、Release 和来源治理；
-- `research_validation_framework.md` 中的研究证据等级和策略晋级门禁。
+- `study_data_platform_redesign.md` 中的数据产品身份、Release 和来源治理；
+- `study_validation_framework.md` 中的研究证据等级和策略晋级门禁。
 
 后续专题文档可以继续存在，但发生冲突时，应先更新本文的系统级决策，再同步专题文档。
 
@@ -35,7 +35,7 @@
 - Dataset Catalog V3、不可变 Release、Parquet 和 point-in-time 查询；
 - 策略 Intent、执行计划、路由、组合订单和 Venue 规则校验；
 - Ledger、Portfolio、Risk、Pricing、Volatility 和产品生命周期；
-- 确定性 Backtest、Research Validation 和策略治理；
+- 确定性 Backtest、Study Validation 和策略治理；
 - Readiness、Reconciliation、Kill Switch、事件日志和部分故障恢复；
 - IBKR、Binance、Deribit、Massive 和模拟 connector。
 
@@ -149,7 +149,7 @@ Runtime recovery
 - Application Service 负责编排，不重新定义业务规则；
 - Connector 只实现端口并完成外部对象转换；
 - Storage 只提供持久化能力，不决定业务状态转换；
-- Research 和 Backtest 是 Domain/Application 的消费者，不反向进入 Domain；
+- Study 和 Backtest 是 Domain/Application 的消费者，不反向进入 Domain；
 - CLI 只是入口，不是业务逻辑和依赖组装的长期归宿。
 
 ### 3.3 一份事实，一个权威来源
@@ -210,7 +210,7 @@ Runtime recovery
 应移出：
 
 - 直接引用具体 `ReferenceCatalog` 的 StrategyContext；
-- 对 Backtest MarketSnapshot、Research Feature、Volatility Repository 等上层对象的依赖；
+- 对 Backtest MarketSnapshot、Study Feature、Volatility Repository 等上层对象的依赖；
 - 文件、Dataset、Provider、Release、DataFrame 和运行环境概念。
 
 目标依赖：Domain 只能依赖 Python 标准库和 Domain 内部模块。
@@ -258,7 +258,7 @@ Runtime recovery
 
 目标定位：
 
-- `ResearchDataClient` 是 Research 和 Backtest 的唯一公开数据入口；
+- `DatasetClient` 是 Study 和 Backtest 的唯一公开数据入口；
 - Event、Tabular、MarketSnapshot Reader 都是内部 storage driver；
 - 所有正式数据读取必须先解析为不可变 Release；
 - Backtest 禁止隐式联网获取；
@@ -356,7 +356,7 @@ Connector 不得：
 - 纯计算核心无 I/O；
 - 数据获取由应用层完成；
 - vendor analytics 与内部估值明确分开；
-- 相同输入在 Research、Backtest 和 Runtime 结果一致。
+- 相同输入在 Study、Backtest 和 Runtime 结果一致。
 
 ### 4.8 `kairos.volatility`
 
@@ -518,7 +518,7 @@ Connector 不得：
 已完成的迁移包括：
 
 - OHLCV 数据迁入不可变 Dataset Release；
-- 查询统一进入 ResearchDataClient；
+- 查询统一进入 DatasetClient；
 - SMA 示例改为治理 Release 驱动的 Backtest；
 - 删除 `kairos.history`、`BarRepository` 和顶级 `kairos history` CLI；
 - 旧 CSV sidecar 经行数核验后删除，新发布不再双写 CSV。
@@ -546,7 +546,7 @@ Connector 不得：
 包含：
 
 - KairosApplication；
-- ResearchApplication；
+- StudyApplication；
 - BacktestApplication；
 - DataPreparationApplication；
 - Strategy Runtime；
@@ -603,7 +603,7 @@ KairosApplication
 ├── ApplicationConfig
 ├── Clock
 ├── ReferenceCatalog
-├── DatasetCatalog / ResearchDataClient
+├── DatasetCatalog / DatasetClient
 ├── MarketDataRuntime
 ├── StrategyRuntime
 ├── PortfolioGovernance
@@ -905,8 +905,8 @@ runtime_state
 Dataset Catalog Release
   = 所有持久化研究数据的唯一治理身份
 
-ResearchDataClient
-  = Research 和 Backtest 的唯一公开数据入口
+DatasetClient
+  = Study 和 Backtest 的唯一公开数据入口
 ```
 
 底层可以存在不同 storage driver，但不允许成为用户入口。
@@ -976,7 +976,7 @@ market_snapshots
 reference
 ```
 
-ResearchDataClient 按 storage kind 选择内部 Reader，禁止根据目录名、`dataset=*` 或 `dataset.json` 推断。
+DatasetClient 按 storage kind 选择内部 Reader，禁止根据目录名、`dataset=*` 或 `dataset.json` 推断。
 
 ### 11.6 Canonical 与 Domain
 
@@ -1001,7 +1001,7 @@ Domain 对象不保存 Dataset Release 和 Provider payload。
 
 - Q0 Archived；
 - Q1 Integrity；
-- Q2 Research；
+- Q2 Study；
 - Q3 Backtest；
 - Q4 Production。
 
@@ -1040,16 +1040,16 @@ kairos data migrate ...
 
 | 旧对象 | 目标 |
 |---|---|
-| `BarRepository` | Canonical OHLCV + ResearchDataClient |
+| `BarRepository` | Canonical OHLCV + DatasetClient |
 | `kairos history` | `kairos data` + 正式 backtest |
 | `DatasetRepository` 公开使用 | 内部 MarketSnapshot storage driver |
-| `ResearchDatasetStore` | Collection Publisher |
+| `StudySnapshotCollectionStore` | Collection Publisher |
 | `SurfaceRepository` | Feature Release |
 | CSV sidecar | 停止生成并迁移删除 |
 | `data/history` | Canonical |
 | 旧 `data/datasets` | Curated Release |
 | `data/surfaces` | Features |
-| 空 raw/normalized/derived/research | 删除 |
+| 空 raw/normalized/derived/study | 删除 |
 | Release local aliases | Catalog Alias Registry |
 
 ### 11.10 迁移安全
@@ -1065,13 +1065,13 @@ kairos data migrate ...
 - 只有验证通过后允许 `--delete-source`；
 - 删除代码和删除数据分开提交。
 
-## 12. Research、Backtest 与 Live 的统一关系
+## 12. Study、Backtest 与 Live 的统一关系
 
 ### 12.1 允许替换的组件
 
 | 运行模式 | Clock | Market Input | Execution |
 |---|---|---|---|
-| Research | Fixed/System | Frozen Release/Table | 无或分析模型 |
+| Study | Fixed/System | Frozen Release/Table | 无或分析模型 |
 | Backtest | BacktestClock | Frozen Replay | Fill Model |
 | Simulation | SystemClock | Live/Replay | SimulatedExecutionGateway |
 | Paper/Testnet | SystemClock | Venue | VenueExecutionGateway |
@@ -1102,7 +1102,7 @@ kairos data migrate ...
 ### 12.3 Live 合格条件
 
 - Strategy Registry 已批准 Live；
-- Research/Backtest/Paper 证据链完整；
+- Study/Backtest/Paper 证据链完整；
 - 数据和执行能力满足策略 Claim；
 - Runtime L3/L4 验收通过；
 - Risk limits 和 capital allocation 明确；
@@ -1191,7 +1191,7 @@ kairos data migrate ...
 
 完成证据：
 
-- ResearchDataClient 唯一公开入口；
+- DatasetClient 唯一公开入口；
 - Backtest 全部使用 Q3/Q4 frozen Release；
 - Catalog strict health 通过。
 
@@ -1200,7 +1200,7 @@ kairos data migrate ...
 工作：
 
 - 迁移 history、datasets、surfaces 和 CSV sidecar；
-- 修改 SMA、Notebook、Research 和 Backtest 消费者；
+- 修改 SMA、Notebook、Study 和 Backtest 消费者；
 - 删除旧 CLI、Repository 和空目录；
 - 删除目录推断 Reader 的兼容逻辑。
 
@@ -1270,7 +1270,7 @@ kairos data migrate ...
 状态：进行中。统一 Release、storage kind、OHLCV Quality、产品 CLI 和两条 Golden SMA 已完成；DataProductContract、其他 Quality Profile、Dataset/Surface 迁移仍待完成。
 
 - Product Spec、storage kind、Quality Engine；
-- 统一 ResearchDataClient；
+- 统一 DatasetClient；
 - 产品体验命令；
 - 迁移旧数据。
 
@@ -1314,7 +1314,7 @@ kairos data migrate ...
 
 - Domain 无反向依赖；
 - Interface 只依赖 Application；
-- Research/Strategy 不直接依赖 Storage Driver；
+- Study/Strategy 不直接依赖 Storage Driver；
 - 无硬编码正式数据路径；
 - Product、Order、Ledger 等事实源唯一。
 
@@ -1417,14 +1417,14 @@ tests/data/test_quality_profiles.py
 tests/data/test_catalog_health.py
 tests/data/test_migration_idempotency.py
 tests/data/test_prepare_end_to_end.py
-tests/data/test_frozen_research_inputs.py
+tests/data/test_frozen_study_inputs.py
 ```
 
 ### 16.4 Golden Pipelines
 
 至少固定：
 
-1. Binance BTC-USDT OHLCV -> Feature -> Strategy/Research；
+1. Binance BTC-USDT OHLCV -> Feature -> Strategy/Study；
 2. Deribit BTC Option -> Curated/Feature -> Validation；
 3. Massive SPXW Events -> MarketSnapshot -> Backtest；
 4. Simulated Venue -> Order -> Fill -> Ledger -> Reconciliation；
@@ -1461,7 +1461,7 @@ git diff --check
 静态扫描：
 
 ```bash
-rg '^from kairos\.(data|catalog|storage|research|backtest)' kairos/domain
+rg '^from kairos\.(data|catalog|storage|study|backtest)' kairos/domain
 rg 'from kairos\.history|import kairos\.history' kairos examples tests
 rg 'DatasetRepository\(' kairos examples
 rg 'data/(history|datasets|surfaces|raw|normalized|derived)' kairos examples docs
@@ -1474,7 +1474,7 @@ rg 'read_(csv|parquet)|open\(.+data/' examples studies
 - History 依赖扫描为空；
 - DatasetRepository 仅允许出现在内部 driver 和专门测试；
 - 旧路径仅允许出现在 migration 文档/工具；
-- Notebook/Research 不直接读取物理文件。
+- Notebook/Study 不直接读取物理文件。
 
 ## 18. 量化验收指标
 
@@ -1511,7 +1511,7 @@ rg 'read_(csv|parquet)|open\(.+data/' examples studies
 7. 恢复和 Reconciliation 完成前不能新开仓；
 8. Kill Switch 和 reduce-only 跨重启保持；
 9. 数据只通过治理 Release 被研究和回测消费；
-10. Domain 与 Data、Catalog、Storage、Research、Backtest 解耦；
+10. Domain 与 Data、Catalog、Storage、Study、Backtest 解耦；
 11. 旧数据路径、旧 Repository 和平行 CLI 已删除；
 12. 日志、Metrics、Alerts 能串联 Intent -> Order -> Fill -> Ledger；
 13. L0–L3 自动化验收通过；

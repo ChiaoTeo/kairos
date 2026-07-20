@@ -8,13 +8,13 @@ from pathlib import Path
 import statistics
 
 from kairos import __version__
-from kairos.data import ResearchDataClient
+from kairos.data import DatasetClient
 from kairos.data.products import BTC_DERIBIT_TERM_SKEW_DAILY, BTC_SPOT_DAILY
 from kairos.storage.data_lake import write_json
 
 
 def analyze(root: str | Path = "data"):
-    root=Path(root); repository=ResearchDataClient(root)
+    root=Path(root); repository=DatasetClient(root)
     trades=json.loads((root/"studies"/"btc_deribit_skew_spread_trade_proxy_v1"/"trades.json").read_text())
     spot={row["period_start"][:10]:float(row["close"]) for row in repository.load_rows(BTC_SPOT_DAILY.product)}
     features={row["period_start"][:10]:row for row in repository.load_rows(BTC_DERIBIT_TERM_SKEW_DAILY.product)}
@@ -73,7 +73,7 @@ def _days(start,end):return [(start+timedelta(days=offset)).isoformat() for offs
 def main(argv=None):
     parser=argparse.ArgumentParser();parser.add_argument("--data-root",type=Path,default=Path("data"));args=parser.parse_args(argv)
     details,summary=analyze(args.data_root);output=args.data_root/"studies"/"btc_deribit_skew_spread_trade_proxy_v1"
-    ResearchDataClient(args.data_root).freeze_products(output/"analysis_data_snapshot.json", "btc_deribit_skew_spread_analysis_v1",
+    DatasetClient(args.data_root).freeze_products(output/"analysis_data_snapshot.json", "btc_deribit_skew_spread_analysis_v1",
         (BTC_SPOT_DAILY.product, BTC_DERIBIT_TERM_SKEW_DAILY.product), code_version=__version__)
     write_json(output/"attribution_trades.json",details);write_json(output/"risk_decomposition.json",summary);print(json.dumps(summary,ensure_ascii=False,indent=2))
 

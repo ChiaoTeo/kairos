@@ -23,7 +23,7 @@ from kairos.data.products import (
     BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY,
 )
 from kairos.data.bootstrap import default_provider_registry, register_configured_products
-from kairos.data import ResearchDataClient
+from kairos.data import DatasetClient
 
 
 START = datetime(2026, 1, 2, tzinfo=timezone.utc)
@@ -251,7 +251,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
                 "dimensions": {"venue": "opra", "asset_class": "option"},
             }]}))
             register_configured_products(temporary, config)
-            client = ResearchDataClient(temporary, providers=default_provider_registry(temporary, connector_config=config))
+            client = DatasetClient(temporary, providers=default_provider_registry(temporary, connector_config=config))
             plan = client.plan("market.events.options.us.test", start=START, end=END,
                                provider="massive", venue="opra")
             self.assertTrue(plan.connector_available)
@@ -268,7 +268,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
                 "view": "raw",
             }]}))
             register_configured_products(temporary, config)
-            client = ResearchDataClient(temporary, providers=default_provider_registry(temporary, connector_config=config))
+            client = DatasetClient(temporary, providers=default_provider_registry(temporary, connector_config=config))
             plan = client.plan("market.ohlcv.equity.us.massive.nvda.1d.raw", start=START, end=END,
                                provider="massive", venue="us-securities")
             self.assertTrue(plan.connector_available)

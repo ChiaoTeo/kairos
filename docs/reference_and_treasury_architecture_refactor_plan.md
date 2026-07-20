@@ -22,7 +22,7 @@
 - Execution、Pricing、Risk、Ledger、Portfolio、Lifecycle、Backtest、MarketData subscription、RuntimeRecovery 和主要 Strategy 的 V2 读取路径；
 - Treasury Intent/Instruction/Operation、显式审批、状态机、SQLite 恢复、Provider 对账和 Ledger 在途投影；
 - Binance 内部划转/链上提现 connector 与 provider-neutral Bank transfer connector；
-- Research reference evidence hash 和 Massive curated V2 lineage。
+- Study reference evidence hash 和 Massive curated V2 lineage。
 
 当前全量验证为 434 tests passed、5 skipped，固定 runtime Golden audit hash 保持不变。
 
@@ -30,7 +30,7 @@
 
 - live CLI 的所有交易/行情入口完全切换为 V2 Catalog；
 - 旧版 IBKR/Binance connector 内部参数从 `InstrumentDefinition` 改为解析后的轻量 contract；
-- 旧 ResearchSnapshot builder 和少量 synthetic compatibility 分支移除；
+- 旧研究快照 builder 已收敛为 `OptionCaptureSnapshot`；后续仅剩少量 synthetic compatibility 分支移除；
 - 旧版 `kairos.reference.ReferenceCatalog`、嵌套 `ListingDefinition` 和兼容 facade 的最终删除；
 - 完成删除后的全量故障注入与最终逐项验收审计。
 

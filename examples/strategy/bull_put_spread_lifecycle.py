@@ -19,7 +19,7 @@ from kairos.backtest.repository import BacktestRepository
 from kairos.backtest.result import BacktestConfig
 from kairos.features import FactorRegistry,OptionSkewFactorConfig,OptionSkewFactorRuntime,snapshots_hash
 from kairos.pricing import OptionValuationService
-from kairos.research_platform import StudyWorkspace,StudyWorkspaceRepository
+from kairos.study_platform import StudyWorkspace,StudyWorkspaceRepository
 from kairos.risk.limits import RiskLimits
 from kairos.storage.codec import to_primitive
 from kairos.strategies import StrategyImplementation,StrategyRegistry
@@ -38,18 +38,18 @@ def run(root:Path)->dict[str,object]:
         created_at=datetime(2026,7,17,tzinfo=timezone.utc).isoformat()))
     candidate=studies.freeze("spxw-skew-bull-put","1.0.0")
     factor_config=OptionSkewFactorConfig(minimum_rank_history=0)
-    research_factor=OptionSkewFactorRuntime(catalog,factor_config,input_identity=identity)
+    study_factor=OptionSkewFactorRuntime(catalog,factor_config,input_identity=identity)
     valuation=OptionValuationService(catalog,max_quote_age_seconds=Decimal("120"));factor_snapshots=[]
     for market in dataset.slices:
         valued,snapshot=valuation.value(market)
-        if value:=research_factor.update_market(valued,snapshot):factor_snapshots.append(value)
-    factor_dir=FactorRegistry(root/"factors").register(research_factor.spec)
-    strategy_config=BullPutSpreadConfig(signal_factor_id=research_factor.spec.factor_id,minimum_skew_rank=Decimal("0.5"))
+        if value:=study_factor.update_market(valued,snapshot):factor_snapshots.append(value)
+    factor_dir=FactorRegistry(root/"factors").register(study_factor.spec)
+    strategy_config=BullPutSpreadConfig(signal_factor_id=study_factor.spec.factor_id,minimum_skew_rank=Decimal("0.5"))
     spec,policy=bull_put_strategy_spec(strategy_config)
     implementation=StrategyImplementation("kairos.strategies.bull_put_spread:BullPutSpreadStrategy",
         sha256((ROOT/"kairos/strategies/bull_put_spread.py").read_bytes()).hexdigest())
     strategy_dir=StrategyRegistry(root/"strategies").register(spec,policy,implementation=implementation,
-        factor_specs=(research_factor.spec,))
+        factor_specs=(study_factor.spec,))
     config=BacktestConfig(dataset.manifest.start,dataset.manifest.end)
     def execute(model="conservative"):
         from dataclasses import replace
@@ -62,10 +62,10 @@ def run(root:Path)->dict[str,object]:
     conservative_dir=repository.save(conservative,strategy_config=strategy_config,risk_limits=RiskLimits())
     stress_dir=repository.save(stress,strategy_config=strategy_config,risk_limits=RiskLimits())
     replay=execute();replay_equal=_hash(conservative)==_hash(replay)
-    return {"study_candidate":(candidate/"manifest.json").exists(),"research_evidence":"TRADE_PROXY_ONLY",
+    return {"study_candidate":(candidate/"manifest.json").exists(),"study_evidence":"TRADE_PROXY_ONLY",
         "synthetic_mechanics_only":dataset.manifest.synthetic,"factor_release":str(factor_dir),
         "factor_hash":snapshots_hash(tuple(factor_snapshots)),"strategy_release":str(strategy_dir),
-        "strategy_version":spec.version,"strategy_spec_hash":spec.spec_hash,"factor_spec_hash":research_factor.spec.spec_hash,
+        "strategy_version":spec.version,"strategy_spec_hash":spec.spec_hash,"factor_spec_hash":study_factor.spec.spec_hash,
         "conservative_run":str(conservative_dir),"stress_run":str(stress_dir),"conservative_fills":len(conservative.fills),
         "stress_fills":len(stress.fills),"formal_strategy_consumed_factor":any("skew_rank=" in d.reason or d.action=="open" for d in conservative.strategy_decisions),
         "replay_equal":replay_equal,"replay_hash":_hash(replay)}

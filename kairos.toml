@@ -1,9 +1,9 @@
 [project]
-name = "trader"
+name = "kairos"
 data_root = "data"
 timezone = "UTC"
 
-[research]
+[study]
 default_study = "starter"
 
 [execution]

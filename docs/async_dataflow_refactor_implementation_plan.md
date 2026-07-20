@@ -22,7 +22,7 @@
 最终需要交付一套统一运行体系：
 
 ```text
-Research
+Study
   -> Governed Dataset Release
   -> Deterministic Backtest
   -> Historical Runtime Simulation
@@ -66,7 +66,7 @@ Research
 | W6 | 市场数据 Connector 收敛 | Massive/Binance/IBKR 统一接入 | P1 |
 | W7 | Market State Projection | Quote/Trade/Book/Derivative State | P1 |
 | W8 | Execution 异步化 | Durable Outbox、Dispatcher、Private Events | P0 |
-| W9 | 全运行模式统一 | Research/Backtest/Sim/Paper/Live | P0 |
+| W9 | 全运行模式统一 | Study/Backtest/Sim/Paper/Live | P0 |
 | W10 | 调试与可观测性 | Trace、Fault、CLI、Metrics | P0 |
 | W11 | Rust Gateway Spike | 跨语言 Contract、可选共享内存 | P2 |
 
@@ -499,7 +499,7 @@ Transport
 ### 14.1 要完成的工作
 
 - 定义统一 `RunModeComposition`；
-- Research 输出可晋级 Strategy Artifact；
+- Study 输出可晋级 Strategy Artifact；
 - Backtest 使用 Canonical Event/Projector；
 - Historical Simulation 使用正式异步 Runtime；
 - Paper Trading 使用实时 EventSource + 模拟 Execution Driver；
@@ -532,7 +532,7 @@ elif backtest:
 
 ### 14.3 阶段门禁
 
-#### Research -> Backtest
+#### Study -> Backtest
 
 -冻结输入 Release；
 -研究 Claim 和 Validation 通过；
@@ -906,7 +906,7 @@ Retry owner 规则：
 ### M4：全模式统一
 
 包含：W9。  
-退出：同一策略通过 Research、Backtest、Historical Sim 和 Paper Trading。
+退出：同一策略通过 Study、Backtest、Historical Sim 和 Paper Trading。
 
 ### M5：真实 Venue 与 L4
 

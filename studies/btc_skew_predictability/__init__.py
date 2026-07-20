@@ -1,1 +1,1 @@
-"""BTC fixed-maturity skew predictability research."""
+"""BTC fixed-maturity skew predictability study."""

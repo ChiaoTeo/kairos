@@ -35,7 +35,7 @@ from kairos.domain.product import CryptoSpotSpec, ProductType
 from kairos.risk.portfolio_governance import PositionSizer
 from kairos.strategies import GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext
 from kairos.strategies.specs import sma_strategy_spec
-from kairos.strategies.sma_cross_research_backtest import SmaCrossConfig
+from kairos.strategies.sma_cross_study_backtest import SmaCrossConfig
 
 from .clock import FixedClock
 from .config import ApplicationConfig, RuntimePaths

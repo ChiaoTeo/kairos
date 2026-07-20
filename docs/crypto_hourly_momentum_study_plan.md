@@ -218,7 +218,7 @@ canonical/derivatives/funding/
   instrument=BTC-USDT-PERP/event_year=2024/event_month=01/
 ```
 
-正式研究只通过 `ResearchDataClient` 和批准的 Dataset Release 读取，不在研究脚本中拼接物理路径。
+正式研究只通过 `DatasetClient` 和批准的 Dataset Release 读取，不在研究脚本中拼接物理路径。
 
 ### 4.4 下载与发布验收
 
@@ -912,7 +912,7 @@ data/source/provider=binance/dataset=usdm_klines/
 data/canonical/market/ohlcv/asset_class=crypto/venue=binance/product=usdm-perpetual/interval=1h/
 ```
 
-Study 和生成的 `research.py` 保存到：
+Study 和生成的 `study.py` 保存到：
 
 ```text
 data/study-workspaces/crypto-hourly-momentum/1.0.0/
@@ -921,7 +921,7 @@ data/study-workspaces/crypto-hourly-momentum/1.0.0/
 命令输出中的 `next` 是运行研究脚本的下一条命令。也可以手动执行：
 
 ```bash
-./pyenv/bin/python data/study-workspaces/crypto-hourly-momentum/1.0.0/research.py
+./pyenv/bin/python data/study-workspaces/crypto-hourly-momentum/1.0.0/study.py
 ```
 
 首次验证网络、字段和时间窗口时，可以用 `--symbol` 做有界烟雾测试；这不是正式全市场研究：
@@ -997,9 +997,9 @@ Study 创建。Raw 数据因此可以跨重跑、跨 Study 和后续增量窗口
 
 ## 17. 与仓库现有文档的关系
 
-- 数据发现、Release、Catalog 和时间语义遵循 [research_data_guide.md](research_data_guide.md)；
-- 从假设到 Study、Factor、Strategy 和 Run 的流程参考 [tutorial_first_research.md](tutorial_first_research.md)；
-- 预测能力、组合映射和可执行性分层遵循 [research_validation_framework.md](research_validation_framework.md)；
-- 研究、回测和实盘一致性遵循 [research_strategy_backtest_live_convergence_plan.md](research_strategy_backtest_live_convergence_plan.md)。
+- 数据发现、Release、Catalog 和时间语义遵循 [study_data_guide.md](study_data_guide.md)；
+- 从假设到 Study、Factor、Strategy 和 Run 的流程参考 [tutorial_first_study.md](tutorial_first_study.md)；
+- 预测能力、组合映射和可执行性分层遵循 [study_validation_framework.md](study_validation_framework.md)；
+- 研究、回测和实盘一致性遵循 [study_strategy_backtest_live_convergence_plan.md](study_strategy_backtest_live_convergence_plan.md)。
 
 本文只定义本次“加密货币小时级横截面动量”研究的具体执行顺序和验收标准；通用平台能力不在研究目录内重复实现。

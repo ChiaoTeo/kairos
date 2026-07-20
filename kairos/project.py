@@ -51,9 +51,10 @@ def initialize_project(target: str | Path = ".", *, name: str | None = None, for
             "kairos --help",
         ),
     )
+    metadata = {**result.to_dict(), "root": ".", "kairos_version": __version__}
     _write_file(
         root / ".kairos" / "project.json",
-        json.dumps({**result.to_dict(), "kairos_version": __version__}, indent=2, sort_keys=True) + "\n",
+        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
         force=True,
         created=created,
         reused=reused,
@@ -101,7 +102,7 @@ def _files(project_name: str) -> tuple[tuple[Path, str], ...]:
         (Path("pyproject.toml"), _pyproject_toml(project_name)),
         (Path(".gitignore"), _gitignore()),
         (Path("README.md"), _readme(project_name)),
-        (Path("config/research.json"), _research_config(project_name)),
+        (Path("config/study.json"), _study_config(project_name)),
         (Path("studies/starter.py"), _starter_script()),
         (Path("strategies/__init__.py"), ""),
         (Path("strategies/starter_sma.py"), _starter_strategy()),
@@ -148,7 +149,7 @@ name = "{project_name}"
 data_root = "data"
 timezone = "UTC"
 
-[research]
+[study]
 default_study = "starter"
 
 [execution]
@@ -185,7 +186,7 @@ def _readme(project_name: str) -> str:
     title = project_name.replace("-", " ").replace("_", " ").title()
     return f"""# {title}
 
-This is a Kairos quantitative research and trading project.
+This is a Kairos quantitative study, backtest, and execution project.
 
 ## Start
 
@@ -198,7 +199,7 @@ Project data lives under `data/`. Keep study code in `studies/` and reusable str
 """
 
 
-def _research_config(project_name: str) -> str:
+def _study_config(project_name: str) -> str:
     return json.dumps({
         "project": project_name,
         "lake_root": "data",

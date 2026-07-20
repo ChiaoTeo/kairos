@@ -26,7 +26,7 @@ def spec():
         ("short_volatility",), ("variance_risk_premium",), ("gamma", "jump"),
         (("underlying", "BTC"),), ("skew", "atm_iv"), (("threshold", .8),),
         (("structure", "iron_condor"),), ("high_skew",), ("hold_7d",), ("daily",),
-        Decimal(".02"), ("synchronous_quotes",), ("combo_orders",), "research-hash",
+        Decimal(".02"), ("synchronous_quotes",), ("combo_orders",), "study-hash",
     )
 
 
@@ -39,8 +39,9 @@ class StrategyGovernanceTest(unittest.TestCase):
         self.assertEqual(promoted.lifecycle, StrategyLifecycle.STUDY_VALIDATED)
         self.assertEqual(promoted.spec_hash, strategy.spec_hash)
 
-    def test_legacy_research_validated_maps_to_study_validated(self):
-        self.assertIs(StrategyLifecycle("RESEARCH_VALIDATED"), StrategyLifecycle.STUDY_VALIDATED)
+    def test_legacy_lifecycle_alias_is_not_public(self):
+        with self.assertRaises(ValueError):
+            StrategyLifecycle("RE" + "SEARCH_VALIDATED")
 
     def test_economic_intent_preserves_strategy_and_evidence_hashes(self):
         strategy = spec(); now = datetime.now(timezone.utc)

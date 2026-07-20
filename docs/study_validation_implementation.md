@@ -1,6 +1,6 @@
 # 研究验证框架实施映射
 
-本文记录 [`research_validation_framework.md`](research_validation_framework.md) 在项目中的生产实现和验收入口。规范定义目标和门禁，本文定义代码所有权与可执行证据。
+本文记录 [`study_validation_framework.md`](study_validation_framework.md) 在项目中的生产实现和验收入口。规范定义目标和门禁，本文定义代码所有权与可执行证据。
 
 ## 核心契约
 
@@ -87,13 +87,13 @@ soak artifact。本地 deterministic acceptance、synthetic fixture 和 trade pr
 参考策略首先注册为`DRAFT`：
 
 ```bash
-pyenv/bin/python -m kairos --lake-root data research register-builtin-strategies
+pyenv/bin/python -m kairos --lake-root data study register-builtin-strategies
 ```
 
-BTC铁鹰以治理研究结果作为hash证据晋级到`RESEARCH_VALIDATED`：
+BTC铁鹰以治理 Study 结果作为hash证据晋级到`STUDY_VALIDATED`：
 
 ```bash
-pyenv/bin/python -m kairos --lake-root data research register-btc-iron-condor
+pyenv/bin/python -m kairos --lake-root data study register-btc-iron-condor
 ```
 
 该状态只允许进入后续可执行数据研究，不代表通过L4或允许实盘。
@@ -112,7 +112,7 @@ pyenv/bin/python -m kairos --lake-root data research register-btc-iron-condor
 治理审计：
 
 ```bash
-pyenv/bin/python -m kairos --lake-root data research governance-audit
+pyenv/bin/python -m kairos --lake-root data study governance-audit
 ```
 
 完整测试：
@@ -133,7 +133,7 @@ git diff --check
 测试文件包括：
 
 ```text
-tests/test_research_validation_framework.py
+tests/test_study_validation_framework.py
 tests/test_validation_protocols.py
 tests/test_governance_audit.py
 tests/test_strategy_governance.py

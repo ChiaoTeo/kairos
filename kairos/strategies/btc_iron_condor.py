@@ -44,8 +44,8 @@ class BtcIronCondorConfig:
 class BtcIronCondorStrategy:
     """Frozen economic strategy model; venue execution remains outside the strategy."""
 
-    def __init__(self, config: BtcIronCondorConfig = BtcIronCondorConfig(), *, research_spec_hash: str) -> None:
-        self.config = config; self._research_spec_hash = research_spec_hash
+    def __init__(self, config: BtcIronCondorConfig = BtcIronCondorConfig(), *, study_spec_hash: str) -> None:
+        self.config = config; self._study_spec_hash = study_spec_hash
         self._decisions: list[StrategyDecision] = []; self._evaluated_dates = set()
 
     @property
@@ -67,7 +67,7 @@ class BtcIronCondorStrategy:
              ("short_call_delta",str(c.short_call_delta)),("long_call_delta",str(c.long_call_delta))),
             ("signal_gate_passed",),(f"hold_{c.holding_days}_calendar_days",),("no_intraday_rebalance",),
             c.risk_budget_fraction,("point_in_time_option_universe","synchronous_quotes","quote_size"),
-            ("combo_orders",c.execution_policy_id),self._research_spec_hash)
+            ("combo_orders",c.execution_policy_id),self._study_spec_hash)
 
     def on_start(self, context: StrategyContext): return ()
 

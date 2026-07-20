@@ -132,7 +132,7 @@ def curate_sorted_trade_release(root: str | Path, source_release_id: str) -> Dat
         "release_id": release_id,
         "profile": "trade",
         "passed": True,
-        "level": QualityLevel.RESEARCH.value,
+        "level": QualityLevel.STUDY.value,
         "checks": [{"name": "external_sort_completed", "passed": True, "value": total_rows}],
     })
     release = DatasetRelease(
@@ -149,8 +149,8 @@ def curate_sorted_trade_release(root: str | Path, source_release_id: str) -> Dat
         source.provider,
         source.venue,
         (),
-        DatasetStatus.APPROVED_FOR_RESEARCH,
-        QualityLevel.RESEARCH,
+        DatasetStatus.APPROVED_FOR_STUDY,
+        QualityLevel.STUDY,
         datetime.now(timezone.utc).isoformat(),
         source.storage_kind,
         source.layout_version,

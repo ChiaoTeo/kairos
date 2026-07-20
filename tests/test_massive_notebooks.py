@@ -7,7 +7,7 @@ import unittest
 
 class MassiveNotebookTests(unittest.TestCase):
     def test_notebooks_are_valid_offline_readers_with_unique_cell_ids(self):
-        for name in ("massive_data_quality.ipynb", "massive_research_diagnostics.ipynb", "spxw_popular_options_2026.ipynb", "nvda_options_2026.ipynb"):
+        for name in ("massive_data_quality.ipynb", "massive_study_diagnostics.ipynb", "spxw_popular_options_2026.ipynb", "nvda_options_2026.ipynb"):
             path = Path("examples") / name
             notebook = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(notebook["nbformat"], 4)
@@ -18,7 +18,7 @@ class MassiveNotebookTests(unittest.TestCase):
             self.assertNotIn("MassiveClient", source)
             self.assertNotIn("requests.get", source)
             self.assertIn("Dataset", source)
-            if name == "massive_research_diagnostics.ipynb":
+            if name == "massive_study_diagnostics.ipynb":
                 self.assertIn("synthetic_forward", source)
             if name == "spxw_popular_options_2026.ipynb":
                 self.assertIn("daily_representatives.parquet", source)

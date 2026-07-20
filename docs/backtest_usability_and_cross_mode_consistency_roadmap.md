@@ -87,7 +87,7 @@ kairos backtest run \
 - Factor、Decision、Intent 和 Audit Hash；
 - Historical Simulation、Simulated Venue、Runtime Store、Ledger 和重启恢复；
 - Raw/Canonical Capture 和 Capture Replay；
-- Research、Backtest、Historical Simulation、Paper Trading、Live 的 `RunModeComposition`；
+- Study、Backtest、Historical Simulation、Paper Trading、Live 的 `RunModeComposition`；
 - SMA 主链的 batch/replay/execution-boundary parity；
 - 期权和多资产领域模型、专用回测与运行能力。
 
@@ -245,7 +245,7 @@ kairos strategy promote <strategy-release> --to limited-live
 
 - 定义所有可部署策略必须实现的运行协议；
 - 将旧专用回测逐步迁移为统一 Strategy/Factor/Intent 路径；
-- 明确 Research Label、Trade Proxy 与 Executable Backtest 的边界；
+- 明确 Study Label、Trade Proxy 与 Executable Backtest 的边界；
 - 禁止研究目录复制生产策略逻辑后直接作为晋级证据；
 - Strategy Release 强制绑定 implementation hash、Factor Release、参数 schema、数据需求和支持模式；
 - 建立兼容层和弃用计划，避免一次性删除现有期权回测能力。
@@ -412,7 +412,7 @@ kairos strategy promote <strategy-release> --to limited-live
 - 不要求历史数据和实时数据逐事件完全相同；
 - 不要求回测、Paper 和 Live 收益完全相同；
 - 不以一个万能 Fill Model 覆盖所有 Venue 和产品；
-- 不强制 Research Sandbox 放弃 DataFrame、Notebook 或临时代码。
+- 不强制 Study Sandbox 放弃 DataFrame、Notebook 或临时代码。
 
 ### 禁止做法
 
@@ -420,7 +420,7 @@ kairos strategy promote <strategy-release> --to limited-live
 - 用 `event_time` 冒充 `available_time` 而不声明理想化延迟模型；
 - 回测过程中隐式联网补数；
 - 使用 mutable alias 作为不可复现实验的唯一身份；
-- Research、Backtest、Live 各维护一份信号逻辑；
+- Study、Backtest、Live 各维护一份信号逻辑；
 - 使用今天获取的当前期权链回填历史；
 - fixture、synthetic 或 trade proxy 冒充可部署证据；
 - 只比较最终收益，不比较数据、Factor、Decision 和 Intent；

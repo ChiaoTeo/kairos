@@ -1,1 +1,1 @@
-"""BTC options volatility-risk-premium research example."""
+"""BTC options volatility-risk-premium study example."""

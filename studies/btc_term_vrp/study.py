@@ -9,7 +9,7 @@ import statistics
 
 from kairos import __version__
 from studies.btc_options_stats import block_bootstrap_ci, hac_mean_t
-from kairos.data import ResearchDataClient
+from kairos.data import DatasetClient
 from kairos.data.products import BTC_DERIBIT_TERM_SKEW_DAILY, BTC_SPOT_DAILY
 from kairos.storage.data_lake import write_json
 
@@ -18,7 +18,7 @@ HORIZONS = (7, 14, 30, 60, 90)
 
 
 def execute(root: str | Path = "data"):
-    repository = ResearchDataClient(root)
+    repository = DatasetClient(root)
     surface = repository.load_rows(BTC_DERIBIT_TERM_SKEW_DAILY.product)
     spot = repository.load_rows(BTC_SPOT_DAILY.product)
     closes = {row["period_start"][:10]: float(row["close"]) for row in spot}
@@ -79,7 +79,7 @@ def _mean(values):
 def main(argv=None):
     parser = argparse.ArgumentParser(); parser.add_argument("--data-root", type=Path, default=Path("data")); args = parser.parse_args(argv)
     panel, result = execute(args.data_root); output = args.data_root/"studies"/"btc_term_vrp_v1"; output.mkdir(parents=True, exist_ok=True)
-    ResearchDataClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_term_vrp_v1",
+    DatasetClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_term_vrp_v1",
         (BTC_DERIBIT_TERM_SKEW_DAILY.product, BTC_SPOT_DAILY.product), code_version=__version__)
     write_json(output/"study_spec.json", {"study_id": "btc_term_vrp_v1", "horizons": list(HORIZONS),
         "hypothesis": "fixed-maturity ATM IV exceeds same-horizon forward realized volatility", "test_fraction": 0.30})

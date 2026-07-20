@@ -31,7 +31,7 @@ Governed Dataset / Live WebSocket
 
 ## 第一次使用：从零完成一个研究
 
-如果你还不知道 Study、Factor、Strategy 和 Run 应该怎样串起来，请不要先运行完整验收，也不要先连接 Paper/Live。按照 [第一次研究教程](../docs/tutorial_first_research.md) 逐条执行。教程会解释每一步的目的、产物、继续条件和停止条件，并使用一个最终应被拒绝的 SMA 结果示范“系统跑通”与“策略有效”之间的区别。
+如果你还不知道 Study、Factor、Strategy 和 Run 应该怎样串起来，请不要先运行完整验收，也不要先连接 Paper/Live。按照 [第一次研究教程](../docs/tutorial_first_study.md) 逐条执行。教程会解释每一步的目的、产物、继续条件和停止条件，并使用一个最终应被拒绝的 SMA 结果示范“系统跑通”与“策略有效”之间的区别。
 
 完成 `kairos tutorial sma` 后，可以直接打开 Study 绑定的数据为 DataFrame：
 
@@ -52,17 +52,17 @@ Governed Dataset / Live WebSocket
 只有八个场景、SMA execution-boundary parity 和多资产 Strategy Release 全部成立时，顶层
 `passed` 才为 `true`。
 
-## 0. Research Sandbox 到 Factor Release
+## 0. Study Sandbox 到 Factor Release
 
-Research 采用“探索灵活、晋级固定”的双层模型。下面的确定性示例创建 Sandbox workspace、冻结
+Study 采用“探索灵活、晋级固定”的双层模型。下面的确定性示例创建 Sandbox workspace、冻结
 Study Candidate、注册 SMA Factor Release，并证明 batch 与 Canonical replay 完全一致：
 
 ```bash
 ./pyenv/bin/python examples/studies/sma_factor_lifecycle.py
 ```
 
-冻结的 candidate 仍不是正式的 Research Validation Evidence；它必须经过现有
-`ResearchValidationResult` 和治理门禁后，才能支持 Strategy promotion。
+冻结的 candidate 仍不是正式的 Study Validation Evidence；它必须经过现有
+`StudyValidationResult` 和治理门禁后，才能支持 Strategy promotion。
 
 同一流程也可以完全通过产品 CLI 执行：
 
@@ -170,7 +170,7 @@ Funding/Corporate Action/Assignment、Ledger、Conservative/Stress 和 determini
 
 ```bash
 kairos strategy register-builtins
-kairos strategy register-btc-iron-condor --research-spec-hash '<governed-study-spec-hash>'
+kairos strategy register-btc-iron-condor --study-spec-hash '<governed-study-spec-hash>'
 kairos strategy inspect covered-call-v1 --version 1.1.0
 kairos strategy status covered-call-v1 --version 1.1.0
 kairos strategy activate covered-call-v1 --version 1.1.0 --actor operator@example --reason 'approved baseline'
@@ -239,7 +239,7 @@ kairos run reference --strategy spot-perp-carry
 ./pyenv/bin/python examples/runtime/run_modes.py
 ```
 
-输出 Research、Backtest、Historical Simulation、Paper Trading 和 Live 的 EventSource、Clock、Execution、Persistence、Safety、Capture 与 composition hash。
+输出 Study、Backtest、Historical Simulation、Paper Trading 和 Live 的 EventSource、Clock、Execution、Persistence、Safety、Capture 与 composition hash。
 
 正式 SMA Historical Simulation 使用与回测相同的 FactorSpec、Strategy implementation 和
 EconomicIntent，但将执行边界替换为 Simulated Venue、Durable Order State、Execution Ingestion、

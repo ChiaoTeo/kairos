@@ -54,7 +54,7 @@ def internally_priceable_spxw_dataset() -> MarketReplayDataset:
     )
 
 
-class OptionsResearchEndToEndTests(unittest.TestCase):
+class OptionsStudyEndToEndTests(unittest.TestCase):
     def test_market_to_surface_strategy_backtest_and_risk_is_deterministic(self) -> None:
         dataset = internally_priceable_spxw_dataset()
         config = BacktestConfig(dataset.manifest.start, dataset.manifest.end, minimum_data_coverage=Decimal("0"))

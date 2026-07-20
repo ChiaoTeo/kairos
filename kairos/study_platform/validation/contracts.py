@@ -250,7 +250,7 @@ class StudyRegistration:
 
 
 @dataclass(frozen=True, slots=True)
-class ResearchValidationResult:
+class StudyValidationResult:
     registration: StudyRegistration
     state: ValidationState
     data_capabilities: DataCapabilities

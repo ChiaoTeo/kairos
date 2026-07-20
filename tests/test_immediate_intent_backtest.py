@@ -8,7 +8,7 @@ from kairos.features import SmaFactorConfig, SmaFactorRuntime
 from kairos.market_data import IterableEventSource
 from kairos.strategies import GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig
 from kairos.strategies.specs import sma_strategy_spec
-from kairos.strategies.sma_cross_research_backtest import SmaCrossConfig
+from kairos.strategies.sma_cross_study_backtest import SmaCrossConfig
 
 
 class ImmediateIntentBacktestTests(unittest.IsolatedAsyncioTestCase):

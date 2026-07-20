@@ -439,8 +439,8 @@ git diff --check
 | Pricing | Black-Scholes、Black-76、解析 Greeks、带边界和诊断的 IV solver | `test_pricing.py` |
 | Vol Engine | IV observations、确定性 SVI、标准 `g(k)` butterfly 与 calendar 检查、期限插值、版本化 SurfaceRepository | `test_volatility.py` |
 | Strategy | StrategyContext valuation/surface/features、IV rank/percentile/skew/term、Bull Put Spread internal-surface delta | `test_internal_valuation.py` |
-| Backtest | 逐 slice 内部估值、动态 universe、无 vendor Greeks、估值/曲面覆盖率、情景尾部指标 | `test_internal_valuation.py`, `test_options_research_end_to_end.py` |
+| Backtest | 逐 slice 内部估值、动态 universe、无 vendor Greeks、估值/曲面覆盖率、情景尾部指标 | `test_internal_valuation.py`, `test_options_study_end_to_end.py` |
 | Risk | spot/vol/skew/term/rate/time 完整重估、结构/账户归因、PnL explain、historical VaR/ES | `test_risk_analytics.py` |
-| CLI | `pricing option`、`vol calibrate`、`risk scenario` | `test_options_research_cli.py` |
+| CLI | `pricing option`、`vol calibrate`、`risk scenario` | `test_options_study_cli.py` |
 
 SPXW reference 流程使用满足静态价格边界的五档期权链，不包含 vendor Greeks。测试证明从 quote 到 IV、SVI、surface delta 选腿、下一 slice 成交、风险情景和 replay 的闭环是确定性的。

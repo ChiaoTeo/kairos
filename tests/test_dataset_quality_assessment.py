@@ -45,7 +45,7 @@ class DatasetQualityAssessmentTests(unittest.TestCase):
             release = DatasetRelease(
                 "ohlcv-release", product.key, "1", "market.ohlcv.v1", "1", "fixture", "1",
                 relative_path, "parquet", str(manifest["dataset_sha256"]), "fixture", "test", (),
-                DatasetStatus.APPROVED_FOR_RESEARCH, QualityLevel.RESEARCH,
+                DatasetStatus.APPROVED_FOR_STUDY, QualityLevel.STUDY,
             )
             for name in ("usage", "release"):
                 (root / release.relative_path / f"{name}.json").write_text("{}", encoding="utf-8")
@@ -137,13 +137,13 @@ class DatasetQualityAssessmentTests(unittest.TestCase):
             checks = {item.name: item for item in assessment.checks}
 
             self.assertTrue(assessment.passed)
-            self.assertEqual(assessment.level, QualityLevel.RESEARCH)
+            self.assertEqual(assessment.level, QualityLevel.STUDY)
             self.assertFalse(checks["backtest_history"].passed)
             self.assertEqual(checks["backtest_history"].severity, "diagnostic")
-            self.assertEqual(DataCatalog(root).release(release.release_id).status, DatasetStatus.APPROVED_FOR_RESEARCH)
+            self.assertEqual(DataCatalog(root).release(release.release_id).status, DatasetStatus.APPROVED_FOR_STUDY)
             prepared = DataPreparationService(DatasetClient(root)).prepare(
                 release.release_id, start=start, end=end,
-                minimum_quality=QualityLevel.RESEARCH, promote=False,
+                minimum_quality=QualityLevel.STUDY, promote=False,
             )
             self.assertEqual(prepared.policy.diagnostics, ("backtest_history",))
             self.assertTrue(prepared.policy.passed)
@@ -177,14 +177,14 @@ class DatasetQualityAssessmentTests(unittest.TestCase):
                 relative_path, "parquet", str(manifest["dataset_sha256"]),
             )
             catalog = DataCatalog(root); catalog.register_product(product); catalog.register_release(release); catalog.save()
-            strict_research_policy = DataPromotionPolicyProfile(
-                "strict-research", QualityLevel.RESEARCH, required_diagnostics=("backtest_history",),
+            strict_study_policy = DataPromotionPolicyProfile(
+                "strict-study", QualityLevel.STUDY, required_diagnostics=("backtest_history",),
             )
 
-            with self.assertRaisesRegex(RuntimeError, "strict-research"):
+            with self.assertRaisesRegex(RuntimeError, "strict-study"):
                 DataPreparationService(DatasetClient(root)).prepare(
                     release.release_id, start=start, end=end,
-                    minimum_quality=QualityLevel.RESEARCH, promotion_policy=strict_research_policy,
+                    minimum_quality=QualityLevel.STUDY, promotion_policy=strict_study_policy,
                 )
 
     def test_product_contract_can_declare_default_promotion_policy(self) -> None:
@@ -232,12 +232,11 @@ class DatasetQualityAssessmentTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "contract-q2-strict"):
                 DataPreparationService(DatasetClient(root)).prepare(
                     release.release_id, start=start, end=end,
-                    minimum_quality=QualityLevel.RESEARCH,
+                    minimum_quality=QualityLevel.STUDY,
                 )
 
     def test_product_contract_can_reference_builtin_promotion_policy_profile(self) -> None:
         self.assertIs(data_promotion_policy_profile("study-default"), STUDY_DEFAULT_POLICY)
-        self.assertIs(data_promotion_policy_profile("research-default"), STUDY_DEFAULT_POLICY)
         self.assertEqual(
             data_promotion_policy_profile("backtest-default").minimum_assessment_level,
             QualityLevel.BACKTEST,

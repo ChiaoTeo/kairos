@@ -10,11 +10,11 @@ import pandas as pd
 from kairos.backtest.feed import HistoricalDataset
 from kairos.domain.product import ListedOptionSpec, OptionRight
 from kairos.pricing import ValuationService
-from kairos.research.data_store import CollectionManifest
+from kairos.study_platform.data_store import CollectionManifest
 
 
 @dataclass(frozen=True, slots=True)
-class ResearchConfig:
+class StudyConfig:
     min_dte: int = 7
     max_dte: int = 45
     target_short_delta: Decimal = Decimal("-0.25")
@@ -56,7 +56,7 @@ class ResearchConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class ResearchConclusion:
+class StudyConclusion:
     status: str
     observation_count: int
     high_skew_count: int
@@ -65,7 +65,7 @@ class ResearchConclusion:
 
 
 @dataclass(frozen=True, slots=True)
-class ResearchReadiness:
+class StudyReadiness:
     ready: bool
     reasons: tuple[str, ...]
     metrics: dict[str, float | int | bool]
@@ -74,9 +74,9 @@ class ResearchReadiness:
 def assess_readiness(
     dataset: HistoricalDataset,
     panel: pd.DataFrame,
-    config: ResearchConfig,
+    config: StudyConfig,
     collection: CollectionManifest | None,
-) -> ResearchReadiness:
+) -> StudyReadiness:
     reasons = []
     real_sessions = collection.real_session_count if collection else 0
     allowed_sources = bool(collection and collection.sessions and all(
@@ -116,20 +116,20 @@ def assess_readiness(
         "high_skew_test_observations": len(test_high),
         "surface_calibration_rate": surface_rate,
     }
-    return ResearchReadiness(not reasons, tuple(reasons), metrics)
+    return StudyReadiness(not reasons, tuple(reasons), metrics)
 
 
-def execute_research(
+def execute_study(
     dataset: HistoricalDataset,
-    config: ResearchConfig,
+    config: StudyConfig,
     collection: CollectionManifest | None,
-) -> tuple[pd.DataFrame, ResearchReadiness, ResearchConclusion]:
+) -> tuple[pd.DataFrame, StudyReadiness, StudyConclusion]:
     panel = build_panel(dataset, config)
     readiness = assess_readiness(dataset, panel, config, collection)
     if not readiness.ready:
-        conclusion = ResearchConclusion(
+        conclusion = StudyConclusion(
             "DATA_NOT_READY", len(panel), 0,
-            "Research conclusion is locked until every real-data readiness gate passes.",
+            "Study conclusion is locked until every real-data readiness gate passes.",
             {key: value for key, value in readiness.metrics.items() if isinstance(value, (int, float))},
         )
     else:
@@ -137,7 +137,7 @@ def execute_research(
     return panel, readiness, conclusion
 
 
-def build_panel(dataset: HistoricalDataset, config: ResearchConfig = ResearchConfig()) -> pd.DataFrame:
+def build_panel(dataset: HistoricalDataset, config: StudyConfig = StudyConfig()) -> pd.DataFrame:
     """Build point-in-time skew observations and forward labels.
 
     Contract selection and internal valuation use only the current slice. Forward
@@ -235,10 +235,10 @@ def build_panel(dataset: HistoricalDataset, config: ResearchConfig = ResearchCon
     return panel
 
 
-def analyze_hypothesis(panel: pd.DataFrame, config: ResearchConfig = ResearchConfig()) -> ResearchConclusion:
+def analyze_hypothesis(panel: pd.DataFrame, config: StudyConfig = StudyConfig()) -> StudyConclusion:
     required = {"skew_rank", "forward_skew_change", "strategy_pnl", "high_skew", "sample"}
     if panel.empty or not required <= set(panel.columns):
-        return ResearchConclusion("INSUFFICIENT_DATA", 0, 0, "No eligible point-in-time observations were produced.", {})
+        return StudyConclusion("INSUFFICIENT_DATA", 0, 0, "No eligible point-in-time observations were produced.", {})
     usable = panel.dropna(subset=["skew_rank", "forward_skew_change", "strategy_pnl"])
     high = usable[usable["high_skew"]]
     test = usable[usable["sample"] == "test"]
@@ -254,7 +254,7 @@ def analyze_hypothesis(panel: pd.DataFrame, config: ResearchConfig = ResearchCon
         "test_mean_spread_pnl_high": _mean(test_high["strategy_pnl"]),
     }
     if len(usable) < config.minimum_observations or len(test_high) < 20:
-        return ResearchConclusion(
+        return StudyConclusion(
             "INSUFFICIENT_DATA", len(usable), len(high),
             f"Need at least {config.minimum_observations} usable observations and 20 high-skew test observations; got {len(usable)} and {len(test_high)}.",
             stats,
@@ -263,7 +263,7 @@ def analyze_hypothesis(panel: pd.DataFrame, config: ResearchConfig = ResearchCon
     low, high_ci = _block_bootstrap_difference(test, config)
     stats.update({"test_pnl_difference": float(difference), "bootstrap_ci_low": low, "bootstrap_ci_high": high_ci})
     supported = difference > 0 and low > 0 and test_high["forward_skew_change"].mean() < 0
-    return ResearchConclusion(
+    return StudyConclusion(
         "TRADE_PROXY_SUPPORTED" if supported else "NOT_SUPPORTED", len(usable), len(high),
         "Signal and trade proxy passed the predeclared conditions; executable Strategy evidence is still required." if supported else "Hypothesis did not pass all predeclared out-of-sample conditions.",
         stats,
@@ -335,9 +335,9 @@ def _forward_max_drawdown(spot: pd.Series, horizon: int) -> pd.Series:
 
 
 def _simulate_trade_proxy(
-    row, dataset: HistoricalDataset, config: ResearchConfig, *, entry_delay_slices: int,
+    row, dataset: HistoricalDataset, config: StudyConfig, *, entry_delay_slices: int,
 ) -> tuple[float | None, str | None, int | None]:
-    """Cheap research mapping proxy; never substitutes for BacktestEngine evidence."""
+    """Cheap study mapping proxy; never substitutes for BacktestEngine evidence."""
     slice_index = {market.timestamp: index for index, market in enumerate(dataset.slices)}
     decision = slice_index[row["timestamp"]]
     entry_index = decision + entry_delay_slices
@@ -375,7 +375,7 @@ def _time_split(length: int) -> list[str]:
     return ["development" if i < development_end else "validation" if i < validation_end else "test" for i in range(length)]
 
 
-def _block_bootstrap_difference(test: pd.DataFrame, config: ResearchConfig) -> tuple[float, float]:
+def _block_bootstrap_difference(test: pd.DataFrame, config: StudyConfig) -> tuple[float, float]:
     rng = Random(config.random_seed)
     block = min(config.bootstrap_block_size, len(test))
     differences = []

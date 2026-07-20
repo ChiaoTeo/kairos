@@ -240,7 +240,7 @@ class BinanceOptionQuotesDatasetConnector:
         )
         return publish_release(
             self.root, BTC_OPTION_QUOTES_HOURLY, release_id, manifest, provider="binance", venue="binance",
-            transform_id="binance.option_eoh.quotes", transform_version="2", quality_level=QualityLevel.RESEARCH,
+            transform_id="binance.option_eoh.quotes", transform_version="2", quality_level=QualityLevel.STUDY,
         )
 
 

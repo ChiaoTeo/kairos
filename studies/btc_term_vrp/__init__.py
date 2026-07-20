@@ -1,1 +1,1 @@
-"""BTC fixed-maturity volatility risk premium research."""
+"""BTC fixed-maturity volatility risk premium study."""

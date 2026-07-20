@@ -58,7 +58,7 @@ kairos/strategies/
 Governed Data / Point-in-time Features
                     |
                     v
-Research Platform
+Study Platform
   hypothesis -> factor -> signal evidence
                     |
                     v
@@ -79,7 +79,7 @@ Ledger & Operations
                     |
                     +--------------------+
                                          v
-                                 Research feedback
+                                 Study feedback
 ```
 
 各层必须能独立回放，并通过版本化契约连接。研究平台不能直接调用 Venue；执行平台不能重新解释因子；风险平台不能静默改变策略经济含义。
@@ -220,12 +220,12 @@ Operations负责：
 
 |契约|生产者|消费者|回答的问题|
 |---|---|---|---|
-|`ResearchEvidence`|研究验证|研究门禁/治理|信号证据到了哪里|
+|`StudyEvidence`|研究验证|研究门禁/治理|信号证据到了哪里|
 |`StrategySpec`|策略研究|Strategy Model|信号如何变成经济持仓|
 |`EconomicIntent`|Strategy Model|Portfolio & Risk|现在希望持有什么风险|
 |`ExecutionPolicy`|策略与执行共同配置|Execution Platform|允许怎样成交|
 
-`ResearchEvidence` 至少包含假设、效应量、样本、证据等级、多维状态和限制。
+`StudyEvidence` 至少包含假设、效应量、样本、证据等级、多维状态和限制。
 
 `StrategySpec` 至少包含：
 
@@ -258,7 +258,7 @@ Operations负责：
 
 ### 2.9 同代码语义与不同运行环境
 
-成熟系统应实现相同 `StrategySpec` 和 Strategy Model 在research replay、backtest、paper和live中使用同一决策语义。环境差异通过依赖注入提供：
+成熟系统应实现相同 `StrategySpec` 和 Strategy Model 在study replay、backtest、paper和live中使用同一决策语义。环境差异通过依赖注入提供：
 
 - point-in-time feature repository；
 - clock和market-data feed；
@@ -275,7 +275,7 @@ Operations负责：
 
 ```text
 DRAFT
- -> RESEARCH_VALIDATED
+ -> STUDY_VALIDATED
  -> TRADE_PROXY_VALIDATED (optional)
  -> EXECUTABLE_BACKTEST_VALIDATED
  -> ROBUSTNESS_VALIDATED
@@ -1031,7 +1031,7 @@ data_gap_plan.json      # 数据缺口、补数计划和重评条件
 
 ### Phase A：治理基础
 
-1. `ResearchEvidence`、多维状态和验证层级；
+1. `StudyEvidence`、多维状态和验证层级；
 2. `StrategySpec`、`spec_hash` 和研究预注册；
 3. 数据能力契约与数据缺口分类；
 4. 时间切分、测试集消耗和audit hash；

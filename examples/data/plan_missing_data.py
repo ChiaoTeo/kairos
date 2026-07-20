@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 
-from kairos.data import ResearchDataClient
+from kairos.data import DatasetClient
 from kairos.data.products import BTC_SPOT_DAILY
 from kairos.data.bootstrap import register_default_products
 
 
 register_default_products("data")
-data = ResearchDataClient("data")
+data = DatasetClient("data")
 plan = data.plan(
     BTC_SPOT_DAILY.product,
     start=datetime(2025, 1, 1, tzinfo=timezone.utc),

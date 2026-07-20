@@ -1,9 +1,9 @@
 from kairos import __version__
-from kairos.data import ResearchDataClient
+from kairos.data import DatasetClient
 from kairos.data.products import BTC_SPOT_DAILY
 
 
-data = ResearchDataClient("data")
+data = DatasetClient("data")
 query = data.get(
     BTC_SPOT_DAILY.product,
     start="2025-01-01T00:00:00Z",

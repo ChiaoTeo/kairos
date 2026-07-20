@@ -16,7 +16,6 @@ from .product import ProductType
 class StrategyLifecycle(StrEnum):
     DRAFT = "DRAFT"
     STUDY_VALIDATED = "STUDY_VALIDATED"
-    RESEARCH_VALIDATED = "STUDY_VALIDATED"
     TRADE_PROXY_VALIDATED = "TRADE_PROXY_VALIDATED"
     EXECUTABLE_BACKTEST_VALIDATED = "EXECUTABLE_BACKTEST_VALIDATED"
     ROBUSTNESS_VALIDATED = "ROBUSTNESS_VALIDATED"
@@ -25,13 +24,6 @@ class StrategyLifecycle(StrEnum):
     LIVE_APPROVED = "LIVE_APPROVED"
     SUSPENDED = "SUSPENDED"
     RETIRED = "RETIRED"
-
-    @classmethod
-    def _missing_(cls, value: object):
-        if str(value) == "RESEARCH_VALIDATED":
-            return cls.STUDY_VALIDATED
-        return None
-
 
 _PROMOTIONS = {
     StrategyLifecycle.DRAFT: StrategyLifecycle.STUDY_VALIDATED,
@@ -63,15 +55,15 @@ class StrategySpec:
     risk_budget_fraction: Decimal
     required_data_capabilities: tuple[str, ...]
     required_execution_capabilities: tuple[str, ...]
-    research_spec_hash: str
+    study_spec_hash: str
 
     def __post_init__(self) -> None:
         if not self.strategy_id or not self.version or not self.products:
             raise ValueError("strategy identity, version, and products are required")
         if not Decimal("0") < self.risk_budget_fraction <= Decimal("1"):
             raise ValueError("strategy risk budget must be in (0, 1]")
-        if not self.research_spec_hash:
-            raise ValueError("research spec hash is required")
+        if not self.study_spec_hash:
+            raise ValueError("study spec hash is required")
 
     @property
     def spec_hash(self) -> str:

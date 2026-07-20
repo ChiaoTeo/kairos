@@ -36,7 +36,7 @@ from kairos.strategies import (
     GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext,
     StrategyImplementation, StrategyRegistry,
 )
-from kairos.strategies.sma_cross_research_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross
+from kairos.strategies.sma_cross_study_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross
 from kairos.strategies.specs import sma_strategy_spec
 from kairos.strategies.specs import register_builtin_strategies
 from kairos.backtest.reference_scenarios import run_reference_scenario
@@ -115,7 +115,7 @@ def _ensure_legacy_study_product_manifest(args) -> None:
         "kind": "study.workspace",
         "id": args.study_id,
         "version": getattr(args, "version", "1.0.0"),
-        "hypothesis": getattr(args, "hypothesis", "legacy research compatibility workspace"),
+        "hypothesis": getattr(args, "hypothesis", "legacy study compatibility workspace"),
         "status": "draft",
         "data": {},
         "factors": {},
@@ -724,7 +724,7 @@ def register_builtin_strategy_releases(args)->dict[str,object]:
 
 
 def register_btc_iron_condor_candidate(args)->dict[str,object]:
-    strategy=BtcIronCondorStrategy(research_spec_hash=args.research_spec_hash);spec=strategy.strategy_spec
+    strategy=BtcIronCondorStrategy(study_spec_hash=args.study_spec_hash);spec=strategy.strategy_spec
     policy=ExecutionPolicy(strategy.config.execution_policy_id,"1.0.0",ExecutionMode.TAKER,TimeInForce.IOC,Decimal("15"),
         order_latency_ms=250,slippage_model="top_of_book",fee_schedule="governed")
     source=Path(__file__).parent/"strategies"/"btc_iron_condor.py";implementation=StrategyImplementation(
@@ -760,7 +760,7 @@ def check_strategy_promotion(args)->dict[str,object]:
     registry=StrategyRegistry(Path(args.lake_root)/"strategies")
     release=registry.load(args.strategy_id,args.version)
     spec=_strategy_spec_from_registry_payload(release.strategy_spec)
-    target=StrategyLifecycle(args.to)
+    target=_strategy_lifecycle_arg(args.to)
     evidence_paths=tuple(Path(path) for path in args.evidence)
     results=tuple(json.loads(path.read_text(encoding="utf-8")) for path in evidence_paths)
     gate=evaluate_promotion_artifacts(target,results)
@@ -776,7 +776,7 @@ def promote_strategy_release(args)->dict[str,object]:
     registry=StrategyRegistry(Path(args.lake_root)/"strategies")
     release=registry.load(args.strategy_id,args.version)
     spec=_strategy_spec_from_registry_payload(release.strategy_spec)
-    target=StrategyLifecycle(args.to)
+    target=_strategy_lifecycle_arg(args.to)
     transition_valid, transition_reason = _promotion_transition(spec, target)
     if not transition_valid:
         raise ValueError(f"strategy promotion transition failed: {transition_reason}")
@@ -802,6 +802,10 @@ def _promotion_transition(spec: StrategySpec, target: StrategyLifecycle) -> tupl
     except ValueError as error:
         return False, str(error)
     return True, None
+
+
+def _strategy_lifecycle_arg(value: str) -> StrategyLifecycle:
+    return StrategyLifecycle(value)
 
 
 def _strategy_spec_from_registry_payload(payload: dict[str,object]) -> StrategySpec:

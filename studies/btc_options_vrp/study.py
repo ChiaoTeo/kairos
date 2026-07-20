@@ -9,7 +9,7 @@ import random
 import statistics
 
 from kairos import __version__
-from kairos.data import ResearchDataClient
+from kairos.data import DatasetClient
 from kairos.data.products import BTC_IV_RV_DAILY
 from kairos.storage.data_lake import write_json
 
@@ -131,7 +131,7 @@ def write_report(path, result):
 def main(argv=None):
     parser = argparse.ArgumentParser(description="BTC VRP study over a governed feature dataset")
     parser.add_argument("--data-root", type=Path, default=Path("data")); args = parser.parse_args(argv)
-    repository = ResearchDataClient(args.data_root)
+    repository = DatasetClient(args.data_root)
     feature_release = repository.catalog.release(BTC_IV_RV_DAILY.key)
     rows = repository.load_rows(BTC_IV_RV_DAILY.product)
     panel, threshold, development, high_test = prepare_study_panel(rows)

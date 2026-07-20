@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from .contracts import (
     EvidenceStatus, ExecutionArchetype, OutOfSampleEvidence,
-    ResearchValidationResult, ValidationLevel,
+    StudyValidationResult, ValidationLevel,
 )
 from .protocols import validate_product_protocol, validate_return_driver_protocol
 
@@ -28,7 +28,7 @@ class GateDecision:
 
 
 class ValidationGate:
-    def evaluate(self, result: ResearchValidationResult, requirement: GateRequirement) -> GateDecision:
+    def evaluate(self, result: StudyValidationResult, requirement: GateRequirement) -> GateDecision:
         reasons: list[str] = []
         if result.state.maximum_level < requirement.target_level:
             reasons.append(f"evidence reaches {result.state.maximum_level.name}, below {requirement.target_level.name}")

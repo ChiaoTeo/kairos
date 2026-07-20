@@ -10,9 +10,11 @@ import unittest
 from kairos.application import ApplicationConfig, AsyncKairosRuntime, KairosApplication, RuntimePaths, runtime_feed_plan
 from kairos.connectors.binance import BinanceRuntimeFeedFactory
 from kairos.data import (
+    DataCatalog,
     DataSetContractArtifact,
     LiveViewManifest,
     PAPER_LIVE_FRESHNESS_POLICY,
+    register_live_capture_release,
     evaluate_live_view_freshness,
     live_view_manifest_path,
     load_live_view_manifest,
@@ -125,8 +127,25 @@ class BinanceRuntimeFeedFactoryTests(unittest.IsolatedAsyncioTestCase):
                 load_live_view_manifest(manifest_path),
                 policy=PAPER_LIVE_FRESHNESS_POLICY,
             )
-            journal_paths = sorted((root / "journals").glob("*.jsonl"))
+            journal_paths = sorted(
+                path for path in (root / "journals").glob("*.jsonl")
+                if not path.name.endswith(".canonical.jsonl")
+            )
             capture_manifests = sorted((root / "journals").glob("*.rotation.manifest.json"))
+            raw_journal_symbol = json.loads(
+                journal_paths[0].read_text(encoding="utf-8").splitlines()[0],
+            )["s"]
+            release = register_live_capture_release(
+                root,
+                dataset_id=dataset_id,
+                capture_manifest_path=capture_manifests[0],
+                run_id="run_fixture",
+                live_view_id=live_view_id,
+                provider="binance",
+            )
+            release_manifest_path = root / release.relative_path / "data_release_manifest.json"
+            release_manifest = json.loads(release_manifest_path.read_text(encoding="utf-8"))
+            catalog_release = DataCatalog(root).release(release.release_id)
 
         self.assertTrue(connector.urls[0].endswith("/btcusdt@bookTicker"))
         self.assertEqual(service.raw_messages, 1)
@@ -138,8 +157,13 @@ class BinanceRuntimeFeedFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(feed.runtime_bundle.manifest()["monitor_service_ids"], ["feed-monitor:bars:live:binance:btcusdt-book"])
         self.assertEqual(len(feed.runtime_bundle.bundle_hash), 64)
         self.assertEqual(len(journal_paths), 1)
-        self.assertEqual(json.loads(journal_paths[0].read_text(encoding="utf-8").splitlines()[0])["s"], "BTCUSDT")
+        self.assertEqual(raw_journal_symbol, "BTCUSDT")
         self.assertEqual(len(capture_manifests), 1)
+        self.assertEqual(catalog_release.content_hash, release.content_hash)
+        self.assertEqual(catalog_release.storage_kind.value, "market_events")
+        self.assertEqual(release_manifest["kind"], "data_release_manifest")
+        self.assertEqual(release_manifest["dataset_id"], dataset_id)
+        self.assertEqual(release_manifest["source"]["run_id"], "run_fixture")
 
     def test_factory_rejects_non_binance_live_view_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

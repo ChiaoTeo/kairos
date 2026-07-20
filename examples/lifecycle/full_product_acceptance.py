@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 
 from examples.backtest.governed_sma import run as run_backtest
 from examples.operations.manual_order import run as run_manual
-from examples.research.sma_factor_lifecycle import run as run_research
+from examples.studies.sma_factor_lifecycle import run as run_study
 from examples.runtime.sma_historical_simulation import run as run_simulation
 from examples.runtime.sma_paper_session import run as run_paper
 from examples.strategy.bull_put_spread_lifecycle import run as run_option
@@ -24,7 +24,7 @@ from examples.strategy.multi_strategy_portfolio import run as run_multi_strategy
 
 
 def run(root:Path)->dict[str,object]:
-    research=run_research(root/"research")
+    study=run_study(root/"study")
     backtest=asyncio.run(run_backtest(Namespace(lake_root=str(root),dataset=None,start=None,end=None,fast=5,slow=15,fee_bps=Decimal("10"))))
     simulation=asyncio.run(run_simulation(root/"simulation"))
     paper=run_paper(root/"paper")
@@ -33,8 +33,8 @@ def run(root:Path)->dict[str,object]:
     multi=run_multi_asset(root/"multi-asset")
     multi_strategy=run_multi_strategy()
     scenarios={
-        "1_explore":research["sandbox_workspace"],
-        "2_factor_release":research["factor_release"] and research["batch_replay_equal"],
+        "1_explore":study["sandbox_workspace"],
+        "2_factor_release":study["factor_release"] and study["batch_replay_equal"],
         "3_strategy_backtest":backtest["economic_intents"]>0,
         "4_historical_simulation":simulation["restart_ready"] and simulation["fills"]>0,
         "5_live_paper":paper["restart_ready"] and paper["fills"]>0,
@@ -49,7 +49,7 @@ def run(root:Path)->dict[str,object]:
         "sma_execution_boundary_parity":parity,
         "multi_asset_releases":releases,
         "multi_strategy_portfolio":portfolio,
-        "evidence":{"research":research,"backtest":backtest,"simulation":simulation,"paper":paper,
+        "evidence":{"study":study,"backtest":backtest,"simulation":simulation,"paper":paper,
             "manual":manual,"option":option,"multi_asset":multi,"multi_strategy":multi_strategy}}
 
 

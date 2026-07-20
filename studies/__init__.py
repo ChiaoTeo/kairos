@@ -1,2 +1,1 @@
-"""Reproducible research studies built on the trading package."""
-
+"""Reproducible studies built on Kairos."""

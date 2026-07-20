@@ -6,22 +6,22 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from kairos import __version__
-from kairos.connectors.ibkr.research import SpxwResearchProvider
+from kairos.connectors.ibkr.option_chain_provider import SpxwOptionChainProvider
 from kairos.domain.event import OptionChainDiscovered, envelope
 from kairos.domain.market_state import MarketState, apply_market_event
-from kairos.storage.repository import FileResearchRepository, RunManifest, RunStatus, new_manifest
+from kairos.storage.repository import FileOptionCaptureRepository, RunManifest, RunStatus, new_manifest
 
 from .option_snapshot_analysis import OptionSnapshotAnalysis, analyze_option_snapshot
 from .option_universe_selector import select_instruments
-from .snapshot import ResearchSnapshot, build_snapshot
+from .snapshot import OptionCaptureSnapshot, build_snapshot
 from .spec import OptionChainCaptureSpec
 
 
-class OptionResearchCaptureService:
-    def __init__(self, repository: FileResearchRepository) -> None:
+class OptionCaptureService:
+    def __init__(self, repository: FileOptionCaptureRepository) -> None:
         self.repository = repository
 
-    def capture_snapshot(self, provider: SpxwResearchProvider, spec: OptionChainCaptureSpec) -> tuple[ResearchSnapshot, OptionSnapshotAnalysis]:
+    def capture_snapshot(self, provider: SpxwOptionChainProvider, spec: OptionChainCaptureSpec) -> tuple[OptionCaptureSnapshot, OptionSnapshotAnalysis]:
         run_id = uuid4()
         manifest = new_manifest(run_id, spec, __version__)
         self.repository.create(manifest)

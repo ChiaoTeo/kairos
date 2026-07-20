@@ -91,7 +91,7 @@ class CryptoMomentumStudyStartTests(unittest.TestCase):
                 lake_root=temporary, study_id="cross-month", version="1.0.0",
                 dataset="market.ohlcv.crypto.binance.usdm-perpetual.1h",
                 start="2026-01-25T00:00:00+00:00", end="2026-02-15T00:00:00+00:00",
-                symbol=[], hypothesis="Cross-month partitions preserve deterministic research order",
+                symbol=[], hypothesis="Cross-month partitions preserve deterministic study order",
             )
 
             with patch("kairos.data.bootstrap.default_provider_registry", return_value=providers):

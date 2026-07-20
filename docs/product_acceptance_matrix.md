@@ -3,7 +3,7 @@
 状态：Local Acceptance Passed  
 基线日期：2026-07-18
 
-本文件是 [`research_strategy_backtest_live_convergence_plan.md`](research_strategy_backtest_live_convergence_plan.md)
+本文件是 [`study_strategy_backtest_live_convergence_plan.md`](study_strategy_backtest_live_convergence_plan.md)
 的实施证据索引。完成状态以可运行 example、自动化测试和 artifact 为准，不以模块存在为准。
 
 ## 一键验收
@@ -39,7 +39,7 @@ Spot/Perpetual Carry、Funding、Corporate Action、Assignment、Conservative/St
 
 | 要求 | 权威实现 | 证据 |
 |---|---|---|
-| Sandbox/Governed Research 分离 | `kairos.study_platform.workspace`、ValidationArtifactWriter | workspace 与 `data/studies` 不混用 |
+| Sandbox/Governed Study 分离 | `kairos.study_platform.workspace`、ValidationArtifactWriter | workspace 与 `data/studies` 不混用 |
 | Study 可直接使用绑定数据 | `StudySession`、`StudyData` | Dataset hash 校验、Pandas/Polars/Arrow、profile、scaffold |
 | Factor 一等公民 | FactorSpec/Snapshot/Runtime/Registry | SMA、SPXW skew、fear-cooling factors |
 | Strategy Release 绑定代码和因子 | StrategyRegistry | implementation.json、factor_bindings.json、manifest.json |

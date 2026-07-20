@@ -1,7 +1,7 @@
 """Run one SMA strategy through batch and canonical async replay paths.
 
 Default execution is a deterministic fixture and needs no data download. Pass
---dataset to consume an approved Q3/Q4 release from ResearchDataClient.
+--dataset to consume an approved Q3/Q4 release from DatasetClient.
 """
 
 from __future__ import annotations
@@ -15,12 +15,12 @@ import json
 
 from kairos.contracts import canonicalize_market_event
 from kairos.application import GovernedStrategyRunLoop, run_target_backtest
-from kairos.data import OutputFormat, ResearchDataClient, RunMode
+from kairos.data import OutputFormat, DatasetClient, RunMode
 from kairos.domain.identity import InstrumentId
 from kairos.domain.market_data import Bar
 from kairos.market_data import IterableEventSource, MarketEventEnvelope, MarketEventType
 from kairos.storage.codec import to_primitive
-from kairos.strategies.sma_cross_research_backtest import (
+from kairos.strategies.sma_cross_study_backtest import (
     BarSeries, SmaCrossConfig, backtest_sma_cross, backtest_sma_cross_events,
 )
 from kairos.features import SmaFactorConfig, SmaFactorRuntime
@@ -45,7 +45,7 @@ def fixture_bars() -> tuple[Bar, ...]:
 def governed_bars(
     lake_root: str, dataset: str, start: str | None, end: str | None,
 ) -> tuple[str, tuple[Bar, ...]]:
-    query = ResearchDataClient(lake_root, run_mode=RunMode.BACKTEST).get(
+    query = DatasetClient(lake_root, run_mode=RunMode.BACKTEST).get(
         dataset, start=start, end=end,
         fields=("instrument_id", "period_start", "period_end", "open", "high", "low", "close", "volume"),
     )

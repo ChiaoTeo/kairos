@@ -29,7 +29,7 @@ class DatasetStatus(StrEnum):
     REGISTERED = "registered"
     VALIDATING = "validating"
     VALIDATED = "validated"
-    APPROVED_FOR_RESEARCH = "approved_for_research"
+    APPROVED_FOR_STUDY = "approved_for_study"
     APPROVED_FOR_BACKTEST = "approved_for_backtest"
     APPROVED_FOR_PRODUCTION = "approved_for_production"
     DEPRECATED = "deprecated"
@@ -40,7 +40,7 @@ class DatasetStatus(StrEnum):
 class QualityLevel(StrEnum):
     ARCHIVED = "Q0"
     INTEGRITY = "Q1"
-    RESEARCH = "Q2"
+    STUDY = "Q2"
     BACKTEST = "Q3"
     PRODUCTION = "Q4"
 
@@ -66,7 +66,6 @@ class OutputFormat(StrEnum):
 
 class RunMode(StrEnum):
     STUDY = "study"
-    RESEARCH = "study"
     BACKTEST = "backtest"
     HISTORICAL_SIMULATION = "historical-simulation"
     PAPER_TRADING = "paper-trading"
@@ -74,8 +73,6 @@ class RunMode(StrEnum):
 
     @classmethod
     def _missing_(cls, value: object):
-        if str(value) == "research":
-            return cls.STUDY
         if str(value) == "paper":
             return cls.PAPER_TRADING
         return None
@@ -111,7 +108,7 @@ class SourceBinding:
     provider: str
     venue: str | None = None
     priority: int = 0
-    quality_level: QualityLevel = QualityLevel.RESEARCH
+    quality_level: QualityLevel = QualityLevel.STUDY
     acquisition_modes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -151,7 +148,7 @@ class DataProductContract:
     storage_kind: DatasetStorageKind = DatasetStorageKind.TABULAR
     layout_version: str = "1"
     quality_profile: str = "generic"
-    minimum_publication_level: QualityLevel = QualityLevel.RESEARCH
+    minimum_publication_level: QualityLevel = QualityLevel.STUDY
 
     def __post_init__(self) -> None:
         path = self.relative_path.replace("\\", "/")
@@ -182,8 +179,8 @@ class DatasetRelease:
     provider: str | None = None
     venue: str | None = None
     aliases: tuple[str, ...] = ()
-    status: DatasetStatus = DatasetStatus.APPROVED_FOR_RESEARCH
-    quality_level: QualityLevel = QualityLevel.RESEARCH
+    status: DatasetStatus = DatasetStatus.APPROVED_FOR_STUDY
+    quality_level: QualityLevel = QualityLevel.STUDY
     published_at: str | None = None
     storage_kind: DatasetStorageKind = DatasetStorageKind.TABULAR
     layout_version: str = "1"
@@ -213,7 +210,7 @@ class DataSetContractArtifact:
     storage_kind: DatasetStorageKind = DatasetStorageKind.TABULAR
     layout_version: str = "1"
     quality_profile: str = "generic"
-    minimum_publication_level: QualityLevel = QualityLevel.RESEARCH
+    minimum_publication_level: QualityLevel = QualityLevel.STUDY
     capabilities: Mapping[str, object] = field(default_factory=dict)
     schema_version: int = 1
 

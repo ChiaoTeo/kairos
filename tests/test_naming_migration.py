@@ -24,7 +24,7 @@ from kairos.connectors.ibkr import (
     IbkrMarketDataClient,
     IbkrReferenceDataClient,
 )
-from kairos.connectors.ibkr.research import IbkrSpxwResearchProvider
+from kairos.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
 from kairos.connectors.market_data_router import CompositeMarketDataClient
 from kairos.connectors.massive import (
     MassiveEquityDailyOhlcvDatasetConnector,
@@ -69,8 +69,8 @@ class NamingMigrationTests(unittest.TestCase):
         self.assertEqual(SimulatedExecutionAccountGateway.__name__, "SimulatedExecutionAccountGateway")
         self.assertEqual(CompositeMarketDataClient.__name__, "CompositeMarketDataClient")
 
-    def test_research_and_transfer_gateway_names_are_public(self) -> None:
-        self.assertEqual(IbkrSpxwResearchProvider.__name__, "IbkrSpxwResearchProvider")
+    def test_option_chain_and_transfer_gateway_names_are_public(self) -> None:
+        self.assertEqual(IbkrSpxwOptionChainProvider.__name__, "IbkrSpxwOptionChainProvider")
         self.assertEqual(BinanceTransferGateway.__name__, "BinanceTransferGateway")
         self.assertEqual(BankTransferGateway.__name__, "BankTransferGateway")
         self.assertEqual(TransferGateway.__name__, "TransferGateway")

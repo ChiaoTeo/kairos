@@ -12,7 +12,7 @@ from kairos.domain.market_data import Quote
 from kairos.study_platform.data_store import MarketSnapshotCollectionPublisher, merge_datasets
 
 
-class ResearchDataStoreTests(unittest.TestCase):
+class StudyDataStoreTests(unittest.TestCase):
     def test_sessions_append_idempotently_with_provenance(self) -> None:
         first = build_synthetic_backtest_dataset(start_date=date(2025, 1, 6))
         second = build_synthetic_backtest_dataset(start_date=date(2025, 1, 8))

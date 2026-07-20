@@ -20,9 +20,13 @@ class KairosProjectInitTests(unittest.TestCase):
             self.assertEqual(result.name, "alpha-desk")
             self.assertTrue((root / "kairos.toml").exists())
             self.assertTrue((root / "pyproject.toml").exists())
+            self.assertTrue((root / "config" / "study.json").exists())
+            self.assertFalse((root / "config" / "research.json").exists())
             self.assertTrue((root / "studies" / "starter.py").exists())
             self.assertTrue((root / "strategies" / "starter_sma.py").exists())
             self.assertTrue((root / ".kairos" / "project.json").exists())
+            metadata = json.loads((root / ".kairos" / "project.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["root"], ".")
 
             readme = root / "README.md"
             readme.write_text("custom notes\n", encoding="utf-8")

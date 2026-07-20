@@ -9,13 +9,13 @@ import statistics
 
 from kairos import __version__
 from studies.btc_options_stats import block_bootstrap_ci
-from kairos.data import ResearchDataClient
+from kairos.data import DatasetClient
 from kairos.data.products import BTC_DERIBIT_OPTION_TRADES, BTC_SPOT_DAILY
 from kairos.storage.data_lake import write_json
 
 
 def execute(root: str | Path = "data", hedge_cost_bps=7.0):
-    root=Path(root);repository=ResearchDataClient(root)
+    root=Path(root);repository=DatasetClient(root)
     base=json.loads((root/"studies"/"btc_deribit_skew_spread_trade_proxy_v1"/"trades.json").read_text())
     spot={date.fromisoformat(row["period_start"][:10]):float(row["close"]) for row in repository.load_rows(BTC_SPOT_DAILY.product)}
     wanted={trade[leg] for trade in base for leg in ("short","long")}; windows={}
@@ -104,7 +104,7 @@ def _weighted(values):
 def main(argv=None):
     parser=argparse.ArgumentParser();parser.add_argument("--data-root",type=Path,default=Path("data"));parser.add_argument("--hedge-cost-bps",type=float,default=7);args=parser.parse_args(argv)
     details,result=execute(args.data_root,args.hedge_cost_bps);output=args.data_root/"studies"/"btc_deribit_skew_spread_daily_delta_hedged_v1";output.mkdir(parents=True,exist_ok=True)
-    ResearchDataClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_deribit_skew_spread_daily_delta_hedged_v1",
+    DatasetClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_deribit_skew_spread_daily_delta_hedged_v1",
         (BTC_SPOT_DAILY.product, BTC_DERIBIT_OPTION_TRADES.product), code_version=__version__)
     write_json(output/"trades.json",details);write_json(output/"results.json",result);print(json.dumps(result,ensure_ascii=False,indent=2))
 

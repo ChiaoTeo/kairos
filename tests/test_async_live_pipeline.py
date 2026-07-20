@@ -16,7 +16,7 @@ from kairos.domain.identity import InstrumentId
 from kairos.domain.market_data import Bar
 from kairos.market_data import BoundedEventChannel, MarketEventEnvelope, MarketEventType
 from kairos.orchestration.runtime_store import SQLiteRuntimeStore
-from kairos.strategies.sma_cross_research_backtest import (
+from kairos.strategies.sma_cross_study_backtest import (
     BarSeries, SmaCrossConfig, backtest_sma_cross, backtest_sma_cross_events,
 )
 

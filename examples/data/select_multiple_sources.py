@@ -1,6 +1,6 @@
 import argparse
 
-from kairos.data import OutputFormat, ResearchDataClient
+from kairos.data import OutputFormat, DatasetClient
 
 
 parser = argparse.ArgumentParser()
@@ -13,7 +13,7 @@ args = parser.parse_args()
 
 # Provider and venue are both explicit. A Deribit release can never silently
 # satisfy this Binance request.
-frame = ResearchDataClient("data").get(
+frame = DatasetClient("data").get(
     args.dataset,
     provider=args.provider,
     venue=args.venue,

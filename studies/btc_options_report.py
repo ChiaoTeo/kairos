@@ -19,10 +19,10 @@ def generate(root: Path):
     hedged = _load(studies/"btc_deribit_skew_spread_daily_delta_hedged_v1"/"results.json")
     threshold_hedge = _load(studies/"btc_deribit_skew_spread_delta_threshold_sensitivity_v1"/"results.json")
     readiness = btc_options_readiness(root)
-    output = studies/"btc_options_research_summary"; output.mkdir(parents=True, exist_ok=True)
+    output = studies/"btc_options_study_summary"; output.mkdir(parents=True, exist_ok=True)
     report = ["# BTC 期权期限溢价与 Skew 研究总结", "", "## 数据与门禁", "",
         f"- Deribit：21,930,528 笔 BTC 期权成交，覆盖 {readiness['gates'][0]['value']} 个自然日。",
-        f"- 长期信号研究：`{'READY' if readiness['signal_research_ready'] else 'DATA_NOT_READY'}`。",
+        f"- 长期信号研究：`{'READY' if readiness['signal_study_ready'] else 'DATA_NOT_READY'}`。",
         f"- 可执行策略研究：`{'READY' if readiness['executable_strategy_ready'] else 'DATA_NOT_READY'}`；Binance 盘口仅 {readiness['gates'][-1]['value']} 天。",
         "", "## 多期限 IV 与未来 RV", "", "|期限|测试样本|平均ATM IV|平均未来RV|平均VRP|95% CI|IV>RV|支持|", "|---:|---:|---:|---:|---:|---:|---:|:---:|"]
     for horizon, item in term["horizons"].items():

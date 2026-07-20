@@ -118,7 +118,7 @@ class DatasetClient:
         name = str(dataset.key) if isinstance(dataset, DataProductDefinition) else str(dataset)
         release = self.catalog.resolve(name, version=version)
         if release.status not in {
-            DatasetStatus.APPROVED_FOR_RESEARCH, DatasetStatus.APPROVED_FOR_BACKTEST,
+            DatasetStatus.APPROVED_FOR_STUDY, DatasetStatus.APPROVED_FOR_BACKTEST,
             DatasetStatus.APPROVED_FOR_PRODUCTION,
         }:
             raise PermissionError(
@@ -385,7 +385,7 @@ class DatasetClient:
         try:
             import duckdb
         except ImportError as error:
-            raise RuntimeError("SQL research queries require the 'query' optional dependency") from error
+            raise RuntimeError("SQL dataset queries require the 'query' optional dependency") from error
         connection = duckdb.connect(database=":memory:")
         try:
             for view_name, dataset in datasets.items():
@@ -445,7 +445,7 @@ class DatasetClient:
             table = pa.concat_tables([csv.read_csv(path) for path in csv_files], promote_options="default")
             table = _filter_table(table, start=start, end=end, instruments=instruments, primary_time=primary_time)
             return _select(table, columns, root.name) if columns is not None else table
-        raise FileNotFoundError(f"no research-readable data files under {root}")
+        raise FileNotFoundError(f"no dataset-readable data files under {root}")
 
 
 def _parquet_files(root: Path, start, end) -> list[Path]:
@@ -601,7 +601,7 @@ def _datetime(value):
         return value
     parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     if parsed.tzinfo is None:
-        raise ValueError("research time filters must be timezone-aware")
+        raise ValueError("dataset time filters must be timezone-aware")
     return parsed
 
 
@@ -679,6 +679,3 @@ def _arrow():
 _DECIMAL_FIELDS = frozenset({"bid", "ask", "bid_size", "ask_size", "price", "size", "open", "high", "low",
                              "close", "volume", "vwap", "last_trade_price", "last_trade_size",
                              "vendor_implied_volatility", "vendor_open_interest", "vendor_fmv"})
-
-
-ResearchDataClient = DatasetClient

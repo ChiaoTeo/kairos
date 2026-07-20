@@ -77,7 +77,7 @@ class StudySessionTests(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertIn("study.data.pandas()", first.read_text(encoding="utf-8"))
 
-            first.write_text("# user research\n", encoding="utf-8")
+            first.write_text("# user study\n", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "user changes"):
                 study.scaffold()
 
@@ -243,9 +243,9 @@ class StudySessionTests(unittest.TestCase):
                 str(manifest["content_sha256"]),
                 "massive",
                 "us-securities",
-                ("market.ohlcv.equity.us.massive.1d.raw@latest-research",),
-                DatasetStatus.APPROVED_FOR_RESEARCH,
-                QualityLevel.RESEARCH,
+                ("market.ohlcv.equity.us.massive.1d.raw@latest-study",),
+                DatasetStatus.APPROVED_FOR_STUDY,
+                QualityLevel.STUDY,
                 datetime.now(timezone.utc).isoformat(),
                 DatasetStorageKind.TABULAR,
                 "1",
@@ -309,9 +309,9 @@ class StudySessionTests(unittest.TestCase):
                     str(manifest["content_sha256"]),
                     "massive",
                     "us-securities",
-                    (f"{key}@latest-research",),
-                    DatasetStatus.APPROVED_FOR_RESEARCH,
-                    QualityLevel.RESEARCH,
+                    (f"{key}@latest-study",),
+                    DatasetStatus.APPROVED_FOR_STUDY,
+                    QualityLevel.STUDY,
                     datetime.now(timezone.utc).isoformat(),
                     DatasetStorageKind.TABULAR,
                     "1",
@@ -363,9 +363,9 @@ class StudySessionTests(unittest.TestCase):
                 str(manifest["content_sha256"]),
                 "massive",
                 "us-securities",
-                ("market.ohlcv.equity.us.massive.1d.raw@latest-research",),
-                DatasetStatus.APPROVED_FOR_RESEARCH,
-                QualityLevel.RESEARCH,
+                ("market.ohlcv.equity.us.massive.1d.raw@latest-study",),
+                DatasetStatus.APPROVED_FOR_STUDY,
+                QualityLevel.STUDY,
                 datetime.now(timezone.utc).isoformat(),
                 DatasetStorageKind.TABULAR,
                 "1",
@@ -442,9 +442,9 @@ class StudySessionTests(unittest.TestCase):
                 str(manifest["content_sha256"]),
                 "massive",
                 "us-securities",
-                ("market.ohlcv.equity.us.massive.1d.raw@latest-research",),
-                DatasetStatus.APPROVED_FOR_RESEARCH,
-                QualityLevel.RESEARCH,
+                ("market.ohlcv.equity.us.massive.1d.raw@latest-study",),
+                DatasetStatus.APPROVED_FOR_STUDY,
+                QualityLevel.STUDY,
                 datetime.now(timezone.utc).isoformat(),
                 DatasetStorageKind.TABULAR,
                 "1",

@@ -7,13 +7,13 @@ from pathlib import Path
 import statistics
 
 from kairos import __version__
-from kairos.data import ResearchDataClient
+from kairos.data import DatasetClient
 from kairos.data.products import BTC_DERIBIT_TERM_SKEW_DAILY, BTC_TERM_SKEW_HOURLY
 from kairos.storage.data_lake import write_json
 
 
 def execute(root: str | Path = "data"):
-    repository = ResearchDataClient(root)
+    repository = DatasetClient(root)
     deribit = {row["period_start"][:10]: _float(row.get("put_skew25_30d"))
                for row in repository.load_rows(BTC_DERIBIT_TERM_SKEW_DAILY.product)}
     hourly = {}
@@ -49,7 +49,7 @@ def _float(value):
 def main(argv=None):
     parser=argparse.ArgumentParser(); parser.add_argument("--data-root",type=Path,default=Path("data")); args=parser.parse_args(argv)
     result=execute(args.data_root); output=args.data_root/"studies"/"btc_skew_cross_validation_v1"; output.mkdir(parents=True,exist_ok=True)
-    ResearchDataClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_skew_cross_validation_v1",
+    DatasetClient(args.data_root).freeze_products(output/"data_snapshot.json", "btc_skew_cross_validation_v1",
         (BTC_DERIBIT_TERM_SKEW_DAILY.product, BTC_TERM_SKEW_HOURLY.product), code_version=__version__)
     write_json(output/"results.json",result); print(json.dumps(result,ensure_ascii=False,indent=2))
 

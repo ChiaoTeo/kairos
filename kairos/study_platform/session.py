@@ -132,7 +132,7 @@ class StudySession:
 
     def scaffold(self) -> Path:
         directory = self.root/"study-workspaces"/self.workspace.study_id/self.workspace.version
-        target = directory/"research.py"
+        target = directory/"study.py"
         source = f'''"""Flexible exploration for {self.workspace.study_id}@{self.workspace.version}."""
 
 from kairos.study_platform import open_study
@@ -146,7 +146,7 @@ print("\\nData quality")
 print(study.profile().as_dict())
 '''
         if target.exists() and target.read_text(encoding="utf-8") != source:
-            raise ValueError(f"research scaffold already exists with user changes: {target}")
+            raise ValueError(f"study scaffold already exists with user changes: {target}")
         if not target.exists():
             target.write_text(source, encoding="utf-8")
         return target

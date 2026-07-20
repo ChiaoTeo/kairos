@@ -1,9 +1,9 @@
 from .study import (
-    ResearchConfig, ResearchConclusion, ResearchReadiness, analyze_hypothesis,
-    assess_readiness, build_panel, execute_research,
+    StudyConfig, StudyConclusion, StudyReadiness, analyze_hypothesis,
+    assess_readiness, build_panel, execute_study,
 )
 
 __all__ = [
-    "ResearchConfig", "ResearchConclusion", "ResearchReadiness", "analyze_hypothesis",
-    "assess_readiness", "build_panel", "execute_research",
+    "StudyConfig", "StudyConclusion", "StudyReadiness", "analyze_hypothesis",
+    "assess_readiness", "build_panel", "execute_study",
 ]

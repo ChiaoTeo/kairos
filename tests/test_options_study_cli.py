@@ -12,13 +12,13 @@ from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairos.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
 
 
-class OptionsResearchCliTests(unittest.TestCase):
+class OptionsStudyCliTests(unittest.TestCase):
     @staticmethod
     def _register(root: Path, dataset):
         path = MarketSnapshotStorageDriver(root / "curated").save(dataset)
         product = DataProductDefinition(
-            DatasetKey("curated.synthetic.options-research"), "Options research fixture", DatasetLayer.CURATED,
-            "Governed synthetic options research fixture", {"synthetic": "true"}, "timestamp", owner="test",
+            DatasetKey("curated.synthetic.options-study"), "Options study fixture", DatasetLayer.CURATED,
+            "Governed synthetic options study fixture", {"synthetic": "true"}, "timestamp", owner="test",
         )
         return register_market_replay_dataset(
             root, dataset, path, product, provider="synthetic", venue="synthetic", synthetic=True,
@@ -61,14 +61,14 @@ class OptionsResearchCliTests(unittest.TestCase):
         self.assertIn("Scenario value:", output.getvalue())
         self.assertIn("Residual:", output.getvalue())
 
-    def test_research_readiness_rejects_synthetic_data(self) -> None:
+    def test_study_readiness_rejects_synthetic_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             dataset = build_synthetic_backtest_dataset()
             release = self._register(Path(directory), dataset)
             output = io.StringIO()
             with redirect_stdout(output):
                 code = main([
-                    "--lake-root", directory, "research", "readiness",
+                    "--lake-root", directory, "study", "readiness",
                     "--dataset", release.release_id,
                 ])
         self.assertEqual(code, 2)

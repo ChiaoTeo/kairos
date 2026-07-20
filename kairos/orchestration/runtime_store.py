@@ -51,7 +51,7 @@ class DurableExecutionRecord:
 class SQLiteRuntimeStore:
     """Transactional local state for one execution runtime.
 
-    Market and research datasets remain in Parquet. This store owns small,
+    Market and study datasets remain in Parquet. This store owns small,
     transactional runtime facts whose uniqueness and crash consistency matter.
     """
 

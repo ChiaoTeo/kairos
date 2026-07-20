@@ -1,6 +1,6 @@
-from kairos.data import ResearchDataClient, OutputFormat
+from kairos.data import DatasetClient, OutputFormat
 
-client = ResearchDataClient("data")
+client = DatasetClient("data")
 
 query = client.get(
     "market.ohlcv.crypto.binance.usdm-perpetual.1h",

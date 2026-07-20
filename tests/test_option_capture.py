@@ -16,9 +16,9 @@ from kairos.domain.market_data import OptionChain
 from kairos.domain.market_data import Greeks, Quote
 from kairos.domain.product import IndexSpec, ProductType
 from kairos.__main__ import main
-from kairos.study_platform.option_capture import OptionResearchCaptureService
+from kairos.study_platform.option_capture import OptionCaptureService
 from kairos.study_platform.spec import OptionChainCaptureSpec
-from kairos.storage.repository import FileResearchRepository
+from kairos.storage.repository import FileOptionCaptureRepository
 from kairos.reference import ReferenceCatalog
 from kairos.reference.contracts import InstrumentDefinition
 from tests.reference_support import publish_test_instrument
@@ -61,11 +61,11 @@ class FakeProvider:
         return events
 
 
-class OptionResearchCaptureTests(unittest.TestCase):
+class OptionCaptureTests(unittest.TestCase):
     def test_capture_save_and_offline_reproduce(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            repository = FileResearchRepository(Path(directory))
-            service = OptionResearchCaptureService(repository)
+            repository = FileOptionCaptureRepository(Path(directory))
+            service = OptionCaptureService(repository)
             provider = FakeProvider()
             snapshot, online = service.capture_snapshot(provider, OptionChainCaptureSpec(strikes_each_side=1, max_quote_age_seconds=60))
             self.assertFalse(provider.connected)
@@ -89,10 +89,10 @@ class OptionResearchCaptureTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 6)
             with __import__("io").StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main(["--data-root", directory, "research", "analyze", "--run-id", str(snapshot.run_id)]), 0)
+                self.assertEqual(main(["--data-root", directory, "study", "analyze", "--run-id", str(snapshot.run_id)]), 0)
                 self.assertIn("Completeness: 100.0%", output.getvalue())
             with __import__("io").StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main(["--data-root", directory, "research", "show", "--run-id", str(snapshot.run_id)]), 0)
+                self.assertEqual(main(["--data-root", directory, "study", "show", "--run-id", str(snapshot.run_id)]), 0)
                 self.assertIn("Status: completed", output.getvalue())
 
     def test_failure_is_persisted_and_disconnects(self) -> None:
@@ -101,10 +101,10 @@ class OptionResearchCaptureTests(unittest.TestCase):
                 raise RuntimeError("broken feed")
 
         with tempfile.TemporaryDirectory() as directory:
-            repository = FileResearchRepository(directory)
+            repository = FileOptionCaptureRepository(directory)
             provider = BrokenProvider()
             with self.assertRaisesRegex(RuntimeError, "broken feed"):
-                OptionResearchCaptureService(repository).capture_snapshot(provider, OptionChainCaptureSpec())
+                OptionCaptureService(repository).capture_snapshot(provider, OptionChainCaptureSpec())
             manifests = list(Path(directory).glob("*/*/manifest.json"))
             self.assertEqual(len(manifests), 1)
             manifest = __import__("json").loads(manifests[0].read_text())

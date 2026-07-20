@@ -8,7 +8,7 @@ import unittest
 from kairos.ports import Environment
 from kairos.connectors.ibkr.account_gateway import IbkrAccountGateway
 from kairos.connectors.ibkr.session import IbkrSession
-from kairos.connectors.ibkr.research import IbkrSpxwResearchProvider
+from kairos.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
 from kairos.domain.identity import AccountKey, AccountType, VenueId
 from kairos.study_platform.spec import OptionChainCaptureSpec
 
@@ -17,7 +17,7 @@ from kairos.study_platform.spec import OptionChainCaptureSpec
 class IbkrIntegrationTests(unittest.TestCase):
     def test_readonly_underlying_snapshot(self) -> None:
         spec = OptionChainCaptureSpec()
-        provider = IbkrSpxwResearchProvider(
+        provider = IbkrSpxwOptionChainProvider(
             spec,
             host=os.getenv("IBKR_HOST", "127.0.0.1"),
             port=int(os.getenv("IBKR_PORT", "4001")),

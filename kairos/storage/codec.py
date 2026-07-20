@@ -21,7 +21,7 @@ from kairos.domain.event import (
 )
 from kairos.domain.identity import AccountKey, InstitutionId, InstrumentId
 from kairos.domain.market_data import FundingRate, Greeks, IndexPrice, MarkPrice, OpenInterest, OptionChain, Quote, Trade, TradingStatus, VolatilitySurfacePoint
-from kairos.study_platform.snapshot import DataQualityIssue, InstrumentSnapshot, ResearchSnapshot
+from kairos.study_platform.snapshot import DataQualityIssue, InstrumentSnapshot, OptionCaptureSnapshot
 from kairos.study_platform.spec import MarketDataType, OptionChainCaptureSpec
 
 PAYLOAD_TYPES = {
@@ -126,9 +126,9 @@ def from_primitive(value: Any, target: Any) -> Any:
     return value
 
 
-def snapshot_from_primitive(value: dict[str, Any]) -> ResearchSnapshot:
+def snapshot_from_primitive(value: dict[str, Any]) -> OptionCaptureSnapshot:
     from kairos.reference.repository import instrument_from_primitive
-    return ResearchSnapshot(
+    return OptionCaptureSnapshot(
         schema_version=value["schema_version"],
         run_id=from_primitive(value["run_id"], UUID),
         created_at=from_primitive(value["created_at"], datetime),
@@ -146,7 +146,7 @@ def snapshot_from_primitive(value: dict[str, Any]) -> ResearchSnapshot:
     )
 
 
-def snapshot_to_primitive(snapshot: ResearchSnapshot) -> dict[str, Any]:
+def snapshot_to_primitive(snapshot: OptionCaptureSnapshot) -> dict[str, Any]:
     from kairos.reference.repository import instrument_to_primitive
     value = to_primitive(snapshot)
     value["definitions"] = [instrument_to_primitive(item) for item in snapshot.definitions]

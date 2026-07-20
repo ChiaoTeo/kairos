@@ -13,7 +13,7 @@ from kairos.market_data import (
     BoundedEventChannel, ConflatedLatestChannel, ConsumerGap, IterableEventSource,
     MarketEventEnvelope, MarketEventType, OverflowPolicy, StreamOverflow,
 )
-from kairos.strategies.sma_cross_research_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross, backtest_sma_cross_events
+from kairos.strategies.sma_cross_study_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross, backtest_sma_cross_events
 from kairos.domain.market_data import Bar
 
 

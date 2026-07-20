@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from kairos.domain.product import ListedOptionSpec, OptionRight
 from kairos.reference.access import contract_spec
 
-from .snapshot import ResearchSnapshot
+from .snapshot import OptionCaptureSnapshot
 
 ZERO = Decimal("0")
 
@@ -87,7 +87,7 @@ def _ratio(numerator: Decimal | None, denominator: Decimal | None) -> Decimal | 
     return numerator / denominator
 
 
-def analyze_option_snapshot(snapshot: ResearchSnapshot) -> OptionSnapshotAnalysis:
+def analyze_option_snapshot(snapshot: OptionCaptureSnapshot) -> OptionSnapshotAnalysis:
     rows: list[OptionSnapshotMetricRow] = []
     stale_keys = {
         issue.instrument_id.value

@@ -102,7 +102,7 @@ Product = CLI + API + Contract + Extension Surface + Artifacts
 | 产品 | 提供什么 | CLI | API | Contract | 开放什么 | 产出什么 |
 |---|---|---|---|---|---|---|
 | Data | 数据生产和数据身份 | `data download/write/list/describe/quality/compare` | `DataProductApi.download/write_file/write_live` | DataSet Contract、Download Spec、Write Contract | download key、write connector、schema、quality/freshness profile | Data Release、Live View、manifest、quality/freshness report |
-| Study | 研究工作区和因子验证 | `study open/add-data/add-factor/inspect/freeze` | `StudyProductApi.open/add_data/add_factor/freeze` | Study Contract、Factor Contract | study spec、factor code、参数、notebook exploration | Study Lock、Factor profile、research evidence |
+| Study | 研究工作区和因子验证 | `study open/add-data/add-factor/inspect/freeze` | `StudyProductApi.open/add_data/add_factor/freeze` | Study Contract、Factor Contract | study spec、factor code、参数、notebook exploration | Study Lock、Factor profile、study evidence |
 | Strategy | 策略代码和决策边界 | `strategy open/bind-factor/set-risk/freeze/promote` | `StrategyProductApi.open/bind_factor/freeze` | Strategy Contract、InputTable Contract | `model.py`、risk policy、execution policy | Strategy Lock、promotion evidence |
 | Run | 执行、回放和诊断 | `run start/inspect/replay/compare` | `RunProductApi.start_study/start_snapshot/inspect/replay/compare` | Run Contract、Runtime Contract | run mode、clock、runtime connector、safety gate | Run Workspace、Run Manifest、outputs、diagnostics |
 
@@ -630,7 +630,7 @@ Data 注册后的目标不是只服务一次研究，而是成为长期可复用
 local/exploratory file
   -> Study declared input
   -> Registered Data Release
-  -> Approved for Research (Q2)
+  -> Approved for Study (Q2)
   -> Approved for Backtest (Q3)
   -> Approved for Production (Q4 historical + live view)
 ```
@@ -640,7 +640,7 @@ local/exploratory file
 | 等级 | 用户含义 | 系统门禁 |
 |---|---|---|
 | 未注册 | 可以探索，但不承诺复现 | 只允许 Draft Study |
-| Q2 Research | 可以进入正式研究 | schema、hash、lineage、基础 quality |
+| Q2 Study | 可以进入正式研究 | schema、hash、lineage、基础 quality |
 | Q3 Backtest | 可以进入正式回测 | coverage、point-in-time、关键异常处置 |
 | Q4 Production | 可以进入 paper/live | live 接入、新鲜度、监控、对账、fail-closed |
 
@@ -676,7 +676,7 @@ Study Product 定义：
 | 提供 | 研究 workspace、数据别名绑定、Factor 注册、研究配置、冻结研究证据 |
 | 开放 | `study.yaml`、本地 factor code、factor 参数、notebook exploration、标签/报告配置 |
 | Contract | Study Contract、Factor Contract、Study Lock Schema |
-| 产出 | Study Lock、Factor profile、research evidence、可供 Strategy 绑定的 Frozen Factor |
+| 产出 | Study Lock、Factor profile、study evidence、可供 Strategy 绑定的 Frozen Factor |
 | 不提供 | 数据下载、外部数据写入、策略执行、broker/execution gateway |
 
 ### 5.1 CLI
@@ -745,7 +745,7 @@ study = open_study("us-equity-momentum")
 
 returns = study.data("returns").pandas()
 signal = study.factor("momentum_12_1").pandas()
-report = start_research_run(study="us-equity-momentum")
+report = start_study_run(study="us-equity-momentum")
 ```
 
 Study API 的职责是把 Dataset 和 Factor Code 组合起来：
@@ -758,7 +758,7 @@ study.freeze(version="1.0.0")
 ```
 
 当前仓库的 `kairos.study_platform.open_study`、`StudySession.data` 和 `kairos study create/start/freeze`
-仍是过渡形态；它们应逐步收敛到上面的多数据输入、命名 factor、Research Run Client 和 Study Lock 语义。
+仍是过渡形态；它们应逐步收敛到上面的多数据输入、命名 factor、Study Run Client 和 Study Lock 语义。
 
 ### 5.4 生命周期
 
@@ -985,7 +985,7 @@ execution:
   connector: simulated
 ```
 
-Run Contract 只描述本次执行需要的运行环境，不改变 Study 或 Strategy 语义。Research、backtest、paper、live
+Run Contract 只描述本次执行需要的运行环境，不改变 Study 或 Strategy 语义。Study、backtest、paper、live
 可以替换 clock、feed、execution gateway 和 safety gate，但不能替换 Study Lock、Strategy Snapshot、
 Frozen Factor 或 DataSet identity。
 
@@ -1328,10 +1328,39 @@ def decide(context):
 - paper/live Run Manifest 已生成 `runtime_contract.feed_runtime_plan`，把通过 freshness gate 的 Live View binding
   转成 runtime 可消费的 service plan、capture policy 和 `plan_hash`；feed plan 缺少 EventSource 或 Channel
   contract、或存在重复 `service_id` 时 fail closed；
+- Run Manifest 已记录 `runtime_contract.run_mode_composition`，把 mode、event source、clock、execution driver、
+  persistence、safety gate、capture policy 和 `composition_hash` 放入正式审计链；
+- paper/live Run Manifest 已记录 `runtime_contract.execution_runtime_plan`，把 execution driver 转成 runtime
+  service plan 和 `plan_hash`；显式执行 feed runtime 时，paper 的 simulated execution gateway 已作为
+  supervised service 同步启动并写入 runtime execution 摘要；
+- paper/live Strategy target Run Manifest 已记录 `runtime_contract.strategy_runtime_plan`，把 Strategy Lock target
+  转成 strategy service plan 和 `plan_hash`；`kairos strategy set-model --kind sma-cross-v1 ...` /
+  `StrategyProductApi.set_model(...)` 已可在 Strategy Lock 中声明内置 SMA runtime model，显式
+  `--execute-strategy` 时 Run Product 会从 Strategy Lock 自动实例化真实 `GovernedStrategyRunLoop`
+  runner，并写出 strategy runtime result；内置 strategy runtime model registry 已建立，`model.kind`
+  通过 registry/alias 解析到 runner factory，不再在 Run Product factory 里硬编码单个 SMA 分支；
+  注入式 strategy runner 仍可用于外部/测试 runner；
+- paper `--execute-strategy` 已有最小 intent bridge：`GovernedStrategyRunLoop` 产生的 `TargetExposureIntent`
+  会被转换为 simulated execution gateway 的 market `OrderRequest`，gateway ack、paper fill projection 和
+  `TradeExecution` evidence 会写入 Run Workspace；同时该 bridge 已接入 run-local `SQLiteRuntimeStore`，
+  生成 durable order 状态、execution record 和 Ledger transaction，可从 runtime sqlite 重建 order/fill
+  证据；bridge close 时会用现有 `ReconciliationService` 生成 `paper_runtime_readiness`，确认 durable ledger、
+  simulated account state、open orders 和 strategy position ownership 一致；live execution 仍保持未绑定 fail closed；
+- 本地可编辑文件不做持续 hash 校验：Draft workspace 中的 `model.py`、connector 和临时文件以路径作为编辑引用；
+  只有 Data Release、Live View、Study Lock、Strategy Lock、Run Manifest、promotion evidence 这些跨产品冻结/发布边界记录
+  hash。`run start --execute-strategy` 只消费 Strategy Lock 的 model 声明，不重新 hash 本地 `model.py`；
 - `RuntimeFeedPlan.managed_services(...)` 已能把 feed runtime plan 适配为 `ManagedServiceSpec`，交由
   `AsyncKairosRuntime` 监督启动；未绑定真实 connector runner 时会 fail closed；
 - `RuntimeFeedPlan.managed_service_bundle(...)` 已能把 feed connector runner 和 freshness monitor runner 按
   Live View binding 成对组装成受监督 bundle，bundle manifest/hash 已进入 paper/live Run Manifest 审计链；
+- `BinanceRuntimeFeedFactory` 已能从 Binance Live View manifest 自动实例化 `BinanceCanonicalStreamService`、
+  `BoundedEventChannel`、rotating canonical capture 和 `LiveViewFreshnessMonitor`，并交给
+  `AsyncKairosRuntime` 作为 feed/monitor bundle 运行；
+- `run start --mode paper/live --execute-feeds` 已能在显式开关下调用 provider runtime feed factory，把
+  feed/monitor bundle 纳入 Run Product 的 supervised runtime，并在 Run Manifest 记录执行摘要；
+- 实时 feed runtime 产生的 rotating canonical capture manifest 已可通过 `register_live_capture_release`
+  归档为 DataSet identity 下的 `MARKET_EVENTS` Release，并写出 `data_release_manifest.json` / `release.json`
+  / lineage / coverage / quality 等最小回放元数据；
 - `LiveViewFreshnessMonitor` 已提供受监督的 Live View health/diagnostics 写回 runner，可由
   `AsyncKairosRuntime` 作为 managed service 周期性刷新 manifest；
 - `live_view_freshness_evidence` 已能从 connector service counters、channel metrics 和 capture evidence 生成
@@ -1342,7 +1371,7 @@ def decide(context):
 
 目标态剩余缺口：
 
-1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型，并接入四产品 surface、`publish_release`、columnar publishing 和 MarketReplayDataset metadata 补全路径；质量报告已开始区分 gate/diagnostic，DataPreparation 已有可配置 promotion policy profile，DataProductContract capabilities 已可声明产品默认 policy，内置 Q2/Q3/Q4 profile registry 已建立，freshness gate 已有最小 policy/result 模型并接入四产品 paper/live run 边界，channel diagnostics 已进入该 gate，`soak-binance` 可显式写回 Live View health/diagnostics，Live View manifest 读写/查找已有共享 API，paper/live Run Manifest 已记录最小 Live View subscription binding、runtime feed plan 和 feed/monitor bundle hash，feed plan 已可适配为 `AsyncKairosRuntime` 监督的 `ManagedServiceSpec`，`LiveViewFreshnessMonitor` 已能作为 managed service 持续写回 manifest，connector service metrics 已可转成 monitor evidence，feed connector runner 和 freshness monitor runner 已可按 Live View binding 成对组装；剩余缺口是 provider-specific 的真实实时 connector runner factory、订阅执行和历史回放归档还没有完整统一到 DataSet identity；
+1. DataSet Contract、Data Release Manifest、Live View Manifest 已建立最小正式模型，并接入四产品 surface、`publish_release`、columnar publishing 和 MarketReplayDataset metadata 补全路径；质量报告已开始区分 gate/diagnostic，DataPreparation 已有可配置 promotion policy profile，DataProductContract capabilities 已可声明产品默认 policy，内置 Q2/Q3/Q4 profile registry 已建立，freshness gate 已有最小 policy/result 模型并接入四产品 paper/live run 边界，channel diagnostics 已进入该 gate，`soak-binance` 可显式写回 Live View health/diagnostics，Live View manifest 读写/查找已有共享 API，paper/live Run Manifest 已记录 run mode composition、最小 Live View subscription binding、runtime feed plan、feed/monitor bundle hash、execution runtime plan 和 strategy runtime plan，feed plan 已可适配为 `AsyncKairosRuntime` 监督的 `ManagedServiceSpec`，`LiveViewFreshnessMonitor` 已能作为 managed service 持续写回 manifest，connector service metrics 已可转成 monitor evidence，feed connector runner 和 freshness monitor runner 已可按 Live View binding 成对组装，Binance provider-specific runtime feed factory 已能从 Live View manifest 自动实例化 connector/channel/capture/monitor，Run Product 已能通过显式 `--execute-feeds` 开关调用该 factory 执行订阅并记录执行摘要，paper simulated execution gateway 已能作为 supervised service 同步启动，注入式 strategy runner 已能进入同一个 supervised runtime，Strategy Lock 声明的内置 SMA runtime model 已能通过 registry 自动实例化为真实 supervised strategy runner，paper intent bridge 已能把 TargetExposureIntent 转成 simulated execution gateway order ack、fill projection、durable order/execution/ledger evidence，并生成 paper runtime readiness/reconciliation evidence，实时 feed canonical capture 已可归档为 DataSet identity 下的 replayable `MARKET_EVENTS` Release；剩余缺口是 paper/live 默认生产运行生命周期、更多内置 strategy runtime model entry 和 live execution gateway runner 还没有完整统一到 Run Product；
 2. 旧 `StudyWorkspace` 仍以单 `input_release_id` 为主模型，新的 Study Product workspace 还没有替换旧模型；
 3. Study Product 的 Draft/Frozen 生命周期已最小落地，但状态机、质量门禁和目录结构还没有统一到正式模型；
 4. 本地 factor 已记录 code hash，但依赖、参数、输出 schema 和 point-in-time 检查还没有正式约定；
@@ -1350,7 +1379,7 @@ def decide(context):
 6. Strategy 已要求从 Frozen Study 打开，但还没有完整自动检查 Data Release hash 与 Factor Output 语义一致；
 7. Study factor 与 Strategy model 的语义一致性还没有自动检查；
 8. Data Product 已有最小 `data download` 和 `data write` 入口，live write 已要求 freshness contract；但 download spec、YAML contract、quality report 还没有完整实现；
-9. 实时数据流接入已能生成 Live View manifest，并已有 provider WebSocket/canonical channel 运行基线；四产品 paper/live run 已要求 healthy Live View freshness 和 channel diagnostics，`soak-binance` 已能把审计结果写回指定 Live View manifest，Run Manifest 已记录 DataSet 到 Live View/EventSource/channel 的最小 subscription binding、runtime feed plan 和 feed/monitor bundle hash，feed plan 已能生成 `ManagedServiceSpec` 并被 `AsyncKairosRuntime` 监督，`LiveViewFreshnessMonitor` 已能持续写回 manifest，connector service metrics 已能生成 monitor evidence，feed/monitor 已能按 binding 成对组装为 runtime bundle；但 provider-specific 真实 connector runner factory、订阅执行和历史回放归档还没有完整统一到 DataSet identity；
+9. 实时数据流接入已能生成 Live View manifest，并已有 provider WebSocket/canonical channel 运行基线；四产品 paper/live run 已要求 healthy Live View freshness 和 channel diagnostics，`soak-binance` 已能把审计结果写回指定 Live View manifest，Run Manifest 已记录 DataSet 到 Live View/EventSource/channel 的最小 subscription binding、runtime feed plan、feed/monitor bundle hash、execution runtime plan 和 strategy runtime plan，feed plan 已能生成 `ManagedServiceSpec` 并被 `AsyncKairosRuntime` 监督，`LiveViewFreshnessMonitor` 已能持续写回 manifest，connector service metrics 已能生成 monitor evidence，feed/monitor 已能按 binding 成对组装为 runtime bundle，Binance runtime feed factory 已能从 Live View manifest 自动生成 connector/channel/capture/monitor 运行包，Run Product 已能显式调用该 factory 执行订阅并记录 runtime execution 摘要，paper simulated execution gateway 已能作为 supervised service 同步启动，注入式 strategy runner 和 Strategy Lock 内置 SMA runner 已能进入同一个 supervised runtime，paper intent bridge 已能把 strategy TargetExposureIntent 转成 simulated execution gateway order ack、fill projection、durable runtime-store evidence 和 readiness/reconciliation evidence，canonical capture 已可归档为 DataSet identity 下的 replayable `MARKET_EVENTS` Release；但 paper/live 默认生产运行生命周期和 live execution gateway runner 还没有完整统一到 Run Product；
 10. Run Product 已有最小 `run start/inspect/replay/compare` API，但还没有接入真实 InputTable、clock、feed 和 execution gateway；
 11. `data.dataset(name)`、`study.data(name)`、`study.factor(name)`、`strategy.decide(context)` 和 `run.start(...)` 这种用户 API 还没有完成；
 12. Factor Code decorator/metadata/hash 协议还没有完成；
@@ -1400,6 +1429,7 @@ def decide(context):
 - 定义 `strategies/<strategy_id>/`；
 - 增加 `kairos strategy open --from-study`；
 - 增加 `strategy.yaml`、`model.py`、risk/execution 配置；
+- 增加 Strategy Lock 中的 `model.kind/parameters` 运行时声明；本地 `model.py` 保持 Draft 编辑文件，不作为 run start 的持续 hash 门禁；
 - 生成 `strategy.lock.json`；
 - 强制 Strategy 绑定 Frozen Study。
 
@@ -1410,6 +1440,7 @@ def decide(context):
 - 增加 `kairos run inspect/replay/compare`；
 - 生成独立 Run Workspace；
 - `run start` 只接受明确 target，运行前比较 workspace hash 与 target hash；
+- Paper/Live strategy execution 从 Strategy Lock 的 runtime model 声明实例化 runner；
 - Run Manifest 记录 snapshot、输入产物、runtime contract、环境和输出 hash。
 
 ### 阶段 F：一致性门禁
@@ -1531,7 +1562,7 @@ data/downloads/us-equity-momentum-data/report.json
 - 每个注册 Data Release 有 `release_id`、`content_hash`、schema、primary_time、grain；
 - `single_series` 输入不需要 `entity_key`，但必须声明 join_policy；
 - Study/Strategy 后续只能通过 DataSet API 访问这些 release；
-- 如果只能达到 bounded scope，report 必须明确 `ready_for_research=true`、`ready_for_backtest=false` 或同等诊断。
+- 如果只能达到 bounded scope，report 必须明确 `ready_for_study=true`、`ready_for_backtest=false` 或同等诊断。
 
 如果用户要进入 paper/live，还需要接入同一 DataSet identity 的 Live View：
 

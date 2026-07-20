@@ -39,7 +39,7 @@ from kairos.connectors.ibkr.account_gateway import IbkrAccountGateway
 from kairos.connectors.ibkr.execution_gateway import IbkrExecutionGateway
 from kairos.connectors.ibkr.market_data_client import IbkrMarketDataClient
 from kairos.connectors.ibkr.reference_data import IbkrReferenceDataClient
-from kairos.connectors.ibkr.research import IbkrSpxwResearchProvider
+from kairos.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
 from kairos.connectors.ibkr.session import IbkrSession
 from kairos.connectors.simulated import SimulatedExecutionAccountGateway
 from kairos.connectors.massive import MassiveClient, MassiveConfig, MassiveMarketSnapshotBuilder, MassiveEntitlementDiagnostics, MassiveEquityDailyOhlcvPipeline, MassiveEquityIdentityResolver, MassiveFlatFileBatchDownloader, MassiveFlatFileClient, MassiveReferencePipeline, MassiveVendorArchiveClient, OptionCloseImpliedVolatilityPipeline, OptionDailyOhlcvPipeline, SpxwDailyOhlcvPipeline
@@ -58,9 +58,9 @@ from kairos.orchestration.event_log import PersistentEventLog
 from kairos.orchestration.kill_switch import KillSwitch
 from kairos.orchestration.reconciliation import ReconciliationService
 from kairos.study_platform.report import summarize
-from kairos.study_platform.option_capture import OptionResearchCaptureService
+from kairos.study_platform.option_capture import OptionCaptureService
 from kairos.study_platform.spec import MarketDataType, OptionChainCaptureSpec
-from kairos.storage.repository import FileResearchRepository
+from kairos.storage.repository import FileOptionCaptureRepository
 from kairos.backtest.engine import BacktestEngine
 from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairos.backtest.synthetic_scenarios import SyntheticScenario, build_synthetic_backtest_dataset
@@ -73,7 +73,7 @@ from kairos.storage.data_lake import write_json
 from kairos.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
 from kairos.study_platform.series import SeriesCaptureProgress, SeriesCaptureService, SeriesCaptureSpec
 from kairos.study_platform.normalized_series import NormalizedSeriesCaptureService
-from kairos.strategies.sma_cross_research_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross
+from kairos.strategies.sma_cross_study_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross
 from kairos.pricing import PricingInput, PricingModel, OptionValuationService, implied_volatility, price_with_volatility
 from kairos.risk import RevaluationPosition, Scenario, ScenarioEngine, explain_scenario
 from kairos.data import (
@@ -95,7 +95,7 @@ def _program_name() -> str:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog=_program_name(), description="Multi-asset research, backtest, reconciliation, and execution toolkit")
+    parser = argparse.ArgumentParser(prog=_program_name(), description="Multi-asset study, backtest, reconciliation, and execution toolkit")
     parser.add_argument("--data-root", default="data/snapshots")
     parser.add_argument("--dataset-root", default="data/curated")
     parser.add_argument("--backtest-root", default="data/backtests")
@@ -186,7 +186,7 @@ def _parser() -> argparse.ArgumentParser:
     prepare_data.add_argument("--dataset", required=True)
     prepare_data.add_argument("--start", required=True)
     prepare_data.add_argument("--end", required=True)
-    prepare_data.add_argument("--quality", choices=tuple(item.value for item in QualityLevel), default=QualityLevel.RESEARCH.value)
+    prepare_data.add_argument("--quality", choices=tuple(item.value for item in QualityLevel), default=QualityLevel.STUDY.value)
     prepare_data.add_argument("--provider")
     prepare_data.add_argument("--venue")
     prepare_data.add_argument("--connector-config", type=Path)
@@ -263,7 +263,7 @@ def _parser() -> argparse.ArgumentParser:
     promote_data = data_actions.add_parser("promote", help="audit and promote a frozen dataset release")
     promote_data.add_argument("--release", required=True)
     promote_data.add_argument("--status", required=True, choices=(
-        DatasetStatus.APPROVED_FOR_RESEARCH.value, DatasetStatus.APPROVED_FOR_BACKTEST.value,
+        DatasetStatus.APPROVED_FOR_STUDY.value, DatasetStatus.APPROVED_FOR_BACKTEST.value,
         DatasetStatus.APPROVED_FOR_PRODUCTION.value,
     ))
     promote_data.add_argument("--actor", required=True)
@@ -402,41 +402,6 @@ def _parser() -> argparse.ArgumentParser:
     sync.add_argument("--symbols", required=True, help="comma-separated symbols or IBKR option descriptors")
     sync.add_argument("--environment", choices=("paper", "testnet", "live"), required=True)
     sync.add_argument("--inverse", action="store_true", help="use Binance coin-margined futures contracts")
-    research = commands.add_parser("research", help="capture normalized snapshots and replayable market series")
-    actions = research.add_subparsers(dest="action", required=True)
-    capture = actions.add_parser("capture", help="capture an IBKR research snapshot")
-    capture.add_argument("--config", type=Path, help="optional JSON OptionChainCaptureSpec overrides")
-    capture.add_argument("--host", default="127.0.0.1")
-    capture.add_argument("--port", type=int, default=4001)
-    capture.add_argument("--client-id", type=int, default=21)
-    capture.add_argument("--expiry-count", type=int)
-    capture.add_argument("--strikes-each-side", type=int)
-    capture.add_argument("--market-data-type", choices=[item.value for item in MarketDataType])
-    analyze = actions.add_parser("analyze", help="rebuild a report without connecting to IBKR")
-    analyze.add_argument("--run-id", required=True)
-    show = actions.add_parser("show", help="show a saved run")
-    show.add_argument("--run-id", required=True)
-    series = actions.add_parser("capture-series", help="capture fixed-frequency MarketSnapshot data from IBKR")
-    series.add_argument("--config", type=Path)
-    series.add_argument("--dataset-id", required=True)
-    series.add_argument("--samples", type=int, default=60)
-    series.add_argument("--interval-seconds", type=int, default=60)
-    series.add_argument("--split", choices=("development", "validation", "test"), default="development")
-    series.add_argument("--host", default="127.0.0.1")
-    series.add_argument("--port", type=int, default=4001)
-    series.add_argument("--client-id", type=int, default=31)
-    series.add_argument("--venue", choices=("ibkr", "binance"), default="ibkr")
-    series.add_argument("--environment", choices=("paper", "testnet", "live"), default="paper")
-    series.add_argument("--instruments", help="comma-separated internal InstrumentId values from Catalog")
-    series.add_argument("--inverse", action="store_true", help="use Binance coin-margined market data routes")
-    series.add_argument("--append", action="store_true", help="append this capture session to an existing dataset with provenance checks")
-    series.add_argument("--checkpoint-samples", type=int, default=10, help="atomically persist after this many samples")
-    research_readiness = actions.add_parser("readiness", help=argparse.SUPPRESS)
-    research_readiness.add_argument("--dataset", required=True)
-    research_readiness.add_argument("--study-config", type=Path, default=Path("studies/spxw_put_skew/config.json"))
-    actions.add_parser("governance-audit", help="audit governed datasets, study versions, and strategy registry artifacts")
-    actions.add_parser("register-btc-iron-condor", help=argparse.SUPPRESS)
-    actions.add_parser("register-builtin-strategies", help="register draft StrategySpec and ExecutionPolicy contracts for reference strategies")
     backtest = commands.add_parser("backtest", help="run deterministic conservative/stress strategy validation")
     backtest_actions = backtest.add_subparsers(dest="action", required=True)
     synthetic = backtest_actions.add_parser("synthetic-scenario", help="create a standardized synthetic backtest dataset")
@@ -546,7 +511,7 @@ def _parser() -> argparse.ArgumentParser:
     runtime_soak.add_argument("--inverse", action="store_true")
     runtime_soak.set_defaults(manual_order=False)
 
-    study = commands.add_parser("study", help="manage flexible research workspaces and frozen candidates")
+    study = commands.add_parser("study", help="manage flexible study workspaces and frozen candidates")
     study_actions = study.add_subparsers(dest="action", required=True)
     study_open = study_actions.add_parser("open", help="open or create a Study workspace")
     study_open.add_argument("study_id")
@@ -571,7 +536,7 @@ def _parser() -> argparse.ArgumentParser:
     study_create.add_argument("--primary-time", help="advanced/CI override")
     study_create.add_argument("--start", help="optional range override"); study_create.add_argument("--end", help="optional range override")
     study_start = study_actions.add_parser(
-        "start", help="acquire governed data, create a bound Study, and scaffold research in one command",
+        "start", help="acquire governed data, create a bound Study, and scaffold analysis in one command",
     )
     study_start.add_argument("study_id")
     study_start.add_argument("--version", default="1.0.0")
@@ -604,8 +569,41 @@ def _parser() -> argparse.ArgumentParser:
     study_data.add_argument("--head", type=int, default=10); study_data.add_argument("--column", action="append")
     study_profile = study_actions.add_parser("profile", help="run basic point-in-time and OHLCV data checks")
     study_profile.add_argument("study_id"); study_profile.add_argument("--version", default="1.0.0")
-    study_scaffold = study_actions.add_parser("scaffold", help="generate a minimal DataFrame research script")
+    study_scaffold = study_actions.add_parser("scaffold", help="generate a minimal DataFrame study script")
     study_scaffold.add_argument("study_id"); study_scaffold.add_argument("--version", default="1.0.0")
+    study_capture = study_actions.add_parser("capture", help="capture an IBKR option-chain snapshot")
+    study_capture.add_argument("--config", type=Path, help="optional JSON OptionChainCaptureSpec overrides")
+    study_capture.add_argument("--host", default="127.0.0.1")
+    study_capture.add_argument("--port", type=int, default=4001)
+    study_capture.add_argument("--client-id", type=int, default=21)
+    study_capture.add_argument("--expiry-count", type=int)
+    study_capture.add_argument("--strikes-each-side", type=int)
+    study_capture.add_argument("--market-data-type", choices=[item.value for item in MarketDataType])
+    study_analyze = study_actions.add_parser("analyze", help="rebuild an option snapshot report without connecting to IBKR")
+    study_analyze.add_argument("--run-id", required=True)
+    study_show = study_actions.add_parser("show", help="show a saved option snapshot run")
+    study_show.add_argument("--run-id", required=True)
+    study_series = study_actions.add_parser("capture-series", help="capture fixed-frequency MarketSnapshot data")
+    study_series.add_argument("--config", type=Path)
+    study_series.add_argument("--dataset-id", required=True)
+    study_series.add_argument("--samples", type=int, default=60)
+    study_series.add_argument("--interval-seconds", type=int, default=60)
+    study_series.add_argument("--split", choices=("development", "validation", "test"), default="development")
+    study_series.add_argument("--host", default="127.0.0.1")
+    study_series.add_argument("--port", type=int, default=4001)
+    study_series.add_argument("--client-id", type=int, default=31)
+    study_series.add_argument("--venue", choices=("ibkr", "binance"), default="ibkr")
+    study_series.add_argument("--environment", choices=("paper", "testnet", "live"), default="paper")
+    study_series.add_argument("--instruments", help="comma-separated internal InstrumentId values from Catalog")
+    study_series.add_argument("--inverse", action="store_true", help="use Binance coin-margined market data routes")
+    study_series.add_argument("--append", action="store_true", help="append this capture session to an existing dataset with provenance checks")
+    study_series.add_argument("--checkpoint-samples", type=int, default=10, help="atomically persist after this many samples")
+    study_readiness = study_actions.add_parser("readiness", help=argparse.SUPPRESS)
+    study_readiness.add_argument("--dataset", required=True)
+    study_readiness.add_argument("--study-config", type=Path, default=Path("studies/spxw_put_skew/config.json"))
+    study_actions.add_parser("governance-audit", help="audit governed datasets, study versions, and strategy registry artifacts")
+    study_actions.add_parser("register-btc-iron-condor", help=argparse.SUPPRESS)
+    study_actions.add_parser("register-builtin-strategies", help="register draft StrategySpec and ExecutionPolicy contracts for reference strategies")
 
     factor = commands.add_parser("factor", help="register and verify governed factor releases")
     factor_actions = factor.add_subparsers(dest="action", required=True)
@@ -630,6 +628,13 @@ def _parser() -> argparse.ArgumentParser:
     strategy_set_risk = strategy_actions.add_parser("set-risk", help="bind strategy risk code or configuration")
     strategy_set_risk.add_argument("strategy_id")
     strategy_set_risk.add_argument("risk_file")
+    strategy_set_model = strategy_actions.add_parser("set-model", help="bind a built-in runtime model to a Strategy workspace")
+    strategy_set_model.add_argument("strategy_id")
+    strategy_set_model.add_argument("--kind", required=True, choices=("sma-cross-v1", "builtin.sma-cross-v1"))
+    strategy_set_model.add_argument("--instrument-id")
+    strategy_set_model.add_argument("--fast-window", type=int)
+    strategy_set_model.add_argument("--slow-window", type=int)
+    strategy_set_model.add_argument("--approved-capital")
     strategy_freeze = strategy_actions.add_parser("freeze", help="freeze a Strategy workspace snapshot")
     strategy_freeze.add_argument("strategy_id")
     strategy_freeze.add_argument("--version", default="1.0.0")
@@ -639,7 +644,7 @@ def _parser() -> argparse.ArgumentParser:
     strategy_register.add_argument("--version", default="1.2.0"); strategy_register.add_argument("--factor-id", default="sma-spread")
     strategy_register.add_argument("--factor-version", default="1.0.0")
     strategy_actions.add_parser("register-builtins")
-    iron_register=strategy_actions.add_parser("register-btc-iron-condor");iron_register.add_argument("--research-spec-hash",required=True)
+    iron_register=strategy_actions.add_parser("register-btc-iron-condor");iron_register.add_argument("--study-spec-hash",required=True)
     strategy_inspect=strategy_actions.add_parser("inspect");strategy_inspect.add_argument("strategy_id")
     strategy_inspect.add_argument("--version")
     strategy_status=strategy_actions.add_parser("status");strategy_status.add_argument("strategy_id");strategy_status.add_argument("--version",required=True)
@@ -650,14 +655,14 @@ def _parser() -> argparse.ArgumentParser:
     strategy_check=strategy_actions.add_parser("check-promotion", help="check promotion evidence without changing strategy lifecycle")
     strategy_check.add_argument("strategy_id"); strategy_check.add_argument("--version", required=True)
     strategy_check.add_argument("--to", required=True, choices=(
-        "STUDY_VALIDATED", "RESEARCH_VALIDATED", "TRADE_PROXY_VALIDATED", "EXECUTABLE_BACKTEST_VALIDATED",
+        "STUDY_VALIDATED", "TRADE_PROXY_VALIDATED", "EXECUTABLE_BACKTEST_VALIDATED",
         "ROBUSTNESS_VALIDATED", "PAPER_APPROVED", "LIVE_LIMITED", "LIVE_APPROVED",
     ))
     strategy_check.add_argument("--evidence", action="append", required=True, help="study, readiness or soak JSON evidence; repeatable")
     strategy_promote=strategy_actions.add_parser("promote", help="promote a Strategy Release with hashed evidence")
     strategy_promote.add_argument("strategy_id"); strategy_promote.add_argument("--version", required=True)
     strategy_promote.add_argument("--to", required=True, choices=(
-        "STUDY_VALIDATED", "RESEARCH_VALIDATED", "TRADE_PROXY_VALIDATED", "EXECUTABLE_BACKTEST_VALIDATED",
+        "STUDY_VALIDATED", "TRADE_PROXY_VALIDATED", "EXECUTABLE_BACKTEST_VALIDATED",
         "ROBUSTNESS_VALIDATED", "PAPER_APPROVED", "LIVE_LIMITED", "LIVE_APPROVED",
     ))
     strategy_promote.add_argument("--evidence", action="append", required=True, help="study or run result JSON evidence; repeatable")
@@ -670,7 +675,13 @@ def _parser() -> argparse.ArgumentParser:
     run_target = run_start.add_mutually_exclusive_group(required=True)
     run_target.add_argument("--study", help="Study workspace id for study-mode execution")
     run_target.add_argument("--snapshot", help="Strategy snapshot reference, for example my-strategy@1.0.0")
-    run_start.add_argument("--mode", required=True, choices=("study", "research", "backtest", "historical-simulation", "paper", "live"))
+    run_start.add_argument("--mode", required=True, choices=("study", "backtest", "historical-simulation", "paper", "live"))
+    run_start.add_argument("--execute-feeds", action="store_true",
+                           help="for paper/live, instantiate provider feed runtime services and run them briefly")
+    run_start.add_argument("--execute-strategy", action="store_true",
+                           help="for paper/live, require a bound strategy runtime runner in the supervised runtime")
+    run_start.add_argument("--feed-runtime-seconds", type=float, default=5.0,
+                           help="duration for --execute-feeds/--execute-strategy supervised runtime")
     run_backtest_generic = run_actions.add_parser("backtest", help="run a Strategy Release through the unified backtest entry")
     run_backtest_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
     _add_sma_input_arguments(run_backtest_generic); _add_sma_run_arguments(run_backtest_generic)
@@ -721,8 +732,8 @@ def _parser() -> argparse.ArgumentParser:
 
     tutorial = commands.add_parser("tutorial", help="guided, credential-free first-use workflows")
     tutorial_actions = tutorial.add_subparsers(dest="action", required=True)
-    tutorial_sma = tutorial_actions.add_parser("sma", help="start the deterministic SMA research tutorial")
-    tutorial_sma.add_argument("--output-root", type=Path, default=Path("example-output/first-research"))
+    tutorial_sma = tutorial_actions.add_parser("sma", help="start the deterministic SMA study tutorial")
+    tutorial_sma.add_argument("--output-root", type=Path, default=Path("example-output/first-study"))
     tutorial_sma.add_argument("--study-id", default="btc-sma-first")
     return parser
 
@@ -837,7 +848,19 @@ def main(argv: list[str] | None = None) -> int:
         elif not args.quiet:
             print(render_project_init(result))
         return 0
-    if args.group in {"study", "factor", "strategy", "run", "tutorial"}:
+    study_capture_actions = {
+        "capture",
+        "analyze",
+        "show",
+        "capture-series",
+        "readiness",
+        "governance-audit",
+        "register-btc-iron-condor",
+        "register-builtin-strategies",
+    }
+    if args.group in {"factor", "strategy", "run", "tutorial"} or (
+        args.group == "study" and args.action not in study_capture_actions
+    ):
         return _product_command(args)
     if args.group == "data":
         return _data(args)
@@ -849,8 +872,8 @@ def main(argv: list[str] | None = None) -> int:
         return _vol(args)
     if args.group == "risk":
         return _risk_analytics(args)
-    repository = FileResearchRepository(args.data_root)
-    service = OptionResearchCaptureService(repository)
+    repository = FileOptionCaptureRepository(args.data_root)
+    service = OptionCaptureService(repository)
     if args.group == "backtest":
         return _backtest(args)
     if args.action == "governance-audit":
@@ -861,19 +884,19 @@ def main(argv: list[str] | None = None) -> int:
             "violations":result.violations},ensure_ascii=False,indent=2))
         return 0 if result.passed else 2
     if args.action == "register-btc-iron-condor":
-        module = _workspace_research_module("studies.register_btc_iron_condor")
+        module = _workspace_study_module("studies.register_btc_iron_condor")
         directory,spec=module.register(args.lake_root);print(f"{directory}: {spec.lifecycle.value} {spec.spec_hash}");return 0
     if args.action == "register-builtin-strategies":
         from kairos.strategies.specs import register_builtin_strategies
         paths=register_builtin_strategies(Path(args.lake_root)/"strategies")
         print(json.dumps({"count":len(paths),"paths":[str(path) for path in paths]},indent=2));return 0
     if args.action == "readiness":
-        return _research_readiness(args)
+        return _study_readiness(args)
     if args.action == "capture-series":
         if args.instruments:
             return _capture_normalized_series(args)
         spec = _spec(args)
-        provider = IbkrSpxwResearchProvider(spec, host=args.host, port=args.port, client_id=args.client_id)
+        provider = IbkrSpxwOptionChainProvider(spec, host=args.host, port=args.port, client_id=args.client_id)
         series_spec = SeriesCaptureSpec(args.dataset_id, args.samples, args.interval_seconds, args.split, args.checkpoint_samples)
         def report_progress(progress: SeriesCaptureProgress) -> None:
             checkpoint = " saved" if progress.checkpoint_saved else ""
@@ -894,7 +917,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.action == "capture":
         spec = _spec(args)
-        provider = IbkrSpxwResearchProvider(spec, host=args.host, port=args.port, client_id=args.client_id)
+        provider = IbkrSpxwOptionChainProvider(spec, host=args.host, port=args.port, client_id=args.client_id)
         snapshot, result = service.capture_snapshot(provider, spec)
         print(summarize(result))
         print(f"Directory: {repository.run_dir(snapshot.run_id)}")
@@ -971,6 +994,7 @@ def _product_command(args: argparse.Namespace) -> int:
         ("strategy", "open"): product_surface.strategy_open,
         ("strategy", "bind-factor"): product_surface.strategy_bind_factor,
         ("strategy", "set-risk"): product_surface.strategy_set_risk,
+        ("strategy", "set-model"): product_surface.strategy_set_model,
         ("strategy", "freeze"): product_surface.strategy_freeze,
         ("strategy", "register-sma"): register_sma_strategy,
         ("strategy","register-builtins"):register_builtin_strategy_releases,("strategy","inspect"):_strategy_inspect_dispatch,
@@ -1368,9 +1392,9 @@ def _data(args: argparse.Namespace) -> int:
         )
         print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
     if args.action == "btc-options-readiness":
-        module = _workspace_research_module("studies.btc_options_readiness")
+        module = _workspace_study_module("studies.btc_options_readiness")
         result = module.btc_options_readiness(args.lake_root); print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["signal_research_ready"] else 2
+        return 0 if result["signal_study_ready"] else 2
     metadata = DatasetClient(args.lake_root).metadata(args.dataset)
     print(json.dumps(metadata, ensure_ascii=False, indent=2))
     return 0
@@ -1418,7 +1442,7 @@ def _prepare_us_equity_momentum(args: argparse.Namespace) -> dict[str, object]:
             raw_dataset,
             start=start,
             end=end,
-            minimum_quality=QualityLevel.RESEARCH,
+            minimum_quality=QualityLevel.STUDY,
             provider=args.provider,
             venue=args.venue,
             acquire_missing=True,
@@ -1545,9 +1569,9 @@ def _ensure_us_equity_identity_release(root: Path, directory: Path, manifest: di
         digest,
         "massive",
         "us-securities",
-        ("reference.identity.equity.us.massive@latest-research",),
-        DatasetStatus.APPROVED_FOR_RESEARCH,
-        QualityLevel.RESEARCH,
+        ("reference.identity.equity.us.massive@latest-study",),
+        DatasetStatus.APPROVED_FOR_STUDY,
+        QualityLevel.STUDY,
         datetime.now(timezone.utc).isoformat(),
         DatasetStorageKind.REFERENCE,
         "1",
@@ -1667,9 +1691,9 @@ def _sync_us_equity_momentum_corporate_actions(
         digest,
         "massive",
         "us-securities",
-        ("reference.corporate_actions.equity.us.massive@latest-research",),
-        DatasetStatus.APPROVED_FOR_RESEARCH,
-        QualityLevel.RESEARCH,
+        ("reference.corporate_actions.equity.us.massive@latest-study",),
+        DatasetStatus.APPROVED_FOR_STUDY,
+        QualityLevel.STUDY,
         datetime.now(timezone.utc).isoformat(),
         DatasetStorageKind.REFERENCE,
         "1",
@@ -1809,9 +1833,9 @@ def _pricing(args: argparse.Namespace) -> int:
     return 0
 
 
-def _research_readiness(args: argparse.Namespace) -> int:
-    module = _workspace_research_module("studies.spxw_put_skew.study")
-    ResearchConfig, execute_research = module.ResearchConfig, module.execute_research
+def _study_readiness(args: argparse.Namespace) -> int:
+    module = _workspace_study_module("studies.spxw_put_skew.study")
+    StudyConfig, execute_study = module.StudyConfig, module.execute_study
     raw = json.loads(args.study_config.read_text(encoding="utf-8"))
     raw.pop("dataset_id", None)
     decimal_fields = {
@@ -1819,12 +1843,12 @@ def _research_readiness(args: argparse.Namespace) -> int:
         "maximum_stale_rate", "minimum_surface_calibration_rate", "profit_target",
         "stop_loss_multiple", "commission_per_contract",
     }
-    config = ResearchConfig(**{key: Decimal(str(value)) if key in decimal_fields else value for key, value in raw.items()})
+    config = StudyConfig(**{key: Decimal(str(value)) if key in decimal_fields else value for key, value in raw.items()})
     client = DatasetClient(args.lake_root, run_mode=RunMode.BACKTEST)
     feed = client.replay_snapshots(args.dataset)
     dataset = feed.dataset
     collection = client.collection(args.dataset)
-    panel, readiness, conclusion = execute_research(dataset, config, collection)
+    panel, readiness, conclusion = execute_study(dataset, config, collection)
     release = feed.release
     artifact_payload = {
         "artifact_schema_version": 1,
@@ -2596,7 +2620,7 @@ def _coerce_decimal_fields(values: dict[str, Any], cls) -> dict[str, Any]:
     return result
 
 
-def _workspace_research_module(module_name: str):
+def _workspace_study_module(module_name: str):
     try:
         return importlib.import_module(module_name)
     except ImportError as error:

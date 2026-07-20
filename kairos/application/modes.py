@@ -210,6 +210,134 @@ class RuntimeFeedServiceBundle:
         return self.plan.service_bundle_manifest()
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeExecutionServicePlan:
+    mode: RunMode
+    execution_driver: str
+    environment: str
+
+    def __post_init__(self) -> None:
+        if not self.execution_driver.strip() or not self.environment.strip():
+            raise ValueError("runtime execution service plan requires driver and environment")
+
+    @property
+    def service_id(self) -> str:
+        return f"execution:{self.mode.value}:{self.execution_driver}"
+
+    def manifest(self) -> dict[str, str]:
+        return {
+            "service_id": self.service_id,
+            "mode": self.mode.value,
+            "execution_driver": self.execution_driver,
+            "environment": self.environment,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeExecutionPlan:
+    mode: RunMode
+    services: tuple[RuntimeExecutionServicePlan, ...]
+
+    def __post_init__(self) -> None:
+        if self.mode not in {RunMode.PAPER_TRADING, RunMode.LIVE}:
+            raise ValueError("runtime execution plan is only valid for paper/live modes")
+        if not self.services:
+            raise ValueError("paper/live runtime execution plan requires at least one execution driver")
+        service_ids = [item.service_id for item in self.services]
+        if len(service_ids) != len(set(service_ids)):
+            raise ValueError("runtime execution plan service ids must be unique")
+
+    @property
+    def plan_hash(self) -> str:
+        material = json.dumps(self.manifest(), sort_keys=True, separators=(",", ":"))
+        return sha256(material.encode()).hexdigest()
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "mode": self.mode.value,
+            "services": [item.manifest() for item in self.services],
+        }
+
+    def managed_services(
+        self,
+        runner_factory: Callable[[RuntimeExecutionServicePlan], Callable[[], Awaitable[None]]] | None = None,
+    ) -> tuple[ManagedServiceSpec, ...]:
+        factory = runner_factory or _unconfigured_execution_runner
+        return tuple(
+            ManagedServiceSpec(
+                service.service_id,
+                factory(service),
+                ServiceCriticality.CRITICAL,
+                restart_limit=1,
+            )
+            for service in self.services
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeStrategyServicePlan:
+    mode: RunMode
+    strategy_id: str
+    target_hash: str
+
+    def __post_init__(self) -> None:
+        if not self.strategy_id.strip() or not self.target_hash.strip():
+            raise ValueError("runtime strategy service plan requires strategy id and target hash")
+
+    @property
+    def service_id(self) -> str:
+        return f"strategy:{self.mode.value}:{self.strategy_id}"
+
+    def manifest(self) -> dict[str, str]:
+        return {
+            "service_id": self.service_id,
+            "mode": self.mode.value,
+            "strategy_id": self.strategy_id,
+            "target_hash": self.target_hash,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeStrategyPlan:
+    mode: RunMode
+    services: tuple[RuntimeStrategyServicePlan, ...]
+
+    def __post_init__(self) -> None:
+        if self.mode not in {RunMode.PAPER_TRADING, RunMode.LIVE}:
+            raise ValueError("runtime strategy plan is only valid for paper/live modes")
+        if not self.services:
+            raise ValueError("paper/live runtime strategy plan requires at least one strategy target")
+        service_ids = [item.service_id for item in self.services]
+        if len(service_ids) != len(set(service_ids)):
+            raise ValueError("runtime strategy plan service ids must be unique")
+
+    @property
+    def plan_hash(self) -> str:
+        material = json.dumps(self.manifest(), sort_keys=True, separators=(",", ":"))
+        return sha256(material.encode()).hexdigest()
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "mode": self.mode.value,
+            "services": [item.manifest() for item in self.services],
+        }
+
+    def managed_services(
+        self,
+        runner_factory: Callable[[RuntimeStrategyServicePlan], Callable[[], Awaitable[None]]] | None = None,
+    ) -> tuple[ManagedServiceSpec, ...]:
+        factory = runner_factory or _unconfigured_strategy_runner
+        return tuple(
+            ManagedServiceSpec(
+                service.service_id,
+                factory(service),
+                ServiceCriticality.CRITICAL,
+                restart_limit=1,
+            )
+            for service in self.services
+        )
+
+
 def _runtime_feed_service_id(service: RuntimeFeedServicePlan) -> str:
     return f"feed:{service.name}:{service.live_view_id}"
 
@@ -246,10 +374,6 @@ def study_composition() -> RunModeComposition:
         RunMode.STUDY, "frozen-release", "analysis", "none", "study-artifact",
         "study-validation", CapturePolicy.NONE,
     )
-
-
-def research_composition() -> RunModeComposition:
-    return study_composition()
 
 
 def backtest_composition() -> RunModeComposition:
@@ -297,10 +421,23 @@ def runtime_feed_plan(mode: RunMode | str, feed_bindings: tuple[Mapping[str, obj
     return RuntimeFeedPlan(run_mode, tuple(services))
 
 
+def runtime_execution_plan(mode: RunMode | str, composition: RunModeComposition) -> RuntimeExecutionPlan:
+    run_mode = _runtime_mode(mode)
+    environment = "live" if run_mode is RunMode.LIVE else "paper"
+    return RuntimeExecutionPlan(run_mode, (
+        RuntimeExecutionServicePlan(run_mode, composition.execution_driver, environment),
+    ))
+
+
+def runtime_strategy_plan(mode: RunMode | str, *, strategy_id: str, target_hash: str) -> RuntimeStrategyPlan:
+    run_mode = _runtime_mode(mode)
+    return RuntimeStrategyPlan(run_mode, (
+        RuntimeStrategyServicePlan(run_mode, strategy_id, target_hash),
+    ))
+
+
 def _runtime_mode(mode: RunMode | str) -> RunMode:
     raw = mode.value if isinstance(mode, RunMode) else str(mode)
-    if raw == "research":
-        return RunMode.STUDY
     if raw == "paper":
         return RunMode.PAPER_TRADING
     return RunMode(raw)
@@ -309,5 +446,19 @@ def _runtime_mode(mode: RunMode | str) -> RunMode:
 def _unconfigured_feed_runner(service: RuntimeFeedServicePlan) -> Callable[[], Awaitable[None]]:
     async def run() -> None:
         raise RuntimeError(f"feed service {service.name!r} has no runtime connector bound")
+
+    return run
+
+
+def _unconfigured_execution_runner(service: RuntimeExecutionServicePlan) -> Callable[[], Awaitable[None]]:
+    async def run() -> None:
+        raise RuntimeError(f"execution service {service.execution_driver!r} has no runtime gateway bound")
+
+    return run
+
+
+def _unconfigured_strategy_runner(service: RuntimeStrategyServicePlan) -> Callable[[], Awaitable[None]]:
+    async def run() -> None:
+        raise RuntimeError(f"strategy service {service.strategy_id!r} has no runtime runner bound")
 
     return run

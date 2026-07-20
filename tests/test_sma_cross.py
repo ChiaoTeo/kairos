@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from kairos.domain.identity import InstrumentId
 from kairos.domain.market_data import Bar
-from kairos.strategies.sma_cross_research_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross
+from kairos.strategies.sma_cross_study_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross
 
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)

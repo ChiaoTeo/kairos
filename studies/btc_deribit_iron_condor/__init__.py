@@ -1,1 +1,1 @@
-"""BTC Deribit iron-condor research package."""
+"""BTC Deribit iron-condor study package."""

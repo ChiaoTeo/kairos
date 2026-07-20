@@ -57,7 +57,7 @@ class OptionChainCaptureSpec:
         if not self.rights:
             raise ValueError("at least one option right is required")
         if self.minimum_dte_days < 0 or self.maximum_dte_days is not None and self.maximum_dte_days < self.minimum_dte_days:
-            raise ValueError("invalid research DTE range")
+            raise ValueError("invalid option-chain DTE range")
         if self.target_dte_days is not None and self.target_dte_days < self.minimum_dte_days:
             raise ValueError("target DTE cannot be below minimum DTE")
         if self.maximum_dte_days is not None and self.target_dte_days is not None and self.target_dte_days > self.maximum_dte_days:

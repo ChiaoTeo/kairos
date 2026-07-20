@@ -97,7 +97,7 @@ Input audit: dc542279b2aa4c64d66cdeb3d4d2c00440d3ef93286451652b4a255f5dab73ef
 ## 6. 自动化验收
 
 ```text
-Data/research/backtest focused tests: 92 passed
+Data/study/backtest focused tests: 92 passed
 Repository full tests: 331 passed, 3 external integration tests skipped
 Catalog strict health: passed
 compileall: passed
@@ -106,8 +106,8 @@ git diff --check: passed
 
 静态扫描确认：
 
-- Domain 无 Data/Catalog/Storage/Research/Backtest 反向依赖；
-- DatasetRepository、ResearchDatasetStore、SurfaceRepository 不再用于运行路径；
+- Domain 无 Data/Catalog/Storage/Study/Backtest 反向依赖；
+- DatasetRepository、StudySnapshotCollectionStore、SurfaceRepository 不再用于运行路径；
 - `data/history`、`data/datasets`、`data/surfaces` 旧目录不存在；
 - CSV 不再作为正式数据事实源。
 

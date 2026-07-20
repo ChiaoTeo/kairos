@@ -1,7 +1,7 @@
 {
   "created": [],
   "kairos_version": "0.1.0",
-  "name": "trader",
+  "name": "kairos",
   "next_steps": [
     "python studies/starter.py",
     "kairos --help"
@@ -21,7 +21,7 @@
     "pyproject.toml",
     ".gitignore",
     "README.md",
-    "config/research.json",
+    "config/study.json",
     "studies/starter.py",
     "strategies/__init__.py",
     "strategies/starter_sma.py",
@@ -32,5 +32,5 @@
     "data/events/.gitkeep",
     "data/reference/.gitkeep"
   ],
-  "root": "/Users/zhaoqian/Code/Github/trader"
+  "root": "."
 }

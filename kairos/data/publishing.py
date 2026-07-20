@@ -81,7 +81,7 @@ def _primary_key_value(name: str, value: object) -> str:
 
 def publish_release(root: str | Path, product: DataProductContract, release_id: str, manifest: dict[str, object], *,
                     provider: str, venue: str | None, transform_id: str, transform_version: str,
-                    quality_level: QualityLevel = QualityLevel.RESEARCH) -> DatasetRelease:
+                    quality_level: QualityLevel = QualityLevel.STUDY) -> DatasetRelease:
     lake = Path(root)
     relative_path = release_path(product, release_id)
     directory = lake / relative_path
@@ -101,7 +101,7 @@ def publish_release(root: str | Path, product: DataProductContract, release_id: 
     if not content_hash:
         raise ValueError(f"release {release_id} has no content hash")
     status = (DatasetStatus.APPROVED_FOR_BACKTEST if quality_level in {QualityLevel.BACKTEST, QualityLevel.PRODUCTION}
-              else DatasetStatus.APPROVED_FOR_RESEARCH)
+              else DatasetStatus.APPROVED_FOR_STUDY)
     catalog = DataCatalog(lake)
     try:
         existing = catalog.release(release_id)

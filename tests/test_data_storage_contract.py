@@ -51,7 +51,7 @@ class DataStorageContractTests(unittest.TestCase):
                     "release_version": "1", "schema_id": "market_replay_dataset.v2", "schema_version": "2",
                     "transform_id": "previous", "transform_version": "1", "relative_path": "curated/previous",
                     "format": "parquet", "content_hash": "hash", "aliases": [],
-                    "status": "approved_for_research", "quality_level": "Q2",
+                    "status": "approved_for_study", "quality_level": "Q2",
                 }],
             }), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "current schema version 4"):

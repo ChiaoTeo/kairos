@@ -6,7 +6,7 @@
 
 - Massive 作为美股、指数、SPX/SPXW 和美股期权研究的首期主数据源；
 - 供应商原始格式在 Source 层隔离，在 Canonical 层汇合；
-- research、feature 和 backtest 不直接依赖任何供应商 SDK 对象。
+- study、feature 和 backtest 不直接依赖任何供应商 SDK 对象。
 
 本文不是供应商 API 的调用示例，而是项目后续实现、评审和数据使用的长期约束。
 
@@ -17,7 +17,7 @@ InstrumentDefinition + ListingDefinition + Catalog
                          |
               normalized market events
                          |
-        research / backtest / risk / execution
+        study / backtest / risk / execution
 ```
 
 ```text
@@ -269,7 +269,7 @@ Canonical event repository (Parquet)
 Curated datasets and features
         |
         v
-Frozen research dataset
+Frozen study dataset
         |
         v
 Streaming ReplayEventFeed
@@ -780,7 +780,7 @@ Massive：
 | 研究与回测桥接 | `MassiveMarketSnapshotBuilder` 生成现有 `MarketReplayDataset/MarketSnapshot` |
 | SPXW 合成远期 | 缺少官方指数 bar 时，用新鲜 Call/Put 配对报价按 put-call parity 构造中位数远期；质量信息和 manifest source 显式标记 |
 | 实时恢复 | raw journal、reconnect、sequence-gap 和 historical-backfill hooks |
-| 人工数据体检 | `massive_data_quality.ipynb` 与 `massive_research_diagnostics.ipynb`，均已用 HTTPS smoke 数据无界面执行 |
+| 人工数据体检 | `massive_data_quality.ipynb` 与 `massive_study_diagnostics.ipynb`，均已用 HTTPS smoke 数据无界面执行 |
 | 热门合约探索 | `spxw_popular_options_2026.ipynb` 读取受管 Day Aggregates Dataset，展示具体 ticker 排名和每日滚动的最活跃/0DTE ATM Call-Put 日线；不在 Notebook 下载数据 |
 | NVDA 年度探索 | `nvda_options_2026.ipynb` 读取受管 NVDA 股票/期权/IV Dataset，展示日 K、全量 IV 密度、近 ATM IV 和最新微笑；不在 Notebook 下载数据 |
 

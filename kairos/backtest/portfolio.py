@@ -76,7 +76,7 @@ class PortfolioSnapshot:
 
 
 class BacktestPortfolio:
-    """Ledger-backed portfolio used by research backtests and simulation."""
+    """Ledger-backed portfolio used by study backtests and simulation."""
 
     def __init__(self, initial_cash: Decimal, catalog: ReferenceCatalog, account: AccountKey, cash_asset: AssetId = AssetId("USD")) -> None:
         if initial_cash <= 0:

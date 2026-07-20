@@ -66,7 +66,7 @@ class DataProductContractTests(unittest.TestCase):
                 self.assertEqual(restored, spec)
                 self.assertIn("equity", restored.capabilities["supported_products"])
                 self.assertTrue(restored.relative_path)
-            self.assertEqual(US_EQUITY_MASSIVE_RAW_DAILY.minimum_publication_level, QualityLevel.RESEARCH)
+            self.assertEqual(US_EQUITY_MASSIVE_RAW_DAILY.minimum_publication_level, QualityLevel.STUDY)
             self.assertEqual(US_EQUITY_MASSIVE_CORPORATE_ACTIONS.quality_profile, "corporate_action")
             self.assertEqual(US_EQUITY_MASSIVE_CORPORATE_ACTIONS.storage_kind, DatasetStorageKind.REFERENCE)
             self.assertEqual(US_EQUITY_MASSIVE_IDENTITY.quality_profile, "equity_identity")
@@ -111,7 +111,7 @@ class DataProductContractTests(unittest.TestCase):
             self.assertEqual(providers.product_spec(str(compiled.key)), compiled)
             self.assertEqual(compiled.storage_kind, DatasetStorageKind.TABULAR)
             self.assertEqual(compiled.quality_profile, "equity_ohlcv")
-            self.assertEqual(compiled.minimum_publication_level, QualityLevel.RESEARCH)
+            self.assertEqual(compiled.minimum_publication_level, QualityLevel.STUDY)
             self.assertEqual(compiled.product.dimensions["view"], "raw")
 
     def test_product_spec_rejects_unsafe_physical_layout(self) -> None:

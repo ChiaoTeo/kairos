@@ -41,7 +41,7 @@ class InstrumentSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
-class ResearchSnapshot:
+class OptionCaptureSnapshot:
     schema_version: int
     run_id: UUID
     created_at: datetime
@@ -119,7 +119,7 @@ def build_snapshot(
     state: MarketState,
     now: datetime | None = None,
     code_version: str = "0.1.0",
-) -> ResearchSnapshot:
+) -> OptionCaptureSnapshot:
     created_at = now or datetime.now(timezone.utc)
     if created_at.tzinfo is None:
         raise ValueError("snapshot time must be timezone-aware")
@@ -168,7 +168,7 @@ def build_snapshot(
         )
     span = (max(times) - min(times)).total_seconds() if times else 0.0
     sources = tuple(sorted({event.source for event in state.events}))
-    return ResearchSnapshot(
+    return OptionCaptureSnapshot(
         SCHEMA_VERSION,
         run_id,
         created_at,

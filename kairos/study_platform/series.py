@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from kairos import __version__
 from kairos.backtest.feed import InstrumentLifecycleSnapshot, MarketReplayDataset, MarketSnapshot, SettlementType, build_manifest
 from kairos.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairos.connectors.ibkr.research import SpxwResearchProvider
+from kairos.connectors.ibkr.option_chain_provider import SpxwOptionChainProvider
 from kairos.domain.event import UnderlyingPriceUpdated
 from kairos.domain.market_state import MarketState, apply_market_event
 from kairos.domain.product import ListedOptionSpec
@@ -69,11 +69,11 @@ class SeriesCaptureService:
         self.now = now
         self.on_progress = on_progress
 
-    def capture(self, provider: SpxwResearchProvider, research: OptionChainCaptureSpec, series: SeriesCaptureSpec, *, append: bool = False) -> MarketReplayDataset:
+    def capture(self, provider: SpxwOptionChainProvider, spec: OptionChainCaptureSpec, series: SeriesCaptureSpec, *, append: bool = False) -> MarketReplayDataset:
         correlation_id = uuid4()
         provider.connect()
         try:
-            underlying = provider.underlying(research)
+            underlying = provider.underlying(spec)
             initial = provider.snapshot((underlying,), correlation_id)
             price = next((event.payload.price for event in initial if isinstance(event.payload, UnderlyingPriceUpdated)), None)
             if price is None:
@@ -87,13 +87,13 @@ class SeriesCaptureService:
             watchlist = None
             known_definitions = {}
             target = self.repository.root / series.dataset_id / "dataset.json"
-            if research.retain_delta_legs:
+            if spec.retain_delta_legs:
                 watchlist = DeltaLegWatchlist(
                     self.repository.root,
                     series.dataset_id,
-                    evaluation_time=time.fromisoformat(research.retention_evaluation_time),
-                    target_deltas=tuple(Decimal(str(value)) for value in research.retention_target_deltas),
-                    retain_until_dte=research.retention_until_dte,
+                    evaluation_time=time.fromisoformat(spec.retention_evaluation_time),
+                    target_deltas=tuple(Decimal(str(value)) for value in spec.retention_target_deltas),
+                    retain_until_dte=spec.retention_until_dte,
                 )
                 if append and target.exists():
                     existing = self.repository.load(series.dataset_id)
@@ -107,8 +107,8 @@ class SeriesCaptureService:
                     qualification_attempts.update(item.instrument_id for item in active)
                     definitions_by_id.update((item.instrument_id, item) for item in provider.qualify(active))
                     restored_watchlist = True
-                chain = provider.discover_option_chain(underlying, research)
-                requested = select_instruments(provider.catalog, chain, price, research)
+                chain = provider.discover_option_chain(underlying, spec)
+                requested = select_instruments(provider.catalog, chain, price, spec)
                 missing = tuple(item for item in requested if item.instrument_id not in qualification_attempts)
                 qualification_attempts.update(item.instrument_id for item in missing)
                 definitions_by_id.update((item.instrument_id, item) for item in provider.qualify(missing))
@@ -154,7 +154,7 @@ class SeriesCaptureService:
                                     item.quote.bid_size, item.quote.ask_size, "ibkr.series",
                                 ),
                                 timestamp,
-                                max_age_seconds=Decimal(str(research.max_quote_age_seconds)),
+                                max_age_seconds=Decimal(str(spec.max_quote_age_seconds)),
                             )
                             issues.extend(DataQualityIssue(issue.code, issue.message, issue.severity, instrument_id) for issue in quality)
                 span = Decimal(str((max(event_times) - min(event_times)).total_seconds())) if event_times else Decimal("0")
@@ -187,7 +187,7 @@ class SeriesCaptureService:
                     chunk_manifest = build_manifest(
                         series.dataset_id, chunk_slices, contracts_so_far, (underlying, *selected_so_far),
                         sampling_seconds=series.interval_seconds, source="ibkr.series",
-                        market_data_type=research.market_data_type.value, code_version=__version__,
+                        market_data_type=spec.market_data_type.value, code_version=__version__,
                         split=series.split, synthetic=False,
                         products=tuple(provider.catalog.products.values()),
                         references=provider.catalog.all_references(),

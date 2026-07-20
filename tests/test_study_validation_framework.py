@@ -7,7 +7,7 @@ import unittest
 from kairos.study_platform.validation import (
     CapitalSpec, DataCapabilities, DataGap, DataGapPlan, EvidenceStatus,
     ExecutionArchetype, GateRequirement, OutOfSampleEvidence, ProductProtocol,
-    ResearchValidationResult, ReturnDriver, SampleSufficiency, StudyRegistration,
+    StudyValidationResult, ReturnDriver, SampleSufficiency, StudyRegistration,
     ValidationArtifactWriter, ValidationGate, ValidationLevel, ValidationState,
 )
 
@@ -27,7 +27,7 @@ def registration(capital=True):
     )
 
 
-class ResearchValidationFrameworkTest(unittest.TestCase):
+class StudyValidationFrameworkTest(unittest.TestCase):
     def test_spec_hash_is_stable_and_ignores_registration_time(self):
         first = registration(); second = registration()
         self.assertEqual(first.spec_hash, second.spec_hash)
@@ -37,7 +37,7 @@ class ResearchValidationFrameworkTest(unittest.TestCase):
             DataCapabilities(("quotes",), queue_reconstructable=True)
 
     def test_executable_gate_rejects_trade_only_data(self):
-        result = ResearchValidationResult(
+        result = StudyValidationResult(
             registration(),
             ValidationState(EvidenceStatus.READY, EvidenceStatus.SUPPORTED,
                             EvidenceStatus.DATA_NOT_READY, EvidenceStatus.TRADE_PROXY_ONLY,
@@ -56,7 +56,7 @@ class ResearchValidationFrameworkTest(unittest.TestCase):
         self.assertTrue(any("synchronous" in reason for reason in decision.reasons))
 
     def test_artifact_writer_emits_governed_files_and_audit_hashes(self):
-        result = ResearchValidationResult(
+        result = StudyValidationResult(
             registration(), ValidationState(EvidenceStatus.READY, EvidenceStatus.SUPPORTED,
                 EvidenceStatus.SUPPORTED, EvidenceStatus.SUPPORTED, ValidationLevel.L4_EXECUTABLE, "executable backtest"),
             DataCapabilities(("quotes",), synchronous_quotes=True, top_of_book=True, quote_size=True,
@@ -73,7 +73,7 @@ class ResearchValidationFrameworkTest(unittest.TestCase):
             self.assertIn("results.json", audit["artifact_hashes"])
 
     def test_artifact_writer_accepts_only_safe_unique_json_extras(self):
-        result = ResearchValidationResult(
+        result = StudyValidationResult(
             registration(), ValidationState(EvidenceStatus.READY, EvidenceStatus.SUPPORTED,
                 EvidenceStatus.SUPPORTED, EvidenceStatus.SUPPORTED, ValidationLevel.L4_EXECUTABLE, "ok"),
             DataCapabilities(("quotes",), synchronous_quotes=True, top_of_book=True, quote_size=True,
@@ -88,7 +88,7 @@ class ResearchValidationFrameworkTest(unittest.TestCase):
                     extra_artifacts={"../escape.json": {}})
 
     def test_robustness_and_live_gates_require_specific_evidence(self):
-        result = ResearchValidationResult(
+        result = StudyValidationResult(
             registration(), ValidationState(EvidenceStatus.READY, EvidenceStatus.SUPPORTED,
                 EvidenceStatus.SUPPORTED, EvidenceStatus.SUPPORTED, ValidationLevel.L6_LIVE, "live"),
             DataCapabilities(("quotes",), synchronous_quotes=True, top_of_book=True, quote_size=True,

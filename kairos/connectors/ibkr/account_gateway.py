@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairos.ports import AccountState, Environment, VenueBalance
-from kairos.connectors.ibkr.research import decimal_or_none
+from kairos.connectors.ibkr.option_chain_provider import decimal_or_none
 from kairos.domain.identity import AssetId, InstitutionId, VenueId
 
 from .session import IbkrSession

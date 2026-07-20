@@ -76,7 +76,7 @@
 
 ### 异步数据流 M4 模式组合与 M5 Binance 公共实时行情
 
-- [x] 新增可审计 `RunModeComposition`，显式声明 Research、Backtest、Historical Simulation、Paper Trading 和 Live 的 EventSource、Clock、Execution Driver、Persistence、Safety 与 Capture。
+- [x] 新增可审计 `RunModeComposition`，显式声明 Study、Backtest、Historical Simulation、Paper Trading 和 Live 的 EventSource、Clock、Execution Driver、Persistence、Safety 与 Capture。
 - [x] Backtest 强制 Replay Clock；Live/Paper 强制 Capture 和 durable persistence；Live 禁止 simulated execution driver。
 - [x] Canonical Contract 新增 OrderBook Delta、Index/Mark Price、Funding Rate 和 Open Interest typed payload。
 - [x] 新增 Domain Market Data -> Canonical Event 转换，DerivativeMarketState 可拆分为多个有序 canonical facts。
@@ -153,7 +153,7 @@
 
 - [x] 将 `Strategy`、`StrategyContext`、`StrategyDecision` 从 `kairos.domain` 移到 `kairos.strategies.strategy_protocols`。
 - [x] 删除 `kairos/domain/strategy.py`。
-- [x] 新增 AST 架构测试，禁止 Domain 依赖 Data、Catalog、Backtest、Research、Storage 等上层模块。
+- [x] 新增 AST 架构测试，禁止 Domain 依赖 Data、Catalog、Backtest、Study、Storage 等上层模块。
 
 证据：
 
@@ -238,7 +238,7 @@
 
 - [x] Dataset Release 显式保存 `storage_kind` 和 `layout_version`。
 - [x] 支持 tabular、market_events、market_snapshots、reference。
-- [x] ResearchDataClient 按 storage kind 分发 Event 和 MarketSnapshot Reader。
+- [x] DatasetClient 按 storage kind 分发 Event 和 MarketSnapshot Reader。
 - [x] 新发布的 Massive Event 和 Curated Slice Release 明确声明 storage kind。
 - [x] 旧 Registry 在加载时兼容推断 storage kind。
 
@@ -286,19 +286,19 @@
 - [x] 340 个既有 CSV sidecar 与 Parquet 核对 22,739,500 行后删除，未覆盖 Parquet。
 - [x] `data/history/btcusdt-1h` 迁移为不可变 Q3 OHLCV Release，4344 行核对后删除源目录。
 - [x] 删除 `kairos.history`、`BarRepository`、旧顶级 `kairos history` 和旧测试。
-- [x] README 和 History Notebook 改用 ResearchDataClient 和治理回测。
+- [x] README 和 History Notebook 改用 DatasetClient 和治理回测。
 - [x] 旧 `data/history` 已不存在；迁移报告记录 Release、行数、质量与 report hash。
 
 ### MarketSnapshot 与 Surface 旧路径收敛
 
 - [x] 从 `kairos.backtest.feed` 删除公开 DatasetRepository，物理读写迁入 Data 内部 MarketSnapshotStorageDriver。
-- [x] 正式 Research、Volatility 和 Backtest CLI 只通过 ResearchDataClient 解析不可变 Release。
-- [x] ResearchDatasetStore 更名并收敛为 MarketSnapshotCollectionPublisher。
+- [x] 正式 Study、Volatility 和 Backtest CLI 只通过 DatasetClient 解析不可变 Release。
+- [x] StudySnapshotCollectionStore 更名并收敛为 MarketSnapshotCollectionPublisher。
 - [x] 7 条旧 `data/datasets` Release 在核验 Manifest/Release hash 后迁至统一 Curated Release 布局。
-- [x] 所有迁移后的 MarketSnapshot 均通过 ResearchDataClient 重放，并与原 content hash 一致。
+- [x] 所有迁移后的 MarketSnapshot 均通过 DatasetClient 重放，并与原 content hash 一致。
 - [x] 4 个独立 Surface JSON 迁移为一条 typed Feature Release，并验证 Surface ID 完整一致。
 - [x] 删除 SurfaceRepository、`data/datasets`、`data/surfaces` 和旧 Notebook 物理路径读取。
-- [x] 新增架构测试，禁止重新引入 DatasetRepository、ResearchDatasetStore 和 SurfaceRepository。
+- [x] 新增架构测试，禁止重新引入 DatasetRepository、StudySnapshotCollectionStore 和 SurfaceRepository。
 
 证据：
 
@@ -311,7 +311,7 @@
 
 ### Application Runtime
 
-- [x] 正式 Trading CLI 只通过 KairosApplication/RuntimeSupervisor 启动；Coordinator 不再以布尔参数激活正式路径。
+- [x] 正式 Kairos CLI 只通过 KairosApplication/RuntimeSupervisor 启动；Coordinator 不再以布尔参数激活正式路径。
 - [x] Coordinator 正式 `activate()` 只接受 Application READY 门禁；旧布尔 Readiness 已隔离为 `start_旧版()` 测试兼容入口，生产调用为零。
 - [x] Binance/IBKR 真实 order status、open orders/trades 和 fill history 接入 Venue Order Recovery 契约。
 - [x] 实现 `runtime orders` unresolved order 查询与人工处置 CLI；只允许显式终态，要求 actor/reason/evidence 并保存不可缺失的审计记录。
@@ -338,7 +338,7 @@
 
 - [x] 合并 Dataset 定义和动态配置为 DataProductContract。
 - [x] 为 Quote、Trade、Market Event、Option Snapshot、Feature、Reference 实现 typed Quality Profile。
-- [x] 正式 Research Diagnostics 和 Reference/SMA Backtest 只消费冻结 Q3/Q4 Release，并可通过 `data audit-artifact` 独立核验 Release ID、content hash、质量和批准状态。
+- [x] 正式 Study Diagnostics 和 Reference/SMA Backtest 只消费冻结 Q3/Q4 Release，并可通过 `data audit-artifact` 独立核验 Release ID、content hash、质量和批准状态。
 - [x] 数据专项最终验收通过：92 项数据/研究/回测测试、离线 search/describe/query/freeze/replay/backtest/audit 用户路径和 Catalog strict health 全部通过；详见 `docs/data_system_final_acceptance.md`。
 
 ### 旧系统删除
@@ -346,7 +346,7 @@
 - [x] DatasetRepository 删除，MarketSnapshotStorageDriver 仅作为 Data 内部物理 Driver。
 - [x] SurfaceRepository 迁移为 Feature Release 后删除。
 - [x] 迁移删除旧 `data/datasets`、`data/surfaces` 和空旧目录。
-- [x] 更新其余直接使用旧 Repository/物理路径的 Notebook、Research 和 CLI。
+- [x] 更新其余直接使用旧 Repository/物理路径的 Notebook、Study 和 CLI。
 
 ### 最终验收
 
@@ -421,7 +421,7 @@ Rows: 21,930,528
 Source issue: 8,620 physical ordering inversions
 Curated Release: ds_46f3c7aba02d299eaa6240b3
 Curated hash: 46f3c7aba02d299eaa6240b39f9ea8d16ca061aa5f41e63f3aa75fa5a585121c
-Quality: Q2 / approved_for_research
+Quality: Q2 / approved_for_study
 Streaming assessment time: approximately 3 seconds
 ```
 
@@ -448,7 +448,7 @@ Governed consumed-input audit: dc542279b2aa4c64d66cdeb3d4d2c00440d3ef93286451652
 BTC 1d SMA input audit: 009bcb95771ca3485396cfe2e5359c8cd1ada73c9e116758470738fd07627687
 BTC 1h SMA input audit: ef07f8fa6775f0998e83af602049a68b2b8b40605bd4f677ad2807bc663e449d
 SPXW Golden input audit: dc542279b2aa4c64d66cdeb3d4d2c00440d3ef93286451652b4a255f5dab73ef
-SPXW Research Readiness input audit: 4ea51a266d2f09d2dc80b41fec0075532e3488beb2158fa5e3dfa68414294f29
+SPXW Study Readiness input audit: 4ea51a266d2f09d2dc80b41fec0075532e3488beb2158fa5e3dfa68414294f29
 ```
 
 上述审计证明直接消费输入均为冻结且批准的 Q3/Q4 Release。SPXW Readiness 的输入治理通过，

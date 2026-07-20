@@ -10,10 +10,10 @@
 
 目前的主要问题不是缺少新能力，而是迁移尚未完成：
 
-1. `ResearchDataClient`、`ParquetMarketEventRepository`、`MarketReplayDataset/DatasetRepository`、`BarRepository` 等多套读取和存储模型并存；
-2. CLI 同时暴露 `data`、`history`、`research capture-series`、`backtest` 等相近但治理等级不同的入口；
+1. `DatasetClient`、`ParquetMarketEventRepository`、`MarketReplayDataset/DatasetRepository`、`BarRepository` 等多套读取和存储模型并存；
+2. CLI 同时暴露 `data`、`history`、`study capture-series`、`backtest` 等相近但治理等级不同的入口；
 3. 部分数据类型仍通过目录名称和文件形态识别，而不是由 Catalog 中的显式契约决定；
-4. Domain、Market Data、Research、Backtest 之间存在对象重复和反向依赖；
+4. Domain、Market Data、Study、Backtest 之间存在对象重复和反向依赖；
 5. Product 定义、Managed Dataset、Catalog Registry 和 Provider 配置承担了部分重复职责；
 6. Parquet 与 CSV 双写、旧目录和独立 Repository 继续增加存储和维护成本；
 7. 质量检查存在，但尚不足以自动决定一个 Release 能否进入研究、回测或生产；
@@ -21,7 +21,7 @@
 
 本次改造的核心决策是：
 
-> Catalog Release 是所有持久化研究数据的唯一治理身份；ResearchDataClient 是所有研究和回测数据的唯一公开入口；Domain 只定义业务事实与行为，不感知文件、Catalog、Provider、Release 或查询引擎。
+> Catalog Release 是所有持久化研究数据的唯一治理身份；DatasetClient 是所有研究和回测数据的唯一公开入口；Domain 只定义业务事实与行为，不感知文件、Catalog、Provider、Release 或查询引擎。
 
 完成改造后，系统只保留一条正式运行链路：
 
@@ -30,8 +30,8 @@ Provider
   -> Source receipt/payload
   -> Canonical Release
   -> Curated/Feature Release
-  -> ResearchDataClient
-  -> Research / Backtest / Validation
+  -> DatasetClient
+  -> Study / Backtest / Validation
   -> Study Snapshot / Backtest Manifest
 ```
 
@@ -57,25 +57,25 @@ Provider
 
 - `DataCatalog` 的 Product、Release、Schema、Transform、source binding 和状态模型；
 - Release 发布后不可覆盖，使用 content hash 证明内容；
-- `ResearchDataClient.get()`、`replay()`、`replay_snapshots()`、`plan()`、`acquire()` 和研究冻结能力；
+- `DatasetClient.get()`、`replay()`、`replay_snapshots()`、`plan()`、`acquire()` 和研究冻结能力；
 - Provider Connector 的显式获取、估算、限额和幂等发布；
 - Source、Canonical、Curated、Features、Studies 五层布局；
 - `event_time`、`available_time` 和 `[start,end)` 时间契约；
 - Parquet 分区、列裁剪、DuckDB/Arrow 读取和事件确定性重放；
 - Study Snapshot、Backtest Manifest 和审计 hash；
-- 数据获取、数据湖、事件仓库和 ResearchDataClient 的现有自动化测试。
+- 数据获取、数据湖、事件仓库和 DatasetClient 的现有自动化测试。
 
 ### 3.2 必须收敛的多套数据路径
 
 | 当前路径 | 当前用途 | 目标处理 |
 |---|---|---|
-| `ResearchDataClient + DataCatalog` | 新治理入口 | 保留，成为唯一公开入口 |
+| `DatasetClient + DataCatalog` | 新治理入口 | 保留，成为唯一公开入口 |
 | `ParquetMarketEventRepository` | Canonical event 读写 | 保留为 Data 内部 storage driver，不直接暴露给研究代码 |
 | `MarketReplayDataset + DatasetRepository` | MarketSnapshot 回放 | 迁入统一 Release storage contract，Repository 降为内部 driver |
-| `ResearchDatasetStore` | MarketSnapshot append session | 合并到统一 Publisher/Collection Service |
+| `StudySnapshotCollectionStore` | MarketSnapshot append session | 合并到统一 Publisher/Collection Service |
 | `BarRepository` | CSV OHLCV 与 SMA 示例 | 迁移并删除 |
 | `SurfaceRepository` | 独立 JSON Surface | 迁移为 Feature Release 后删除 |
-| `FileResearchRepository` | 旧研究运行快照 | 与 Study Artifact Store 明确分工；无消费者后删除 |
+| `FileOptionCaptureRepository` | 期权快照采集运行记录 | 与 Study Artifact Store 明确分工；无消费者后合并生命周期 |
 | Provider 专用 Store | Reference、cache、source | Source/Reference 契约内保留，不得成为研究读取入口 |
 
 ### 3.3 当前身份和存储耦合
@@ -151,7 +151,7 @@ domain <- strategy/risk/pricing/backtest
 domain -> data
 domain -> catalog implementation
 domain -> storage
-domain -> research
+domain -> study
 domain -> backtest
 ```
 
@@ -224,7 +224,7 @@ Dataset Product 可以声明 instrument universe 语义，但不得复制完整 
 
 ### 4.5 需要修正的依赖
 
-当前 `domain.strategy.StrategyContext` 直接引用具体 `ReferenceCatalog`，并通过类型引用 Backtest、Research 和 Volatility 对象。建议将 StrategyContext 移出 Domain，放入 `kairos.strategies.runtime` 或应用层。
+当前 `domain.strategy.StrategyContext` 直接引用具体 `ReferenceCatalog`，并通过类型引用 Backtest、Study 和 Volatility 对象。建议将 StrategyContext 移出 Domain，放入 `kairos.strategies.runtime` 或应用层。
 
 如果 Domain 行为确实需要查询合约定义，应依赖最小 Protocol：
 
@@ -242,7 +242,7 @@ class InstrumentDefinitionProvider(Protocol):
 - `DomainEventEnvelope`：业务状态变化和领域事件；
 - `MarketDataRecord`：可持久化、point-in-time 的市场数据事实；
 - `SourceRecord`：供应商原始记录；
-- `ReplayRecord`：ResearchDataClient 向重放消费者提供的只读记录。
+- `ReplayRecord`：DatasetClient 向重放消费者提供的只读记录。
 
 禁止用一个万能 Event 类型同时承担 Domain Event、Source Event 和 Canonical Market Event。
 
@@ -275,14 +275,14 @@ class InstrumentDefinitionProvider(Protocol):
 7. write input snapshot to study/backtest artifact
 ```
 
-Research 和 Backtest 都不得直接调用 Provider、HTTP Client 或 acquisition。Backtest 模式必须继续禁止网络获取。
+Study 和 Backtest 都不得直接调用 Provider、HTTP Client 或 acquisition。Backtest 模式必须继续禁止网络获取。
 
 ### 5.3 唯一公开 Python API
 
 普通使用者只面向以下对象：
 
 ```python
-data = ResearchDataClient("data")
+data = DatasetClient("data")
 
 product = data.find(
     data_type="ohlcv",
@@ -324,18 +324,18 @@ snapshot = prepared.freeze(study_id="btc-sma-v2")
 |---|---|---|
 | `kairos.history.BarRepository` | Canonical OHLCV Release | 全仓无生产 import；CLI 已替换；数据已核对 |
 | `kairos history *` | `kairos data prepare/query` 与正式 backtest | CLI help 中不再出现 history |
-| `strategies.sma_cross_research_backtest -> BarSeries` | Arrow rows 或统一 Bar Series Port | 策略不再 import `kairos.history` |
+| `strategies.sma_cross_study_backtest -> BarSeries` | Arrow rows 或统一 Bar Series Port | 策略不再 import `kairos.history` |
 | Parquet 的 CSV sidecar | 仅 Parquet | 新发布不生成 CSV；旧 CSV 经核对删除 |
 | `data/history` | Canonical | 目录为空并删除 |
 | 旧 `data/datasets` | Curated Release | Release 已注册且 hash 冻结 |
-| `SurfaceRepository` / `data/surfaces` | Feature Release | 所有 Surface 查询走 ResearchDataClient |
-| 空的 `raw/normalized/derived/research` | 五层标准目录 | 文档、CLI 和代码无引用 |
+| `SurfaceRepository` / `data/surfaces` | Feature Release | 所有 Surface 查询走 DatasetClient |
+| 空的 `raw/normalized/derived/study` | 五层标准目录 | 文档、CLI 和代码无引用 |
 
 ### 6.3 第二批收敛对象
 
 - 将 `DatasetRepository` 变成 Data 内部 `MarketSnapshotStorageDriver`；
-- 将 `ResearchDatasetStore` 的 session append 能力合入 Collection Publisher；
-- 将 `FileResearchRepository` 与 Studies Artifact Store 合并或明确完全不同的生命周期；
+- 将 `StudySnapshotCollectionStore` 的 session append 能力合入 Collection Publisher；
+- 将 `FileOptionCaptureRepository` 与 Studies Artifact Store 合并或明确完全不同的生命周期；
 - Provider 专用 Reference Store 使用 Instrument Catalog/Reference Release 的统一接口；
 - 删除依据目录名选择 Reader 的逻辑；
 - 删除 Release 内局部 aliases 与 Catalog 全局 Alias Registry 的双轨机制。
@@ -360,7 +360,7 @@ snapshot = prepared.freeze(study_id="btc-sma-v2")
 }
 ```
 
-只有 `content_verification=passed` 且目标 Release 可通过 ResearchDataClient 读取时，才允许单独执行 `--delete-source`。
+只有 `content_verification=passed` 且目标 Release 可通过 DatasetClient 读取时，才允许单独执行 `--delete-source`。
 
 ## 7. 产品体验改造
 
@@ -481,7 +481,7 @@ resolve intent
 工作：
 
 - Release 增加 `storage.kind`、layout version 和 partition contract；
-- ResearchDataClient 改为按 storage kind 分发；
+- DatasetClient 改为按 storage kind 分发；
 - Event、Tabular、MarketSnapshot Reader 实现统一内部 Protocol；
 - Product 定义合并为 DataProductContract；
 - Alias 只保留 Catalog Registry。
@@ -534,7 +534,7 @@ resolve intent
 
 - 实现 search、describe、prepare、query、freeze、doctor；
 - Provider 运维命令退出普通数据工作流；
-- 示例和 Notebook 统一使用 ResearchDataClient；
+- 示例和 Notebook 统一使用 DatasetClient；
 - 错误信息增加下一步建议；
 - 输出产品健康报告。
 
@@ -572,17 +572,17 @@ resolve intent
 test_domain_dependencies.py
 test_public_data_api.py
 test_no_旧版_repository_imports.py
-test_no_physical_data_paths_in_research.py
+test_no_physical_data_paths_in_study.py
 test_storage_driver_boundaries.py
 ```
 
 关键断言：
 
 - Domain 不依赖上层模块；
-- Research/Strategies 不直接依赖 storage driver；
+- Study/Strategies 不直接依赖 storage driver；
 - Provider connector 不直接修改 Catalog Registry；
 - 只有 Data Publishing workflow 可以发布 Release；
-- 只有 ResearchDataClient 是研究数据公开入口。
+- 只有 DatasetClient 是研究数据公开入口。
 
 ### 9.2 Catalog 完整性测试
 
@@ -618,7 +618,7 @@ test_storage_driver_boundaries.py
 2. 本地缺少部分范围，plan 清楚解释缺口；
 3. 用户允许获取，Connector 发布新 Release；
 4. Provider 无凭证，返回可操作诊断且不产生半成品；
-5. 数据质量不足，Research 可显式降级但 Backtest 拒绝；
+5. 数据质量不足，Study 可显式降级但 Backtest 拒绝；
 6. Alias 更新后，已冻结研究仍使用原 Release；
 7. 两次相同输入生成相同内容 hash 和 replay 顺序；
 8. 用户可从 describe 输出复制示例并成功读取数据。
@@ -729,7 +729,7 @@ rg 'read_(csv|parquet)|open\(.+data/' examples studies
 - [ ] Dataset Catalog 与 Instrument Catalog 职责清晰；
 - [ ] Release 显式声明 storage kind；
 - [ ] Product Spec 只有一个事实来源；
-- [ ] ResearchDataClient 是唯一公开数据入口。
+- [ ] DatasetClient 是唯一公开数据入口。
 
 ### 数据治理
 

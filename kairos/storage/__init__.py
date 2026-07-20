@@ -1,1 +1,1 @@
-"""File-backed research persistence."""
+"""File-backed capture and artifact persistence."""

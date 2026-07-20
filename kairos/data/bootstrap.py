@@ -143,7 +143,7 @@ def configured_product_specs(config_path: str | Path) -> tuple[DataProductContra
             str(raw.get("primary_time", "available_time")),
             sources=(SourceBinding(
                 "massive", "us-securities", int(raw.get("priority", 100)),
-                QualityLevel(str(raw.get("source_quality_level", QualityLevel.RESEARCH.value))),
+                QualityLevel(str(raw.get("source_quality_level", QualityLevel.STUDY.value))),
                 ("rest",),
             ),),
             owner=str(raw.get("owner", "data-platform")),
@@ -162,7 +162,7 @@ def configured_product_specs(config_path: str | Path) -> tuple[DataProductContra
             DatasetStorageKind(str(raw.get("storage_kind", DatasetStorageKind.TABULAR.value))),
             str(raw.get("layout_version", "1")),
             str(raw.get("quality_profile", "equity_ohlcv")),
-            QualityLevel(str(raw.get("minimum_publication_level", QualityLevel.RESEARCH.value))),
+            QualityLevel(str(raw.get("minimum_publication_level", QualityLevel.STUDY.value))),
         ))
     return tuple(specs)
 

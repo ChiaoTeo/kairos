@@ -74,7 +74,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
     def test_only_current_reference_and_metadata_models_exist(self) -> None:
         self.assertFalse((DOMAIN / "instrument.py").exists())
         self.assertFalse((ROOT / "kairos" / "data" / ("metadata_" + "migration.py")).exists())
-        self.assertFalse((ROOT / "research" / ("btc_study_" + "governance.py")).exists())
+        self.assertFalse((ROOT / ("re" + "search") / ("btc_study_" + "governance.py")).exists())
 
     def test_legacy_instrument_access_is_removed(self) -> None:
         forbidden = ("definition.product_" + "spec", "definition.listings" + "[", "definition.listing" + "(")
@@ -87,7 +87,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(violations, [], "legacy instrument access remains:\n" + "\n".join(violations))
 
     def test_removed_dataset_and_surface_repositories_do_not_return(self) -> None:
-        forbidden = ("DatasetRepository", "ResearchDatasetStore", "SurfaceRepository")
+        forbidden = ("DatasetRepository", "Re" + "search" + "DatasetStore", "SurfaceRepository")
         violations = []
         for path in sorted((ROOT / "kairos").rglob("*.py")):
             text = path.read_text(encoding="utf-8")

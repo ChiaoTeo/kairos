@@ -89,7 +89,7 @@ class StudyWorkspaceRepository:
             "schema_version": 1, "study_id": study_id, "version": version,
             "candidate_hash": frozen.candidate_hash,
             "files": {"study_candidate.json": sha256(target.read_bytes()).hexdigest()},
-            "promotion_boundary": "requires ResearchValidationResult before Strategy evidence",
+            "promotion_boundary": "requires StudyValidationResult before Strategy evidence",
         }
         _write(directory/"manifest.json", manifest)
         return directory

@@ -30,7 +30,7 @@ class BinanceTransferGateway:
     """Dedicated Binance asset-movement gateway.
 
     Withdrawal capability is disabled by default and intentionally separate from
-    trading gateways and user-stream processors.
+    execution gateways and user-stream processors.
     """
 
     def __init__(

@@ -124,7 +124,7 @@ class SeriesCaptureTests(unittest.TestCase):
         known = {item.instrument_id for item in dataset.definitions}
         self.assertTrue(set(dataset.slices[0].available_instruments) | set(dataset.slices[1].available_instruments) <= known)
 
-    def test_independent_gateway_sessions_append_to_one_research_dataset(self) -> None:
+    def test_independent_gateway_sessions_append_to_one_study_dataset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = MarketSnapshotStorageDriver(directory)
             first_times = iter(datetime(2099, 1, 1, 12, minute, tzinfo=timezone.utc) for minute in range(2))

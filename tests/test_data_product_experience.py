@@ -20,7 +20,7 @@ class DataProductExperienceTests(unittest.TestCase):
         root = Path(directory)
         product = DataProductDefinition(
             DatasetKey("market.ohlcv.crypto.test.btc-usdt.1d"), "BTC daily test data", DatasetLayer.CANONICAL,
-            "Daily BTC/USDT bars for governed research and backtesting",
+            "Daily BTC/USDT bars for governed study and backtesting",
             {"asset_class": "crypto", "instrument": "BTC-USDT", "frequency": "1d"},
             "period_start", owner="data-platform",
         )

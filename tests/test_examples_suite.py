@@ -31,7 +31,7 @@ class ExamplesSuiteTests(unittest.TestCase):
             "factor_hash", "decision_hash", "intent_hash", "strategy_run_audit_hash",
         )))
 
-    def test_sma_research_candidate_and_factor_release_lifecycle(self):
+    def test_sma_study_candidate_and_factor_release_lifecycle(self):
         result = run_example("examples/studies/sma_factor_lifecycle.py")
         self.assertTrue(result["sandbox_workspace"])
         self.assertTrue(result["frozen_candidate"])
@@ -51,7 +51,7 @@ class ExamplesSuiteTests(unittest.TestCase):
         result = run_example("examples/runtime/run_modes.py")
         self.assertEqual(len(result["modes"]), 5)
         self.assertEqual({item["mode"] for item in result["modes"]}, {
-            "research", "backtest", "historical-simulation", "paper-trading", "live",
+            "study", "backtest", "historical-simulation", "paper-trading", "live",
         })
         self.assertTrue(all(len(item["composition_hash"]) == 64 for item in result["modes"]))
 
@@ -67,9 +67,9 @@ class ExamplesSuiteTests(unittest.TestCase):
         self.assertEqual(result["mode"],"paper-trading");self.assertGreater(result["fills"],0)
         self.assertTrue(result["restart_ready"]);self.assertTrue(result["capture_replay_passed"])
 
-    def test_complex_option_strategy_binds_research_factor_to_executable_strategy(self):
+    def test_complex_option_strategy_binds_study_factor_to_executable_strategy(self):
         result=run_example("examples/strategy/bull_put_spread_lifecycle.py")
-        self.assertEqual(result["research_evidence"],"TRADE_PROXY_ONLY")
+        self.assertEqual(result["study_evidence"],"TRADE_PROXY_ONLY")
         self.assertTrue(result["formal_strategy_consumed_factor"]);self.assertTrue(result["replay_equal"])
 
     def test_multi_asset_reference_strategies_are_complete_releases(self):

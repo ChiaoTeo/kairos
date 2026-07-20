@@ -69,7 +69,7 @@ class BtcIvRvFeatureBuilder:
                                        capabilities=capabilities_payload(BTC_IV_RV_DAILY, release_id))
         return publish_release(self.root, BTC_IV_RV_DAILY, release_id, manifest, provider="internal", venue=None,
                                transform_id="btc_iv_rv_features", transform_version="2",
-                               quality_level=QualityLevel.RESEARCH)
+                               quality_level=QualityLevel.STUDY)
 
 
 class BtcTermSkewFeatureBuilder:
@@ -105,7 +105,7 @@ class BtcTermSkewFeatureBuilder:
             capabilities=capabilities_payload(BTC_TERM_SKEW_HOURLY, release_id))
         return publish_release(self.root, BTC_TERM_SKEW_HOURLY, release_id, manifest, provider="internal", venue=None,
                                transform_id="fixed_maturity_delta_skew", transform_version="2",
-                               quality_level=QualityLevel.RESEARCH)
+                               quality_level=QualityLevel.STUDY)
 
 
 class BtcDeribitTradeSkewFeatureBuilder:
@@ -145,7 +145,7 @@ class BtcDeribitTradeSkewFeatureBuilder:
             capabilities=capabilities_payload(BTC_DERIBIT_TERM_SKEW_DAILY, release_id))
         return publish_release(self.root, BTC_DERIBIT_TERM_SKEW_DAILY, release_id, manifest,
                                provider="internal", venue=None, transform_id="deribit_trade_fixed_maturity_skew",
-                               transform_version="2", quality_level=QualityLevel.RESEARCH)
+                               transform_version="2", quality_level=QualityLevel.STUDY)
 
 
 def build_deribit_trade_skew_panel(trades, target_dtes=(7, 14, 30, 60, 90)):

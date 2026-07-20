@@ -14,9 +14,9 @@ from kairos.pricing import ValuationService
 
 
 def load_study_context(root):
-    from kairos.data import ResearchDataClient
-    from studies.spxw_put_skew.study import ResearchConfig, execute_research
-    study_dir = root / "research" / "spxw_put_skew"
+    from kairos.data import DatasetClient
+    from studies.spxw_put_skew.study import StudyConfig, execute_study
+    study_dir = root / "studies" / "spxw_put_skew"
     raw = json.loads((study_dir / "config.json").read_text(encoding="utf-8"))
     dataset_id = raw.pop("dataset_id")
     decimal_fields = {
@@ -24,12 +24,12 @@ def load_study_context(root):
         "maximum_stale_rate", "minimum_surface_calibration_rate", "profit_target",
         "stop_loss_multiple", "commission_per_contract",
     }
-    config = ResearchConfig(**{key: Decimal(str(value)) if key in decimal_fields else value for key, value in raw.items()})
-    data = ResearchDataClient(root / "data")
+    config = StudyConfig(**{key: Decimal(str(value)) if key in decimal_fields else value for key, value in raw.items()})
+    data = DatasetClient(root / "data")
     feed = data.replay_slices(dataset_id)
     dataset = feed.dataset
     collection = data.collection(dataset_id)
-    panel, readiness, conclusion = execute_research(dataset, config, collection)
+    panel, readiness, conclusion = execute_study(dataset, config, collection)
     return dataset, config, collection, panel, readiness, conclusion
 
 

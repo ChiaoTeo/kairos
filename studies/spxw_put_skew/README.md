@@ -1,6 +1,6 @@
-# SPXW Put Skew 风险溢价研究
+# SPXW Put Skew 风险溢价 Study
 
-## 研究问题
+## Study 问题
 
 高 25Δ Put skew 是否随后均值回归，并提高 25Δ/10Δ Bull Put Spread 的保守成交 PnL？
 
@@ -10,11 +10,11 @@
 2. test split 中 25Δ/10Δ Put Spread 的平均 PnL 高于无条件基准；
 3. block-bootstrap 95% CI 的下界大于 0。
 
-研究频率固定为每个交易日 15:30 一个决策点；分位数只使用此前 252 个交易日。策略最早在下一分钟 slice 成交，使用 50% 止盈、2× credit 止损或 3 DTE 时间退出。
+Study 频率固定为每个交易日 15:30 一个决策点；分位数只使用此前 252 个交易日。策略最早在下一分钟 slice 成交，使用 50% 止盈、2× credit 止损或 3 DTE 时间退出。
 
 任何一项不成立，假设记为 `NOT_SUPPORTED`。真实数据门禁未通过时记为 `DATA_NOT_READY`；门禁通过但统计样本不足时才记为 `INSUFFICIENT_DATA`。
 
-研究中的 spread 收益循环仅为 `TRADE_PROXY_ONLY`。即使统计条件通过，也只能返回
+Study 中的 spread 收益循环仅为 `TRADE_PROXY_ONLY`。即使统计条件通过，也只能返回
 `TRADE_PROXY_SUPPORTED`；正式策略证据必须来自绑定同一 `spxw-put-skew` FactorSpec 的
 `BullPutSpreadStrategy` 和 `BacktestEngine`，trade proxy 不能支持 executable、paper 或 live 晋级。
 
@@ -40,7 +40,7 @@ Notebook 默认读取 `config.json` 中的 dataset。当前仓库的 mock datase
 
 正式结论还要求 `collection.json` 证明数据来自非 synthetic 的 `ibkr.series` 采集会话。手工把 manifest 中的 `synthetic` 改成 `false` 不会绕过该门禁。
 
-真实研究至少需要：
+真实 Study 至少需要：
 
 - 252 个以上可用决策时点；
 - 每个时点动态且 point-in-time 的 SPXW chain；
@@ -53,7 +53,7 @@ Notebook 默认读取 `config.json` 中的 dataset。当前仓库的 mock datase
 IB Gateway 登录后可以分多次续采同一个 dataset：
 
 ```bash
-./pyenv/bin/python -m trading research capture-series \
+./pyenv/bin/python -m kairos study capture-series \
   --venue ibkr --environment paper \
   --config studies/spxw_put_skew/capture_config.json \
   --dataset-id spxw-put-skew-real \
@@ -68,7 +68,7 @@ IB Gateway 登录后可以分多次续采同一个 dataset：
 随时检查距离正式验证还缺哪些条件：
 
 ```bash
-./pyenv/bin/python -m trading research readiness --dataset spxw-put-skew-real
+./pyenv/bin/python -m kairos study readiness --dataset spxw-put-skew-real
 ```
 
 在所有门禁通过之前，该命令返回退出码 `2`，Notebook 的结论状态保持 `DATA_NOT_READY`。
@@ -80,4 +80,4 @@ IB Gateway 登录后可以分多次续采同一个 dataset：
 - 入场按 short bid / long ask，退出按 short ask / long bid；
 - development/validation/test 按时间顺序 60%/20%/20% 划分；
 - test 结果出来后不再调整阈值、delta 或 horizon；
-- synthetic 数据只能验证研究代码，不能证明策略有效。
+- synthetic 数据只能验证 Study 代码，不能证明策略有效。

@@ -6,7 +6,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from kairos.connectors.ibkr.research import IbkrSpxwResearchProvider, decimal_or_none
+from kairos.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider, decimal_or_none
 from kairos.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
 from kairos.domain.identity import AssetId, InstrumentId, VenueId
 from kairos.domain.market_data import OptionChain
@@ -46,7 +46,7 @@ class DomainTests(unittest.TestCase):
         self.assertEqual(decimal_or_none(0), Decimal("0"))
 
     def test_ibkr_contract_conversion_round_trip(self) -> None:
-        provider = object.__new__(IbkrSpxwResearchProvider); provider.catalog = self.catalog
+        provider = object.__new__(IbkrSpxwOptionChainProvider); provider.catalog = self.catalog
         converted = provider._to_contract(self.option)
         self.assertEqual(converted.right, "C")
         self.assertEqual(converted.lastTradeDateOrContractMonth, "20990102")

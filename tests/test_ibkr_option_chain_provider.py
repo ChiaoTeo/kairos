@@ -6,7 +6,7 @@ from decimal import Decimal
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from kairos.connectors.ibkr.research import IbkrSpxwResearchProvider
+from kairos.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
 from kairos.domain.identity import AssetId, InstrumentId, VenueId
 from kairos.domain.product import (
     ExerciseStyle,
@@ -65,21 +65,21 @@ class TransientTimeoutIb:
         return [contract]
 
 
-class IbkrResearchProviderTests(unittest.TestCase):
+class IbkrOptionChainProviderTests(unittest.TestCase):
     def test_underlying_retries_transient_contract_detail_timeouts(self) -> None:
-        provider = object.__new__(IbkrSpxwResearchProvider)
+        provider = object.__new__(IbkrSpxwOptionChainProvider)
         provider._ib = TransientTimeoutIb()
         provider._contracts = {}
         provider.catalog = ReferenceCatalog()
 
-        with patch("kairos.connectors.ibkr.research.sleep"):
+        with patch("kairos.connectors.ibkr.option_chain_provider.sleep"):
             result = provider.underlying(OptionChainCaptureSpec())
 
         self.assertEqual(result.instrument_id, InstrumentId("index:spx"))
         self.assertEqual(provider._ib.attempts, 3)
 
     def test_qualify_ignores_failed_contract_placeholders(self) -> None:
-        provider = object.__new__(IbkrSpxwResearchProvider)
+        provider = object.__new__(IbkrSpxwOptionChainProvider)
         provider._ib = PartialQualificationIb()
         provider._contracts = {}
         provider.catalog = ReferenceCatalog()

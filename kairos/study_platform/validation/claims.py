@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .contracts import ResearchValidationResult, ValidationLevel
+from .contracts import StudyValidationResult, ValidationLevel
 
 
 _MAXIMUM_CLAIMS = {
-    ValidationLevel.L1_DATA: "data can support the registered research question",
+    ValidationLevel.L1_DATA: "data can support the registered study question",
     ValidationLevel.L2_SIGNAL: "signal has registered predictive evidence",
     ValidationLevel.L3_MAPPING: "signal can be mapped to a trade proxy",
     ValidationLevel.L4_EXECUTABLE: "historical executable backtest meets its registered gate",
@@ -22,7 +22,7 @@ class ClaimDecision:
     reasons: tuple[str, ...]
 
 
-def authorize_claim(result: ResearchValidationResult, requested_level: ValidationLevel, *,
+def authorize_claim(result: StudyValidationResult, requested_level: ValidationLevel, *,
                     mentions_cagr: bool=False, mentions_capacity: bool=False) -> ClaimDecision:
     reasons=[]
     if requested_level>result.state.maximum_level:reasons.append("requested claim exceeds maximum validated level")

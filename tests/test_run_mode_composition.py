@@ -9,7 +9,7 @@ from kairos.application import (
     ApplicationConfig, AsyncKairosRuntime, KairosApplication, ManagedServiceStatus, RuntimePaths,
     RunModeComposition, RuntimeFeedServiceBundle, RuntimeStatus, backtest_composition,
     historical_simulation_composition, live_composition, paper_trading_composition, study_composition,
-    runtime_feed_plan,
+    runtime_execution_plan, runtime_feed_plan, runtime_strategy_plan,
 )
 from kairos.ports import Environment
 from kairos.data import (
@@ -38,8 +38,9 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(paper_trading_composition("binance").composition_hash,
                          paper_trading_composition("binance").composition_hash)
 
-    def test_legacy_research_mode_maps_to_study_mode(self) -> None:
-        self.assertIs(RunMode("research"), RunMode.STUDY)
+    def test_legacy_study_mode_alias_is_not_public_api(self) -> None:
+        with self.assertRaises(ValueError):
+            RunMode("re" + "search")
         self.assertEqual(study_composition().mode, RunMode.STUDY)
 
     def test_live_modes_fail_without_capture_or_persistence(self) -> None:
@@ -170,6 +171,88 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
             app = KairosApplication(
                 ApplicationConfig(Environment.PAPER, paths), SQLiteRuntimeStore(paths.runtime_database),
                 runtime_id="unbound-feed-plan-runtime",
+            )
+            runtime = AsyncKairosRuntime(app, plan.managed_services())
+
+            with self.assertRaisesRegex(RuntimeError, "critical managed service failed"):
+                await runtime.start()
+
+    async def test_runtime_execution_plan_starts_injected_gateway_service(self) -> None:
+        stopped = asyncio.Event()
+        plan = runtime_execution_plan("paper", paper_trading_composition("binance"))
+
+        def runner_factory(_service):
+            async def run():
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    stopped.set()
+            return run
+
+        with tempfile.TemporaryDirectory() as directory:
+            paths = RuntimePaths.under(Path(directory))
+            app = KairosApplication(
+                ApplicationConfig(Environment.PAPER, paths), SQLiteRuntimeStore(paths.runtime_database),
+                runtime_id="execution-plan-runtime",
+            )
+            runtime = AsyncKairosRuntime(app, plan.managed_services(runner_factory))
+            await runtime.start()
+            snapshots = {item.name: item.status for item in runtime.service_snapshots()}
+            await runtime.stop()
+
+        self.assertEqual(len(plan.plan_hash), 64)
+        self.assertEqual(plan.services[0].service_id, "execution:paper-trading:simulated")
+        self.assertEqual(snapshots["execution:paper-trading:simulated"], ManagedServiceStatus.RUNNING)
+        self.assertTrue(stopped.is_set())
+
+    async def test_unbound_execution_plan_fails_closed_at_runtime_start(self) -> None:
+        plan = runtime_execution_plan("live", live_composition("binance", "binance-live"))
+        with tempfile.TemporaryDirectory() as directory:
+            paths = RuntimePaths.under(Path(directory))
+            app = KairosApplication(
+                ApplicationConfig(Environment.LIVE, paths), SQLiteRuntimeStore(paths.runtime_database),
+                runtime_id="unbound-execution-plan-runtime",
+            )
+            runtime = AsyncKairosRuntime(app, plan.managed_services())
+
+            with self.assertRaisesRegex(RuntimeError, "critical managed service failed"):
+                await runtime.start()
+
+    async def test_runtime_strategy_plan_starts_injected_strategy_service(self) -> None:
+        stopped = asyncio.Event()
+        plan = runtime_strategy_plan("paper", strategy_id="strategy-v1", target_hash="abc123")
+
+        def runner_factory(_service):
+            async def run():
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    stopped.set()
+            return run
+
+        with tempfile.TemporaryDirectory() as directory:
+            paths = RuntimePaths.under(Path(directory))
+            app = KairosApplication(
+                ApplicationConfig(Environment.PAPER, paths), SQLiteRuntimeStore(paths.runtime_database),
+                runtime_id="strategy-plan-runtime",
+            )
+            runtime = AsyncKairosRuntime(app, plan.managed_services(runner_factory))
+            await runtime.start()
+            snapshots = {item.name: item.status for item in runtime.service_snapshots()}
+            await runtime.stop()
+
+        self.assertEqual(len(plan.plan_hash), 64)
+        self.assertEqual(plan.services[0].service_id, "strategy:paper-trading:strategy-v1")
+        self.assertEqual(snapshots["strategy:paper-trading:strategy-v1"], ManagedServiceStatus.RUNNING)
+        self.assertTrue(stopped.is_set())
+
+    async def test_unbound_strategy_plan_fails_closed_at_runtime_start(self) -> None:
+        plan = runtime_strategy_plan("paper", strategy_id="strategy-v1", target_hash="abc123")
+        with tempfile.TemporaryDirectory() as directory:
+            paths = RuntimePaths.under(Path(directory))
+            app = KairosApplication(
+                ApplicationConfig(Environment.PAPER, paths), SQLiteRuntimeStore(paths.runtime_database),
+                runtime_id="unbound-strategy-plan-runtime",
             )
             runtime = AsyncKairosRuntime(app, plan.managed_services())
 

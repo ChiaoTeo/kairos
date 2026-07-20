@@ -17,7 +17,7 @@ class GovernanceAudit:
     violations: tuple[str, ...]
 
 
-def audit_governance(root: str | Path = "data", *, ignored_studies: tuple[str, ...] = ("btc_options_research_summary",)) -> GovernanceAudit:
+def audit_governance(root: str | Path = "data", *, ignored_studies: tuple[str, ...] = ("btc_options_study_summary",)) -> GovernanceAudit:
     root=Path(root);violations=[];datasets=studies=strategies=0;study_versions=[]
     catalog=DataCatalog(root)
     for release in catalog.releases():

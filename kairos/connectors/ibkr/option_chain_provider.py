@@ -20,7 +20,7 @@ from kairos.reference.factory import publish_instrument
 from kairos.reference.contracts import InstrumentDefinition
 
 
-class SpxwResearchProvider(Protocol):
+class SpxwOptionChainProvider(Protocol):
     catalog: ReferenceCatalog
     def connect(self) -> None: ...
     def disconnect(self) -> None: ...
@@ -42,8 +42,8 @@ def decimal_or_none(value: Any) -> Decimal | None:
         return None
 
 
-class IbkrSpxwResearchProvider:
-    """IBKR research provider that exposes only normalized definitions and events."""
+class IbkrSpxwOptionChainProvider:
+    """IBKR SPXW option-chain provider that exposes normalized definitions and events."""
 
     venue_id = VenueId("ibkr")
 

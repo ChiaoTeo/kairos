@@ -1,13 +1,13 @@
 from datetime import datetime, timezone
 from itertools import islice
 
-from kairos.data import DataView, ResearchDataClient, RunMode
+from kairos.data import DataView, DatasetClient, RunMode
 from kairos.data.products import Datasets
 
 
-# Research replay accepts Q2 data. Use RunMode.BACKTEST only after the exact
+# Study replay accepts Q2 data. Use RunMode.BACKTEST only after the exact
 # Release has passed Q3 review and is approved_for_backtest.
-data = ResearchDataClient("data", run_mode=RunMode.RESEARCH)
+data = DatasetClient("data", run_mode=RunMode.STUDY)
 feed = data.replay(
     Datasets.MARKET_EVENTS_OPTIONS_US_SPXW,
     datetime(2026, 7, 15, 13, 30, tzinfo=timezone.utc),

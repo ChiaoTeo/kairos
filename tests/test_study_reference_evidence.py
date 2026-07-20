@@ -17,7 +17,7 @@ from kairos.study_platform.snapshot import build_reference_evidence
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
 
 
-class ResearchReferenceEvidenceTests(unittest.TestCase):
+class StudyReferenceEvidenceTests(unittest.TestCase):
     def test_reference_evidence_hash_is_deterministic_and_changes_with_listing_version(self) -> None:
         catalog = ReferenceCatalog(); instrument = InstrumentId("crypto:spot:BTCUSDT"); product = ProductId("product:BTCUSDT")
         catalog.products.add(EconomicProduct(product, ProductType.CRYPTO_SPOT, "BTC/USDT", NOW))

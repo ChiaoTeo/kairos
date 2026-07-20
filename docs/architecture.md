@@ -1,12 +1,12 @@
 # Kairos 最终态架构
 
 期权策略研究框架的目标设计、模块契约、迁移路线和完成定义见
-[`options_research_architecture.md`](options_research_architecture.md)。本文继续描述整个多资产交易系统已经采用的核心边界。
+[`options_study_architecture.md`](options_study_architecture.md)。本文继续描述整个多资产交易系统已经采用的核心边界。
 
 从市场假设、信号预测、成交代理到可执行回测和实盘验证的统一证据等级与阶段门禁见
-[`research_validation_framework.md`](research_validation_framework.md)。
+[`study_validation_framework.md`](study_validation_framework.md)。
 对应代码、数据产物、迁移命令和验收入口见
-[`research_validation_implementation.md`](research_validation_implementation.md)。
+[`study_validation_implementation.md`](study_validation_implementation.md)。
 
 ## 1. 核心边界
 
@@ -28,7 +28,7 @@ normalized market/order/execution/lifecycle events
 - execution gateway 只消费 Catalog 显式绑定的 `InstrumentId -> ListingDefinition.symbol`，不会从内部 ID 猜测 Venue symbol；
 - IBKR/Binance 原始对象不进入 strategy、accounting、risk 或 backtest；
 - 余额、持仓、费用、Funding、公司行为和结算都由不可变 Ledger transaction 重建；
-- research、backtest、simulation、paper/testnet 和 live fill 最终进入同一个 `LedgerService` reducer。
+- study、backtest、simulation、paper/testnet 和 live fill 最终进入同一个 `LedgerService` reducer。
 
 旧 `kairos/core`、旧单币种 Portfolio 和旧 broker facade 已删除。
 
@@ -48,7 +48,7 @@ IBKR 不是期权专用 connector：
 - `IbkrReferenceDataClient` 通过 `ReferenceDataRequest.product_type` 分别同步股票、ETF 和上市期权；
 - `IbkrMarketDataClient`、`IbkrExecutionGateway`、`IbkrAccountGateway` 消费通用定义；行情客户端提供 quote、recent trade 和 historical bar；
 - Reference、MarketData、Execution 分别声明 capability，指数可查询行情但不会被误路由到执行层；
-- `IbkrSpxwResearchProvider` 的命名明确表明它只负责 SPX/SPXW option-chain 研究切片；
+- `IbkrSpxwOptionChainProvider` 的命名明确表明它只负责 SPX/SPXW option-chain 研究切片；
 - 通用 `MarketSnapshot` 不包含强制 `underlying_price`，股票、ETF 和加密产品直接保存 instrument quote；确有参考价格时使用 `reference_prices`。
 
 Capability 以 port 边界为准，而不是描述 Venue 的能力全集：

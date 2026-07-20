@@ -130,7 +130,6 @@ class StrategyRegistry:
         latest_bundle = self._latest_promotion_bundle(directory)
         next_stage={
             "DRAFT":"STUDY_VALIDATED","STUDY_VALIDATED":"TRADE_PROXY_VALIDATED",
-            "RESEARCH_VALIDATED":"TRADE_PROXY_VALIDATED",
             "TRADE_PROXY_VALIDATED":"EXECUTABLE_BACKTEST_VALIDATED","EXECUTABLE_BACKTEST_VALIDATED":"ROBUSTNESS_VALIDATED",
             "ROBUSTNESS_VALIDATED":"PAPER_APPROVED","PAPER_APPROVED":"LIVE_LIMITED","LIVE_LIMITED":"LIVE_APPROVED",
         }.get(lifecycle)

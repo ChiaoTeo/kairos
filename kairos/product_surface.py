@@ -1,15 +1,30 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from hashlib import sha256
 import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from kairos.application import runtime_feed_plan
+from kairos.application import (
+    ApplicationConfig,
+    AsyncKairosRuntime,
+    KairosApplication,
+    RuntimePaths,
+    backtest_composition,
+    historical_simulation_composition,
+    live_composition,
+    paper_trading_composition,
+    runtime_execution_plan,
+    runtime_feed_plan,
+    runtime_strategy_plan,
+    study_composition,
+)
 from kairos.data import (
     DataCatalog,
     DataReleaseManifest,
@@ -27,10 +42,13 @@ from kairos.data import (
     SourceBinding,
     data_release_ref,
     live_view_manifest_path,
+    register_live_capture_release,
     resolve_live_view_subscription,
     stable_artifact_hash,
     write_live_view_manifest,
 )
+from kairos.orchestration.runtime_store import SQLiteRuntimeStore
+from kairos.ports import Environment
 from kairos.study_platform import ensure_sma_tutorial_dataset
 
 
@@ -96,6 +114,26 @@ class StrategyProductApi:
     def set_risk(self, strategy_id: str, risk_file: str | Path) -> dict[str, object]:
         return strategy_set_risk(_args(self.root, strategy_id=strategy_id, risk_file=str(risk_file)))
 
+    def set_model(
+        self,
+        strategy_id: str,
+        *,
+        kind: str,
+        instrument_id: str | None = None,
+        fast_window: int | None = None,
+        slow_window: int | None = None,
+        approved_capital: str | None = None,
+    ) -> dict[str, object]:
+        return strategy_set_model(_args(
+            self.root,
+            strategy_id=strategy_id,
+            kind=kind,
+            instrument_id=instrument_id,
+            fast_window=fast_window,
+            slow_window=slow_window,
+            approved_capital=approved_capital,
+        ))
+
     def inspect(self, strategy_id: str) -> dict[str, object]:
         return strategy_inspect(_args(self.root, strategy_id=strategy_id))
 
@@ -107,11 +145,51 @@ class StrategyProductApi:
 class RunProductApi:
     root: str | Path = "data"
 
-    def start_study(self, study: str, *, mode: str = "study") -> dict[str, object]:
-        return run_start(_args(self.root, study=study, snapshot=None, mode=mode))
+    def start_study(
+        self,
+        study: str,
+        *,
+        mode: str = "study",
+        execute_feeds: bool = False,
+        feed_runtime_seconds: float = 0.0,
+        feed_runtime_factory: object | None = None,
+        execute_strategy: bool = False,
+        strategy_runtime_factory: object | None = None,
+    ) -> dict[str, object]:
+        return run_start(_args(
+            self.root,
+            study=study,
+            snapshot=None,
+            mode=mode,
+            execute_feeds=execute_feeds,
+            feed_runtime_seconds=feed_runtime_seconds,
+            feed_runtime_factory=feed_runtime_factory,
+            execute_strategy=execute_strategy,
+            strategy_runtime_factory=strategy_runtime_factory,
+        ))
 
-    def start_snapshot(self, snapshot: str, *, mode: str) -> dict[str, object]:
-        return run_start(_args(self.root, study=None, snapshot=snapshot, mode=mode))
+    def start_snapshot(
+        self,
+        snapshot: str,
+        *,
+        mode: str,
+        execute_feeds: bool = False,
+        feed_runtime_seconds: float = 0.0,
+        feed_runtime_factory: object | None = None,
+        execute_strategy: bool = False,
+        strategy_runtime_factory: object | None = None,
+    ) -> dict[str, object]:
+        return run_start(_args(
+            self.root,
+            study=None,
+            snapshot=snapshot,
+            mode=mode,
+            execute_feeds=execute_feeds,
+            feed_runtime_seconds=feed_runtime_seconds,
+            feed_runtime_factory=feed_runtime_factory,
+            execute_strategy=execute_strategy,
+            strategy_runtime_factory=strategy_runtime_factory,
+        ))
 
     def inspect(self, run_id: str) -> dict[str, object]:
         return run_inspect(_args(self.root, run_id=run_id))
@@ -208,7 +286,7 @@ def data_write(args) -> dict[str, object]:
         content_hash,
         primary_time,
         tuple(fields),
-        QualityLevel.RESEARCH,
+        QualityLevel.STUDY,
         {"kind": "file", "name": source.name},
         _now(),
     )
@@ -366,6 +444,33 @@ def strategy_set_risk(args) -> dict[str, object]:
     return {"product": "strategy", "operation": "set-risk", "strategy_id": args.strategy_id, "risk_hash": risk_hash}
 
 
+def strategy_set_model(args) -> dict[str, object]:
+    strategy = _load_strategy(args.lake_root, args.strategy_id)
+    kind = str(args.kind)
+    if kind not in {"sma-cross-v1", "builtin.sma-cross-v1"}:
+        raise ValueError(f"unsupported Strategy runtime model: {kind!r}")
+    parameters = {
+        key: value for key, value in {
+            "instrument_id": getattr(args, "instrument_id", None),
+            "fast_window": getattr(args, "fast_window", None),
+            "slow_window": getattr(args, "slow_window", None),
+            "approved_capital": getattr(args, "approved_capital", None),
+        }.items() if value is not None
+    }
+    strategy["model"] = {
+        "kind": "sma-cross-v1",
+        "runtime": "built-in",
+        "parameters": _json_safe(parameters),
+    }
+    _write_json(_strategy_file(args.lake_root, args.strategy_id), strategy)
+    return {
+        "product": "strategy",
+        "operation": "set-model",
+        "strategy_id": args.strategy_id,
+        **strategy["model"],
+    }
+
+
 def strategy_inspect(args) -> dict[str, object]:
     return {**_load_strategy(args.lake_root, args.strategy_id), "contract": "Strategy Contract"}
 
@@ -407,7 +512,7 @@ def strategy_freeze(args) -> dict[str, object]:
 
 def run_start(args) -> dict[str, object]:
     root = Path(args.lake_root)
-    mode = _canonical_run_mode(args.mode)
+    mode = args.mode
     if args.study:
         target_id = args.study
         target_kind = "study"
@@ -421,6 +526,15 @@ def run_start(args) -> dict[str, object]:
         target_hash = target["lock_hash"]
     live_bindings = _paper_live_subscription_bindings(root, target) if mode in {"paper", "live"} else ()
     feed_plan = runtime_feed_plan(mode, live_bindings) if live_bindings else None
+    if getattr(args, "execute_feeds", False) and feed_plan is None:
+        raise ValueError("feed execution requires paper/live feed bindings")
+    composition = _run_mode_composition(mode)
+    execution_plan = runtime_execution_plan(mode, composition) if mode in {"paper", "live"} else None
+    strategy_plan = runtime_strategy_plan(mode, strategy_id=target_id, target_hash=target_hash) if (
+        target_kind == "strategy" and mode in {"paper", "live"}
+    ) else None
+    if getattr(args, "execute_strategy", False) and strategy_plan is None:
+        raise ValueError("strategy execution requires a paper/live Strategy snapshot target")
     freshness_gates = tuple(
         {"name": item["name"], "dataset": item["dataset"], **item["freshness_gate"]}
         for item in live_bindings
@@ -428,6 +542,9 @@ def run_start(args) -> dict[str, object]:
     material = {"target_kind": target_kind, "target_id": target_id, "mode": mode, "target_hash": target_hash, "at": _now()}
     run_id = f"run_{sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:16]}"
     directory = root / "runs" / target_id / run_id
+    feed_runtime_execution = _execute_feed_runtime(root, directory, mode, feed_plan, execution_plan, strategy_plan, target, args) if (
+        (feed_plan and getattr(args, "execute_feeds", False)) or getattr(args, "execute_strategy", False)
+    ) else None
     manifest = {
         "product": "run",
         "kind": "run.manifest",
@@ -438,11 +555,19 @@ def run_start(args) -> dict[str, object]:
         "input_artifacts": _run_input_artifacts(target_kind, target),
         "runtime_contract": {
             "mode": mode,
+            "run_mode_composition": {**composition.manifest(), "composition_hash": composition.composition_hash},
+            **({"execution_runtime_plan": {
+                **execution_plan.manifest(), "plan_hash": execution_plan.plan_hash,
+            }} if execution_plan else {}),
+            **({"strategy_runtime_plan": {
+                **strategy_plan.manifest(), "plan_hash": strategy_plan.plan_hash,
+            }} if strategy_plan else {}),
             **({"feed_bindings": list(live_bindings)} if live_bindings else {}),
             **({"feed_runtime_plan": {**feed_plan.manifest(), "plan_hash": feed_plan.plan_hash}} if feed_plan else {}),
             **({"feed_runtime_bundle": {
                 **feed_plan.service_bundle_manifest(), "bundle_hash": feed_plan.service_bundle_hash,
             }} if feed_plan else {}),
+            **({"feed_runtime_execution": feed_runtime_execution} if feed_runtime_execution else {}),
             **({"freshness_gates": list(freshness_gates)} if freshness_gates else {}),
         },
         "started_at": material["at"],
@@ -450,14 +575,201 @@ def run_start(args) -> dict[str, object]:
     }
     _write_json(directory / "snapshot.json", target)
     _write_json(directory / "manifest.json", manifest)
-    _write_json(directory / "reports" / "summary.json", {"run_id": run_id, "passed": True, "target_hash": target_hash})
+    _write_json(directory / "reports" / "summary.json", {
+        "run_id": run_id,
+        "passed": True,
+        "target_hash": target_hash,
+        **({"feed_runtime_execution": feed_runtime_execution} if feed_runtime_execution else {}),
+    })
     return {**manifest, "workspace": str(directory), "manifest": str(directory / "manifest.json")}
 
 
-def _canonical_run_mode(mode: str) -> str:
-    if mode == "research":
-        return "study"
-    return mode
+
+def _run_mode_composition(mode: str):
+    if mode == "study":
+        return study_composition()
+    if mode == "backtest":
+        return backtest_composition()
+    if mode == "historical-simulation":
+        return historical_simulation_composition()
+    if mode == "paper":
+        return paper_trading_composition("binance")
+    if mode == "live":
+        return live_composition("binance", "binance-live")
+    raise ValueError(f"unsupported run mode: {mode}")
+
+
+def _execute_feed_runtime(root: Path, run_directory: Path, mode: str, feed_plan, execution_plan, strategy_plan, strategy_target, args) -> dict[str, object]:
+    seconds = float(getattr(args, "feed_runtime_seconds", 0.0) or 0.0)
+    if seconds < 0:
+        raise ValueError("feed runtime seconds cannot be negative")
+    feed_runtime = None
+    if feed_plan is not None and getattr(args, "execute_feeds", False):
+        factory = getattr(args, "feed_runtime_factory", None)
+        if factory is None:
+            from kairos.connectors.binance import BinanceRuntimeFeedFactory
+
+            factory = BinanceRuntimeFeedFactory(
+                root,
+                journal_root=run_directory / "feeds" / "binance",
+            )
+        feed_runtime = factory(feed_plan) if callable(factory) and not hasattr(factory, "build") else factory.build(feed_plan)
+
+    async def run() -> tuple[object, ...]:
+        paths = RuntimePaths.under(run_directory / "runtime")
+        runtime_store = SQLiteRuntimeStore(paths.runtime_database)
+        app = KairosApplication(
+            ApplicationConfig(_runtime_environment(mode), paths),
+            runtime_store,
+            runtime_id=f"run-feed-runtime:{run_directory.name}",
+        )
+        tasks = tuple(feed_runtime.managed_services) if feed_runtime is not None else ()
+        intent_bridge = _paper_intent_bridge(run_directory, mode, runtime_store) if (
+            strategy_plan is not None and getattr(args, "execute_strategy", False)
+        ) else None
+        if execution_plan is not None:
+            tasks += execution_plan.managed_services(_execution_gateway_runner_factory(run_directory, mode, intent_bridge))
+        strategy_bindings = {}
+        if strategy_plan is not None and getattr(args, "execute_strategy", False):
+            strategy_runner_factory, strategy_bindings = _strategy_runner_factory(
+                args, strategy_target, feed_runtime, run_directory, mode, intent_bridge,
+            )
+            tasks += strategy_plan.managed_services(strategy_runner_factory)
+        runtime = AsyncKairosRuntime(app, tasks)
+        await runtime.start()
+        try:
+            await asyncio.sleep(seconds)
+            return runtime.service_snapshots(), strategy_bindings, intent_bridge
+        finally:
+            await runtime.stop()
+
+    snapshots, strategy_bindings, intent_bridge = asyncio.run(run())
+    capture_releases = _register_feed_capture_releases(root, run_directory, feed_plan, feed_runtime) if feed_runtime is not None else []
+    return {
+        "executed": True,
+        "provider": "binance",
+        "duration_seconds": seconds,
+        **({"bundle_hash": feed_runtime.runtime_bundle.bundle_hash} if feed_runtime is not None else {}),
+        **({"execution_plan_hash": execution_plan.plan_hash} if execution_plan else {}),
+        **({"strategy_plan_hash": strategy_plan.plan_hash} if strategy_plan else {}),
+        "services": [
+            {
+                "name": item.name,
+                "criticality": item.criticality.value,
+                "status": item.status.value,
+                "attempts": item.attempts,
+                "restart_count": item.restart_count,
+                **({"last_fault": {
+                    "task_name": item.last_fault.task_name,
+                    "error_type": item.last_fault.error_type,
+                    "message": item.last_fault.message,
+                    "attempt": item.last_fault.attempt,
+                    "occurred_at": item.last_fault.occurred_at.isoformat(),
+                }} if item.last_fault else {}),
+            }
+            for item in snapshots
+        ],
+        "manifest_paths": {
+            service_id: str(path)
+            for service_id, path in getattr(feed_runtime, "manifest_paths", {}).items()
+        },
+        "strategy_bindings": {
+            key: value.manifest() for key, value in strategy_bindings.items()
+        },
+        **({"intent_execution_bridge": intent_bridge.manifest()} if intent_bridge is not None else {}),
+        "capture_releases": capture_releases,
+    }
+
+
+def _paper_intent_bridge(run_directory: Path, mode: str, runtime_store: SQLiteRuntimeStore):
+    if mode != "paper":
+        return None
+    from kairos.application.strategy_runtime import PaperIntentExecutionBridge
+    from kairos.domain.identity import AccountKey, AccountType, InstitutionId
+
+    account = AccountKey(InstitutionId("simulated"), f"{run_directory.name}-paper", AccountType.CRYPTO_SPOT)
+    return PaperIntentExecutionBridge(
+        account=account,
+        output_path=run_directory / "execution" / "paper-intent-bridge.json",
+        approved_capital=Decimal("100000"),
+        runtime_store=runtime_store,
+    )
+
+
+def _execution_gateway_runner_factory(run_directory: Path, mode: str, intent_bridge=None):
+    def factory(service):
+        if service.execution_driver != "simulated":
+            async def unbound() -> None:
+                raise RuntimeError(f"execution driver {service.execution_driver!r} has no runtime gateway bound")
+
+            return unbound
+
+        async def run() -> None:
+            from kairos.connectors.simulated import SimulatedExecutionAccountGateway
+            from kairos.domain.identity import AccountKey, AccountType, InstitutionId, VenueId
+
+            environment = _runtime_environment(mode)
+            account = AccountKey(InstitutionId("simulated"), f"{run_directory.name}-paper", AccountType.CRYPTO_SPOT)
+            gateway = SimulatedExecutionAccountGateway(VenueId("simulated"), account, environment=environment)
+            if intent_bridge is not None:
+                await intent_bridge.run_gateway(gateway)
+                await asyncio.Event().wait()
+            while True:
+                gateway.account_state(account)
+                await asyncio.sleep(0.01)
+
+        return run
+
+    return factory
+
+
+def _strategy_runner_factory(args, strategy_target: dict[str, object], feed_runtime: object | None, run_directory: Path, mode: str, intent_bridge=None):
+    factory = getattr(args, "strategy_runtime_factory", None)
+    if factory is not None:
+        return factory, {}
+    from kairos.application.strategy_runtime import strategy_runtime_runner_from_lock
+
+    return strategy_runtime_runner_from_lock(strategy_target, feed_runtime, run_directory, mode, intent_bridge)
+
+
+def _register_feed_capture_releases(root: Path, run_directory: Path, feed_plan, feed_runtime) -> list[dict[str, object]]:
+    results = []
+    for service in feed_plan.services:
+        capture_manifests = sorted((run_directory / "feeds").glob(f"**/{_safe_glob_part(service.service_id)}*.rotation.manifest.json"))
+        if not capture_manifests:
+            capture_manifests = sorted((run_directory / "feeds").glob("**/*.rotation.manifest.json"))
+        if not capture_manifests:
+            continue
+        release = register_live_capture_release(
+            root,
+            dataset_id=service.dataset,
+            capture_manifest_path=capture_manifests[-1],
+            run_id=run_directory.name,
+            live_view_id=service.live_view_id,
+            provider="binance",
+        )
+        manifest_path = root / release.relative_path / "data_release_manifest.json"
+        manifest = _read_json(manifest_path)
+        results.append({
+            "service_id": service.service_id,
+            "dataset": service.dataset,
+            "release_id": release.release_id,
+            "content_hash": release.content_hash,
+            "artifact_ref": manifest["artifact_ref"],
+            "data_release_manifest_hash": stable_artifact_hash(manifest),
+            "capture_manifest": str(capture_manifests[-1]),
+        })
+    return results
+
+
+def _safe_glob_part(value: str) -> str:
+    return "".join(character if character.isalnum() or character in {"-", "_"} else "-" for character in value)
+
+
+def _runtime_environment(mode: str) -> Environment:
+    if mode == "live":
+        return Environment.LIVE
+    return Environment.PAPER
 
 
 def run_inspect(args) -> dict[str, object]:
@@ -658,7 +970,7 @@ def _register_written_release(root: Path, dataset_id: str, release_id: str, dire
         description="User-written Data Product release",
         dimensions={"source": "user-write"},
         primary_time=primary_time,
-        sources=(SourceBinding("user-write", None, 100, QualityLevel.RESEARCH, ("file",)),),
+        sources=(SourceBinding("user-write", None, 100, QualityLevel.STUDY, ("file",)),),
         owner="user",
     )
     spec = DataProductContract(
@@ -667,7 +979,7 @@ def _register_written_release(root: Path, dataset_id: str, release_id: str, dire
         f"{dataset_id}.contract",
         storage_kind=DatasetStorageKind.TABULAR,
         quality_profile="contract",
-        minimum_publication_level=QualityLevel.RESEARCH,
+        minimum_publication_level=QualityLevel.STUDY,
     )
     catalog = DataCatalog(root)
     catalog.register_product_spec(spec, enrich=True)
@@ -685,8 +997,8 @@ def _register_written_release(root: Path, dataset_id: str, release_id: str, dire
         "user-write",
         None,
         (),
-        DatasetStatus.APPROVED_FOR_RESEARCH,
-        QualityLevel.RESEARCH,
+        DatasetStatus.APPROVED_FOR_STUDY,
+        QualityLevel.STUDY,
         _now(),
         DatasetStorageKind.TABULAR,
         "1",
@@ -815,6 +1127,18 @@ def _load_run_manifest(root: str | Path, run_id: str) -> dict[str, Any]:
 
 def _stable_hash(value: object) -> str:
     return sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _json_safe(value: object) -> object:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Decimal):
+        return str(value)
+    return value
 
 
 def _now() -> str:

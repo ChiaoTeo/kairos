@@ -12,7 +12,7 @@ from kairos.domain.event import EventEnvelope
 from kairos.domain.market_data import OptionChain
 from kairos.study_platform.option_snapshot_analysis import OptionSnapshotAnalysis
 from kairos.study_platform.report import write_csv
-from kairos.study_platform.snapshot import ResearchSnapshot
+from kairos.study_platform.snapshot import OptionCaptureSnapshot
 from kairos.study_platform.spec import OptionChainCaptureSpec
 
 from .codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, snapshot_to_primitive, to_primitive
@@ -48,7 +48,7 @@ class RunManifest:
     offline_analyzable: bool = False
 
 
-class FileResearchRepository:
+class FileOptionCaptureRepository:
     def __init__(self, root: Path | str = "data/snapshots") -> None:
         self.root = Path(root)
 
@@ -94,12 +94,12 @@ class FileResearchRepository:
         with target.open(encoding="utf-8") as handle:
             return [event_from_primitive(json.loads(line)) for line in handle if line.strip()]
 
-    def save_snapshot(self, snapshot: ResearchSnapshot) -> Path:
+    def save_snapshot(self, snapshot: OptionCaptureSnapshot) -> Path:
         target = self.run_dir(snapshot.run_id) / "snapshot.json"
         self._write_json(target, snapshot_to_primitive(snapshot))
         return target
 
-    def load_snapshot(self, run_id: UUID | str) -> ResearchSnapshot:
+    def load_snapshot(self, run_id: UUID | str) -> OptionCaptureSnapshot:
         return snapshot_from_primitive(self._read_json(self.run_dir(run_id) / "snapshot.json"))
 
     def save_report(self, run_id: UUID | str, result: OptionSnapshotAnalysis) -> Path:

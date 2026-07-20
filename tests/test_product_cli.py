@@ -99,7 +99,7 @@ class ProductCliTests(unittest.TestCase):
             inspected=command(root,"strategy","inspect","covered-call-v1","--version","1.1.0")
             status=command(root,"strategy","status","covered-call-v1","--version","1.1.0")
             active=command(root,"strategy","activate","covered-call-v1","--version","1.1.0","--actor","operator","--reason","acceptance")
-            iron=command(root,"strategy","register-btc-iron-condor","--research-spec-hash","b"*64)
+            iron=command(root,"strategy","register-btc-iron-condor","--study-spec-hash","b"*64)
             iron_status=command(root,"strategy","status","btc-iron-condor-v1","--version","1.2.0")
             result=command(root,"run","reference","--strategy","covered-call")
         self.assertGreaterEqual(registered["count"],5);self.assertIn("CoveredCallStrategy",inspected["implementation"]["import_path"])
@@ -204,12 +204,12 @@ class ProductCliTests(unittest.TestCase):
             root = Path(directory)
             command(root, "strategy", "register-sma", "--input-identity", "fixture:sma-bars-v1",
                 "--fast", "5", "--slow", "15")
-            evidence = root / "research-result.json"
+            evidence = root / "study-result.json"
             evidence.write_text(json.dumps({"state": {"maximum_level": 2, "signal_status": "SUPPORTED"}}))
             checked = command(root, "strategy", "check-promotion", "sma-cross-v1", "--version", "1.2.0",
                 "--to", "STUDY_VALIDATED", "--evidence", str(evidence))
             checked_legacy = command(root, "strategy", "check-promotion", "sma-cross-v1", "--version", "1.2.0",
-                "--to", "RESEARCH_VALIDATED", "--evidence", str(evidence))
+                "--to", "STUDY_VALIDATED", "--evidence", str(evidence))
             before = command(root, "strategy", "status", "sma-cross-v1", "--version", "1.2.0")
             promoted = command(root, "strategy", "promote", "sma-cross-v1", "--version", "1.2.0",
                 "--to", "STUDY_VALIDATED", "--evidence", str(evidence), "--actor", "reviewer",

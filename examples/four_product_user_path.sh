@@ -68,7 +68,7 @@ JSON
   --file "$ROOT/external-input/momentum_factor.py"
 "$PYTHON" -m kairos --format json --lake-root "$ROOT" run start \
   --study momentum-study \
-  --mode research
+  --mode study
 "$PYTHON" -m kairos --format json --lake-root "$ROOT" study freeze momentum-study --version 1.0.0
 
 "$PYTHON" -m kairos --format json --lake-root "$ROOT" strategy open momentum-long-only \

@@ -94,8 +94,8 @@ class MassiveEquityDailyOhlcvDatasetConnector:
             final_id, product.key, published_at, "market.ohlcv.equity.us.1d.v1", "1",
             "massive.equity_daily_ohlcv", "1", str(final.relative_to(self.root)), "parquet",
             str(manifest["content_sha256"]), "massive", "us-securities",
-            (f"{product.key}@latest-research",), DatasetStatus.APPROVED_FOR_RESEARCH,
-            QualityLevel.RESEARCH, published_at, DatasetStorageKind.TABULAR, "1",
+            (f"{product.key}@latest-study",), DatasetStatus.APPROVED_FOR_STUDY,
+            QualityLevel.STUDY, published_at, DatasetStorageKind.TABULAR, "1",
         )
         catalog.register_release(release); catalog.save()
         from kairos.data.release_metadata import ensure_release_metadata

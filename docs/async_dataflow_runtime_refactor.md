@@ -69,7 +69,7 @@
 - Fill、Order、Ledger 和 cursor 的事务提交与幂等；
 - Portfolio、Risk、Strategy Position Projection；
 - Recovery、Reconciliation、Readiness、Kill Switch 和 fail-closed；
-- Research Validation、Backtest Golden 和审计 Artifact。
+- Study Validation、Backtest Golden 和审计 Artifact。
 
 本次改造的原则是：
 
@@ -286,7 +286,7 @@ kairos/
 │   ├── runtime.py           # 顶层生命周期
 │   ├── service_supervisor.py # 结构化并发
 │   ├── composition.py       # 唯一正式组合根
-│   └── modes.py             # research/replay/sim/paper/live
+│   └── modes.py             # study/replay/sim/paper/live
 ├── orchestration/           # readiness/reconciliation/kill switch/monitoring
 └── connectors/
     ├── ports/               # Port contracts
@@ -774,18 +774,18 @@ Order、Fill、Account Event 使用 Critical Durable Channel：
 
 模式之间只允许以下差异：
 
-| 维度 | Research | Backtest | Historical Sim | Live Sim/Paper | Testnet/Live |
+| 维度 | Study | Backtest | Historical Sim | Live Sim/Paper | Testnet/Live |
 |---|---|---|---|---|---|
 | Event Source | Frozen Release | Frozen Release | Frozen Release | Live Venue | Live Venue |
 | Clock | Analysis Clock | Replay Clock | Replay Clock | System Clock | System Clock |
 | Execution Driver | 无/分析 | Fill Model | Simulated Venue | Simulated/Paper Venue | Real Venue |
 | Latency | 可分析 | 模型化 | 模型化 | 实际数据延迟+模拟执行 | 实际 |
 | Persistence | Study Artifact | Backtest Artifact | Runtime Store 可选 | Runtime Store | Runtime Store |
-| Safety Gate | Research Validation | Backtest Gate | Simulation Gate | Paper Gate | Live Gate |
+| Safety Gate | Study Validation | Backtest Gate | Simulation Gate | Paper Gate | Live Gate |
 
-### 13.2 Research
+### 13.2 Study
 
-Research 使用 `ResearchDataClient` 解析冻结 Release，输出：
+Study 使用 `DatasetClient` 解析冻结 Release，输出：
 
 - Study Input Snapshot；
 - code/environment version；
@@ -794,7 +794,7 @@ Research 使用 `ResearchDataClient` 解析冻结 Release，输出：
 - validation evidence；
 - promotion decision。
 
-Research 可以使用批处理 API，但产出的正式策略逻辑必须能够映射到流式 Strategy contract，不允许形成只有 Notebook 能运行的第二套策略实现。
+Study 可以使用批处理 API，但产出的正式策略逻辑必须能够映射到流式 Strategy contract，不允许形成只有 Notebook 能运行的第二套策略实现。
 
 ### 13.3 Backtest
 
@@ -902,7 +902,7 @@ contracts/
 -Risk policy；
 -Order State；
 -Ledger；
--Research Governance。
+-Study Governance。
 
 ### 14.3 Sidecar 边界
 
@@ -1204,9 +1204,9 @@ Paper/Testnet L4 至少验证：
 -Historical Simulation 使用正式异步 Runtime；
 -Live Paper 使用真实行情和 Capture；
 -Replay Session 对比 live decision；
--建立从 Research Artifact 到 Deployment 的 promotion manifest。
+-建立从 Study Artifact 到 Deployment 的 promotion manifest。
 
-退出标准：Research -> Backtest -> Historical Sim -> Live Paper 使用同一 Strategy 和 Projector。
+退出标准：Study -> Backtest -> Historical Sim -> Live Paper 使用同一 Strategy 和 Projector。
 
 ### Phase 5：Rust Market Gateway Spike
 
@@ -1254,7 +1254,7 @@ Paper/Testnet L4 至少验证：
 
 -只有一套正式 Canonical Event/Command contract；
 -只有一个正式 Application Runtime 组合根；
--Research、Backtest、Simulation、Paper 和 Live 使用同一 Strategy/Projector/Intent/Risk/Order/Ledger 语义；
+-Study、Backtest、Simulation、Paper 和 Live 使用同一 Strategy/Projector/Intent/Risk/Order/Ledger 语义；
 -Python/Rust connector 通过同一语言无关契约接入；
 -共享内存严格限定为可替换数据面 transport。
 

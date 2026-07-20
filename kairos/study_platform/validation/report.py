@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from .claims import authorize_claim
-from .contracts import ResearchValidationResult,ValidationLevel
+from .contracts import StudyValidationResult,ValidationLevel
 
 
-def render_validation_report(result: ResearchValidationResult,requested_level: ValidationLevel|None=None) -> str:
+def render_validation_report(result: StudyValidationResult,requested_level: ValidationLevel|None=None) -> str:
     level=requested_level or result.state.maximum_level;claim=authorize_claim(result,level)
     if not claim.allowed:raise ValueError("report claim is not authorized: "+"; ".join(claim.reasons))
     sample=result.sample_sufficiency

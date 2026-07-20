@@ -1,9 +1,9 @@
-from kairos.research_platform import open_study
+from kairos.study_platform import open_study
 
 
 study = open_study(
     "btc-sma-first",
-    root="example-output/first-research",
+    root="example-output/first-study",
 )
 
 df = study.data.pandas()

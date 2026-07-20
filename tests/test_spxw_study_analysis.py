@@ -14,10 +14,10 @@ if pd is not None:
         data_quality_report, frozen_parameter_validation, predictability_report,
         risk_decomposition, robustness_sensitivity, strategy_comparison, surface_observations,
     )
-    from tests.test_options_research_end_to_end import internally_priceable_spxw_dataset
+    from tests.test_options_study_end_to_end import internally_priceable_spxw_dataset
 
 
-def research_panel():
+def study_panel():
     rows = []
     start = datetime(2020, 1, 1, 15, 30, tzinfo=timezone.utc)
     for index in range(180):
@@ -40,7 +40,7 @@ def research_panel():
 
 
 @unittest.skipIf(pd is None, "install notebook optional dependencies")
-class SpxwResearchAnalysisTests(unittest.TestCase):
+class SpxwStudyAnalysisTests(unittest.TestCase):
     def test_quality_and_surface_reports_use_internal_valuation(self) -> None:
         dataset = internally_priceable_spxw_dataset()
         summary, detail = data_quality_report(dataset)
@@ -52,7 +52,7 @@ class SpxwResearchAnalysisTests(unittest.TestCase):
         self.assertIn("total_variance", surface)
 
     def test_predictability_strategy_and_frozen_validation(self) -> None:
-        panel = research_panel()
+        panel = study_panel()
         correlations, quintiles, regressions = predictability_report(panel)
         self.assertFalse(correlations.empty)
         self.assertEqual(len(quintiles), 5)
@@ -73,7 +73,7 @@ class SpxwResearchAnalysisTests(unittest.TestCase):
         self.assertLess(sensitivity.set_index("case").loc["combined_stress", "mean_pnl"], sensitivity.set_index("case").loc["base", "mean_pnl"])
 
     def test_risk_decomposition_reconciles_to_strategy_pnl(self) -> None:
-        panel = research_panel()
+        panel = study_panel()
         mask = panel["skew_rank"] >= 0.8
         summary, trades, by_year = risk_decomposition(panel, mask)
         self.assertFalse(summary.empty)

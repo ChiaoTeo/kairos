@@ -5,12 +5,12 @@ from pathlib import Path
 from kairos.data.products import (
     BTC_DERIBIT_OPTION_TRADES, BTC_DERIBIT_TERM_SKEW_DAILY, BTC_OPTION_QUOTES_HOURLY,
 )
-from kairos.data.client import ResearchDataClient
+from kairos.data.client import DatasetClient
 
 
 def btc_options_readiness(root: str | Path = "data") -> dict[str, object]:
     """Study-family gate; platform release quality is evaluated separately."""
-    repository = ResearchDataClient(root)
+    repository = DatasetClient(root)
     trade_meta = repository.metadata(BTC_DERIBIT_OPTION_TRADES.product)
     feature_meta = repository.metadata(BTC_DERIBIT_TERM_SKEW_DAILY.product)
     rows = repository.load_rows(BTC_DERIBIT_TERM_SKEW_DAILY.product)
@@ -42,7 +42,7 @@ def btc_options_readiness(root: str | Path = "data") -> dict[str, object]:
         )
     ]
     return {
-        "dataset_family": "btc_options", "signal_research_ready": all(gate["passed"] for gate in gates),
+        "dataset_family": "btc_options", "signal_study_ready": all(gate["passed"] for gate in gates),
         "executable_strategy_ready": strategy["passed"] and all(gate["passed"] for gate in execution_gates),
         "gates": gates + [cross_validation, strategy] + execution_gates,
         "blocked_execution_capabilities": [gate["name"] for gate in execution_gates if not gate["passed"]],

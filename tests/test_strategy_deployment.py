@@ -14,7 +14,7 @@ from kairos.strategies.registry import StrategyRegistry
 
 class StrategyDeploymentTest(unittest.TestCase):
     def test_draft_is_simulation_only_and_live_needs_live_lifecycle(self):
-        spec=BtcIronCondorStrategy(research_spec_hash="x").strategy_spec
+        spec=BtcIronCondorStrategy(study_spec_hash="x").strategy_spec
         policy=ExecutionPolicy("taker-combo-v1","1",ExecutionMode.TAKER,TimeInForce.IOC,Decimal("10"))
         with TemporaryDirectory() as directory:
             StrategyRegistry(directory).register(spec,policy);gate=StrategyDeploymentGate(directory)

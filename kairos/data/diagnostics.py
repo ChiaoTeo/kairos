@@ -129,11 +129,11 @@ class DataDiagnosticsService:
                 "backtest_quality_mismatch", "error", "backtest-approved release must be Q3 or Q4",
                 key, release.release_id,
             ))
-        if release.status is DatasetStatus.APPROVED_FOR_RESEARCH and release.quality_level not in {
-            QualityLevel.RESEARCH, QualityLevel.BACKTEST, QualityLevel.PRODUCTION,
+        if release.status is DatasetStatus.APPROVED_FOR_STUDY and release.quality_level not in {
+            QualityLevel.STUDY, QualityLevel.BACKTEST, QualityLevel.PRODUCTION,
         }:
             result.append(DataDiagnosticIssue(
-                "research_quality_mismatch", "error", "research-approved release must be Q2, Q3 or Q4",
+                "study_quality_mismatch", "error", "study-approved release must be Q2, Q3 or Q4",
                 key, release.release_id,
             ))
         if release.status is DatasetStatus.APPROVED_FOR_PRODUCTION and release.quality_level is not QualityLevel.PRODUCTION:

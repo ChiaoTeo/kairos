@@ -140,9 +140,9 @@ class MassiveEquityIdentityResolver:
                 result.content_sha256,
                 "massive",
                 "us-securities",
-                ("reference.identity.equity.us.massive@latest-research",),
-                DatasetStatus.APPROVED_FOR_RESEARCH,
-                QualityLevel.RESEARCH,
+                ("reference.identity.equity.us.massive@latest-study",),
+                DatasetStatus.APPROVED_FOR_STUDY,
+                QualityLevel.STUDY,
                 storage_kind=DatasetStorageKind.REFERENCE,
             ))
             catalog.save()
