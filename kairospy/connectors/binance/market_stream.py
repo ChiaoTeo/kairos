@@ -16,6 +16,7 @@ from kairospy.domain.market_data import (
     DerivativeMarketState,
     OrderBookDelta,
     OrderBookLevel,
+    OrderBookSnapshot,
     Quote,
     Trade,
 )
@@ -73,9 +74,13 @@ def parse_market_stream_event(row: dict[str, Any], instrument_lookup: dict[str, 
             event_type = "bookTicker"
         elif all(key in payload for key in ("U", "u", "b", "a")):
             event_type = "depthUpdate"
+        elif all(key in payload for key in ("lastUpdateId", "bids", "asks")):
+            event_type = "partialDepth"
         elif all(key in payload for key in ("p", "q", "t")):
             event_type = "trade"
     symbol = payload.get("s") or payload.get("symbol")
+    if symbol is None and len(instrument_lookup) == 1:
+        symbol = next(iter(instrument_lookup))
     if symbol not in instrument_lookup:
         raise LookupError(f"unknown Binance stream symbol: {symbol}")
     instrument_id = instrument_lookup[symbol]
@@ -87,6 +92,14 @@ def parse_market_stream_event(row: dict[str, Any], instrument_lookup: dict[str, 
         )
     if event_type in {"trade", "aggTrade"}:
         return Trade(instrument_id, Decimal(payload["p"]), Decimal(payload["q"]), event_time)
+    if event_type == "partialDepth":
+        return OrderBookSnapshot(
+            instrument_id,
+            tuple(OrderBookLevel(Decimal(price), Decimal(quantity)) for price, quantity in payload.get("bids", [])),
+            tuple(OrderBookLevel(Decimal(price), Decimal(quantity)) for price, quantity in payload.get("asks", [])),
+            int(payload["lastUpdateId"]),
+            event_time,
+        )
     if event_type == "depthUpdate":
         return OrderBookDelta(
             instrument_id,

@@ -51,13 +51,21 @@ class DataProductExperienceTests(unittest.TestCase):
             self.assertTrue(report["healthy"])
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
-                    "--lake-root", directory, "data", "search",
+                    "--lake-root", directory, "--format", "json", "data", "search",
                     "--dimension", "instrument=BTC-USDT", "--dimension", "frequency=1d",
                 ]), 0)
-                self.assertIn(str(product.key), output.getvalue())
+                search = json.loads(output.getvalue())
+                self.assertEqual(search["products"][0]["dataset"], str(product.key))
+                self.assertNotIn("release_id", json.dumps(search))
+                self.assertNotIn("logical_key", json.dumps(search))
+                self.assertNotIn("selected_release", json.dumps(search))
+                self.assertNotIn("layer", json.dumps(search))
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main(["--lake-root", directory, "data", "describe", "--dataset", str(product.key)]), 0)
-                self.assertIn(release.release_id, output.getvalue())
+                rendered = output.getvalue()
+                self.assertIn(str(product.key), rendered)
+                self.assertIn("ready_for_backtest", rendered)
+                self.assertNotIn(release.release_id, rendered)
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main(["--lake-root", directory, "--format", "json", "data", "doctor", "--dataset", str(product.key)]), 0)
                 self.assertIn('"healthy": true', output.getvalue())
@@ -68,7 +76,9 @@ class DataProductExperienceTests(unittest.TestCase):
                     "--lake-root", directory, "data", "query", "--dataset", release.release_id,
                     "--limit", "1",
                 ]), 0)
-                self.assertIn(release.release_id, output.getvalue())
+                rendered = output.getvalue()
+                self.assertIn(str(product.key), rendered)
+                self.assertNotIn("Release", rendered)
             snapshot = Path(directory) / "studies" / "input_snapshot.json"
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
@@ -85,7 +95,7 @@ class DataProductExperienceTests(unittest.TestCase):
                 self.assertEqual(main(["--lake-root", directory, "--format", "json", "data", "diagnostics", "--strict"]), 2)
                 self.assertIn("missing_quality", output.getvalue())
             doctor = DataDiagnosticsService(directory).doctor(str(product.key))
-            self.assertIn("reacquire", doctor["next"])
+            self.assertIn("missing_quality", doctor["issues"])
 
 
 if __name__ == "__main__":

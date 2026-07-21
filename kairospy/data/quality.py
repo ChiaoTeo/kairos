@@ -356,7 +356,7 @@ class DatasetQualityService:
     def _integrity(self, rows: list[dict[str, object]], release: DatasetRelease) -> tuple[QualityCheck, ...]:
         manifest_path = self.root / release.relative_path / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
-        manifest_hash = manifest.get("dataset_sha256") or manifest.get("content_sha256")
+        manifest_hash = manifest.get("dataset_sha256") or manifest.get("content_sha256") or manifest.get("content_hash")
         return (
             QualityCheck("non_empty", bool(rows), len(rows), "> 0 rows"),
             QualityCheck("content_hash", bool(release.content_hash), release.content_hash, "frozen content hash"),

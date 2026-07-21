@@ -1,6 +1,7 @@
 import argparse
 
-from kairospy.data import OutputFormat, DatasetClient
+from kairospy.data import OutputFormat
+from kairospy.product_surface import Data
 
 
 parser = argparse.ArgumentParser()
@@ -13,7 +14,7 @@ args = parser.parse_args()
 
 # Provider and venue are both explicit. A Deribit release can never silently
 # satisfy this Binance request.
-frame = DatasetClient().get(
+frame = Data().reader().get(
     args.dataset,
     provider=args.provider,
     venue=args.venue,

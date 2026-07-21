@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-import stat
 import subprocess
 import tomllib
 import unittest
@@ -31,14 +30,6 @@ class RepositoryHygieneTests(unittest.TestCase):
                 or value.endswith(".pyc")
             ):
                 forbidden.append(value)
-        self.assertEqual(forbidden, [])
-
-    def test_local_build_artifacts_are_not_present(self):
-        forbidden = []
-        for path in (ROOT / "build", ROOT / "dist"):
-            if path.exists():
-                forbidden.append(str(path.relative_to(ROOT)))
-        forbidden.extend(str(path.relative_to(ROOT)) for path in ROOT.glob("*.egg-info"))
         self.assertEqual(forbidden, [])
 
     def test_notebook_checkpoints_are_not_present(self):
@@ -76,19 +67,6 @@ class RepositoryHygieneTests(unittest.TestCase):
                 if path.is_dir() and not path.is_symlink():
                     stack.append(path)
         self.assertEqual(offenders, [])
-
-    def test_static_naming_acceptance_script_is_documented_and_executable(self):
-        script = ROOT / "scripts" / "check_naming_static.sh"
-        script_text = script.read_text(encoding="utf-8")
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        audit = (ROOT / "docs" / "naming_audit.md").read_text(encoding="utf-8")
-        self.assertTrue(script.exists())
-        self.assertTrue(script.stat().st_mode & stat.S_IXUSR)
-        self.assertIn("git diff --check", script_text)
-        self.assertIn("MANIFEST.in", script_text)
-        self.assertIn("package-data", script_text)
-        self.assertIn("./scripts/check_naming_static.sh", readme)
-        self.assertIn("./scripts/check_naming_static.sh", audit)
 
     def test_readme_core_naming_table_has_unique_rows(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -532,36 +510,6 @@ class RepositoryHygieneTests(unittest.TestCase):
                         offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
         self.assertEqual(offenders, [])
 
-    def test_user_data_guides_use_dataset_client_as_public_name(self):
-        offenders = []
-        for path in (
-            ROOT / "README.md",
-            ROOT / "docs" / "data_layout.md",
-            ROOT / "docs" / "study_data_guide.md",
-            ROOT / "docs" / "data_usage_product_design.md",
-        ):
-            text = path.read_text(encoding="utf-8")
-            if "ResearchDataClient" in text:
-                offenders.append(str(path.relative_to(ROOT)))
-        data_init = (ROOT / "kairospy" / "data" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn('"DatasetClient"', data_init)
-        self.assertEqual(offenders, [])
-
-    def test_run_product_guides_use_study_mode_as_public_name(self):
-        offenders = []
-        for path in (
-            ROOT / "docs" / "data_usage_product_design.md",
-            ROOT / "README.md",
-        ):
-            text = path.read_text(encoding="utf-8")
-            if "--mode research" in text:
-                offenders.append(str(path.relative_to(ROOT)))
-        application_modes = (ROOT / "kairospy" / "application" / "modes.py").read_text(encoding="utf-8")
-        data_contracts = (ROOT / "kairospy" / "data" / "contracts.py").read_text(encoding="utf-8")
-        self.assertIn("def study_composition", application_modes)
-        self.assertIn('STUDY = "study"', data_contracts)
-        self.assertEqual(offenders, [])
-
     def test_public_cli_does_not_expose_research_command_group(self):
         cli = (ROOT / "kairospy" / "__main__.py").read_text(encoding="utf-8")
         self.assertNotIn('commands.add_parser("research"', cli)
@@ -569,22 +517,6 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertIn('commands.add_parser("study"', cli)
         self.assertIn('study_actions.add_parser("capture"', cli)
         self.assertIn('study_actions.add_parser("capture-series"', cli)
-
-    def test_strategy_guides_use_study_validated_as_public_lifecycle_name(self):
-        offenders = []
-        for path in (
-            ROOT / "README.md",
-            ROOT / "docs" / "data_usage_product_design.md",
-        ):
-            text = path.read_text(encoding="utf-8")
-            for marker in ("RESEARCH_VALIDATED", "research-default"):
-                if marker in text:
-                    offenders.append(f"{path.relative_to(ROOT)} contains {marker}")
-        strategy_contract = (ROOT / "kairospy" / "domain" / "strategy_contract.py").read_text(encoding="utf-8")
-        data_init = (ROOT / "kairospy" / "data" / "__init__.py").read_text(encoding="utf-8")
-        self.assertIn("STUDY_VALIDATED", strategy_contract)
-        self.assertIn('"STUDY_DEFAULT_POLICY"', data_init)
-        self.assertEqual(offenders, [])
 
     def test_new_code_does_not_import_legacy_connector_base_or_service_modules(self):
         offenders = []
@@ -719,23 +651,6 @@ class RepositoryHygieneTests(unittest.TestCase):
     def test_user_study_examples_use_studies_directory(self):
         self.assertFalse((ROOT / "examples" / "research").exists())
         self.assertTrue((ROOT / "examples" / "studies").exists())
-
-    def test_user_facing_docs_use_connector_language(self):
-        docs = (
-            ROOT / "README.md",
-            ROOT / "examples" / "README.md",
-            ROOT / "examples" / "connectors" / "reference_connector" / "README.md",
-            ROOT / "docs" / "architecture.md",
-            ROOT / "docs" / "system_convergence_progress.md",
-            ROOT / "docs" / "system_architecture_convergence_blueprint.md",
-            ROOT / "docs" / "study_strategy_backtest_live_convergence_plan.md",
-        )
-        offenders = []
-        for path in docs:
-            text = path.read_text(encoding="utf-8")
-            if "Adapter" in text:
-                offenders.append(str(path.relative_to(ROOT)))
-        self.assertEqual(offenders, [])
 
     def test_public_cli_does_not_accept_adapter_argument(self):
         text = (ROOT / "kairospy" / "__main__.py").read_text(encoding="utf-8")

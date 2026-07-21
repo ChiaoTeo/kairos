@@ -7,6 +7,7 @@ from kairospy.configuration import DEFAULT_LAKE_ROOT
 
 from .catalog import DataCatalog
 from .contracts import DatasetRelease, DatasetStatus, QualityLevel
+from .freshness import PAPER_LIVE_FRESHNESS_POLICY, evaluate_live_view_freshness, load_live_view_manifest
 
 
 REQUIRED_RELEASE_DOCUMENTS = (
@@ -71,6 +72,9 @@ class DataDiagnosticsService:
         }
 
     def doctor(self, dataset: str) -> dict[str, object]:
+        return DatasetReadinessService(self.root).doctor(dataset)
+
+    def technical_doctor(self, dataset: str) -> dict[str, object]:
         product = self.catalog.product(dataset)
         releases = self.catalog.releases(product)
         issues = []
@@ -89,7 +93,6 @@ class DataDiagnosticsService:
                 "code": item.code, "severity": item.severity, "message": item.message,
                 "logical_key": item.logical_key, "release_id": item.release_id,
             } for item in issues],
-            "next": self._next_action(product=str(product.key), releases=releases, issues=issues),
         }
 
     def _release_issues(self, release: DatasetRelease) -> list[DataDiagnosticIssue]:
@@ -156,3 +159,182 @@ class DataDiagnosticsService:
         if any("quality" in item.code for item in issues):
             return f"review quality report and revalidate {product}"
         return f"kairospy data describe --dataset {product}"
+
+
+class DatasetReadinessService:
+    def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT) -> None:
+        self.root = Path(root)
+        self.catalog = DataCatalog(self.root)
+
+    def doctor(self, dataset: str) -> dict[str, object]:
+        product = None
+        releases: tuple[DatasetRelease, ...] = ()
+        technical_issues: list[DataDiagnosticIssue] = []
+        try:
+            product = self.catalog.product(dataset)
+            releases = self.catalog.releases(product)
+        except KeyError:
+            product = None
+        if product is not None:
+            for release in releases:
+                technical_issues.extend(DataDiagnosticsService(self.root)._release_issues(release))
+
+        live_views = self._live_views(dataset)
+        historical = self._historical_status(dataset, releases, technical_issues)
+        live = self._live_status(live_views)
+        ready = sorted(set(historical["ready_for"]) | set(live["ready_for"]))
+        blocked = sorted(set(historical["blocked_for"]) | set(live["blocked_for"]))
+        issues = list(historical["issues"]) + list(live["issues"])
+        status = self._overall_status(historical, live, releases, live_views, issues)
+        return {
+            "dataset": dataset,
+            "status": status,
+            "healthy": status.startswith("ready"),
+            "source_kind": self._source_kind(releases, live_views),
+            "time": product.primary_time if product is not None else self._live_primary_time(live_views),
+            "historical": historical,
+            "live": live,
+            "ready_for": ready,
+            "blocked_for": blocked,
+            "issues": issues,
+        }
+
+    def _historical_status(
+        self,
+        dataset: str,
+        releases: tuple[DatasetRelease, ...],
+        technical_issues: list[DataDiagnosticIssue],
+    ) -> dict[str, object]:
+        if not releases:
+            return {
+                "status": "not_configured",
+                "ready_for": [],
+                "blocked_for": ["study", "backtest"],
+                "issues": [],
+            }
+        blocking_codes = {
+            "missing_release_path",
+            "missing_content_hash",
+            "missing_quality",
+            "backtest_quality_mismatch",
+            "study_quality_mismatch",
+            "production_quality_mismatch",
+            "release_storage_kind_mismatch",
+            "release_layout_version_mismatch",
+        }
+        errors = [item for item in technical_issues if item.severity == "error" and item.code in blocking_codes]
+        if errors:
+            return {
+                "status": "needs_fix",
+                "ready_for": [],
+                "blocked_for": ["study", "backtest"],
+                "issues": [item.code for item in errors],
+            }
+        best = sorted(releases, key=lambda item: item.published_at or item.release_version)[-1]
+        ready_for = ["study"]
+        blocked_for: list[str] = []
+        if best.status is DatasetStatus.APPROVED_FOR_BACKTEST:
+            ready_for.append("backtest")
+        else:
+            blocked_for.append("backtest")
+        return {
+            "status": "ready_for_backtest" if "backtest" in ready_for else "ready_for_study",
+            "ready_for": ready_for,
+            "blocked_for": blocked_for,
+            "issues": [],
+        }
+
+    def _live_status(self, live_views) -> dict[str, object]:
+        if not live_views:
+            return {
+                "status": "not_configured",
+                "ready_for": [],
+                "blocked_for": ["shadow", "paper", "live"],
+                "issues": [],
+            }
+        latest = live_views[-1]
+        gate = evaluate_live_view_freshness(latest, policy=PAPER_LIVE_FRESHNESS_POLICY)
+        diagnostics = dict(gate.channel_diagnostics)
+        evidence = latest.live_data_plane.get("freshness_evidence")
+        capture_enabled = bool(isinstance(evidence, dict) and int(evidence.get("event_count") or 0) > 0)
+        summary = {
+            "freshness_status": gate.freshness_status,
+            "max_age_seconds": gate.max_age_seconds,
+            "dropped": int(diagnostics.get("dropped") or 0),
+            "overflow": int(diagnostics.get("overflow") or 0),
+            "sequence_gaps": int(diagnostics.get("sequence_gaps") or 0),
+            "capture": "enabled" if capture_enabled else "not_verified",
+        }
+        if gate.passed:
+            return {
+                "status": "ready_for_paper",
+                "ready_for": ["shadow", "paper"],
+                "blocked_for": ["live"],
+                "issues": [],
+                **summary,
+            }
+        if gate.freshness_status == "configured":
+            issues = ["freshness_not_verified"]
+        elif gate.channel_failures:
+            issues = list(gate.channel_failures)
+        elif gate.freshness_status not in PAPER_LIVE_FRESHNESS_POLICY.passing_statuses:
+            issues = [f"freshness_{gate.freshness_status}"]
+        else:
+            issues = ["freshness_not_verified"]
+        return {
+            "status": "needs_fix",
+            "ready_for": ["shadow"],
+            "blocked_for": ["paper", "live"],
+            "issues": issues,
+            **summary,
+        }
+
+    def _live_views(self, dataset: str):
+        directory = self.root / "live-views" / dataset.replace(".", "/")
+        manifests = []
+        for path in sorted(directory.glob("*/manifest.json")):
+            manifest = load_live_view_manifest(path)
+            if manifest.dataset_id == dataset:
+                manifests.append(manifest)
+        return manifests
+
+    @staticmethod
+    def _overall_status(historical, live, releases, live_views, issues) -> str:
+        if issues and historical["status"] == "needs_fix":
+            return "needs_fix"
+        if live_views and live["status"] == "ready_for_paper":
+            return "ready_for_paper"
+        if releases and historical["status"] in {"ready_for_study", "ready_for_backtest"}:
+            return str(historical["status"])
+        if live_views:
+            return str(live["status"])
+        return "not_configured"
+
+    @staticmethod
+    def _source_kind(releases: tuple[DatasetRelease, ...], live_views) -> str | None:
+        if releases:
+            providers = {release.provider for release in releases}
+            if providers <= {"user-write", None}:
+                return "user_defined"
+            return "built_in"
+        if live_views:
+            source = live_views[-1].source
+            value = source.get("source_kind") if isinstance(source, dict) else None
+            return str(value or "user_defined")
+        return None
+
+    @staticmethod
+    def _live_primary_time(live_views) -> str | None:
+        return live_views[-1].primary_time if live_views else None
+
+    @staticmethod
+    def _next_action(dataset: str, historical, live, issues: list[str]) -> str:
+        if historical["status"] == "needs_fix":
+            return f"reacquire {dataset}; current release needs metadata or quality repair"
+        if live["status"] == "needs_fix":
+            return f"kairospy data doctor {dataset} --verbose"
+        if historical["status"] == "not_configured" and live["status"] == "not_configured":
+            return f"kairospy data add <file-or-connector> --name {dataset}"
+        if "backtest" in historical.get("blocked_for", ()):
+            return f"kairospy data promote {dataset} --for backtest"
+        return f"kairospy data query --dataset {dataset}"

@@ -87,12 +87,21 @@ class KairosApiTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertIn("prepare-spxw-daily-ohlcv", completed.stdout)
-        self.assertIn("prepare-option-daily-ohlcv", completed.stdout)
-        self.assertIn("prepare-equity-daily-ohlcv", completed.stdout)
-        self.assertIn("compatibility alias for prepare-spxw-daily-ohlcv", completed.stdout)
-        self.assertIn("compatibility alias for prepare-option-daily-ohlcv", completed.stdout)
-        self.assertIn("compatibility alias for prepare-equity-daily-ohlcv", completed.stdout)
+        self.assertNotIn("prepare-spxw-daily-ohlcv", completed.stdout)
+        self.assertNotIn("prepare-option-daily-ohlcv", completed.stdout)
+        self.assertNotIn("prepare-equity-daily-ohlcv", completed.stdout)
+        for command, alias in (
+            ("prepare-spxw-day-aggs", "prepare-spxw-daily-ohlcv"),
+            ("prepare-option-day-aggs", "prepare-option-daily-ohlcv"),
+            ("prepare-equity-day-aggs", "prepare-equity-daily-ohlcv"),
+        ):
+            detailed = subprocess.run(
+                [sys.executable, "-m", "kairospy", "data", command, "--help"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertIn(f"compatibility alias for {alias}", detailed.stdout)
 
 
 if __name__ == "__main__":

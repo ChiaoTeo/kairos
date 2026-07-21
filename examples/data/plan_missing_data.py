@@ -1,12 +1,12 @@
 from datetime import datetime, timezone
 
-from kairospy.data import DatasetClient
 from kairospy.data.products import BTC_SPOT_DAILY
 from kairospy.data.bootstrap import register_default_products
+from kairospy.product_surface import Data
 
 
 register_default_products()
-data = DatasetClient()
+data = Data().reader()
 plan = data.plan(
     BTC_SPOT_DAILY.product,
     start=datetime(2025, 1, 1, tzinfo=timezone.utc),

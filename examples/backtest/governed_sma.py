@@ -1,7 +1,7 @@
 """Run one SMA strategy through batch and canonical async replay paths.
 
 Default execution is a deterministic fixture and needs no data download. Pass
---dataset to consume an approved Q3/Q4 release from DatasetClient.
+--dataset to consume an approved Q3/Q4 release from a Data reader.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import json
 from kairospy.contracts import canonicalize_market_event
 from kairospy.application import GovernedStrategyRunLoop, run_target_backtest
 from kairospy.configuration import DEFAULT_LAKE_ROOT
-from kairospy.data import OutputFormat, DatasetClient, RunMode
+from kairospy.data import OutputFormat, RunMode
 from kairospy.domain.identity import InstrumentId
 from kairospy.domain.market_data import Bar
 from kairospy.market_data import IterableEventSource, MarketEventEnvelope, MarketEventType
@@ -27,6 +27,7 @@ from kairospy.strategies.sma_cross_study_backtest import (
 from kairospy.features import SmaFactorConfig, SmaFactorRuntime
 from kairospy.strategies import GovernedStrategyRuntime, SmaCrossStrategy, SmaCrossStrategyConfig, StrategyContext
 from kairospy.strategies.specs import sma_strategy_spec
+from kairospy.product_surface import Data
 
 
 def fixture_bars() -> tuple[Bar, ...]:
@@ -46,7 +47,7 @@ def fixture_bars() -> tuple[Bar, ...]:
 def governed_bars(
     lake_root: str, dataset: str, start: str | None, end: str | None,
 ) -> tuple[str, tuple[Bar, ...]]:
-    query = DatasetClient(lake_root, run_mode=RunMode.BACKTEST).get(
+    query = Data(lake_root).reader(run_mode=RunMode.BACKTEST).get(
         dataset, start=start, end=end,
         fields=("instrument_id", "period_start", "period_end", "open", "high", "low", "close", "volume"),
     )

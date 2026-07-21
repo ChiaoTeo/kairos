@@ -9,7 +9,8 @@ import tempfile
 import unittest
 from decimal import Decimal
 
-from kairospy.product_surface import DataProductApi
+from kairospy.data.freshness import update_live_view_manifest_freshness
+from kairospy.product_surface import Data
 from kairospy.product_workflow import _write_binance_spot_bar_capture
 
 
@@ -22,6 +23,14 @@ def command(root: Path, *args: str) -> dict[str, object]:
         cwd=ROOT, check=True, capture_output=True, text=True,
     )
     return json.loads(completed.stdout)
+
+
+def live_manifest_path(root: Path, payload: dict[str, object]) -> Path:
+    directory = root / "live-views" / str(payload["dataset"]).replace(".", "/")
+    manifests = sorted(directory.glob("*/manifest.json"))
+    if not manifests:
+        raise AssertionError(f"no live manifest found for {payload['dataset']}")
+    return manifests[-1]
 
 
 class ProductCliTests(unittest.TestCase):
@@ -334,7 +343,7 @@ class ProductCliTests(unittest.TestCase):
             try:
                 os.environ["KAIROSPY_TEST_CLI_PROVIDER_TOKEN"] = "cli-secret-token"
                 downloaded = command(root, "data", "download", "provider-macro")
-                rows = DataProductApi(root).dataset("reference.macro.provider").rows(columns=("metric", "value"))
+                rows = Data(root).dataset("reference.macro.provider").rows(columns=("metric", "value"))
                 os.environ.pop("KAIROSPY_TEST_CLI_PROVIDER_TOKEN", None)
                 reused = command(root, "data", "download", "provider-macro")
                 provider_calls = (spec_dir / "calls.txt").read_text(encoding="utf-8")
@@ -395,7 +404,7 @@ class ProductCliTests(unittest.TestCase):
             registered_provider = command(root, "data", "register-provider", "--name", "cli-provider", "--spec", str(provider_spec))
             command(root, "data", "register-download", "--key", "cli-provider-data", "--spec", str(download_spec))
             downloaded = command(root, "data", "download", "cli-provider-data")
-            rows = DataProductApi(root).dataset("reference.provider.cli").rows(columns=("symbol", "score"))
+            rows = Data(root).dataset("reference.provider.cli").rows(columns=("symbol", "score"))
 
         self.assertEqual(registered_provider["operation"], "register-provider")
         self.assertEqual(downloaded["source"]["provider"], "cli-provider")
@@ -445,7 +454,7 @@ class ProductCliTests(unittest.TestCase):
             try:
                 os.environ["KAIROSPY_TEST_CLI_CONFIG_PROVIDER_TOKEN"] = "cli-config-secret-token"
                 downloaded = command(root, "data", "download", "cli-config-provider")
-                rows = DataProductApi(root).dataset("reference.provider.config.cli").rows(columns=("symbol", "value"))
+                rows = Data(root).dataset("reference.provider.config.cli").rows(columns=("symbol", "value"))
             finally:
                 if original_token is None:
                     os.environ.pop("KAIROSPY_TEST_CLI_CONFIG_PROVIDER_TOKEN", None)
@@ -709,6 +718,48 @@ class ProductCliTests(unittest.TestCase):
         self.assertEqual(failed.returncode, 2)
         self.assertIn("strategy promotion transition failed", failed.stderr)
         self.assertEqual(status["lifecycle"], "DRAFT")
+
+    def test_run_paper_accepts_live_dataset_name_and_resolves_fresh_live_view(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            connector = root / "quote_live.py"
+            connector.write_text(
+                "async def stream(request):\n"
+                "    if False:\n"
+                "        yield {}\n",
+                encoding="utf-8",
+            )
+            connected = command(root, "data", "connect", str(connector),
+                "--as", "market.quote.test", "--time", "event_time",
+                "--account", "paper-feed", "--instrument", "TEST", "--channel", "quote")
+            failed = subprocess.run(
+                [sys.executable, "-m", "kairospy", "--format", "json", "--lake-root", str(root),
+                 "run", "paper", "--strategy", "sma-cross-v1@1.2.0",
+                 "--data", "quote=market.quote.test", "--run-root", str(root / "runs")],
+                cwd=ROOT, check=False, capture_output=True, text=True,
+            )
+            update_live_view_manifest_freshness(live_manifest_path(root, connected), {
+                "passed": True,
+                "event_count": 3,
+                "channel_dropped": 0,
+                "channel_overflow": 0,
+                "sequence_gaps": 0,
+            })
+            planned = command(root, "run", "paper", "--strategy", "sma-cross-v1@1.2.0",
+                "--data", "quote=market.quote.test", "--run-root", str(root / "runs"))
+
+        self.assertEqual(failed.returncode, 2)
+        self.assertIn("paper-live-freshness", failed.stderr)
+        self.assertEqual(planned["status"], "ready_for_paper")
+        self.assertFalse(planned["will_execute"])
+        self.assertEqual(planned["data_inputs"][0]["name"], "quote")
+        self.assertEqual(planned["data_inputs"][0]["dataset"], "market.quote.test")
+        self.assertTrue(planned["data_inputs"][0]["freshness_gate"]["passed"])
+        self.assertEqual(planned["runtime_contract"]["feed_bindings"][0]["dataset"], "market.quote.test")
+        self.assertNotIn("live_view_id", json.dumps(planned))
+        self.assertNotIn("artifact_ref", json.dumps(planned))
+        self.assertNotIn("journal", json.dumps(planned))
+        self.assertNotIn("manifest.json", json.dumps(planned))
 
     def test_public_binance_bar_capture_can_drive_strategy_paper(self) -> None:
         class Transport:

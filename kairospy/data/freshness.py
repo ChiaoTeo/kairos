@@ -242,6 +242,41 @@ def resolve_live_view_subscription(
     )
 
 
+def resolve_live_dataset_subscription(
+    root: str | Path,
+    *,
+    name: str,
+    dataset_id: str,
+    policy: LiveViewFreshnessPolicy | None = None,
+) -> LiveViewSubscriptionBinding:
+    profile = policy or PAPER_LIVE_FRESHNESS_POLICY
+    directory = Path(root) / "live-views" / dataset_id.replace(".", "/")
+    candidates = []
+    for path in sorted(directory.glob("*/manifest.json")):
+        manifest = load_live_view_manifest(path)
+        if manifest.dataset_id == dataset_id:
+            candidates.append(manifest)
+    passing = [item for item in candidates if evaluate_live_view_freshness(item, policy=profile).passed]
+    if not passing:
+        if candidates:
+            gate = evaluate_live_view_freshness(candidates[-1], policy=profile)
+            raise ValueError(gate.reason)
+        raise ValueError(f"paper/live run requires healthy Live View freshness for data input {name!r}")
+    manifest = passing[-1]
+    gate = evaluate_live_view_freshness(manifest, policy=profile)
+    plane = manifest.live_data_plane
+    return LiveViewSubscriptionBinding(
+        name,
+        manifest.dataset_id,
+        manifest.live_view_id,
+        manifest.artifact_ref,
+        str(plane.get("event_source_contract") or "EventSource[DataSetRecord]"),
+        str(plane.get("channel_contract") or "BoundedEventChannel"),
+        str(plane.get("transport") or "connector"),
+        gate,
+    )
+
+
 def freshness_gate_to_primitive(gate: LiveViewFreshnessGateResult) -> dict[str, object]:
     return {
         "live_view_id": gate.live_view_id,

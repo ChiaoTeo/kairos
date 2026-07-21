@@ -354,7 +354,22 @@ def render_data_catalog(products: Sequence[Mapping[str, object]]) -> str:
 
 def render_dataset_list(title: str, products: Sequence[Mapping[str, object]]) -> str:
     rows = []
+    if not products:
+        return render_status_table(title, rows, columns=("dataset", "status", "time", "ready_for", "blocked_for", "issues"))
     for item in products:
+        if "status" in item or "ready_for" in item or "blocked_for" in item:
+            ready_for = item.get("ready_for")
+            blocked_for = item.get("blocked_for")
+            issues = item.get("issues")
+            rows.append({
+                "dataset": item.get("dataset") or item.get("key") or "",
+                "status": item.get("status", ""),
+                "time": item.get("time", ""),
+                "ready_for": ", ".join(str(value) for value in ready_for) if isinstance(ready_for, list) else ready_for or "",
+                "blocked_for": ", ".join(str(value) for value in blocked_for) if isinstance(blocked_for, list) else blocked_for or "",
+                "issues": ", ".join(str(value) for value in issues) if isinstance(issues, list) else issues or "",
+            })
+            continue
         selected = item.get("selected_release")
         rows.append({
             "key": item.get("logical_key") or item.get("key") or item.get("dataset") or "",
@@ -364,7 +379,26 @@ def render_dataset_list(title: str, products: Sequence[Mapping[str, object]]) ->
             "primary_time": item.get("primary_time", ""),
             "title": item.get("title", ""),
         })
+    if rows and ("status" in rows[0] or "ready_for" in rows[0]):
+        return render_status_table(title, rows, columns=("dataset", "status", "time", "ready_for", "blocked_for", "issues"))
     return render_status_table(title, rows, columns=("key", "layer", "releases", "selected", "primary_time", "title"))
+
+
+def render_builtin_data_products(title: str, products: Sequence[Mapping[str, object]]) -> str:
+    lines = [title]
+    for item in products:
+        lines.extend([
+            "",
+            f"Key: {item.get('key') or ''}",
+            f"Title: {item.get('title') or ''}",
+            f"Capability: {item.get('capability') or ''}",
+            f"Requires Account: {'yes' if item.get('requires_account') else 'no'}",
+            f"Default Dataset: {item.get('default_dataset_name') or ''}",
+        ])
+        aliases = item.get("aliases")
+        if isinstance(aliases, Sequence) and not isinstance(aliases, (str, bytes)) and aliases:
+            lines.append("Aliases: " + ", ".join(str(alias) for alias in aliases))
+    return "\n".join(lines).rstrip()
 
 
 def render_dataset_releases(title: str, releases: Sequence[Mapping[str, object]]) -> str:
@@ -397,6 +431,10 @@ def render_dataset_detail(title: str, payload: Mapping[str, object]) -> str:
             }
             for item in releases if isinstance(item, Mapping)
         ]
+        release_rows.extend(
+            {"release_id": str(item), "quality": "", "status": "", "provider": ""}
+            for item in releases if not isinstance(item, Mapping)
+        )
         output.append(render_status_table("Releases", release_rows, columns=("release_id", "quality", "status", "provider")))
     return "\n\n".join(item for item in output if item)
 

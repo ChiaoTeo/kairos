@@ -25,7 +25,7 @@ from .freshness import (
     find_live_view_manifest, live_view_channel_diagnostics, live_view_freshness_evidence,
     live_view_freshness_policy,
     live_view_manifest_path, load_live_view_manifest, update_live_view_manifest_freshness,
-    resolve_live_view_subscription, write_live_view_manifest,
+    resolve_live_dataset_subscription, resolve_live_view_subscription, write_live_view_manifest,
 )
 from .quality import DatasetQualityService, QualityAssessment, QualityCheck
 from .preparation import (
@@ -33,6 +33,21 @@ from .preparation import (
     BACKTEST_DEFAULT_POLICY, DATA_PROMOTION_POLICY_PROFILES, PRODUCTION_DEFAULT_POLICY,
     STUDY_DEFAULT_POLICY,
     data_promotion_policy_profile, evaluate_data_promotion_policy,
+)
+from .metadata import DatasetMetadata, DatasetMetadataInference, FieldMetadata
+from .protocols import (
+    DataProtocolRegistry, HistoricalDataProtocol, HistoricalDataRequest,
+    LiveDataProtocol, LiveDataRequest,
+)
+from .historical_service import HistoricalDataService
+from .live_service import LiveDataService
+from .manifest import (
+    DEFAULT_DATA_MANIFEST, DataManifest, DataManifestDataset, DataManifestError,
+)
+from .source_cache import SourceCacheEntry, SourceCacheStore
+from .builtin import (
+    BuiltInDataProduct, BuiltInDataProductRegistry, BuiltInHistoricalDataProtocol, BuiltInLiveDataProtocol,
+    default_builtin_protocol_registry,
 )
 
 __all__ = ["DataCatalog", "DatasetClient", "ensure_release_metadata", "verify_release_metadata",
@@ -57,7 +72,7 @@ __all__ += [
     "find_live_view_manifest", "live_view_channel_diagnostics", "live_view_freshness_evidence",
     "live_view_freshness_policy",
     "live_view_manifest_path", "load_live_view_manifest", "update_live_view_manifest_freshness",
-    "resolve_live_view_subscription", "write_live_view_manifest",
+    "resolve_live_dataset_subscription", "resolve_live_view_subscription", "write_live_view_manifest",
 ]
 __all__ += ["DatasetQualityService", "QualityAssessment", "QualityCheck"]
 __all__ += [
@@ -66,3 +81,17 @@ __all__ += [
     "STUDY_DEFAULT_POLICY", "data_promotion_policy_profile",
     "evaluate_data_promotion_policy",
 ]
+__all__ += [
+    "DatasetMetadata", "DatasetMetadataInference", "FieldMetadata",
+    "DataProtocolRegistry", "HistoricalDataProtocol", "HistoricalDataRequest",
+    "LiveDataProtocol", "LiveDataRequest",
+    "HistoricalDataService", "LiveDataService",
+]
+__all__ += [
+    "BuiltInDataProduct", "BuiltInDataProductRegistry", "BuiltInHistoricalDataProtocol", "BuiltInLiveDataProtocol",
+    "default_builtin_protocol_registry",
+]
+__all__ += [
+    "DEFAULT_DATA_MANIFEST", "DataManifest", "DataManifestDataset", "DataManifestError",
+]
+__all__ += ["SourceCacheEntry", "SourceCacheStore"]

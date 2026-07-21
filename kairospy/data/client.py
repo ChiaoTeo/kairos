@@ -102,6 +102,10 @@ class DatasetClient:
     Users address datasets by catalog ID/logical alias and never need to know
     whether the physical source is typed Parquet, event Parquet, or a
     MarketReplayDataset.  Arrow is the native return type; pandas/polars are conversion formats.
+
+    DatasetClient is the consumption-side API.  Use Data or the
+    ``kairospy data`` CLI for product setup workflows such as add, use, connect,
+    sample, validate, promote, and audit.
     """
 
     def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT, *, catalog_path: str | Path | None = None,
@@ -181,19 +185,9 @@ class DatasetClient:
         return rows
 
     def describe(self, dataset: DatasetLike) -> dict[str, object]:
-        product = self.catalog.product(dataset)
-        releases = self.catalog.releases(product)
-        selected = self.catalog.release(product) if releases else None
-        return {
-            "logical_key": str(product.key), "title": product.title, "description": product.description,
-            "layer": product.layer.value, "dimensions": dict(product.dimensions),
-            "primary_time": product.primary_time, "default_view": product.default_view.value,
-            "sources": [{"provider": item.provider, "venue": item.venue, "priority": item.priority,
-                         "quality_level": item.quality_level.value, "acquisition_modes": list(item.acquisition_modes)}
-                        for item in product.sources],
-            "selected_release": _release_summary(selected) if selected else None,
-            "releases": [_release_summary(item) for item in releases],
-        }
+        from .diagnostics import DatasetReadinessService
+
+        return DatasetReadinessService(self.root).doctor(str(dataset))
 
     def coverage(self, dataset: DatasetLike, *, provider: str | None = None,
                  venue: str | None = None) -> dict[str, object]:
@@ -259,11 +253,16 @@ class DatasetClient:
         estimate = connector.estimate(request) if hasattr(connector, "estimate") else AcquisitionEstimate(len(plan.missing))
         return replace(plan, connector_available=True, estimate=estimate)
 
-    def acquire(self, plan: AcquisitionPlan, *, instruments=(), fields=(), refresh: bool = False):
+    def acquire(self, plan: AcquisitionPlan, *, instruments=(), fields=(), refresh: bool = False,
+                aliases: Iterable[str] = ()):
         if self.run_mode is RunMode.BACKTEST:
             raise RuntimeError("backtest mode forbids data acquisition; prepare and freeze a release before running")
+        alias_values = tuple(str(item).strip() for item in aliases if str(item).strip())
         if plan.complete and not refresh:
-            return self.catalog.release(plan.logical_key)
+            release = self.catalog.release(plan.logical_key)
+            for alias in alias_values:
+                release = self.catalog.add_release_alias(release.release_id, alias)
+            return release
         if plan.selected is None:
             raise DataUnavailableError(plan)
         missing = (plan.requested,) if refresh else plan.missing
@@ -281,6 +280,8 @@ class DatasetClient:
             raise ValueError("provider connector returned a release with a mismatched provider")
         self.catalog.register_release(release)
         self.catalog.save()
+        for alias in alias_values:
+            release = self.catalog.add_release_alias(release.release_id, alias)
         return release
 
     def _check_acquisition_limits(self, request: AcquisitionRequest, estimate: AcquisitionEstimate) -> None:

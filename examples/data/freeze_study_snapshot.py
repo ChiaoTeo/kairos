@@ -1,9 +1,9 @@
 from kairospy import __version__
-from kairospy.data import DatasetClient
+from kairospy.product_surface import Data
 from kairospy.data.products import BTC_SPOT_DAILY
 
 
-data = DatasetClient()
+data = Data().reader()
 query = data.get(
     BTC_SPOT_DAILY.product,
     start="2025-01-01T00:00:00Z",

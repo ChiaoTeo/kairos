@@ -80,7 +80,11 @@ class DatasetClientTests(unittest.TestCase):
             self.assertEqual(loaded.search(venue="binance"), (product,))
             client = DatasetClient(temporary)
             self.assertEqual(client.search(venue="binance"), (product,))
-            self.assertEqual(client.describe(product)["selected_release"]["release_id"], "ds_btc_1")
+            described = client.describe(product)
+            self.assertEqual(described["dataset"], "market.trades.crypto.btc_usdt")
+            self.assertEqual(described["status"], "needs_fix")
+            self.assertNotIn("releases", described)
+            self.assertIn("missing_release_path", described["historical"]["issues"])
             products = client.list(venue="binance")
             self.assertEqual(products[0]["logical_key"], "market.trades.crypto.btc_usdt")
             self.assertEqual(products[0]["release_count"], 1)
@@ -101,7 +105,10 @@ class DatasetClientTests(unittest.TestCase):
             ])
             self.assertEqual(result, 0)
             payload = json.loads(output.getvalue())
-            self.assertEqual(payload["products"][0]["logical_key"], str(BTC_SPOT_DAILY.key))
+            self.assertEqual(payload["products"][0]["dataset"], str(BTC_SPOT_DAILY.key))
+            self.assertEqual(payload["products"][0]["status"], "not_configured")
+            self.assertNotIn("logical_key", payload["products"][0])
+            self.assertNotIn("layer", payload["products"][0])
 
     def test_data_releases_cli_reports_local_versions(self):
         with TemporaryDirectory() as temporary, io.StringIO() as output, redirect_stdout(output):
@@ -459,6 +466,37 @@ class DatasetClientTests(unittest.TestCase):
             backtest = DatasetClient(temporary, providers=providers, run_mode=RunMode.BACKTEST)
             with self.assertRaisesRegex(RuntimeError, "forbids data acquisition"):
                 backtest.acquire(plan)
+
+    def test_acquire_can_expose_release_under_dataset_alias(self):
+        class Connector:
+            provider = "test-provider"
+
+            def supports(self, logical_key):
+                return logical_key == "market.trades.crypto.test"
+
+            def acquire(self, request):
+                return DatasetRelease(
+                    "ds_alias_1", DatasetKey(request.logical_key), "1", "market.trade", "1",
+                    "test", "1", "canonical/test", "parquet", provider=self.provider,
+                )
+
+        with TemporaryDirectory() as temporary:
+            catalog = DataCatalog(temporary)
+            product = DataProductDefinition(
+                DatasetKey("market.trades.crypto.test"), "Test trades", DatasetLayer.CANONICAL,
+                sources=(SourceBinding("test-provider", "test", 100),),
+            )
+            catalog.register_product(product)
+            catalog.save()
+            providers = ProviderRegistry()
+            providers.register(Connector())
+            client = DatasetClient(temporary, providers=providers)
+            plan = client.plan(product.key, start=NOW, end=NOW + timedelta(hours=1))
+
+            release = client.acquire(plan, aliases=("research.trades",))
+
+            self.assertIn("research.trades", release.aliases)
+            self.assertEqual(client.catalog.release("research.trades").release_id, "ds_alias_1")
 
     def test_acquisition_limits_fail_before_provider_network_call(self):
         class Archive:

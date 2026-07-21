@@ -15,7 +15,7 @@ from kairospy.application import builtin_runtime_strategy_model_registry
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.market_data import BoundedEventChannel
 from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
-from kairospy.product_surface import DataProductApi, RunProductApi, StrategyProductApi, StudyProductApi
+from kairospy.product_surface import Data, RunProductApi, StrategyProductApi, StudyProductApi
 
 
 ROOT = Path(__file__).parents[1]
@@ -68,7 +68,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             run = RunProductApi(root)
@@ -158,7 +158,7 @@ class FourProductSurfaceTests(unittest.TestCase):
             live_connector.write_text("def subscribe(params, context):\n    yield {}\n", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "freshness.max_age_seconds"):
-                DataProductApi(root).write_live(
+                Data(root).write_live(
                     live_connector, as_dataset="market.quotes.equity.us", contract=contract,
                 )
 
@@ -166,7 +166,7 @@ class FourProductSurfaceTests(unittest.TestCase):
             payload["freshness"] = {"max_age_seconds": "30"}
             contract.write_text(json.dumps(payload), encoding="utf-8")
 
-            live_view = DataProductApi(root).write_live(
+            live_view = Data(root).write_live(
                 live_connector, as_dataset="market.quotes.equity.us", contract=contract,
             )
 
@@ -197,7 +197,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "    yield {'available_time': '2026-01-01T00:00:00Z', 'instrument_id': 'equity:US:AAPL', 'sentiment': 0.4}\n",
                 encoding="utf-8",
             )
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             run = RunProductApi(root)
@@ -286,7 +286,7 @@ class FourProductSurfaceTests(unittest.TestCase):
             )
             live_connector.write_text("def subscribe(params, context):\n    yield {}\n", encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             run = RunProductApi(root)
@@ -397,7 +397,7 @@ class FourProductSurfaceTests(unittest.TestCase):
             factor_file = root / "factor.py"
             factor_file.write_text("def compute(data):\n    return data['bars']\n", encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             run = RunProductApi(root)
@@ -466,7 +466,7 @@ class FourProductSurfaceTests(unittest.TestCase):
             factor_file = root / "factor.py"
             factor_file.write_text("def compute(inputs, params, context):\n    return inputs['bars']\n", encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             data.download("tutorial-sma-data")
             study.open("readiness-study")
@@ -538,7 +538,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "quality": {"minimum": "Q2"},
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             registered = data.register_download("custom-bars", spec)
             downloaded = data.download("custom-bars")
             added = StudyProductApi(root).open("custom-study")
@@ -580,7 +580,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "side_effects_allowed": False,
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             data.download("tutorial-sma-data")
@@ -636,7 +636,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             registered = data.register_download("provider-sentiment", spec)
             original_token = os.environ.pop("KAIROSPY_TEST_PROVIDER_TOKEN", None)
             try:
@@ -707,7 +707,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             registered_provider = data.register_provider("catalog-provider", provider_spec)
             data.register_download("catalog-provider-data", download_spec)
             downloaded = data.download("catalog-provider-data")
@@ -757,7 +757,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             data.register_download("config-provider-data", spec)
             original_token = os.environ.pop("KAIROSPY_TEST_CONFIG_PROVIDER_TOKEN", None)
             try:
@@ -798,7 +798,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "runtime": {"filesystem": "study_inputs_only"},
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             data.download("tutorial-sma-data")
@@ -873,7 +873,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "runtime": {"paths": ["/tmp/raw.csv"]},
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             data.download("tutorial-sma-data")
             study.open("unsafe-runtime-study")
@@ -903,7 +903,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "point_in_time": True,
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             data.download("tutorial-sma-data")
             study.open("factor-run-study")
@@ -952,7 +952,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "point_in_time": True,
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             data.download("tutorial-sma-data")
             study.open("tampered-factor-study")
@@ -988,7 +988,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "point_in_time": True,
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             data.download("tutorial-sma-data")
             study.open("lookahead-factor-study")
@@ -1009,7 +1009,7 @@ class FourProductSurfaceTests(unittest.TestCase):
             root = Path(directory)
             factor_file = root / "factor.py"
             factor_file.write_text("def compute(inputs, params, context):\n    return []\n", encoding="utf-8")
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             data.download("tutorial-sma-data")
             study.open("factor-run-metadata-study")
@@ -1053,7 +1053,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "strategy_eligible": False,
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             data.download("tutorial-sma-data")
@@ -1093,7 +1093,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "point_in_time": True,
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             data.download("tutorial-sma-data")
@@ -1118,7 +1118,7 @@ class FourProductSurfaceTests(unittest.TestCase):
     def test_strategy_execution_policy_requires_execution_contract_fields(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             bad_execution = root / "bad-execution.json"
@@ -1176,7 +1176,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "side_effects_allowed": False,
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             data.download("tutorial-sma-data")
@@ -1248,7 +1248,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "side_effects_allowed": False,
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             data.download("tutorial-sma-data")
@@ -1307,7 +1307,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "side_effects_allowed": False,
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             data.download("tutorial-sma-data")
@@ -1347,7 +1347,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "side_effects_allowed": False,
             }), encoding="utf-8")
 
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             data.download("tutorial-sma-data")
@@ -1381,7 +1381,7 @@ class FourProductSurfaceTests(unittest.TestCase):
                 "intent_schema": {"kind": "target_exposure"},
                 "side_effects_allowed": False,
             }), encoding="utf-8")
-            data = DataProductApi(root)
+            data = Data(root)
             study = StudyProductApi(root)
             strategy = StrategyProductApi(root)
             data.download("tutorial-sma-data")

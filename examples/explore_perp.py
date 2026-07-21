@@ -1,6 +1,7 @@
-from kairospy.data import DatasetClient, OutputFormat
+from kairospy.data import OutputFormat
+from kairospy.product_surface import Data
 
-client = DatasetClient()
+client = Data().reader()
 
 query = client.get(
     "market.ohlcv.crypto.binance.usdm-perpetual.1h",

@@ -193,6 +193,22 @@ class DataCatalog:
             }, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
         return quarantined
 
+    def add_release_alias(self, release_id: str, alias: str) -> DatasetRelease:
+        name = alias.strip()
+        if not name:
+            raise ValueError("dataset alias cannot be empty")
+        current = self.release(release_id)
+        if name == str(current.product_key) or name in current.aliases:
+            return current
+        for item in self._releases.values():
+            if item.release_id != current.release_id and name in item.aliases:
+                raise ValueError(f"dataset alias {name!r} is already used by release {item.release_id!r}")
+        updated = replace(current, aliases=tuple((*current.aliases, name)))
+        self._releases[release_id] = updated
+        self._validate_release_aliases()
+        self.save()
+        return updated
+
     def purge_quarantined_release(self, release_id: str, *, actor: str, reason: str) -> None:
         if not actor.strip() or not reason.strip():
             raise ValueError("quarantined Release purge requires actor and reason")
