@@ -12,9 +12,9 @@ from kairospy.application import (
     RuntimePaths, RuntimeStatus, ServiceCriticality, KairosApplication,
 )
 from kairospy.ports import Environment
-from kairospy.domain.capability import MarketDataCapabilities, MarketDataKind
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.product import EquitySpec, ProductType
+from kairospy.trading.capability import MarketDataCapabilities, MarketDataKind
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.product import EquitySpec, ProductType
 from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 from kairospy.market_data import (

@@ -7,11 +7,11 @@ from time import sleep
 from typing import Any, Protocol
 from uuid import UUID
 
-from kairospy.domain.event import GreeksUpdated, MarketEvent, QuoteUpdated, TradeUpdated, UnderlyingPriceUpdated, envelope
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.market_data import Greeks, OptionChain, Quote, Trade
-from kairospy.domain.product import IndexSpec, ListedOptionSpec, OptionRight, ProductType
-from kairospy.study_platform.spec import OptionChainCaptureSpec
+from kairospy.trading.event import GreeksUpdated, MarketEvent, QuoteUpdated, TradeUpdated, UnderlyingPriceUpdated, envelope
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.market_data import Greeks, OptionChain, Quote, Trade
+from kairospy.trading.product import IndexSpec, ListedOptionSpec, OptionRight, ProductType
+from kairospy.capture.spec import OptionChainCaptureSpec
 from kairospy.reference import (
     AssetDefinition, AssetType, ListingDefinition, ListingId, ReferenceCatalog,
     TradingRules, VenueDefinition, VenueType,

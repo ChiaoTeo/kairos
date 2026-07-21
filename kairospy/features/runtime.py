@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import Protocol
 
 from kairospy.contracts import CanonicalEventEnvelope, MarketEventKind
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.market_data import Bar
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.market_data import Bar
 from kairospy.market_data.projections import CanonicalBarSeriesProjection
 
 

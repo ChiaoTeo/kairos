@@ -5,9 +5,6 @@ timezone = "UTC"
 [data]
 lake_root = ".kairos/data"
 
-[study]
-default_study = "starter"
-
 [execution]
 default_environment = "simulated"
 live_trading_enabled = false

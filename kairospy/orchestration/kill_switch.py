@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from kairospy.application.clock import Clock, SystemClock
 from kairospy.ports import ExecutionPort
-from kairospy.domain.identity import AccountKey
+from kairospy.trading.identity import AccountKey
 
 if TYPE_CHECKING:
     from .runtime_store import SQLiteRuntimeStore

@@ -7,13 +7,13 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.market_data import OptionChain
-from kairospy.domain.market_state import MarketState, apply_market_event
-from kairospy.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from kairospy.study_platform.option_snapshot_analysis import analyze_option_snapshot
-from kairospy.study_platform.snapshot import build_snapshot
-from kairospy.study_platform.spec import OptionChainCaptureSpec
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.market_data import OptionChain
+from kairospy.trading.market_state import MarketState, apply_market_event
+from kairospy.trading.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairospy.capture.option_snapshot_analysis import analyze_option_snapshot
+from kairospy.capture.snapshot import build_snapshot
+from kairospy.capture.spec import OptionChainCaptureSpec
 from kairospy.storage.codec import event_from_primitive
 from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument

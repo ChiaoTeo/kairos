@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import Any, Iterable
 from uuid import UUID
 
-from kairospy.domain.event import EventEnvelope
-from kairospy.domain.market_data import OptionChain
-from kairospy.study_platform.option_snapshot_analysis import OptionSnapshotAnalysis
-from kairospy.study_platform.report import write_csv
-from kairospy.study_platform.snapshot import OptionCaptureSnapshot
-from kairospy.study_platform.spec import OptionChainCaptureSpec
+from kairospy.trading.event import EventEnvelope
+from kairospy.trading.market_data import OptionChain
+from kairospy.capture.option_snapshot_analysis import OptionSnapshotAnalysis
+from kairospy.capture.report import write_csv
+from kairospy.capture.snapshot import OptionCaptureSnapshot
+from kairospy.capture.spec import OptionChainCaptureSpec
 
 from .codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, snapshot_to_primitive, to_primitive
 

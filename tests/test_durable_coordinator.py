@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -11,11 +11,11 @@ from uuid import UUID
 
 from kairospy.ports import ComboLegRequest, ComboOrderRequest, OrderAck, OrderRequest
 from kairospy.application.clock import FixedClock
-from kairospy.domain.capability import OrderType
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, InstrumentId, VenueId
-from kairospy.domain.intent import CancelIntent
-from kairospy.domain.order import ExecutionInstructions, TimeInForce
+from kairospy.trading.capability import OrderType
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, InstrumentId, VenueId
+from kairospy.trading.intent import CancelIntent
+from kairospy.trading.order import ExecutionInstructions, TimeInForce
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.orchestration.coordinator import ExecutionCoordinator
 from kairospy.orchestration.event_log import PersistentEventLog

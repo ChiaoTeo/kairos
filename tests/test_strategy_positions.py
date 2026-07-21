@@ -1,7 +1,7 @@
 from decimal import Decimal
 import unittest
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.risk.strategy_positions import StrategyPositionBook
 
 

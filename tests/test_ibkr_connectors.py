@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -15,11 +15,11 @@ from kairospy.connectors.ibkr.execution_gateway import IbkrExecutionGateway
 from kairospy.connectors.ibkr.ingestion import IbkrDurableFillIngestion
 from kairospy.connectors.ibkr.market_data_client import IbkrMarketDataClient
 from kairospy.connectors.ibkr.reference_data import IbkrReferenceDataClient
-from kairospy.domain.capability import OrderType
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, VenueId
-from kairospy.domain.order import ExecutionInstructions, TimeInForce
-from kairospy.domain.product import ProductType
+from kairospy.trading.capability import OrderType
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, VenueId
+from kairospy.trading.order import ExecutionInstructions, TimeInForce
+from kairospy.trading.product import ProductType
 from kairospy.execution.recovery import OrderRecoveryReport
 from kairospy.application.clock import FixedClock
 

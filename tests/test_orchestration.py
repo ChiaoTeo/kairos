@@ -10,15 +10,15 @@ from uuid import UUID
 from kairospy.accounting.ledger import LedgerService
 from kairospy.ports import ComboLegRequest, ComboOrderRequest, Environment, OrderRequest
 from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
-from kairospy.domain.capability import ExecutionCapabilities, OrderType
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
-from kairospy.domain.ledger import Ledger
-from kairospy.domain.order import ExecutionInstructions, TimeInForce
-from kairospy.domain.intent import (
+from kairospy.trading.capability import ExecutionCapabilities, OrderType
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
+from kairospy.trading.ledger import Ledger
+from kairospy.trading.order import ExecutionInstructions, TimeInForce
+from kairospy.trading.intent import (
     CancelIntent, HedgeIntent, LegIntent, OpenStructureIntent, TransferIntent,
 )
-from kairospy.domain.product import CryptoSpotSpec, ProductType
+from kairospy.trading.product import CryptoSpotSpec, ProductType
 from kairospy.execution.router import ExecutionRiskLimits, ExecutionRouter
 from kairospy.execution.planner import LeggingPolicy, NativeComboPlan, SequentialLegPlan, plan_combo
 from kairospy.execution.strategy_planner import plan_strategy_intent

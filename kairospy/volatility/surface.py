@@ -7,7 +7,7 @@ import json
 from math import sqrt
 from uuid import NAMESPACE_URL, uuid5
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 
 from .calibration import calibrate_svi
 from .contracts import ArbitrageDiagnostics, CalibrationStatus, SurfaceSnapshot, VolObservation

@@ -9,9 +9,9 @@ from kairospy.ports import (
     AccountState, ComboOrderRequest, Environment, OrderAck, OrderRequest, VenueBalance,
     VenueOrderRecovery, VenueOrderStatus,
 )
-from kairospy.domain.capability import ExecutionCapabilities, MarginMode, OrderType, PositionMode
-from kairospy.domain.identity import AccountKey, AssetId, InstitutionId, InstrumentId, VenueId
-from kairospy.domain.product import ProductType
+from kairospy.trading.capability import ExecutionCapabilities, MarginMode, OrderType, PositionMode
+from kairospy.trading.identity import AccountKey, AssetId, InstitutionId, InstrumentId, VenueId
+from kairospy.trading.product import ProductType
 class _Clock(Protocol):
     def now(self) -> datetime: ...
 
@@ -22,6 +22,8 @@ class _SystemClock:
 
 
 class SimulatedExecutionAccountGateway:
+    service_id = "execution"
+    service_kind = "execution"
     capabilities = ExecutionCapabilities(
         frozenset({OrderType.MARKET, OrderType.LIMIT, OrderType.STOP, OrderType.STOP_LIMIT}),
         product_types=frozenset(ProductType),

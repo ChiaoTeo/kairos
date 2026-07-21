@@ -13,10 +13,10 @@ from kairospy.ports import (
     VenueOrderRecovery,
     VenueOrderStatus,
 )
-from kairospy.domain.capability import ExecutionCapabilities, MarginMode, OrderType, PositionMode
-from kairospy.domain.execution import TradeExecution, TradeSide
-from kairospy.domain.identity import AssetId, InstitutionId, InstrumentId, VenueId
-from kairospy.domain.product import ProductType
+from kairospy.trading.capability import ExecutionCapabilities, MarginMode, OrderType, PositionMode
+from kairospy.trading.execution import TradeExecution, TradeSide
+from kairospy.trading.identity import AssetId, InstitutionId, InstrumentId, VenueId
+from kairospy.trading.product import ProductType
 
 from .session import IbkrSession
 
@@ -31,6 +31,8 @@ IBKR_EXECUTION_CAPABILITIES = ExecutionCapabilities(
 
 
 class IbkrExecutionGateway:
+    service_id = "execution"
+    service_kind = "execution"
     institution_id = InstitutionId("ibkr")
     venue_id = VenueId("ibkr")
     capabilities = IBKR_EXECUTION_CAPABILITIES

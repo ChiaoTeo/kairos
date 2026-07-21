@@ -9,8 +9,8 @@ import json
 from typing import Mapping, TypeAlias
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.market_data import DerivativeMarketState, OrderBookDelta, OrderBookSnapshot, Quote, Trade
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.market_data import DerivativeMarketState, OrderBookDelta, OrderBookSnapshot, Quote, Trade
 
 
 class MarketEventKind(StrEnum):
@@ -222,7 +222,7 @@ def canonicalize_market_event(event, *, source_instance: str = "default") -> Can
     )
 
 
-def canonical_from_domain_market_data(
+def canonical_from_trading_market_data(
     value: Quote | Trade | OrderBookSnapshot | OrderBookDelta | DerivativeMarketState,
     *,
     source: str,
@@ -233,7 +233,7 @@ def canonical_from_domain_market_data(
     source_sequence: int | None = None,
     receive_sequence: int | None = None,
 ) -> tuple[CanonicalEventEnvelope, ...]:
-    """Normalize shared domain market values emitted by live venue connectors."""
+    """Normalize shared trading market values emitted by live venue connectors."""
 
     if isinstance(value, Quote):
         return (_canonical(
@@ -286,7 +286,7 @@ def canonical_from_domain_market_data(
                     receive_time, published_time, source_sequence, receive_sequence, canonical_sequence,
                 ))
         return tuple(events)
-    raise TypeError(f"unsupported domain market data: {type(value).__name__}")
+    raise TypeError(f"unsupported trading market data: {type(value).__name__}")
 
 
 def _canonical(

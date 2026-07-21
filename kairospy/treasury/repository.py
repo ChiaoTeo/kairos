@@ -7,7 +7,7 @@ from pathlib import Path
 import sqlite3
 from uuid import UUID
 
-from kairospy.domain.identity import AssetId
+from kairospy.trading.identity import AssetId
 from kairospy.reference.identity import LocationId
 
 from .transfer_contracts import FeePolicy, TransferOperation, TransferOperationEvent, TransferStatus

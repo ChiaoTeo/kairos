@@ -1,14 +1,14 @@
 # Kairos
 
-> A clean research-to-run toolkit for multi-asset trading systems.
+> A clean data-workspace-to-run toolkit for multi-asset trading systems.
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)
 ![Package](https://img.shields.io/badge/package-kairospy-111827?style=flat-square)
 ![Status](https://img.shields.io/badge/status-local%20deterministic%20ready-16A34A?style=flat-square)
 
-Kairos 是一套面向量化研究、回测、模拟运行和交易编排的 Python 工具。
+Kairos 是一套面向量化数据准备、研究代码、策略运行和交易编排的 Python 工具。
 
-它把一个交易想法从 `Study` 逐步推进到 `Factor`、`Strategy`、`Run Artifact` 和可审计的账户事实。核心目标不是“快速下单”，而是让研究输入、策略版本、执行过程和结果证据都可以被复现、检查和回放。
+它把数据准备、用户代码、运行快照和账户事实分开管理。核心目标不是“快速下单”，而是让数据输入、策略入口、执行过程和结果证据都可以被复现、检查和回放。
 
 第一次使用建议从本地确定性流程开始，不需要账户、不联网、不会真实下单。
 
@@ -24,23 +24,23 @@ Kairos 关注四件事：
 当前本地确定性生命周期已经可用：
 
 ```text
-Study -> Factor -> Strategy -> Backtest -> Simulation -> Shadow -> Paper Fixture -> Replay -> Audit
+Data -> Workspace -> Code -> Run -> Replay -> Audit
 ```
 
 ## 🚀 核心功能
 
 - 📦 **项目初始化**：`kairospy init` 在任意空目录创建自己的 Kairos 项目。
 - 🔍 **数据治理**：管理 Data Product、Dataset Release、质量等级、别名和数据审计。
-- 🧠 **Study / Factor**：从假设、数据绑定、特征计算到可冻结的研究证据。
-- ⚙️ **Strategy Release**：注册、检查、晋级和回滚可运行策略版本。
-- 🧪 **Backtest / Simulation**：在冻结数据和 replay 时钟上进行确定性验证。
+- 🗂️ **Workspace**：一个工作区绑定一组数据，研究代码和策略代码都复用同一份数据视图。
+- ⚙️ **Strategy Protocol**：策略是用户代码入口，不是 Kairos 内置工作区。
+- 🧪 **Run**：用 Workspace snapshot 和 strategy entrypoint 生成可审计运行记录。
 - 👻 **Shadow Run**：计算完整决策和假设 Intent，但不提交订单。
 - 🧾 **Ledger / Portfolio**：用不可变账本事实派生持仓、现金、费用和风险视图。
 - 🔌 **Connector 边界**：支持模拟环境，并规划 Binance、IBKR、Massive 等外部接入。
 
 ## ⚡ 使用简介
 
-普通用户不需要复制本仓库。安装包只包含 Kairos 产品库和 CLI，不包含本仓库顶层 `studies/` 源码研究工作区。
+普通用户不需要复制本仓库。安装包只包含 Kairos 产品库和 CLI；研究代码、因子代码、策略代码由用户放在自己的项目目录中。
 
 安装：
 
@@ -57,7 +57,7 @@ cd my-kairospy-project
 kairospy init
 kairospy project status
 kairospy doctor
-python studies/starter.py
+kairospy workspace create alpha
 ```
 
 也可以用交互式初始化：
@@ -157,23 +157,21 @@ kairospy run backtest --strategy sma-cross-v1 --fixture --fast 5 --slow 15 --con
 Python API 示例：
 
 ```python
-from kairospy import Kairos
+from kairospy import Workspace
 
-result = Kairos().backtest(
-    strategy="sma-cross-v1",
-    dataset="fixture:sma-bars-v1",
-    parameters={"fast": 5, "slow": 15},
-)
+workspace = Workspace.open_or_create("alpha")
+workspace.data.bind("bars", dataset="market.equity.us.ohlcv.1d")
 
-print(result.summary())
+# Strategy code is ordinary user code. Run it with:
+# kairospy run start --workspace alpha --mode backtest --entrypoint my_strategy:decide
 ```
 
 ## 📚 其他
 
-- 新手教程：[docs/tutorial_first_study.md](docs/tutorial_first_study.md)
+- 工作区设计：[docs/workspace_experience_consolidation.md](docs/workspace_experience_consolidation.md)
 - 当前状态：[docs/current_product_status.md](docs/current_product_status.md)
 - 系统架构：[docs/architecture.md](docs/architecture.md)
-- 数据指南：[docs/study_data_guide.md](docs/study_data_guide.md)
+- 数据接入：[docs/connector_data_integration_usage.md](docs/connector_data_integration_usage.md)
 - PyPI 发布：[docs/release_pypi.md](docs/release_pypi.md)
 
 > ⚠️ Fixture 和 synthetic backtest 只能证明机制可运行，不能证明策略有效，也不能替代 Paper/Testnet/Live 的外部验收。

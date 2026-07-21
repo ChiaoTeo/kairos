@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from kairospy.domain.product import OptionRight
+from kairospy.trading.product import OptionRight
 
 
 class PricingModel(StrEnum):

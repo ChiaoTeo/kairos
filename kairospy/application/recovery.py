@@ -11,9 +11,9 @@ from kairospy.ports import AccountPort
 from kairospy.application.clock import FixedClock
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.access import contract_spec, definition_at
-from kairospy.domain.identity import AccountKey, AssetId, InstrumentId
-from kairospy.domain.ledger import Ledger
-from kairospy.domain.product import FutureSpec, is_option_spec
+from kairospy.trading.identity import AccountKey, AssetId, InstrumentId
+from kairospy.trading.ledger import Ledger
+from kairospy.trading.product import FutureSpec, is_option_spec
 from kairospy.orchestration.reconciliation import ReconciliationReport, ReconciliationService
 from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 from kairospy.risk.view import UnifiedRiskView, build_risk_view

@@ -87,11 +87,11 @@ class DatasetQualityService:
         elif profile in {"equity_returns", "equity_universe", "equity_feature"} and passed:
             level = QualityLevel.BACKTEST
         elif profile == "corporate_action" and passed:
-            level = QualityLevel.STUDY
+            level = QualityLevel.WORKSPACE
         elif profile == "equity_identity" and passed:
-            level = QualityLevel.STUDY
+            level = QualityLevel.WORKSPACE
         else:
-            level = QualityLevel.STUDY
+            level = QualityLevel.WORKSPACE
         primitive = {
             "quality_schema_version": 2,
             "release_id": release.release_id,

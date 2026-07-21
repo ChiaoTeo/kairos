@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Iterable, Mapping
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.reference import MappingTargetType, ProviderId, ProviderSymbolMapping
 from kairospy.storage.data_lake import write_json
 
@@ -140,9 +140,9 @@ class MassiveEquityIdentityResolver:
                 result.content_sha256,
                 "massive",
                 "us-securities",
-                ("reference.identity.equity.us.massive@latest-study",),
-                DatasetStatus.APPROVED_FOR_STUDY,
-                QualityLevel.STUDY,
+                ("reference.identity.equity.us.massive@latest-workspace",),
+                DatasetStatus.APPROVED_FOR_WORKSPACE,
+                QualityLevel.WORKSPACE,
                 storage_kind=DatasetStorageKind.REFERENCE,
             ))
             catalog.save()

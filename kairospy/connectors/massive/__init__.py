@@ -12,8 +12,15 @@ from .curated import MassiveCuratedSliceBuilder, MassiveMarketSnapshotBuilder
 from .reference_pipeline import MassiveReferencePipeline
 from .daily_ohlcv import OptionDailyOhlcvPipeline, SpxwDailyOhlcvPipeline
 from .equity_daily_ohlcv import MassiveEquityDailyOhlcvPipeline, MassiveEquityHourlyOhlcvPipeline
+from .market_data import (
+    MassiveAggregateBarsArtifact,
+    MassiveAggregateBarsRequest,
+    MassiveAggregateBarsResource,
+    MassiveHistoricalMarketDataService,
+)
 from .datasets import (
     MassiveEquityDailyOhlcvDatasetConnector,
+    MassiveEquityDailyMarketOhlcvDatasetConnector,
     MassiveEquityHourlyOhlcvDatasetConnector,
     MassiveEquityDailyOhlcvProductConfig,
 )
@@ -34,7 +41,10 @@ __all__ = [
     "OptionDailyOhlcvPipeline",
     "MassiveEquityDailyOhlcvPipeline",
     "MassiveEquityHourlyOhlcvPipeline",
-    "MassiveEquityDailyOhlcvDatasetConnector", "MassiveEquityHourlyOhlcvDatasetConnector",
+    "MassiveAggregateBarsArtifact", "MassiveAggregateBarsRequest", "MassiveAggregateBarsResource",
+    "MassiveHistoricalMarketDataService",
+    "MassiveEquityDailyOhlcvDatasetConnector", "MassiveEquityDailyMarketOhlcvDatasetConnector",
+    "MassiveEquityHourlyOhlcvDatasetConnector",
     "MassiveEquityDailyOhlcvProductConfig",
     "MassiveEquityIdentityResolver", "MassiveEquityIdentityResult",
     "OptionCloseImpliedVolatilityPipeline",

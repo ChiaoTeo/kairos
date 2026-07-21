@@ -4,7 +4,7 @@ from dataclasses import replace
 from decimal import Decimal
 from math import erf, exp, log, pi, sqrt
 
-from kairospy.domain.product import OptionRight
+from kairospy.trading.product import OptionRight
 
 from .option_pricing_contracts import PricingInput, PricingModel, PricingResult
 

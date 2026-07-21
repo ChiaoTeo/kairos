@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:sys.path.insert(0,str(ROOT))
 
 from kairospy.__main__ import main
 from kairospy.application import build_simulated_spot_catalog
-from kairospy.domain.identity import AccountKey,AccountType,AssetId,InstitutionId,InstrumentId
+from kairospy.trading.identity import AccountKey,AccountType,AssetId,InstitutionId,InstrumentId
 from kairospy.reference import ReferenceCatalogRepository
 
 

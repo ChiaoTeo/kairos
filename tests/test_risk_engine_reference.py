@@ -7,14 +7,14 @@ from uuid import UUID
 
 from kairospy.backtest.feed import MarketSnapshot
 from kairospy.backtest.portfolio import PortfolioSnapshot
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.capability import TimeInForce
-from kairospy.domain.identity import AssetId, InstrumentId
-from kairospy.domain.intent import LegIntent, OpenStructureIntent
-from kairospy.domain.market_data import Greeks, Quote
-from kairospy.domain.product import ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.capability import TimeInForce
+from kairospy.trading.identity import AssetId, InstrumentId
+from kairospy.trading.intent import LegIntent, OpenStructureIntent
+from kairospy.trading.market_data import Greeks, Quote
+from kairospy.trading.product import ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
 from kairospy.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
-from kairospy.study_platform.snapshot import InstrumentSnapshot
+from kairospy.capture.snapshot import InstrumentSnapshot
 from kairospy.risk.engine import RiskDecisionType, RiskEngine
 from kairospy.risk.limits import RiskLimits
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -10,10 +10,10 @@ from uuid import uuid4
 from kairospy.accounting.conversion import AssetConversionGraph, ConversionRate
 from kairospy.accounting.ledger import LedgerService
 from kairospy.accounting.portfolio import Portfolio
-from kairospy.domain.execution import FundingPayment, TradeExecution, TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.domain.ledger import Ledger, LedgerBook, LedgerEntry, LedgerEntryType, LedgerTransaction
-from kairospy.domain.product import ContractType, CryptoSpotSpec, PerpetualSpec, ProductType
+from kairospy.trading.execution import FundingPayment, TradeExecution, TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.trading.ledger import Ledger, LedgerBook, LedgerEntry, LedgerEntryType, LedgerTransaction
+from kairospy.trading.product import ContractType, CryptoSpotSpec, PerpetualSpec, ProductType
 from kairospy.products.calculators import PositionCalculatorRegistry
 from kairospy.risk.margin import CryptoCrossMarginPolicy
 from kairospy.risk.view import build_risk_view

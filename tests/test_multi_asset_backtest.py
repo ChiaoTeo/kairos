@@ -10,9 +10,9 @@ from kairospy.backtest.fill import (
     EquityBarFillModel, EquityTopOfBookFillModel, PerpetualFillModel,
     SingleAssetOrder, StressWrapperFillModel,
 )
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.market_data import (
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.market_data import (
     Bar, OrderBookLevel, OrderBookSnapshot, Quote, TradingState, TradingStatus,
 )
 

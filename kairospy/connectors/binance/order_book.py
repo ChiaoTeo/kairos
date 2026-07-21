@@ -8,10 +8,10 @@ from typing import Protocol
 
 from kairospy.contracts import (
     CanonicalEventEnvelope, MarketEventKind, OrderBookDeltaPayload,
-    canonical_from_domain_market_data,
+    canonical_from_trading_market_data,
 )
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.market_data import OrderBookLevel, OrderBookSnapshot
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.market_data import OrderBookLevel, OrderBookSnapshot
 from kairospy.market_data.capture import CanonicalCaptureWriter
 from kairospy.market_data.projections import CanonicalOrderBookProjection
 from kairospy.market_data.stream import BoundedEventChannel, EventSource
@@ -165,7 +165,7 @@ class BinanceOrderBookSyncService:
     async def _publish_snapshot(self, *, resync: bool) -> None:
         snapshot = await self.snapshot_provider.fetch()
         now = datetime.now(timezone.utc)
-        event = canonical_from_domain_market_data(
+        event = canonical_from_trading_market_data(
             snapshot, source="binance", source_instance=self.source_instance,
             stream_id=self.stream_id, receive_time=now, published_time=now,
             source_sequence=snapshot.sequence,

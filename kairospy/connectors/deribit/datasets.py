@@ -51,7 +51,7 @@ class DeribitDvolDatasetConnector:
         )
         return publish_release(
             self.root, BTC_DVOL_DAILY, release_id, manifest, provider="deribit", venue="deribit",
-            transform_id="deribit.dvol.daily", transform_version="2", quality_level=QualityLevel.STUDY,
+            transform_id="deribit.dvol.daily", transform_version="2", quality_level=QualityLevel.WORKSPACE,
         )
 
 
@@ -89,7 +89,7 @@ class DeribitOptionTradesDatasetConnector:
         )
         return publish_release(
             self.root, BTC_DERIBIT_OPTION_TRADES, release_id, manifest, provider="deribit", venue="deribit",
-            transform_id="deribit.option_trades", transform_version="2", quality_level=QualityLevel.STUDY,
+            transform_id="deribit.option_trades", transform_version="2", quality_level=QualityLevel.WORKSPACE,
         )
 
 
@@ -128,7 +128,7 @@ class DeribitOptionSnapshotDatasetConnector:
         )
         return publish_release(
             self.root, BTC_DERIBIT_OPTION_QUOTES, release_id, manifest, provider="deribit", venue="deribit",
-            transform_id="deribit.option_chain.snapshot", transform_version="2", quality_level=QualityLevel.STUDY,
+            transform_id="deribit.option_chain.snapshot", transform_version="2", quality_level=QualityLevel.WORKSPACE,
         )
 
 

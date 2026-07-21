@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -23,10 +22,12 @@ class KairosProjectInitTests(unittest.TestCase):
             self.assertTrue((root / "pyproject.toml").exists())
             self.assertFalse((root / "config").exists())
             self.assertFalse((root / "config" / "research.json").exists())
-            self.assertTrue((root / "studies" / "starter.py").exists())
-            self.assertTrue((root / "strategies" / "starter_sma.py").exists())
+            self.assertFalse((root / "studies").exists())
+            self.assertFalse((root / "strategies").exists())
             self.assertTrue((root / ".kairos" / "project.json").exists())
             self.assertTrue((root / ".kairos" / "data" / "curated").is_dir())
+            self.assertTrue((root / ".kairos" / "workspace").is_dir())
+            self.assertTrue((root / ".kairos" / "run").is_dir())
             self.assertFalse((root / "data").exists())
             metadata = json.loads((root / ".kairos" / "project.json").read_text(encoding="utf-8"))
             self.assertEqual(metadata["name"], "alpha-desk")
@@ -40,8 +41,8 @@ class KairosProjectInitTests(unittest.TestCase):
             self.assertIn('default_quality = "Q2"', config)
             self.assertIn("[execution]", config)
             self.assertIn("[cli]", config)
-            self.assertIn('default_dataset = "fixture:sma-bars-v1"', config)
-            self.assertIn('default_strategy = "sma-cross-v1"', config)
+            self.assertNotIn("[study]", config)
+            self.assertNotIn('default_strategy = "sma-cross-v1"', config)
             self.assertIn(".env", (root / ".gitignore").read_text(encoding="utf-8"))
 
             readme = root / "README.md"
@@ -70,22 +71,11 @@ class KairosProjectInitTests(unittest.TestCase):
             payload = json.loads(completed.stdout)
 
             self.assertEqual(payload["name"], "external-desk")
-            self.assertTrue((root / "studies" / "starter.py").exists())
+            self.assertFalse((root / "studies").exists())
+            self.assertTrue((root / ".kairos" / "workspace").is_dir())
             metadata = json.loads((root / ".kairos" / "project.json").read_text(encoding="utf-8"))
             self.assertEqual(metadata["name"], "external-desk")
             self.assertEqual(metadata["root"], ".")
-
-            env = dict(os.environ)
-            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
-            starter = subprocess.run(
-                [sys.executable, "studies/starter.py"],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-            self.assertIn("final_equity", starter.stdout)
 
     def test_kairospy_init_accepts_positional_project_directory_and_writes_config(self) -> None:
         with TemporaryDirectory() as directory:

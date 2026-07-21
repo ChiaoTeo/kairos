@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.product import ListedOptionSpec, ProductType, SettlementType
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.product import ListedOptionSpec, ProductType, SettlementType
 from kairospy.reference import (
     AssetDefinition, AssetType, ListingDefinition, ListingId, ReferenceCatalog,
     TradingRules, VenueDefinition, VenueType,

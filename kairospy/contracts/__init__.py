@@ -15,7 +15,7 @@ from .market_data import (
     PricePayload,
     TradePayload,
     canonicalize_market_event,
-    canonical_from_domain_market_data,
+    canonical_from_trading_market_data,
 )
 
 __all__ = [
@@ -33,5 +33,5 @@ __all__ = [
     "PricePayload",
     "TradePayload",
     "canonicalize_market_event",
-    "canonical_from_domain_market_data",
+    "canonical_from_trading_market_data",
 ]

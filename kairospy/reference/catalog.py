@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Callable, Generic, Iterable, TypeVar
 
-from kairospy.domain.identity import AccountKey, InstrumentId
+from kairospy.trading.identity import AccountKey, InstrumentId
 
 from .identity import BenchmarkId, ListingId, ProductId
 from .contracts import (

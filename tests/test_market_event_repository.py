@@ -5,7 +5,7 @@ from decimal import Decimal
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.market_data import MarketEventEnvelope, MarketEventType, ParquetMarketEventRepository, validate_events
 
 

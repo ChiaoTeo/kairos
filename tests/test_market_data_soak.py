@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from kairospy.contracts import canonicalize_market_event
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.market_data import (
     BoundedEventChannel, MarketEventEnvelope, MarketEventType, run_binance_market_soak,
     run_binance_market_restart_campaign,

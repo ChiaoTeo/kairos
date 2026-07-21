@@ -7,8 +7,8 @@ from hashlib import sha256
 import json
 from typing import Mapping
 
-from kairospy.domain.capability import MarketDataCapabilities, MarketDataKind
-from kairospy.domain.identity import InstrumentId, VenueId
+from kairospy.trading.capability import MarketDataCapabilities, MarketDataKind
+from kairospy.trading.identity import InstrumentId, VenueId
 from kairospy.reference import ProviderId, ReferenceCatalog
 from kairospy.reference.access import definition_at, product_type
 from kairospy.reference.contracts import MappingTargetType

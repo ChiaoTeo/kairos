@@ -4,8 +4,8 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import UUID, uuid5, NAMESPACE_URL
 
-from kairospy.domain.order import Settlement
-from kairospy.domain.product import OptionRight, is_option_spec, option_multiplier
+from kairospy.trading.order import Settlement
+from kairospy.trading.product import OptionRight, is_option_spec, option_multiplier
 from kairospy.reference.access import contract_spec, definition_at
 
 from .portfolio import BacktestPortfolio

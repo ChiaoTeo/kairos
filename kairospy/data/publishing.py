@@ -16,6 +16,47 @@ from .contracts import (
 from .products import DataProductContract
 
 
+class DatasetPublisher:
+    """Small stable facade for registering governed Dataset build outputs."""
+
+    def __init__(self, root: str | Path) -> None:
+        self.root = Path(root)
+
+    def path(self, product: DataProductContract, release_id: str) -> Path:
+        return self.root / release_path(product, release_id)
+
+    def publish(
+        self,
+        product: DataProductContract,
+        release_id: str,
+        manifest: dict[str, object],
+        *,
+        provider: str,
+        venue: str | None,
+        transform_id: str,
+        transform_version: str,
+        quality_level: QualityLevel = QualityLevel.WORKSPACE,
+    ) -> DatasetRelease:
+        return publish_release(
+            self.root,
+            product,
+            release_id,
+            manifest,
+            provider=provider,
+            venue=venue,
+            transform_id=transform_id,
+            transform_version=transform_version,
+            quality_level=quality_level,
+        )
+
+    def register(self, product: DataProductContract, release: DatasetRelease, *, enrich: bool = True) -> DatasetRelease:
+        catalog = DataCatalog(self.root)
+        catalog.register_product_spec(product, enrich=enrich)
+        catalog.register_release(release)
+        catalog.save()
+        return release
+
+
 def content_release_id(product: DataProductContract, material: object) -> str:
     payload = json.dumps(to_primitive(material), ensure_ascii=False, sort_keys=True,
                          separators=(",", ":"), default=str).encode()
@@ -81,7 +122,7 @@ def _primary_key_value(name: str, value: object) -> str:
 
 def publish_release(root: str | Path, product: DataProductContract, release_id: str, manifest: dict[str, object], *,
                     provider: str, venue: str | None, transform_id: str, transform_version: str,
-                    quality_level: QualityLevel = QualityLevel.STUDY) -> DatasetRelease:
+                    quality_level: QualityLevel = QualityLevel.WORKSPACE) -> DatasetRelease:
     lake = Path(root)
     relative_path = release_path(product, release_id)
     directory = lake / relative_path
@@ -101,7 +142,7 @@ def publish_release(root: str | Path, product: DataProductContract, release_id: 
     if not content_hash:
         raise ValueError(f"release {release_id} has no content hash")
     status = (DatasetStatus.APPROVED_FOR_BACKTEST if quality_level in {QualityLevel.BACKTEST, QualityLevel.PRODUCTION}
-              else DatasetStatus.APPROVED_FOR_STUDY)
+              else DatasetStatus.APPROVED_FOR_WORKSPACE)
     catalog = DataCatalog(lake)
     try:
         existing = catalog.release(release_id)

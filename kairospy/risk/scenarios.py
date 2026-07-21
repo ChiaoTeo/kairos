@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from math import log
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.pricing import PricingInput, PricingModel, PricingResult, price_with_volatility
 
 

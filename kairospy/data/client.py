@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Iterable, Iterator, Literal
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.configuration import DEFAULT_LAKE_ROOT
 from kairospy.market_data import MarketEventType, ParquetMarketEventRepository
 from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
@@ -20,7 +20,7 @@ from .contracts import (
     AcquirePolicy, DataView, DatasetLike, DataProductDefinition, DatasetStatus, DatasetStorageKind, FieldLike, OutputFormat,
     QualityLevel, RunMode,
 )
-from .snapshot import StudyInputSnapshot, write_study_snapshot
+from .snapshot import DataInputSnapshot, write_data_snapshot
 
 
 class DataUnavailableError(RuntimeError):
@@ -81,11 +81,11 @@ class DataQuery:
             } if parquet else None,
         }
 
-    def snapshot(self) -> StudyInputSnapshot:
+    def snapshot(self) -> DataInputSnapshot:
         release = self.client.catalog.release(self.release_id)
         if release.content_hash is None:
             raise ValueError(f"release {release.release_id!r} has no frozen content hash")
-        return StudyInputSnapshot(
+        return DataInputSnapshot(
             str(release.product_key), release.release_id, release.content_hash, release.schema_version,
             release.transform_id, release.transform_version, release.provider, release.venue,
             release.quality_level.value, self.client.catalog.product(release.product_key).source_policy_version,
@@ -110,7 +110,7 @@ class DatasetClient:
 
     def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT, *, catalog_path: str | Path | None = None,
                  dataset_root: str | Path | None = None, providers: ProviderRegistry | None = None,
-                 run_mode: RunMode | str = RunMode.STUDY, acquisition_limits: AcquisitionLimits = AcquisitionLimits()) -> None:
+                 run_mode: RunMode | str = RunMode.WORKSPACE, acquisition_limits: AcquisitionLimits = AcquisitionLimits()) -> None:
         self.root = Path(root)
         self.catalog = DataCatalog(self.root, catalog_path)
         self.events = ParquetMarketEventRepository(self.root / "canonical" / "market")
@@ -123,7 +123,7 @@ class DatasetClient:
         name = str(dataset.key) if isinstance(dataset, DataProductDefinition) else str(dataset)
         release = self.catalog.resolve(name, version=version)
         if release.status not in {
-            DatasetStatus.APPROVED_FOR_STUDY, DatasetStatus.APPROVED_FOR_BACKTEST,
+            DatasetStatus.APPROVED_FOR_WORKSPACE, DatasetStatus.APPROVED_FOR_BACKTEST,
             DatasetStatus.APPROVED_FOR_PRODUCTION,
         }:
             raise PermissionError(
@@ -275,9 +275,9 @@ class DatasetClient:
         self._check_acquisition_limits(request, estimate)
         release = connector.acquire(request)
         if str(release.product_key) != plan.logical_key:
-            raise ValueError("provider connector returned a release for a different logical product")
+            raise ValueError("Data Product builder returned a dataset build record for a different Data Product")
         if release.provider is not None and release.provider != plan.selected.provider:
-            raise ValueError("provider connector returned a release with a mismatched provider")
+            raise ValueError("Data Product builder returned a dataset build record with a mismatched provider")
         self.catalog.register_release(release)
         self.catalog.save()
         for alias in alias_values:
@@ -405,21 +405,21 @@ class DatasetClient:
         path = self.root / release.relative_path / "collection.json"
         if not path.exists():
             return None
-        from kairospy.study_platform.data_store import CollectionManifest
+        from kairospy.capture.data_store import CollectionManifest
         from kairospy.storage.codec import from_primitive
         return from_primitive(json.loads(path.read_text(encoding="utf-8")), CollectionManifest)
 
     @staticmethod
-    def freeze_study(path: str | Path, study_id: str, queries: Iterable[DataQuery], *,
-                     code_version: str, environment_hash: str | None = None) -> Path:
-        return write_study_snapshot(path, study_id, (query.snapshot() for query in queries),
-                                    code_version=code_version, environment_hash=environment_hash)
+    def freeze_snapshot(path: str | Path, workspace: str, queries: Iterable[DataQuery], *,
+                        code_version: str, environment_hash: str | None = None) -> Path:
+        return write_data_snapshot(path, workspace, (query.snapshot() for query in queries),
+                                   code_version=code_version, environment_hash=environment_hash)
 
-    def freeze_products(self, path: str | Path, study_id: str, datasets: Iterable[DatasetLike], *,
+    def freeze_products(self, path: str | Path, workspace: str, datasets: Iterable[DatasetLike], *,
                         code_version: str, environment_hash: str | None = None) -> Path:
         queries = tuple(self.get(dataset) for dataset in datasets)
-        return self.freeze_study(path, study_id, queries, code_version=code_version,
-                                 environment_hash=environment_hash)
+        return self.freeze_snapshot(path, workspace, queries, code_version=code_version,
+                                    environment_hash=environment_hash)
 
     def _require_release_for_mode(self, release) -> None:
         if self.run_mode in {RunMode.BACKTEST, RunMode.HISTORICAL_SIMULATION}:
@@ -430,7 +430,7 @@ class DatasetClient:
         if self.run_mode in {RunMode.PAPER_TRADING, RunMode.LIVE}:
             if release.status is not DatasetStatus.APPROVED_FOR_PRODUCTION or release.quality_level is not QualityLevel.PRODUCTION:
                 raise PermissionError(f"{self.run_mode.value} requires approved_for_production Q4 data")
-        if self.run_mode is not RunMode.STUDY and release.content_hash is None:
+        if self.run_mode is not RunMode.WORKSPACE and release.content_hash is None:
             raise ValueError(f"{self.run_mode.value} requires a frozen release content hash")
 
     def sql(self, query: str, *, datasets: dict[str, str], output: Literal["arrow", "pandas", "rows"] = "arrow"):

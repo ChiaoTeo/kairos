@@ -4,14 +4,14 @@ from uuid import uuid4
 import unittest
 
 from kairospy.ports import OrderRequest
-from kairospy.domain.capability import OrderType, TimeInForce
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, InstitutionId, InstrumentId
-from kairospy.domain.intent import TargetExposureIntent, TargetPositionIntent
-from kairospy.domain.order import ExecutionInstructions
+from kairospy.trading.capability import OrderType, TimeInForce
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, InstitutionId, InstrumentId
+from kairospy.trading.intent import TargetExposureIntent, TargetPositionIntent
+from kairospy.trading.order import ExecutionInstructions
 from kairospy.execution.intent_status import IntentExecutionTracker, IntentStatus, intent_scope
 from kairospy.execution.strategy_planner import plan_strategy_intent
-from kairospy.strategies.strategy_protocols import StrategyContext
+from kairospy.strategy.protocols import StrategyContext
 
 
 NOW = datetime(2026, 7, 19, tzinfo=timezone.utc)

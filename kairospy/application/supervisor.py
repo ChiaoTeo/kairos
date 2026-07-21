@@ -8,7 +8,7 @@ from pathlib import Path
 from time import monotonic, sleep
 from typing import Callable, Mapping, Protocol
 
-from kairospy.domain.identity import AccountKey
+from kairospy.trading.identity import AccountKey
 from kairospy.orchestration.kill_switch import KillSwitch
 from kairospy.orchestration.monitoring import OperationalMonitor
 from kairospy.orchestration.reconciliation import ReconciliationReport, ReconciliationService

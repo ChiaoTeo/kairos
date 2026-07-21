@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kairospy.domain.product import (
+from kairospy.trading.product import (
     CryptoOptionSpec, CryptoSpotSpec, EquitySpec, FutureSpec, IndexSpec,
     ListedOptionSpec, PerpetualSpec, ProductType, TokenizedEquitySpec,
 )

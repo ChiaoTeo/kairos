@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Iterable, Mapping
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.market_data.events import MarketEventEnvelope, MarketEventType
 from kairospy.reference import ProviderId, ReferenceCatalog
 

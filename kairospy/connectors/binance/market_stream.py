@@ -11,8 +11,8 @@ from time import time
 from typing import Any, Protocol
 
 from kairospy.ports import Environment
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.market_data import (
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.market_data import (
     DerivativeMarketState,
     OrderBookDelta,
     OrderBookLevel,

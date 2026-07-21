@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from kairospy.ports import AccountState, Environment, VenueBalance
 from kairospy.connectors.ibkr.option_chain_provider import decimal_or_none
-from kairospy.domain.identity import AssetId, InstitutionId, VenueId
+from kairospy.trading.identity import AssetId, InstitutionId, VenueId
 
 from .session import IbkrSession
 

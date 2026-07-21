@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from kairospy.domain.identity import AccountKey, AccountType, InstitutionId
+from kairospy.trading.identity import AccountKey, AccountType, InstitutionId
 
 
 class AccountInstitutionIdentityTests(unittest.TestCase):

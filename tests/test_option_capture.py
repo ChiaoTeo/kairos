@@ -3,21 +3,19 @@ from __future__ import annotations
 import csv
 import tempfile
 import unittest
-from contextlib import redirect_stdout
 from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
-from kairospy.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.market_data import OptionChain
-from kairospy.domain.market_data import Greeks, Quote
-from kairospy.domain.product import IndexSpec, ProductType
-from kairospy.__main__ import main
-from kairospy.study_platform.option_capture import OptionCaptureService
-from kairospy.study_platform.spec import OptionChainCaptureSpec
+from kairospy.trading.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.market_data import OptionChain
+from kairospy.trading.market_data import Greeks, Quote
+from kairospy.trading.product import IndexSpec, ProductType
+from kairospy.capture.option_capture import OptionCaptureService
+from kairospy.capture.spec import OptionChainCaptureSpec
 from kairospy.storage.repository import FileOptionCaptureRepository
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.contracts import InstrumentDefinition
@@ -88,13 +86,6 @@ class OptionCaptureTests(unittest.TestCase):
             with (run_dir / "report.csv").open() as handle:
                 rows = list(csv.DictReader(handle))
             self.assertEqual(len(rows), 6)
-            with __import__("io").StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main(["--data-root", directory, "study", "analyze", "--run-id", str(snapshot.run_id)]), 0)
-                self.assertIn("Completeness: 100.0%", output.getvalue())
-            with __import__("io").StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main(["--data-root", directory, "study", "show", "--run-id", str(snapshot.run_id)]), 0)
-                self.assertIn("Status: completed", output.getvalue())
-
     def test_failure_is_persisted_and_disconnects(self) -> None:
         class BrokenProvider(FakeProvider):
             def underlying(self, spec: OptionChainCaptureSpec) -> InstrumentDefinition:

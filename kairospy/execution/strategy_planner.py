@@ -5,16 +5,16 @@ from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid5
 
 from kairospy.ports import ComboLegRequest, ComboOrderRequest, OrderRequest
-from kairospy.domain.capability import OrderType
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import AccountKey, InstrumentId
-from kairospy.domain.intent import (
+from kairospy.trading.capability import OrderType
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import AccountKey, InstrumentId
+from kairospy.trading.intent import (
     CancelIntent, CashAndCarryIntent, CloseStructureIntent, CoveredCallIntent,
     HedgeIntent, OpenStructureIntent, ProtectivePutIntent, TargetPositionIntent,
     TransferIntent,
 )
-from kairospy.domain.order import ExecutionInstructions
-from kairospy.domain.strategy_contract import EconomicIntent
+from kairospy.trading.order import ExecutionInstructions
+from kairospy.trading.strategy_contract import EconomicIntent
 from kairospy.execution.policy import ExecutionPolicy
 from kairospy.execution.planner import LeggingPolicy
 

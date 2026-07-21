@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from kairospy.domain.strategy_contract import EconomicIntent
-from kairospy.domain.intent import TargetExposureIntent, TargetPositionIntent
+from kairospy.trading.strategy_contract import EconomicIntent
+from kairospy.trading.intent import TargetExposureIntent, TargetPositionIntent
 
 
 class AllocationDecisionType(StrEnum):

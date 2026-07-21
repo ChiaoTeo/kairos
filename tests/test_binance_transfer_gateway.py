@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from kairospy.connectors.binance import BinanceSigner
 from kairospy.connectors.transfer import BinanceTransferGateway, BinanceWalletRoute
-from kairospy.domain.identity import AssetId
+from kairospy.trading.identity import AssetId
 from kairospy.reference import NetworkAssetDefinition, NetworkDefinition, NetworkType, ReferenceCatalog
 from kairospy.reference.identity import LocationId, NetworkAssetId, NetworkId
 from kairospy.treasury import CryptoTransferInstruction, FeePolicy, InternalTransferInstruction, TransferStatus

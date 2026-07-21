@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 import argparse
 from datetime import date, datetime, timezone
@@ -44,43 +44,33 @@ from kairospy.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainPr
 from kairospy.connectors.ibkr.session import IbkrSession
 from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
 from kairospy.connectors.massive import MassiveClient, MassiveConfig, MassiveMarketSnapshotBuilder, MassiveEntitlementDiagnostics, MassiveEquityDailyOhlcvPipeline, MassiveEquityHourlyOhlcvPipeline, MassiveEquityIdentityResolver, MassiveFlatFileBatchDownloader, MassiveFlatFileClient, MassiveReferencePipeline, MassiveVendorArchiveClient, OptionCloseImpliedVolatilityPipeline, OptionDailyOhlcvPipeline, SpxwDailyOhlcvPipeline
-from kairospy.backtest.reference_scenarios import run_reference_scenario
 from kairospy.reference import ReferenceCatalog, ReferenceCatalogRepository
 from kairospy.reference.access import settlement_asset
-from kairospy.domain.capability import OrderType
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.domain.ledger import LedgerBook
-from kairospy.domain.order import ExecutionInstructions, TimeInForce
-from kairospy.domain.product import OptionRight, ProductType
+from kairospy.trading.capability import OrderType
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.trading.ledger import LedgerBook
+from kairospy.trading.order import ExecutionInstructions, TimeInForce
+from kairospy.trading.product import OptionRight, ProductType
 from kairospy.execution.router import ExecutionRouter
 from kairospy.orchestration.coordinator import ExecutionCoordinator
 from kairospy.orchestration.event_log import PersistentEventLog
 from kairospy.orchestration.kill_switch import KillSwitch
 from kairospy.orchestration.reconciliation import ReconciliationService
-from kairospy.study_platform.report import summarize
-from kairospy.study_platform.option_capture import OptionCaptureService
-from kairospy.study_platform.spec import MarketDataType, OptionChainCaptureSpec
+from kairospy.capture.report import summarize
+from kairospy.capture.option_capture import OptionCaptureService
+from kairospy.capture.spec import MarketDataType, OptionChainCaptureSpec
 from kairospy.storage.repository import FileOptionCaptureRepository
-from kairospy.backtest.engine import BacktestEngine
 from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairospy.backtest.synthetic_scenarios import SyntheticScenario, build_synthetic_backtest_dataset
-from kairospy.backtest.repository import BacktestRepository
-from kairospy.backtest.result import BacktestConfig
-from kairospy.backtest.experiment_runner import BacktestExperimentRunner
-from kairospy.risk.limits import RiskLimits
-from kairospy.storage.codec import from_primitive, restore_primitives, to_primitive
+from kairospy.storage.codec import restore_primitives, to_primitive
 from kairospy.storage.data_lake import write_json
-from kairospy.strategies.bull_put_spread import BullPutSpreadConfig, BullPutSpreadStrategy
-from kairospy.study_platform.series import SeriesCaptureProgress, SeriesCaptureService, SeriesCaptureSpec
-from kairospy.study_platform.normalized_series import NormalizedSeriesCaptureService
-from kairospy.strategies.sma_cross_study_backtest import BarSeries, SmaCrossConfig, backtest_sma_cross
+from kairospy.capture.series import SeriesCaptureProgress, SeriesCaptureService, SeriesCaptureSpec
+from kairospy.capture.normalized_series import NormalizedSeriesCaptureService
 from kairospy.pricing import PricingInput, PricingModel, OptionValuationService, implied_volatility, price_with_volatility
 from kairospy.risk import RevaluationPosition, Scenario, ScenarioEngine, explain_scenario
 from kairospy.data import (
     AcquisitionLimits, DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetQualityService, DatasetRelease,
     DatasetStatus, DatasetStorageKind, OutputFormat, QualityLevel, DatasetClient, RunMode,
-    register_market_replay_dataset,
 )
 from kairospy.data.bootstrap import default_provider_registry, register_configured_products, register_default_products
 from kairospy.market_data import ParquetMarketEventRepository
@@ -108,7 +98,7 @@ def _hide_subcommands(action, names: set[str]) -> None:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog=_program_name(), description="Multi-asset study, backtest, reconciliation, and execution toolkit")
+    parser = argparse.ArgumentParser(prog=_program_name(), description="Multi-asset data, workspace, run, reconciliation, and execution toolkit")
     parser.add_argument("--data-root", default=f"{DEFAULT_LAKE_ROOT}/snapshots")
     parser.add_argument("--dataset-root", default=f"{DEFAULT_LAKE_ROOT}/curated")
     parser.add_argument("--backtest-root", default=f"{DEFAULT_LAKE_ROOT}/backtests")
@@ -132,6 +122,20 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--name", help="project name; defaults to the target directory name")
     init.add_argument("--force", action="store_true", help="overwrite existing scaffold files")
     init.add_argument("--interactive", action="store_true", help="prompt for project target, name and overwrite behavior")
+    workspace = commands.add_parser("workspace", help="manage project workspaces and data bindings")
+    workspace_actions = workspace.add_subparsers(dest="action", required=True)
+    workspace_create = workspace_actions.add_parser("create", help="create or open one Workspace")
+    workspace_create.add_argument("name")
+    workspace_bind_data = workspace_actions.add_parser("bind-data", help="bind a Dataset to a workspace-local name")
+    workspace_bind_data.add_argument("workspace")
+    workspace_bind_data.add_argument("--name", required=True, help="workspace-local data name")
+    workspace_bind_data.add_argument("--dataset", required=True, help="Dataset name, alias, or release id")
+    workspace_bind_live = workspace_actions.add_parser("bind-live", help="bind a Live View to a workspace-local name")
+    workspace_bind_live.add_argument("workspace")
+    workspace_bind_live.add_argument("--name", required=True, help="workspace-local live data name")
+    workspace_bind_live.add_argument("--dataset", required=True, help="Live View dataset name")
+    workspace_inspect = workspace_actions.add_parser("inspect", help="inspect Workspace bindings")
+    workspace_inspect.add_argument("name")
     data = commands.add_parser("data", help="prepare and inspect governed market datasets")
     data_actions = data.add_subparsers(dest="action", required=True)
     data_apply = data_actions.add_parser("apply", help="apply a Data manifest such as kairos.data.toml")
@@ -157,8 +161,8 @@ def _parser() -> argparse.ArgumentParser:
     data_start.add_argument("--market", choices=("spot", "usdm"), default="spot", help="market type for built-in Binance live sources")
     data_start.add_argument("--levels", type=int, choices=(5, 10, 20), help="order book depth levels for Binance orderbook")
     data_start.add_argument("--interval", choices=("100ms", "1000ms"), help="Binance orderbook update interval")
-    data_start.add_argument("--for", dest="for_use", choices=("study", "backtest", "shadow", "paper", "live"),
-                            help="target use; defaults to study for historical data and shadow for live data")
+    data_start.add_argument("--for", dest="for_use", choices=("workspace", "backtest", "shadow", "paper", "live"),
+                            help="target use; defaults to workspace for historical data and shadow for live data")
     data_add = data_actions.add_parser("add", help="add user-defined historical data as a named Dataset")
     data_add.add_argument("source", type=Path, help="CSV file or user connector path")
     data_add.add_argument("--name", required=True, help="Dataset name to expose")
@@ -169,21 +173,20 @@ def _parser() -> argparse.ArgumentParser:
     data_add.add_argument("--instrument", action="append", default=[], help="optional protocol instrument; repeat for a bounded universe")
     data_use = data_actions.add_parser(
         "use",
-        help="use a built-in Data product",
-        description="Use a built-in Data product. Run 'kairospy data use --list-products' to see product keys, titles, capabilities and account requirements.",
+        help="use a historical Data Product",
+        description="Use a historical Data Product. Run 'kairospy data products list' to see built-in product keys, titles, capabilities and account requirements.",
     )
-    data_use.add_argument("key", nargs="?", help="built-in Data product key")
-    data_use.add_argument("--as", dest="as_dataset", help="Dataset name to expose; defaults to the built-in key")
+    data_use.add_argument("key", nargs="?", help="Data Product key or alias")
+    data_use.add_argument("--as", dest="as_dataset", help="Dataset name to expose; defaults to the Data Product key")
     data_use.add_argument("--list-products", action="store_true", help="list built-in Data products and exit")
     data_use.add_argument("--start", help="inclusive ISO-8601 timestamp with timezone")
     data_use.add_argument("--end", help="exclusive ISO-8601 timestamp with timezone")
     data_use.add_argument("--provider")
     data_use.add_argument("--venue")
-    data_use.add_argument("--connector-config", type=Path,
-                          help="explicit JSON configuration for additional provider connectors")
+    _add_provider_config_arg(data_use)
     data_use.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat for a bounded universe")
-    data_use.add_argument("--for", dest="for_use", choices=("study", "backtest", "production"),
-                          default="study", help="target use; defaults to study")
+    data_use.add_argument("--for", dest="for_use", choices=("workspace", "backtest", "production"),
+                          default="workspace", help="target use; defaults to workspace")
     data_use.add_argument("--refresh", action="store_true")
     data_use.add_argument("--dry-run", action="store_true", help="show the plan without downloading")
     data_connect = data_actions.add_parser("connect", help="connect a live Data source")
@@ -218,9 +221,14 @@ def _parser() -> argparse.ArgumentParser:
     data_reconnect.add_argument("--levels", type=int, choices=(5, 10, 20), help="override order book depth levels for Binance orderbook")
     data_reconnect.add_argument("--interval", choices=("100ms", "1000ms"), help="override Binance orderbook update interval")
     data_reconnect.add_argument("--freshness-seconds", type=float, help="override freshness max age")
-    data_product = data_actions.add_parser("product", help="list built-in Data products")
+    data_product = data_actions.add_parser(
+        "products", aliases=("product",), help="list built-in Data products",
+    )
     data_product_actions = data_product.add_subparsers(dest="product_action", required=True)
     data_product_actions.add_parser("list", help="list built-in Data products")
+    data_product_doctor = data_product_actions.add_parser("doctor", help="diagnose one Data Product")
+    data_product_doctor.add_argument("product", help="Data Product key or alias")
+    _add_provider_config_arg(data_product_doctor)
     data_protocol = data_actions.add_parser("protocol", help="create and check user Data protocols")
     data_protocol_actions = data_protocol.add_subparsers(dest="protocol_action", required=True)
     data_protocol_actions.add_parser("list", help="list supported user Data protocol types")
@@ -230,7 +238,7 @@ def _parser() -> argparse.ArgumentParser:
     protocol_check = data_protocol_actions.add_parser("check", help="check a user Data protocol file")
     protocol_check.add_argument("source", type=Path, help="Python protocol file")
     protocol_check.add_argument("--kind", choices=("historical", "live"), required=True)
-    protocol_check.add_argument("--name", default="research.protocol_check", help="temporary Dataset name for the check request")
+    protocol_check.add_argument("--name", default="workspace.protocol_check", help="temporary Dataset name for the check request")
     protocol_check.add_argument("--start", help="optional historical start timestamp")
     protocol_check.add_argument("--end", help="optional historical end timestamp")
     protocol_check.add_argument("--instrument", action="append", default=[], help="optional instrument; repeat as needed")
@@ -300,7 +308,7 @@ def _parser() -> argparse.ArgumentParser:
     describe_data = data_actions.add_parser("describe", help="show Dataset readiness, time and issues")
     describe_data.add_argument("dataset_arg", nargs="?", help="Dataset name to describe")
     describe_data.add_argument("--dataset", dest="dataset", help="Dataset name to describe; kept for compatibility")
-    doctor_data = data_actions.add_parser("doctor", help="diagnose one product readiness")
+    doctor_data = data_actions.add_parser("doctor", help="diagnose one Dataset readiness")
     doctor_data.add_argument("dataset_arg", nargs="?", help="Dataset name to diagnose")
     doctor_data.add_argument("--dataset", dest="dataset", help="Dataset name to diagnose; kept for compatibility")
     metadata_data = data_actions.add_parser("metadata", help="show inferred Dataset metadata without audit internals")
@@ -310,7 +318,7 @@ def _parser() -> argparse.ArgumentParser:
     diagnostics_data = data_actions.add_parser("diagnostics", help="audit all Catalog products and releases")
     diagnostics_data.add_argument("--strict", action="store_true", help="return non-zero when errors exist")
     us_equity_diagnostics = data_actions.add_parser("us-equity-momentum-diagnostics", help="audit the local US equity momentum data package")
-    us_equity_diagnostics.add_argument("--study-id", default="us-equity-momentum")
+    us_equity_diagnostics.add_argument("--workspace", default="us-equity-momentum")
     us_equity_diagnostics.add_argument("--version", default="1.0.0")
     us_equity_diagnostics.add_argument("--strict", action="store_true", help="return non-zero when diagnostics errors exist")
     validate_data = data_actions.add_parser("validate", help="validate a Dataset quality profile")
@@ -321,10 +329,10 @@ def _parser() -> argparse.ArgumentParser:
     prepare_data.add_argument("--dataset", required=True)
     prepare_data.add_argument("--start", required=True)
     prepare_data.add_argument("--end", required=True)
-    prepare_data.add_argument("--quality", choices=tuple(item.value for item in QualityLevel), default=QualityLevel.STUDY.value)
+    prepare_data.add_argument("--quality", choices=tuple(item.value for item in QualityLevel), default=QualityLevel.WORKSPACE.value)
     prepare_data.add_argument("--provider")
     prepare_data.add_argument("--venue")
-    prepare_data.add_argument("--connector-config", type=Path)
+    _add_provider_config_arg(prepare_data)
     prepare_data.add_argument("--acquire-missing", action="store_true")
     _add_acquisition_limit_args(prepare_data)
     prepare_data.add_argument("--promote", action="store_true", help="explicitly approve promotion after quality passes")
@@ -332,7 +340,7 @@ def _parser() -> argparse.ArgumentParser:
     prepare_data.add_argument("--reason", default="explicit data preparation")
     prepare_us_equity_momentum = data_actions.add_parser(
         "prepare-us-equity-momentum",
-        help="one-command bounded US equity momentum data, feature, study and diagnostics workflow",
+        help="one-command bounded US equity momentum data, feature and diagnostics workflow",
     )
     prepare_us_equity_momentum.add_argument(
         "--raw-dataset", action="append", required=True,
@@ -340,11 +348,11 @@ def _parser() -> argparse.ArgumentParser:
     )
     prepare_us_equity_momentum.add_argument("--start", required=True, help="inclusive ISO-8601 timestamp with timezone")
     prepare_us_equity_momentum.add_argument("--end", required=True, help="exclusive ISO-8601 timestamp with timezone")
-    prepare_us_equity_momentum.add_argument("--connector-config", type=Path)
+    _add_provider_config_arg(prepare_us_equity_momentum)
     prepare_us_equity_momentum.add_argument("--provider", default="massive")
     prepare_us_equity_momentum.add_argument("--venue", default="us-securities")
     prepare_us_equity_momentum.add_argument("--dataset-id", default="us-equity-momentum.bounded.v1")
-    prepare_us_equity_momentum.add_argument("--study-id", default="us-equity-momentum")
+    prepare_us_equity_momentum.add_argument("--workspace", default="us-equity-momentum")
     prepare_us_equity_momentum.add_argument("--version", default="1.0.0")
     prepare_us_equity_momentum.add_argument(
         "--hypothesis",
@@ -378,8 +386,8 @@ def _parser() -> argparse.ArgumentParser:
     replay_data.add_argument("--field", action="append", default=[])
     replay_data.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat as needed")
     replay_data.add_argument("--limit", type=_positive_int, default=20)
-    freeze_data = data_actions.add_parser("freeze", help="freeze one or more dataset inputs for a study")
-    freeze_data.add_argument("--study-id", required=True)
+    freeze_data = data_actions.add_parser("freeze", help="freeze one or more dataset inputs for a workspace")
+    freeze_data.add_argument("--workspace", required=True)
     freeze_data.add_argument("--dataset", action="append", required=True)
     freeze_data.add_argument("--output", type=Path, required=True)
     freeze_data.add_argument("--code-version", default=__version__)
@@ -397,7 +405,6 @@ def _parser() -> argparse.ArgumentParser:
     alias_data.add_argument("--actor", required=True)
     alias_data.add_argument("--reason", required=True)
     alias_data.add_argument("--quality-report-hash", required=True)
-    data_actions.add_parser("btc-options-readiness", help=argparse.SUPPRESS)
     catalog_data = data_actions.add_parser("catalog", help="list governed logical datasets, versions, aliases and formats")
     catalog_data.add_argument("--refresh", action="store_true", help="discover and persist existing governed datasets")
     copy_data = data_actions.add_parser("copy", help="copy a governed dataset release between local data lake roots")
@@ -419,8 +426,7 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--end", required=action == "plan", help="exclusive ISO-8601 timestamp with timezone")
         command.add_argument("--provider")
         command.add_argument("--venue")
-        command.add_argument("--connector-config", type=Path,
-                             help="explicit JSON configuration for additional provider connectors")
+        _add_provider_config_arg(command)
         command.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat for a bounded universe")
         _add_acquisition_limit_args(command)
         if action == "acquire":
@@ -430,13 +436,8 @@ def _parser() -> argparse.ArgumentParser:
             command.add_argument("--list-products", action="store_true", help="list acquirable data products and exit")
     promote_data = data_actions.add_parser("promote", help="promote a Dataset for a higher use")
     promote_data.add_argument("dataset", nargs="?", help="Dataset name for user-facing promotion")
-    promote_data.add_argument("--for", dest="for_use", choices=("study", "backtest", "production"),
+    promote_data.add_argument("--for", dest="for_use", choices=("workspace", "backtest", "production"),
                               help="target use for Dataset promotion")
-    promote_data.add_argument("--release")
-    promote_data.add_argument("--status", choices=(
-        DatasetStatus.APPROVED_FOR_STUDY.value, DatasetStatus.APPROVED_FOR_BACKTEST.value,
-        DatasetStatus.APPROVED_FOR_PRODUCTION.value,
-    ))
     promote_data.add_argument("--actor")
     promote_data.add_argument("--reason")
     provider_fetch = data_actions.add_parser("provider-fetch", help=argparse.SUPPRESS)
@@ -572,7 +573,6 @@ def _parser() -> argparse.ArgumentParser:
         "compare",
         "audit-artifact",
         "alias",
-        "btc-options-readiness",
         "catalog",
         "copy",
         "plan",
@@ -596,6 +596,13 @@ def _parser() -> argparse.ArgumentParser:
         "prepare-option-close-implied-volatility",
         "compact-market-events",
     })
+    providers = commands.add_parser("providers", help="inspect Providers and Data Product readiness")
+    providers_actions = providers.add_subparsers(dest="action", required=True)
+    providers_list = providers_actions.add_parser("list", help="list known Providers")
+    _add_provider_config_arg(providers_list)
+    providers_doctor = providers_actions.add_parser("doctor", help="diagnose one Provider")
+    providers_doctor.add_argument("provider", help="Provider name, for example massive or binance")
+    _add_provider_config_arg(providers_doctor)
     features = commands.add_parser("features", help="build reusable feature datasets")
     feature_actions = features.add_subparsers(dest="action", required=True)
     build_features = feature_actions.add_parser("build")
@@ -683,38 +690,6 @@ def _parser() -> argparse.ArgumentParser:
     sync.add_argument("--symbols", required=True, help="comma-separated symbols or IBKR option descriptors")
     sync.add_argument("--environment", choices=("paper", "testnet", "live"), required=True)
     sync.add_argument("--inverse", action="store_true", help="use Binance coin-margined futures contracts")
-    backtest = commands.add_parser("backtest", help="run deterministic conservative/stress strategy validation")
-    backtest_actions = backtest.add_subparsers(dest="action", required=True)
-    synthetic = backtest_actions.add_parser("synthetic-scenario", help="create a standardized synthetic backtest dataset")
-    synthetic.add_argument("--scenario", choices=[item.value for item in SyntheticScenario], default=SyntheticScenario.PROFIT_TARGET.value)
-    synthetic.add_argument("--split", choices=("development", "validation", "test"), default="development")
-    run = backtest_actions.add_parser("run", help="run conservative and stress backtests")
-    run.add_argument("--strategy", choices=("bull-put-spread", "covered-call", "spot-perp-carry"), default="bull-put-spread")
-    run.add_argument("--dataset")
-    run.add_argument("--config", type=Path)
-    bt_show = backtest_actions.add_parser("show")
-    bt_show.add_argument("--run-id", required=True)
-    replay = backtest_actions.add_parser("replay")
-    replay.add_argument("--run-id", required=True)
-    compare = backtest_actions.add_parser("compare")
-    compare.add_argument("--run-id", action="append", required=True)
-    validate = backtest_actions.add_parser("validate", help="run frozen parameters over development/validation/test datasets")
-    validate.add_argument("--development", required=True)
-    validate.add_argument("--validation", required=True)
-    validate.add_argument("--test", required=True)
-    validate.add_argument("--config", type=Path)
-    sma = backtest_actions.add_parser("sma", help="run SMA crossover on a frozen Q3/Q4 OHLCV release")
-    sma.add_argument("--dataset", required=True, help="logical product, alias, or immutable release ID")
-    sma.add_argument("--start")
-    sma.add_argument("--end")
-    sma.add_argument("--fast", type=int, default=20)
-    sma.add_argument("--slow", type=int, default=50)
-    sma.add_argument("--initial-cash", type=Decimal, default=Decimal("100000"))
-    sma.add_argument("--fee-bps", type=Decimal, default=Decimal("10"))
-    reference_spxw = backtest_actions.add_parser("spxw-reference-scenario", help="run the governed Massive SPXW reference pipeline")
-    reference_spxw.add_argument("--event-release", required=True)
-    reference_spxw.add_argument("--source-slices", required=True)
-    reference_spxw.add_argument("--curated-slices", required=True)
     account = commands.add_parser("account", help="reconcile Ledger balances and positions with a venue")
     account_actions = account.add_subparsers(dest="action", required=True)
     reconcile = account_actions.add_parser("reconcile")
@@ -792,251 +767,13 @@ def _parser() -> argparse.ArgumentParser:
     runtime_soak.add_argument("--inverse", action="store_true")
     runtime_soak.set_defaults(manual_order=False)
 
-    study = commands.add_parser("study", help="manage flexible study workspaces and frozen candidates")
-    study_actions = study.add_subparsers(dest="action", required=True)
-    study_open = study_actions.add_parser("open", help="open or create a Study workspace")
-    study_open.add_argument("study_id")
-    study_open.add_argument("--version", default="1.0.0")
-    study_open.add_argument("--hypothesis", default="")
-    study_add_data = study_actions.add_parser("add-data", help=argparse.SUPPRESS)
-    study_add_data.add_argument("--workspace", dest="workspace", help="Study workspace id")
-    study_add_data.add_argument("--ws", dest="workspace", help=argparse.SUPPRESS)
-    study_add_data.add_argument("--name", required=True, help="workspace-local data name")
-    study_add_data.add_argument("--dataset", required=True, help="logical dataset, alias, or release id")
-    study_add_factor = study_actions.add_parser("add-factor", help=argparse.SUPPRESS)
-    study_add_factor.add_argument("--workspace", dest="workspace", help="Study workspace id")
-    study_add_factor.add_argument("--ws", dest="workspace", help=argparse.SUPPRESS)
-    study_add_factor.add_argument("--name", required=True, help="workspace-local factor name")
-    study_add_factor.add_argument("--file", required=True, help="factor code file")
-    study_add_factor.add_argument("--metadata", type=Path, help="JSON or YAML Factor metadata contract")
-    study_create = study_actions.add_parser("create")
-    study_create.add_argument("study_id"); study_create.add_argument("--version", default="1.0.0")
-    study_create.add_argument("--hypothesis", required=True)
-    study_create.add_argument("--dataset", help="Dataset Release or alias; infers release hash, time semantics and coverage")
-    study_create.add_argument("--input-release", help="advanced/CI override")
-    study_create.add_argument("--input-hash", help="advanced/CI override")
-    study_create.add_argument("--primary-time", help="advanced/CI override")
-    study_create.add_argument("--start", help="optional range override"); study_create.add_argument("--end", help="optional range override")
-    study_start = study_actions.add_parser(
-        "start", help="acquire governed data, create a bound Study, and scaffold analysis in one command",
-    )
-    study_start.add_argument("study_id")
-    study_start.add_argument("--version", default="1.0.0")
-    study_start.add_argument(
-        "--dataset", default="market.ohlcv.crypto.binance.usdm-perpetual.1h",
-    )
-    study_start.add_argument("--start", help="inclusive ISO-8601 timestamp with timezone")
-    study_start.add_argument("--end", help="exclusive ISO-8601 timestamp with timezone")
-    study_start.add_argument("--symbol", action="append", default=[],
-                             help="optional Binance symbol for a bounded run; omit for full-market discovery")
-    study_start.add_argument(
-        "--hypothesis",
-        default=("At each hour, idiosyncratic moves are concentrated in a minority of crypto perpetuals, "
-                 "and activated cross-sectional momentum persists over subsequent hours"),
-    )
-    study_plan = study_actions.add_parser(
-        "plan", help="show the full-market symbol-by-month acquisition matrix without downloading bars",
-    )
-    study_plan.add_argument("study_id")
-    study_plan.add_argument("--dataset", default="market.ohlcv.crypto.binance.usdm-perpetual.1h")
-    study_plan.add_argument("--start", required=True, help="inclusive ISO-8601 timestamp with timezone")
-    study_plan.add_argument("--end", required=True, help="exclusive ISO-8601 timestamp with timezone")
-    study_plan.add_argument("--symbol", action="append", default=[])
-    study_freeze = study_actions.add_parser("freeze")
-    study_freeze.add_argument("study_id"); study_freeze.add_argument("--version", default="1.0.0")
-    study_inspect = study_actions.add_parser("inspect", help="inspect a Study and its bound Dataset Release")
-    study_inspect.add_argument("study_id"); study_inspect.add_argument("--version", default="1.0.0")
-    study_data = study_actions.add_parser("data", help="preview rows from the Study input without storage plumbing")
-    study_data.add_argument("study_id"); study_data.add_argument("--version", default="1.0.0")
-    study_data.add_argument("--head", type=int, default=10); study_data.add_argument("--column", action="append")
-    study_factor_run = study_actions.add_parser("factor-run", help=argparse.SUPPRESS)
-    study_factor_run.add_argument("study_id")
-    study_factor_run.add_argument("name")
-    study_publish_factor = study_actions.add_parser("publish-factor", help=argparse.SUPPRESS)
-    study_publish_factor.add_argument("study_id")
-    study_publish_factor.add_argument("name")
-    study_publish_factor.add_argument("--as", dest="as_dataset", required=True, help="Feature DataSet identity to publish")
-    study_profile = study_actions.add_parser("profile", help="run basic point-in-time and OHLCV data checks")
-    study_profile.add_argument("study_id"); study_profile.add_argument("--version", default="1.0.0")
-    study_scaffold = study_actions.add_parser("scaffold", help="generate a minimal DataFrame study script")
-    study_scaffold.add_argument("study_id"); study_scaffold.add_argument("--version", default="1.0.0")
-    study_capture = study_actions.add_parser("capture", help="capture an IBKR option-chain snapshot")
-    study_capture.add_argument("--config", type=Path, help="optional JSON OptionChainCaptureSpec overrides")
-    study_capture.add_argument("--host", default="127.0.0.1")
-    study_capture.add_argument("--port", type=int, default=4001)
-    study_capture.add_argument("--client-id", type=int, default=21)
-    study_capture.add_argument("--expiry-count", type=int)
-    study_capture.add_argument("--strikes-each-side", type=int)
-    study_capture.add_argument("--market-data-type", choices=[item.value for item in MarketDataType])
-    study_analyze = study_actions.add_parser("analyze", help="rebuild an option snapshot report without connecting to IBKR")
-    study_analyze.add_argument("--run-id", required=True)
-    study_show = study_actions.add_parser("show", help="show a saved option snapshot run")
-    study_show.add_argument("--run-id", required=True)
-    study_series = study_actions.add_parser("capture-series", help="capture fixed-frequency MarketSnapshot data")
-    study_series.add_argument("--config", type=Path)
-    study_series.add_argument("--dataset-id", required=True)
-    study_series.add_argument("--samples", type=int, default=60)
-    study_series.add_argument("--interval-seconds", type=int, default=60)
-    study_series.add_argument("--split", choices=("development", "validation", "test"), default="development")
-    study_series.add_argument("--host", default="127.0.0.1")
-    study_series.add_argument("--port", type=int, default=4001)
-    study_series.add_argument("--client-id", type=int, default=31)
-    study_series.add_argument("--venue", choices=("ibkr", "binance"), default="ibkr")
-    study_series.add_argument("--environment", choices=("paper", "testnet", "live"), default="paper")
-    study_series.add_argument("--instruments", help="comma-separated internal InstrumentId values from Catalog")
-    study_series.add_argument("--inverse", action="store_true", help="use Binance coin-margined market data routes")
-    study_series.add_argument("--append", action="store_true", help="append this capture session to an existing dataset with provenance checks")
-    study_series.add_argument("--checkpoint-samples", type=int, default=10, help="atomically persist after this many samples")
-    study_readiness = study_actions.add_parser("readiness", help=argparse.SUPPRESS)
-    study_readiness.add_argument("--dataset", required=True)
-    study_readiness.add_argument("--study-config", type=Path, default=Path("studies/spxw_put_skew/config.json"))
-    study_actions.add_parser("governance-audit", help="audit governed datasets, study versions, and strategy registry artifacts")
-    study_actions.add_parser("register-btc-iron-condor", help=argparse.SUPPRESS)
-    study_actions.add_parser("register-builtin-strategies", help="register draft StrategySpec and ExecutionPolicy contracts for reference strategies")
-    _hide_subcommands(study_actions, {
-        "start",
-        "plan",
-        "data",
-        "profile",
-        "capture",
-        "analyze",
-        "show",
-        "capture-series",
-        "governance-audit",
-        "register-builtin-strategies",
-        "add-data",
-        "add-factor",
-        "factor-run",
-        "publish-factor",
-        "readiness",
-        "register-btc-iron-condor",
-    })
-
-    factor = commands.add_parser("factor", help="register and verify governed factor releases")
-    factor_actions = factor.add_subparsers(dest="action", required=True)
-    factor_register = factor_actions.add_parser("register-sma")
-    factor_register.add_argument("--input-identity", required=True); factor_register.add_argument("--fast", type=int, default=20)
-    factor_register.add_argument("--slow", type=int, default=50); factor_register.add_argument("--factor-id", default="sma-spread")
-    factor_register.add_argument("--version", default="1.0.0")
-    factor_verify = factor_actions.add_parser("verify-sma")
-    _add_sma_input_arguments(factor_verify); factor_verify.add_argument("--fast", type=int, default=20)
-    factor_verify.add_argument("--slow", type=int, default=50)
-
-    strategy_product = commands.add_parser("strategy", help="register governed runnable strategy releases")
-    strategy_actions = strategy_product.add_subparsers(dest="action", required=True)
-    strategy_open = strategy_actions.add_parser("open", help="open a Strategy workspace from a frozen Study")
-    strategy_open.add_argument("strategy_id")
-    strategy_open.add_argument("--from-study", required=True, help="Study snapshot reference, for example my-study@1.0.0")
-    strategy_bind_factor = strategy_actions.add_parser("bind-factor", help="reuse a Study factor in a Strategy workspace")
-    strategy_bind_factor.add_argument("--workspace", dest="workspace", help="Strategy workspace id")
-    strategy_bind_factor.add_argument("--ws", dest="workspace", help=argparse.SUPPRESS)
-    strategy_bind_factor.add_argument("--name", required=True, help="strategy-local input name")
-    strategy_bind_factor.add_argument("--study-factor", required=True, help="factor name from the Study Lock")
-    strategy_set_risk = strategy_actions.add_parser("set-risk", help="bind strategy risk code or configuration")
-    strategy_set_risk.add_argument("strategy_id")
-    strategy_set_risk.add_argument("risk_file")
-    strategy_set_execution = strategy_actions.add_parser("set-execution", help="bind strategy execution policy")
-    strategy_set_execution.add_argument("strategy_id")
-    strategy_set_execution.add_argument("execution_file")
-    strategy_set_model = strategy_actions.add_parser("set-model", help="bind a built-in runtime model to a Strategy workspace")
-    strategy_set_model.add_argument("strategy_id")
-    strategy_set_model.add_argument("--kind", required=True, choices=("sma-cross-v1", "builtin.sma-cross-v1"))
-    strategy_set_model.add_argument("--instrument-id")
-    strategy_set_model.add_argument("--fast-window", type=int)
-    strategy_set_model.add_argument("--slow-window", type=int)
-    strategy_set_model.add_argument("--approved-capital")
-    strategy_set_model_code = strategy_actions.add_parser("set-model-code", help="bind user strategy model.py and optional metadata")
-    strategy_set_model_code.add_argument("strategy_id")
-    strategy_set_model_code.add_argument("model_file")
-    strategy_set_model_code.add_argument("--metadata", type=Path, help="JSON or YAML Strategy model metadata contract")
-    strategy_freeze = strategy_actions.add_parser("freeze", help="freeze a Strategy workspace snapshot")
-    strategy_freeze.add_argument("strategy_id")
-    strategy_freeze.add_argument("--version", default="1.0.0")
-    strategy_register = strategy_actions.add_parser("register-sma")
-    strategy_register.add_argument("--input-identity", required=True); strategy_register.add_argument("--fast", type=int, default=20)
-    strategy_register.add_argument("--slow", type=int, default=50); strategy_register.add_argument("--fee-bps", type=Decimal, default=Decimal("10"))
-    strategy_register.add_argument("--version", default="1.2.0"); strategy_register.add_argument("--factor-id", default="sma-spread")
-    strategy_register.add_argument("--factor-version", default="1.0.0")
-    strategy_actions.add_parser("register-builtins")
-    iron_register=strategy_actions.add_parser("register-btc-iron-condor");iron_register.add_argument("--study-spec-hash",required=True)
-    strategy_inspect=strategy_actions.add_parser("inspect");strategy_inspect.add_argument("strategy_id")
-    strategy_inspect.add_argument("--version")
-    strategy_status=strategy_actions.add_parser("status");strategy_status.add_argument("strategy_id");strategy_status.add_argument("--version",required=True)
-    strategy_activate=strategy_actions.add_parser("activate");strategy_activate.add_argument("strategy_id");strategy_activate.add_argument("--version",required=True)
-    strategy_activate.add_argument("--actor",required=True);strategy_activate.add_argument("--reason",required=True)
-    strategy_rollback=strategy_actions.add_parser("rollback");strategy_rollback.add_argument("strategy_id")
-    strategy_rollback.add_argument("--actor",required=True);strategy_rollback.add_argument("--reason",required=True)
-    strategy_check=strategy_actions.add_parser("check-promotion", help="check promotion evidence without changing strategy lifecycle")
-    strategy_check.add_argument("strategy_id"); strategy_check.add_argument("--version", required=True)
-    strategy_check.add_argument("--to", required=True, choices=(
-        "STUDY_VALIDATED", "TRADE_PROXY_VALIDATED", "EXECUTABLE_BACKTEST_VALIDATED",
-        "ROBUSTNESS_VALIDATED", "PAPER_APPROVED", "LIVE_LIMITED", "LIVE_APPROVED",
-    ))
-    strategy_check.add_argument("--evidence", action="append", required=True, help="study, readiness or soak JSON evidence; repeatable")
-    strategy_promote=strategy_actions.add_parser("promote", help="promote a Strategy Release with hashed evidence")
-    strategy_promote.add_argument("strategy_id"); strategy_promote.add_argument("--version", required=True)
-    strategy_promote.add_argument("--to", required=True, choices=(
-        "STUDY_VALIDATED", "TRADE_PROXY_VALIDATED", "EXECUTABLE_BACKTEST_VALIDATED",
-        "ROBUSTNESS_VALIDATED", "PAPER_APPROVED", "LIVE_LIMITED", "LIVE_APPROVED",
-    ))
-    strategy_promote.add_argument("--evidence", action="append", required=True, help="study or run result JSON evidence; repeatable")
-    strategy_promote.add_argument("--actor", required=True); strategy_promote.add_argument("--capital-limit", type=Decimal, required=True)
-    strategy_promote.add_argument("--rollback-condition", required=True)
-
-    run_product = commands.add_parser("run", help="run one Strategy Release across backtest, simulation, shadow or paper")
+    run_product = commands.add_parser("run", help="run strategy code from a Workspace across backtest, simulation, paper or live")
     run_actions = run_product.add_subparsers(dest="action", required=True)
-    run_start = run_actions.add_parser("start", help="start a Run workspace from a Study or Strategy snapshot")
-    run_target = run_start.add_mutually_exclusive_group(required=True)
-    run_target.add_argument("--study", help="Study workspace id for study-mode execution")
-    run_target.add_argument("--snapshot", help="Strategy snapshot reference, for example my-strategy@1.0.0")
-    run_start.add_argument("--mode", required=True, choices=("study", "backtest", "historical-simulation", "paper", "live"))
-    run_start.add_argument("--execute-feeds", action="store_true",
-                           help="for paper/live, instantiate provider feed runtime services and run them briefly")
-    run_start.add_argument("--execute-strategy", action="store_true",
-                           help="execute a bound Strategy model: supervised runtime for paper/live, decide(context) for user model backtests")
-    run_start.add_argument("--feed-runtime-seconds", type=float, default=5.0,
-                           help="duration for --execute-feeds/--execute-strategy supervised runtime")
-    _add_run_control_argument(run_start)
-    run_backtest_generic = run_actions.add_parser("backtest", help="run a Strategy Release through the unified backtest entry")
-    run_backtest_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
-    _add_run_control_argument(run_backtest_generic)
-    _add_sma_input_arguments(run_backtest_generic); _add_sma_run_arguments(run_backtest_generic)
-    run_backtest_generic.add_argument("--artifact-root", type=Path)
-    run_backtest_generic.add_argument("--execution-calibration", type=Path,
-                                      help="ExecutionCalibrationRelease manifest to bind into the backtest artifact")
-    run_simulate_generic = run_actions.add_parser("simulate", help="run a Strategy Release through historical simulation")
-    run_simulate_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
-    _add_run_control_argument(run_simulate_generic)
-    _add_sma_input_arguments(run_simulate_generic); _add_sma_run_arguments(run_simulate_generic)
-    run_simulate_generic.add_argument("--run-root", type=Path, required=True)
-    run_simulate_generic.add_argument("--artifact-root", type=Path)
-    run_simulate_generic.add_argument("--account-id", default="sma-simulation")
-    run_simulate_generic.add_argument("--base-asset", default="BTC")
-    run_simulate_generic.add_argument("--quote-asset", default="USDT")
-    run_paper_generic = run_actions.add_parser("paper", help="run a Strategy Release in live-market simulated execution")
-    run_paper_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
-    _add_run_control_argument(run_paper_generic)
-    run_paper_generic.add_argument("--capture", type=Path)
-    run_paper_generic.add_argument("--fixture", action="store_true")
-    run_paper_generic.add_argument("--data", action="append", default=[],
-                                   help="live Dataset binding name=dataset; repeat for multiple feeds")
-    _add_live_binance_bar_arguments(run_paper_generic)
-    _add_sma_run_arguments(run_paper_generic)
-    run_paper_generic.add_argument("--run-root", type=Path, required=True)
-    run_paper_generic.add_argument("--artifact-root", type=Path)
-    run_paper_generic.add_argument("--account-id", default="sma-paper")
-    run_paper_generic.add_argument("--base-asset", default="BTC")
-    run_paper_generic.add_argument("--quote-asset", default="USDT")
-    run_shadow_generic = run_actions.add_parser("shadow", help="run a Strategy Release on a capture without submitting orders")
-    run_shadow_generic.add_argument("--strategy", default="sma-cross-v1@1.2.0")
-    _add_run_control_argument(run_shadow_generic)
-    run_shadow_generic.add_argument("--capture", type=Path)
-    run_shadow_generic.add_argument("--fixture", action="store_true")
-    run_shadow_generic.add_argument("--data", action="append", default=[],
-                                    help="live Dataset binding name=dataset; repeat for multiple feeds")
-    _add_sma_run_arguments(run_shadow_generic)
-    run_shadow_generic.add_argument("--run-root", type=Path, required=True)
-    run_shadow_generic.add_argument("--artifact-root", type=Path)
+    run_start = run_actions.add_parser("start", help="start a Run workspace from a Workspace and strategy entrypoint")
+    run_start.add_argument("--workspace", required=True, help="Workspace id whose data view drives the run")
+    run_start.add_argument("--entrypoint", required=True, help="strategy entrypoint as module:callable")
+    run_start.add_argument("--param", action="append", default=[], help="strategy parameter key=value; repeatable")
+    run_start.add_argument("--mode", required=True, choices=("backtest", "historical-simulation", "paper", "live"))
     run_inspect = run_actions.add_parser("inspect"); run_inspect.add_argument("--db", type=Path)
     run_inspect.add_argument("--artifact",type=Path);run_inspect.add_argument("--at")
     run_inspect.add_argument("--run-id")
@@ -1045,20 +782,24 @@ def _parser() -> argparse.ArgumentParser:
     target_run_compare = run_actions.add_parser("compare", help="compare two Run workspaces")
     target_run_compare.add_argument("--first", required=True)
     target_run_compare.add_argument("--second", required=True)
-    run_replay=run_actions.add_parser("artifact-replay", help="replay a governed run artifact")
-    run_replay.add_argument("--artifact",type=Path,required=True)
-    _add_sma_input_arguments(run_replay)
-    replay_capture=run_actions.add_parser("capture-replay", help="replay a run artifact against a canonical capture")
-    replay_capture.add_argument("--artifact",type=Path,required=True)
-    replay_capture.add_argument("--capture",type=Path,required=True)
-    run_reference=run_actions.add_parser("reference");run_reference.add_argument("--strategy",choices=("covered-call","spot-perp-carry"),required=True)
-
-    tutorial = commands.add_parser("tutorial", help="guided, credential-free first-use workflows")
-    tutorial_actions = tutorial.add_subparsers(dest="action", required=True)
-    tutorial_sma = tutorial_actions.add_parser("sma", help="start the deterministic SMA study tutorial")
-    tutorial_sma.add_argument("--output-root", type=Path, default=Path("example-output/first-study"))
-    tutorial_sma.add_argument("--study-id", default="btc-sma-first")
     return parser
+
+
+def _add_global_cli_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--data-root", default=f"{DEFAULT_LAKE_ROOT}/snapshots")
+    parser.add_argument("--dataset-root", default=f"{DEFAULT_LAKE_ROOT}/curated")
+    parser.add_argument("--backtest-root", default=f"{DEFAULT_LAKE_ROOT}/backtests")
+    parser.add_argument("--catalog-path", default=f"{DEFAULT_LAKE_ROOT}/catalog/instruments.json")
+    parser.add_argument("--reference-catalog-path", default=f"{DEFAULT_LAKE_ROOT}/reference/catalog.json")
+    parser.add_argument("--event-log-path", default=f"{DEFAULT_LAKE_ROOT}/events/kairospy.jsonl")
+    parser.add_argument("--runtime-db", type=Path, help="transactional runtime database; defaults beside --event-log-path")
+    parser.add_argument("--lake-root", default=os.environ.get("KAIROSPY_LAKE_ROOT", DEFAULT_LAKE_ROOT),
+                        help="data lake root; defaults to KAIROSPY_LAKE_ROOT or .kairos/data")
+    parser.add_argument("--format", choices=("text", "json"), default="text",
+                        help="output format; human-readable text is the default")
+    parser.add_argument("--lang", choices=("zh-CN", "en-US"), default=None,
+                        help="display language; defaults from the system locale")
+    parser.add_argument("--quiet", action="store_true", help="suppress successful product command output")
 
 
 def _add_sma_input_arguments(parser):
@@ -1072,6 +813,13 @@ def _add_acquisition_limit_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-bytes", type=int, help="maximum estimated bytes allowed for this acquisition")
 
 
+def _add_provider_config_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--provider-config", dest="connector_config", metavar="PROVIDER_CONFIG", type=Path,
+                        help="JSON configuration for additional Providers")
+    parser.add_argument("--connector-config", dest="connector_config", type=Path,
+                        help=argparse.SUPPRESS)
+
+
 def _add_sma_run_arguments(parser):
     parser.add_argument("--fast", type=int, default=20); parser.add_argument("--slow", type=int, default=50)
     parser.add_argument("--initial-cash", type=Decimal, default=Decimal("100000"))
@@ -1083,10 +831,6 @@ def _add_live_binance_bar_arguments(parser):
     parser.add_argument("--live-binance-interval", default="1m", help="Binance kline interval for live-market paper input")
     parser.add_argument("--live-binance-limit", type=int, default=120, help="number of recent Binance klines to capture")
     parser.add_argument("--live-binance-base-url", default="https://data-api.binance.vision", help=argparse.SUPPRESS)
-
-
-def _add_run_control_argument(parser):
-    parser.add_argument("--control", action="store_true", help="show a professional run control console and summary")
 
 
 def _spec(args: argparse.Namespace) -> OptionChainCaptureSpec:
@@ -1409,6 +1153,8 @@ def main(argv: list[str] | None = None) -> int:
         return _doctor(args)
     if args.group == "configure":
         return _configure_command(args)
+    if args.group == "providers":
+        return _providers(args)
     if args.group == "catalog":
         return _catalog(args)
     if args.group == "account":
@@ -1485,19 +1231,9 @@ def main(argv: list[str] | None = None) -> int:
         elif not args.quiet:
             print(render_project_init(result))
         return 0
-    study_capture_actions = {
-        "capture",
-        "analyze",
-        "show",
-        "capture-series",
-        "readiness",
-        "governance-audit",
-        "register-btc-iron-condor",
-        "register-builtin-strategies",
-    }
-    if args.group in {"factor", "strategy", "run", "tutorial"} or (
-        args.group == "study" and args.action not in study_capture_actions
-    ):
+    if args.group == "workspace":
+        return _workspace(args)
+    if args.group == "run":
         return _product_command(args)
     if args.group == "data":
         return _data(args)
@@ -1511,24 +1247,13 @@ def main(argv: list[str] | None = None) -> int:
         return _risk_analytics(args)
     repository = FileOptionCaptureRepository(args.data_root)
     service = OptionCaptureService(repository)
-    if args.group == "backtest":
-        return _backtest(args)
     if args.action == "governance-audit":
-        from kairospy.study_platform.validation import audit_governance
+        from kairospy.validation import audit_governance
         result=audit_governance(args.lake_root)
         print(json.dumps({"passed":result.passed,"checked_datasets":result.checked_datasets,
-            "checked_studies":result.checked_studies,"checked_strategies":result.checked_strategies,
+            "checked_experiments":result.checked_experiments,"checked_strategies":result.checked_strategies,
             "violations":result.violations},ensure_ascii=False,indent=2))
         return 0 if result.passed else 2
-    if args.action == "register-btc-iron-condor":
-        module = _workspace_study_module("studies.register_btc_iron_condor")
-        directory,spec=module.register(args.lake_root);print(f"{directory}: {spec.lifecycle.value} {spec.spec_hash}");return 0
-    if args.action == "register-builtin-strategies":
-        from kairospy.strategies.specs import register_builtin_strategies
-        paths=register_builtin_strategies(Path(args.lake_root)/"strategies")
-        print(json.dumps({"count":len(paths),"paths":[str(path) for path in paths]},indent=2));return 0
-    if args.action == "readiness":
-        return _study_readiness(args)
     if args.action == "capture-series":
         if args.instruments:
             return _capture_normalized_series(args)
@@ -1581,140 +1306,144 @@ def main(argv: list[str] | None = None) -> int:
 
 def _product_command(args: argparse.Namespace) -> int:
     import sys
-    from kairospy.cli_control import initial_run_control_state, render_run_control, render_run_summary
     from kairospy.cli_output import render_error, render_product_result, resolve_language
-    from kairospy.product_workflow import (
-        activate_strategy_release,create_study, freeze_study, inspect_run, inspect_strategy_release, inspect_study,
-        check_strategy_promotion,
-        promote_strategy_release,register_btc_iron_condor_candidate,register_builtin_strategy_releases,rollback_strategy_release,strategy_release_status,
-        register_sma_factor, register_sma_strategy,
-        replay_capture_artifact, replay_run_artifact, run_sma_backtest_workflow, run_sma_paper_workflow, run_sma_shadow_workflow,
-        run_strategy_backtest_workflow,
-        preview_study_data, profile_study, run_reference_strategy_workflow, run_sma_simulation_workflow,
-        plan_governed_study, scaffold_study, start_governed_study, start_sma_tutorial, verify_sma_factor,
-    )
     from kairospy import product_surface
     from kairospy.connectors.binance.historical_archive import GracefulShutdown
 
-    def _study_freeze_dispatch(command_args: argparse.Namespace):
-        if product_surface.study_exists(command_args.lake_root, command_args.study_id):
-            return product_surface.study_freeze(command_args)
-        return freeze_study(command_args)
-
-    def _study_inspect_dispatch(command_args: argparse.Namespace):
-        if product_surface.study_exists(command_args.lake_root, command_args.study_id):
-            return product_surface.study_inspect(command_args)
-        return inspect_study(command_args)
-
-    def _strategy_inspect_dispatch(command_args: argparse.Namespace):
-        if product_surface.strategy_exists(command_args.lake_root, command_args.strategy_id):
-            return product_surface.strategy_inspect(command_args)
-        if not getattr(command_args, "version", None):
-            raise ValueError("legacy strategy inspect requires --version")
-        return inspect_strategy_release(command_args)
-
-    def _run_inspect_dispatch(command_args: argparse.Namespace):
-        if getattr(command_args, "run_id", None):
-            return product_surface.run_inspect(command_args)
-        return inspect_run(command_args)
-
-    def _run_live_data_dispatch(command_args: argparse.Namespace):
-        if getattr(command_args, "data", None):
-            return product_surface.run_live_data_preflight(command_args)
-        if command_args.action == "paper":
-            return run_sma_paper_workflow(command_args)
-        return run_sma_shadow_workflow(command_args)
-
-    handlers = {
-        ("study", "open"): product_surface.study_open,
-        ("study", "add-data"): product_surface.study_add_data,
-        ("study", "add-factor"): product_surface.study_add_factor,
-        ("study", "create"): create_study, ("study", "plan"): plan_governed_study,
-        ("study", "start"): start_governed_study,
-        ("study", "freeze"): _study_freeze_dispatch,
-        ("study", "factor-run"): product_surface.study_factor_run,
-        ("study", "publish-factor"): product_surface.study_publish_factor,
-        ("study", "inspect"): _study_inspect_dispatch, ("study", "data"): preview_study_data,
-        ("study", "profile"): profile_study, ("study", "scaffold"): scaffold_study,
-        ("tutorial", "sma"): start_sma_tutorial,
-        ("factor", "register-sma"): register_sma_factor, ("factor", "verify-sma"): verify_sma_factor,
-        ("strategy", "open"): product_surface.strategy_open,
-        ("strategy", "bind-factor"): product_surface.strategy_bind_factor,
-        ("strategy", "set-risk"): product_surface.strategy_set_risk,
-        ("strategy", "set-execution"): product_surface.strategy_set_execution,
-        ("strategy", "set-model"): product_surface.strategy_set_model,
-        ("strategy", "set-model-code"): product_surface.strategy_set_model_code,
-        ("strategy", "freeze"): product_surface.strategy_freeze,
-        ("strategy", "register-sma"): register_sma_strategy,
-        ("strategy","register-builtins"):register_builtin_strategy_releases,("strategy","inspect"):_strategy_inspect_dispatch,
-        ("strategy","register-btc-iron-condor"):register_btc_iron_condor_candidate,
-        ("strategy","status"):strategy_release_status,("strategy","activate"):activate_strategy_release,
-        ("strategy","rollback"):rollback_strategy_release,("strategy","promote"):promote_strategy_release,
-        ("strategy","check-promotion"):check_strategy_promotion,
-        ("run", "start"): product_surface.run_start,
-        ("run", "backtest"): run_strategy_backtest_workflow,
-        ("run", "simulate"): run_sma_simulation_workflow, ("run", "inspect"): _run_inspect_dispatch,
-        ("run","replay"): product_surface.run_replay,
-        ("run","compare"): product_surface.run_compare,
-        ("run","artifact-replay"):replay_run_artifact,
-        ("run","paper"):_run_live_data_dispatch,
-        ("run","capture-replay"):replay_capture_artifact,
-        ("run","shadow"):_run_live_data_dispatch,
-        ("run","reference"):run_reference_strategy_workflow,
-    }
-    try:
-        _validate_strategy_scoped_run(args)
-        if _should_render_run_control(args):
-            print(render_run_control(initial_run_control_state(_run_control_target(args), args.action)))
-        payload = handlers[(args.group, args.action)](args)
-    except GracefulShutdown as error:
-        print(f"Stopped cleanly: {error}", file=sys.stderr)
-        return 130
-    except (KeyError, LookupError, PermissionError, ValueError, FileNotFoundError) as error:
-        language = resolve_language(args.lang)
-        print(render_error(error, language, json_output=args.format == "json"), file=sys.stderr)
-        return 2
-    if args.quiet:
+    if args.group == "run" and args.action in {"start", "inspect", "replay", "compare"}:
+        handlers = {
+            ("run", "start"): product_surface.run_start,
+            ("run", "inspect"): product_surface.run_inspect,
+            ("run", "replay"): product_surface.run_replay,
+            ("run", "compare"): product_surface.run_compare,
+        }
+        try:
+            payload = handlers[(args.group, args.action)](args)
+        except GracefulShutdown as error:
+            print(f"Stopped cleanly: {error}", file=sys.stderr)
+            return 130
+        except (KeyError, LookupError, PermissionError, ValueError, FileNotFoundError) as error:
+            language = resolve_language(args.lang)
+            print(render_error(error, language, json_output=args.format == "json"), file=sys.stderr)
+            return 2
+        if args.quiet:
+            return 0
+        if args.format == "json":
+            print(json.dumps(to_primitive(payload), ensure_ascii=False, indent=2, sort_keys=True))
+        else:
+            print(render_product_result(args.group, args.action, payload, resolve_language(args.lang)))
         return 0
-    if args.format == "json":
-        print(json.dumps(to_primitive(payload), ensure_ascii=False, indent=2, sort_keys=True))
-    elif _is_run_execution(args):
-        print(render_run_summary(_run_control_target(args), payload))
+
+    raise SystemExit(f"unsupported product command {args.group} {args.action}")
+
+
+def _workspace(args: argparse.Namespace) -> int:
+    from kairospy.workspace import WorkspaceRepository
+
+    repository = WorkspaceRepository.discover(Path.cwd())
+    if args.action == "create":
+        workspace = repository.open_or_create(args.name)
+        payload = {
+            "product": "workspace",
+            "operation": "create",
+            "workspace": workspace.name,
+            "root": str(workspace.root),
+            "bindings": workspace.snapshot()["bindings"],
+        }
+    elif args.action == "bind-data":
+        workspace = repository.open_or_create(args.workspace)
+        binding = workspace.bind_data(args.name, dataset=args.dataset)
+        payload = {
+            "product": "workspace",
+            "operation": "bind-data",
+            "workspace": workspace.name,
+            "binding": binding.to_dict(),
+            "root": str(workspace.root),
+        }
+    elif args.action == "bind-live":
+        workspace = repository.open_or_create(args.workspace)
+        binding = workspace.bind_live(args.name, dataset=args.dataset)
+        payload = {
+            "product": "workspace",
+            "operation": "bind-live",
+            "workspace": workspace.name,
+            "binding": binding.to_dict(),
+            "root": str(workspace.root),
+        }
+    elif args.action == "inspect":
+        workspace = repository.open(args.name)
+        payload = {
+            "product": "workspace",
+            "operation": "inspect",
+            "workspace": workspace.name,
+            "root": str(workspace.root),
+            **workspace.snapshot(),
+        }
     else:
-        print(render_product_result(args.group, args.action, payload, resolve_language(args.lang)))
+        raise SystemExit(f"unsupported workspace action {args.action!r}")
+    if args.format == "json":
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    elif not args.quiet:
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
 
-def _is_run_execution(args: argparse.Namespace) -> bool:
-    if args.group != "run":
-        return False
-    if args.action in {"backtest", "simulate", "paper", "shadow"}:
-        return True
-    return args.action == "start" and (
-        bool(getattr(args, "execute_strategy", False)) or bool(getattr(args, "execute_feeds", False))
-    )
+def _providers(args: argparse.Namespace) -> int:
+    from kairospy import provider_surface
+
+    if args.action == "list":
+        payload = provider_surface.providers_list(args.lake_root, connector_config=args.connector_config)
+    else:
+        payload = provider_surface.provider_doctor(
+            args.lake_root, args.provider, connector_config=args.connector_config,
+        )
+    _emit_provider_payload(args, "Kairos Providers" if args.action == "list" else "Kairos Provider Diagnostics", payload)
+    return 2 if payload.get("status") == "unknown_provider" else 0
 
 
-def _should_render_run_control(args: argparse.Namespace) -> bool:
-    return _is_run_execution(args) and bool(getattr(args, "control", False)) and args.format != "json" and not args.quiet
+def _emit_provider_payload(args: argparse.Namespace, title: str, payload: dict[str, object]) -> None:
+    from kairospy.cli_output import render_generic_payload, render_key_value_panel, render_status_table
 
-
-def _run_control_target(args: argparse.Namespace) -> str:
-    return str(
-        getattr(args, "strategy", None)
-        or getattr(args, "snapshot", None)
-        or getattr(args, "study", None)
-        or "unknown"
-    )
-
-
-def _validate_strategy_scoped_run(args: argparse.Namespace) -> None:
-    if args.group != "run" or args.action not in {"simulate", "paper", "shadow"}:
+    primitive = to_primitive(payload)
+    if args.format == "json":
+        print(json.dumps(primitive, ensure_ascii=False, indent=2, sort_keys=True))
         return
-    strategy = getattr(args, "strategy", "sma-cross-v1")
-    strategy_id = str(strategy).split("@", 1)[0]
-    if strategy_id != "sma-cross-v1":
-        raise ValueError(f"{args.action} currently supports sma-cross-v1 Strategy Releases, got {strategy!r}")
+    if args.action == "list" and isinstance(primitive.get("providers"), list):
+        rows = [{
+            "provider": item.get("provider", ""),
+            "status": item.get("status", ""),
+            "data_products": item.get("data_products", ""),
+            "available": item.get("available_data_products", ""),
+            "venues": ", ".join(str(value) for value in item.get("venues", ())),
+        } for item in primitive["providers"] if isinstance(item, dict)]
+        print(render_status_table(title, rows, columns=("provider", "status", "data_products", "available", "venues")))
+        return
+    if args.action == "doctor":
+        rows = [
+            ("Provider", primitive.get("provider", "")),
+            ("Status", primitive.get("status", "")),
+            ("Venues", ", ".join(str(value) for value in primitive.get("venues", ()))),
+        ]
+        output = [render_key_value_panel(title, [(label, value) for label, value in rows if value not in ("", None)])]
+        products = primitive.get("data_products")
+        if isinstance(products, list):
+            product_rows = [{
+                "key": item.get("key", ""),
+                "status": item.get("status", ""),
+                "capability": item.get("capability", ""),
+                "dataset": item.get("dataset", ""),
+            } for item in products if isinstance(item, dict)]
+            output.append(render_status_table("Data Products", product_rows, columns=("key", "status", "capability", "dataset")))
+        issues = primitive.get("issues")
+        if isinstance(issues, list) and issues:
+            issue_rows = [{
+                "code": item.get("code", ""),
+                "message": item.get("message", ""),
+            } for item in issues if isinstance(item, dict)]
+            output.append(render_status_table("Issues", issue_rows, columns=("code", "message")))
+        print("\n\n".join(item for item in output if item))
+        return
+    print(render_generic_payload(title, primitive))
 
 
 def _data(args: argparse.Namespace) -> int:
@@ -1758,12 +1487,17 @@ def _data(args: argparse.Namespace) -> int:
             return 2
         _emit_data_payload(args, "Kairos Dataset", payload)
         return 0
-    if args.action == "product":
-        if args.product_action != "list":
-            raise SystemExit(f"unsupported data product action {args.product_action!r}")
+    if args.action in {"product", "products"}:
         from kairospy import product_surface
-        _emit_data_payload(args, "Kairos Dataset", product_surface.data_product_list(args))
-        return 0
+        if args.product_action == "list":
+            _emit_data_payload(args, "Kairos Dataset", product_surface.data_product_list(args))
+            return 0
+        if args.product_action == "doctor":
+            payload = product_surface.data_product_doctor(args)
+            _emit_data_payload(args, "Kairos Data Product", payload)
+            return 2 if payload.get("status") == "unknown_data_product" else 0
+        else:
+            raise SystemExit(f"unsupported data product action {args.product_action!r}")
     if args.action == "protocol":
         from kairospy import product_surface
         try:
@@ -1999,7 +1733,7 @@ def _data(args: argparse.Namespace) -> int:
         return 2 if args.strict and not report["healthy"] else 0
     if args.action == "us-equity-momentum-diagnostics":
         from kairospy.features import UsEquityMomentumDiagnostics
-        report = UsEquityMomentumDiagnostics(args.lake_root).report(study_id=args.study_id, version=args.version)
+        report = UsEquityMomentumDiagnostics(args.lake_root).report(workspace=args.workspace, version=args.version)
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 2 if args.strict and report["summary"]["errors"] else 0
     if args.action == "validate":
@@ -2016,10 +1750,9 @@ def _data(args: argparse.Namespace) -> int:
         register_default_products(args.lake_root)
         if args.connector_config is not None:
             register_configured_products(args.lake_root, args.connector_config)
-        from kairospy.product_workflow import _archive_progress
         providers = default_provider_registry(
             args.lake_root, connector_config=args.connector_config,
-            progress=None if args.quiet else _archive_progress,
+            progress=None,
         )
         client = DatasetClient(args.lake_root, providers=providers, acquisition_limits=_acquisition_limits(args))
         from kairospy.data.preparation import DataPreparationService
@@ -2070,11 +1803,11 @@ def _data(args: argparse.Namespace) -> int:
     if args.action == "freeze":
         client = DatasetClient(args.lake_root)
         queries = tuple(client.get(dataset) for dataset in args.dataset)
-        target = client.freeze_study(
-            args.output, args.study_id, queries, code_version=args.code_version,
+        target = client.freeze_snapshot(
+            args.output, args.workspace, queries, code_version=args.code_version,
         )
         print(json.dumps({
-            "study_id": args.study_id, "snapshot": str(target),
+            "workspace": args.workspace, "snapshot": str(target),
             "release_ids": [query.release_id for query in queries],
         }, ensure_ascii=False, indent=2)); return 0
     if args.action == "catalog":
@@ -2126,10 +1859,9 @@ def _data(args: argparse.Namespace) -> int:
         register_default_products(args.lake_root)
         if args.connector_config is not None:
             register_configured_products(args.lake_root, args.connector_config)
-        from kairospy.product_workflow import _archive_progress
         providers = default_provider_registry(
             args.lake_root, connector_config=args.connector_config,
-            progress=(None if args.quiet or args.action == "plan" else _archive_progress),
+            progress=None,
         )
         client = DatasetClient(args.lake_root, providers=providers, acquisition_limits=_acquisition_limits(args))
         if args.action == "acquire" and getattr(args, "list_products", False):
@@ -2156,7 +1888,7 @@ def _data(args: argparse.Namespace) -> int:
             release = client.acquire(plan, instruments=tuple(args.instrument), refresh=args.refresh)
         except RuntimeError as error:
             raise SystemExit(str(error)) from error
-        _emit_data_payload(args, "Kairos Data Release", to_primitive(release)); return 0
+        _emit_data_payload(args, "Kairos Dataset", _dataset_acquire_payload(release)); return 0
     if args.action == "promote":
         if getattr(args, "for_use", None):
             if not args.dataset:
@@ -2169,13 +1901,8 @@ def _data(args: argparse.Namespace) -> int:
                 _emit_data_payload(args, "Kairos Dataset Promotion", payload)
                 return 2
             _emit_data_payload(args, "Kairos Dataset Promotion", payload)
-            return 0 if payload.get("status") in {"ready_for_study", "ready_for_backtest", "ready_for_production"} else 2
-        if not args.release or not args.status or not args.actor or not args.reason:
-            raise SystemExit("legacy data promote requires --release, --status, --actor and --reason")
-        release = DataCatalog(args.lake_root).promote(
-            args.release, args.status, actor=args.actor, reason=args.reason,
-        )
-        _emit_data_payload(args, "Kairos Data Promotion", to_primitive(release)); return 0
+            return 0 if payload.get("status") in {"ready_for_workspace", "ready_for_backtest", "ready_for_production"} else 2
+        raise SystemExit("data promote requires --for workspace, --for backtest, or --for production")
     if args.action == "quarantine-insecure-provider-cache":
         moved = MassiveVendorArchiveClient.quarantine_non_https(args.lake_root)
         print(json.dumps({"quarantined": len(moved), "paths": [str(item) for item in moved]}, ensure_ascii=False, indent=2)); return 0
@@ -2273,10 +2000,6 @@ def _data(args: argparse.Namespace) -> int:
             risk_free_rate=args.risk_free_rate, dividend_yield=args.dividend_yield,
         )
         print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
-    if args.action == "btc-options-readiness":
-        module = _workspace_study_module("studies.btc_options_readiness")
-        result = module.btc_options_readiness(args.lake_root); print(json.dumps(result, ensure_ascii=False, indent=2))
-        return 0 if result["signal_study_ready"] else 2
     metadata = DatasetClient(args.lake_root).metadata(args.dataset)
     print(json.dumps(metadata, ensure_ascii=False, indent=2))
     return 0
@@ -2301,17 +2024,23 @@ def _emit_data_payload(args: argparse.Namespace, title: str, payload: object) ->
         print(render_data_catalog(primitive["products"]))
         return
     if (
-        args.action == "product"
+        args.action in {"product", "products"}
         and getattr(args, "product_action", None) == "list"
         and isinstance(primitive.get("products"), list)
     ):
         print(render_builtin_data_products("Kairos Built-In Data Products", primitive["products"]))
+        return
+    if args.action in {"product", "products"} and getattr(args, "product_action", None) == "doctor":
+        print(_render_data_product_doctor_payload(title, primitive))
         return
     if args.action == "protocol":
         print(_render_data_protocol_payload(title, primitive))
         return
     if args.action == "use" and getattr(args, "list_products", False) and isinstance(primitive.get("products"), list):
         print(render_builtin_data_products("Kairos Built-In Data Products", primitive["products"]))
+        return
+    if args.action == "use" and primitive.get("operation") == "use":
+        print(_render_data_use_payload(title, primitive))
         return
     if args.action == "list" and isinstance(primitive.get("products"), list):
         print(render_dataset_list(title, primitive["products"]))
@@ -2330,6 +2059,9 @@ def _emit_data_payload(args: argparse.Namespace, title: str, payload: object) ->
         return
     if args.action == "diagnostics":
         print(render_status_table(title, _diagnostic_rows(primitive)))
+        return
+    if args.action == "acquire" and primitive.get("operation") == "acquire":
+        print(_render_dataset_acquire_payload(title, primitive))
         return
     if args.action in {"plan", "acquire"}:
         print(_render_acquisition_plan_payload(title, primitive))
@@ -2368,6 +2100,30 @@ def _dimension_filters(values: list[str]) -> dict[str, str]:
             raise SystemExit("--dimension key and value cannot be empty")
         dimensions[key.strip()] = value.strip()
     return dimensions
+
+
+def _render_data_use_payload(title: str, payload: dict[str, object]) -> str:
+    from kairospy.cli_output import render_key_value_panel
+
+    historical = payload.get("historical") if isinstance(payload.get("historical"), dict) else {}
+    rows = [
+        ("Product", payload.get("product", "")),
+        ("Operation", payload.get("operation", "")),
+        ("Dataset", payload.get("dataset", "")),
+        ("Data Product", payload.get("data_product", "")),
+        ("Default Dataset", payload.get("default_dataset", "")),
+        ("Title", payload.get("title", "")),
+        ("Capability", payload.get("capability", "")),
+        ("Target Use", payload.get("target_use", "")),
+        ("Status", historical.get("status", "")),
+        ("Ready For", ", ".join(str(item) for item in historical.get("ready_for", ()))),
+        ("Blocked For", ", ".join(str(item) for item in historical.get("blocked_for", ()))),
+        ("Time", payload.get("time", "")),
+        ("Requires Account", payload.get("requires_account", "")),
+        ("Provider", payload.get("provider", "")),
+        ("Venue", payload.get("venue", "")),
+    ]
+    return render_key_value_panel(title, [(label, value) for label, value in rows if value not in ("", None)])
 
 
 def _dataset_argument(args: argparse.Namespace) -> str:
@@ -2528,6 +2284,100 @@ def _render_data_doctor_payload(title: str, payload: dict[str, object]) -> str:
     return render_key_value_panel(title, rows)
 
 
+def _dataset_acquire_payload(release: DatasetRelease) -> dict[str, object]:
+    ready_for = _ready_for_dataset_status(release.status)
+    all_uses = ("workspace", "backtest", "production")
+    return {
+        "product": "data",
+        "operation": "acquire",
+        "dataset": str(release.product_key),
+        "status": _dataset_ready_status(release.status),
+        "ready_for": ready_for,
+        "blocked_for": [value for value in all_uses if value not in ready_for],
+        "provider": release.provider,
+        "venue": release.venue,
+        "quality_level": release.quality_level.value,
+        "format": release.format,
+    }
+
+
+def _dataset_ready_status(status: DatasetStatus) -> str:
+    if status is DatasetStatus.APPROVED_FOR_PRODUCTION:
+        return "ready_for_production"
+    if status is DatasetStatus.APPROVED_FOR_BACKTEST:
+        return "ready_for_backtest"
+    if status is DatasetStatus.APPROVED_FOR_WORKSPACE:
+        return "ready_for_workspace"
+    return status.value
+
+
+def _ready_for_dataset_status(status: DatasetStatus) -> list[str]:
+    if status is DatasetStatus.APPROVED_FOR_PRODUCTION:
+        return ["workspace", "backtest", "production"]
+    if status is DatasetStatus.APPROVED_FOR_BACKTEST:
+        return ["workspace", "backtest"]
+    if status is DatasetStatus.APPROVED_FOR_WORKSPACE:
+        return ["workspace"]
+    return []
+
+
+def _render_dataset_acquire_payload(title: str, payload: dict[str, object]) -> str:
+    from kairospy.cli_output import render_key_value_panel
+
+    def join_values(key: str) -> str:
+        values = payload.get(key)
+        if isinstance(values, list):
+            return ", ".join(str(item) for item in values) if values else "-"
+        return "-"
+
+    rows = (
+        ("Dataset", payload.get("dataset", "-")),
+        ("Status", payload.get("status", "-")),
+        ("Ready For", join_values("ready_for")),
+        ("Blocked For", join_values("blocked_for")),
+        ("Provider", payload.get("provider", "-")),
+        ("Venue", payload.get("venue", "-")),
+        ("Quality Level", payload.get("quality_level", "-")),
+        ("Format", payload.get("format", "-")),
+    )
+    return render_key_value_panel(title, rows)
+
+
+def _render_data_product_doctor_payload(title: str, payload: dict[str, object]) -> str:
+    from kairospy.cli_output import render_key_value_panel, render_status_table
+
+    aliases = payload.get("aliases")
+    alias_text = ", ".join(str(alias) for alias in aliases) if isinstance(aliases, list) and aliases else "-"
+    rows = (
+        ("Data Product", payload.get("key") or payload.get("requested_key", "-")),
+        ("Requested", payload.get("requested_key", "-")),
+        ("Status", payload.get("status", "-")),
+        ("Available", "yes" if payload.get("available") else "no"),
+        ("Provider", payload.get("provider", "-")),
+        ("Venue", payload.get("venue", "-")),
+        ("Dataset", payload.get("dataset", "-")),
+        ("Capability", payload.get("capability", "-")),
+        ("Aliases", alias_text),
+    )
+    output = [render_key_value_panel(title, rows)]
+    issues = payload.get("issues")
+    if isinstance(issues, list) and issues:
+        output.append(render_status_table(
+            "Issues",
+            [{"code": item.get("code", ""), "message": item.get("message", "")}
+             for item in issues if isinstance(item, dict)],
+            columns=("code", "message"),
+        ))
+    commands = payload.get("next_commands")
+    if isinstance(commands, list) and commands:
+        output.append(render_status_table(
+            "Next Commands",
+            [{"command": command} for command in commands],
+            columns=("command",),
+        ))
+    return "\n\n".join(item for item in output if item)
+
+
 def _render_query_payload(title: str, payload: dict[str, object]) -> str:
     from kairospy.cli_output import render_key_value_panel, render_status_table
 
@@ -2654,7 +2504,7 @@ def _render_acquisition_plan_payload(title: str, payload: dict[str, object]) -> 
         ("Dataset", payload.get("logical_key", "-")),
         ("Provider", selected.get("provider", "-") if selected else "-"),
         ("Venue", selected.get("venue", "-") if selected else "-"),
-        ("Connector", "available" if payload.get("connector_available") else "unavailable"),
+        ("Provider Access", "available" if payload.get("connector_available") else "unavailable"),
         ("Complete", payload.get("complete", False)),
         ("Missing Ranges", len(missing)),
         ("Estimated Requests", estimate.get("requests", "-") if estimate else "-"),
@@ -2719,7 +2569,6 @@ def _massive_request(args: argparse.Namespace) -> tuple[str, dict[str, object]]:
 def _prepare_us_equity_momentum(args: argparse.Namespace) -> dict[str, object]:
     from kairospy.data.preparation import DataPreparationService
     from kairospy.features import UsEquityMomentumDiagnostics
-    from kairospy.product_workflow import start_governed_study
 
     start, end = datetime.fromisoformat(args.start), datetime.fromisoformat(args.end)
     if start.tzinfo is None or end.tzinfo is None or start >= end:
@@ -2739,7 +2588,7 @@ def _prepare_us_equity_momentum(args: argparse.Namespace) -> dict[str, object]:
             raw_dataset,
             start=start,
             end=end,
-            minimum_quality=QualityLevel.STUDY,
+            minimum_quality=QualityLevel.WORKSPACE,
             provider=args.provider,
             venue=args.venue,
             acquire_missing=True,
@@ -2774,18 +2623,7 @@ def _prepare_us_equity_momentum(args: argparse.Namespace) -> dict[str, object]:
         corporate_actions_directory=corporate_actions_directory,
         reference_directory=reference_directory,
     )
-    study_args = argparse.Namespace(
-        lake_root=args.lake_root,
-        study_id=args.study_id,
-        version=args.version,
-        hypothesis=args.hypothesis,
-        dataset="features.momentum.equity.us.1d",
-        start=args.start,
-        end=args.end,
-        quiet=args.quiet,
-    )
-    study = start_governed_study(study_args)
-    readiness = UsEquityMomentumDiagnostics(args.lake_root).report(study_id=args.study_id, version=args.version)
+    readiness = UsEquityMomentumDiagnostics(args.lake_root).report(workspace=args.workspace, version=args.version)
     return {
         "workflow": "us-equity-momentum",
         "scope": "bounded-configured-products",
@@ -2799,9 +2637,8 @@ def _prepare_us_equity_momentum(args: argparse.Namespace) -> dict[str, object]:
         ),
         "reference": reference_evidence,
         "features": features_manifest,
-        "study": study,
         "readiness": readiness,
-        "ready_for_study": readiness["ready_for_study"],
+        "ready_for_workspace": readiness["ready_for_workspace"],
         "ready_for_backtest": readiness["ready_for_backtest"],
         "limitations": [
             "This command prepares configured Massive equity products, not a proven full-market active/inactive universe.",
@@ -2866,9 +2703,9 @@ def _ensure_us_equity_identity_release(root: Path, directory: Path, manifest: di
         digest,
         "massive",
         "us-securities",
-        ("reference.identity.equity.us.massive@latest-study",),
-        DatasetStatus.APPROVED_FOR_STUDY,
-        QualityLevel.STUDY,
+        ("reference.identity.equity.us.massive@latest-workspace",),
+        DatasetStatus.APPROVED_FOR_WORKSPACE,
+        QualityLevel.WORKSPACE,
         datetime.now(timezone.utc).isoformat(),
         DatasetStorageKind.REFERENCE,
         "1",
@@ -2988,9 +2825,9 @@ def _sync_us_equity_momentum_corporate_actions(
         digest,
         "massive",
         "us-securities",
-        ("reference.corporate_actions.equity.us.massive@latest-study",),
-        DatasetStatus.APPROVED_FOR_STUDY,
-        QualityLevel.STUDY,
+        ("reference.corporate_actions.equity.us.massive@latest-workspace",),
+        DatasetStatus.APPROVED_FOR_WORKSPACE,
+        QualityLevel.WORKSPACE,
         datetime.now(timezone.utc).isoformat(),
         DatasetStorageKind.REFERENCE,
         "1",
@@ -3130,57 +2967,8 @@ def _pricing(args: argparse.Namespace) -> int:
     return 0
 
 
-def _study_readiness(args: argparse.Namespace) -> int:
-    module = _workspace_study_module("studies.spxw_put_skew.study")
-    StudyConfig, execute_study = module.StudyConfig, module.execute_study
-    raw = json.loads(args.study_config.read_text(encoding="utf-8"))
-    raw.pop("dataset_id", None)
-    decimal_fields = {
-        "target_short_delta", "target_long_delta", "high_skew_percentile", "minimum_quote_coverage",
-        "maximum_stale_rate", "minimum_surface_calibration_rate", "profit_target",
-        "stop_loss_multiple", "commission_per_contract",
-    }
-    config = StudyConfig(**{key: Decimal(str(value)) if key in decimal_fields else value for key, value in raw.items()})
-    client = DatasetClient(args.lake_root, run_mode=RunMode.BACKTEST)
-    feed = client.replay_snapshots(args.dataset)
-    dataset = feed.dataset
-    collection = client.collection(args.dataset)
-    panel, readiness, conclusion = execute_study(dataset, config, collection)
-    release = feed.release
-    artifact_payload = {
-        "artifact_schema_version": 1,
-        "study": "spxw-put-skew-readiness",
-        "consumed_inputs": [{
-            "release_id": release.release_id,
-            "content_hash": release.content_hash,
-            "quality_level": release.quality_level.value,
-        }],
-        "config": to_primitive(config),
-        "readiness": to_primitive(readiness),
-        "conclusion": to_primitive(conclusion),
-        "eligible_panel_rows": len(panel),
-    }
-    material = json.dumps(artifact_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    artifact_payload["audit_hash"] = sha256(material.encode()).hexdigest()
-    artifact = Path(args.lake_root) / "studies" / "spxw-put-skew-readiness" / artifact_payload["audit_hash"] / "manifest.json"
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    temporary = artifact.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(artifact_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(artifact)
-    print(f"Dataset: {dataset.manifest.dataset_id}")
-    print(f"Ready: {readiness.ready}")
-    print(f"Conclusion status: {conclusion.status}")
-    print(f"Eligible panel rows: {len(panel)}")
-    for key, value in readiness.metrics.items():
-        print(f"{key}: {value}")
-    for reason in readiness.reasons:
-        print(f"FAIL: {reason}")
-    print(f"Artifact: {artifact}")
-    return 0 if readiness.ready else 2
-
-
 def _vol(args: argparse.Namespace) -> int:
-    client = DatasetClient(args.lake_root, run_mode=RunMode.STUDY)
+    client = DatasetClient(args.lake_root, run_mode=RunMode.WORKSPACE)
     feed = client.replay_snapshots(args.dataset)
     dataset = feed.dataset
     catalog = dataset.reference_catalog()
@@ -3237,171 +3025,6 @@ def _risk_analytics(args: argparse.Namespace) -> int:
     print(f"Rho PnL: {explain.rho}")
     print(f"Residual: {explain.residual}")
     return 0
-
-
-def _backtest(args: argparse.Namespace) -> int:
-    if args.action == "spxw-reference-scenario":
-        from kairospy.backtest.spxw_reference_pipeline import build_spxw_reference_pipeline
-        payload = build_spxw_reference_pipeline(
-            args.lake_root,
-            args.backtest_root,
-            event_release_id=args.event_release,
-            source_slice_release_id=args.source_slices,
-            curated_slice_release_id=args.curated_slices,
-        )
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return 0
-    if args.action == "sma":
-        from kairospy.domain.market_data import Bar
-        client = DatasetClient(args.lake_root, run_mode=RunMode.BACKTEST)
-        query = client.get(args.dataset, start=args.start, end=args.end, fields=(
-            "instrument_id", "period_start", "period_end", "open", "high", "low", "close", "volume",
-        ))
-        rows = query.collect(OutputFormat.ROWS)
-        release_id = query.release_id
-        bars = tuple(Bar(
-            InstrumentId(str(row["instrument_id"])),
-            row["period_start"] if isinstance(row["period_start"], datetime) else datetime.fromisoformat(str(row["period_start"]).replace("Z", "+00:00")),
-            row["period_end"] if isinstance(row["period_end"], datetime) else datetime.fromisoformat(str(row["period_end"]).replace("Z", "+00:00")),
-            Decimal(str(row["open"])), Decimal(str(row["high"])), Decimal(str(row["low"])),
-            Decimal(str(row["close"])), Decimal(str(row["volume"])),
-        ) for row in rows)
-        result = backtest_sma_cross(
-            BarSeries(release_id, bars), SmaCrossConfig(args.fast, args.slow, args.initial_cash, args.fee_bps),
-        )
-        release = client.resolve(release_id)
-        payload = {
-            "artifact_schema_version": 1,
-            "strategy": f"sma-{args.fast}-{args.slow}", "release_id": release_id,
-            "input": {
-                "logical_key": str(release.product_key), "release_id": release.release_id,
-                "content_hash": release.content_hash, "schema_id": release.schema_id,
-                "schema_version": release.schema_version, "transform_id": release.transform_id,
-                "transform_version": release.transform_version, "quality_level": release.quality_level.value,
-                "start": args.start, "end": args.end, "boundary": "[start,end)",
-            },
-            "config": {
-                "fast": args.fast, "slow": args.slow, "initial_cash": str(args.initial_cash),
-                "fee_bps": str(args.fee_bps),
-            },
-            "bars": len(bars), "metrics": to_primitive(result.metrics),
-        }
-        material = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        audit_hash = sha256(material.encode()).hexdigest()
-        payload["audit_hash"] = audit_hash
-        directory = Path(args.backtest_root) / "sma" / audit_hash
-        directory.mkdir(parents=True, exist_ok=True)
-        target = directory / "manifest.json"
-        temporary = target.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        temporary.replace(target)
-        payload["artifact"] = str(target)
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return 0
-    backtests = BacktestRepository(args.backtest_root)
-    if args.action == "synthetic-scenario":
-        dataset = build_synthetic_backtest_dataset(SyntheticScenario(args.scenario), split=args.split)
-        directory = MarketSnapshotStorageDriver(args.dataset_root).save(dataset)
-        product = DataProductDefinition(
-            DatasetKey(f"curated.synthetic.{args.scenario}.{args.split}"), f"Synthetic {args.scenario} {args.split}",
-            DatasetLayer.CURATED, dimensions={"synthetic": "true", "split": args.split}, primary_time="timestamp",
-        )
-        register_market_replay_dataset(args.lake_root, dataset, directory, product, provider="synthetic", venue="synthetic", synthetic=True)
-        print(f"Dataset: {dataset.manifest.dataset_id}")
-        print(f"Hash: {dataset.manifest.content_hash}")
-        print(f"Directory: {directory}")
-        print("Synthetic data validates mechanics only; it is not evidence of strategy effectiveness.")
-        return 0
-    if args.action == "run":
-        if args.strategy in {"covered-call", "spot-perp-carry"}:
-            results = tuple(run_reference_scenario(args.strategy, model) for model in ("conservative", "stress"))
-            directory = Path(args.backtest_root) / "reference" / args.strategy
-            directory.mkdir(parents=True, exist_ok=True)
-            for result in results:
-                target = directory / f"{result.model}-{result.audit_hash}.json"
-                target.write_text(json.dumps({
-                    "strategy": result.strategy, "model": result.model, "final_cash": str(result.final_cash),
-                    "ledger_transactions": result.ledger_transactions, "audit_hash": result.audit_hash,
-                    "strategy_spec_hash": result.strategy_spec_hash, "execution_policy_id": result.execution_policy_id,
-                }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-                print(f"{result.model}: cash={result.final_cash} hash={result.audit_hash}")
-            return 0
-        if not args.dataset:
-            raise SystemExit("--dataset is required for bull-put-spread")
-        feed = DatasetClient(args.lake_root, dataset_root=args.dataset_root,
-                                  run_mode=RunMode.BACKTEST).replay_snapshots(args.dataset)
-        dataset = feed.dataset
-        values = json.loads(args.config.read_text()) if args.config else {}
-        strategy_config = BullPutSpreadConfig(**_coerce_decimal_fields(values.get("strategy", {}), BullPutSpreadConfig))
-        risk_limits = RiskLimits(**_coerce_decimal_fields(values.get("risk", {}), RiskLimits))
-        backtest_values = _coerce_decimal_fields(values.get("backtest", {}), BacktestConfig)
-        backtest_values.pop("start", None)
-        backtest_values.pop("end", None)
-        config = BacktestConfig(dataset.manifest.start, dataset.manifest.end, **backtest_values)
-        conservative, stress = BacktestExperimentRunner(backtests).run_suite(feed, config, strategy_config, risk_limits)
-        for result in (conservative, stress):
-            print(f"{result.config.fill_model}: run={result.run_id} status={result.status.value} return={result.metrics['total_return']}")
-        return 0
-    if args.action == "validate":
-        client = DatasetClient(args.lake_root, dataset_root=args.dataset_root, run_mode=RunMode.BACKTEST)
-        selected_feeds = tuple(client.replay_snapshots(value) for value in (args.development, args.validation, args.test))
-        selected = tuple(feed.dataset for feed in selected_feeds)
-        values = json.loads(args.config.read_text()) if args.config else {}
-        strategy_config = BullPutSpreadConfig(**_coerce_decimal_fields(values.get("strategy", {}), BullPutSpreadConfig))
-        risk_limits = RiskLimits(**_coerce_decimal_fields(values.get("risk", {}), RiskLimits))
-        bt_values = _coerce_decimal_fields(values.get("backtest", {}), BacktestConfig)
-        bt_values.pop("start", None)
-        bt_values.pop("end", None)
-        config = BacktestConfig(selected[0].manifest.start, selected[0].manifest.end, **bt_values)
-        directory = BacktestExperimentRunner(backtests).validate_splits(selected_feeds, config, strategy_config, risk_limits)
-        print(f"Validation: {directory}")
-        print("Parameters were frozen across development, validation, and test splits.")
-        return 0
-    if args.action == "show":
-        manifest = backtests.load_manifest(args.run_id)
-        metrics = restore_primitives(backtests.load_metrics(args.run_id))
-        print(f"Run: {args.run_id}")
-        print(f"Status: {manifest['status']}")
-        print(f"Model: {manifest['fill_model']}")
-        print(f"Split: {manifest['sample_split']}")
-        print(f"Synthetic: {manifest['synthetic_dataset']}")
-        print(f"Return: {metrics.get('total_return')}")
-        print(f"Max drawdown: {metrics.get('max_drawdown')}")
-        print(f"Directory: {backtests.run_dir(args.run_id)}")
-        return 0
-    if args.action == "compare":
-        if len(args.run_id) < 2:
-            raise SystemExit("compare requires at least two --run-id values")
-        for run_id in args.run_id:
-            manifest = backtests.load_manifest(run_id)
-            metrics = restore_primitives(backtests.load_metrics(run_id))
-            print(f"{run_id} model={manifest['fill_model']} split={manifest['sample_split']} return={metrics.get('total_return')} drawdown={metrics.get('max_drawdown')} fees={metrics.get('commissions')} slippage={metrics.get('slippage')}")
-        return 0
-    manifest = backtests.load_manifest(args.run_id)
-    config, raw_strategy, raw_risk = backtests.load_config(args.run_id)
-    strategy_config = from_primitive(raw_strategy, BullPutSpreadConfig)
-    risk_limits = from_primitive(raw_risk, RiskLimits)
-    dataset = DatasetClient(args.lake_root, run_mode=RunMode.BACKTEST).replay_snapshots(
-        manifest["dataset_id"],
-    ).dataset
-    replayed = BacktestEngine(dataset, config, BullPutSpreadStrategy(strategy_config), risk_limits).run()
-    replayed.metrics["dataset_hash"] = dataset.manifest.content_hash
-    replayed.metrics["code_version"] = dataset.manifest.code_version
-    from kairospy.strategies.specs import bull_put_strategy_spec
-    replay_spec,replay_policy=bull_put_strategy_spec(strategy_config)
-    replayed.metrics["strategy_spec_hash"] = replay_spec.spec_hash
-    replayed.metrics["execution_policy_id"] = replay_policy.policy_id
-    replayed.metrics["execution_policy_version"] = replay_policy.version
-    import tempfile
-    with tempfile.TemporaryDirectory() as directory:
-        candidate = BacktestRepository(directory)
-        candidate.save(replayed, strategy_config=strategy_config, risk_limits=risk_limits)
-        actual = candidate.audit_hash(candidate.run_dir(replayed.run_id))
-    expected = manifest["audit_hash"]
-    print(f"Replay: {'MATCH' if actual == expected else 'MISMATCH'}")
-    print(f"Expected: {expected}")
-    print(f"Actual:   {actual}")
-    return 0 if actual == expected else 2
 
 
 def _capture_normalized_series(args: argparse.Namespace) -> int:
@@ -3522,16 +3145,12 @@ def _account(args: argparse.Namespace) -> int:
 
 def _runtime_l4_preflight(args: argparse.Namespace) -> dict[str, object]:
     import socket
-    from kairospy.strategies.deployment import StrategyDeploymentGate
     environment = Environment(args.environment)
     compatible_environment = (
         args.venue == "binance" and environment is Environment.TESTNET
         or args.venue == "ibkr" and environment is Environment.PAPER
     )
-    strategy_id = {"covered-call": "covered-call-v1", "spot-perp-carry": "spot-perpetual-carry-v1"}.get(args.strategy, args.strategy)
-    deployment = StrategyDeploymentGate(Path(args.lake_root) / "strategies").evaluate(
-        strategy_id, environment, simulated_venue=False,
-    )
+    strategy_id = str(args.strategy)
     instrument_ready = False
     instrument_reason = "instrument catalog is missing"
     catalog_path = Path(args.reference_catalog_path)
@@ -3563,7 +3182,6 @@ def _runtime_l4_preflight(args: argparse.Namespace) -> dict[str, object]:
     checks = {
         "environment_compatible": compatible_environment,
         "external_connection_ready": external_ready,
-        "strategy_paper_approved": deployment.allowed,
         "instrument_listing_ready": instrument_ready,
     }
     payload = {
@@ -3577,7 +3195,6 @@ def _runtime_l4_preflight(args: argparse.Namespace) -> dict[str, object]:
         "checks": checks,
         "reasons": {
             "external": external_reason,
-            "strategy": deployment.reason,
             "instrument": instrument_reason,
         },
     }
@@ -3615,16 +3232,8 @@ def _submit_order_or_runtime_soak(args: argparse.Namespace) -> int:
     if args.venue == "binance" and args.product == "options" and environment is not Environment.LIVE:
         raise SystemExit("Binance options execution is live-only; no equivalent options testnet is available")
     manual_order=bool(getattr(args,"manual_order",False))
-    from kairospy.strategies.deployment import StrategyDeploymentGate
-    if args.venue == "simulated" and not manual_order:
-        from kairospy.strategies.specs import register_builtin_strategies
-        register_builtin_strategies(Path(args.lake_root) / "strategies")
-    strategy_id="manual-operations-v1" if manual_order else {"covered-call":"covered-call-v1","spot-perp-carry":"spot-perpetual-carry-v1"}.get(args.strategy,args.strategy)
-    if not manual_order:
-        deployment=StrategyDeploymentGate(Path(args.lake_root)/"strategies").evaluate(strategy_id,environment,simulated_venue=args.venue=="simulated")
-        if not deployment.allowed:raise SystemExit(f"strategy deployment rejected: {deployment.reason}")
-        print(f"Strategy lifecycle: {deployment.lifecycle.value} ({deployment.strategy_directory})")
-    else:
+    strategy_id = "manual-operations-v1" if manual_order else str(args.strategy)
+    if manual_order:
         print(f"Manual operations intent: actor={args.actor} reason={args.reason}")
     catalog_repository = ReferenceCatalogRepository(args.reference_catalog_path)
     if not catalog_repository.path.exists():
@@ -3925,16 +3534,6 @@ def _coerce_decimal_fields(values: dict[str, Any], cls) -> dict[str, Any]:
         else:
             result[key] = value
     return result
-
-
-def _workspace_study_module(module_name: str):
-    try:
-        return importlib.import_module(module_name)
-    except ImportError as error:
-        raise SystemExit(
-            f"{module_name} is a source-workspace study module and is not included in the pip package. "
-            "Run this command from the Kairos source checkout, or migrate the study into your own project workspace."
-        ) from error
 
 
 if __name__ == "__main__":

@@ -6,14 +6,14 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
-from kairospy.domain.capability import ExecutionCapabilities, MarketDataCapabilities, ReferenceCapabilities
-from kairospy.domain.execution import TradeExecution, TradeSide
-from kairospy.domain.identity import AccountKey, AssetId, InstitutionId, InstrumentId, VenueId
+from kairospy.trading.capability import ExecutionCapabilities, MarketDataCapabilities, ReferenceCapabilities
+from kairospy.trading.execution import TradeExecution, TradeSide
+from kairospy.trading.identity import AccountKey, AssetId, InstitutionId, InstrumentId, VenueId
 from kairospy.reference.contracts import InstrumentDefinition
-from kairospy.domain.market_data import Quote
-from kairospy.domain.corporate_action import CashDividendEvent, SplitEvent
-from kairospy.domain.order import ExecutionInstructions
-from kairospy.domain.product import ProductType
+from kairospy.trading.market_data import Quote
+from kairospy.trading.corporate_action import CashDividendEvent, SplitEvent
+from kairospy.trading.order import ExecutionInstructions
+from kairospy.trading.product import ProductType
 from kairospy.reference.catalog import ReferenceCatalog
 
 

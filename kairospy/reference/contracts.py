@@ -6,8 +6,8 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import TypeAlias
 
-from kairospy.domain.identity import AccountKey, AssetId, InstrumentId, VenueId
-from kairospy.domain.product import (
+from kairospy.trading.identity import AccountKey, AssetId, InstrumentId, VenueId
+from kairospy.trading.product import (
     CryptoOptionSpec, CryptoSpotSpec, EquitySpec, FutureSpec, IndexSpec,
     ListedOptionSpec, PerpetualSpec, ProductType, SettlementSession,
     TokenizedEquitySpec,

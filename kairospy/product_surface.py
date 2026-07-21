@@ -6,27 +6,21 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 from hashlib import sha256
+import importlib
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
 import shlex
+import sys
 from types import SimpleNamespace
 from typing import Any, Iterable
 
 from kairospy.application import (
-    ApplicationConfig,
-    AsyncKairosRuntime,
-    KairosApplication,
-    RuntimePaths,
-    backtest_composition,
-    historical_simulation_composition,
-    live_composition,
     paper_trading_composition,
     runtime_execution_plan,
     runtime_feed_plan,
-    runtime_strategy_plan,
-    study_composition,
 )
 from kairospy.data import (
     DataCatalog,
@@ -45,15 +39,11 @@ from kairospy.data import (
     SourceBinding,
     data_release_ref,
     live_view_manifest_path,
-    register_live_capture_release,
     resolve_live_dataset_subscription,
-    resolve_live_view_subscription,
     stable_artifact_hash,
     write_live_view_manifest,
 )
-from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
-from kairospy.ports import Environment
-from kairospy.study_platform import ensure_sma_tutorial_dataset
+from kairospy.capture.tutorial_data import ensure_sma_tutorial_dataset
 
 
 BUILTIN_DOWNLOAD_KEYS = {
@@ -83,65 +73,6 @@ class InputTableRef(dict):
         from kairospy.data import DatasetClient
         release_id = str(self["release_id"])
         return DatasetClient(self._root).get(release_id, fields=tuple(columns) if columns is not None else None)
-
-
-class StrategyDecisionContext:
-    def __init__(self, root: str | Path, strategy_lock: dict[str, Any]) -> None:
-        self._root = Path(root)
-        self._strategy_lock = strategy_lock
-
-    @property
-    def mode(self) -> str:
-        return "strategy"
-
-    @property
-    def strategy_id(self) -> str:
-        return str(self._strategy_lock.get("strategy_id") or "")
-
-    def data(self, name: str) -> InputTableRef:
-        data = self._strategy_lock.get("data", {})
-        if name not in data:
-            raise ValueError(f"Strategy data input {name!r} is not declared")
-        return InputTableRef(self._root, {
-            "product": "strategy",
-            "operation": "data",
-            "strategy_id": self.strategy_id,
-            "name": name,
-            **data[name],
-        })
-
-    def input(self, name: str) -> InputTableRef:
-        data = self._strategy_lock.get("data", {})
-        if name in data:
-            return self.data(name)
-        inputs = self._strategy_lock.get("inputs", {})
-        if name not in inputs:
-            raise ValueError(f"Strategy input {name!r} is not declared")
-        input_spec = inputs[name]
-        release_id = input_spec.get("release_id")
-        dataset = input_spec.get("dataset")
-        if release_id and dataset:
-            return InputTableRef(self._root, {
-                "product": "strategy",
-                "operation": "input",
-                "strategy_id": self.strategy_id,
-                "name": name,
-                **input_spec,
-            })
-        raise ValueError(
-            f"Strategy input {name!r} is a factor contract without materialized InputTable; "
-            "publish the factor as a Feature Data Release before executing model.py"
-        )
-
-    def factor(self, name: str) -> InputTableRef:
-        return self.input(name)
-
-    def manifest(self) -> dict[str, object]:
-        return {
-            "strategy_id": self.strategy_id,
-            "data_inputs": sorted(self._strategy_lock.get("data", {})),
-            "strategy_inputs": sorted(self._strategy_lock.get("inputs", {})),
-        }
 
 
 class DataAddInputError(ValueError):
@@ -293,7 +224,7 @@ class Data:
 
     root: str | Path = "data"
 
-    def reader(self, *, run_mode: object = "study", **kwargs: object):
+    def reader(self, *, run_mode: object = "workspace", **kwargs: object):
         from kairospy.data import DatasetClient
 
         return DatasetClient(self.root, run_mode=run_mode, **kwargs)
@@ -313,7 +244,7 @@ class Data:
               as_dataset: str | None = None, time: str | None = None,
               start: str | None = None, end: str | None = None,
               account: str | None = None, channel: str | None = None,
-              instruments: tuple[str, ...] = (), for_use: str = "study") -> dict[str, object]:
+              instruments: tuple[str, ...] = (), for_use: str = "workspace") -> dict[str, object]:
         return data_start(_args(
             self.root,
             dry_run=dry_run,
@@ -349,7 +280,7 @@ class Data:
             end: str | None = None, instruments: tuple[str, ...] = (),
             provider: str | None = None, venue: str | None = None,
             connector_config: str | Path | None = None, refresh: bool = False,
-            dry_run: bool = False, for_use: str = "study") -> dict[str, object]:
+            dry_run: bool = False, for_use: str = "workspace") -> dict[str, object]:
         return data_use(_args(
             self.root,
             key=key,
@@ -441,7 +372,7 @@ class Data:
 
     def protocol(self, action: str = "list", *, kind: str | None = None,
                  source: str | Path | None = None, output: str | Path | None = None,
-                 name: str = "research.protocol_check", start: str | None = None,
+                 name: str = "workspace.protocol_check", start: str | None = None,
                  end: str | None = None, instruments: tuple[str, ...] = (),
                  account: str | None = None, channel: str | None = None) -> dict[str, object]:
         return data_protocol(_args(
@@ -504,218 +435,23 @@ class Data:
 
 
 @dataclass(frozen=True, slots=True)
-class StudyProductApi:
-    root: str | Path = "data"
-
-    def open(self, study_id: str, *, version: str = "1.0.0", hypothesis: str = "") -> dict[str, object]:
-        return study_open(_args(self.root, study_id=study_id, version=version, hypothesis=hypothesis))
-
-    def add_data(self, workspace: str, *, name: str, dataset: str) -> dict[str, object]:
-        return study_add_data(_args(self.root, workspace=workspace, name=name, dataset=dataset))
-
-    def data(self, study_id: str, name: str, *, version: str | None = None) -> dict[str, object]:
-        study = _study_material(self.root, study_id, version)
-        data = study.get("data", {})
-        if name not in data:
-            raise ValueError(f"Study data alias {name!r} is not declared")
-        return InputTableRef(self.root, {
-            "product": "study",
-            "operation": "data",
-            "study_id": study_id,
-            "version": version or study.get("version", "draft"),
-            "name": name,
-            **data[name],
-        })
-
-    def add_factor(
-        self,
-        workspace: str,
-        *,
-        name: str,
-        file: str | Path,
-        metadata: str | Path | None = None,
-    ) -> dict[str, object]:
-        return study_add_factor(_args(
-            self.root, workspace=workspace, name=name, file=str(file),
-            metadata=Path(metadata) if metadata is not None else None,
-        ))
-
-    def inspect(self, study_id: str) -> dict[str, object]:
-        return study_inspect(_args(self.root, study_id=study_id))
-
-    def factor(self, study_id: str, name: str, *, version: str | None = None) -> dict[str, object]:
-        study = _study_material(self.root, study_id, version)
-        factors = study.get("factors", {})
-        if name not in factors:
-            raise ValueError(f"Study factor {name!r} is not declared")
-        factor = dict(factors[name])
-        if version is not None:
-            factor.pop("path", None)
-            factor.pop("metadata_path", None)
-        return {
-            "product": "study",
-            "operation": "factor",
-            "study_id": study_id,
-            "version": version or study.get("version", "draft"),
-            "name": name,
-            **factor,
-        }
-
-    def run_factor(self, study_id: str, name: str) -> dict[str, object]:
-        return study_factor_run(_args(self.root, study_id=study_id, name=name))
-
-    def publish_factor(self, study_id: str, name: str, *, as_dataset: str) -> dict[str, object]:
-        return study_publish_factor(_args(
-            self.root,
-            study_id=study_id,
-            name=name,
-            as_dataset=as_dataset,
-        ))
-
-    def freeze(self, study_id: str, *, version: str = "1.0.0") -> dict[str, object]:
-        return study_freeze(_args(self.root, study_id=study_id, version=version))
-
-
-@dataclass(frozen=True, slots=True)
-class StrategyProductApi:
-    root: str | Path = "data"
-
-    def open(self, strategy_id: str, *, from_study: str) -> dict[str, object]:
-        return strategy_open(_args(self.root, strategy_id=strategy_id, from_study=from_study))
-
-    def bind_factor(self, workspace: str, *, name: str, study_factor: str) -> dict[str, object]:
-        return strategy_bind_factor(_args(self.root, workspace=workspace, name=name, study_factor=study_factor))
-
-    def set_risk(self, strategy_id: str, risk_file: str | Path) -> dict[str, object]:
-        return strategy_set_risk(_args(self.root, strategy_id=strategy_id, risk_file=str(risk_file)))
-
-    def set_execution(self, strategy_id: str, execution_file: str | Path) -> dict[str, object]:
-        return strategy_set_execution(_args(
-            self.root,
-            strategy_id=strategy_id,
-            execution_file=str(execution_file),
-        ))
-
-    def set_model_code(
-        self,
-        strategy_id: str,
-        model_file: str | Path,
-        *,
-        metadata: str | Path | None = None,
-    ) -> dict[str, object]:
-        return strategy_set_model_code(_args(
-            self.root,
-            strategy_id=strategy_id,
-            model_file=str(model_file),
-            metadata=Path(metadata) if metadata is not None else None,
-        ))
-
-    def set_model(
-        self,
-        strategy_id: str,
-        *,
-        kind: str,
-        instrument_id: str | None = None,
-        fast_window: int | None = None,
-        slow_window: int | None = None,
-        approved_capital: str | None = None,
-    ) -> dict[str, object]:
-        return strategy_set_model(_args(
-            self.root,
-            strategy_id=strategy_id,
-            kind=kind,
-            instrument_id=instrument_id,
-            fast_window=fast_window,
-            slow_window=slow_window,
-            approved_capital=approved_capital,
-        ))
-
-    def inspect(self, strategy_id: str) -> dict[str, object]:
-        return strategy_inspect(_args(self.root, strategy_id=strategy_id))
-
-    def freeze(self, strategy_id: str, *, version: str = "1.0.0") -> dict[str, object]:
-        return strategy_freeze(_args(self.root, strategy_id=strategy_id, version=version))
-
-
-@dataclass(frozen=True, slots=True)
 class RunProductApi:
     root: str | Path = "data"
 
     def start(
         self,
-        target: str,
         *,
+        workspace: str,
+        entrypoint: str,
         mode: str,
-        execute_feeds: bool = False,
-        feed_runtime_seconds: float = 0.0,
-        feed_runtime_factory: object | None = None,
-        execute_strategy: bool = False,
-        strategy_runtime_factory: object | None = None,
-    ) -> dict[str, object]:
-        if "@" in target:
-            return self.start_snapshot(
-                target,
-                mode=mode,
-                execute_feeds=execute_feeds,
-                feed_runtime_seconds=feed_runtime_seconds,
-                feed_runtime_factory=feed_runtime_factory,
-                execute_strategy=execute_strategy,
-                strategy_runtime_factory=strategy_runtime_factory,
-            )
-        return self.start_study(
-            target,
-            mode=mode,
-            execute_feeds=execute_feeds,
-            feed_runtime_seconds=feed_runtime_seconds,
-            feed_runtime_factory=feed_runtime_factory,
-            execute_strategy=execute_strategy,
-            strategy_runtime_factory=strategy_runtime_factory,
-        )
-
-    def start_study(
-        self,
-        study: str,
-        *,
-        mode: str = "study",
-        execute_feeds: bool = False,
-        feed_runtime_seconds: float = 0.0,
-        feed_runtime_factory: object | None = None,
-        execute_strategy: bool = False,
-        strategy_runtime_factory: object | None = None,
+        params: dict[str, str] | None = None,
     ) -> dict[str, object]:
         return run_start(_args(
             self.root,
-            study=study,
-            snapshot=None,
+            workspace=workspace,
+            entrypoint=entrypoint,
             mode=mode,
-            execute_feeds=execute_feeds,
-            feed_runtime_seconds=feed_runtime_seconds,
-            feed_runtime_factory=feed_runtime_factory,
-            execute_strategy=execute_strategy,
-            strategy_runtime_factory=strategy_runtime_factory,
-        ))
-
-    def start_snapshot(
-        self,
-        snapshot: str,
-        *,
-        mode: str,
-        execute_feeds: bool = False,
-        feed_runtime_seconds: float = 0.0,
-        feed_runtime_factory: object | None = None,
-        execute_strategy: bool = False,
-        strategy_runtime_factory: object | None = None,
-    ) -> dict[str, object]:
-        return run_start(_args(
-            self.root,
-            study=None,
-            snapshot=snapshot,
-            mode=mode,
-            execute_feeds=execute_feeds,
-            feed_runtime_seconds=feed_runtime_seconds,
-            feed_runtime_factory=feed_runtime_factory,
-            execute_strategy=execute_strategy,
-            strategy_runtime_factory=strategy_runtime_factory,
+            param=[f"{key}={value}" for key, value in (params or {}).items()],
         ))
 
     def inspect(self, run_id: str) -> dict[str, object]:
@@ -733,16 +469,12 @@ class ProductPaths:
     root: Path
 
     @property
-    def studies(self) -> Path:
-        return self.root / "studies"
-
-    @property
-    def strategies(self) -> Path:
-        return self.root / "strategies"
+    def workspaces(self) -> Path:
+        return self.root / ".kairos" / "workspace"
 
     @property
     def runs(self) -> Path:
-        return self.root / "runs"
+        return self.root / ".kairos" / "run"
 
 
 def data_download(args) -> dict[str, object]:
@@ -788,17 +520,17 @@ def data_start(args) -> dict[str, object]:
     source = file_source or getattr(args, "source", None)
     product = getattr(args, "product", None)
     dataset = getattr(args, "as_dataset", None) or getattr(args, "name", None)
-    target = str(getattr(args, "for_use", None) or ("shadow" if kind == "live" else "study"))
+    target = str(getattr(args, "for_use", None) or ("shadow" if kind == "live" else "workspace"))
     choices = [
         {
             "kind": "file",
             "description": "CSV or Parquet historical file",
-            "template": "kairospy data start --kind file --file signals.csv --name research.my_signal",
+            "template": "kairospy data start --kind file --file signals.csv --name features.my_signal",
         },
         {
             "kind": "connector",
             "description": "Python HistoricalDataProtocol connector",
-            "template": "kairospy data start --kind connector --source connectors/my_vendor.py --name research.my_dataset",
+            "template": "kairospy data start --kind connector --source connectors/my_vendor.py --name features.my_dataset",
         },
         {
             "kind": "product",
@@ -919,8 +651,8 @@ def _data_start_command(args, kind: str, dataset: str | None) -> str | None:
             parts.extend(["--end", str(args.end_time)])
         for instrument in getattr(args, "instrument", None) or ():
             parts.extend(["--instrument", str(instrument)])
-        target_use = str(getattr(args, "for_use", None) or "study")
-        if target_use != "study":
+        target_use = str(getattr(args, "for_use", None) or "workspace")
+        if target_use != "workspace":
             parts.extend(["--for", target_use])
         return _shell_command(parts)
     if kind == "live":
@@ -1000,14 +732,14 @@ def _materialize_historical_protocol(args) -> Path:
         raise FileNotFoundError(source)
     module_hash = sha256(source.read_bytes()).hexdigest()
     module = _load_user_module(source, f"kairospy_user_historical_data_{module_hash[:12]}")
-    adapter = _historical_protocol_adapter(module)
+    protocol = _historical_protocol_object(module)
     request = HistoricalDataRequest(
         dataset_id=str(args.name),
         start=_optional_datetime(getattr(args, "start", None)),
         end=_optional_datetime(getattr(args, "end", None)),
         instruments=tuple(str(item) for item in getattr(args, "instrument", ()) or ()),
     )
-    rows = _protocol_rows(adapter.load(request), "HistoricalDataProtocol.load")
+    rows = _protocol_rows(protocol.load(request), "HistoricalDataProtocol.load")
     target = (
         Path(args.lake_root)
         / "source"
@@ -1021,23 +753,28 @@ def _materialize_historical_protocol(args) -> Path:
     return target
 
 
-def _historical_protocol_adapter(module):
-    for name in ("ADAPTER", "adapter"):
-        adapter = getattr(module, name, None)
-        if adapter is not None and hasattr(adapter, "load") and callable(adapter.load):
-            return adapter
-    factory = getattr(module, "get_adapter", None)
+def _historical_protocol_object(module):
+    for name in ("PROTOCOL", "protocol", "SOURCE", "source", "ADAPTER", "adapter"):
+        protocol = getattr(module, name, None)
+        if protocol is not None and hasattr(protocol, "load") and callable(protocol.load):
+            return protocol
+    factory = getattr(module, "get_protocol", None)
     if callable(factory):
-        adapter = factory()
-        if hasattr(adapter, "load") and callable(adapter.load):
-            return adapter
+        protocol = factory()
+        if hasattr(protocol, "load") and callable(protocol.load):
+            return protocol
+    legacy_factory = getattr(module, "get_adapter", None)
+    if callable(legacy_factory):
+        protocol = legacy_factory()
+        if hasattr(protocol, "load") and callable(protocol.load):
+            return protocol
     load = getattr(module, "load", None)
     if callable(load):
-        class _FunctionAdapter:
+        class _FunctionProtocol:
             def load(self, request):
                 return load(request)
-        return _FunctionAdapter()
-    raise ValueError("historical protocol module must define load(request), ADAPTER.load(request), or get_adapter().load(request)")
+        return _FunctionProtocol()
+    raise ValueError("historical protocol module must define load(request), PROTOCOL.load(request), or get_protocol().load(request)")
 
 
 def _protocol_rows(value: object, label: str) -> list[dict[str, object]]:
@@ -1112,6 +849,16 @@ def data_product_list(args) -> dict[str, object]:
             for item in registry.list()
         ],
     }
+
+
+def data_product_doctor(args) -> dict[str, object]:
+    from kairospy import provider_surface
+
+    return provider_surface.data_product_doctor(
+        args.lake_root,
+        args.product,
+        connector_config=getattr(args, "connector_config", None),
+    )
 
 
 def _user_builtin_product_payload(item, *, aliases: Iterable[str] = ()) -> dict[str, object]:
@@ -1261,7 +1008,7 @@ def _check_user_protocol(args) -> dict[str, object]:
     if kind == "historical":
         return _check_historical_protocol(args, module)
     if kind == "live":
-        _live_protocol_adapter(module)
+        _live_protocol_object(module)
         return {
             "product": "data",
             "operation": "protocol.check",
@@ -1280,14 +1027,14 @@ def _check_user_protocol(args) -> dict[str, object]:
 def _check_historical_protocol(args, module) -> dict[str, object]:
     from kairospy.data import HistoricalDataRequest
 
-    adapter = _historical_protocol_adapter(module)
+    protocol = _historical_protocol_object(module)
     request = HistoricalDataRequest(
-        dataset_id=str(getattr(args, "name", None) or "research.protocol_check"),
+        dataset_id=str(getattr(args, "name", None) or "workspace.protocol_check"),
         start=_optional_datetime(getattr(args, "start", None)),
         end=_optional_datetime(getattr(args, "end", None)),
         instruments=tuple(str(item) for item in getattr(args, "instrument", ()) or ()),
     )
-    rows = _protocol_rows(adapter.load(request), "HistoricalDataProtocol.load")
+    rows = _protocol_rows(protocol.load(request), "HistoricalDataProtocol.load")
     fields: list[str] = []
     for row in rows:
         for field in row:
@@ -1331,8 +1078,8 @@ def _data_connect_impl(args) -> dict[str, object]:
     return LiveDataService(args.lake_root).connect(args)
 
 
-def _live_runtime_config(adapter, request) -> dict[str, object]:
-    runtime_config = getattr(adapter, "runtime_config", None)
+def _live_runtime_config(protocol, request) -> dict[str, object]:
+    runtime_config = getattr(protocol, "runtime_config", None)
     if not callable(runtime_config):
         return {}
     value = runtime_config(request)
@@ -1367,7 +1114,7 @@ def data_sample(args, *, on_row=None) -> dict[str, object]:
     if built_in.capability not in {"live", "both"}:
         raise ValueError(f"built-in data product {built_in.key!r} is not a live source")
     protocols = default_builtin_protocol_registry(args.lake_root, registry.list())
-    adapter = protocols.live(built_in.protocol_name)
+    protocol = protocols.live(built_in.protocol_name)
     dataset_id = str(getattr(args, "as_dataset", None) or built_in.default_dataset_name)
     request = LiveDataRequest(
         dataset_id,
@@ -1380,11 +1127,11 @@ def data_sample(args, *, on_row=None) -> dict[str, object]:
             **({"environment": getattr(args, "environment")} if getattr(args, "environment", None) is not None else {}),
         },
     )
-    runtime_config = _live_runtime_config(adapter, request)
+    runtime_config = _live_runtime_config(protocol, request)
 
     async def collect() -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
-        async for row in adapter.stream(request):
+        async for row in protocol.stream(request):
             item = dict(row)
             rows.append(item)
             if on_row is not None:
@@ -1906,24 +1653,24 @@ def _user_quality_checks(checks) -> list[dict[str, object]]:
 
 def _ready_for_quality(level: QualityLevel) -> list[str]:
     if level is QualityLevel.PRODUCTION:
-        return ["study", "backtest", "production"]
+        return ["workspace", "backtest", "production"]
     if level is QualityLevel.BACKTEST:
-        return ["study", "backtest"]
-    if level is QualityLevel.STUDY:
-        return ["study"]
+        return ["workspace", "backtest"]
+    if level is QualityLevel.WORKSPACE:
+        return ["workspace"]
     return []
 
 
 def _blocked_for_quality(level: QualityLevel, *, passed: bool) -> list[str]:
     if not passed:
-        return ["study", "backtest", "production"]
+        return ["workspace", "backtest", "production"]
     if level is QualityLevel.PRODUCTION:
         return []
     if level is QualityLevel.BACKTEST:
         return ["production"]
-    if level is QualityLevel.STUDY:
+    if level is QualityLevel.WORKSPACE:
         return ["backtest", "production"]
-    return ["study", "backtest", "production"]
+    return ["workspace", "backtest", "production"]
 
 
 def _read_optional_json(path: Path) -> dict[str, object]:
@@ -1993,24 +1740,29 @@ def _dataset_argument(args) -> str:
     return str(dataset)
 
 
-def _live_protocol_adapter(module):
-    for name in ("ADAPTER", "adapter"):
-        adapter = getattr(module, name, None)
-        if adapter is not None and hasattr(adapter, "stream") and callable(adapter.stream):
-            return adapter
-    factory = getattr(module, "get_adapter", None)
+def _live_protocol_object(module):
+    for name in ("PROTOCOL", "protocol", "SOURCE", "source", "ADAPTER", "adapter"):
+        protocol = getattr(module, name, None)
+        if protocol is not None and hasattr(protocol, "stream") and callable(protocol.stream):
+            return protocol
+    factory = getattr(module, "get_protocol", None)
     if callable(factory):
-        adapter = factory()
-        if hasattr(adapter, "stream") and callable(adapter.stream):
-            return adapter
+        protocol = factory()
+        if hasattr(protocol, "stream") and callable(protocol.stream):
+            return protocol
+    legacy_factory = getattr(module, "get_adapter", None)
+    if callable(legacy_factory):
+        protocol = legacy_factory()
+        if hasattr(protocol, "stream") and callable(protocol.stream):
+            return protocol
     stream = getattr(module, "stream", None)
     if callable(stream):
-        class _FunctionAdapter:
+        class _FunctionProtocol:
             async def stream(self, request):
                 async for item in stream(request):
                     yield item
-        return _FunctionAdapter()
-    raise ValueError("live protocol module must define stream(request), ADAPTER.stream(request), or get_adapter().stream(request)")
+        return _FunctionProtocol()
+    raise ValueError("live protocol module must define stream(request), PROTOCOL.stream(request), or get_protocol().stream(request)")
 
 
 def data_reconnect(args) -> dict[str, object]:
@@ -2061,7 +1813,7 @@ def data_promote(args) -> dict[str, object]:
             "dataset": dataset,
             "target": str(args.for_use),
             "status": "needs_fix",
-            "ready_for": ["study"] if release.status is DatasetStatus.APPROVED_FOR_STUDY else [],
+            "ready_for": ["workspace"] if release.status is DatasetStatus.APPROVED_FOR_WORKSPACE else [],
             "blocked_for": [str(args.for_use)],
             "issues": [f"{type(error).__name__}: {error}"],
         }
@@ -2073,7 +1825,7 @@ def data_promote(args) -> dict[str, object]:
             "target": str(args.for_use),
             "status": "needs_fix",
             "quality_level": assessment.level.value,
-            "ready_for": ["study"] if release.status is DatasetStatus.APPROVED_FOR_STUDY else [],
+            "ready_for": ["workspace"] if release.status is DatasetStatus.APPROVED_FOR_WORKSPACE else [],
             "blocked_for": [str(args.for_use)],
             "issues": [policy.reason],
             "checks": [
@@ -2102,8 +1854,8 @@ def data_promote(args) -> dict[str, object]:
 
 
 def _promotion_quality(value: str) -> QualityLevel:
-    if value == "study":
-        return QualityLevel.STUDY
+    if value == "workspace":
+        return QualityLevel.WORKSPACE
     if value == "backtest":
         return QualityLevel.BACKTEST
     if value == "production":
@@ -2112,8 +1864,8 @@ def _promotion_quality(value: str) -> QualityLevel:
 
 
 def _promotion_status(level: QualityLevel) -> DatasetStatus:
-    if level is QualityLevel.STUDY:
-        return DatasetStatus.APPROVED_FOR_STUDY
+    if level is QualityLevel.WORKSPACE:
+        return DatasetStatus.APPROVED_FOR_WORKSPACE
     if level is QualityLevel.BACKTEST:
         return DatasetStatus.APPROVED_FOR_BACKTEST
     return DatasetStatus.APPROVED_FOR_PRODUCTION
@@ -2122,7 +1874,7 @@ def _promotion_status(level: QualityLevel) -> DatasetStatus:
 def _dataset_status_rank(status: DatasetStatus) -> int:
     order = [
         DatasetStatus.VALIDATED,
-        DatasetStatus.APPROVED_FOR_STUDY,
+        DatasetStatus.APPROVED_FOR_WORKSPACE,
         DatasetStatus.APPROVED_FOR_BACKTEST,
         DatasetStatus.APPROVED_FOR_PRODUCTION,
     ]
@@ -2131,8 +1883,8 @@ def _dataset_status_rank(status: DatasetStatus) -> int:
 
 def _next_dataset_status(status: DatasetStatus) -> DatasetStatus:
     if status is DatasetStatus.VALIDATED:
-        return DatasetStatus.APPROVED_FOR_STUDY
-    if status is DatasetStatus.APPROVED_FOR_STUDY:
+        return DatasetStatus.APPROVED_FOR_WORKSPACE
+    if status is DatasetStatus.APPROVED_FOR_WORKSPACE:
         return DatasetStatus.APPROVED_FOR_BACKTEST
     if status is DatasetStatus.APPROVED_FOR_BACKTEST:
         return DatasetStatus.APPROVED_FOR_PRODUCTION
@@ -2144,11 +1896,11 @@ def _ready_status(status: DatasetStatus) -> str:
         return "ready_for_production"
     if status is DatasetStatus.APPROVED_FOR_BACKTEST:
         return "ready_for_backtest"
-    return "ready_for_study"
+    return "ready_for_workspace"
 
 
 def _ready_for_status(status: DatasetStatus) -> list[str]:
-    ready = ["study"]
+    ready = ["workspace"]
     if _dataset_status_rank(status) >= _dataset_status_rank(DatasetStatus.APPROVED_FOR_BACKTEST):
         ready.append("backtest")
     if _dataset_status_rank(status) >= _dataset_status_rank(DatasetStatus.APPROVED_FOR_PRODUCTION):
@@ -2649,123 +2401,6 @@ def _download_product_contract(product_entry: dict[str, Any], spec: dict[str, An
     raise ValueError("download spec product must declare contract")
 
 
-def _factor_metadata_contract(
-    study: dict[str, Any],
-    metadata_path: str | Path | None,
-    workspace_dir: Path,
-) -> dict[str, object]:
-    if metadata_path is None:
-        return {
-            "metadata_status": "missing",
-            "strategy_eligible": False,
-        }
-    source = _resolve_user_file(metadata_path, workspace_dir)
-    metadata = _read_contract(source)
-    inputs = _factor_metadata_inputs(metadata)
-    declared_data = set(study.get("data", {}))
-    unknown_inputs = sorted(set(inputs) - declared_data)
-    if unknown_inputs:
-        raise ValueError(f"factor metadata references undeclared study data aliases: {', '.join(unknown_inputs)}")
-    parameters = metadata.get("parameters") or {}
-    if not isinstance(parameters, dict):
-        raise ValueError("factor metadata parameters must be an object")
-    _assert_json_serializable(parameters, "factor metadata parameters")
-    output_schema = _factor_output_schema(metadata)
-    fields = output_schema["fields"]
-    primary_time = str(metadata.get("primary_time") or metadata.get("time", {}).get("primary_time") or "")
-    if not primary_time:
-        raise ValueError("factor metadata must declare primary_time")
-    if primary_time not in fields:
-        raise ValueError(f"factor metadata primary_time {primary_time!r} is not in output fields")
-    point_in_time = metadata.get("point_in_time")
-    if not isinstance(point_in_time, bool):
-        raise ValueError("factor metadata must declare boolean point_in_time")
-    dependencies = metadata.get("dependencies") or []
-    if not isinstance(dependencies, list) or not all(isinstance(item, str) for item in dependencies):
-        raise ValueError("factor metadata dependencies must be a list of strings")
-    runtime = _factor_runtime_contract(metadata.get("runtime") or {})
-    contract = {
-        "inputs": inputs,
-        "parameters": _json_safe(parameters),
-        "output_schema": output_schema,
-        "primary_time": primary_time,
-        "point_in_time": point_in_time,
-        "strategy_eligible": bool(metadata.get("strategy_eligible", True)),
-        "dependencies": dependencies,
-        "runtime": runtime,
-    }
-    _assert_json_serializable(contract, "factor metadata contract")
-    parameters_hash = _stable_hash(parameters)
-    factor_contract_hash = _stable_hash(contract)
-    return {
-        "metadata_status": "declared",
-        "metadata_path": str(source),
-        "metadata": contract,
-        "inputs": inputs,
-        "parameters": _json_safe(parameters),
-        "parameters_hash": parameters_hash,
-        "output_schema": output_schema,
-        "primary_time": primary_time,
-        "point_in_time": point_in_time,
-        "strategy_eligible": contract["strategy_eligible"],
-        "dependencies": dependencies,
-        "runtime": runtime,
-        "factor_contract_hash": factor_contract_hash,
-    }
-
-
-def _factor_metadata_inputs(metadata: dict[str, Any]) -> list[str]:
-    raw_inputs = metadata.get("inputs")
-    if isinstance(raw_inputs, dict):
-        inputs = [str(key) for key in raw_inputs]
-    elif isinstance(raw_inputs, list):
-        inputs = [str(item) for item in raw_inputs]
-    else:
-        raise ValueError("factor metadata must declare inputs as an object or list")
-    if not inputs:
-        raise ValueError("factor metadata inputs must not be empty")
-    return sorted(inputs)
-
-
-def _factor_output_schema(metadata: dict[str, Any]) -> dict[str, object]:
-    raw_schema = metadata.get("output_schema") or {}
-    raw_fields = metadata.get("fields")
-    if isinstance(raw_schema, dict) and raw_schema.get("fields") is not None:
-        raw_fields = raw_schema.get("fields")
-    fields: list[str] = []
-    for item in raw_fields or ():
-        fields.append(str(item.get("name") if isinstance(item, dict) else item))
-    if not fields:
-        raise ValueError("factor metadata must declare output fields")
-    return {
-        "fields": fields,
-        **({key: value for key, value in raw_schema.items() if key != "fields"} if isinstance(raw_schema, dict) else {}),
-    }
-
-
-def _factor_runtime_contract(raw_runtime: object) -> dict[str, object]:
-    if not isinstance(raw_runtime, dict):
-        raise ValueError("factor metadata runtime must be an object")
-    network = raw_runtime.get("network", raw_runtime.get("network_allowed", False))
-    if bool(network):
-        raise ValueError("factor metadata runtime cannot allow network access")
-    filesystem = str(raw_runtime.get("filesystem") or raw_runtime.get("filesystem_access") or "study_inputs_only")
-    if filesystem not in {"study_inputs_only", "none"}:
-        raise ValueError("factor metadata runtime filesystem access must be study_inputs_only or none")
-    paths = raw_runtime.get("paths") or raw_runtime.get("read_paths") or raw_runtime.get("allowed_paths") or []
-    if isinstance(paths, str):
-        paths = [paths]
-    if not isinstance(paths, list) or not all(isinstance(item, str) for item in paths):
-        raise ValueError("factor metadata runtime paths must be a list of strings")
-    if paths:
-        raise ValueError("factor metadata runtime cannot declare filesystem paths outside Study inputs")
-    return {
-        "network_allowed": False,
-        "filesystem_access": filesystem,
-        "paths": [],
-    }
-
-
 def _assert_json_serializable(value: object, label: str) -> None:
     try:
         json.dumps(value, ensure_ascii=False, sort_keys=True)
@@ -2800,159 +2435,6 @@ def _rows_from_factor_output(value: object) -> list[dict[str, object]]:
     return [_json_safe(dict(item)) for item in rows]
 
 
-def _factor_run_profile(
-    study_id: str,
-    factor_name: str,
-    factor: dict[str, Any],
-    rows: list[dict[str, object]],
-) -> dict[str, object]:
-    fields = sorted({field for row in rows for field in row})
-    primary_time = str(factor.get("primary_time") or "")
-    missing_primary = bool(primary_time) and any(row.get(primary_time) in (None, "") for row in rows)
-    missing_values = sum(value in (None, "") for row in rows for value in row.values())
-    point_in_time = bool(factor.get("point_in_time"))
-    declared_fields = list(factor.get("output_schema", {}).get("fields", []))
-    missing_declared = sorted(set(declared_fields) - set(fields))
-    pit_check = _factor_point_in_time_check(rows, primary_time, fields, point_in_time)
-    passed = (
-        bool(rows)
-        and bool(primary_time)
-        and primary_time in fields
-        and not missing_primary
-        and not missing_declared
-        and bool(pit_check["passed"])
-    )
-    return {
-        "kind": "factor.run.profile",
-        "schema_version": 1,
-        "study_id": study_id,
-        "factor": factor_name,
-        "row_count": len(rows),
-        "fields": fields,
-        "declared_fields": declared_fields,
-        "missing_declared_fields": missing_declared,
-        "primary_time": primary_time,
-        "primary_time_present": primary_time in fields,
-        "missing_primary_time_values": missing_primary,
-        "missing_values": missing_values,
-        "point_in_time": point_in_time,
-        "point_in_time_check": pit_check["status"],
-        "lookahead_rows": pit_check["lookahead_rows"],
-        "factor_contract_hash": factor.get("factor_contract_hash"),
-        "parameters_hash": factor.get("parameters_hash"),
-        "passed": passed,
-        "ran_at": _now(),
-    }
-
-
-def _factor_point_in_time_check(
-    rows: list[dict[str, object]],
-    primary_time: str,
-    fields: list[str],
-    point_in_time: bool,
-) -> dict[str, object]:
-    if not point_in_time:
-        return {"passed": True, "status": "not_declared", "lookahead_rows": 0}
-    if not primary_time or primary_time not in fields or "event_time" not in fields:
-        return {"passed": True, "status": "declared", "lookahead_rows": 0}
-    lookahead_rows = 0
-    for row in rows:
-        primary_value = _parse_factor_time(row.get(primary_time))
-        event_value = _parse_factor_time(row.get("event_time"))
-        if primary_value is not None and event_value is not None and primary_value < event_value:
-            lookahead_rows += 1
-    return {
-        "passed": lookahead_rows == 0,
-        "status": "passed" if lookahead_rows == 0 else "failed",
-        "lookahead_rows": lookahead_rows,
-    }
-
-
-def _parse_factor_time(value: object) -> datetime | None:
-    if value in (None, ""):
-        return None
-    if isinstance(value, datetime):
-        return value
-    text = str(value)
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    try:
-        return datetime.fromisoformat(text)
-    except ValueError:
-        return None
-
-
-def _factor_output_hash(profile: dict[str, object], rows: list[dict[str, object]]) -> str:
-    return _stable_hash({
-        "fields": profile.get("declared_fields") or profile.get("fields", []),
-        "primary_time": profile.get("primary_time"),
-        "rows": rows,
-    })
-
-
-def _factor_run_hash(profile: dict[str, object], rows: list[dict[str, object]]) -> str:
-    return _stable_hash({
-        "profile": {key: value for key, value in profile.items() if key not in {"run_hash", "factor_output_hash"}},
-        "rows": rows,
-    })
-
-
-def _study_readiness(study: dict[str, Any]) -> dict[str, object]:
-    data = study.get("data", {})
-    factors = study.get("factors", {})
-    checks: list[dict[str, object]] = []
-    blocking: list[str] = []
-
-    has_data = bool(data)
-    checks.append({
-        "name": "declared_data",
-        "kind": "gate",
-        "passed": has_data,
-        "detail": "Study must bind at least one Data Release before freeze",
-    })
-    if not has_data:
-        blocking.append("missing_data")
-
-    for name, item in sorted(data.items()):
-        level = str(item.get("quality_level") or "")
-        passed = _quality_level_at_least(level, QualityLevel.STUDY)
-        checks.append({
-            "name": f"data_quality:{name}",
-            "kind": "gate",
-            "passed": passed,
-            "quality_level": level,
-            "minimum": QualityLevel.STUDY.value,
-            "detail": "Study data must meet the study quality gate",
-        })
-        if not passed:
-            blocking.append(f"data_quality_too_low:{name}")
-
-    missing_metadata = sorted(
-        name for name, item in factors.items()
-        if item.get("metadata_status") != "declared"
-    )
-    checks.append({
-        "name": "factor_metadata",
-        "kind": "diagnostic",
-        "passed": not missing_metadata,
-        "missing": missing_metadata,
-        "detail": "Factor metadata is required before Strategy-grade semantic checks",
-    })
-
-    return {
-        "kind": "study.readiness",
-        "schema_version": 1,
-        "lifecycle": "FROZEN_CANDIDATE" if not blocking else "DRAFT",
-        "passed": not blocking,
-        "blocking_reasons": blocking,
-        "diagnostics": {
-            "factor_metadata_missing": missing_metadata,
-        },
-        "checks": checks,
-        "checked_at": _now(),
-    }
-
-
 def _quality_level_at_least(value: str, minimum: QualityLevel) -> bool:
     try:
         level = QualityLevel(value)
@@ -2965,7 +2447,7 @@ def _quality_level_rank(level: QualityLevel) -> int:
     order = {
         QualityLevel.ARCHIVED: 0,
         QualityLevel.INTEGRITY: 1,
-        QualityLevel.STUDY: 2,
+        QualityLevel.WORKSPACE: 2,
         QualityLevel.BACKTEST: 3,
         QualityLevel.PRODUCTION: 4,
     }
@@ -3006,7 +2488,7 @@ def _write_historical_file(
         content_hash,
         primary_time,
         tuple(fields),
-        QualityLevel.STUDY,
+        QualityLevel.WORKSPACE,
         {"kind": "file", "name": source.name},
         _now(),
     )
@@ -3060,7 +2542,7 @@ def _data_quality_report(
         "schema_version": 1,
         "dataset_id": dataset_id,
         "primary_time": primary_time,
-        "quality_level": QualityLevel.STUDY.value,
+        "quality_level": QualityLevel.WORKSPACE.value,
         "row_count": len(rows),
         "fields": fields,
         "contract_hash": stable_artifact_hash(contract),
@@ -3119,565 +2601,210 @@ def _write_rows_csv(path: Path, rows: list[dict[str, object]], fields: list[str]
             writer.writerow({field: row.get(field) for field in fields})
 
 
-def study_exists(root: str | Path, study_id: str) -> bool:
-    return _study_file(root, study_id).exists()
-
-
-def strategy_exists(root: str | Path, strategy_id: str) -> bool:
-    return _strategy_file(root, strategy_id).exists()
-
-
 def run_exists(root: str | Path, run_id: str) -> bool:
     return _find_run_manifest(root, run_id) is not None
 
 
-def study_open(args) -> dict[str, object]:
-    path = _study_file(args.lake_root, args.study_id)
-    if path.exists():
-        return _read_json(path)
-    study = {
-        "product": "study",
-        "kind": "study.workspace",
-        "id": args.study_id,
-        "version": args.version,
-        "hypothesis": args.hypothesis,
-        "status": "draft",
-        "data": {},
-        "factors": {},
-        "created_at": _now(),
+def _run_start_workspace_entrypoint(args) -> dict[str, object]:
+    if not getattr(args, "entrypoint", None):
+        raise ValueError("run start --workspace requires --entrypoint module:callable")
+
+    from kairospy.configuration import KairosProjectConfig, PROJECT_STATE_DIR
+    from kairospy.storage.codec import to_primitive
+    from kairospy.workspace import WorkspaceRepository
+
+    config = KairosProjectConfig.discover(Path.cwd())
+    workspace = WorkspaceRepository(config.root).open(args.workspace)
+    params = _parse_run_params(getattr(args, "param", ()))
+    workspace_snapshot = workspace.snapshot()
+    entrypoint_ref = str(args.entrypoint)
+    module, callable_name, entrypoint = _load_run_entrypoint(entrypoint_ref, config.root)
+    _validate_workspace_entrypoint_requirements(module, entrypoint, workspace_snapshot)
+
+    material = {
+        "workspace": workspace.name,
+        "mode": args.mode,
+        "entrypoint": entrypoint_ref,
+        "params": params,
+        "at": _now(),
     }
-    _write_study_state(args.lake_root, args.study_id, study)
-    _append_study_lifecycle(args.lake_root, args.study_id, "opened", study)
-    return study
-
-
-def study_add_data(args) -> dict[str, object]:
-    workspace = _workspace_arg(args)
-    study = _load_study(args.lake_root, workspace)
-    release = DataCatalog(args.lake_root).release(args.dataset)
-    evidence = _data_release_evidence(Path(args.lake_root), release)
-    study.setdefault("data", {})[args.name] = {
-        "dataset": args.dataset,
-        "release_id": release.release_id,
-        "content_hash": release.content_hash,
-        "contract_hash": evidence["contract_hash"],
-        "manifest_hash": evidence["manifest_hash"],
-        "artifact_ref": evidence["artifact_ref"],
-        "primary_time": evidence.get("primary_time"),
-        "fields": evidence.get("fields", []),
-        "quality_level": release.quality_level.value,
-    }
-    _write_study_state(args.lake_root, workspace, study)
-    return {"product": "study", "operation": "add-data", "study_id": workspace, "name": args.name, **study["data"][args.name]}
-
-
-def study_add_factor(args) -> dict[str, object]:
-    workspace = _workspace_arg(args)
-    study = _load_study(args.lake_root, workspace)
-    source = _resolve_user_file(args.file, _study_dir(args.lake_root, workspace))
-    code_hash = sha256(source.read_bytes()).hexdigest()
-    metadata_path = getattr(args, "metadata", None)
-    factor_metadata = _factor_metadata_contract(study, metadata_path, _study_dir(args.lake_root, workspace))
-    factor = {
-        "path": str(source),
-        "code_hash": code_hash,
-        "source_hash": code_hash,
-        "artifact_ref": f"study://{workspace}/factors/{args.name}",
-        "contract": "Factor Contract",
-        **factor_metadata,
-    }
-    study.setdefault("factors", {})[args.name] = factor
-    _write_study_state(args.lake_root, workspace, study)
-    return {
-        "product": "study",
-        "operation": "add-factor",
-        "study_id": workspace,
-        "name": args.name,
-        "code_hash": code_hash,
-        **{key: value for key, value in factor_metadata.items() if key != "metadata"},
-    }
-
-
-def study_inspect(args) -> dict[str, object]:
-    study = _load_study(args.lake_root, args.study_id)
-    return {**study, "contract": "Study Contract"}
-
-
-def study_factor_run(args) -> dict[str, object]:
-    study = _load_study(args.lake_root, args.study_id)
-    factors = study.get("factors", {})
-    if args.name not in factors:
-        raise ValueError(f"Study factor {args.name!r} is not declared")
-    factor = factors[args.name]
-    if factor.get("metadata_status") != "declared":
-        raise ValueError(f"study factor {args.name!r} requires metadata before factor-run")
-    source = Path(str(factor.get("path") or ""))
-    if not source.exists():
-        raise FileNotFoundError(source)
-    inputs = {
-        alias: StudyProductApi(args.lake_root).data(args.study_id, alias)
-        for alias in factor.get("inputs", [])
-    }
-    module = _load_user_module(source, f"kairospy_user_factor_{args.study_id}_{args.name}")
-    compute = getattr(module, "compute", None)
-    if compute is None or not callable(compute):
-        raise ValueError(f"study factor {args.name!r} must define callable compute(inputs, params, context)")
-    result = compute(inputs, factor.get("parameters", {}), {
-        "study_id": args.study_id,
-        "factor": args.name,
-        "run_mode": "study",
-    })
-    rows = _rows_from_factor_output(result)
-    profile = _factor_run_profile(args.study_id, args.name, factor, rows)
-    factor_output_hash = _factor_output_hash(profile, rows)
-    run_hash = _factor_run_hash(profile, rows)
-    profile = {**profile, "factor_output_hash": factor_output_hash, "run_hash": run_hash}
-    run_dir = _study_dir(args.lake_root, args.study_id) / "factor-runs" / args.name / run_hash[:12]
-    _write_json(run_dir / "rows.json", rows)
-    _write_json(run_dir / "profile.json", profile)
-    study.setdefault("factor_runs", {})[args.name] = {
-        "profile": str(run_dir / "profile.json"),
-        "rows": str(run_dir / "rows.json"),
-        "run_hash": run_hash,
-        "factor_output_hash": factor_output_hash,
-        "row_count": profile["row_count"],
-        "fields": profile["fields"],
-        "ran_at": profile["ran_at"],
-    }
-    _write_study_state(args.lake_root, args.study_id, study)
-    return {
-        "product": "study",
-        "operation": "factor-run",
-        "study_id": args.study_id,
-        "name": args.name,
-        "profile": str(run_dir / "profile.json"),
-        "rows": str(run_dir / "rows.json"),
-        **profile,
-    }
-
-
-def study_publish_factor(args) -> dict[str, object]:
-    study = _load_study(args.lake_root, args.study_id)
-    factors = study.get("factors", {})
-    if args.name not in factors:
-        raise ValueError(f"Study factor {args.name!r} is not declared")
-    factor = factors[args.name]
-    run = study.get("factor_runs", {}).get(args.name)
-    if not isinstance(run, dict):
-        raise ValueError(f"study factor {args.name!r} has no factor-run to publish")
-    profile = _read_json(run["profile"])
-    if not profile.get("passed"):
-        raise ValueError(f"study factor {args.name!r} latest factor-run did not pass")
-    rows = _read_json(run["rows"])
-    if not isinstance(rows, list) or not rows:
-        raise ValueError(f"study factor {args.name!r} factor-run rows are empty")
-    expected_run_hash = str(profile.get("run_hash") or "")
-    if expected_run_hash and _factor_run_hash(profile, rows) != expected_run_hash:
-        raise ValueError(f"study factor {args.name!r} factor-run hash does not match rows")
-    fields = list(factor.get("output_schema", {}).get("fields", [])) or list(profile.get("fields", []))
-    if not fields:
-        raise ValueError(f"study factor {args.name!r} has no output fields to publish")
-    primary_time = str(factor.get("primary_time") or profile.get("primary_time") or "")
-    if not primary_time:
-        raise ValueError(f"study factor {args.name!r} has no primary_time to publish")
-    factor_output_hash = str(profile.get("factor_output_hash") or _factor_output_hash(profile, rows))
-    dataset_id = str(args.as_dataset)
-    publish_dir = _study_dir(args.lake_root, args.study_id) / "factor-publish" / args.name / str(profile["run_hash"])[:12]
-    publish_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = publish_dir / f"{args.name}.csv"
-    _write_rows_csv(csv_path, rows, fields)
-    contract = {
-        "dataset_id": dataset_id,
-        "primary_time": primary_time,
-        "fields": fields,
-        "grain": factor.get("output_schema", {}).get("grain", "factor_output"),
-        "lineage": {
-            "study_id": args.study_id,
-            "factor": args.name,
-            "factor_contract_hash": factor.get("factor_contract_hash"),
-            "parameters_hash": factor.get("parameters_hash"),
-            "factor_run_hash": profile.get("run_hash"),
-            "factor_output_hash": factor_output_hash,
-        },
-    }
-    release = _write_historical_file(Path(args.lake_root), dataset_id, contract, csv_path)
-    result = {
-        "product": "study",
-        "operation": "publish-factor",
-        "study_id": args.study_id,
-        "name": args.name,
-        "as_dataset": dataset_id,
-        "factor_run_hash": profile.get("run_hash"),
-        "factor_output_hash": factor_output_hash,
-        **release,
-    }
-    study.setdefault("published_factors", {})[args.name] = {
-        "dataset": dataset_id,
-        "release_id": release["release_id"],
-        "content_hash": release["content_hash"],
-        "contract_hash": release["contract_hash"],
-        "artifact_ref": release["artifact_ref"],
-        "manifest_hash": release["manifest_hash"],
-        "quality_level": release["quality_level"],
-        "primary_time": release["primary_time"],
-        "fields": release["fields"],
-        "factor_run_hash": profile.get("run_hash"),
-        "factor_output_hash": factor_output_hash,
-        "quality_report_hash": release.get("quality_report_hash"),
-        "published_at": _now(),
-    }
-    _write_study_state(args.lake_root, args.study_id, study)
-    return result
-
-
-def study_freeze(args) -> dict[str, object]:
-    study = _load_study(args.lake_root, args.study_id)
-    version = args.version
-    readiness = _study_readiness(study)
-    if not readiness["passed"]:
-        raise ValueError(f"Study is not ready to freeze: {', '.join(readiness['blocking_reasons'])}")
-    path = _study_dir(args.lake_root, args.study_id) / "locks" / version / "study.lock.json"
-    if path.exists():
-        raise ValueError(f"Study Lock version already exists: {args.study_id}@{version}")
-    lock_body = {
-        "product": "study",
-        "kind": "study.lock",
-        "schema_version": 1,
-        "study_id": args.study_id,
-        "version": version,
-        "lifecycle": "FROZEN",
-        "data": study.get("data", {}),
-        "factors": study.get("factors", {}),
-        "published_factors": study.get("published_factors", {}),
-        "readiness": readiness,
-        "evidence_chain": _study_evidence_chain(study),
-        "frozen_at": _now(),
-    }
-    lock_hash = _stable_hash(lock_body)
-    lock = {**lock_body, "lock_hash": lock_hash}
-    _write_json(path, lock)
-    _write_json(path.parent / "readiness.json", readiness)
-    study["status"] = "frozen"
-    study["lifecycle"] = "FROZEN"
-    study["readiness"] = readiness
-    study["latest_lock"] = str(path)
-    study["latest_lock_hash"] = lock_hash
-    _write_study_state(args.lake_root, args.study_id, study)
-    _append_study_lifecycle(args.lake_root, args.study_id, "frozen", study, {"version": version, "lock_hash": lock_hash})
-    return {**lock, "artifact": str(path)}
-
-
-def strategy_open(args) -> dict[str, object]:
-    study_id, version = _split_ref(args.from_study)
-    study_lock = _load_study_lock(args.lake_root, study_id, version)
-    strategy = {
-        "product": "strategy",
-        "kind": "strategy.workspace",
-        "id": args.strategy_id,
-        "version": "draft",
-        "derived_from": {"study": study_id, "version": version, "lock_hash": study_lock["lock_hash"]},
-        "data": study_lock.get("data", {}),
-        "inputs": {},
-        "model": {"path": "model.py"},
-        "risk": {},
-        "execution": {},
-        "created_at": _now(),
-    }
-    _write_json(_strategy_file(args.lake_root, args.strategy_id), strategy)
-    return strategy
-
-
-def strategy_bind_factor(args) -> dict[str, object]:
-    workspace = _workspace_arg(args)
-    strategy = _load_strategy(args.lake_root, workspace)
-    derived = strategy["derived_from"]
-    study_lock = _load_study_lock(args.lake_root, derived["study"], derived["version"])
-    factors = study_lock.get("factors", {})
-    if args.study_factor not in factors:
-        raise ValueError(f"study factor {args.study_factor!r} is not in Study Lock")
-    study_factor = factors[args.study_factor]
-    if study_factor.get("metadata_status") == "declared" and not bool(study_factor.get("strategy_eligible")):
-        raise ValueError(f"study factor {args.study_factor!r} is not strategy eligible")
-    published = study_lock.get("published_factors", {}).get(args.study_factor, {})
-    materialized = {
-        key: published.get(key)
-        for key in (
-            "dataset", "release_id", "content_hash", "contract_hash", "manifest_hash",
-            "quality_level", "primary_time", "fields", "factor_run_hash", "factor_output_hash", "quality_report_hash",
-        )
-        if isinstance(published, dict) and published.get(key) is not None
-    }
-    if isinstance(published, dict) and published.get("artifact_ref"):
-        materialized["feature_artifact_ref"] = published.get("artifact_ref")
-    strategy.setdefault("inputs", {})[args.name] = {
-        "kind": "factor",
-        "from_study_factor": args.study_factor,
-        "source_hash": study_factor["code_hash"],
-        "factor_contract_hash": study_factor.get("factor_contract_hash"),
-        "parameters_hash": study_factor.get("parameters_hash"),
-        "primary_time": study_factor.get("primary_time"),
-        "point_in_time": study_factor.get("point_in_time"),
-        "output_schema": study_factor.get("output_schema"),
-        "runtime": study_factor.get("runtime"),
-        "metadata_status": study_factor.get("metadata_status"),
-        "strategy_eligible": study_factor.get("strategy_eligible"),
-        "materialization_status": "published_feature" if materialized else "contract_only",
-        **materialized,
-        "contract": study_factor.get("contract", "Factor Contract"),
-        "artifact_ref": f"study://{derived['study']}/locks/{derived['version']}/factors/{args.study_factor}",
-    }
-    _write_json(_strategy_file(args.lake_root, workspace), strategy)
-    return {"product": "strategy", "operation": "bind-factor", "strategy_id": workspace, "name": args.name, **strategy["inputs"][args.name]}
-
-
-def strategy_set_risk(args) -> dict[str, object]:
-    strategy = _load_strategy(args.lake_root, args.strategy_id)
-    source = _resolve_user_file(args.risk_file, _strategy_dir(args.lake_root, args.strategy_id))
-    policy = _read_policy_contract(source, "risk")
-    risk_hash = _stable_hash(policy)
-    strategy["risk"] = {
-        "path": str(source),
-        "policy": policy,
-        "hash": risk_hash,
-        "risk_policy_hash": risk_hash,
-        "contract": "Risk Policy Contract",
-    }
-    _write_json(_strategy_file(args.lake_root, args.strategy_id), strategy)
-    return {
-        "product": "strategy",
-        "operation": "set-risk",
-        "strategy_id": args.strategy_id,
-        "risk_hash": risk_hash,
-        "risk_policy_hash": risk_hash,
-        "contract": "Risk Policy Contract",
-    }
-
-
-def strategy_set_execution(args) -> dict[str, object]:
-    strategy = _load_strategy(args.lake_root, args.strategy_id)
-    source = _resolve_user_file(args.execution_file, _strategy_dir(args.lake_root, args.strategy_id))
-    policy = _read_policy_contract(source, "execution")
-    execution_hash = _stable_hash(policy)
-    strategy["execution"] = {
-        "path": str(source),
-        "policy": policy,
-        "hash": execution_hash,
-        "execution_policy_hash": execution_hash,
-        "contract": "Execution Policy Contract",
-    }
-    _write_json(_strategy_file(args.lake_root, args.strategy_id), strategy)
-    return {
-        "product": "strategy",
-        "operation": "set-execution",
-        "strategy_id": args.strategy_id,
-        "execution_policy_hash": execution_hash,
-        "contract": "Execution Policy Contract",
-    }
-
-
-def strategy_set_model(args) -> dict[str, object]:
-    strategy = _load_strategy(args.lake_root, args.strategy_id)
-    kind = str(args.kind)
-    if kind not in {"sma-cross-v1", "builtin.sma-cross-v1"}:
-        raise ValueError(f"unsupported Strategy runtime model: {kind!r}")
-    parameters = {
-        key: value for key, value in {
-            "instrument_id": getattr(args, "instrument_id", None),
-            "fast_window": getattr(args, "fast_window", None),
-            "slow_window": getattr(args, "slow_window", None),
-            "approved_capital": getattr(args, "approved_capital", None),
-        }.items() if value is not None
-    }
-    strategy["model"] = {
-        "kind": "sma-cross-v1",
-        "runtime": "built-in",
-        "parameters": _json_safe(parameters),
-    }
-    _write_json(_strategy_file(args.lake_root, args.strategy_id), strategy)
-    return {
-        "product": "strategy",
-        "operation": "set-model",
-        "strategy_id": args.strategy_id,
-        **strategy["model"],
-    }
-
-
-def strategy_set_model_code(args) -> dict[str, object]:
-    strategy = _load_strategy(args.lake_root, args.strategy_id)
-    source = _resolve_user_file(args.model_file, _strategy_dir(args.lake_root, args.strategy_id))
-    source_bytes = source.read_bytes()
-    code_hash = sha256(source_bytes).hexdigest()
-    artifact_path = _strategy_dir(args.lake_root, args.strategy_id) / "model" / code_hash[:12] / source.name
-    artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    if not artifact_path.exists() or artifact_path.read_bytes() != source_bytes:
-        artifact_path.write_bytes(source_bytes)
-    metadata_path = getattr(args, "metadata", None)
-    model_contract = _strategy_model_contract(strategy, metadata_path, _strategy_dir(args.lake_root, args.strategy_id))
-    model = {
-        "kind": "user-model-code",
-        "runtime": "user",
-        "path": str(source),
-        "artifact_path": str(artifact_path),
-        "model_code_hash": code_hash,
-        "code_hash": code_hash,
-        "contract": "Strategy Model Contract",
-        **model_contract,
-    }
-    strategy["model"] = model
-    _write_json(_strategy_file(args.lake_root, args.strategy_id), strategy)
-    return {
-        "product": "strategy",
-        "operation": "set-model-code",
-        "strategy_id": args.strategy_id,
-        "model_code_hash": code_hash,
-        "artifact_path": str(artifact_path),
-        **{key: value for key, value in model_contract.items() if key != "metadata"},
-    }
-
-
-def strategy_inspect(args) -> dict[str, object]:
-    return {**_load_strategy(args.lake_root, args.strategy_id), "contract": "Strategy Contract"}
-
-
-def strategy_freeze(args) -> dict[str, object]:
-    strategy = _load_strategy(args.lake_root, args.strategy_id)
-    derived = strategy["derived_from"]
-    study_lock = _load_study_lock(args.lake_root, derived["study"], derived["version"])
-    _assert_strategy_study_consistency(strategy, study_lock)
-    path = _strategy_dir(args.lake_root, args.strategy_id) / "locks" / args.version / "strategy.lock.json"
-    if path.exists():
-        raise ValueError(f"Strategy Lock version already exists: {args.strategy_id}@{args.version}")
-    lock_body = {
-        "product": "strategy",
-        "kind": "strategy.lock",
-        "schema_version": 1,
-        "strategy_id": args.strategy_id,
-        "version": args.version,
-        "derived_from": strategy["derived_from"],
-        "data": strategy.get("data", {}),
-        "inputs": strategy.get("inputs", {}),
-        "model": strategy.get("model", {}),
-        "risk": strategy.get("risk", {}),
-        "execution": strategy.get("execution", {}),
-        "consistency_checks": {
-            "study_lock_hash": "passed",
-            "factor_hashes": "passed",
-            "data_release_hashes": "passed",
-            "risk_policy_hash": "passed" if strategy.get("risk", {}).get("risk_policy_hash") else "not_declared",
-            "execution_policy_hash": "passed" if strategy.get("execution", {}).get("execution_policy_hash") else "not_declared",
-            "model_contract_hash": "passed" if strategy.get("model", {}).get("model_contract_hash") else "not_declared",
-        },
-        "frozen_at": _now(),
-    }
-    lock_hash = _stable_hash(lock_body)
-    lock = {**lock_body, "lock_hash": lock_hash}
-    _write_json(path, lock)
-    strategy["version"] = args.version
-    strategy["latest_lock"] = str(path)
-    strategy["latest_lock_hash"] = lock_hash
-    _write_json(_strategy_file(args.lake_root, args.strategy_id), strategy)
-    return {**lock, "artifact": str(path)}
-
-
-def run_start(args) -> dict[str, object]:
-    root = Path(args.lake_root)
-    mode = args.mode
-    if args.study:
-        target_id = args.study
-        target_kind = "study"
-        target = _load_study(root, args.study)
-        target_hash = _stable_hash(target)
-        target_source = str(_study_file(root, args.study))
-    else:
-        strategy_id, version = _split_ref(args.snapshot)
-        target_id = strategy_id
-        target_kind = "strategy"
-        target = _load_strategy_lock(root, strategy_id, version)
-        target_hash = target["lock_hash"]
-        target_source = str(_strategy_dir(root, strategy_id) / "locks" / version / "strategy.lock.json")
-    workspace_evidence = _run_target_workspace_evidence(root, target_kind, target_id, target, target_hash)
-    live_bindings = _paper_live_subscription_bindings(root, target) if mode in {"paper", "live"} else ()
-    feed_plan = runtime_feed_plan(mode, live_bindings) if live_bindings else None
-    if getattr(args, "execute_feeds", False) and feed_plan is None:
-        raise ValueError("feed execution requires paper/live feed bindings")
-    composition = _run_mode_composition(mode)
-    execution_plan = runtime_execution_plan(mode, composition) if mode in {"paper", "live"} else None
-    strategy_plan = runtime_strategy_plan(mode, strategy_id=target_id, target_hash=target_hash) if (
-        target_kind == "strategy" and mode in {"paper", "live"}
-    ) else None
-    strategy_decision_supported = (
-        target_kind == "strategy"
-        and mode in {"backtest", "historical-simulation"}
-        and target.get("model", {}).get("kind") == "user-model-code"
-    )
-    if getattr(args, "execute_strategy", False) and strategy_plan is None and not strategy_decision_supported:
-        raise ValueError(
-            "strategy execution requires paper/live runtime model or backtest/historical-simulation user-model-code"
-        )
-    freshness_gates = tuple(
-        {"name": item["name"], "dataset": item["dataset"], **item["freshness_gate"]}
-        for item in live_bindings
-    )
-    material = {"target_kind": target_kind, "target_id": target_id, "mode": mode, "target_hash": target_hash, "at": _now()}
     run_id = f"run_{sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:16]}"
-    directory = root / "runs" / target_id / run_id
-    snapshot_artifact = directory / "snapshot.json"
-    feed_runtime_execution = _execute_feed_runtime(root, directory, mode, feed_plan, execution_plan, strategy_plan, target, args) if (
-        (feed_plan and getattr(args, "execute_feeds", False))
-        or (strategy_plan is not None and getattr(args, "execute_strategy", False))
-    ) else None
-    strategy_decision_execution = _execute_strategy_model_decision(root, directory, target, mode) if (
-        getattr(args, "execute_strategy", False) and strategy_decision_supported
-    ) else None
+    directory = config.root / PROJECT_STATE_DIR / "run" / run_id
+    context = SimpleNamespace(
+        run_id=run_id,
+        workspace=workspace.name,
+        mode=args.mode,
+        now=datetime.now(timezone.utc),
+        data=workspace.data,
+        params=params,
+        state={},
+    )
+    execution = _execute_workspace_strategy_entrypoint(entrypoint, workspace, params, context)
+    decisions = _json_fallback(to_primitive(execution["decisions"]))
+    result = _json_fallback(to_primitive(execution["result"]))
+    decision_artifact = directory / "artifacts" / "decisions.json"
+    result_artifact = directory / "artifacts" / "result.json"
+    snapshot_artifact = directory / "workspace_snapshot.json"
+    artifacts = {
+        "decisions": str(decision_artifact),
+        "summary": str(directory / "reports" / "summary.json"),
+    }
+    if result is not None:
+        artifacts["result"] = str(result_artifact)
     manifest = {
         "product": "run",
         "kind": "run.manifest",
-        "schema_version": 1,
+        "schema_version": 2,
         "run_id": run_id,
-        "mode": mode,
-        "target": {
-            "kind": target_kind,
-            "id": target_id,
-            "hash": target_hash,
-            "snapshot_hash": target_hash,
-            "snapshot_source": target_source,
+        "mode": args.mode,
+        "status": "completed",
+        "workspace": {
+            "name": workspace.name,
+            "root": str(workspace.root),
             "snapshot_artifact": str(snapshot_artifact),
-            **workspace_evidence,
+            "snapshot_hash": _stable_hash(workspace_snapshot),
         },
-        "input_artifacts": _run_input_artifacts(target_kind, target),
-        "runtime_contract": {
-            "mode": mode,
-            "run_mode_composition": {**composition.manifest(), "composition_hash": composition.composition_hash},
-            **({"execution_runtime_plan": {
-                **execution_plan.manifest(), "plan_hash": execution_plan.plan_hash,
-            }} if execution_plan else {}),
-            **({"strategy_runtime_plan": {
-                **strategy_plan.manifest(), "plan_hash": strategy_plan.plan_hash,
-            }} if strategy_plan else {}),
-            **({"feed_bindings": list(live_bindings)} if live_bindings else {}),
-            **({"feed_runtime_plan": {**feed_plan.manifest(), "plan_hash": feed_plan.plan_hash}} if feed_plan else {}),
-            **({"feed_runtime_bundle": {
-                **feed_plan.service_bundle_manifest(), "bundle_hash": feed_plan.service_bundle_hash,
-            }} if feed_plan else {}),
-            **({"feed_runtime_execution": feed_runtime_execution} if feed_runtime_execution else {}),
-            **({"strategy_decision_execution": strategy_decision_execution} if strategy_decision_execution else {}),
-            **({"freshness_gates": list(freshness_gates)} if freshness_gates else {}),
+        "strategy": {
+            "entrypoint": entrypoint_ref,
+            "module": module.__name__,
+            "callable": callable_name,
+            "entrypoint_kind": execution["entrypoint_kind"],
+            "params": params,
         },
         "started_at": material["at"],
-        "outputs": {
-            **({"strategy_decision": strategy_decision_execution["artifact"]} if strategy_decision_execution else {}),
-        },
+        "finished_at": _now(),
+        "artifacts": artifacts,
     }
-    _write_json(snapshot_artifact, target)
+    _write_json(snapshot_artifact, workspace_snapshot)
+    _write_json(directory / "entrypoint.json", manifest["strategy"])
+    _write_json(decision_artifact, decisions)
+    if result is not None:
+        _write_json(result_artifact, result)
     _write_json(directory / "manifest.json", manifest)
     _write_json(directory / "reports" / "summary.json", {
         "run_id": run_id,
+        "workspace": workspace.name,
+        "mode": args.mode,
+        "entrypoint": entrypoint_ref,
         "passed": True,
-        "target_hash": target_hash,
-        **({"feed_runtime_execution": feed_runtime_execution} if feed_runtime_execution else {}),
-        **({"strategy_decision_execution": strategy_decision_execution} if strategy_decision_execution else {}),
+        "decisions_count": len(decisions) if isinstance(decisions, list) else int(decisions is not None),
+        "result_artifact": str(result_artifact) if result is not None else None,
     })
-    return {**manifest, "workspace": str(directory), "manifest": str(directory / "manifest.json")}
+    return {
+        **manifest,
+        "workspace_root": str(workspace.root),
+        "run_workspace": str(directory),
+        "manifest": str(directory / "manifest.json"),
+    }
+
+
+def _parse_run_params(values: Iterable[str]) -> dict[str, str]:
+    params: dict[str, str] = {}
+    for item in values:
+        if "=" not in item:
+            raise ValueError(f"run parameter must be key=value: {item!r}")
+        key, value = item.split("=", 1)
+        if not key.strip():
+            raise ValueError("run parameter key is required")
+        params[key.strip()] = value
+    return params
+
+
+def _load_run_entrypoint(ref: str, project_root: Path):
+    if ":" not in ref:
+        raise ValueError("strategy entrypoint must be module:callable")
+    module_name, callable_name = ref.split(":", 1)
+    if not module_name or not callable_name:
+        raise ValueError("strategy entrypoint must be module:callable")
+    root_text = str(project_root)
+    if root_text not in sys.path:
+        sys.path.insert(0, root_text)
+    module = importlib.import_module(module_name)
+    entrypoint = getattr(module, callable_name)
+    if not callable(entrypoint):
+        raise ValueError(f"strategy entrypoint is not callable: {ref}")
+    return module, callable_name, entrypoint
+
+
+def _validate_workspace_entrypoint_requirements(module: object, entrypoint: object, snapshot: dict[str, Any]) -> None:
+    requires = getattr(entrypoint, "REQUIRES", None) or getattr(module, "REQUIRES", None)
+    if not isinstance(requires, dict):
+        return
+    inputs = requires.get("inputs", {})
+    if not isinstance(inputs, dict):
+        return
+    bindings = snapshot.get("bindings", {})
+    missing = [name for name in inputs if name not in bindings]
+    if missing:
+        raise ValueError(f"workspace is missing strategy data bindings: {', '.join(sorted(missing))}")
+
+
+def _execute_workspace_strategy_entrypoint(entrypoint: object, workspace: object, params: dict[str, str], context: SimpleNamespace) -> dict[str, object]:
+    signature = inspect.signature(entrypoint)
+    positional = [
+        param
+        for param in signature.parameters.values()
+        if param.kind in {param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD}
+    ]
+    if len(positional) <= 1:
+        return {
+            "entrypoint_kind": "context_decide",
+            "decisions": _normalize_decisions(entrypoint(context)),
+            "result": None,
+        }
+
+    strategy = entrypoint(workspace, params)
+    if hasattr(strategy, "decide"):
+        return {
+            "entrypoint_kind": "workspace_strategy",
+            "decisions": _normalize_decisions(strategy.decide(context)),
+            "result": None,
+        }
+
+    decisions: list[object] = []
+    used_hooks = False
+    for hook, args in (
+        ("on_start", (context,)),
+        ("on_tick", (0, context)),
+        ("on_stop", (context,)),
+    ):
+        callback = getattr(strategy, hook, None)
+        if callable(callback):
+            used_hooks = True
+            decisions.extend(_normalize_decisions(callback(*args)))
+    if used_hooks:
+        return {
+            "entrypoint_kind": "workspace_lifecycle_strategy",
+            "decisions": decisions,
+            "result": None,
+        }
+    return {
+        "entrypoint_kind": "workspace_function",
+        "decisions": [],
+        "result": strategy,
+    }
+
+
+def _normalize_decisions(value: object) -> list[object]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def _json_fallback(value: object) -> object:
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        return str(value)
+
+
+def run_start(args) -> dict[str, object]:
+    return _run_start_workspace_entrypoint(args)
 
 
 def run_live_data_preflight(args) -> dict[str, object]:
@@ -3782,298 +2909,6 @@ def _run_data_bindings(values: Iterable[str]) -> tuple[tuple[str, str], ...]:
     return tuple(result)
 
 
-
-def _run_mode_composition(mode: str):
-    if mode == "study":
-        return study_composition()
-    if mode == "backtest":
-        return backtest_composition()
-    if mode == "historical-simulation":
-        return historical_simulation_composition()
-    if mode == "paper":
-        return paper_trading_composition("binance")
-    if mode == "live":
-        return live_composition("binance", "binance-live")
-    raise ValueError(f"unsupported run mode: {mode}")
-
-
-def _execute_feed_runtime(root: Path, run_directory: Path, mode: str, feed_plan, execution_plan, strategy_plan, strategy_target, args) -> dict[str, object]:
-    seconds = float(getattr(args, "feed_runtime_seconds", 0.0) or 0.0)
-    if seconds < 0:
-        raise ValueError("feed runtime seconds cannot be negative")
-    feed_runtime = None
-    if feed_plan is not None and getattr(args, "execute_feeds", False):
-        factory = getattr(args, "feed_runtime_factory", None)
-        if factory is None:
-            from kairospy.connectors.binance import BinanceRuntimeFeedFactory
-
-            factory = BinanceRuntimeFeedFactory(
-                root,
-                journal_root=run_directory / "feeds" / "binance",
-            )
-        feed_runtime = factory(feed_plan) if callable(factory) and not hasattr(factory, "build") else factory.build(feed_plan)
-
-    async def run() -> tuple[object, ...]:
-        paths = RuntimePaths.under(run_directory / "runtime")
-        runtime_store = SQLiteRuntimeStore(paths.runtime_database)
-        app = KairosApplication(
-            ApplicationConfig(_runtime_environment(mode), paths),
-            runtime_store,
-            runtime_id=f"run-feed-runtime:{run_directory.name}",
-        )
-        tasks = tuple(feed_runtime.managed_services) if feed_runtime is not None else ()
-        intent_bridge = _paper_intent_bridge(run_directory, mode, runtime_store) if (
-            strategy_plan is not None and getattr(args, "execute_strategy", False)
-        ) else None
-        if execution_plan is not None:
-            tasks += execution_plan.managed_services(_execution_gateway_runner_factory(run_directory, mode, intent_bridge))
-        strategy_bindings = {}
-        if strategy_plan is not None and getattr(args, "execute_strategy", False):
-            strategy_runner_factory, strategy_bindings = _strategy_runner_factory(
-                args, strategy_target, feed_runtime, run_directory, mode, intent_bridge,
-            )
-            tasks += strategy_plan.managed_services(strategy_runner_factory)
-        runtime = AsyncKairosRuntime(app, tasks)
-        await runtime.start()
-        try:
-            await asyncio.sleep(seconds)
-            return runtime.service_snapshots(), strategy_bindings, intent_bridge
-        finally:
-            await runtime.stop()
-
-    snapshots, strategy_bindings, intent_bridge = asyncio.run(run())
-    capture_releases = _register_feed_capture_releases(root, run_directory, feed_plan, feed_runtime) if feed_runtime is not None else []
-    return {
-        "executed": True,
-        "provider": "binance",
-        "duration_seconds": seconds,
-        **({"bundle_hash": feed_runtime.runtime_bundle.bundle_hash} if feed_runtime is not None else {}),
-        **({"execution_plan_hash": execution_plan.plan_hash} if execution_plan else {}),
-        **({"strategy_plan_hash": strategy_plan.plan_hash} if strategy_plan else {}),
-        "services": [
-            {
-                "name": item.name,
-                "criticality": item.criticality.value,
-                "status": item.status.value,
-                "attempts": item.attempts,
-                "restart_count": item.restart_count,
-                **({"last_fault": {
-                    "task_name": item.last_fault.task_name,
-                    "error_type": item.last_fault.error_type,
-                    "message": item.last_fault.message,
-                    "attempt": item.last_fault.attempt,
-                    "occurred_at": item.last_fault.occurred_at.isoformat(),
-                }} if item.last_fault else {}),
-            }
-            for item in snapshots
-        ],
-        "manifest_paths": {
-            service_id: str(path)
-            for service_id, path in getattr(feed_runtime, "manifest_paths", {}).items()
-        },
-        "strategy_bindings": {
-            key: value.manifest() for key, value in strategy_bindings.items()
-        },
-        **({"intent_execution_bridge": intent_bridge.manifest()} if intent_bridge is not None else {}),
-        "capture_releases": capture_releases,
-    }
-
-
-def _paper_intent_bridge(run_directory: Path, mode: str, runtime_store: SQLiteRuntimeStore):
-    if mode != "paper":
-        return None
-    from kairospy.application.strategy_runtime import PaperIntentExecutionBridge
-    from kairospy.domain.identity import AccountKey, AccountType, InstitutionId
-
-    account = AccountKey(InstitutionId("simulated"), f"{run_directory.name}-paper", AccountType.CRYPTO_SPOT)
-    return PaperIntentExecutionBridge(
-        account=account,
-        output_path=run_directory / "execution" / "paper-intent-bridge.json",
-        approved_capital=Decimal("100000"),
-        runtime_store=runtime_store,
-    )
-
-
-def _execute_strategy_model_decision(
-    root: Path,
-    run_directory: Path,
-    strategy_lock: dict[str, Any],
-    mode: str,
-) -> dict[str, object]:
-    if mode not in {"backtest", "historical-simulation"}:
-        raise ValueError("user model.py decision execution is only supported for backtest or historical-simulation")
-    model = strategy_lock.get("model")
-    if not isinstance(model, dict) or model.get("kind") != "user-model-code":
-        raise ValueError("strategy decision execution requires a user-model-code Strategy Lock")
-    if model.get("side_effects_allowed") is not False:
-        raise ValueError("strategy decision execution requires side_effects_allowed=false")
-    model_path_value = model.get("artifact_path") or model.get("path")
-    if not model_path_value:
-        raise ValueError("Strategy Lock user model is missing artifact_path")
-    model_path = Path(str(model_path_value))
-    if not model_path.exists():
-        raise FileNotFoundError(model_path)
-    module_name = f"kairospy_user_strategy_{sha256(str(model_path).encode()).hexdigest()[:12]}"
-    module = _load_user_module(model_path, module_name)
-    decide = getattr(module, "decide", None)
-    if not callable(decide):
-        raise ValueError("user strategy model.py must define decide(context)")
-    context = StrategyDecisionContext(root, strategy_lock)
-    try:
-        decision = _json_safe(decide(context))
-    except Exception as error:
-        diagnostic = _run_data_plane_diagnostic(strategy_lock, mode, error)
-        diagnostic_path = run_directory / "diagnostics" / "data_plane.json"
-        _write_json(diagnostic_path, diagnostic)
-        raise ValueError(
-            f"strategy model decision failed; data plane diagnostic: {diagnostic_path}"
-        ) from error
-    payload = {
-        "kind": "strategy.model_decision",
-        "schema_version": 1,
-        "strategy_id": strategy_lock.get("strategy_id"),
-        "mode": mode,
-        "model_code_hash": model.get("model_code_hash") or model.get("code_hash"),
-        "model_contract_hash": model.get("model_contract_hash"),
-        "context": context.manifest(),
-        "decision": decision,
-        "decided_at": _now(),
-    }
-    decision_hash = _stable_hash(payload)
-    artifact = run_directory / "strategy" / "decision.json"
-    _write_json(artifact, {**payload, "decision_hash": decision_hash})
-    return {
-        "executed": True,
-        "kind": "strategy.model_decision",
-        "artifact": str(artifact),
-        "decision_hash": decision_hash,
-        "model_code_hash": str(payload.get("model_code_hash") or ""),
-        "model_contract_hash": str(payload.get("model_contract_hash") or ""),
-    }
-
-
-def _run_data_plane_diagnostic(strategy_lock: dict[str, Any], mode: str, error: Exception) -> dict[str, object]:
-    message = str(error)
-    issue = "strategy_model_error"
-    next_action = "Inspect the strategy model error and rerun after fixing the declared input contract."
-    if "factor contract without materialized InputTable" in message:
-        issue = "factor_runtime_missing_input"
-        next_action = "Run kairospy study publish-factor for the referenced factor and refreeze the Study/Strategy."
-    elif "no dataset-readable data files" in message or isinstance(error, FileNotFoundError):
-        issue = "missing_history_release"
-        next_action = "Run kairospy data download or republish the Data Release so DatasetClient can materialize it."
-    elif "not declared" in message:
-        issue = "missing_dataset_fields"
-        next_action = "Declare the input in Strategy model metadata or bind the missing Data/Factor input before freeze."
-    checks = []
-    for name, item in sorted(strategy_lock.get("data", {}).items()):
-        checks.append({
-            "name": name,
-            "kind": "data",
-            "dataset": item.get("dataset"),
-            "release_id": item.get("release_id"),
-            "materialized": bool(item.get("release_id")),
-        })
-    for name, item in sorted(strategy_lock.get("inputs", {}).items()):
-        checks.append({
-            "name": name,
-            "kind": item.get("kind", "input"),
-            "dataset": item.get("dataset"),
-            "release_id": item.get("release_id"),
-            "materialization_status": item.get("materialization_status", "unknown"),
-            "materialized": bool(item.get("release_id") and item.get("dataset")),
-        })
-    return {
-        "kind": "run.data_plane_diagnostic",
-        "schema_version": 1,
-        "strategy_id": strategy_lock.get("strategy_id"),
-        "mode": mode,
-        "passed": False,
-        "issue": issue,
-        "error_type": type(error).__name__,
-        "message": message,
-        "next_action": next_action,
-        "inputs": checks,
-        "diagnosed_at": _now(),
-    }
-
-
-def _execution_gateway_runner_factory(run_directory: Path, mode: str, intent_bridge=None):
-    def factory(service):
-        if service.execution_driver != "simulated":
-            async def unbound() -> None:
-                raise RuntimeError(f"execution driver {service.execution_driver!r} has no runtime gateway bound")
-
-            return unbound
-
-        async def run() -> None:
-            from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
-            from kairospy.domain.identity import AccountKey, AccountType, InstitutionId, VenueId
-
-            environment = _runtime_environment(mode)
-            account = AccountKey(InstitutionId("simulated"), f"{run_directory.name}-paper", AccountType.CRYPTO_SPOT)
-            gateway = SimulatedExecutionAccountGateway(VenueId("simulated"), account, environment=environment)
-            if intent_bridge is not None:
-                await intent_bridge.run_gateway(gateway)
-                await asyncio.Event().wait()
-            while True:
-                gateway.account_state(account)
-                await asyncio.sleep(0.01)
-
-        return run
-
-    return factory
-
-
-def _strategy_runner_factory(args, strategy_target: dict[str, object], feed_runtime: object | None, run_directory: Path, mode: str, intent_bridge=None):
-    factory = getattr(args, "strategy_runtime_factory", None)
-    if factory is not None:
-        return factory, {}
-    from kairospy.application.strategy_runtime import strategy_runtime_runner_from_lock
-
-    return strategy_runtime_runner_from_lock(strategy_target, feed_runtime, run_directory, mode, intent_bridge)
-
-
-def _register_feed_capture_releases(root: Path, run_directory: Path, feed_plan, feed_runtime) -> list[dict[str, object]]:
-    results = []
-    for service in feed_plan.services:
-        capture_manifests = sorted((run_directory / "feeds").glob(f"**/{_safe_glob_part(service.service_id)}*.rotation.manifest.json"))
-        if not capture_manifests:
-            capture_manifests = sorted((run_directory / "feeds").glob("**/*.rotation.manifest.json"))
-        if not capture_manifests:
-            continue
-        release = register_live_capture_release(
-            root,
-            dataset_id=service.dataset,
-            capture_manifest_path=capture_manifests[-1],
-            run_id=run_directory.name,
-            live_view_id=service.live_view_id,
-            provider="binance",
-        )
-        manifest_path = root / release.relative_path / "data_release_manifest.json"
-        manifest = _read_json(manifest_path)
-        results.append({
-            "service_id": service.service_id,
-            "dataset": service.dataset,
-            "release_id": release.release_id,
-            "content_hash": release.content_hash,
-            "artifact_ref": manifest["artifact_ref"],
-            "data_release_manifest_hash": stable_artifact_hash(manifest),
-            "capture_manifest": str(capture_manifests[-1]),
-        })
-    return results
-
-
-def _safe_glob_part(value: str) -> str:
-    return "".join(character if character.isalnum() or character in {"-", "_"} else "-" for character in value)
-
-
-def _runtime_environment(mode: str) -> Environment:
-    if mode == "live":
-        return Environment.LIVE
-    return Environment.PAPER
-
-
 def run_inspect(args) -> dict[str, object]:
     manifest = _load_run_manifest(args.lake_root, args.run_id)
     return {**manifest, "artifact": str(_find_run_manifest(args.lake_root, args.run_id))}
@@ -4084,9 +2919,12 @@ def run_replay(args) -> dict[str, object]:
     if path is None:
         raise FileNotFoundError(args.run_id)
     manifest = _read_json(path)
-    snapshot = _read_json(path.with_name("snapshot.json"))
+    snapshot_path = path.with_name("workspace_snapshot.json")
+    if not snapshot_path.exists():
+        snapshot_path = path.with_name("snapshot.json")
+    snapshot = _read_json(snapshot_path)
     snapshot_hash = str(snapshot.get("lock_hash") or _stable_hash(snapshot))
-    expected = manifest["target"]["hash"]
+    expected = str(manifest.get("workspace", {}).get("snapshot_hash") or manifest.get("target", {}).get("hash") or "")
     passed = snapshot_hash == expected
     report = {"product": "run", "operation": "replay", "run_id": args.run_id, "passed": passed, "expected_hash": expected, "actual_hash": snapshot_hash}
     _write_json(path.parent / "replay.json", report)
@@ -4101,7 +2939,12 @@ def run_compare(args) -> dict[str, object]:
         "operation": "compare",
         "first": args.first,
         "second": args.second,
-        "same_target": first["target"] == second["target"],
+        "same_target": (
+            first.get("target") == second.get("target")
+            if "target" in first or "target" in second
+            else first.get("workspace") == second.get("workspace")
+            and first.get("strategy") == second.get("strategy")
+        ),
         "same_mode": first["mode"] == second["mode"],
     }
 
@@ -4205,157 +3048,6 @@ def _release_schema_fields(manifest: dict[str, Any], schema: dict[str, Any]) -> 
     return []
 
 
-def _study_evidence_chain(study: dict[str, Any]) -> dict[str, object]:
-    return {
-        "data": {
-            name: {
-                "dataset": item.get("dataset"),
-                "release_id": item.get("release_id"),
-                "content_hash": item.get("content_hash"),
-                "contract_hash": item.get("contract_hash"),
-                "manifest_hash": item.get("manifest_hash"),
-                "artifact_ref": item.get("artifact_ref"),
-            }
-            for name, item in sorted(study.get("data", {}).items())
-        },
-        "factors": {
-            name: {
-                "code_hash": item.get("code_hash"),
-                "factor_contract_hash": item.get("factor_contract_hash"),
-                "parameters_hash": item.get("parameters_hash"),
-                "primary_time": item.get("primary_time"),
-                "point_in_time": item.get("point_in_time"),
-                "output_schema": item.get("output_schema"),
-                "runtime": item.get("runtime"),
-                "factor_run_hash": item.get("factor_run_hash"),
-                "factor_output_hash": item.get("factor_output_hash"),
-                "metadata_status": item.get("metadata_status"),
-                "strategy_eligible": item.get("strategy_eligible"),
-                "artifact_ref": item.get("artifact_ref"),
-                "contract": item.get("contract"),
-            }
-            for name, item in sorted(study.get("factors", {}).items())
-        },
-    }
-
-
-def _assert_strategy_study_consistency(strategy: dict[str, Any], study_lock: dict[str, Any]) -> None:
-    if strategy["derived_from"].get("lock_hash") != study_lock.get("lock_hash"):
-        raise ValueError("Strategy workspace must derive from the current Frozen Study Lock hash")
-    if strategy.get("data", {}) != study_lock.get("data", {}):
-        raise ValueError("Strategy data release evidence must match the Frozen Study Lock")
-    factors = study_lock.get("factors", {})
-    published_factors = study_lock.get("published_factors", {})
-    for name, input_spec in strategy.get("inputs", {}).items():
-        factor_name = input_spec.get("from_study_factor")
-        if factor_name not in factors:
-            raise ValueError(f"strategy input {name!r} references unknown Study factor {factor_name!r}")
-        factor = factors[factor_name]
-        if input_spec.get("source_hash") != factor.get("code_hash"):
-            raise ValueError(f"strategy input {name!r} factor hash does not match the Frozen Study Lock")
-        for key in ("factor_contract_hash", "parameters_hash"):
-            if factor.get(key) is not None and input_spec.get(key) != factor.get(key):
-                raise ValueError(f"strategy input {name!r} {key} does not match the Frozen Study Lock")
-        if factor.get("metadata_status") == "declared" and input_spec.get("strategy_eligible") is not True:
-            raise ValueError(f"strategy input {name!r} factor is not strategy eligible")
-        published = published_factors.get(factor_name)
-        if isinstance(published, dict) and input_spec.get("materialization_status") == "published_feature":
-            for key in ("factor_run_hash", "factor_output_hash"):
-                if published.get(key) is not None and input_spec.get(key) != published.get(key):
-                    raise ValueError(f"strategy input {name!r} {key} does not match the published Feature evidence")
-
-
-def _run_input_artifacts(target_kind: str, target: dict[str, Any]) -> dict[str, object]:
-    if target_kind == "study":
-        return _study_evidence_chain(target)
-    data = {
-        name: {
-            "dataset": item.get("dataset"),
-            "release_id": item.get("release_id"),
-            "content_hash": item.get("content_hash"),
-            "contract_hash": item.get("contract_hash"),
-            "manifest_hash": item.get("manifest_hash"),
-            "artifact_ref": item.get("artifact_ref"),
-        }
-        for name, item in sorted(target.get("data", {}).items())
-    }
-    inputs = {
-        name: {
-            "kind": item.get("kind"),
-            "source_hash": item.get("source_hash"),
-            "factor_contract_hash": item.get("factor_contract_hash"),
-            "parameters_hash": item.get("parameters_hash"),
-            "primary_time": item.get("primary_time"),
-            "point_in_time": item.get("point_in_time"),
-            "output_schema": item.get("output_schema"),
-            "runtime": item.get("runtime"),
-            "materialization_status": item.get("materialization_status"),
-            "dataset": item.get("dataset"),
-            "release_id": item.get("release_id"),
-            "content_hash": item.get("content_hash"),
-            "contract_hash": item.get("contract_hash"),
-            "manifest_hash": item.get("manifest_hash"),
-            "quality_level": item.get("quality_level"),
-            "factor_run_hash": item.get("factor_run_hash"),
-            "factor_output_hash": item.get("factor_output_hash"),
-            "feature_artifact_ref": item.get("feature_artifact_ref"),
-            "artifact_ref": item.get("artifact_ref"),
-            "contract": item.get("contract"),
-        }
-        for name, item in sorted(target.get("inputs", {}).items())
-    }
-    return {"data": data, "inputs": inputs}
-
-
-def _run_target_workspace_evidence(
-    root: Path,
-    target_kind: str,
-    target_id: str,
-    target: dict[str, Any],
-    target_hash: str,
-) -> dict[str, object]:
-    if target_kind == "study":
-        source = _study_file(root, target_id)
-        current = _read_json(source) if source.exists() else {}
-        current_hash = _stable_hash(current) if current else ""
-        return {
-            "workspace_source": str(source),
-            "workspace_hash": current_hash,
-            "workspace_dirty": current_hash != target_hash,
-        }
-    source = _strategy_file(root, target_id)
-    if not source.exists():
-        return {
-            "workspace_source": str(source),
-            "workspace_hash": "",
-            "workspace_dirty": False,
-        }
-    current = _read_json(source)
-    return {
-        "workspace_source": str(source),
-        "workspace_hash": _stable_hash(current),
-        "workspace_dirty": _strategy_workspace_differs_from_lock(current, target),
-    }
-
-
-def _strategy_workspace_differs_from_lock(workspace: dict[str, Any], lock: dict[str, Any]) -> bool:
-    compared_fields = ("derived_from", "data", "inputs", "model", "risk", "execution")
-    return any(workspace.get(field, {}) != lock.get(field, {}) for field in compared_fields)
-
-
-def _paper_live_subscription_bindings(root: Path, target: dict[str, Any]) -> tuple[dict[str, object], ...]:
-    results = []
-    for name, data in sorted(target.get("data", {}).items()):
-        dataset = str(data.get("dataset") or "")
-        contract_hash = str(data.get("contract_hash") or "")
-        binding = resolve_live_view_subscription(
-            root, name=name, dataset_id=dataset, contract_hash=contract_hash,
-            policy=PAPER_LIVE_FRESHNESS_POLICY,
-        )
-        results.append(binding.to_primitive())
-    return tuple(results)
-
-
 def _register_written_release(
     root: Path,
     dataset_id: str,
@@ -4373,7 +3065,7 @@ def _register_written_release(
         description="User-written Data Product release",
         dimensions={"source": "user-write"},
         primary_time=primary_time,
-        sources=(SourceBinding("user-write", None, 100, QualityLevel.STUDY, ("file",)),),
+        sources=(SourceBinding("user-write", None, 100, QualityLevel.WORKSPACE, ("file",)),),
         owner="user",
     )
     spec = DataProductContract(
@@ -4382,7 +3074,7 @@ def _register_written_release(
         f"{dataset_id}.contract",
         storage_kind=DatasetStorageKind.TABULAR,
         quality_profile="generic",
-        minimum_publication_level=QualityLevel.STUDY,
+        minimum_publication_level=QualityLevel.WORKSPACE,
     )
     catalog = DataCatalog(root)
     catalog.register_product_spec(spec, enrich=True)
@@ -4413,8 +3105,8 @@ def _register_written_release(
         "user-write",
         None,
         (),
-        DatasetStatus.APPROVED_FOR_STUDY,
-        QualityLevel.STUDY,
+        DatasetStatus.APPROVED_FOR_WORKSPACE,
+        QualityLevel.WORKSPACE,
         _now(),
         DatasetStorageKind.TABULAR,
         "1",
@@ -4470,147 +3162,6 @@ def _read_contract(path: str | Path) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"contract/spec must be an object: {source}")
     return value
-
-
-def _read_policy_contract(path: str | Path, policy_kind: str) -> dict[str, Any]:
-    payload = _read_contract(path)
-    kind = payload.get("kind")
-    if kind not in (None, f"strategy.{policy_kind}", f"{policy_kind}.policy", f"{policy_kind}_policy"):
-        raise ValueError(f"{policy_kind} policy kind is not supported: {kind!r}")
-    body = payload.get(policy_kind) if isinstance(payload.get(policy_kind), dict) else payload
-    if not isinstance(body, dict) or not body:
-        raise ValueError(f"{policy_kind} policy must be a non-empty object")
-    _assert_json_serializable(body, f"{policy_kind} policy")
-    if policy_kind == "execution":
-        missing = [key for key in ("decision_time", "execution_time", "order_style") if not body.get(key)]
-        if missing:
-            raise ValueError(f"execution policy must declare: {', '.join(missing)}")
-    return _json_safe(body)
-
-
-def _strategy_model_contract(
-    strategy: dict[str, Any],
-    metadata_path: str | Path | None,
-    workspace_dir: Path,
-) -> dict[str, object]:
-    if metadata_path is None:
-        return {
-            "metadata_status": "missing",
-            "model_contract_hash": None,
-        }
-    source = _resolve_user_file(metadata_path, workspace_dir)
-    metadata = _read_contract(source)
-    inputs = _strategy_model_inputs(metadata)
-    available = set(strategy.get("inputs", {})) | set(strategy.get("data", {}))
-    unknown = sorted(set(inputs) - available)
-    if unknown:
-        raise ValueError(f"strategy model metadata references undeclared inputs: {', '.join(unknown)}")
-    input_contracts = _strategy_model_input_contracts(metadata)
-    _validate_strategy_model_input_contracts(strategy, input_contracts)
-    intent_schema = metadata.get("intent_schema") or metadata.get("outputs") or {}
-    if not isinstance(intent_schema, dict) or not intent_schema:
-        raise ValueError("strategy model metadata must declare intent_schema")
-    side_effects = bool(metadata.get("side_effects_allowed", False))
-    if side_effects:
-        raise ValueError("strategy model metadata must declare side_effects_allowed=false")
-    contract = {
-        "inputs": inputs,
-        "input_contracts": input_contracts,
-        "intent_schema": _json_safe(intent_schema),
-        "side_effects_allowed": False,
-        "parameters": _json_safe(metadata.get("parameters", {})),
-    }
-    _assert_json_serializable(contract, "strategy model metadata contract")
-    return {
-        "metadata_status": "declared",
-        "metadata_path": str(source),
-        "metadata": contract,
-        "inputs": inputs,
-        "input_contracts": input_contracts,
-        "intent_schema": contract["intent_schema"],
-        "side_effects_allowed": False,
-        "parameters": contract["parameters"],
-        "model_contract_hash": _stable_hash(contract),
-    }
-
-
-def _strategy_model_inputs(metadata: dict[str, Any]) -> list[str]:
-    raw_inputs = metadata.get("inputs")
-    if isinstance(raw_inputs, dict):
-        inputs = [str(key) for key in raw_inputs]
-    elif isinstance(raw_inputs, list):
-        inputs = [str(item) for item in raw_inputs]
-    else:
-        raise ValueError("strategy model metadata must declare inputs as an object or list")
-    if not inputs:
-        raise ValueError("strategy model metadata inputs must not be empty")
-    return sorted(inputs)
-
-
-def _strategy_model_input_contracts(metadata: dict[str, Any]) -> dict[str, object]:
-    raw_inputs = metadata.get("inputs")
-    if not isinstance(raw_inputs, dict):
-        return {}
-    contracts: dict[str, object] = {}
-    for name, value in sorted(raw_inputs.items()):
-        if value is None:
-            continue
-        if not isinstance(value, dict):
-            raise ValueError(f"strategy model input {name!r} contract must be an object")
-        contract: dict[str, object] = {}
-        raw_fields = value.get("fields") or value.get("required_fields")
-        if raw_fields is not None:
-            if not isinstance(raw_fields, list) or not raw_fields:
-                raise ValueError(f"strategy model input {name!r} fields must be a non-empty list")
-            contract["fields"] = [str(item.get("name") if isinstance(item, dict) else item) for item in raw_fields]
-        primary_time = value.get("primary_time")
-        if not primary_time and isinstance(value.get("time"), dict):
-            primary_time = value["time"].get("primary_time")
-        if primary_time:
-            contract["primary_time"] = str(primary_time)
-        if contract:
-            contracts[str(name)] = contract
-    return contracts
-
-
-def _validate_strategy_model_input_contracts(strategy: dict[str, Any], input_contracts: dict[str, object]) -> None:
-    if not input_contracts:
-        return
-    available: dict[str, Any] = {
-        **{str(name): value for name, value in strategy.get("data", {}).items() if isinstance(value, dict)},
-        **{str(name): value for name, value in strategy.get("inputs", {}).items() if isinstance(value, dict)},
-    }
-    for name, contract in sorted(input_contracts.items()):
-        if not isinstance(contract, dict):
-            continue
-        source = available.get(name)
-        if not isinstance(source, dict):
-            raise ValueError(f"strategy model input {name!r} is not bound")
-        expected_fields = [str(item) for item in contract.get("fields", [])]
-        if expected_fields:
-            fields = _strategy_input_fields(source)
-            if not fields:
-                raise ValueError(f"strategy model input {name!r} has no declared fields to validate")
-            missing = sorted(set(expected_fields) - set(fields))
-            if missing:
-                raise ValueError(f"strategy model input {name!r} is missing fields: {', '.join(missing)}")
-        expected_primary_time = contract.get("primary_time")
-        if expected_primary_time:
-            primary_time = str(source.get("primary_time") or source.get("output_schema", {}).get("primary_time") or "")
-            if not primary_time:
-                raise ValueError(f"strategy model input {name!r} has no declared primary_time to validate")
-            if str(expected_primary_time) != primary_time:
-                raise ValueError(
-                    f"strategy model input {name!r} primary_time mismatch: "
-                    f"expected {expected_primary_time!r}, got {primary_time!r}"
-                )
-
-
-def _strategy_input_fields(source: dict[str, Any]) -> list[str]:
-    raw_fields = source.get("fields")
-    if raw_fields is None and isinstance(source.get("output_schema"), dict):
-        raw_fields = source["output_schema"].get("fields")
-    return [str(item.get("name") if isinstance(item, dict) else item) for item in raw_fields or []]
 
 
 def _validate_download_key(key: str) -> str:
@@ -4697,95 +3248,6 @@ def _resolve_download_spec_file(value: str | Path, base: Path) -> Path:
     return path
 
 
-def _study_dir(root: str | Path, study_id: str) -> Path:
-    return ProductPaths(Path(root)).studies / study_id
-
-
-def _study_file(root: str | Path, study_id: str) -> Path:
-    return _study_dir(root, study_id) / "study.json"
-
-
-def _study_workspace_file(root: str | Path, study_id: str) -> Path:
-    return _study_dir(root, study_id) / "workspace.json"
-
-
-def _study_lifecycle_file(root: str | Path, study_id: str) -> Path:
-    return _study_dir(root, study_id) / "lifecycle.jsonl"
-
-
-def _write_study_state(root: str | Path, study_id: str, study: dict[str, Any]) -> None:
-    _write_json(_study_file(root, study_id), study)
-    manifest = {
-        "product": "study",
-        "kind": "study.workspace_manifest",
-        "schema_version": 1,
-        "study_id": study_id,
-        "status": study.get("status"),
-        "lifecycle": study.get("lifecycle", "DRAFT"),
-        "data_count": len(study.get("data", {})),
-        "factor_count": len(study.get("factors", {})),
-        "published_factor_count": len(study.get("published_factors", {})),
-        "latest_lock": study.get("latest_lock"),
-        "latest_lock_hash": study.get("latest_lock_hash"),
-        "updated_at": _now(),
-    }
-    _write_json(_study_workspace_file(root, study_id), manifest)
-
-
-def _append_study_lifecycle(
-    root: str | Path,
-    study_id: str,
-    event: str,
-    study: dict[str, Any],
-    extra: dict[str, object] | None = None,
-) -> None:
-    path = _study_lifecycle_file(root, study_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "product": "study",
-        "kind": "study.lifecycle_event",
-        "schema_version": 1,
-        "study_id": study_id,
-        "event": event,
-        "status": study.get("status"),
-        "lifecycle": study.get("lifecycle", "DRAFT"),
-        "at": _now(),
-        **(extra or {}),
-    }
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n")
-
-
-def _strategy_dir(root: str | Path, strategy_id: str) -> Path:
-    return ProductPaths(Path(root)).strategies / strategy_id
-
-
-def _strategy_file(root: str | Path, strategy_id: str) -> Path:
-    return _strategy_dir(root, strategy_id) / "strategy.json"
-
-
-def _load_study(root: str | Path, study_id: str) -> dict[str, Any]:
-    return _read_json(_study_file(root, study_id))
-
-
-def _load_strategy(root: str | Path, strategy_id: str) -> dict[str, Any]:
-    return _read_json(_strategy_file(root, strategy_id))
-
-
-def _study_material(root: str | Path, study_id: str, version: str | None = None) -> dict[str, Any]:
-    if version is None:
-        return _load_study(root, study_id)
-    return _load_study_lock(root, study_id, version)
-
-
-def _load_study_lock(root: str | Path, study_id: str, version: str) -> dict[str, Any]:
-    return _read_json(_study_dir(root, study_id) / "locks" / version / "study.lock.json")
-
-
-def _load_strategy_lock(root: str | Path, strategy_id: str, version: str) -> dict[str, Any]:
-    return _read_json(_strategy_dir(root, strategy_id) / "locks" / version / "strategy.lock.json")
-
-
 def _split_ref(value: str) -> tuple[str, str]:
     if "@" not in value:
         raise ValueError(f"reference must use name@version form: {value!r}")
@@ -4803,7 +3265,22 @@ def _workspace_arg(args) -> str:
 
 
 def _find_run_manifest(root: str | Path, run_id: str) -> Path | None:
-    matches = list((Path(root) / "runs").glob(f"*/{run_id}/manifest.json"))
+    root_path = Path(root)
+    candidates = [
+        root_path / ".kairos" / "run" / run_id / "manifest.json",
+        root_path.parent / "run" / run_id / "manifest.json",
+    ]
+    try:
+        from kairospy.configuration import KairosProjectConfig, PROJECT_STATE_DIR
+
+        project = KairosProjectConfig.discover(Path.cwd()).root
+        candidates.append(project / PROJECT_STATE_DIR / "run" / run_id / "manifest.json")
+    except Exception:
+        pass
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    matches = list((root_path / "runs").glob(f"*/{run_id}/manifest.json"))
     return matches[0] if matches else None
 
 

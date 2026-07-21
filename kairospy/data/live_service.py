@@ -35,7 +35,7 @@ class LiveDataService:
         if source.exists():
             connector_hash = sha256(source.read_bytes()).hexdigest()
             module = product_surface._load_user_module(source, f"kairospy_user_live_data_{connector_hash[:12]}")
-            product_surface._live_protocol_adapter(module)
+            product_surface._live_protocol_object(module)
             source_name = source.name
             source_path = str(source.resolve())
             primary_time = str(getattr(request_args, "time", None) or "timestamp")
@@ -54,7 +54,7 @@ class LiveDataService:
             if built_in.capability not in {"live", "both"}:
                 raise ValueError(f"built-in data product {built_in.key!r} is not a live source")
             protocols = default_builtin_protocol_registry(self.root, registry.list())
-            adapter = protocols.live(built_in.protocol_name)
+            protocol = protocols.live(built_in.protocol_name)
             connector_hash = sha256(built_in.protocol_name.encode("utf-8")).hexdigest()
             protocol_name = built_in.protocol_name
             provider = built_in.provider
@@ -64,7 +64,7 @@ class LiveDataService:
             source_path = None
             requested_time = str(getattr(request_args, "time", None) or "")
             primary_time = built_in.primary_time if requested_time in {"", "timestamp"} else requested_time
-            runtime_config = product_surface._live_runtime_config(adapter, LiveDataRequest(
+            runtime_config = product_surface._live_runtime_config(protocol, LiveDataRequest(
                 dataset_id,
                 account=getattr(request_args, "account", None),
                 instruments=tuple(getattr(request_args, "instrument", ()) or ()),
@@ -125,7 +125,7 @@ class LiveDataService:
             "historical": {
                 "status": "not_configured",
                 "ready_for": [],
-                "blocked_for": ["study", "backtest"],
+                "blocked_for": ["workspace", "backtest"],
                 "issues": [],
             },
             "live": {

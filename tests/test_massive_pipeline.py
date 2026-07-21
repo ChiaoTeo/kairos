@@ -14,7 +14,7 @@ from kairospy.pricing import OptionValuationService
 from kairospy.market_data import ParquetMarketEventRepository
 from kairospy.connectors.massive.datasets import MassiveOptionEventsDatasetConnector, MassiveOptionProductConfig
 from kairospy.data import AcquisitionRequest, DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, SourceBinding, TimeRange
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.market_data import MarketEventEnvelope, MarketEventType
 
 

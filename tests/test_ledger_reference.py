@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -8,10 +8,10 @@ import unittest
 from uuid import uuid4
 
 from kairospy.accounting.ledger import LedgerService
-from kairospy.domain.execution import TradeExecution, TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.domain.ledger import Ledger, LedgerBook
-from kairospy.domain.product import CryptoSpotSpec, ProductType
+from kairospy.trading.execution import TradeExecution, TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.trading.ledger import Ledger, LedgerBook
+from kairospy.trading.product import CryptoSpotSpec, ProductType
 from kairospy.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
 
 

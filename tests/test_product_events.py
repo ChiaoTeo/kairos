@@ -8,17 +8,17 @@ from uuid import uuid4
 from kairospy.accounting.conversion import AssetConversionGraph, ConversionRate
 from kairospy.accounting.ledger import LedgerService
 from kairospy.accounting.portfolio import Portfolio
-from kairospy.domain.corporate_action import (
+from kairospy.trading.corporate_action import (
     CorporateActionType, DelistingEvent, InstrumentExchangeEvent, StockDividendEvent, SymbolChangeEvent,
 )
-from kairospy.domain.derivative_event import DerivativeEventType, DerivativePositionEvent
-from kairospy.domain.event import EventEnvelope
-from kairospy.domain.execution import TradeExecution, TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
-from kairospy.domain.ledger import Ledger, LedgerBook
-from kairospy.domain.market_data import IndexPrice, VolatilitySurfacePoint
-from kairospy.domain.market_state import MarketState, apply_market_event
-from kairospy.domain.product import (
+from kairospy.trading.derivative_event import DerivativeEventType, DerivativePositionEvent
+from kairospy.trading.event import EventEnvelope
+from kairospy.trading.execution import TradeExecution, TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
+from kairospy.trading.ledger import Ledger, LedgerBook
+from kairospy.trading.market_data import IndexPrice, VolatilitySurfacePoint
+from kairospy.trading.market_state import MarketState, apply_market_event
+from kairospy.trading.product import (
     ContractType, EquitySpec, ExerciseStyle, FutureSpec, ListedOptionSpec, OptionRight,
     ProductType, SettlementSession, SettlementType,
 )

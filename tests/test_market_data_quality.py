@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.market_data import OptionMarketObservation, blocking_issues, validate_option_observation
 
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from kairospy.ports import ComboOrderRequest, OrderRequest
-from kairospy.domain.capability import ExecutionCapabilities
+from kairospy.trading.capability import ExecutionCapabilities
 
 
 class LeggingPolicy(StrEnum):

@@ -369,13 +369,6 @@ class ExecutableRunComposition:
     def composition_hash(self):return self.declaration.composition_hash
 
 
-def study_composition() -> RunModeComposition:
-    return RunModeComposition(
-        RunMode.STUDY, "frozen-release", "analysis", "none", "study-artifact",
-        "study-validation", CapturePolicy.NONE,
-    )
-
-
 def backtest_composition() -> RunModeComposition:
     return RunModeComposition(
         RunMode.BACKTEST, "frozen-release", "replay", "fill-model", "backtest-artifact",

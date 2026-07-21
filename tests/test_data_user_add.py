@@ -10,12 +10,14 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 from uuid import UUID
 
 from kairospy.contracts import CanonicalEventEnvelope, MarketEventKind, QuotePayload
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.__main__ import main
 from kairospy.market_data import CanonicalCaptureWriter
+from kairospy.connectors.massive.config import MassiveConfig
 from kairospy.product_surface import Data
 from kairospy.data import (
     BuiltInDataProductRegistry, BuiltInHistoricalDataProtocol, DataCatalog, DataProductContract,
@@ -34,7 +36,280 @@ def _live_manifest_path(root: str | Path, payload: dict[str, object]) -> Path:
     return manifests[-1]
 
 
+def _json_documents(text: str) -> list[dict[str, object]]:
+    decoder = json.JSONDecoder()
+    documents = []
+    index = 0
+    while index < len(text):
+        while index < len(text) and text[index].isspace():
+            index += 1
+        if index >= len(text):
+            break
+        document, index = decoder.raw_decode(text, index)
+        documents.append(document)
+    return documents
+
+
+def _require_optional_module(testcase: unittest.TestCase, module: str, message: str) -> None:
+    try:
+        __import__(module)
+    except ImportError:
+        testcase.skipTest(message)
+
+
 class DataUserAddTests(unittest.TestCase):
+    def test_providers_list_uses_provider_data_product_dataset_terms(self) -> None:
+        with TemporaryDirectory() as temporary:
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main([
+                    "--lake-root", temporary, "--format", "json",
+                    "providers", "list",
+                ]), 0)
+                payload = json.loads(output.getvalue())
+
+        self.assertEqual(payload["product"], "providers")
+        self.assertEqual(payload["operation"], "list")
+        self.assertIn("massive", {item["provider"] for item in payload["providers"]})
+        encoded = json.dumps(payload, sort_keys=True)
+        self.assertNotIn("ProviderConnector", encoded)
+        self.assertNotIn("DataProductBuilder", encoded)
+        self.assertNotIn("ProductSourceBinding", encoded)
+        self.assertNotIn("DatasetRelease", encoded)
+
+    def test_provider_doctor_reports_massive_daily_data_product_when_configured(self) -> None:
+        with TemporaryDirectory() as temporary:
+            with patch("kairospy.data.bootstrap._massive_config_for_project", return_value=MassiveConfig("test-key")):
+                with StringIO() as output, redirect_stdout(output):
+                    self.assertEqual(main([
+                        "--lake-root", temporary, "--format", "json",
+                        "providers", "doctor", "massive",
+                    ]), 0)
+                    payload = json.loads(output.getvalue())
+
+        products = {item["key"]: item for item in payload["data_products"]}
+        key = "market.ohlcv.equity.us.massive.1d.vendor_adjusted"
+        self.assertIn(key, products)
+        self.assertTrue(products[key]["available"])
+        self.assertEqual(products[key]["dataset"], key)
+        encoded = json.dumps(payload, sort_keys=True)
+        self.assertNotIn("connector_available", encoded)
+        self.assertNotIn("DatasetRelease", encoded)
+
+    def test_data_products_plural_list_matches_usage_command(self) -> None:
+        with TemporaryDirectory() as temporary:
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main([
+                    "--lake-root", temporary, "--format", "json",
+                    "data", "products", "list",
+                ]), 0)
+                payload = json.loads(output.getvalue())
+
+        self.assertEqual(payload["product"], "data")
+        self.assertEqual(payload["operation"], "product.list")
+        self.assertIn("market.ohlcv.equity.us.massive.1d.vendor_adjusted", {
+            item["key"] for item in payload["products"]
+        })
+
+    def test_data_products_doctor_resolves_alias_without_internal_terms(self) -> None:
+        with TemporaryDirectory() as temporary:
+            with patch("kairospy.data.bootstrap._massive_config_for_project", return_value=MassiveConfig("test-key")):
+                with StringIO() as output, redirect_stdout(output):
+                    self.assertEqual(main([
+                        "--lake-root", temporary, "--format", "json",
+                        "data", "products", "doctor", "massive.equity.ohlcv.1d",
+                    ]), 0)
+                    payload = json.loads(output.getvalue())
+
+        self.assertEqual(payload["operation"], "products.doctor")
+        self.assertEqual(payload["requested_key"], "massive.equity.ohlcv.1d")
+        self.assertEqual(payload["key"], "market.ohlcv.equity.us.massive.1d.vendor_adjusted")
+        self.assertEqual(payload["resolved_key"], "market.ohlcv.equity.us.massive.1d.vendor_adjusted")
+        self.assertTrue(payload["available"])
+        self.assertEqual(payload["dataset"], "market.ohlcv.equity.us.massive.1d.vendor_adjusted")
+        encoded = json.dumps(payload, sort_keys=True)
+        self.assertNotIn("ProviderConnector", encoded)
+        self.assertNotIn("DataProductBuilder", encoded)
+        self.assertNotIn("ProductSourceBinding", encoded)
+        self.assertNotIn("DatasetRelease", encoded)
+
+    def test_data_products_doctor_reports_unknown_product(self) -> None:
+        with TemporaryDirectory() as temporary:
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main([
+                    "--lake-root", temporary, "--format", "json",
+                    "data", "products", "doctor", "missing.product",
+                ]), 2)
+                payload = json.loads(output.getvalue())
+
+        self.assertEqual(payload["status"], "unknown_data_product")
+        self.assertEqual(payload["issues"][0]["code"], "unknown_data_product")
+        self.assertEqual(payload["next_commands"], ["kairospy data products list"])
+
+    def test_provider_doctor_includes_external_process_extension(self) -> None:
+        with TemporaryDirectory() as temporary:
+            config = Path(temporary) / "connectors.json"
+            config.write_text(json.dumps({
+                "provider_extensions": [{
+                    "kind": "external_process",
+                    "provider": "demo-process",
+                    "venue": "test",
+                    "command": [sys.executable, "-c", "print('{}')"],
+                    "products": [{
+                        "logical_key": "market.demo.process.signal",
+                        "title": "Demo process signal",
+                        "primary_time": "period_start",
+                        "fields": ["period_start", "symbol", "value"],
+                    }],
+                }],
+            }), encoding="utf-8")
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main([
+                    "--lake-root", temporary, "--format", "json",
+                    "providers", "doctor", "demo-process",
+                    "--provider-config", str(config),
+                ]), 0)
+                provider_payload = json.loads(output.getvalue())
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main([
+                    "--lake-root", temporary, "--format", "json",
+                    "data", "products", "doctor", "market.demo.process.signal",
+                    "--provider-config", str(config),
+                ]), 0)
+                product_payload = json.loads(output.getvalue())
+
+        self.assertEqual(provider_payload["provider"], "demo-process")
+        self.assertEqual(provider_payload["status"], "available")
+        self.assertEqual(provider_payload["data_products"][0]["key"], "market.demo.process.signal")
+        self.assertTrue(product_payload["available"])
+        self.assertEqual(product_payload["provider"], "demo-process")
+
+    def test_data_acquire_reports_dataset_without_release_id_for_external_process(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provider_script = root / "external_provider.py"
+            provider_script.write_text(
+                "\n".join([
+                    "import json",
+                    "from pathlib import Path",
+                    "__import__('sys').stdin.read()",
+                    "rows = Path('rows.csv')",
+                    "rows.write_text(",
+                    "    'period_start,symbol,value\\n'",
+                    "    '2026-01-01T00:00:00Z,AAPL,1.2\\n',",
+                    "    encoding='utf-8',",
+                    ")",
+                    "print(json.dumps({",
+                    "    'artifact_kind': 'source',",
+                    "    'files': [{'path': str(rows)}],",
+                    "    'fields': ['period_start', 'symbol', 'value'],",
+                    "    'row_count': 1,",
+                    "}))",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+            config = root / "connectors.json"
+            config.write_text(json.dumps({
+                "provider_extensions": [{
+                    "kind": "external_process",
+                    "provider": "demo-process",
+                    "venue": "test",
+                    "command": [sys.executable, provider_script.name],
+                    "products": [{
+                        "logical_key": "market.demo.process.signal",
+                        "title": "Demo process signal",
+                        "primary_time": "period_start",
+                        "fields": ["period_start", "symbol", "value"],
+                    }],
+                }],
+            }), encoding="utf-8")
+
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main([
+                    "--lake-root", temporary, "--format", "json",
+                    "data", "acquire",
+                    "--dataset", "market.demo.process.signal",
+                    "--start", "2026-01-01T00:00:00+00:00",
+                    "--end", "2026-01-02T00:00:00+00:00",
+                    "--provider", "demo-process",
+                    "--venue", "test",
+                    "--connector-config", str(config),
+                    "--instrument", "AAPL",
+                    "--yes",
+                ]), 0)
+                documents = _json_documents(output.getvalue())
+
+        payload = documents[-1]
+        self.assertEqual(payload["operation"], "acquire")
+        self.assertEqual(payload["dataset"], "market.demo.process.signal")
+        self.assertEqual(payload["status"], "ready_for_workspace")
+        self.assertEqual(payload["provider"], "demo-process")
+        self.assertNotIn("release_id", payload)
+        self.assertNotIn("DatasetRelease", json.dumps(payload))
+
+    def test_data_use_accepts_configured_external_process_product(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            provider_script = root / "external_provider.py"
+            provider_script.write_text(
+                "\n".join([
+                    "import json",
+                    "from pathlib import Path",
+                    "__import__('sys').stdin.read()",
+                    "rows = Path('rows.csv')",
+                    "rows.write_text(",
+                    "    'period_start,symbol,value\\n'",
+                    "    '2026-01-01T00:00:00Z,AAPL,1.2\\n',",
+                    "    encoding='utf-8',",
+                    ")",
+                    "print(json.dumps({",
+                    "    'artifact_kind': 'source',",
+                    "    'files': [{'path': str(rows)}],",
+                    "    'fields': ['period_start', 'symbol', 'value'],",
+                    "}))",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+            config = root / "connectors.json"
+            config.write_text(json.dumps({
+                "provider_extensions": [{
+                    "kind": "external_process",
+                    "provider": "demo-process",
+                    "venue": "test",
+                    "command": [sys.executable, provider_script.name],
+                    "products": [{
+                        "logical_key": "market.demo.process.signal",
+                        "title": "Demo process signal",
+                        "primary_time": "period_start",
+                        "fields": ["period_start", "symbol", "value"],
+                    }],
+                }],
+            }), encoding="utf-8")
+
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main([
+                    "--lake-root", temporary, "--format", "json",
+                    "data", "use", "market.demo.process.signal",
+                    "--as", "research.demo_process_signal",
+                    "--start", "2026-01-01T00:00:00+00:00",
+                    "--end", "2026-01-02T00:00:00+00:00",
+                    "--provider", "demo-process",
+                    "--venue", "test",
+                    "--provider-config", str(config),
+                    "--instrument", "AAPL",
+                ]), 0)
+                payload = json.loads(output.getvalue())
+            release_provider = DataCatalog(temporary).release("research.demo_process_signal").provider
+
+        self.assertEqual(payload["operation"], "use")
+        self.assertEqual(payload["dataset"], "research.demo_process_signal")
+        self.assertEqual(payload["data_product"], "market.demo.process.signal")
+        self.assertEqual(payload["historical"]["status"], "ready")
+        self.assertEqual(payload["provider"], "demo-process")
+        self.assertNotIn("release_id", json.dumps(payload))
+        self.assertEqual(release_provider, "demo-process")
+
     def test_data_help_prioritizes_product_paths_over_provider_diagnostics(self) -> None:
         completed = subprocess.run(
             [sys.executable, "-m", "kairospy", "data", "--help"],
@@ -63,6 +338,19 @@ class DataUserAddTests(unittest.TestCase):
         self.assertNotIn("soak-binance", completed.stdout)
         self.assertNotIn("provider-fetch", completed.stdout)
         self.assertNotIn("==SUPPRESS==", completed.stdout)
+
+    def test_data_use_help_prefers_provider_config_name(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-m", "kairospy", "data", "use", "--help"],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertIn("--provider-config", completed.stdout)
+        self.assertIn("PROVIDER_CONFIG", completed.stdout)
+        self.assertNotIn("--connector-config", completed.stdout)
+        self.assertNotIn("CONNECTOR_CONFIG", completed.stdout)
 
     def test_data_start_lists_onboarding_paths_without_executing(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -341,26 +629,16 @@ class DataUserAddTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["missing"], [])
 
-    def test_study_help_does_not_present_data_control_as_primary_path(self) -> None:
+    def test_top_level_help_does_not_present_removed_study_product(self) -> None:
         completed = subprocess.run(
-            [sys.executable, "-m", "kairospy", "study", "--help"],
+            [sys.executable, "-m", "kairospy", "--help"],
             cwd=Path(__file__).resolve().parents[1],
             text=True,
             capture_output=True,
             check=True,
         )
-        self.assertIn("open", completed.stdout)
-        self.assertIn("inspect", completed.stdout)
-        self.assertNotIn("start", completed.stdout)
-        self.assertNotIn("plan", completed.stdout)
-        self.assertNotIn("data", completed.stdout)
-        self.assertNotIn("profile", completed.stdout)
-        self.assertNotIn("capture", completed.stdout)
-        self.assertNotIn("governance-audit", completed.stdout)
-        self.assertNotIn("add-data", completed.stdout)
-        self.assertNotIn("add-factor", completed.stdout)
-        self.assertNotIn("factor-run", completed.stdout)
-        self.assertNotIn("publish-factor", completed.stdout)
+        self.assertNotIn("study", completed.stdout)
+        self.assertIn("data", completed.stdout)
 
     def test_builtin_registry_exposes_foundational_data_products_only(self) -> None:
         registry = BuiltInDataProductRegistry.from_default_products()
@@ -376,12 +654,12 @@ class DataUserAddTests(unittest.TestCase):
             "built_in.historical.market.ohlcv.crypto.binance.btc-usdt.1d",
         )
 
-    def test_builtin_protocol_registry_resolves_historical_adapter(self) -> None:
+    def test_builtin_protocol_registry_resolves_historical_protocol(self) -> None:
         with TemporaryDirectory() as temporary:
             products = BuiltInDataProductRegistry.from_default_products().list()
             protocols = default_builtin_protocol_registry(temporary, products)
-            adapter = protocols.historical("built_in.historical.market.ohlcv.crypto.binance.btc-usdt.1d")
-            self.assertIsInstance(adapter, BuiltInHistoricalDataProtocol)
+            protocol = protocols.historical("built_in.historical.market.ohlcv.crypto.binance.btc-usdt.1d")
+            self.assertIsInstance(protocol, BuiltInHistoricalDataProtocol)
 
     def test_data_use_builtin_historical_product_dry_run(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -398,7 +676,8 @@ class DataUserAddTests(unittest.TestCase):
                 payload = json.loads(output.getvalue())
 
         self.assertEqual(payload["dataset"], "research.btc_daily")
-        self.assertEqual(payload["built_in_dataset"], "market.ohlcv.crypto.binance.btc-usdt.1d")
+        self.assertEqual(payload["data_product"], "market.ohlcv.crypto.binance.btc-usdt.1d")
+        self.assertEqual(payload["default_dataset"], "market.ohlcv.crypto.binance.btc-usdt.1d")
         self.assertNotIn("source_kind", payload)
         self.assertEqual(payload["target_use"], "backtest")
         self.assertEqual(payload["time"], "period_start")
@@ -450,7 +729,8 @@ class DataUserAddTests(unittest.TestCase):
             capture_output=True,
             check=True,
         )
-        self.assertIn("data use --list-products", completed.stdout)
+        self.assertIn("data products list", completed.stdout)
+        self.assertIn("Data Product key or alias", completed.stdout)
         self.assertIn("product keys, titles, capabilities and account requirements", completed.stdout)
 
     def test_data_use_list_products_matches_product_list_text(self) -> None:
@@ -480,7 +760,8 @@ class DataUserAddTests(unittest.TestCase):
                 payload = json.loads(output.getvalue())
 
         self.assertEqual(payload["dataset"], "market.ohlcv.equity.us.1d")
-        self.assertEqual(payload["built_in_dataset"], "market.ohlcv.equity.us.massive.1d.vendor_adjusted")
+        self.assertEqual(payload["data_product"], "market.ohlcv.equity.us.massive.1d.vendor_adjusted")
+        self.assertEqual(payload["default_dataset"], "market.ohlcv.equity.us.massive.1d.vendor_adjusted")
         self.assertEqual(payload["provider"], "massive")
         self.assertEqual(payload["target_use"], "backtest")
 
@@ -500,6 +781,36 @@ class DataUserAddTests(unittest.TestCase):
         self.assertEqual(payload["issues"][0]["code"], "unknown_built_in_product")
         self.assertIn("massive.equity.ohlcv.1d", payload["aliases"])
         self.assertEqual(payload["next_command"], "kairospy data use --list-products")
+
+    def test_data_use_unknown_product_lists_provider_config_products(self) -> None:
+        with TemporaryDirectory() as temporary:
+            config = Path(temporary) / "providers.json"
+            config.write_text(json.dumps({
+                "provider_extensions": [{
+                    "kind": "external_process",
+                    "provider": "demo-process",
+                    "venue": "test",
+                    "command": [sys.executable, "-c", "print('{}')"],
+                    "products": [{
+                        "logical_key": "market.demo.process.signal",
+                        "title": "Demo process signal",
+                        "primary_time": "period_start",
+                        "fields": ["period_start", "symbol", "value"],
+                    }],
+                }],
+            }), encoding="utf-8")
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main([
+                    "--lake-root", temporary, "--format", "json",
+                    "data", "use", "unknown.product",
+                    "--provider-config", str(config),
+                    "--start", "2026-01-01T00:00:00+00:00",
+                    "--end", "2026-01-02T00:00:00+00:00",
+                    "--dry-run",
+                ]), 2)
+                payload = json.loads(output.getvalue())
+
+        self.assertIn("market.demo.process.signal", payload["known_keys"])
 
     def test_data_connect_unknown_live_product_reports_registered_keys_without_traceback(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -592,7 +903,7 @@ class DataUserAddTests(unittest.TestCase):
             self.assertEqual(payload["operation"], "list")
             self.assertEqual(payload["datasets"][0]["dataset"], "research.my_signal")
             self.assertEqual(payload["datasets"][0]["time"], "date")
-            self.assertIn("study", payload["datasets"][0]["ready_for"])
+            self.assertIn("workspace", payload["datasets"][0]["ready_for"])
             self.assertNotIn("layer", encoded)
             self.assertNotIn("release_id", encoded)
             self.assertNotIn("selected_release", encoded)
@@ -737,7 +1048,52 @@ class DataUserAddTests(unittest.TestCase):
             self.assertEqual(live_checked["source"], "my_live_protocol.py")
             self.assertNotIn(str(live), json.dumps(live_checked))
 
+    def test_data_protocol_accepts_protocol_object_without_adapter_naming(self) -> None:
+        with TemporaryDirectory() as temporary:
+            source = Path(temporary) / "object_protocol.py"
+            source.write_text(
+                "\n".join([
+                    "class SignalProtocol:",
+                    "    def load(self, request):",
+                    "        return [{'timestamp': '2026-01-01T00:00:00Z', 'symbol': 'AAPL', 'value': 1.0}]",
+                    "",
+                    "PROTOCOL = SignalProtocol()",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main([
+                    "--lake-root", temporary, "--format", "json",
+                    "data", "protocol", "check", str(source),
+                    "--kind", "historical",
+                    "--name", "research.object_protocol",
+                ]), 0)
+                payload = json.loads(output.getvalue())
+
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(payload["fields"], ["timestamp", "symbol", "value"])
+
+    def test_data_protocol_error_uses_protocol_naming_not_adapter(self) -> None:
+        with TemporaryDirectory() as temporary:
+            source = Path(temporary) / "empty_protocol.py"
+            source.write_text("VALUE = 1\n", encoding="utf-8")
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main([
+                    "--lake-root", temporary, "--format", "json",
+                    "data", "protocol", "check", str(source),
+                    "--kind", "historical",
+                ]), 2)
+                payload = json.loads(output.getvalue())
+
+        message = payload["issues"][0]["message"]
+        self.assertIn("PROTOCOL.load", message)
+        self.assertIn("get_protocol", message)
+        self.assertNotIn("ADAPTER", message)
+        self.assertNotIn("get_adapter", message)
+
     def test_data_exposes_list_metadata_replay_and_protocol(self) -> None:
+        _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
         with TemporaryDirectory() as temporary:
             source = Path(temporary) / "signals.csv"
             source.write_text("date,symbol,value\n2026-01-01,AAPL,1.2\n", encoding="utf-8")
@@ -779,7 +1135,7 @@ class DataUserAddTests(unittest.TestCase):
         self.assertEqual(payload["operation"], "apply")
         self.assertEqual(payload["status"], "ready")
         self.assertEqual(payload["datasets"][0]["dataset"], "research.api_signal")
-        self.assertEqual(doctor["status"], "ready_for_study")
+        self.assertEqual(doctor["status"], "ready_for_workspace")
 
     def test_data_matches_cli_dataset_naming_for_builtin_use(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -793,7 +1149,8 @@ class DataUserAddTests(unittest.TestCase):
             )
 
         self.assertEqual(payload["dataset"], "research.btc_daily")
-        self.assertEqual(payload["built_in_dataset"], "market.ohlcv.crypto.binance.btc-usdt.1d")
+        self.assertEqual(payload["data_product"], "market.ohlcv.crypto.binance.btc-usdt.1d")
+        self.assertEqual(payload["default_dataset"], "market.ohlcv.crypto.binance.btc-usdt.1d")
         self.assertEqual(payload["source_kind"], "built_in")
         self.assertEqual(payload["target_use"], "backtest")
 
@@ -1080,7 +1437,7 @@ class DataUserAddTests(unittest.TestCase):
                     connector=Connector(),
                 )
 
-    def test_data_is_product_workflow_entrypoint(self) -> None:
+    def test_data_api_is_user_entrypoint(self) -> None:
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "signals.csv"
@@ -1103,9 +1460,10 @@ class DataUserAddTests(unittest.TestCase):
             )
 
         self.assertEqual(added["dataset"], "research.client_signal")
-        self.assertEqual(added["historical"]["status"], "ready_for_study")
+        self.assertEqual(added["historical"]["status"], "ready_for_workspace")
         self.assertEqual(used["dataset"], "research.client_btc_daily")
-        self.assertEqual(used["built_in_dataset"], "market.ohlcv.crypto.binance.btc-usdt.1d")
+        self.assertEqual(used["data_product"], "market.ohlcv.crypto.binance.btc-usdt.1d")
+        self.assertEqual(used["default_dataset"], "market.ohlcv.crypto.binance.btc-usdt.1d")
         self.assertEqual(live["source_kind"], "built_in")
         self.assertEqual(live["runtime"]["stream"], "btcusdt@bookTicker")
 
@@ -1133,6 +1491,7 @@ class DataUserAddTests(unittest.TestCase):
         self.assertFalse(hasattr(reader, "connect_live"))
 
     def test_data_add_user_historical_protocol_registers_queryable_dataset(self) -> None:
+        _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
         with TemporaryDirectory() as temporary:
             connector = Path(temporary) / "my_signal_protocol.py"
             connector.write_text(
@@ -1163,7 +1522,7 @@ class DataUserAddTests(unittest.TestCase):
             self.assertEqual(payload["dataset"], "research.protocol_signal")
             self.assertNotIn("source_kind", payload)
             self.assertEqual(payload["time"], "timestamp")
-            self.assertEqual(payload["historical"]["status"], "ready_for_study")
+            self.assertEqual(payload["historical"]["status"], "ready_for_workspace")
 
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
@@ -1676,6 +2035,7 @@ class DataUserAddTests(unittest.TestCase):
                 ])
 
     def test_data_add_csv_infers_time_and_registers_queryable_dataset(self) -> None:
+        _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "signals.csv"
@@ -1690,7 +2050,7 @@ class DataUserAddTests(unittest.TestCase):
 
             self.assertEqual(payload["dataset"], "research.my_signal")
             self.assertEqual(payload["time"], "date")
-            self.assertEqual(payload["historical"]["status"], "ready_for_study")
+            self.assertEqual(payload["historical"]["status"], "ready_for_workspace")
             self.assertNotIn("source_kind", payload)
             self.assertNotIn("release_id", payload)
             self.assertNotIn("manifest_hash", payload)
@@ -1702,8 +2062,8 @@ class DataUserAddTests(unittest.TestCase):
                     "data", "doctor", "research.my_signal",
                 ]), 0)
                 doctor = json.loads(output.getvalue())
-            self.assertEqual(doctor["status"], "ready_for_study")
-            self.assertEqual(doctor["historical"]["ready_for"], ["study"])
+            self.assertEqual(doctor["status"], "ready_for_workspace")
+            self.assertEqual(doctor["historical"]["ready_for"], ["workspace"])
             self.assertNotIn("release_id", json.dumps(doctor))
             self.assertNotIn("selected_release", json.dumps(doctor))
             self.assertNotIn("live_view_id", json.dumps(doctor))
@@ -1742,7 +2102,7 @@ class DataUserAddTests(unittest.TestCase):
                 ]), 0)
                 description = json.loads(output.getvalue())
             self.assertEqual(description["dataset"], "research.my_signal")
-            self.assertEqual(description["status"], "ready_for_study")
+            self.assertEqual(description["status"], "ready_for_workspace")
             self.assertNotIn("manifest_hash", description)
             self.assertNotIn("content_hash", description)
 
@@ -1769,7 +2129,7 @@ class DataUserAddTests(unittest.TestCase):
             api_validation = Data(temporary).validate("research.my_signal")
             self.assertEqual(validation["dataset"], "research.my_signal")
             self.assertEqual(validation["status"], "passed")
-            self.assertEqual(validation["ready_for"], ["study"])
+            self.assertEqual(validation["ready_for"], ["workspace"])
             self.assertEqual(api_validation["status"], validation["status"])
             self.assertTrue(any(item["name"] == "non_empty" for item in validation["checks"]))
             self.assertNotIn("release_id", json.dumps(validation))
@@ -1977,7 +2337,7 @@ class DataUserAddTests(unittest.TestCase):
 
         self.assertEqual(payload["dataset"], "research.parquet_signal")
         self.assertEqual(payload["time"], "event_time")
-        self.assertEqual(payload["historical"]["status"], "ready_for_study")
+        self.assertEqual(payload["historical"]["status"], "ready_for_workspace")
         self.assertEqual(query["rows"][0]["symbol"], "AAPL")
         self.assertEqual(query["rows"][0]["value"], 1.2)
 
@@ -1999,7 +2359,7 @@ class DataUserAddTests(unittest.TestCase):
                     "data", "add", str(source), "--name", "tutorial.signal",
                 ]), 0)
                 added = json.loads(output.getvalue())
-            self.assertEqual(added["historical"]["status"], "ready_for_study")
+            self.assertEqual(added["historical"]["status"], "ready_for_workspace")
 
             rows = DatasetClient(temporary).load_rows("tutorial.signal")
             output_path = root / "outputs" / "signal.parquet"
@@ -2020,7 +2380,7 @@ class DataUserAddTests(unittest.TestCase):
                 ]), 0)
                 output_added = json.loads(output.getvalue())
             self.assertEqual(output_added["time"], "date")
-            self.assertEqual(output_added["historical"]["status"], "ready_for_study")
+            self.assertEqual(output_added["historical"]["status"], "ready_for_workspace")
 
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
@@ -2028,7 +2388,7 @@ class DataUserAddTests(unittest.TestCase):
                     "data", "doctor", "tutorial.signal_output",
                 ]), 0)
                 doctor = json.loads(output.getvalue())
-            self.assertEqual(doctor["status"], "ready_for_study")
+            self.assertEqual(doctor["status"], "ready_for_workspace")
             self.assertNotIn("release_id", doctor)
             self.assertNotIn("manifest_hash", doctor)
 
@@ -2041,6 +2401,8 @@ class DataUserAddTests(unittest.TestCase):
             self.assertIn("documents", audit["historical"]["releases"][0])
 
     def test_data_promote_dataset_for_backtest_updates_doctor_readiness(self) -> None:
+        _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
+        _require_optional_module(self, "duckdb", "query optional dependency is not installed")
         with TemporaryDirectory() as temporary:
             dataset = "market.ohlcv.crypto.test.btc-usdt.1d"
             rows = []
@@ -2098,8 +2460,8 @@ class DataUserAddTests(unittest.TestCase):
                 "test",
                 None,
                 (),
-                DatasetStatus.APPROVED_FOR_STUDY,
-                QualityLevel.STUDY,
+                DatasetStatus.APPROVED_FOR_WORKSPACE,
+                QualityLevel.WORKSPACE,
             ))
             catalog.save()
 
@@ -2110,7 +2472,7 @@ class DataUserAddTests(unittest.TestCase):
                 ]), 0)
                 promotion = json.loads(output.getvalue())
             self.assertEqual(promotion["status"], "ready_for_backtest")
-            self.assertEqual(promotion["ready_for"], ["study", "backtest"])
+            self.assertEqual(promotion["ready_for"], ["workspace", "backtest"])
 
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
@@ -2120,21 +2482,6 @@ class DataUserAddTests(unittest.TestCase):
                 doctor = json.loads(output.getvalue())
             self.assertEqual(doctor["status"], "ready_for_backtest")
             self.assertIn("backtest", doctor["ready_for"])
-
-            with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main([
-                    "--lake-root", temporary,
-                    "--backtest-root", str(Path(temporary) / "backtests"),
-                    "--format", "json",
-                    "backtest", "sma",
-                    "--dataset", dataset,
-                    "--fast", "5",
-                    "--slow", "20",
-                ]), 0)
-                backtest = json.loads(output.getvalue())
-            self.assertEqual(backtest["input"]["logical_key"], dataset)
-            self.assertEqual(backtest["bars"], 365)
-            self.assertTrue(Path(backtest["artifact"]).exists())
 
     def test_data_add_requires_time_when_header_has_no_time_candidate(self) -> None:
         with TemporaryDirectory() as temporary:

@@ -7,9 +7,9 @@ from uuid import NAMESPACE_URL, uuid5
 
 from kairospy.accounting.ledger import LedgerService
 from kairospy.execution.ingestion import DurableAccountingIngestionService
-from kairospy.domain.identity import AccountKey, AssetId, InstrumentId
-from kairospy.domain.ledger import LedgerBook, LedgerEntryType
-from kairospy.domain.product import CryptoOptionSpec, OptionRight
+from kairospy.trading.identity import AccountKey, AssetId, InstrumentId
+from kairospy.trading.ledger import LedgerBook, LedgerEntryType
+from kairospy.trading.product import CryptoOptionSpec, OptionRight
 from kairospy.reference.access import contract_spec, definition_at
 
 

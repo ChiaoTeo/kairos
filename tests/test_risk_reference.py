@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
 from kairospy.accounting.portfolio import PortfolioSnapshot, Position
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.domain.product import ContractType, PerpetualSpec, ProductType
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.trading.product import ContractType, PerpetualSpec, ProductType
 from kairospy.reference import (
     BrokerId, EconomicProduct, ExecutionRoute, InstrumentDefinition,
     InstrumentLifecycle, InstrumentReference, ListingDefinition, ListingId,

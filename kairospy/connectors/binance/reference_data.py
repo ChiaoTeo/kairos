@@ -6,9 +6,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.ports import ReferenceDataRequest
-from kairospy.domain.capability import ReferenceCapabilities
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.product import (
+from kairospy.trading.capability import ReferenceCapabilities
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.product import (
     ContractType,
     CryptoOptionSpec,
     CryptoSpotSpec,

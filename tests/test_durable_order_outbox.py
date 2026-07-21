@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 import asyncio
 from datetime import datetime, timezone
@@ -13,10 +13,10 @@ from kairospy.ports import OrderAck, OrderRequest
 from kairospy.ports import Environment
 from kairospy.application import ApplicationConfig, AsyncKairosRuntime, ManagedServiceSpec, RuntimePaths, KairosApplication
 from kairospy.application.clock import FixedClock
-from kairospy.domain.capability import OrderType
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, InstrumentId, VenueId
-from kairospy.domain.order import ExecutionInstructions, TimeInForce
+from kairospy.trading.capability import OrderType
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, InstrumentId, VenueId
+from kairospy.trading.order import ExecutionInstructions, TimeInForce
 from kairospy.execution.command import OutboxStatus
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher

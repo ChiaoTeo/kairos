@@ -20,7 +20,7 @@ class DataProductExperienceTests(unittest.TestCase):
         root = Path(directory)
         product = DataProductDefinition(
             DatasetKey("market.ohlcv.crypto.test.btc-usdt.1d"), "BTC daily test data", DatasetLayer.CANONICAL,
-            "Daily BTC/USDT bars for governed study and backtesting",
+            "Daily BTC/USDT bars for governed workspace and backtesting",
             {"asset_class": "crypto", "instrument": "BTC-USDT", "frequency": "1d"},
             "period_start", owner="data-platform",
         )
@@ -44,7 +44,7 @@ class DataProductExperienceTests(unittest.TestCase):
         catalog.save()
         return product, release
 
-    def test_search_describe_doctor_and_strict_health_form_a_product_workflow(self) -> None:
+    def test_search_describe_doctor_and_strict_health_form_a_data_workflow(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             product, release = self._lake(directory)
             report = DataDiagnosticsService(directory).audit()
@@ -79,10 +79,10 @@ class DataProductExperienceTests(unittest.TestCase):
                 rendered = output.getvalue()
                 self.assertIn(str(product.key), rendered)
                 self.assertNotIn("Release", rendered)
-            snapshot = Path(directory) / "studies" / "input_snapshot.json"
+            snapshot = Path(directory) / "workspace" / "test-workspace" / "data_snapshot.json"
             with StringIO() as output, redirect_stdout(output):
                 self.assertEqual(main([
-                    "--lake-root", directory, "data", "freeze", "--study-id", "test-study",
+                    "--lake-root", directory, "data", "freeze", "--workspace", "test-workspace",
                     "--dataset", release.release_id, "--output", str(snapshot),
                 ]), 0)
                 self.assertTrue(snapshot.exists())

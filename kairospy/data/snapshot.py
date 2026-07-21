@@ -9,7 +9,7 @@ from kairospy.storage.data_lake import write_json
 
 
 @dataclass(frozen=True, slots=True)
-class StudyInputSnapshot:
+class DataInputSnapshot:
     logical_key: str
     release_id: str
     content_hash: str
@@ -29,16 +29,16 @@ class StudyInputSnapshot:
     event_types: tuple[str, ...]
 
 
-def write_study_snapshot(path: str | Path, study_id: str, inputs: Iterable[StudyInputSnapshot], *,
-                         code_version: str, environment_hash: str | None = None) -> Path:
+def write_data_snapshot(path: str | Path, workspace: str, inputs: Iterable[DataInputSnapshot], *,
+                        code_version: str, environment_hash: str | None = None) -> Path:
     values = tuple(inputs)
-    if not study_id.strip() or not code_version.strip():
-        raise ValueError("study snapshot requires study_id and code_version")
+    if not workspace.strip() or not code_version.strip():
+        raise ValueError("data snapshot requires workspace and code_version")
     if not values:
-        raise ValueError("study snapshot requires at least one frozen input")
+        raise ValueError("data snapshot requires at least one frozen input")
     target = Path(path)
     write_json(target, {
-        "snapshot_schema_version": 1, "study_id": study_id,
+        "snapshot_schema_version": 1, "workspace": workspace,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "inputs": [asdict(item) for item in values],
         "code": {"version": code_version}, "environment": {"lock_hash": environment_hash},

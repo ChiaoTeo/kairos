@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid5
 
-from kairospy.domain.intent import TargetPositionIntent
-from kairospy.strategies import StrategyContext, StrategyDecision
+from kairospy.trading.intent import TargetPositionIntent
+from kairospy.strategy import StrategyContext, StrategyDecision
 
 
 @dataclass(frozen=True, slots=True)

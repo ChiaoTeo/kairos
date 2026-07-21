@@ -39,7 +39,7 @@ class GovernedArtifactAuditTests(unittest.TestCase):
             }), encoding="utf-8")
             self.assertIn("content hash mismatch", audit_governed_artifact(root, artifact).violations[0])
         with TemporaryDirectory() as root:
-            self._catalog(root, quality=QualityLevel.STUDY, status=DatasetStatus.APPROVED_FOR_STUDY)
+            self._catalog(root, quality=QualityLevel.WORKSPACE, status=DatasetStatus.APPROVED_FOR_WORKSPACE)
             artifact = Path(root) / "artifact.json"
             artifact.write_text(json.dumps({
                 "input": {"release_id": "ds_audit_q3", "content_hash": "frozen-hash"},

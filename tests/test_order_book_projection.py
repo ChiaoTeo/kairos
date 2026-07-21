@@ -6,9 +6,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairospy.contracts import canonical_from_domain_market_data
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.market_data import OrderBookDelta, OrderBookLevel, OrderBookSnapshot
+from kairospy.contracts import canonical_from_trading_market_data
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.market_data import OrderBookDelta, OrderBookLevel, OrderBookSnapshot
 from kairospy.market_data import (
     CanonicalCaptureWriter, CanonicalOrderBookProjection, CapturedCanonicalEventSource,
 )
@@ -19,7 +19,7 @@ NOW = datetime(2026, 7, 17, 12, tzinfo=timezone.utc)
 
 
 def canonical(value, receive_sequence: int):
-    return canonical_from_domain_market_data(
+    return canonical_from_trading_market_data(
         value, source="binance", source_instance="book-fixture", stream_id="btcusdt@depth",
         receive_time=value.event_time, published_time=value.event_time,
         receive_sequence=receive_sequence,

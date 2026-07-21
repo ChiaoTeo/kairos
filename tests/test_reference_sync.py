@@ -5,8 +5,8 @@ from decimal import Decimal
 import unittest
 
 from kairospy.ports import ReferenceDataRequest
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.product import CryptoSpotSpec, EquitySpec, ProductType
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.product import CryptoSpotSpec, EquitySpec, ProductType
 from kairospy.reference import (
     AssetDefinition, AssetType, ListingDefinition, ListingId, MappingTargetType,
     ProviderId, ProviderSymbolMapping, ReferenceCatalog, TradingRules,

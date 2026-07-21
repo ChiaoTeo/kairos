@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Iterable
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.storage.data_lake import write_json
 
 from .events import MarketEventEnvelope, MarketEventType
@@ -156,7 +156,7 @@ def _row(event: MarketEventEnvelope) -> dict[str, object]:
             "source_namespace": event.source_namespace, "source_instrument_id": event.source_instrument_id,
             "record_type": event.record_type.value, "source_order": event.source_order, "publisher_id": event.publisher_id,
             "flags_json": json.dumps(event.flags), "payload_json": json.dumps(payload, default=_json_default, sort_keys=True, separators=(",", ":")),
-            # Common study fields are physical columns so Arrow/DuckDB can prune and filter them.
+            # Common query fields are physical columns so Arrow/DuckDB can prune and filter them.
             "bid": _decimal_value(payload.get("bid")), "ask": _decimal_value(payload.get("ask")),
             "bid_size": _decimal_value(payload.get("bid_size")), "ask_size": _decimal_value(payload.get("ask_size")),
             "price": _decimal_value(payload.get("price")), "size": _decimal_value(payload.get("size")),

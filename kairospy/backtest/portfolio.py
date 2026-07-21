@@ -6,11 +6,11 @@ from decimal import Decimal
 from uuid import UUID, uuid5, NAMESPACE_URL
 
 from kairospy.accounting.ledger import LedgerService
-from kairospy.domain.execution import TradeExecution, TradeSide
-from kairospy.domain.identity import AccountKey, AssetId, InstrumentId
-from kairospy.domain.ledger import Ledger, LedgerBook
-from kairospy.domain.order import Fill, Settlement
-from kairospy.domain.product import is_option_spec, option_multiplier
+from kairospy.trading.execution import TradeExecution, TradeSide
+from kairospy.trading.identity import AccountKey, AssetId, InstrumentId
+from kairospy.trading.ledger import Ledger, LedgerBook
+from kairospy.trading.order import Fill, Settlement
+from kairospy.trading.product import is_option_spec, option_multiplier
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.access import contract_spec, definition_at, trade_cash_asset
 from kairospy.risk.option_structure import maximum_expiry_loss
@@ -76,7 +76,7 @@ class PortfolioSnapshot:
 
 
 class BacktestPortfolio:
-    """Ledger-backed portfolio used by study backtests and simulation."""
+    """Ledger-backed portfolio used by backtests and simulation."""
 
     def __init__(self, initial_cash: Decimal, catalog: ReferenceCatalog, account: AccountKey, cash_asset: AssetId = AssetId("USD")) -> None:
         if initial_cash <= 0:

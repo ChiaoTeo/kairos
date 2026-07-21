@@ -8,8 +8,8 @@ from kairospy.contracts import (
     BarPayload, CanonicalEventEnvelope, MarketEventKind, OrderBookDeltaPayload,
     OrderBookLevelPayload, OrderBookSnapshotPayload, QuotePayload,
 )
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.market_data import Bar
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.market_data import Bar
 
 
 @dataclass(slots=True)

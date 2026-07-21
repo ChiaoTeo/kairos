@@ -5,8 +5,8 @@ from decimal import Decimal
 from typing import Iterable, Mapping
 from uuid import NAMESPACE_URL, uuid5
 
-from kairospy.domain.corporate_action import CashDividendEvent, SplitEvent, SymbolChangeEvent
-from kairospy.domain.identity import AssetId, InstrumentId
+from kairospy.trading.corporate_action import CashDividendEvent, SplitEvent, SymbolChangeEvent
+from kairospy.trading.identity import AssetId, InstrumentId
 from kairospy.reference import ProviderId, ReferenceCatalog
 
 

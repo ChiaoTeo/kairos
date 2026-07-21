@@ -9,11 +9,11 @@ from uuid import UUID, uuid4
 
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.access import contract_spec, definition_at
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.market_data import Bar, OrderBookSnapshot, Quote, TradingState, TradingStatus
-from kairospy.domain.order import Fill, LegFill, Order, OrderStatus, TimeInForce
-from kairospy.domain.product import is_option_spec, option_multiplier
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.market_data import Bar, OrderBookSnapshot, Quote, TradingState, TradingStatus
+from kairospy.trading.order import Fill, LegFill, Order, OrderStatus, TimeInForce
+from kairospy.trading.product import is_option_spec, option_multiplier
 
 from .execution import combo_quote
 from .feed import MarketSnapshot

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -14,14 +14,14 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from kairospy.accounting.ledger import LedgerService
 from kairospy.ports import Environment
 from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
-from kairospy.domain.capability import OrderType, TimeInForce
-from kairospy.domain.execution import TradeExecution, TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.domain.intent import TargetPositionIntent
-from kairospy.domain.ledger import Ledger
-from kairospy.domain.market_data import Quote
-from kairospy.domain.order import ExecutionInstructions
-from kairospy.domain.product import CryptoSpotSpec, ProductType
+from kairospy.trading.capability import OrderType, TimeInForce
+from kairospy.trading.execution import TradeExecution, TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.trading.intent import TargetPositionIntent
+from kairospy.trading.ledger import Ledger
+from kairospy.trading.market_data import Quote
+from kairospy.trading.order import ExecutionInstructions
+from kairospy.trading.product import CryptoSpotSpec, ProductType
 from kairospy.reference import (
     AssetDefinition, AssetType, BrokerId, ExecutionRoute, ListingDefinition,
     ListingId, ReferenceCatalog, RouteId, TradingRules, VenueDefinition, VenueType,

@@ -21,7 +21,7 @@ from .modes import (
     RuntimeStrategyPlan, RuntimeStrategyServicePlan,
     backtest_composition, historical_simulation_composition,
     live_composition, paper_trading_composition, runtime_execution_plan,
-    runtime_feed_plan, runtime_strategy_plan, study_composition,
+    runtime_feed_plan, runtime_strategy_plan,
 )
 from .strategy_run_loop import (
     CanonicalBarMarketProjection, GovernedStrategyRunLoop, StrategyRunResult,
@@ -46,12 +46,8 @@ __all__ = [
     "RuntimeStrategyPlan", "RuntimeStrategyServicePlan",
     "backtest_composition", "historical_simulation_composition",
     "live_composition", "paper_trading_composition", "runtime_execution_plan",
-    "runtime_feed_plan", "runtime_strategy_plan", "study_composition",
+    "runtime_feed_plan", "runtime_strategy_plan",
     "CanonicalBarMarketProjection", "GovernedStrategyRunLoop", "StrategyRunResult",
-    "PaperIntentExecutionBridge", "RuntimeStrategyBinding", "RuntimeStrategyModelRegistry",
-    "RuntimeStrategyModelSpec", "builtin_runtime_strategy_model_registry", "strategy_runtime_runner_from_lock",
-    "HistoricalSimulationResult", "run_sma_historical_simulation",
-    "build_simulated_spot_catalog",
     "RunArtifact", "RunArtifactRepository",
     "ExecutionAttribution","PortfolioAttribution","RunAttribution","SignalAttribution","build_run_attribution",
     "ComponentBinding","ExecutableRunComposition",
@@ -68,19 +64,4 @@ __all__ += [
 
 
 def __getattr__(name: str):
-    if name in {
-        "PaperIntentExecutionBridge",
-        "RuntimeStrategyBinding",
-        "RuntimeStrategyModelRegistry",
-        "RuntimeStrategyModelSpec",
-        "builtin_runtime_strategy_model_registry",
-        "strategy_runtime_runner_from_lock",
-    }:
-        from . import strategy_runtime
-
-        return getattr(strategy_runtime, name)
-    if name in {"HistoricalSimulationResult", "build_simulated_spot_catalog", "run_sma_historical_simulation"}:
-        from . import historical_simulation
-
-        return getattr(historical_simulation, name)
     raise AttributeError(f"module 'kairospy.application' has no attribute {name!r}")

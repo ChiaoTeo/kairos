@@ -6,11 +6,11 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DOMAIN = ROOT / "kairospy" / "domain"
+TRADING = ROOT / "kairospy" / "trading"
 
 
 class ArchitectureBoundaryTests(unittest.TestCase):
-    def test_domain_does_not_depend_on_upper_layers(self) -> None:
+    def test_trading_model_does_not_depend_on_upper_layers(self) -> None:
         forbidden = {
             "kairospy.accounting",
             "kairospy.connectors",
@@ -22,14 +22,13 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             "kairospy.market_data",
             "kairospy.orchestration",
             "kairospy.pricing",
-            "kairospy.study_platform",
+            "kairospy.capture",
             "kairospy.risk",
             "kairospy.storage",
-            "kairospy.strategies",
             "kairospy.volatility",
         }
         violations: list[str] = []
-        for path in sorted(DOMAIN.glob("*.py")):
+        for path in sorted(TRADING.glob("*.py")):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
                 names: tuple[str, ...] = ()
@@ -40,21 +39,31 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                 for name in names:
                     if any(name == prefix or name.startswith(prefix + ".") for prefix in forbidden):
                         violations.append(f"{path.relative_to(ROOT)}:{node.lineno}: {name}")
-        self.assertEqual(violations, [], "domain has upper-layer dependencies:\n" + "\n".join(violations))
+        self.assertEqual(violations, [], "trading model has upper-layer dependencies:\n" + "\n".join(violations))
 
-    def test_strategy_runtime_contract_is_not_in_domain(self) -> None:
-        self.assertFalse((DOMAIN / "strategy.py").exists())
-        from kairospy.strategies.strategy_protocols import StrategyContext, StrategyDecision
+    def test_strategy_runtime_contract_is_not_in_trading_model(self) -> None:
+        self.assertFalse((TRADING / "strategy.py").exists())
+        from datetime import datetime, timezone
 
-        self.assertEqual(StrategyContext.__module__, "kairospy.strategies.strategy_protocols")
-        self.assertEqual(StrategyDecision.__module__, "kairospy.strategies.strategy_protocols")
+        from kairospy.strategy import (
+            StrategyContext,
+            StrategyDecision,
+            StrategyEvent,
+            StrategyEventKind,
+            StrategyProtocol,
+        )
 
-    def test_strategies_do_not_depend_on_removed_history_module(self) -> None:
-        violations = []
-        for path in sorted((ROOT / "kairospy" / "strategies").glob("*.py")):
-            if "kairospy.history" in path.read_text(encoding="utf-8"):
-                violations.append(str(path.relative_to(ROOT)))
-        self.assertEqual(violations, [])
+        self.assertEqual(StrategyContext.__module__, "kairospy.strategy.protocols")
+        self.assertEqual(StrategyDecision.__module__, "kairospy.strategy.protocols")
+        self.assertEqual(StrategyEvent.__module__, "kairospy.strategy.protocols")
+        self.assertEqual(StrategyProtocol.__module__, "kairospy.strategy.protocols")
+        event = StrategyEvent(StrategyEventKind.UNAVAILABLE, datetime(2026, 1, 1, tzinfo=timezone.utc))
+        decision = StrategyDecision.none(timestamp=event.timestamp, reason="runtime unavailable")
+        self.assertEqual(event.kind.value, "unavailable")
+        self.assertEqual(decision.action, "none")
+
+    def test_deleted_strategies_package_does_not_return(self) -> None:
+        self.assertFalse((ROOT / "kairospy" / "strategies").exists())
 
     def test_json_ledger_repository_is_removed(self) -> None:
         self.assertFalse((ROOT / "kairospy" / "accounting" / "repository.py").exists())
@@ -72,7 +81,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(violations, [], "old catalog code remains:\n" + "\n".join(violations))
 
     def test_only_current_reference_and_metadata_models_exist(self) -> None:
-        self.assertFalse((DOMAIN / "instrument.py").exists())
+        self.assertFalse((TRADING / "instrument.py").exists())
         self.assertFalse((ROOT / "kairospy" / "data" / ("metadata_" + "migration.py")).exists())
         self.assertFalse((ROOT / ("re" + "search") / ("btc_study_" + "governance.py")).exists())
 

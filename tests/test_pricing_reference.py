@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
 
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.product import (
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.product import (
     EquitySpec, ExerciseStyle, ListedOptionSpec, OptionRight, ProductType,
     SettlementSession, SettlementType,
 )

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from kairospy.domain.identity import AssetId
+from kairospy.trading.identity import AssetId
 
 
 @dataclass(frozen=True, slots=True)

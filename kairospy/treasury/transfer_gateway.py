@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
-from kairospy.domain.identity import AssetId
+from kairospy.trading.identity import AssetId
 
 from .transfer_contracts import TransferInstruction, TransferStatus
 

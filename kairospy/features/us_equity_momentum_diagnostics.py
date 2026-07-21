@@ -34,7 +34,7 @@ class UsEquityMomentumDiagnostics:
     def __init__(self, root: str | Path = DEFAULT_LAKE_ROOT) -> None:
         self.root = Path(root)
 
-    def report(self, *, study_id: str = "us-equity-momentum", version: str = "1.0.0") -> dict[str, object]:
+    def report(self, *, workspace: str = "us-equity-momentum", version: str = "1.0.0") -> dict[str, object]:
         register_default_products(self.root)
         catalog = DataCatalog(self.root)
         checks = [
@@ -42,7 +42,7 @@ class UsEquityMomentumDiagnostics:
             self._identity_mapping(),
             self._identity_reference_evidence(catalog),
             self._corporate_action_evidence(catalog),
-            self._study_snapshot(study_id, version),
+            self._workspace_snapshot(workspace, version),
             self._universe_missing_status(catalog),
             self._known_limitations_declared(catalog),
         ]
@@ -54,7 +54,7 @@ class UsEquityMomentumDiagnostics:
         return {
             "schema_version": 1,
             "package": "us-equity-momentum",
-            "ready_for_study": backtest_ready,
+            "ready_for_workspace": backtest_ready,
             "ready_for_backtest": backtest_ready and self._full_market_claim_ok(checks),
             "checks": [asdict(item) for item in checks],
             "summary": {
@@ -96,10 +96,10 @@ class UsEquityMomentumDiagnostics:
                         "reference.corporate_actions.equity.us.massive",
                         "reference.identity.equity.us.massive",
                     }
-                    else release.quality_level in {QualityLevel.STUDY, QualityLevel.BACKTEST, QualityLevel.PRODUCTION}
+                    else release.quality_level in {QualityLevel.WORKSPACE, QualityLevel.BACKTEST, QualityLevel.PRODUCTION}
                 )
                 and release.status in {
-                    DatasetStatus.APPROVED_FOR_STUDY,
+                    DatasetStatus.APPROVED_FOR_WORKSPACE,
                     DatasetStatus.APPROVED_FOR_BACKTEST,
                     DatasetStatus.APPROVED_FOR_PRODUCTION,
                 },
@@ -109,7 +109,7 @@ class UsEquityMomentumDiagnostics:
                     "quality_level": release.quality_level.value,
                     "status": release.status.value,
                 },
-                "Release meets its governed quality target and is approved for study use",
+                "Release meets its governed quality target and is approved for workspace use",
                 f"Run kairospy data validate --release {release.release_id}",
             ))
             directory = self.root / release.relative_path
@@ -168,16 +168,16 @@ class UsEquityMomentumDiagnostics:
             "Resolve identity quarantine before approving full-market releases",
         )
 
-    def _study_snapshot(self, study_id: str, version: str) -> UsEquityReadinessCheck:
-        path = self.root / "study-workspaces" / study_id / version / "input_releases.json"
+    def _workspace_snapshot(self, workspace: str, version: str) -> UsEquityReadinessCheck:
+        path = self.root / "workspace" / workspace / version / "input_releases.json"
         if not path.exists():
             return UsEquityReadinessCheck(
-                "study_fixed_inputs",
+                "workspace_fixed_inputs",
                 False,
                 "warning",
                 "missing",
-                "Study workspace pins all derived input releases",
-                "Run kairospy study start us-equity-momentum --dataset features.momentum.equity.us.1d",
+                "Workspace pins all derived input releases",
+                "Run kairospy workspace bind-data us-equity-momentum --dataset features.momentum.equity.us.1d",
             )
         values = json.loads(path.read_text(encoding="utf-8"))
         keys = {str(item.get("logical_key")) for item in values if isinstance(item, dict)}
@@ -195,12 +195,12 @@ class UsEquityMomentumDiagnostics:
         except KeyError:
             pass
         return UsEquityReadinessCheck(
-            "study_fixed_inputs",
+            "workspace_fixed_inputs",
             expected <= keys,
             "error",
             values,
-            "Study workspace pins returns, universe, liquidity, momentum and available reference release hashes",
-            "Recreate study workspace with study start after rebuilding inputs",
+            "Workspace pins returns, universe, liquidity, momentum and available reference release hashes",
+            "Recreate workspace data bindings after rebuilding inputs",
         )
 
     def _known_limitations_declared(self, catalog: DataCatalog) -> UsEquityReadinessCheck:
@@ -222,7 +222,7 @@ class UsEquityMomentumDiagnostics:
             "warning",
             limitations,
             "Known delisting, corporate action and full-market limitations are disclosed",
-            "Add known limitations to derived release quality metadata and study report",
+            "Add known limitations to derived release quality metadata and validation report",
         )
 
     def _identity_reference_evidence(self, catalog: DataCatalog) -> UsEquityReadinessCheck:
@@ -434,4 +434,4 @@ class UsEquityMomentumDiagnostics:
         for check in checks:
             if not check.passed:
                 return check.next_action
-        return "Ready for governed study; do not claim full-market backtest readiness until bounded/full-market limitations are removed"
+        return "Ready for governed workspace use; do not claim full-market backtest readiness until bounded/full-market limitations are removed"

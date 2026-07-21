@@ -4,7 +4,7 @@ from dataclasses import replace
 from decimal import Decimal
 from math import exp
 
-from kairospy.domain.product import OptionRight
+from kairospy.trading.product import OptionRight
 
 from .black import price_with_volatility
 from .option_pricing_contracts import ImpliedVolResult, PricingInput, PricingModel, SolverStatus

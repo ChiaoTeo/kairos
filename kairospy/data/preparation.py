@@ -42,12 +42,12 @@ class DataPromotionPolicyProfile:
     required_diagnostics: tuple[str, ...] = ()
 
 
-STUDY_DEFAULT_POLICY = DataPromotionPolicyProfile("study-default", QualityLevel.STUDY)
+WORKSPACE_DEFAULT_POLICY = DataPromotionPolicyProfile("workspace-default", QualityLevel.WORKSPACE)
 BACKTEST_DEFAULT_POLICY = DataPromotionPolicyProfile("backtest-default", QualityLevel.BACKTEST)
 PRODUCTION_DEFAULT_POLICY = DataPromotionPolicyProfile("production-default", QualityLevel.PRODUCTION)
 
 DATA_PROMOTION_POLICY_PROFILES: Mapping[str, DataPromotionPolicyProfile] = MappingProxyType({
-    STUDY_DEFAULT_POLICY.name: STUDY_DEFAULT_POLICY,
+    WORKSPACE_DEFAULT_POLICY.name: WORKSPACE_DEFAULT_POLICY,
     BACKTEST_DEFAULT_POLICY.name: BACKTEST_DEFAULT_POLICY,
     PRODUCTION_DEFAULT_POLICY.name: PRODUCTION_DEFAULT_POLICY,
 })
@@ -88,8 +88,8 @@ class DataPreparationService:
         if promote and _status_rank(release.status) < _status_rank(target):
             while _status_rank(release.status) < _status_rank(target):
                 next_status = {
-                    DatasetStatus.VALIDATED: DatasetStatus.APPROVED_FOR_STUDY,
-                    DatasetStatus.APPROVED_FOR_STUDY: DatasetStatus.APPROVED_FOR_BACKTEST,
+                    DatasetStatus.VALIDATED: DatasetStatus.APPROVED_FOR_WORKSPACE,
+                    DatasetStatus.APPROVED_FOR_WORKSPACE: DatasetStatus.APPROVED_FOR_BACKTEST,
                     DatasetStatus.APPROVED_FOR_BACKTEST: DatasetStatus.APPROVED_FOR_PRODUCTION,
                 }.get(release.status)
                 if next_status is None:
@@ -149,7 +149,7 @@ def _default_policy_profile(level: QualityLevel) -> DataPromotionPolicyProfile:
         return PRODUCTION_DEFAULT_POLICY
     if level is QualityLevel.BACKTEST:
         return BACKTEST_DEFAULT_POLICY
-    return STUDY_DEFAULT_POLICY
+    return WORKSPACE_DEFAULT_POLICY
 
 
 def data_promotion_policy_profile(name: str) -> DataPromotionPolicyProfile:
@@ -195,7 +195,7 @@ def _target_status(level: QualityLevel) -> DatasetStatus:
         return DatasetStatus.APPROVED_FOR_PRODUCTION
     if level is QualityLevel.BACKTEST:
         return DatasetStatus.APPROVED_FOR_BACKTEST
-    return DatasetStatus.APPROVED_FOR_STUDY
+    return DatasetStatus.APPROVED_FOR_WORKSPACE
 
 
 def _status_rank(status: DatasetStatus) -> int:
@@ -204,7 +204,7 @@ def _status_rank(status: DatasetStatus) -> int:
         DatasetStatus.REGISTERED: 0,
         DatasetStatus.VALIDATING: 0,
         DatasetStatus.VALIDATED: 1,
-        DatasetStatus.APPROVED_FOR_STUDY: 2,
+        DatasetStatus.APPROVED_FOR_WORKSPACE: 2,
         DatasetStatus.APPROVED_FOR_BACKTEST: 3,
         DatasetStatus.APPROVED_FOR_PRODUCTION: 4,
     }.get(status, -1)

@@ -9,8 +9,8 @@ from statistics import mean, pstdev
 from kairospy.backtest.portfolio import PortfolioSnapshot
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.access import contract_spec, definition_at
-from kairospy.domain.order import Fill, Order, OrderStatus, Settlement
-from kairospy.domain.product import is_option_spec, option_multiplier
+from kairospy.trading.order import Fill, Order, OrderStatus, Settlement
+from kairospy.trading.product import is_option_spec, option_multiplier
 
 from .result import EquityPoint
 from .feed import MarketSnapshot

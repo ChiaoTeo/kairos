@@ -9,11 +9,11 @@ Data 产品的用户心智只有几个概念：
 
 | 概念 | 含义 |
 |---|---|
-| Dataset | 一个稳定的数据名字，例如 `research.my_signal` |
+| Dataset | 一个稳定的数据名字，例如 `features.my_signal` |
 | Time | 数据的主时间字段，例如 `date`、`timestamp`、`event_time` |
 | Historical | 已经落地、可以查询或回放的历史数据 |
 | Live | 当前可以订阅、监控或采样的实时数据 |
-| Ready | 这份 Dataset 当前能不能用于 study、backtest、shadow、paper、live |
+| Ready | 这份 Dataset 当前能不能用于 workspace、backtest、shadow、paper、live |
 | Account | 实时或受限 provider 需要的账号/凭据引用 |
 
 普通使用不需要理解 release、manifest、hash、source cache、journal、lake path。默认 CLI 输出会隐藏这些内部证据；需要审计时再使用 `data audit --verbose`。
@@ -27,11 +27,11 @@ from kairospy.product_surface import Data
 
 data = Data(".kairos/data")
 
-data.add("signals.csv", name="research.my_signal")
-data.doctor("research.my_signal")
+data.add("signals.csv", name="features.my_signal")
+data.doctor("features.my_signal")
 
 reader = data.reader()
-rows = reader.get("research.my_signal").collect("rows")
+rows = reader.get("features.my_signal").collect("rows")
 ```
 
 `kairos.data.toml` 不是 Data 的必经入口。它只是可选的批量清单，适合 CI、项目 bootstrap、团队共享和一次性声明多个 Dataset。
@@ -43,30 +43,30 @@ rows = reader.get("research.my_signal").collect("rows")
 Python：
 
 ```python
-data.add("signals.csv", name="research.my_signal")
+data.add("signals.csv", name="features.my_signal")
 ```
 
 CLI：
 
 ```bash
-kairospy data add signals.csv --name research.my_signal
+kairospy data add signals.csv --name features.my_signal
 ```
 
 如果系统无法识别时间字段，会返回 `needs_time`，并提示可用字段和示例命令：
 
 ```bash
-kairospy data add signals.csv --name research.my_signal --time trade_day
+kairospy data add signals.csv --name features.my_signal --time trade_day
 ```
 
 ### 3.2 检查状态
 
 ```python
-doctor = data.doctor("research.my_signal")
+doctor = data.doctor("features.my_signal")
 print(doctor["status"])
 ```
 
 ```bash
-kairospy data doctor research.my_signal
+kairospy data doctor features.my_signal
 ```
 
 ## 4. 使用内置数据产品
@@ -174,7 +174,7 @@ from kairospy.data import OutputFormat
 
 reader = data.reader()
 rows = reader.get(
-    "research.my_signal",
+    "features.my_signal",
     start="2026-01-01T00:00:00+00:00",
     end="2026-02-01T00:00:00+00:00",
 ).collect(OutputFormat.ROWS)
@@ -183,7 +183,7 @@ rows = reader.get(
 不同用途可以有多个 reader，它们共享同一个 Data root，但有不同治理约束：
 
 ```python
-study = data.reader(run_mode="study")
+workspace = data.reader(run_mode="workspace")
 backtest = data.reader(run_mode="backtest")
 live = data.reader(run_mode="live")
 ```
@@ -191,8 +191,8 @@ live = data.reader(run_mode="live")
 CLI：
 
 ```bash
-kairospy data query research.my_signal --limit 10
-kairospy data replay research.my_signal --limit 20
+kairospy data query features.my_signal --limit 10
+kairospy data replay features.my_signal --limit 20
 ```
 
 ## 7. 可选：批量清单
@@ -203,7 +203,7 @@ kairospy data replay research.my_signal --limit 20
 [datasets.my_signal]
 kind = "file"
 source = "./signals.csv"
-dataset = "research.my_signal"
+dataset = "features.my_signal"
 
 [datasets.btc_orderbook]
 kind = "live"
@@ -263,7 +263,7 @@ kairospy data protocol check connectors/my_history.py --kind historical
 
 ```bash
 kairospy data add connectors/my_history.py \
-  --name research.vendor_signal \
+  --name features.vendor_signal \
   --protocol historical
 ```
 
@@ -271,23 +271,23 @@ kairospy data add connectors/my_history.py \
 
 ```bash
 kairospy data connect connectors/my_live.py \
-  --as research.live_signal \
+  --as market.live_signal \
   --account paper-feed \
   --instrument AAPL
 ```
 
 ## 9. 提升用途等级
 
-刚接入的文件数据通常是 `ready_for_study`。如果要用于 backtest，需要显式提升：
+刚接入的文件数据通常是 `ready_for_workspace`。如果要用于 backtest，需要显式提升：
 
 ```bash
-kairospy data promote research.my_signal --for backtest
+kairospy data promote features.my_signal --for backtest
 ```
 
 提升后再检查：
 
 ```bash
-kairospy data doctor research.my_signal
+kairospy data doctor features.my_signal
 ```
 
 ## 10. 审计
@@ -295,32 +295,33 @@ kairospy data doctor research.my_signal
 普通命令默认隐藏内部证据：
 
 ```bash
-kairospy data describe research.my_signal
-kairospy data doctor research.my_signal
-kairospy data query research.my_signal
-kairospy data replay research.my_signal
+kairospy data describe features.my_signal
+kairospy data doctor features.my_signal
+kairospy data query features.my_signal
+kairospy data replay features.my_signal
 ```
 
 需要追溯 exact evidence 时使用：
 
 ```bash
-kairospy data audit research.my_signal --verbose
+kairospy data audit features.my_signal --verbose
 ```
 
 `audit --verbose` 会展开 release id、content hash、manifest path、lineage、source cache、quality report，以及 live freshness evidence。
 
-## 11. 与 Study / Run 的边界
+## 11. 与 Workspace / Run 的边界
 
 Data 负责接入、检查、查询、回放数据。
 
-Study 是工作区，不负责添加或管理 Data。Study 后续只应该引用已经 ready 的 Dataset 和用户代码。
+Workspace 负责绑定已经准备好的 Dataset 和用户代码上下文，不负责重复下载或重复配置 Data。
 
 Run 使用 Dataset 名字消费数据：
 
 ```bash
-kairospy run paper \
-  --strategy sma-cross-v1@1.2.0 \
-  --data quote=market.quote.crypto.binance.btc-usdt
+kairospy run start \
+  --workspace alpha \
+  --mode paper \
+  --entrypoint my_strategies.sma_cross:build
 ```
 
 用户不需要传 LiveViewManifest、journal path、capture segment path。

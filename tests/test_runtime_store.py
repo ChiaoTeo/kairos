@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -12,12 +12,12 @@ from uuid import UUID
 
 from kairospy.accounting.ledger import LedgerService
 from kairospy.ports import OrderAck, OrderRequest
-from kairospy.domain.capability import OrderType
-from kairospy.domain.execution import TradeExecution, TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.domain.ledger import Ledger
-from kairospy.domain.order import ExecutionInstructions, TimeInForce
-from kairospy.domain.product import CryptoSpotSpec, ProductType
+from kairospy.trading.capability import OrderType
+from kairospy.trading.execution import TradeExecution, TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.trading.ledger import Ledger
+from kairospy.trading.order import ExecutionInstructions, TimeInForce
+from kairospy.trading.product import CryptoSpotSpec, ProductType
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 from kairospy.orchestration.kill_switch import KillSwitch

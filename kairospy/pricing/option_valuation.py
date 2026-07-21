@@ -5,11 +5,11 @@ from datetime import datetime
 from decimal import Decimal
 
 from kairospy.backtest.feed import MarketSnapshot
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.market_data import Greeks
-from kairospy.domain.product import ListedOptionSpec, ProductType, SettlementType
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.market_data import Greeks
+from kairospy.trading.product import ListedOptionSpec, ProductType, SettlementType
 from kairospy.market_data import OptionMarketObservation, blocking_issues, validate_option_observation
-from kairospy.study_platform.snapshot import InstrumentSnapshot
+from kairospy.capture.snapshot import InstrumentSnapshot
 from kairospy.volatility import SurfaceSnapshot, VolObservation, build_surface, surface_implied_volatility
 from kairospy.reference.catalog import ReferenceCatalog
 from kairospy.reference.contracts import ReferenceRole

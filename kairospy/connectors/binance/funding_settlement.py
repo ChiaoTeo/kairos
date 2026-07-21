@@ -5,8 +5,8 @@ from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid5
 
 from kairospy.ports import Environment
-from kairospy.domain.execution import FundingPayment
-from kairospy.domain.identity import AccountKey, AssetId, InstrumentId, VenueId
+from kairospy.trading.execution import FundingPayment
+from kairospy.trading.identity import AccountKey, AssetId, InstrumentId, VenueId
 
 from .request_signing import BinanceSigner
 from .rest_transport import BinanceTransport, RateLimiter

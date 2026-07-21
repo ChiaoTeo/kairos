@@ -7,9 +7,9 @@ import json
 import tempfile
 import unittest
 
-from kairospy.contracts import canonical_from_domain_market_data
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.market_data import Quote
+from kairospy.contracts import canonical_from_trading_market_data
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.market_data import Quote
 from kairospy.market_data import (
     CaptureResourceExceeded, RotatingCanonicalCaptureWriter,
     RotatingCapturedCanonicalEventSource,
@@ -22,7 +22,7 @@ NOW = datetime(2026, 7, 17, 12, tzinfo=timezone.utc)
 
 def event(index: int):
     at = NOW + timedelta(milliseconds=index)
-    return canonical_from_domain_market_data(
+    return canonical_from_trading_market_data(
         Quote(INSTRUMENT, Decimal("100"), Decimal("101"), Decimal("1"), Decimal("1"), at),
         source="binance", source_instance="rotation-fixture", stream_id="btcusdt@bookTicker",
         receive_time=at, published_time=at, source_sequence=index, receive_sequence=index,

@@ -134,11 +134,11 @@ class DataDiagnosticsService:
                 "backtest_quality_mismatch", "error", "backtest-approved release must be Q3 or Q4",
                 key, release.release_id,
             ))
-        if release.status is DatasetStatus.APPROVED_FOR_STUDY and release.quality_level not in {
-            QualityLevel.STUDY, QualityLevel.BACKTEST, QualityLevel.PRODUCTION,
+        if release.status is DatasetStatus.APPROVED_FOR_WORKSPACE and release.quality_level not in {
+            QualityLevel.WORKSPACE, QualityLevel.BACKTEST, QualityLevel.PRODUCTION,
         }:
             result.append(DataDiagnosticIssue(
-                "study_quality_mismatch", "error", "study-approved release must be Q2, Q3 or Q4",
+                "workspace_quality_mismatch", "error", "workspace-approved release must be Q2, Q3 or Q4",
                 key, release.release_id,
             ))
         if release.status is DatasetStatus.APPROVED_FOR_PRODUCTION and release.quality_level is not QualityLevel.PRODUCTION:
@@ -209,7 +209,7 @@ class DatasetReadinessService:
             return {
                 "status": "not_configured",
                 "ready_for": [],
-                "blocked_for": ["study", "backtest"],
+                "blocked_for": ["workspace", "backtest"],
                 "issues": [],
             }
         blocking_codes = {
@@ -217,7 +217,7 @@ class DatasetReadinessService:
             "missing_content_hash",
             "missing_quality",
             "backtest_quality_mismatch",
-            "study_quality_mismatch",
+            "workspace_quality_mismatch",
             "production_quality_mismatch",
             "release_storage_kind_mismatch",
             "release_layout_version_mismatch",
@@ -227,18 +227,18 @@ class DatasetReadinessService:
             return {
                 "status": "needs_fix",
                 "ready_for": [],
-                "blocked_for": ["study", "backtest"],
+                "blocked_for": ["workspace", "backtest"],
                 "issues": [item.code for item in errors],
             }
         best = sorted(releases, key=lambda item: item.published_at or item.release_version)[-1]
-        ready_for = ["study"]
+        ready_for = ["workspace"]
         blocked_for: list[str] = []
         if best.status is DatasetStatus.APPROVED_FOR_BACKTEST:
             ready_for.append("backtest")
         else:
             blocked_for.append("backtest")
         return {
-            "status": "ready_for_backtest" if "backtest" in ready_for else "ready_for_study",
+            "status": "ready_for_backtest" if "backtest" in ready_for else "ready_for_workspace",
             "ready_for": ready_for,
             "blocked_for": blocked_for,
             "issues": [],
@@ -304,7 +304,7 @@ class DatasetReadinessService:
             return "needs_fix"
         if live_views and live["status"] == "ready_for_paper":
             return "ready_for_paper"
-        if releases and historical["status"] in {"ready_for_study", "ready_for_backtest"}:
+        if releases and historical["status"] in {"ready_for_workspace", "ready_for_backtest"}:
             return str(historical["status"])
         if live_views:
             return str(live["status"])

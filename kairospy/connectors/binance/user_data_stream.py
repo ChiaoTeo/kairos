@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.ports import Environment
-from kairospy.domain.identity import AccountKey, AssetId, InstrumentId
+from kairospy.trading.identity import AccountKey, AssetId, InstrumentId
 
 from .rest_transport import BinanceTransport, RateLimiter
 

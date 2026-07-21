@@ -13,15 +13,15 @@ from kairospy.ports import (
     VenueOrderRecovery,
     VenueOrderStatus,
 )
-from kairospy.domain.capability import (
+from kairospy.trading.capability import (
     ExecutionCapabilities,
     MarginMode,
     OrderType,
     PositionMode,
 )
-from kairospy.domain.execution import TradeExecution, TradeSide
-from kairospy.domain.identity import AccountKey, AssetId, InstitutionId, InstrumentId, VenueId
-from kairospy.domain.product import ProductType
+from kairospy.trading.execution import TradeExecution, TradeSide
+from kairospy.trading.identity import AccountKey, AssetId, InstitutionId, InstrumentId, VenueId
+from kairospy.trading.product import ProductType
 
 from .request_signing import BinanceSigner
 from .rest_transport import BinanceTransport, RateLimiter
@@ -49,6 +49,7 @@ BINANCE_OPTIONS_EXECUTION_CAPABILITIES = ExecutionCapabilities(
 
 
 class BinanceExecutionGateway:
+    service_kind = "execution"
     institution_id = InstitutionId("binance")
     venue_id = VenueId("binance")
 
@@ -57,6 +58,7 @@ class BinanceExecutionGateway:
             raise ValueError("Binance execution requires testnet or live")
         if inverse and not futures:
             raise ValueError("inverse execution requires futures=True")
+        self.service_id = _binance_execution_service_id(futures=futures, inverse=inverse)
         self.transport, self.signer, self.environment, self.futures, self.inverse = transport, signer, environment, futures, inverse
         self.limiter = limiter or RateLimiter(1200, 60)
         self.instrument_symbols = dict(instrument_symbols or {})
@@ -186,6 +188,8 @@ class BinanceExecutionGateway:
 
 
 class BinanceOptionsExecutionGateway:
+    service_id = "options_execution"
+    service_kind = "execution"
     institution_id = InstitutionId("binance")
     venue_id = VenueId("binance")
     capabilities = BINANCE_OPTIONS_EXECUTION_CAPABILITIES
@@ -271,6 +275,14 @@ class BinanceOptionsExecutionGateway:
             return self.instrument_symbols[instrument_id]
         except KeyError as error:
             raise LookupError(f"Binance options symbol mapping unavailable for {instrument_id}") from error
+
+
+def _binance_execution_service_id(*, futures: bool, inverse: bool) -> str:
+    if inverse:
+        return "coinm_futures_execution"
+    if futures:
+        return "usdm_futures_execution"
+    return "spot_execution"
 
 
 def _binance_order_status(value: str) -> VenueOrderStatus:

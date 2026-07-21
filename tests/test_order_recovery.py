@@ -12,9 +12,9 @@ from kairospy.ports import (
     Environment, OrderAck, RecoveredExecution, VenueOrderRecovery, VenueOrderStatus,
 )
 from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
-from kairospy.domain.execution import TradeExecution, TradeSide
-from kairospy.domain.identity import AssetId, VenueId
-from kairospy.domain.ledger import Ledger
+from kairospy.trading.execution import TradeExecution, TradeSide
+from kairospy.trading.identity import AssetId, VenueId
+from kairospy.trading.ledger import Ledger
 from kairospy.execution.ingestion import DurableExecutionIngestionService
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.execution.recovery import VenueOrderRecoveryService

@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Callable, Protocol
 
-from kairospy.domain.identity import AccountKey
+from kairospy.trading.identity import AccountKey
 from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 
 from .clock import Clock, SystemClock

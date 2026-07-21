@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from kairospy.domain.capability import TimeInForce
+from kairospy.trading.capability import TimeInForce
 
 from .planner import LeggingPolicy
 

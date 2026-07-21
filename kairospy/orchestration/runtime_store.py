@@ -9,9 +9,9 @@ import sqlite3
 from typing import Iterator
 
 from kairospy.ports import ComboOrderRequest, OrderAck, OrderRequest
-from kairospy.domain.execution import TradeExecution
-from kairospy.domain.identity import AccountKey
-from kairospy.domain.ledger import Ledger, LedgerTransaction
+from kairospy.trading.execution import TradeExecution
+from kairospy.trading.identity import AccountKey
+from kairospy.trading.ledger import Ledger, LedgerTransaction
 from kairospy.execution.order_state import (
     DurableOrderRecord,
     DurableOrderStatus,
@@ -51,7 +51,7 @@ class DurableExecutionRecord:
 class SQLiteRuntimeStore:
     """Transactional local state for one execution runtime.
 
-    Market and study datasets remain in Parquet. This store owns small,
+    Market and workspace datasets remain in Parquet. This store owns small,
     transactional runtime facts whose uniqueness and crash consistency matter.
     """
 

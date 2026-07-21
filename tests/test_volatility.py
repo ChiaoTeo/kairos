@@ -8,8 +8,8 @@ from pathlib import Path
 
 from kairospy.data import DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease
 from kairospy.data.surface_features import SurfaceFeaturePublisher, load_surface_features
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.product import OptionRight
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.product import OptionRight
 from kairospy.volatility import CalibrationStatus, SviParameters, VolObservation, build_surface, surface_implied_volatility, total_variance
 
 

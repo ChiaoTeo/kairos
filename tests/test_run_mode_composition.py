@@ -8,7 +8,7 @@ import unittest
 from kairospy.application import (
     ApplicationConfig, AsyncKairosRuntime, KairosApplication, ManagedServiceStatus, RuntimePaths,
     RunModeComposition, RuntimeFeedServiceBundle, RuntimeStatus, backtest_composition,
-    historical_simulation_composition, live_composition, paper_trading_composition, study_composition,
+    historical_simulation_composition, live_composition, paper_trading_composition,
     runtime_execution_plan, runtime_feed_plan, runtime_strategy_plan,
 )
 from kairospy.ports import Environment
@@ -26,12 +26,12 @@ from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
     def test_all_promotion_modes_have_explicit_replaceable_dependencies(self) -> None:
         values = (
-            study_composition(), backtest_composition(), historical_simulation_composition(),
+            backtest_composition(), historical_simulation_composition(),
             paper_trading_composition("binance"), live_composition("binance", "binance-live"),
         )
 
         self.assertEqual([item.mode for item in values], [
-            RunMode.STUDY, RunMode.BACKTEST, RunMode.HISTORICAL_SIMULATION,
+            RunMode.BACKTEST, RunMode.HISTORICAL_SIMULATION,
             RunMode.PAPER_TRADING, RunMode.LIVE,
         ])
         self.assertEqual(len({item.composition_hash for item in values}), len(values))
@@ -41,7 +41,8 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
     def test_legacy_study_mode_alias_is_not_public_api(self) -> None:
         with self.assertRaises(ValueError):
             RunMode("re" + "search")
-        self.assertEqual(study_composition().mode, RunMode.STUDY)
+        with self.assertRaises(ValueError):
+            RunMode("study")
 
     def test_live_modes_fail_without_capture_or_persistence(self) -> None:
         with self.assertRaisesRegex(ValueError, "capture"):

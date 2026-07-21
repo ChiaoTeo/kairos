@@ -7,8 +7,8 @@ import json
 from pathlib import Path
 
 from kairospy.connectors.binance.market_stream import parse_market_stream_event
-from kairospy.contracts import canonical_from_domain_market_data
-from kairospy.domain.identity import InstrumentId
+from kairospy.contracts import canonical_from_trading_market_data
+from kairospy.trading.identity import InstrumentId
 from kairospy.storage.codec import to_primitive
 
 
@@ -22,7 +22,7 @@ def produce() -> tuple[dict[str, object], ...]:
         instrument = InstrumentId(vector["instrument_id"])
         value = parse_market_stream_event(vector["raw"], {vector["raw"]["s"]: instrument})
         receive_time = datetime.fromtimestamp(vector["raw"]["E"] / 1000, timezone.utc)
-        canonical = canonical_from_domain_market_data(
+        canonical = canonical_from_trading_market_data(
             value, source="binance", source_instance="reference-python-gateway",
             stream_id="btcusdt@bookTicker", receive_time=receive_time,
             published_time=receive_time, source_sequence=vector["raw"]["u"],

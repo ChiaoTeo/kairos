@@ -7,10 +7,10 @@ from enum import StrEnum
 from typing import Callable
 from uuid import UUID, uuid4
 
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.intent import CloseStructureIntent, Intent
-from kairospy.domain.order import Order, OrderStatus
-from kairospy.domain.product import is_option_spec
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.intent import CloseStructureIntent, Intent
+from kairospy.trading.order import Order, OrderStatus
+from kairospy.trading.product import is_option_spec
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.access import contract_spec, definition_at
 

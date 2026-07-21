@@ -15,7 +15,7 @@ from kairospy.data import (
     QualityLevel, DatasetClient, RunMode, SourceBinding, TimeRange,
     ConsolidatedTradeBuilder, ConsolidatedTradeInput, ConsolidatedTradePolicy,
 )
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.connectors.binance.datasets import BinanceSpotDatasetConnector
 from kairospy.market_data import MarketEventEnvelope, MarketEventType, ParquetMarketEventRepository
 from kairospy.storage.data_lake import write_daily_dataset, write_event_dataset
@@ -70,13 +70,13 @@ class DatasetClientTests(unittest.TestCase):
             catalog.register_release(DatasetRelease(
                 "ds_btc_1", product.key, "2026.07.16.1", "market.trade", "1", "binance.trades", "1",
                 "canonical/market/dataset=ds_btc_1", "parquet", "sha256:test", "binance", "binance",
-                ("btc-trades@study",), DatasetStatus.APPROVED_FOR_BACKTEST, QualityLevel.BACKTEST,
+                ("btc-trades@workspace",), DatasetStatus.APPROVED_FOR_BACKTEST, QualityLevel.BACKTEST,
             ))
             catalog.save()
             loaded = DataCatalog(temporary)
             self.assertEqual(loaded.product(product.key).dimensions["venue"], "binance")
             self.assertEqual(loaded.product(product.key).source_policy_version, "priority-v1")
-            self.assertEqual(loaded.release("btc-trades@study").release_id, "ds_btc_1")
+            self.assertEqual(loaded.release("btc-trades@workspace").release_id, "ds_btc_1")
             self.assertEqual(loaded.search(venue="binance"), (product,))
             client = DatasetClient(temporary)
             self.assertEqual(client.search(venue="binance"), (product,))
@@ -316,7 +316,7 @@ class DatasetClientTests(unittest.TestCase):
                                      primary_time="period_start")
             catalog.register_product(product)
             first = DatasetRelease("prices.v1", product.key, "1", "market.ohlcv.v1", "1", "test", "1",
-                                   "canonical/prices-v1", "parquet", "hash-1", aliases=("prices@study",))
+                                   "canonical/prices-v1", "parquet", "hash-1", aliases=("prices@workspace",))
             catalog.register_release(first); catalog.save()
             write_daily_dataset(
                 Path(temporary) / first.relative_path,
@@ -324,9 +324,9 @@ class DatasetClientTests(unittest.TestCase):
                 schema={"schema_id": first.schema_id, "primary_key": ["period_start"]}, lineage={"source": "test"},
             )
             client = DatasetClient(temporary)
-            query = client.get("prices@study", fields=("close",))
+            query = client.get("prices@workspace", fields=("close",))
             second = DatasetRelease("prices.v2", product.key, "2", "market.ohlcv.v1", "1", "test", "2",
-                                    "canonical/prices-v2", "parquet", "hash-2", aliases=("prices@study",))
+                                    "canonical/prices-v2", "parquet", "hash-2", aliases=("prices@workspace",))
             write_daily_dataset(
                 Path(temporary) / second.relative_path,
                 [{"period_start": "2026-01-01T00:00:00Z", "close": 2}], dataset_id=second.release_id,
@@ -334,7 +334,7 @@ class DatasetClientTests(unittest.TestCase):
             )
             client.catalog.register_release(second)
             self.assertEqual(query.collect(OutputFormat.ROWS), [{"close": 1}])
-            self.assertEqual(client.get("prices@study", fields=("close",)).collect(OutputFormat.ROWS), [{"close": 2}])
+            self.assertEqual(client.get("prices@workspace", fields=("close",)).collect(OutputFormat.ROWS), [{"close": 2}])
 
     def test_local_multi_source_selection_requires_matching_provider_and_venue(self):
         try:
@@ -571,9 +571,10 @@ class DatasetClientTests(unittest.TestCase):
             self.assertTrue((target / "release.json").exists())
             self.assertTrue((target / "usage.json").exists())
             query = DatasetClient(temporary).get(BTC_SPOT_DAILY.product, fields=("period_start", "close"))
-            snapshot_path = Path(temporary) / "studies" / "example" / "data_snapshot.json"
-            DatasetClient.freeze_study(snapshot_path, "example", (query,), code_version="test-commit")
+            snapshot_path = Path(temporary) / "workspace" / "example" / "data_snapshot.json"
+            DatasetClient.freeze_snapshot(snapshot_path, "example", (query,), code_version="test-commit")
             snapshot = json.loads(snapshot_path.read_text())
+            self.assertEqual(snapshot["workspace"], "example")
             self.assertEqual(snapshot["inputs"][0]["release_id"], release_id)
             self.assertEqual(snapshot["inputs"][0]["content_hash"], manifest["dataset_sha256"])
             self.assertEqual(snapshot["inputs"][0]["source_policy_version"], "priority-v1")
@@ -638,7 +639,7 @@ class DatasetClientTests(unittest.TestCase):
             catalog.register_release(DatasetRelease(
                 "quotes.test.v1", product.key, "1", "market.event_envelope", "1", "test", "1",
                 "canonical/market/dataset=quotes.test.v1", "parquet", str(manifest["dataset_sha256"]),
-                "massive", "opra", (), DatasetStatus.APPROVED_FOR_STUDY, QualityLevel.STUDY,
+                "massive", "opra", (), DatasetStatus.APPROVED_FOR_WORKSPACE, QualityLevel.WORKSPACE,
                 storage_kind=DatasetStorageKind.MARKET_EVENTS,
             )); catalog.save()
             client = DatasetClient(temporary)
@@ -670,11 +671,11 @@ class DatasetClientTests(unittest.TestCase):
             catalog.register_release(DatasetRelease(
                 "quotes.replay.v1", product.key, "1", "market.event_envelope", "1", "massive.quotes", "1",
                 "canonical/market/dataset=quotes.replay.v1", "parquet", str(manifest["dataset_sha256"]),
-                "massive", "opra", ("quotes@study",), DatasetStatus.APPROVED_FOR_BACKTEST,
+                "massive", "opra", ("quotes@workspace",), DatasetStatus.APPROVED_FOR_BACKTEST,
                 QualityLevel.BACKTEST, storage_kind=DatasetStorageKind.MARKET_EVENTS,
             )); catalog.save()
             client = DatasetClient(temporary, run_mode=RunMode.BACKTEST)
-            feed = client.replay("quotes@study", NOW, NOW + timedelta(seconds=2))
+            feed = client.replay("quotes@workspace", NOW, NOW + timedelta(seconds=2))
             first = tuple(item.event_key for item in feed)
             second = tuple(item.event_key for item in feed)
             self.assertEqual(first, second)
@@ -706,9 +707,9 @@ class DatasetClientTests(unittest.TestCase):
             product = DataProductDefinition(DatasetKey("market.events.test"), "Test events", DatasetLayer.CANONICAL)
             catalog.register_product(product)
             catalog.register_release(DatasetRelease(
-                "study-only", product.key, "1", "market.event", "1", "test", "1",
-                "canonical/market/dataset=study-only", "parquet", "hash", status=DatasetStatus.APPROVED_FOR_STUDY,
-                quality_level=QualityLevel.STUDY,
+                "workspace-only", product.key, "1", "market.event", "1", "test", "1",
+                "canonical/market/dataset=workspace-only", "parquet", "hash", status=DatasetStatus.APPROVED_FOR_WORKSPACE,
+                quality_level=QualityLevel.WORKSPACE,
             )); catalog.save()
             with self.assertRaisesRegex(PermissionError, "approved_for_backtest"):
                 DatasetClient(temporary, run_mode=RunMode.BACKTEST).get(product)
@@ -722,7 +723,7 @@ class DatasetClientTests(unittest.TestCase):
             catalog.register_product(product)
             catalog.register_release(DatasetRelease(
                 "promote-v1", product.key, "1", "market.event", "1", "test", "1", "canonical/test",
-                "parquet", "hash", status=DatasetStatus.APPROVED_FOR_STUDY,
+                "parquet", "hash", status=DatasetStatus.APPROVED_FOR_WORKSPACE,
                 quality_level=QualityLevel.BACKTEST,
             )); catalog.save()
             promoted = catalog.promote(
@@ -733,8 +734,8 @@ class DatasetClientTests(unittest.TestCase):
             self.assertIn("quality review passed", audit)
             with self.assertRaisesRegex(ValueError, "requires a higher quality"):
                 low = DatasetRelease("low", product.key, "2", "market.event", "1", "test", "1", "canonical/low",
-                    "parquet", "hash2", status=DatasetStatus.APPROVED_FOR_STUDY,
-                    quality_level=QualityLevel.STUDY)
+                    "parquet", "hash2", status=DatasetStatus.APPROVED_FOR_WORKSPACE,
+                    quality_level=QualityLevel.WORKSPACE)
                 catalog.register_release(low)
                 catalog.promote("low", DatasetStatus.APPROVED_FOR_BACKTEST, actor="test", reason="not enough")
 
@@ -747,10 +748,10 @@ class DatasetClientTests(unittest.TestCase):
             for version in ("1", "2"):
                 release = DatasetRelease(
                     f"alias-v{version}", product.key, version, "event", "1", "test", version,
-                    f"canonical/v{version}", "parquet", f"hash-{version}", status=DatasetStatus.APPROVED_FOR_STUDY,
+                    f"canonical/v{version}", "parquet", f"hash-{version}", status=DatasetStatus.APPROVED_FOR_WORKSPACE,
                 )
                 catalog.register_release(release); releases.append(release)
-            alias = f"{product.key}@study"
+            alias = f"{product.key}@workspace"
             catalog.promote_alias(alias, releases[0].release_id, actor="reviewer", reason="initial approval",
                                   quality_report_hash="quality-1")
             catalog.promote_alias(alias, releases[1].release_id, actor="reviewer", reason="new release approved",

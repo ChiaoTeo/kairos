@@ -4,7 +4,7 @@ from collections import defaultdict
 
 from kairospy.ports import MarketDataPort
 from kairospy.reference.contracts import InstrumentDefinition
-from kairospy.domain.product import ProductType
+from kairospy.trading.product import ProductType
 
 
 class CompositeMarketDataClient:

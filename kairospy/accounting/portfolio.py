@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from kairospy.domain.identity import AccountKey, AssetId, InstrumentId
-from kairospy.domain.ledger import Ledger, LedgerBook
+from kairospy.trading.identity import AccountKey, AssetId, InstrumentId
+from kairospy.trading.ledger import Ledger, LedgerBook
 from kairospy.products.calculators import PositionCalculatorRegistry
 from kairospy.reference import ReferenceCatalog, ReferenceRole
 

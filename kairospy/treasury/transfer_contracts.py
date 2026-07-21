@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import TypeAlias
 from uuid import UUID
 
-from kairospy.domain.identity import AccountKey, AssetId
+from kairospy.trading.identity import AccountKey, AssetId
 from kairospy.reference.identity import InstitutionId, LocationId, NetworkAssetId, NetworkId, RailId
 
 

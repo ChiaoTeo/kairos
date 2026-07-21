@@ -15,10 +15,10 @@ from kairospy.application import (
     ApplicationConfig, FixedClock, FunctionProbe, RuntimePaths, RuntimeRecoveryService, RuntimeStatus,
     KairosApplication,
 )
-from kairospy.domain.execution import TradeExecution, TradeSide
-from kairospy.domain.identity import AssetId, VenueId
-from kairospy.domain.ledger import Ledger
-from kairospy.domain.product import ContractType, FutureSpec, ProductType
+from kairospy.trading.execution import TradeExecution, TradeSide
+from kairospy.trading.identity import AssetId, VenueId
+from kairospy.trading.ledger import Ledger
+from kairospy.trading.product import ContractType, FutureSpec, ProductType
 from kairospy.execution.ingestion import DurableExecutionIngestionService
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.orchestration.runtime_store import SQLiteRuntimeStore

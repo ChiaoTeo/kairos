@@ -7,9 +7,9 @@ from enum import StrEnum
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from kairospy.accounting.ledger import LedgerService
-from kairospy.domain.identity import AccountKey, AssetId, InstrumentId
-from kairospy.domain.ledger import LedgerBook, LedgerEntryType
-from kairospy.domain.product import ListedOptionSpec, OptionRight, SettlementType
+from kairospy.trading.identity import AccountKey, AssetId, InstrumentId
+from kairospy.trading.ledger import LedgerBook, LedgerEntryType
+from kairospy.trading.product import ListedOptionSpec, OptionRight, SettlementType
 from kairospy.reference import ReferenceCatalog, SettlementMethod, SettlementTermsDefinition
 from kairospy.reference.access import contract_spec, definition_at, trade_cash_asset
 from kairospy.lifecycle import SettlementResolver

@@ -8,11 +8,11 @@ from hashlib import sha256
 import json
 from typing import Protocol
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.reference.catalog import ReferenceCatalog
 from kairospy.reference.contracts import EconomicProduct, InstrumentDefinition, InstrumentReference, SettlementTermsDefinition
 from kairospy.reference.repository import instrument_to_primitive
-from kairospy.study_platform.snapshot import DataQualityIssue, InstrumentSnapshot
+from kairospy.capture.snapshot import DataQualityIssue, InstrumentSnapshot
 from kairospy.storage.codec import to_primitive
 
 

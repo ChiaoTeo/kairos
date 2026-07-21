@@ -27,6 +27,7 @@ from .products import (
     US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
     US_EQUITY_MOMENTUM_DAILY, US_EQUITY_RETURNS_DAILY, US_EQUITY_UNIVERSE_DAILY,
 )
+from .provider_extensions import provider_extension_specs, register_provider_extensions
 
 
 DEFAULT_ACQUIRABLE_PRODUCTS = (
@@ -100,11 +101,27 @@ def default_provider_registry(root: str | Path = DEFAULT_LAKE_ROOT, *, connector
                 ),
             )
             providers.register(connector, (spec,))
+        register_provider_extensions(root, connector_config, providers)
     from kairospy.configuration import ConfigError
     try:
         from kairospy.connectors.massive.client import MassiveClient
-        from kairospy.connectors.massive.datasets import MassiveEquityHourlyOhlcvDatasetConnector
+        from kairospy.connectors.massive.datasets import (
+            MassiveEquityDailyMarketOhlcvDatasetConnector,
+            MassiveEquityHourlyOhlcvDatasetConnector,
+        )
         massive_config = _massive_config_for_project()
+        providers.register(
+            MassiveEquityDailyMarketOhlcvDatasetConnector(
+                root, MassiveClient(massive_config), view="raw",
+            ),
+            (US_EQUITY_MASSIVE_RAW_DAILY,),
+        )
+        providers.register(
+            MassiveEquityDailyMarketOhlcvDatasetConnector(
+                root, MassiveClient(massive_config), view="vendor_adjusted",
+            ),
+            (US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,),
+        )
         providers.register(
             MassiveEquityHourlyOhlcvDatasetConnector(
                 root, MassiveClient(massive_config), view="raw",
@@ -164,7 +181,7 @@ def configured_product_specs(config_path: str | Path) -> tuple[DataProductContra
             str(raw.get("primary_time", "available_time")),
             sources=(SourceBinding(
                 "massive", "us-securities", int(raw.get("priority", 100)),
-                QualityLevel(str(raw.get("source_quality_level", QualityLevel.STUDY.value))),
+                QualityLevel(str(raw.get("source_quality_level", QualityLevel.WORKSPACE.value))),
                 ("rest",),
             ),),
             owner=str(raw.get("owner", "data-platform")),
@@ -183,8 +200,9 @@ def configured_product_specs(config_path: str | Path) -> tuple[DataProductContra
             DatasetStorageKind(str(raw.get("storage_kind", DatasetStorageKind.TABULAR.value))),
             str(raw.get("layout_version", "1")),
             str(raw.get("quality_profile", "equity_ohlcv")),
-            QualityLevel(str(raw.get("minimum_publication_level", QualityLevel.STUDY.value))),
+            QualityLevel(str(raw.get("minimum_publication_level", QualityLevel.WORKSPACE.value))),
         ))
+    specs.extend(provider_extension_specs(config_path))
     return tuple(specs)
 
 

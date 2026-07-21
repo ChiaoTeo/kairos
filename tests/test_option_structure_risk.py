@@ -2,8 +2,8 @@ from datetime import datetime,timezone
 from decimal import Decimal
 import unittest
 
-from kairospy.domain.identity import AssetId
-from kairospy.domain.product import CryptoOptionSpec,ExerciseStyle,OptionRight
+from kairospy.trading.identity import AssetId
+from kairospy.trading.product import CryptoOptionSpec,ExerciseStyle,OptionRight
 from kairospy.risk.option_structure import maximum_expiry_loss
 
 

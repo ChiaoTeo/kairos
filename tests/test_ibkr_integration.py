@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 import os
 import unittest
@@ -9,8 +9,8 @@ from kairospy.ports import Environment
 from kairospy.connectors.ibkr.account_gateway import IbkrAccountGateway
 from kairospy.connectors.ibkr.session import IbkrSession
 from kairospy.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
-from kairospy.domain.identity import AccountKey, AccountType, VenueId
-from kairospy.study_platform.spec import OptionChainCaptureSpec
+from kairospy.trading.identity import AccountKey, AccountType, VenueId
+from kairospy.capture.spec import OptionChainCaptureSpec
 
 
 @unittest.skipUnless(os.getenv("RUN_IBKR_INTEGRATION") == "1", "set RUN_IBKR_INTEGRATION=1 to connect to IBKR")

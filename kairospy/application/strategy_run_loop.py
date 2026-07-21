@@ -8,14 +8,14 @@ from typing import Callable, Protocol
 
 from kairospy.backtest.feed import MarketSnapshot
 from kairospy.contracts import CanonicalEventEnvelope
-from kairospy.domain.strategy_contract import EconomicIntent
+from kairospy.trading.strategy_contract import EconomicIntent
 from kairospy.features.runtime import FactorRuntime, FactorSnapshot
 from kairospy.execution.intent_status import IntentExecutionTracker
 from kairospy.market_data.projections import CanonicalBarSeriesProjection
 from kairospy.market_data.stream import EventSource
 from kairospy.storage.codec import to_primitive
-from kairospy.strategies.strategy_protocols import StrategyContext, StrategyDecision
-from kairospy.strategies.runtime import GovernedStrategyRuntime
+from kairospy.strategy.protocols import StrategyContext, StrategyDecision
+from kairospy.strategy.runtime import GovernedStrategyRuntime
 
 
 @dataclass(frozen=True, slots=True)

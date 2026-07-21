@@ -51,8 +51,8 @@ def initialize_project(target: str | Path = ".", *, name: str | None = None, for
             "kairospy configure massive",
             "kairospy configure binance --environment testnet",
             "kairospy doctor",
-            "kairospy data catalog --refresh",
-            "python studies/starter.py",
+            "kairospy data start",
+            "kairospy workspace create alpha",
         ),
     )
     metadata = {**result.to_dict(), "root": ".", "kairospy_version": __version__}
@@ -94,8 +94,8 @@ def _directories() -> tuple[Path, ...]:
         Path(DEFAULT_LAKE_ROOT) / "curated",
         Path(DEFAULT_LAKE_ROOT) / "events",
         Path(DEFAULT_LAKE_ROOT) / "reference",
-        Path("studies"),
-        Path("strategies"),
+        Path(PROJECT_STATE_DIR) / "workspace",
+        Path(PROJECT_STATE_DIR) / "run",
     )
 
 
@@ -106,9 +106,6 @@ def _files(project_name: str) -> tuple[tuple[Path, str], ...]:
         (Path("pyproject.toml"), _pyproject_toml(project_name)),
         (Path(".gitignore"), _gitignore()),
         (Path("README.md"), _readme(project_name)),
-        (Path("studies/starter.py"), _starter_script()),
-        (Path("strategies/__init__.py"), ""),
-        (Path("strategies/starter_sma.py"), _starter_strategy()),
     )
 
 
@@ -161,11 +158,6 @@ timezone = "UTC"
 lake_root = "{DEFAULT_LAKE_ROOT}"
 default_quality = "Q2"
 default_provider = "auto"
-
-[study]
-default_study = "starter"
-default_dataset = "fixture:sma-bars-v1"
-default_strategy = "sma-cross-v1"
 
 [execution]
 default_environment = "simulated"
@@ -237,51 +229,19 @@ def _readme(project_name: str) -> str:
     title = project_name.replace("-", " ").replace("_", " ").title()
     return f"""# {title}
 
-This is a Kairos quantitative study, backtest, and execution project.
+This is a Kairos quantitative data, strategy code, and run project.
 
 ## Start
 
 ```bash
 export MASSIVE_API_KEY=...
 kairospy doctor
-python studies/starter.py
+kairospy data start
+kairospy workspace create alpha
 ```
 
-Kairos-managed data lives under `.kairos/data/`. Keep study code in `studies/` and reusable strategy code in `strategies/`.
+Kairos-managed data lives under `.kairos/data/`. Workspace bindings live under `.kairos/workspace/`,
+and run artifacts live under `.kairos/run/`. Keep your Python code in whichever source directory
+fits your project.
 Configure providers only in `kairos.toml`; credentials should normally be referenced with `env:VARIABLE_NAME`.
 """
-
-
-def _starter_script() -> str:
-    return '''from kairospy import BacktestRequest, BacktestRunner
-from kairospy.configuration import DEFAULT_LAKE_ROOT, KairosProjectConfig
-
-
-def main() -> None:
-    config = KairosProjectConfig.discover(__file__)
-    lake_root = config.relative_path("data.lake_root", DEFAULT_LAKE_ROOT)
-    request = BacktestRequest(
-        strategy="sma-cross-v1",
-        dataset="fixture:sma-bars-v1",
-        parameters={"fast": 5, "slow": 20},
-        artifact_root=lake_root / "backtests",
-    )
-    result = BacktestRunner(lake_root=lake_root).run(request)
-    print(result.summary())
-
-
-if __name__ == "__main__":
-    main()
-'''
-
-
-def _starter_strategy() -> str:
-    return '''"""Starter strategy parameters for local Kairos experiments."""
-
-STRATEGY_ID = "sma-cross-v1"
-PARAMETERS = {
-    "fast": 5,
-    "slow": 20,
-    "fee_bps": 10,
-}
-'''

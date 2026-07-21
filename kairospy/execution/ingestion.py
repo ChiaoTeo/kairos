@@ -4,7 +4,7 @@ from uuid import NAMESPACE_URL, uuid5
 
 from kairospy.accounting.ledger import LedgerService
 from kairospy.connectors.binance.user_data_stream import UserFillUpdate
-from kairospy.domain.execution import DividendPayment, FundingPayment, TradeExecution, TradeSide
+from kairospy.trading.execution import DividendPayment, FundingPayment, TradeExecution, TradeSide
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 

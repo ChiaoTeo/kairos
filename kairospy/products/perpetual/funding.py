@@ -5,9 +5,9 @@ from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid5
 
 from kairospy.accounting.ledger import LedgerService
-from kairospy.domain.execution import FundingPayment
-from kairospy.domain.identity import AccountKey, InstrumentId
-from kairospy.domain.product import ContractType, PerpetualSpec
+from kairospy.trading.execution import FundingPayment
+from kairospy.trading.identity import AccountKey, InstrumentId
+from kairospy.trading.product import ContractType, PerpetualSpec
 from kairospy.reference.access import contract_spec, definition_at
 
 

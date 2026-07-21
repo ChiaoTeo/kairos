@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from kairospy.ports import ComboOrderRequest, OrderAck, OrderRequest
 from kairospy.application.clock import Clock, SystemClock
-from kairospy.domain.intent import CancelIntent
-from kairospy.domain.identity import AccountKey
+from kairospy.trading.intent import CancelIntent
+from kairospy.trading.identity import AccountKey
 from kairospy.execution.router import ExecutionRouter
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.storage.codec import from_primitive

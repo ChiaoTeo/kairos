@@ -7,8 +7,8 @@ import tempfile
 import unittest
 
 from kairospy.application.recovery import RuntimeRecoveryService
-from kairospy.domain.identity import AssetId, InstrumentId
-from kairospy.domain.product import FutureSpec, ContractType, ProductType
+from kairospy.trading.identity import AssetId, InstrumentId
+from kairospy.trading.product import FutureSpec, ContractType, ProductType
 from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 from kairospy.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
 

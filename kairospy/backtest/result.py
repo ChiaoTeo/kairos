@@ -6,9 +6,9 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
-from kairospy.domain.intent import Intent
-from kairospy.domain.order import Fill, Order, Settlement
-from kairospy.strategies.strategy_protocols import StrategyDecision
+from kairospy.trading.intent import Intent
+from kairospy.trading.order import Fill, Order, Settlement
+from kairospy.strategy.protocols import StrategyDecision
 from kairospy.backtest.portfolio import PortfolioSnapshot
 from kairospy.risk.engine import RiskDecision
 

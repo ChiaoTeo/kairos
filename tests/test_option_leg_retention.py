@@ -7,11 +7,11 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from kairospy.backtest.feed import MarketSnapshot
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.market_data import Greeks, Quote
-from kairospy.domain.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from kairospy.study_platform.retention import DeltaLegWatchlist
-from kairospy.study_platform.snapshot import InstrumentSnapshot
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.market_data import Greeks, Quote
+from kairospy.trading.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairospy.capture.retention import DeltaLegWatchlist
+from kairospy.capture.snapshot import InstrumentSnapshot
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.contracts import InstrumentDefinition
 from tests.reference_support import publish_test_instrument
@@ -50,10 +50,10 @@ class OptionLegRetentionTests(unittest.TestCase):
         )
         market = MarketSnapshot(at, snapshots, ((InstrumentId("index:spx"), Decimal("6000")),), available_instruments=tuple(item.instrument_id for item in definitions))
         with tempfile.TemporaryDirectory() as directory:
-            watchlist = DeltaLegWatchlist(directory, "real-study")
+            watchlist = DeltaLegWatchlist(directory, "real-workspace")
             self.assertTrue(watchlist.observe(market, definitions))
             self.assertFalse(watchlist.observe(market, definitions))
-            restored = DeltaLegWatchlist(directory, "real-study")
+            restored = DeltaLegWatchlist(directory, "real-workspace")
             known = {item.instrument_id: item for item in definitions}
             active = restored.active_definitions(datetime(2026, 8, 4, 12, tzinfo=ny), known)
             expired = restored.active_definitions(datetime(2026, 8, 5, 12, tzinfo=ny), known)

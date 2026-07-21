@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timezone
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 
@@ -10,6 +12,7 @@ from kairospy.data.bootstrap import (
     configured_product_specs, default_provider_registry, register_configured_products,
     register_default_products,
 )
+from kairospy.data import AcquisitionRequest, DatasetClient, TimeRange
 from kairospy.data.catalog import DataCatalog
 from kairospy.data.contracts import (
     DataProductContract, DataReleaseManifest, DataSetContractArtifact, DatasetStorageKind, LiveViewManifest,
@@ -66,7 +69,7 @@ class DataProductContractTests(unittest.TestCase):
                 self.assertEqual(restored, spec)
                 self.assertIn("equity", restored.capabilities["supported_products"])
                 self.assertTrue(restored.relative_path)
-            self.assertEqual(US_EQUITY_MASSIVE_RAW_DAILY.minimum_publication_level, QualityLevel.STUDY)
+            self.assertEqual(US_EQUITY_MASSIVE_RAW_DAILY.minimum_publication_level, QualityLevel.WORKSPACE)
             self.assertEqual(US_EQUITY_MASSIVE_CORPORATE_ACTIONS.quality_profile, "corporate_action")
             self.assertEqual(US_EQUITY_MASSIVE_CORPORATE_ACTIONS.storage_kind, DatasetStorageKind.REFERENCE)
             self.assertEqual(US_EQUITY_MASSIVE_IDENTITY.quality_profile, "equity_identity")
@@ -111,8 +114,128 @@ class DataProductContractTests(unittest.TestCase):
             self.assertEqual(providers.product_spec(str(compiled.key)), compiled)
             self.assertEqual(compiled.storage_kind, DatasetStorageKind.TABULAR)
             self.assertEqual(compiled.quality_profile, "equity_ohlcv")
-            self.assertEqual(compiled.minimum_publication_level, QualityLevel.STUDY)
+            self.assertEqual(compiled.minimum_publication_level, QualityLevel.WORKSPACE)
             self.assertEqual(compiled.product.dimensions["view"], "raw")
+
+    def test_provider_extension_registers_product_spec_and_builder(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            extension = root / "demo_provider.py"
+            extension.write_text(
+                "\n".join([
+                    "from kairospy.data import (",
+                    "    AcquisitionEstimate, DataProductContract, DataProductDefinition, DatasetKey,",
+                    "    DatasetLayer, DatasetStorageKind, QualityLevel, SourceBinding,",
+                    ")",
+                    "KEY = 'market.demo.extension.ohlcv'",
+                    "def products(context):",
+                    "    product = DataProductDefinition(",
+                    "        DatasetKey(KEY), 'Demo extension OHLCV', DatasetLayer.CANONICAL,",
+                    "        'Demo provider extension.', {'provider': 'demo', 'asset_class': 'equity'},",
+                    "        'period_start',",
+                    "        sources=(SourceBinding('demo', 'test', 100, QualityLevel.WORKSPACE, ('python',)),),",
+                    "    )",
+                    "    return (DataProductContract(",
+                    "        product, 'canonical/demo/extension', 'market.demo.ohlcv.v1',",
+                    "        {'supported_products': ['equity']}, DatasetStorageKind.TABULAR,",
+                    "        '1', 'demo_ohlcv', QualityLevel.WORKSPACE,",
+                    "    ),)",
+                    "class DemoBuilder:",
+                    "    provider = 'demo'",
+                    "    def supports(self, logical_key):",
+                    "        return logical_key == KEY",
+                    "    def estimate(self, request):",
+                    "        return AcquisitionEstimate(1, cost_class='python-extension', instruments=len(request.instruments))",
+                    "    def acquire(self, request):",
+                    "        raise RuntimeError('not used in this test')",
+                    "def register(registry, context):",
+                    "    registry.register(DemoBuilder(), products(context))",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+            config = root / "connectors.json"
+            config.write_text(json.dumps({"provider_extensions": [{"path": extension.name}]}), encoding="utf-8")
+
+            compiled = configured_product_specs(config)[0]
+            catalog = register_configured_products(directory, config)
+            providers = default_provider_registry(directory, connector_config=config)
+            request = AcquisitionRequest(
+                str(compiled.key),
+                (TimeRange(
+                    datetime(2026, 1, 1, tzinfo=timezone.utc),
+                    datetime(2026, 1, 2, tzinfo=timezone.utc),
+                ),),
+                compiled.product.sources[0],
+                instruments=("AAPL",),
+            )
+
+            self.assertEqual(catalog.product_spec(str(compiled.key)), compiled)
+            self.assertTrue(providers.available("demo", str(compiled.key)))
+            self.assertEqual(providers.product_spec(str(compiled.key)), compiled)
+            self.assertEqual(providers.get("demo", str(compiled.key)).estimate(request).cost_class, "python-extension")
+
+    def test_external_process_extension_acquires_file_manifest_dataset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            provider_script = root / "external_provider.py"
+            provider_script.write_text(
+                "\n".join([
+                    "import json",
+                    "from pathlib import Path",
+                    "request = json.loads(__import__('sys').stdin.read())",
+                    "rows = Path('rows.csv')",
+                    "rows.write_text(",
+                    "    'period_start,symbol,value\\n'",
+                    "    '2026-01-01T00:00:00Z,AAPL,1.2\\n',",
+                    "    encoding='utf-8',",
+                    ")",
+                    "print(json.dumps({",
+                    "    'artifact_kind': 'source',",
+                    "    'files': [{'path': str(rows)}],",
+                    "    'fields': ['period_start', 'symbol', 'value'],",
+                    "    'row_count': 1,",
+                    "    'request_product': request['product'],",
+                    "}))",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+            config = root / "connectors.json"
+            config.write_text(json.dumps({
+                "provider_extensions": [{
+                    "kind": "external_process",
+                    "provider": "demo-process",
+                    "venue": "test",
+                    "command": [sys.executable, provider_script.name],
+                    "products": [{
+                        "logical_key": "market.demo.process.signal",
+                        "title": "Demo process signal",
+                        "primary_time": "period_start",
+                        "fields": ["period_start", "symbol", "value"],
+                        "dimensions": {"asset_class": "equity"},
+                    }],
+                }],
+            }), encoding="utf-8")
+
+            catalog = register_configured_products(directory, config)
+            providers = default_provider_registry(directory, connector_config=config)
+            client = DatasetClient(directory, providers=providers)
+            plan = client.plan(
+                "market.demo.process.signal",
+                start=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                end=datetime(2026, 1, 2, tzinfo=timezone.utc),
+                provider="demo-process",
+                venue="test",
+            )
+            release = client.acquire(plan, instruments=("AAPL",))
+
+            self.assertEqual(catalog.product_spec("market.demo.process.signal").product.sources[0].provider, "demo-process")
+            self.assertTrue(providers.available("demo-process", "market.demo.process.signal"))
+            self.assertEqual(release.provider, "demo-process")
+            self.assertEqual(release.venue, "test")
+            self.assertTrue((root / release.relative_path / "manifest.json").exists())
+            self.assertTrue((root / release.relative_path / "release.json").exists())
 
     def test_product_spec_rejects_unsafe_physical_layout(self) -> None:
         with self.assertRaisesRegex(ValueError, "safe lake-relative"):

@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from kairospy.domain.product import OptionRight
+from kairospy.trading.product import OptionRight
 from kairospy.pricing import PricingInput, PricingModel, implied_volatility
 from kairospy.storage.data_lake import write_json
 

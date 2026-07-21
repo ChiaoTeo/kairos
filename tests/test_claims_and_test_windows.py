@@ -2,17 +2,17 @@ from tempfile import TemporaryDirectory
 from pathlib import Path
 import unittest
 
-from kairospy.study_platform.validation import TestWindowRegistry,TestWindowUse
-from tests.test_study_validation_framework import registration
-from kairospy.study_platform.validation import (
-    DataCapabilities,EvidenceStatus,OutOfSampleEvidence,ProductProtocol,StudyValidationResult,
+from kairospy.validation import TestWindowRegistry,TestWindowUse
+from tests.test_validation_framework import registration
+from kairospy.validation import (
+    DataCapabilities,EvidenceStatus,OutOfSampleEvidence,ProductProtocol,ExperimentValidationResult,
     SampleSufficiency,ValidationLevel,ValidationState,authorize_claim,
 )
 
 
 class ClaimsAndTestWindowsTest(unittest.TestCase):
     def test_trade_proxy_cannot_claim_cagr_or_capacity(self):
-        result=StudyValidationResult(registration(),ValidationState(EvidenceStatus.READY,EvidenceStatus.SUPPORTED,
+        result=ExperimentValidationResult(registration(),ValidationState(EvidenceStatus.READY,EvidenceStatus.SUPPORTED,
             EvidenceStatus.DATA_NOT_READY,EvidenceStatus.TRADE_PROXY_ONLY,ValidationLevel.L3_MAPPING,"proxy"),
             DataCapabilities(("trades",),point_in_time_universe=True,supported_products=(ProductProtocol.OPTION,),maximum_validation_level=ValidationLevel.L3_MAPPING),
             SampleSufficiency(30,30,30,30),OutOfSampleEvidence.TIME,{})

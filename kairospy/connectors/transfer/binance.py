@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from kairospy.connectors.binance.request_signing import BinanceSigner
 from kairospy.connectors.binance.rest_transport import BinanceTransport, RateLimiter
-from kairospy.domain.identity import AssetId
+from kairospy.trading.identity import AssetId
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.identity import LocationId
 from kairospy.treasury.transfer_gateway import TransferSubmission

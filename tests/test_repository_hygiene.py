@@ -36,6 +36,15 @@ class RepositoryHygieneTests(unittest.TestCase):
         files = [path for path in ROOT.rglob("*") if path.is_file() and ".ipynb_checkpoints" in path.parts]
         self.assertEqual(files, [])
 
+    def test_project_state_has_no_legacy_workspace_data_roots(self):
+        for name in ("studies", "strategies", "workspaces", "study-workspaces", "study-candidates"):
+            self.assertFalse((ROOT / ".kairos" / "data" / name).exists())
+
+    def test_gitignore_does_not_hide_user_code_directories(self):
+        gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+        self.assertNotIn("\nstudies/\n", f"\n{gitignore}\n")
+        self.assertNotIn("\nstrategies/\n", f"\n{gitignore}\n")
+
     def test_workspace_file_names_do_not_reintroduce_legacy_or_generic_terms(self):
         ignored_parts = {".git", "pyenv", ".venv", ".pytest_cache"}
         forbidden_exact = {
@@ -49,10 +58,10 @@ class RepositoryHygieneTests(unittest.TestCase):
             "research.py",
             "service.py",
             "trader",
-            "trading",
             "utils.py",
         }
         forbidden_fragments = ("adapter", "research")
+        allowed = set()
         offenders = []
         stack = [ROOT]
         while stack:
@@ -60,6 +69,8 @@ class RepositoryHygieneTests(unittest.TestCase):
             for path in current.iterdir():
                 relative = path.relative_to(ROOT)
                 if path.is_dir() and path.name in ignored_parts:
+                    continue
+                if relative in allowed:
                     continue
                 name = path.name
                 if name in forbidden_exact or any(fragment in name for fragment in forbidden_fragments):
@@ -83,8 +94,8 @@ class RepositoryHygieneTests(unittest.TestCase):
             "python3 -m pip install kairospy",
             "mkdir my-kairospy-project",
             "kairospy init",
-            "python studies/starter.py",
-            "安装包只包含 Kairos 产品库和 CLI，不包含本仓库顶层 `studies/` 源码研究工作区",
+            "kairospy workspace create alpha",
+            "安装包只包含 Kairos 产品库和 CLI",
             "如果你是从源码参与开发，再使用 editable 安装",
             "./pyenv/bin/pip install -e",
         )
@@ -102,10 +113,10 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertNotIn(str(ROOT), metadata)
         self.assertNotIn('"name": "trader"', metadata)
 
-    def test_root_kairospy_toml_uses_study_section(self):
+    def test_root_kairospy_toml_does_not_use_study_section(self):
         config = (ROOT / "kairos.toml").read_text(encoding="utf-8")
         self.assertIn('name = "kairospy"', config)
-        self.assertIn("[study]", config)
+        self.assertNotIn("[study]", config)
         self.assertNotIn("[research]", config)
         self.assertNotIn('name = "trader"', config)
 
@@ -114,7 +125,7 @@ class RepositoryHygieneTests(unittest.TestCase):
             ROOT / "kairospy" / "__init__.py",
             ROOT / "kairospy" / "connectors" / "__init__.py",
             ROOT / "kairospy" / "ports" / "__init__.py",
-            ROOT / "kairospy" / "study_platform" / "__init__.py",
+            ROOT / "kairospy" / "capture" / "__init__.py",
         )
         offenders = []
         forbidden = ('"adapters"', '"research"', '"trader"', '"trading"', "Adapter", "ResearchSpec", "ResearchService")
@@ -125,17 +136,57 @@ class RepositoryHygieneTests(unittest.TestCase):
                     offenders.append(f"{path.relative_to(ROOT)} contains {token}")
         self.assertEqual(offenders, [])
 
-    def test_project_initializer_scaffold_uses_kairospy_study_workspace_language(self):
+    def test_strategies_package_is_removed_in_favor_of_strategy_protocol(self):
+        self.assertFalse((ROOT / "kairospy" / "strategies").exists())
+        self.assertTrue((ROOT / "kairospy" / "strategy").exists())
+        source = (ROOT / "kairospy" / "strategy" / "__init__.py").read_text(encoding="utf-8")
+        for marker in ("Strategy", "StrategyContext", "StrategyDecision", "GovernedStrategyRuntime"):
+            self.assertIn(marker, source)
+
+    def test_core_code_does_not_import_deleted_strategies_package(self):
+        offenders = []
+        for path in sorted((ROOT / "kairospy").rglob("*.py")):
+            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                stripped = line.strip()
+                if stripped.startswith(("from kairospy.strategies", "import kairospy.strategies")):
+                    offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}")
+        self.assertEqual(offenders, [])
+
+    def test_examples_and_tests_do_not_use_deleted_workspace_or_strategy_apis(self):
+        forbidden = (
+            "from kairospy.strategies",
+            "import kairospy.strategies",
+            "from kairospy.product_workflow",
+            "import kairospy.product_workflow",
+            "from kairospy.capture.session",
+            "open_study",
+            "StudyWorkspace",
+            "BacktestRequest",
+            "BacktestRunner",
+            "from kairospy import Kairos",
+        )
+        offenders = []
+        for root in (ROOT / "examples", ROOT / "tests"):
+            for path in root.rglob("*.py"):
+                if path == ROOT / "tests" / "test_repository_hygiene.py":
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for marker in forbidden:
+                    if marker in text:
+                        offenders.append(f"{path.relative_to(ROOT)} contains {marker}")
+        self.assertEqual(offenders, [])
+
+    def test_project_initializer_scaffold_uses_workspace_language(self):
         source = (ROOT / "kairospy" / "project.py").read_text(encoding="utf-8")
         required = (
             "project_name = _project_name(name or _default_project_name(root))",
             "def _default_project_name(root: Path) -> str:",
             're.search(r\'(?m)^name\\s*=\\s*"(?:kairospy|kairospy)"\'',
             'dependencies = ["kairospy>=0.1.0"]',
-            'Path("studies/starter.py")',
-            "python studies/starter.py",
-            "[study]",
-            "This is a Kairos quantitative study, backtest, and execution project.",
+            'Path(PROJECT_STATE_DIR) / "workspace"',
+            'Path(PROJECT_STATE_DIR) / "run"',
+            "kairospy workspace create alpha",
+            "This is a Kairos quantitative data, strategy code, and run project.",
             'lake_root = "{DEFAULT_LAKE_ROOT}"',
             "Kairos-managed data lives under `.kairos/data/`",
             "Configure providers only in `kairos.toml`",
@@ -152,6 +203,9 @@ class RepositoryHygieneTests(unittest.TestCase):
             "[research]",
             "from trading",
             "import trading",
+            'Path("studies/starter.py")',
+            "python studies/starter.py",
+            "[study]",
         )
         for marker in forbidden:
             self.assertNotIn(marker, source)
@@ -167,7 +221,7 @@ class RepositoryHygieneTests(unittest.TestCase):
                     matches.append(str(path.relative_to(ROOT)))
         self.assertEqual(matches, [])
 
-    def test_studies_workspace_is_not_packaged(self):
+    def test_source_only_packages_are_not_packaged(self):
         config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         scripts = config["project"]["scripts"]
         setuptools_config = config["tool"]["setuptools"]
@@ -186,7 +240,6 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertIn("kairospy*", includes)
         self.assertNotIn("trading*", includes)
         self.assertNotIn("research*", includes)
-        self.assertNotIn("studies*", includes)
         self.assertNotIn("package-data", setuptools_config)
         self.assertNotIn("include-package-data", setuptools_config)
         self.assertNotIn("data-files", config.get("tool", {}).get("setuptools", {}))
@@ -194,19 +247,18 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertIn("kairospy.research.*", excludes)
         self.assertIn("research", excludes)
         self.assertIn("research.*", excludes)
-        self.assertIn("studies", excludes)
-        self.assertIn("studies.*", excludes)
 
-    def test_source_workspace_study_commands_are_hidden_from_product_help(self):
+    def test_source_workspace_study_commands_are_removed_from_product_cli(self):
         cli = (ROOT / "kairospy" / "__main__.py").read_text(encoding="utf-8")
-        required = (
-            'data_actions.add_parser("btc-options-readiness", help=argparse.SUPPRESS)',
-            'study_actions.add_parser("register-btc-iron-condor", help=argparse.SUPPRESS)',
-            'study_actions.add_parser("readiness", help=argparse.SUPPRESS)',
+        forbidden = (
+            'commands.add_parser("study"',
+            "study_actions.add_parser",
+            'commands.add_parser("strategy"',
+            "strategy_actions.add_parser",
         )
-        for marker in required:
-            self.assertIn(marker, cli)
-        self.assertIn("is not included in the pip package", cli)
+        for marker in forbidden:
+            self.assertNotIn(marker, cli)
+        self.assertIn('workspace_actions.add_parser("create"', cli)
 
     def test_packaged_modules_do_not_import_workspace_research_at_module_load(self):
         offenders = []
@@ -355,7 +407,6 @@ class RepositoryHygieneTests(unittest.TestCase):
             "sma_cross_research_backtest",
             "research_spec_hash",
             "research-spec-hash",
-            "RESEARCH_VALIDATED",
             "research-default",
             "RESEARCH_DEFAULT_POLICY",
             "QualityLevel.RESEARCH",
@@ -364,7 +415,6 @@ class RepositoryHygieneTests(unittest.TestCase):
             "@research",
             "@latest-research",
             "latest-research",
-            "research_quality",
             "research-approved",
         )
         forbidden_exact_names = re.compile(r"\b(BacktestService|ValuationService|ResearchService|TreasuryService)\b")
@@ -398,14 +448,15 @@ class RepositoryHygieneTests(unittest.TestCase):
     def test_kairospy_namespace_exposes_connectors_not_adapters(self):
         kairospy_init = (ROOT / "kairospy" / "__init__.py").read_text(encoding="utf-8")
         data_init = (ROOT / "kairospy" / "data" / "__init__.py").read_text(encoding="utf-8")
-        domain_init = (ROOT / "kairospy" / "domain" / "__init__.py").read_text(encoding="utf-8")
+        trading_init = (ROOT / "kairospy" / "trading" / "__init__.py").read_text(encoding="utf-8")
         application_init = (ROOT / "kairospy" / "application" / "__init__.py").read_text(encoding="utf-8")
         pricing_init = (ROOT / "kairospy" / "pricing" / "__init__.py").read_text(encoding="utf-8")
         treasury_init = (ROOT / "kairospy" / "treasury" / "__init__.py").read_text(encoding="utf-8")
-        study_platform_init = (ROOT / "kairospy" / "study_platform" / "__init__.py").read_text(encoding="utf-8")
+        capture_init = (ROOT / "kairospy" / "capture" / "__init__.py").read_text(encoding="utf-8")
         self.assertTrue((ROOT / "kairospy" / "connectors" / "__init__.py").exists())
         self.assertFalse((ROOT / "kairospy" / "research").exists())
         self.assertFalse((ROOT / "kairospy" / "research_platform").exists())
+        self.assertFalse((ROOT / "kairospy" / "study_platform").exists())
         self.assertNotIn('"adapters"', kairospy_init)
         self.assertNotIn('"task_supervisor"', kairospy_init)
         self.assertNotIn('"runtime_golden"', kairospy_init)
@@ -413,7 +464,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertNotIn('"market_slice_storage"', kairospy_init)
         self.assertNotIn('"market_slice_curation"', kairospy_init)
         self.assertNotIn('"research"', kairospy_init)
-        self.assertIn('"study_platform"', kairospy_init)
+        self.assertNotIn('"study_platform"', kairospy_init)
         self.assertNotIn('"Trader"', kairospy_init)
         self.assertNotIn("TradingApplication", application_init)
         self.assertNotIn("AsyncTradingRuntime", application_init)
@@ -421,20 +472,22 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertIn("AsyncKairosRuntime", application_init)
         self.assertNotIn('"DatasetProduct"', data_init)
         self.assertNotIn('"DatasetProductSpec"', data_init)
-        self.assertNotIn('"ProductSpec"', domain_init)
+        self.assertNotIn('"ProductSpec"', trading_init)
         self.assertNotIn("live_paper_composition", application_init)
         self.assertIn("paper_trading_composition", application_init)
-        self.assertIn("study_composition", application_init)
+        self.assertNotIn("study_composition", application_init)
         self.assertNotIn('"ValuationService"', pricing_init)
         self.assertNotIn('"TreasuryService"', treasury_init)
-        self.assertNotIn("Research platform", study_platform_init)
-        self.assertNotIn('"ResearchSpec"', study_platform_init)
-        self.assertNotIn('"service"', study_platform_init)
-        self.assertNotIn('"analyzer"', study_platform_init)
-        self.assertNotIn('"selector"', study_platform_init)
-        self.assertIn('"option_capture"', study_platform_init)
-        self.assertIn('"option_snapshot_analysis"', study_platform_init)
-        self.assertIn('"option_universe_selector"', study_platform_init)
+        self.assertNotIn("Research platform", capture_init)
+        self.assertNotIn('"ResearchSpec"', capture_init)
+        self.assertNotIn('"service"', capture_init)
+        self.assertNotIn('"analyzer"', capture_init)
+        self.assertNotIn('"selector"', capture_init)
+        self.assertNotIn("StudyWorkspace", capture_init)
+        self.assertNotIn("open_study", capture_init)
+        self.assertIn('"option_capture"', capture_init)
+        self.assertIn('"option_snapshot_analysis"', capture_init)
+        self.assertIn('"option_universe_selector"', capture_init)
         for path in (
             ROOT / "kairospy" / "connectors" / "__init__.py",
             ROOT / "kairospy" / "connectors" / "__init__.py",
@@ -473,8 +526,8 @@ class RepositoryHygieneTests(unittest.TestCase):
             "import kairospy.treasury.transfer_models",
             "from kairospy.volatility.models",
             "import kairospy.volatility.models",
-            "from kairospy.study_platform.validation.models",
-            "import kairospy.study_platform.validation.models",
+            "from kairospy.validation.models",
+            "import kairospy.validation.models",
             "from kairospy.reference.models",
             "import kairospy.reference.models",
             "from kairospy.pricing.models",
@@ -510,13 +563,14 @@ class RepositoryHygieneTests(unittest.TestCase):
                         offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {stripped}")
         self.assertEqual(offenders, [])
 
-    def test_public_cli_does_not_expose_research_command_group(self):
+    def test_public_cli_exposes_workspace_not_study_or_strategy_groups(self):
         cli = (ROOT / "kairospy" / "__main__.py").read_text(encoding="utf-8")
         self.assertNotIn('commands.add_parser("research"', cli)
         self.assertNotIn('args.group == "research"', cli)
-        self.assertIn('commands.add_parser("study"', cli)
-        self.assertIn('study_actions.add_parser("capture"', cli)
-        self.assertIn('study_actions.add_parser("capture-series"', cli)
+        self.assertNotIn('commands.add_parser("study"', cli)
+        self.assertNotIn('commands.add_parser("strategy"', cli)
+        self.assertIn('commands.add_parser("workspace"', cli)
+        self.assertIn('run_actions.add_parser("start"', cli)
 
     def test_new_code_does_not_import_legacy_connector_base_or_service_modules(self):
         offenders = []
@@ -648,9 +702,9 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertFalse((ROOT / "examples" / "adapters").exists())
         self.assertTrue((ROOT / "examples" / "connectors" / "reference_connector").exists())
 
-    def test_user_study_examples_use_studies_directory(self):
+    def test_user_examples_do_not_reintroduce_study_workspace_directory(self):
         self.assertFalse((ROOT / "examples" / "research").exists())
-        self.assertTrue((ROOT / "examples" / "studies").exists())
+        self.assertFalse((ROOT / "examples" / "studies").exists())
 
     def test_public_cli_does_not_accept_adapter_argument(self):
         text = (ROOT / "kairospy" / "__main__.py").read_text(encoding="utf-8")
@@ -691,7 +745,7 @@ class RepositoryHygieneTests(unittest.TestCase):
                 text = path.read_text(encoding="utf-8")
                 for line_number, line in enumerate(text.splitlines(), start=1):
                     stripped = line.strip().lstrip('"')
-                    if stripped.startswith(("from trading", "import trading")) or "trading." in stripped:
+                    if stripped.startswith(("from trading", "import trading")):
                         offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}")
                     if "kairospy.research_platform" in stripped or "ResearchDataClient" in stripped:
                         offenders.append(f"{path.relative_to(ROOT)}:{line_number}: {line.strip()}")
@@ -753,11 +807,18 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertFalse((ROOT / "kairospy" / "application" / "runtime_golden.py").exists())
         self.assertFalse((ROOT / "kairospy" / "application" / "runtime_failure_matrix.py").exists())
 
-    def test_spxw_reference_scenario_is_the_public_backtest_cli_name(self):
+    def test_legacy_strategy_backtest_cli_and_modules_are_removed(self):
         cli = (ROOT / "kairospy" / "__main__.py").read_text(encoding="utf-8")
-        self.assertIn('"spxw-reference-scenario"', cli)
+        self.assertNotIn('commands.add_parser("backtest"', cli)
+        self.assertNotIn('commands.add_parser("factor"', cli)
+        self.assertNotIn('commands.add_parser("tutorial"', cli)
+        self.assertNotIn('"spxw-reference-scenario"', cli)
         self.assertNotIn('"golden-spxw"', cli)
-        self.assertTrue((ROOT / "kairospy" / "backtest" / "spxw_reference_pipeline.py").exists())
+        self.assertFalse((ROOT / "kairospy" / "backtest" / "spxw_reference_pipeline.py").exists())
+        self.assertFalse((ROOT / "kairospy" / "backtest" / "experiment_runner.py").exists())
+        self.assertFalse((ROOT / "kairospy" / "backtest" / "reference_scenarios.py").exists())
+        self.assertFalse((ROOT / "kairospy" / "product_workflow.py").exists())
+        self.assertFalse((ROOT / "kairospy" / "api.py").exists())
         self.assertFalse((ROOT / "kairospy" / "backtest" / "golden.py").exists())
         offenders = []
         for root in (ROOT / "kairospy", ROOT / "tests", ROOT / "examples"):
@@ -778,6 +839,63 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertIn("InstrumentLifecycleSnapshot", text)
         self.assertNotIn("HistoricalDataset", text)
         self.assertNotIn("MarketSlice", text)
+
+    def test_workspace_data_quality_names_do_not_reintroduce_study_q2(self):
+        forbidden = (
+            "QualityLevel.STUDY",
+            "APPROVED_FOR_STUDY",
+            "approved_for_study",
+            "STUDY_DEFAULT_POLICY",
+            "study-default",
+            "latest-study",
+            "ready_for_research",
+            "ready_for_study",
+            "RunMode.STUDY",
+            "study_composition",
+            "StudyInputSnapshot",
+            "write_study_snapshot",
+            "freeze_study",
+        )
+        offenders = []
+        for root in (ROOT / "kairospy", ROOT / "examples"):
+            for path in root.rglob("*.py"):
+                text = path.read_text(encoding="utf-8")
+                for marker in forbidden:
+                    if marker in text:
+                        offenders.append(f"{path.relative_to(ROOT)} contains {marker}")
+        self.assertEqual(offenders, [])
+
+    def test_user_docs_and_examples_do_not_expose_legacy_workspace_commands(self):
+        forbidden = (
+            'run_mode="study"',
+            "--study-id",
+            "run start --study",
+            "run start --snapshot",
+            "kairospy run paper",
+            "kairospy study ",
+            "kairospy strategy ",
+            "ready_for_research",
+            "ready_for_study",
+            "from kairospy.strategies",
+            "kairospy.study_platform",
+        )
+        roots = [
+            ROOT / "README.md",
+            ROOT / "docs" / "data_product_usage.md",
+            ROOT / "docs" / "connector_data_integration_usage.md",
+            ROOT / "examples",
+        ]
+        offenders = []
+        for root in roots:
+            paths = (root,) if root.is_file() else root.rglob("*")
+            for path in paths:
+                if not path.is_file() or path.suffix not in {".py", ".md", ".ipynb", ".sh"}:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                for marker in forbidden:
+                    if marker in text:
+                        offenders.append(f"{path.relative_to(ROOT)} contains {marker}")
+        self.assertEqual(offenders, [])
         self.assertNotIn("ContractMetadata", text)
 
 

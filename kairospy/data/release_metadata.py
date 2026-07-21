@@ -120,7 +120,7 @@ def _data_release_manifest(release, product, *, fields: tuple[str, ...]) -> Data
         storage_kind=release.storage_kind or DatasetStorageKind.TABULAR,
         layout_version=release.layout_version,
         quality_profile="market_snapshot" if release.storage_kind is DatasetStorageKind.MARKET_SNAPSHOTS else "generic",
-        minimum_publication_level=release.quality_level if isinstance(release.quality_level, QualityLevel) else QualityLevel.STUDY,
+        minimum_publication_level=release.quality_level if isinstance(release.quality_level, QualityLevel) else QualityLevel.WORKSPACE,
     )
     return DataReleaseManifest(
         str(release.product_key),

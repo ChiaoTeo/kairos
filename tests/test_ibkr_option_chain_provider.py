@@ -7,8 +7,8 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from kairospy.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.product import (
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.product import (
     ExerciseStyle,
     ListedOptionSpec,
     OptionRight,
@@ -16,7 +16,7 @@ from kairospy.domain.product import (
     SettlementSession,
     SettlementType,
 )
-from kairospy.study_platform.spec import OptionChainCaptureSpec
+from kairospy.capture.spec import OptionChainCaptureSpec
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.contracts import InstrumentDefinition
 from tests.reference_support import publish_test_instrument

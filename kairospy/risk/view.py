@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from kairospy.accounting.portfolio import PortfolioSnapshot
-from kairospy.domain.identity import AccountKey, InstrumentId
-from kairospy.domain.product import is_option_spec, option_multiplier
+from kairospy.trading.identity import AccountKey, InstrumentId
+from kairospy.trading.product import is_option_spec, option_multiplier
 from kairospy.risk.margin import MarginResult
 from kairospy.reference import ReferenceCatalog, ReferenceRole
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from kairospy.domain.identity import AssetId
+from kairospy.trading.identity import AssetId
 
 from .transfer_contracts import TransferStatus
 from .state_machine import TransferOperationStore

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from kairospy.application.clock import Clock, SystemClock
-from kairospy.domain.identity import AccountKey
+from kairospy.trading.identity import AccountKey
 from kairospy.execution.ingestion import DurableAccountingIngestionService
 
 from .funding_settlement import BinanceFundingSettlementClient

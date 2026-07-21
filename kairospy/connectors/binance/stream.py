@@ -4,8 +4,8 @@ import asyncio
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from kairospy.contracts import CanonicalEventEnvelope, canonical_from_domain_market_data
-from kairospy.domain.identity import InstrumentId
+from kairospy.contracts import CanonicalEventEnvelope, canonical_from_trading_market_data
+from kairospy.trading.identity import InstrumentId
 from kairospy.market_data.stream import BoundedEventChannel
 from kairospy.market_data.capture import CanonicalCaptureWriter
 
@@ -57,7 +57,7 @@ class BinanceCanonicalStreamService:
                 return
             now = datetime.now(timezone.utc)
             sequence = _source_sequence(row)
-            events = canonical_from_domain_market_data(
+            events = canonical_from_trading_market_data(
                 value,
                 source="binance",
                 source_instance=self.source_instance,

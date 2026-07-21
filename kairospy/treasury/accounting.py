@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from kairospy.domain.ledger import LedgerBook
+from kairospy.trading.ledger import LedgerBook
 
 from .transfer_contracts import FeePolicy, TransferOperation, TransferStatus
 from .ledger_posting import TreasuryLedgerPostingService

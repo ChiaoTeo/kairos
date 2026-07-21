@@ -11,9 +11,9 @@ from kairospy.backtest.feed import MarketSnapshot
 from kairospy.backtest.portfolio import PortfolioSnapshot
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.access import contract_spec, definition_at
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.intent import Intent, OpenStructureIntent
-from kairospy.domain.product import is_option_spec, option_multiplier
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.intent import Intent, OpenStructureIntent
+from kairospy.trading.product import is_option_spec, option_multiplier
 from .option_structure import maximum_expiry_loss
 
 from .limits import RiskLimits

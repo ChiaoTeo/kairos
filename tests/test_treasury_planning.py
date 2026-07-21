@@ -5,7 +5,7 @@ from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, VenueId
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, VenueId
 from kairospy.reference import (
     NetworkAssetDefinition, NetworkDefinition, NetworkType, RailId, RailType,
     ReferenceCatalog, SettlementRail,

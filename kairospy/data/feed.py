@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import AsyncIterator, Iterable, Iterator
 
 from kairospy.contracts import CanonicalEventEnvelope, canonicalize_market_event
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.market_data import MarketEventEnvelope, MarketEventType, ParquetMarketEventRepository
 from kairospy.backtest.feed import MarketReplayDataset, MarketSnapshot, MarketSnapshotReplayFeed
 

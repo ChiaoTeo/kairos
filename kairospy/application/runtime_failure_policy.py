@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 from datetime import timedelta
 from decimal import Decimal
@@ -13,12 +13,12 @@ from uuid import UUID
 from kairospy.accounting.ledger import LedgerService
 from kairospy.ports import OrderAck, RecoveredExecution, VenueOrderRecovery, VenueOrderStatus
 from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
-from kairospy.domain.capability import OrderType, TimeInForce
-from kairospy.domain.execution import TradeExecution, TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.domain.intent import TargetPositionIntent
-from kairospy.domain.ledger import Ledger
-from kairospy.domain.order import ExecutionInstructions
+from kairospy.trading.capability import OrderType, TimeInForce
+from kairospy.trading.execution import TradeExecution, TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.trading.intent import TargetPositionIntent
+from kairospy.trading.ledger import Ledger
+from kairospy.trading.order import ExecutionInstructions
 from kairospy.execution.ingestion import DurableExecutionIngestionService
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.execution.recovery import VenueOrderRecoveryService

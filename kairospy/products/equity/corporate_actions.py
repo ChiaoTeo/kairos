@@ -5,13 +5,13 @@ from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid5
 
 from kairospy.accounting.ledger import LedgerService
-from kairospy.domain.corporate_action import (
+from kairospy.trading.corporate_action import (
     CashDividendEvent, CorporateActionType, DelistingEvent, InstrumentExchangeEvent,
     SplitEvent, StockDividendEvent, SymbolChangeEvent,
 )
-from kairospy.domain.execution import DividendPayment
-from kairospy.domain.identity import AccountKey, AssetId
-from kairospy.domain.ledger import LedgerBook, LedgerEntryType
+from kairospy.trading.execution import DividendPayment
+from kairospy.trading.identity import AccountKey, AssetId
+from kairospy.trading.ledger import LedgerBook, LedgerEntryType
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.access import definition_at
 

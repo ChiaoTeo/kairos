@@ -7,9 +7,9 @@ from kairospy.backtest.maker import (
     BookEventType,FifoMakerFillModel,HybridAction,HybridExecutionStateMachine,
     IncrementalBookEvent,MakerOrderState,
 )
-from kairospy.domain.capability import TimeInForce
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.capability import TimeInForce
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import InstrumentId
 from kairospy.execution.policy import ExecutionMode,ExecutionPolicy,PartialFillPolicy
 
 

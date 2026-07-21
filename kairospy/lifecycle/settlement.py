@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from kairospy.domain.identity import AssetId, InstrumentId
-from kairospy.domain.product import ListedOptionSpec, OptionRight
+from kairospy.trading.identity import AssetId, InstrumentId
+from kairospy.trading.product import ListedOptionSpec, OptionRight
 from kairospy.reference import ReferenceCatalog, SettlementMethod
 from kairospy.reference import ReferenceRole
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 from dataclasses import replace
 from decimal import Decimal
@@ -8,19 +8,19 @@ import json
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from kairospy.reference.access import contract_spec, definition_at
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, VenueId
-from kairospy.domain.intent import CloseStructureIntent, LegIntent
-from kairospy.domain.order import Fill, Order, OrderStatus, TimeInForce
-from kairospy.domain.product import is_option_spec, option_multiplier
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, VenueId
+from kairospy.trading.intent import CloseStructureIntent, LegIntent
+from kairospy.trading.order import Fill, Order, OrderStatus, TimeInForce
+from kairospy.trading.product import is_option_spec, option_multiplier
 from kairospy.pricing.option_valuation import OptionValuationService
-from kairospy.study_platform.features import FeatureEngine, build_features
+from kairospy.capture.features import FeatureEngine, build_features
 from kairospy.risk.engine import RiskDecisionType, RiskEngine
 from kairospy.risk.limits import RiskLimits
 from kairospy.risk.analytics import historical_var_es
 from kairospy.risk.scenarios import RevaluationPosition, ScenarioEngine, standard_scenario_grid
 from kairospy.storage.codec import to_primitive
-from kairospy.strategies.strategy_protocols import Strategy, StrategyContext
+from kairospy.strategy.protocols import Strategy, StrategyContext
 
 from .clock import BacktestClock
 from .execution import ExecutionPlanner

@@ -5,8 +5,8 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.product import OptionRight
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.product import OptionRight
 
 
 class CalibrationStatus(StrEnum):

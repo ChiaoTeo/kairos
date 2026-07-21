@@ -10,16 +10,16 @@ from kairospy.backtest.feed import InstrumentLifecycleSnapshot, MarketReplayData
 from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairospy.reference import ReferenceCatalog, ReferenceCatalogRepository, ReferenceRole
 from kairospy.reference.access import contract_spec, product_type
-from kairospy.study_platform.snapshot import build_reference_evidence
+from kairospy.capture.snapshot import build_reference_evidence
 from kairospy.data.catalog import DataCatalog
 from kairospy.data.contracts import (
     DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel,
 )
-from kairospy.domain.market_data import Quote
-from kairospy.domain.product import ListedOptionSpec, OptionRight, ProductType, SettlementSession
+from kairospy.trading.market_data import Quote
+from kairospy.trading.product import ListedOptionSpec, OptionRight, ProductType, SettlementSession
 from kairospy.market_data import MarketEventType, ParquetMarketEventRepository
-from kairospy.study_platform.data_store import MarketSnapshotCollectionPublisher
-from kairospy.study_platform.snapshot import DataQualityIssue, InstrumentSnapshot
+from kairospy.capture.data_store import MarketSnapshotCollectionPublisher
+from kairospy.capture.snapshot import DataQualityIssue, InstrumentSnapshot
 from kairospy.storage.data_lake import sha256_bytes, write_json
 
 

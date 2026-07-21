@@ -76,7 +76,7 @@ def register_live_capture_release(
         provider,
         venue,
         (),
-        DatasetStatus.APPROVED_FOR_STUDY,
+        DatasetStatus.APPROVED_FOR_WORKSPACE,
         quality_level,
         published_at,
         DatasetStorageKind.MARKET_EVENTS,

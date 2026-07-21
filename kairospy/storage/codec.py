@@ -8,7 +8,7 @@ from types import UnionType
 from typing import Any, Union, get_args, get_origin, get_type_hints
 from uuid import UUID
 
-from kairospy.domain.event import (
+from kairospy.trading.event import (
     BrokerConnected,
     BrokerDisconnected,
     DataWarningRaised,
@@ -19,10 +19,10 @@ from kairospy.domain.event import (
     TradeUpdated,
     UnderlyingPriceUpdated,
 )
-from kairospy.domain.identity import AccountKey, InstitutionId, InstrumentId
-from kairospy.domain.market_data import FundingRate, Greeks, IndexPrice, MarkPrice, OpenInterest, OptionChain, Quote, Trade, TradingStatus, VolatilitySurfacePoint
-from kairospy.study_platform.snapshot import DataQualityIssue, InstrumentSnapshot, OptionCaptureSnapshot
-from kairospy.study_platform.spec import MarketDataType, OptionChainCaptureSpec
+from kairospy.trading.identity import AccountKey, InstitutionId, InstrumentId
+from kairospy.trading.market_data import FundingRate, Greeks, IndexPrice, MarkPrice, OpenInterest, OptionChain, Quote, Trade, TradingStatus, VolatilitySurfacePoint
+from kairospy.capture.snapshot import DataQualityIssue, InstrumentSnapshot, OptionCaptureSnapshot
+from kairospy.capture.spec import MarketDataType, OptionChainCaptureSpec
 
 PAYLOAD_TYPES = {
     cls.__name__: cls

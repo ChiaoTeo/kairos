@@ -25,7 +25,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
                 with self.assertRaisesRegex(Exception, "Massive API key is missing"):
                     KairosProjectConfig.discover(root).massive_config()
                 os.environ.update(env)
-                config = KairosProjectConfig.discover(root / "studies")
+                config = KairosProjectConfig.discover(root / "notebooks")
                 self.assertEqual(config.root, root.resolve())
                 self.assertEqual(config.massive_config().api_key, "secret")
                 self.assertEqual(config.to_redacted_dict()["providers"]["massive"]["api_key"], "env:MASSIVE_API_KEY")
@@ -58,8 +58,8 @@ class KairosProjectConfigurationTests(unittest.TestCase):
                 sys.executable, "-c",
                 "from kairospy.data.bootstrap import register_default_products; "
                 "from kairospy.connectors.binance import BinanceRuntimeFeedFactory; "
-                "from kairospy.study_platform.session import open_study; "
-                "print(register_default_products.__name__, BinanceRuntimeFeedFactory.__name__, open_study.__name__)",
+                "from kairospy.workspace import Workspace; "
+                "print(register_default_products.__name__, BinanceRuntimeFeedFactory.__name__, Workspace.__name__)",
             ],
             cwd=os.getcwd(),
             check=True,
@@ -67,7 +67,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             text=True,
             env=env,
         )
-        self.assertIn("register_default_products BinanceRuntimeFeedFactory open_study", result.stdout)
+        self.assertIn("register_default_products BinanceRuntimeFeedFactory Workspace", result.stdout)
 
     def test_set_and_unset_config_value_preserves_valid_toml(self) -> None:
         with TemporaryDirectory() as directory:
@@ -321,42 +321,6 @@ class KairosProjectConfigurationTests(unittest.TestCase):
 
             config = KairosProjectConfig.load(target / "kairos.toml")
             self.assertEqual(config.get("project.name"), "interactive-desk")
-
-    def test_run_control_console_and_json_output_are_separate(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            env = dict(os.environ)
-            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
-
-            human = subprocess.run(
-                [
-                    sys.executable, "-m", "kairospy", "run", "backtest",
-                    "--fixture", "--fast", "5", "--slow", "15", "--artifact-root", str(root / "artifacts"),
-                    "--control",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-            self.assertIn("Kairos Run Control", human.stdout)
-            self.assertIn("Kairos Run Summary", human.stdout)
-            self.assertIn("Next Steps", human.stdout)
-
-            machine = subprocess.run(
-                [
-                    sys.executable, "-m", "kairospy", "--format", "json", "run", "backtest",
-                    "--fixture", "--fast", "5", "--slow", "15", "--artifact-root", str(root / "json-artifacts"),
-                    "--control",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-            payload = json.loads(machine.stdout)
-            self.assertEqual(payload["mode"], "backtest")
-            self.assertNotIn("Kairos Run Control", machine.stdout)
 
     def test_data_catalog_human_output_and_json_output_are_separate(self) -> None:
         with TemporaryDirectory() as directory:

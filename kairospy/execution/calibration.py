@@ -8,8 +8,8 @@ import json
 from pathlib import Path
 
 from kairospy.ports import ComboOrderRequest, Environment, OrderRequest
-from kairospy.domain.capability import OrderType
-from kairospy.domain.execution import TradeSide
+from kairospy.trading.capability import OrderType
+from kairospy.trading.execution import TradeSide
 from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
 from kairospy.storage.codec import to_primitive
 

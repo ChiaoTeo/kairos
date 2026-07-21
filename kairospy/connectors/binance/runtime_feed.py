@@ -13,7 +13,7 @@ from kairospy.data import (
     live_view_manifest_path,
     load_live_view_manifest,
 )
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.market_data import BoundedEventChannel, RotatingCanonicalCaptureWriter
 from kairospy.ports import Environment
 

@@ -8,7 +8,7 @@ from .contracts import (
 )
 
 def _governed(product, description: str):
-    owner = "study-platform" if product.layer.value in {"features", "studies"} else "data-platform"
+    owner = "workspace-platform" if product.layer.value == "features" else "data-platform"
     return replace(product, description=description, owner=owner)
 
 
@@ -39,7 +39,7 @@ _US_EQUITY_MASSIVE_RAW_DAILY_PRODUCT = _product(
     DatasetLayer.CANONICAL,
     {"asset_class": "equity", "region": "us", "provider": "massive", "frequency": "1d", "view": "raw"},
     primary_time="available_time",
-    sources=(SourceBinding("massive", "us-securities", 100, QualityLevel.STUDY, ("rest", "flat-file")),),
+    sources=(SourceBinding("massive", "us-securities", 100, QualityLevel.WORKSPACE, ("rest", "flat-file")),),
 )
 _US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY_PRODUCT = _product(
     "market.ohlcv.equity.us.massive.1d.vendor_adjusted",
@@ -47,7 +47,7 @@ _US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY_PRODUCT = _product(
     DatasetLayer.CANONICAL,
     {"asset_class": "equity", "region": "us", "provider": "massive", "frequency": "1d", "view": "vendor-adjusted"},
     primary_time="available_time",
-    sources=(SourceBinding("massive", "us-securities", 90, QualityLevel.STUDY, ("rest", "flat-file")),),
+    sources=(SourceBinding("massive", "us-securities", 90, QualityLevel.WORKSPACE, ("rest", "flat-file")),),
 )
 _US_EQUITY_MASSIVE_RAW_HOURLY_PRODUCT = _product(
     "market.ohlcv.equity.us.massive.1h.raw",
@@ -56,7 +56,7 @@ _US_EQUITY_MASSIVE_RAW_HOURLY_PRODUCT = _product(
     {"asset_class": "equity", "region": "us", "provider": "massive", "frequency": "1h", "view": "raw",
      "universe": "full-market"},
     primary_time="available_time",
-    sources=(SourceBinding("massive", "us-securities", 100, QualityLevel.STUDY, ("rest",)),),
+    sources=(SourceBinding("massive", "us-securities", 100, QualityLevel.WORKSPACE, ("rest",)),),
 )
 _US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY_PRODUCT = _product(
     "market.ohlcv.equity.us.massive.1h.adjusted",
@@ -65,7 +65,7 @@ _US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY_PRODUCT = _product(
     {"asset_class": "equity", "region": "us", "provider": "massive", "frequency": "1h",
      "view": "adjusted", "universe": "full-market"},
     primary_time="available_time",
-    sources=(SourceBinding("massive", "us-securities", 90, QualityLevel.STUDY, ("rest",)),),
+    sources=(SourceBinding("massive", "us-securities", 90, QualityLevel.WORKSPACE, ("rest",)),),
 )
 _US_EQUITY_MASSIVE_CORPORATE_ACTIONS_PRODUCT = _product(
     "reference.corporate_actions.equity.us.massive",
@@ -73,7 +73,7 @@ _US_EQUITY_MASSIVE_CORPORATE_ACTIONS_PRODUCT = _product(
     DatasetLayer.SOURCE,
     {"asset_class": "equity", "region": "us", "provider": "massive", "event_family": "corporate-actions"},
     primary_time="effective_at",
-    sources=(SourceBinding("massive", "us-securities", 100, QualityLevel.STUDY, ("rest",)),),
+    sources=(SourceBinding("massive", "us-securities", 100, QualityLevel.WORKSPACE, ("rest",)),),
 )
 _US_EQUITY_MASSIVE_IDENTITY_PRODUCT = _product(
     "reference.identity.equity.us.massive",
@@ -81,7 +81,7 @@ _US_EQUITY_MASSIVE_IDENTITY_PRODUCT = _product(
     DatasetLayer.REFERENCE,
     {"asset_class": "equity", "region": "us", "provider": "massive", "reference_set": "identity"},
     primary_time="effective_from",
-    sources=(SourceBinding("massive", "us-securities", 100, QualityLevel.STUDY, ("rest",)),),
+    sources=(SourceBinding("massive", "us-securities", 100, QualityLevel.WORKSPACE, ("rest",)),),
 )
 _US_EQUITY_RETURNS_DAILY_PRODUCT = _product(
     "market.returns.equity.us.1d",
@@ -115,25 +115,25 @@ _BTC_DVOL_DAILY_PRODUCT = _product(
     "analytics.vendor_volatility_index.deribit.btc-dvol.1d", "Deribit BTC DVOL daily", DatasetLayer.CANONICAL,
     {"asset_class": "crypto", "venue": "deribit", "underlying": "BTC", "frequency": "1d"},
     primary_time="period_start",
-    sources=(SourceBinding("deribit", "deribit", 100, QualityLevel.STUDY, ("public-api",)),),
+    sources=(SourceBinding("deribit", "deribit", 100, QualityLevel.WORKSPACE, ("public-api",)),),
 )
 _BTC_OPTION_QUOTES_HOURLY_PRODUCT = _product(
     "derivatives.option_quotes.crypto.binance.btc-usdt.1h", "Binance BTC option quotes hourly",
     DatasetLayer.CANONICAL,
     {"asset_class": "option", "venue": "binance", "underlying": "BTC-USDT", "frequency": "1h"},
     primary_time="period_start",
-    sources=(SourceBinding("binance", "binance", 100, QualityLevel.STUDY, ("public-archive",)),),
+    sources=(SourceBinding("binance", "binance", 100, QualityLevel.WORKSPACE, ("public-archive",)),),
 )
 _BTC_DERIBIT_OPTION_TRADES_PRODUCT = _product(
     "derivatives.option_trades.crypto.deribit.btc", "Deribit BTC option trades", DatasetLayer.CANONICAL,
     {"asset_class": "option", "venue": "deribit", "underlying": "BTC", "frequency": "event"},
-    sources=(SourceBinding("deribit", "deribit", 100, QualityLevel.STUDY, ("public-api",)),),
+    sources=(SourceBinding("deribit", "deribit", 100, QualityLevel.WORKSPACE, ("public-api",)),),
 )
 _BTC_DERIBIT_OPTION_QUOTES_PRODUCT = _product(
     "derivatives.option_quotes.crypto.deribit.btc.snapshots", "Deribit BTC option snapshots",
     DatasetLayer.CANONICAL,
     {"asset_class": "option", "venue": "deribit", "underlying": "BTC", "frequency": "snapshot"},
-    sources=(SourceBinding("deribit", "deribit", 100, QualityLevel.STUDY, ("public-api",)),),
+    sources=(SourceBinding("deribit", "deribit", 100, QualityLevel.WORKSPACE, ("public-api",)),),
 )
 _BTC_IV_RV_DAILY_PRODUCT = _product(
     "features.volatility.btc.iv-rv.1d", "BTC IV/RV daily features", DatasetLayer.FEATURES,
@@ -188,7 +188,7 @@ US_EQUITY_MASSIVE_RAW_DAILY = DataProductContract(
     "market.ohlcv.equity.us.1d.v1",
     _capabilities(point_in_time_universe=False, products=("equity",), maximum_validation_level=2),
     quality_profile="equity_ohlcv",
-    minimum_publication_level=QualityLevel.STUDY,
+    minimum_publication_level=QualityLevel.WORKSPACE,
 )
 US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY = DataProductContract(
     _governed(
@@ -199,7 +199,7 @@ US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY = DataProductContract(
     "market.ohlcv.equity.us.1d.v1",
     _capabilities(point_in_time_universe=False, products=("equity",), maximum_validation_level=2),
     quality_profile="equity_ohlcv",
-    minimum_publication_level=QualityLevel.STUDY,
+    minimum_publication_level=QualityLevel.WORKSPACE,
 )
 US_EQUITY_MASSIVE_RAW_HOURLY = DataProductContract(
     _governed(
@@ -210,7 +210,7 @@ US_EQUITY_MASSIVE_RAW_HOURLY = DataProductContract(
     "market.ohlcv.equity.us.1h.v1",
     _capabilities(point_in_time_universe=True, products=("equity",), maximum_validation_level=2),
     quality_profile="ohlcv",
-    minimum_publication_level=QualityLevel.STUDY,
+    minimum_publication_level=QualityLevel.WORKSPACE,
 )
 US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY = DataProductContract(
     _governed(
@@ -221,7 +221,7 @@ US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY = DataProductContract(
     "market.ohlcv.equity.us.1h.v1",
     _capabilities(point_in_time_universe=True, products=("equity",), maximum_validation_level=2),
     quality_profile="ohlcv",
-    minimum_publication_level=QualityLevel.STUDY,
+    minimum_publication_level=QualityLevel.WORKSPACE,
 )
 US_EQUITY_MASSIVE_CORPORATE_ACTIONS = DataProductContract(
     _governed(
@@ -233,7 +233,7 @@ US_EQUITY_MASSIVE_CORPORATE_ACTIONS = DataProductContract(
     _capabilities(point_in_time_universe=False, products=("equity",), maximum_validation_level=2),
     storage_kind=DatasetStorageKind.REFERENCE,
     quality_profile="corporate_action",
-    minimum_publication_level=QualityLevel.STUDY,
+    minimum_publication_level=QualityLevel.WORKSPACE,
 )
 US_EQUITY_MASSIVE_IDENTITY = DataProductContract(
     _governed(
@@ -245,7 +245,7 @@ US_EQUITY_MASSIVE_IDENTITY = DataProductContract(
     _capabilities(point_in_time_universe=False, products=("equity",), maximum_validation_level=2),
     storage_kind=DatasetStorageKind.REFERENCE,
     quality_profile="equity_identity",
-    minimum_publication_level=QualityLevel.STUDY,
+    minimum_publication_level=QualityLevel.WORKSPACE,
 )
 US_EQUITY_RETURNS_DAILY = DataProductContract(
     _governed(
@@ -289,7 +289,7 @@ US_EQUITY_MOMENTUM_DAILY = DataProductContract(
     minimum_publication_level=QualityLevel.BACKTEST,
 )
 BTC_DVOL_DAILY = DataProductContract(
-    _governed(_BTC_DVOL_DAILY_PRODUCT, "Deribit BTC DVOL observations for volatility study."),
+    _governed(_BTC_DVOL_DAILY_PRODUCT, "Deribit BTC DVOL observations for volatility analysis."),
     "canonical/analytics/vendor_volatility_indices/provider=deribit/underlying=BTC/index=DVOL/interval=1d",
     "analytics.vendor_volatility_index.v1", _capabilities(), quality_profile="generic",
 )

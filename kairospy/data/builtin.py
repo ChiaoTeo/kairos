@@ -343,7 +343,7 @@ async def _binance_quote_stream(
 
     from kairospy.connectors.binance.market_stream import BinanceStreamSession, WebSocketClientConnector, websocket_url
     from kairospy.connectors.binance.stream import BinanceCanonicalStreamService
-    from kairospy.domain.identity import InstrumentId
+    from kairospy.trading.identity import InstrumentId
     from kairospy.market_data import BoundedEventChannel
     from kairospy.ports import Environment
     from kairospy.storage.codec import to_primitive

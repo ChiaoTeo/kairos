@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from kairospy.domain.identity import AssetId, InstrumentId
+from kairospy.trading.identity import AssetId, InstrumentId
 
 
 class DayCount(StrEnum):

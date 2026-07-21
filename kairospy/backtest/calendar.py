@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from kairospy.domain.product import ProductType
+from kairospy.trading.product import ProductType
 
 
 @dataclass(frozen=True, slots=True)

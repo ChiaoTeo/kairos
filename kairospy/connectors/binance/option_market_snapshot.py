@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from time import time
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 
 
 @dataclass(frozen=True, slots=True)

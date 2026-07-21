@@ -56,7 +56,7 @@ class DataManifestDataset:
             market=self.market or "spot",
             levels=self.levels,
             interval=self.interval,
-            for_use=self.target_use or ("shadow" if self.kind == "live" else "study"),
+            for_use=self.target_use or ("shadow" if self.kind == "live" else "workspace"),
             freshness_seconds=self.freshness_seconds or 5.0,
             provider=None,
             venue=None,
@@ -73,7 +73,7 @@ class DataManifestDataset:
             "kind": self.kind,
             "source": self.source,
             "dataset": self.dataset,
-            "target_use": self.target_use or ("shadow" if self.kind == "live" else "study"),
+            "target_use": self.target_use or ("shadow" if self.kind == "live" else "workspace"),
         }
 
 

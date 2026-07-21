@@ -8,14 +8,14 @@ from decimal import Decimal
 from pathlib import Path
 
 from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairospy.domain.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.market_data import OptionChain
-from kairospy.domain.market_data import Greeks, Quote
-from kairospy.domain.product import IndexSpec, OptionRight, ProductType
-from kairospy.study_platform.series import SeriesCaptureService, SeriesCaptureSpec
-from kairospy.study_platform.data_store import MarketSnapshotCollectionPublisher
-from kairospy.study_platform.spec import OptionChainCaptureSpec
+from kairospy.trading.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.market_data import OptionChain
+from kairospy.trading.market_data import Greeks, Quote
+from kairospy.trading.product import IndexSpec, OptionRight, ProductType
+from kairospy.capture.series import SeriesCaptureService, SeriesCaptureSpec
+from kairospy.capture.data_store import MarketSnapshotCollectionPublisher
+from kairospy.capture.spec import OptionChainCaptureSpec
 from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
@@ -124,7 +124,7 @@ class SeriesCaptureTests(unittest.TestCase):
         known = {item.instrument_id for item in dataset.definitions}
         self.assertTrue(set(dataset.slices[0].available_instruments) | set(dataset.slices[1].available_instruments) <= known)
 
-    def test_independent_gateway_sessions_append_to_one_study_dataset(self) -> None:
+    def test_independent_gateway_sessions_append_to_one_workspace_dataset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = MarketSnapshotStorageDriver(directory)
             first_times = iter(datetime(2099, 1, 1, 12, minute, tzinfo=timezone.utc) for minute in range(2))

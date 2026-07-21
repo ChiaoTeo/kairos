@@ -2,7 +2,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairospy.study_platform.validation import audit_governance
+from kairospy.validation import audit_governance
 from kairospy.storage.data_lake import write_daily_dataset
 from kairospy.data import DatasetRelease
 from kairospy.data.products import BTC_SPOT_DAILY

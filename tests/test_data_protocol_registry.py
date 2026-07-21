@@ -45,7 +45,7 @@ class DataProtocolRegistryTests(unittest.TestCase):
                 connector_config=None,
                 instrument=[],
                 refresh=False,
-                for_use="study",
+                for_use="workspace",
             ))
             live = LiveDataService(root).connect(_args(
                 root,
@@ -63,9 +63,10 @@ class DataProtocolRegistryTests(unittest.TestCase):
             ))
 
         self.assertEqual(added["dataset"], "research.service_signal")
-        self.assertEqual(added["historical"]["status"], "ready_for_study")
+        self.assertEqual(added["historical"]["status"], "ready_for_workspace")
         self.assertEqual(used["dataset"], "research.service_btc_daily")
-        self.assertEqual(used["built_in_dataset"], "market.ohlcv.crypto.binance.btc-usdt.1d")
+        self.assertEqual(used["data_product"], "market.ohlcv.crypto.binance.btc-usdt.1d")
+        self.assertEqual(used["default_dataset"], "market.ohlcv.crypto.binance.btc-usdt.1d")
         self.assertEqual(live["source_kind"], "built_in")
         self.assertEqual(live["runtime"]["stream"], "btcusdt@bookTicker")
 
@@ -92,7 +93,7 @@ class DataProtocolRegistryTests(unittest.TestCase):
 
         self.assertEqual(payload["dataset"], "research.service_owned_signal")
         self.assertEqual(payload["time"], "date")
-        self.assertEqual(payload["historical"]["status"], "ready_for_study")
+        self.assertEqual(payload["historical"]["status"], "ready_for_workspace")
 
     def test_historical_service_use_builtin_owns_builtin_pipeline(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -115,11 +116,12 @@ class DataProtocolRegistryTests(unittest.TestCase):
                     connector_config=None,
                     instrument=[],
                     refresh=False,
-                    for_use="study",
+                    for_use="workspace",
                 ))
 
         self.assertEqual(payload["dataset"], "research.service_owned_btc_daily")
-        self.assertEqual(payload["built_in_dataset"], "market.ohlcv.crypto.binance.btc-usdt.1d")
+        self.assertEqual(payload["data_product"], "market.ohlcv.crypto.binance.btc-usdt.1d")
+        self.assertEqual(payload["default_dataset"], "market.ohlcv.crypto.binance.btc-usdt.1d")
         self.assertEqual(payload["source_kind"], "built_in")
 
     def test_live_service_connect_owns_live_pipeline(self) -> None:

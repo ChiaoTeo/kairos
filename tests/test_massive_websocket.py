@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from kairospy.connectors.massive.websocket import MassiveCanonicalStreamService, MassiveLiveStream
 from kairospy.contracts import MarketEventKind, QuotePayload
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.market_data import BoundedEventChannel, MarketEventEnvelope, MarketEventType
 
 

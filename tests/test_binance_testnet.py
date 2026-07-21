@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 import os
 import unittest
@@ -11,8 +11,8 @@ from kairospy.connectors.binance.account_gateway import BinanceAccountGateway
 from kairospy.connectors.binance.reference_data import BinanceSpotReferenceDataClient
 from kairospy.connectors.binance.request_signing import BinanceSigner, synchronize_clock
 from kairospy.connectors.binance.rest_transport import RateLimiter, UrllibBinanceTransport
-from kairospy.domain.identity import AccountKey, AccountType, VenueId
-from kairospy.domain.product import ProductType
+from kairospy.trading.identity import AccountKey, AccountType, VenueId
+from kairospy.trading.product import ProductType
 
 
 @unittest.skipUnless(

@@ -12,90 +12,38 @@ SUPPORTED_LANGUAGES = ("zh-CN", "en-US")
 
 _TEXT = {
     "zh-CN": {
-        "tutorial.sma": "SMA 研究教程已就绪",
-        "study.create": "研究工作区已创建",
-        "study.freeze": "研究候选版本已冻结",
-        "study.inspect": "研究工作区详情",
-        "study.data": "研究数据预览",
-        "study.profile": "研究数据检查 {status}",
-        "study.scaffold": "研究脚本已生成",
-        "factor.register-sma": "SMA 因子版本已注册",
-        "factor.verify-sma": "SMA 因子验证 {status}",
-        "strategy.register-sma": "SMA 策略版本已注册",
-        "strategy.register-builtins": "内置策略版本已注册",
-        "strategy.register-btc-iron-condor": "BTC Iron Condor 策略候选已注册",
-        "strategy.inspect": "策略版本详情",
-        "strategy.status": "策略版本状态",
-        "strategy.activate": "策略版本已激活",
-        "strategy.rollback": "策略版本已回滚",
-        "strategy.check-promotion": "策略晋级证据检查 {status}",
-        "strategy.promote": "策略版本已晋级",
-        "run.backtest": "策略回测完成",
-        "run.simulate": "策略历史仿真完成",
-        "run.paper": "策略 Paper Session 完成",
-        "run.shadow": "策略 Shadow Session 完成",
         "run.inspect": "运行详情",
-        "run.artifact-replay": "运行产物重放验证 {status}",
-        "run.capture-replay": "行情捕获重放验证 {status}",
-        "run.reference": "参考策略场景完成",
         "section.data": "数据",
         "section.result": "结果",
         "section.validation": "验证",
         "section.files": "产物",
         "section.audit": "审计",
         "section.releases": "策略版本",
+        "section.strategy": "代码",
         "section.explanation": "说明",
         "section.next": "下一步",
         "pass": "通过",
         "fail": "未通过",
         "created": "已创建",
         "reused": "已存在，继续使用",
-        "warming": "慢均线需要 {slow} 根 K 线完成预热，前 {warmup} 根不会产生完整因子。",
-        "replay_meaning": "批量研究与逐事件运行结果一致，可以继续；这不代表策略能够盈利。",
         "error.title": "命令执行失败",
         "error.help": "请检查输入参数，或使用 --help 查看示例。",
     },
     "en-US": {
-        "tutorial.sma": "SMA study tutorial is ready",
-        "study.create": "Study workspace created",
-        "study.freeze": "Study candidate frozen",
-        "study.inspect": "Study workspace details",
-        "study.data": "Study data preview",
-        "study.profile": "Study data profile {status}",
-        "study.scaffold": "Study script generated",
-        "factor.register-sma": "SMA Factor Release registered",
-        "factor.verify-sma": "SMA factor validation {status}",
-        "strategy.register-sma": "SMA Strategy Release registered",
-        "strategy.register-builtins": "Built-in Strategy Releases registered",
-        "strategy.register-btc-iron-condor": "BTC Iron Condor candidate registered",
-        "strategy.inspect": "Strategy Release details",
-        "strategy.status": "Strategy Release status",
-        "strategy.activate": "Strategy Release activated",
-        "strategy.rollback": "Strategy Release rolled back",
-        "strategy.check-promotion": "Strategy promotion evidence check {status}",
-        "strategy.promote": "Strategy Release promoted",
-        "run.backtest": "Strategy backtest completed",
-        "run.simulate": "Strategy historical simulation completed",
-        "run.paper": "Strategy paper session completed",
-        "run.shadow": "Strategy shadow session completed",
         "run.inspect": "Run details",
-        "run.artifact-replay": "Run artifact replay validation {status}",
-        "run.capture-replay": "Market capture replay validation {status}",
-        "run.reference": "Reference strategy scenario completed",
         "section.data": "Data",
         "section.result": "Result",
         "section.validation": "Validation",
         "section.files": "Artifacts",
         "section.audit": "Audit",
         "section.releases": "Strategy Releases",
+        "section.strategy": "Code",
         "section.explanation": "Explanation",
         "section.next": "Next step",
         "pass": "passed",
         "fail": "failed",
         "created": "created",
         "reused": "already exists; reusing it",
-        "warming": "The slow SMA needs {slow} bars to warm up; the first {warmup} bars cannot produce a complete factor.",
-        "replay_meaning": "Batch study analysis and event replay agree. You may continue; this does not mean the strategy is profitable.",
         "error.title": "Command failed",
         "error.help": "Check the inputs or use --help for command examples.",
     },
@@ -104,7 +52,7 @@ _TEXT = {
 
 _LABELS = {
     "zh-CN": {
-        "study_id": "研究 ID", "version": "版本", "status": "状态", "hypothesis": "研究假设",
+        "version": "版本", "status": "状态", "hypothesis": "假设",
         "dataset": "数据集", "input_release": "数据版本", "input_identity": "数据身份",
         "input_hash": "内容指纹", "primary_time": "主时间字段", "start": "开始时间", "end": "结束时间",
         "bars": "K 线数量", "ready": "可用因子数量", "batch_replay_equal": "批量/事件一致性",
@@ -117,7 +65,7 @@ _LABELS = {
         "restart_ready": "重启恢复", "passed": "验证结果", "count": "数量", "active_version": "当前版本",
         "created": "工作区", "root": "工作目录", "range": "数据区间", "lesson": "本步目标",
         "workspace": "工作区文件", "directory": "版本目录", "artifact": "运行产物",
-        "script": "研究脚本", "shown": "显示行数", "total": "总行数", "rows": "数据行数", "columns": "字段数量",
+        "script": "脚本", "shown": "显示行数", "total": "总行数", "rows": "数据行数", "columns": "字段数量",
         "missing_values": "缺失值", "duplicate_primary_times": "重复主时间",
         "chronological": "时间有序", "valid_ohlc": "OHLC 合法", "point_in_time_safe": "时点安全",
         "fields": "字段",
@@ -129,7 +77,7 @@ _LABELS = {
         "transition_valid": "阶段顺序", "transition_reason": "阶段原因", "would_promote": "可晋级",
     },
     "en-US": {
-        "study_id": "Study ID", "version": "Version", "status": "Status", "hypothesis": "Hypothesis",
+        "version": "Version", "status": "Status", "hypothesis": "Hypothesis",
         "dataset": "Dataset", "input_release": "Dataset release", "input_identity": "Input identity",
         "input_hash": "Content hash", "primary_time": "Primary time", "start": "Start", "end": "End",
         "bars": "Bars", "ready": "Ready factors", "batch_replay_equal": "Batch/event parity",
@@ -142,7 +90,7 @@ _LABELS = {
         "restart_ready": "Restart recovery", "passed": "Validation", "count": "Count", "active_version": "Active version",
         "created": "Workspace", "root": "Working directory", "range": "Data range", "lesson": "Lesson",
         "workspace": "Workspace file", "directory": "Release directory", "artifact": "Run artifact",
-        "script": "Study script", "shown": "Rows shown", "total": "Total rows", "rows": "Rows", "columns": "Columns",
+        "script": "Script", "shown": "Rows shown", "total": "Total rows", "rows": "Rows", "columns": "Columns",
         "missing_values": "Missing values", "duplicate_primary_times": "Duplicate primary times",
         "chronological": "Chronological", "valid_ohlc": "Valid OHLC", "point_in_time_safe": "Point-in-time safe",
         "fields": "Fields",
@@ -173,57 +121,15 @@ def render_product_result(group: str, action: str, payload: Mapping[str, object]
     title = messages.get(f"{group}.{action}", f"{group} {action}").format(status=status)
     lines = [title, ""]
 
-    if group == "tutorial":
-        state = messages["created"] if payload.get("created") else messages["reused"]
+    if group == "run":
         sections = (
-            ("section.result", ("created", "study_id", "status", "hypothesis"), {"created": state}),
-            ("section.data", ("dataset", "input_hash", "range"), {}),
-            ("section.files", ("root", "workspace"), {}),
-        )
-    elif (group, action) == ("study", "data"):
-        sections = (
-            ("section.data", ("study_id", "version", "dataset", "shown", "total"), {}),
-        )
-    elif (group, action) == ("study", "profile"):
-        sections = (
-            ("section.data", ("study_id", "version", "dataset", "rows", "columns"), {}),
-            ("section.validation", ("missing_values", "duplicate_primary_times", "chronological",
-                                    "valid_ohlc", "point_in_time_safe", "passed"), {}),
-        )
-    elif (group, action) == ("study", "inspect"):
-        sections = (
-            ("section.result", ("study_id", "version", "status", "hypothesis"), {}),
-            ("section.data", ("dataset", "input_hash", "primary_time", "start", "end", "rows", "columns", "fields"), {}),
-        )
-    elif (group, action) == ("study", "scaffold"):
-        sections = (
-            ("section.result", ("study_id", "version"), {}),
-            ("section.files", ("script",), {}),
-        )
-    elif (group, action) == ("factor", "verify-sma"):
-        sections = (
-            ("section.data", ("input_identity", "bars", "ready"), {}),
-            ("section.validation", ("batch_replay_equal", "factor_hash"), {}),
-        )
-    elif group == "run":
-        sections = (
-            ("section.result", ("mode", "market_data_source", "passed", "bars", "trades", "orders", "fills", "final_equity",
-                                "final_cash", "final_position", "restart_ready", "hypothetical_intents",
-                                "submitted_orders", "comparisons"), {}),
-            ("section.data", ("input_identity", "capture"), {}),
-            ("section.files", ("artifact", "runtime_database"), {}),
+            ("section.result", ("run_id", "mode", "status", "workspace", "passed", "decisions_count", "comparisons"), {}),
+            ("section.data", ("dataset", "input_identity", "capture"), {}),
+            ("section.strategy", ("entrypoint", "strategy_id"), {}),
+            ("section.files", ("manifest", "artifact", "runtime_database", "run_workspace"), {}),
         )
     else:
-        sections = (
-            ("section.result", ("study_id", "factor_id", "strategy_id", "version", "status", "active_version",
-                                "count", "factor_spec_hash", "strategy_spec_hash", "execution_policy_id",
-                                "candidate_hash", "current_status", "target_status", "gate_passed",
-                                "transition_valid", "transition_reason", "would_promote",
-                                "next_promotion", "passed"), {}),
-            ("section.data", ("input_release", "input_hash", "primary_time", "start", "end"), {}),
-            ("section.audit", ("evidence_bundle",), {}),
-            ("section.files", ("workspace", "directory", "record"), {}),
-        )
+        sections = (("section.result", ("status", "passed"), {}),)
 
     shown: set[str] = {"next"}
     for heading, keys, overrides in sections:
@@ -250,15 +156,6 @@ def render_product_result(group: str, action: str, payload: Mapping[str, object]
         table_rows = [(str(key), _display(value, language)) for key, value in comparisons.items()]
         lines.extend(_table(messages["section.validation"], headers, table_rows))
         shown.add("comparisons")
-
-    preview_rows = payload.get("rows")
-    preview_columns = payload.get("columns")
-    if (group, action) == ("study", "data") and isinstance(preview_rows, list) and isinstance(preview_columns, (list, tuple)):
-        headers = tuple(str(item) for item in preview_columns)
-        table_rows = [tuple(_display(row.get(column), language) for column in headers)
-                      for row in preview_rows if isinstance(row, dict)]
-        lines.extend(_table(messages["section.data"], headers, table_rows))
-        shown.update(("rows", "columns"))
 
     if (group, action) == ("factor", "verify-sma"):
         bars, ready = int(payload.get("bars", 0)), int(payload.get("ready", 0))

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import unittest
 
 from kairospy.connectors.massive.reference import MassiveReferenceImporter
-from kairospy.domain.identity import AssetId
+from kairospy.trading.identity import AssetId
 from kairospy.reference import AssetType, ReferenceCatalog
 
 

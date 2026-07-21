@@ -13,7 +13,6 @@ class DatasetLayer(StrEnum):
     CURATED = "curated"
     REFERENCE = "reference"
     FEATURES = "features"
-    STUDIES = "studies"
 
 
 class DatasetStorageKind(StrEnum):
@@ -29,7 +28,7 @@ class DatasetStatus(StrEnum):
     REGISTERED = "registered"
     VALIDATING = "validating"
     VALIDATED = "validated"
-    APPROVED_FOR_STUDY = "approved_for_study"
+    APPROVED_FOR_WORKSPACE = "approved_for_workspace"
     APPROVED_FOR_BACKTEST = "approved_for_backtest"
     APPROVED_FOR_PRODUCTION = "approved_for_production"
     DEPRECATED = "deprecated"
@@ -40,7 +39,7 @@ class DatasetStatus(StrEnum):
 class QualityLevel(StrEnum):
     ARCHIVED = "Q0"
     INTEGRITY = "Q1"
-    STUDY = "Q2"
+    WORKSPACE = "Q2"
     BACKTEST = "Q3"
     PRODUCTION = "Q4"
 
@@ -65,7 +64,7 @@ class OutputFormat(StrEnum):
 
 
 class RunMode(StrEnum):
-    STUDY = "study"
+    WORKSPACE = "workspace"
     BACKTEST = "backtest"
     HISTORICAL_SIMULATION = "historical-simulation"
     PAPER_TRADING = "paper-trading"
@@ -108,7 +107,7 @@ class SourceBinding:
     provider: str
     venue: str | None = None
     priority: int = 0
-    quality_level: QualityLevel = QualityLevel.STUDY
+    quality_level: QualityLevel = QualityLevel.WORKSPACE
     acquisition_modes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
@@ -148,7 +147,7 @@ class DataProductContract:
     storage_kind: DatasetStorageKind = DatasetStorageKind.TABULAR
     layout_version: str = "1"
     quality_profile: str = "generic"
-    minimum_publication_level: QualityLevel = QualityLevel.STUDY
+    minimum_publication_level: QualityLevel = QualityLevel.WORKSPACE
 
     def __post_init__(self) -> None:
         path = self.relative_path.replace("\\", "/")
@@ -179,8 +178,8 @@ class DatasetRelease:
     provider: str | None = None
     venue: str | None = None
     aliases: tuple[str, ...] = ()
-    status: DatasetStatus = DatasetStatus.APPROVED_FOR_STUDY
-    quality_level: QualityLevel = QualityLevel.STUDY
+    status: DatasetStatus = DatasetStatus.APPROVED_FOR_WORKSPACE
+    quality_level: QualityLevel = QualityLevel.WORKSPACE
     published_at: str | None = None
     storage_kind: DatasetStorageKind = DatasetStorageKind.TABULAR
     layout_version: str = "1"
@@ -198,7 +197,7 @@ class DataSetContractArtifact:
 
     This is intentionally narrower than DataProductContract: it keeps logical
     identity, schema, time, storage kind, and quality semantics, but excludes
-    physical lake paths and connector details that Study/Strategy must not
+    physical lake paths and connector details that workspace/run code must not
     depend on.
     """
 
@@ -210,7 +209,7 @@ class DataSetContractArtifact:
     storage_kind: DatasetStorageKind = DatasetStorageKind.TABULAR
     layout_version: str = "1"
     quality_profile: str = "generic"
-    minimum_publication_level: QualityLevel = QualityLevel.STUDY
+    minimum_publication_level: QualityLevel = QualityLevel.WORKSPACE
     capabilities: Mapping[str, object] = field(default_factory=dict)
     schema_version: int = 1
 

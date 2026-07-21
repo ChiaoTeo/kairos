@@ -107,4 +107,4 @@ class ConsolidatedTradeBuilder:
                                                      **dict(managed.capabilities)})
         return publish_release(self.root, managed, release_id, manifest, provider="internal", venue="multi",
                                transform_id=policy.policy_id, transform_version=policy.version,
-                               quality_level=QualityLevel.STUDY)
+                               quality_level=QualityLevel.WORKSPACE)

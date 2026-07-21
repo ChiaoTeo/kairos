@@ -10,9 +10,9 @@ import unittest
 from kairospy.connectors.binance.order_book import (
     BinanceOrderBookSnapshotProvider, BinanceOrderBookSyncFault, BinanceOrderBookSyncService,
 )
-from kairospy.contracts import MarketEventKind, canonical_from_domain_market_data
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.market_data import OrderBookDelta, OrderBookLevel, OrderBookSnapshot
+from kairospy.contracts import MarketEventKind, canonical_from_trading_market_data
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.market_data import OrderBookDelta, OrderBookLevel, OrderBookSnapshot
 from kairospy.market_data import (
     BoundedEventChannel, CanonicalCaptureWriter, CanonicalOrderBookProjection,
     CapturedCanonicalEventSource, IterableEventSource,
@@ -28,7 +28,7 @@ def delta(first: int, last: int, offset: int = 0):
         INSTRUMENT, (OrderBookLevel(Decimal("100"), Decimal(str(1 + offset))),), (),
         first, last, NOW + timedelta(milliseconds=offset),
     )
-    return canonical_from_domain_market_data(
+    return canonical_from_trading_market_data(
         value, source="binance", source_instance="raw-depth", stream_id="btcusdt@depth",
         receive_time=value.event_time, published_time=value.event_time,
         receive_sequence=offset,

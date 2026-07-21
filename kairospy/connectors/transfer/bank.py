@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any, Protocol
 
-from kairospy.domain.identity import AssetId
+from kairospy.trading.identity import AssetId
 from kairospy.treasury.transfer_gateway import TransferSubmission
 from kairospy.treasury.transfer_contracts import BankTransferInstruction, TransferInstruction, TransferStatus
 

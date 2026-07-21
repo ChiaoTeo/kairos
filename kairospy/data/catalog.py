@@ -168,7 +168,7 @@ class DataCatalog:
         if not candidates:
             raise KeyError(_unknown_message(name, self._products, self._releases))
         approved = [item for item in candidates if item.status in {
-            DatasetStatus.APPROVED_FOR_STUDY, DatasetStatus.APPROVED_FOR_BACKTEST,
+            DatasetStatus.APPROVED_FOR_WORKSPACE, DatasetStatus.APPROVED_FOR_BACKTEST,
             DatasetStatus.APPROVED_FOR_PRODUCTION,
         }]
         product = self._products.get(str((approved or candidates)[0].product_key))
@@ -260,7 +260,7 @@ class DataCatalog:
         product_prefix = alias.split("@", 1)[0]
         if product_prefix != str(release.product_key):
             raise ValueError("dataset alias product prefix must match the target release product")
-        if release.status not in {DatasetStatus.APPROVED_FOR_STUDY, DatasetStatus.APPROVED_FOR_BACKTEST,
+        if release.status not in {DatasetStatus.APPROVED_FOR_WORKSPACE, DatasetStatus.APPROVED_FOR_BACKTEST,
                                   DatasetStatus.APPROVED_FOR_PRODUCTION}:
             raise ValueError("dataset alias can only target an approved release")
         previous = self._aliases.get(alias)
@@ -284,14 +284,14 @@ class DataCatalog:
         target = DatasetStatus(status)
         current = self.release(release_id)
         allowed = {
-            DatasetStatus.VALIDATED: {DatasetStatus.APPROVED_FOR_STUDY},
-            DatasetStatus.APPROVED_FOR_STUDY: {DatasetStatus.APPROVED_FOR_BACKTEST},
+            DatasetStatus.VALIDATED: {DatasetStatus.APPROVED_FOR_WORKSPACE},
+            DatasetStatus.APPROVED_FOR_WORKSPACE: {DatasetStatus.APPROVED_FOR_BACKTEST},
             DatasetStatus.APPROVED_FOR_BACKTEST: {DatasetStatus.APPROVED_FOR_PRODUCTION},
         }
         if target not in allowed.get(current.status, set()):
             raise ValueError(f"invalid dataset promotion: {current.status.value} -> {target.value}")
         minimum = {
-            DatasetStatus.APPROVED_FOR_STUDY: {QualityLevel.STUDY, QualityLevel.BACKTEST, QualityLevel.PRODUCTION},
+            DatasetStatus.APPROVED_FOR_WORKSPACE: {QualityLevel.WORKSPACE, QualityLevel.BACKTEST, QualityLevel.PRODUCTION},
             DatasetStatus.APPROVED_FOR_BACKTEST: {QualityLevel.BACKTEST, QualityLevel.PRODUCTION},
             DatasetStatus.APPROVED_FOR_PRODUCTION: {QualityLevel.PRODUCTION},
         }[target]
@@ -477,7 +477,7 @@ def _spec_primitive(item: DataProductContract) -> dict[str, object]:
 def _product_from_primitive(raw: dict[str, object]) -> DataProductDefinition:
     sources = tuple(SourceBinding(
         str(item["provider"]), str(item["venue"]) if item.get("venue") is not None else None,
-        int(item.get("priority", 0)), QualityLevel(str(item.get("quality_level", QualityLevel.STUDY.value))),
+        int(item.get("priority", 0)), QualityLevel(str(item.get("quality_level", QualityLevel.WORKSPACE.value))),
         tuple(str(value) for value in item.get("acquisition_modes", [])),
     ) for item in raw.get("sources", []))
     return DataProductDefinition(
@@ -503,7 +503,7 @@ def _spec_from_primitive(raw: dict[str, object]) -> DataProductContract:
         DatasetStorageKind(str(raw.get("storage_kind", DatasetStorageKind.TABULAR.value))),
         str(raw.get("layout_version", "1")),
         str(raw.get("quality_profile", "generic")),
-        QualityLevel(str(raw.get("minimum_publication_level", QualityLevel.STUDY.value))),
+        QualityLevel(str(raw.get("minimum_publication_level", QualityLevel.WORKSPACE.value))),
     )
 
 
@@ -516,7 +516,7 @@ def _release_from_primitive(raw: dict[str, object]) -> DatasetRelease:
         str(raw["provider"]) if raw.get("provider") is not None else None,
         str(raw["venue"]) if raw.get("venue") is not None else None,
         tuple(str(item) for item in raw.get("aliases", [])), DatasetStatus(str(raw["status"])),
-        QualityLevel(str(raw.get("quality_level", QualityLevel.STUDY.value))),
+        QualityLevel(str(raw.get("quality_level", QualityLevel.WORKSPACE.value))),
         str(raw["published_at"]) if raw.get("published_at") is not None else None,
         DatasetStorageKind(str(raw.get("storage_kind") or _storage_kind(
             str(raw["relative_path"]), str(raw["schema_id"]),
@@ -526,12 +526,12 @@ def _release_from_primitive(raw: dict[str, object]) -> DatasetRelease:
 
 
 def _layer(value: str) -> DatasetLayer:
-    aliases = {"feature": "features", "study": "studies"}
+    aliases = {"feature": "features"}
     return DatasetLayer(aliases.get(value, value))
 
 
 def _status(value: str) -> DatasetStatus:
-    aliases = {"approved": DatasetStatus.APPROVED_FOR_STUDY.value}
+    aliases = {"approved": DatasetStatus.APPROVED_FOR_WORKSPACE.value}
     return DatasetStatus(aliases.get(value, value))
 
 
@@ -563,8 +563,8 @@ def _quality_level(directory: Path, status: DatasetStatus) -> QualityLevel:
         return QualityLevel.PRODUCTION
     if status in {DatasetStatus.APPROVED_FOR_BACKTEST} or level >= 3:
         return QualityLevel.BACKTEST
-    if status in {DatasetStatus.APPROVED_FOR_STUDY, DatasetStatus.VALIDATED} or level >= 2:
-        return QualityLevel.STUDY
+    if status in {DatasetStatus.APPROVED_FOR_WORKSPACE, DatasetStatus.VALIDATED} or level >= 2:
+        return QualityLevel.WORKSPACE
     return QualityLevel.INTEGRITY if level >= 1 else QualityLevel.ARCHIVED
 
 
@@ -652,7 +652,7 @@ def _spec_from_metadata(root: Path, directory: Path, product: DataProductDefinit
         release.storage_kind,
         release.layout_version,
         str(_read_json(directory / "quality.json").get("profile") or "generic"),
-        release.quality_level if release.quality_level is not QualityLevel.ARCHIVED else QualityLevel.STUDY,
+        release.quality_level if release.quality_level is not QualityLevel.ARCHIVED else QualityLevel.WORKSPACE,
     )
 
 
@@ -671,7 +671,7 @@ def _manifest_version(value: object, fallback: str) -> str:
 
 def _discovered_status(directory: Path) -> str:
     quality = _read_json(directory / "quality.json")
-    return "approved_for_study" if quality.get("passed") is True else "registered"
+    return "approved_for_workspace" if quality.get("passed") is True else "registered"
 
 
 def _discovered_product(logical: str, layer: DatasetLayer, provider: str) -> DataProductDefinition:
@@ -691,7 +691,7 @@ def _discovered_product(logical: str, layer: DatasetLayer, provider: str) -> Dat
         dimensions = {"synthetic": "true"}
     elif logical.startswith("curated."):
         dimensions = {"market_data_type": logical.removeprefix("curated.")}
-    sources = (SourceBinding(provider, "opra", 100, QualityLevel.STUDY),) if provider else ()
+    sources = (SourceBinding(provider, "opra", 100, QualityLevel.WORKSPACE),) if provider else ()
     return DataProductDefinition(DatasetKey(logical), logical, layer, dimensions=dimensions,
                           primary_time="available_time" if layer is DatasetLayer.CANONICAL else "timestamp",
                           sources=sources)

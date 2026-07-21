@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
 from kairospy.ports import Environment, OrderAck, OrderRequest
-from kairospy.domain.capability import ExecutionCapabilities, OrderType
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.domain.order import ExecutionInstructions, TimeInForce
-from kairospy.domain.product import EquitySpec, ProductType
+from kairospy.trading.capability import ExecutionCapabilities, OrderType
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.trading.order import ExecutionInstructions, TimeInForce
+from kairospy.trading.product import EquitySpec, ProductType
 from kairospy.execution.router import ExecutionRouter
 from kairospy.reference import (
     BrokerId, EconomicProduct, ExecutionRoute, InstrumentDefinition,

@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Mapping
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 
 
 class MarketEventType(StrEnum):

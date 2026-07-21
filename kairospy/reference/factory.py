@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from kairospy.domain.identity import AssetId, InstrumentId
-from kairospy.domain.product import (
+from kairospy.trading.identity import AssetId, InstrumentId
+from kairospy.trading.product import (
     CryptoOptionSpec, FutureSpec, ListedOptionSpec, PerpetualSpec, ProductType,
     SettlementSession, SettlementType, TokenizedEquitySpec,
 )

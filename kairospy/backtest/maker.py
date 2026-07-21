@@ -6,8 +6,8 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import InstrumentId
 from kairospy.execution.policy import ExecutionMode, ExecutionPolicy, PartialFillPolicy
 
 

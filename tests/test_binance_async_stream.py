@@ -10,7 +10,7 @@ from kairospy.connectors.binance.market_stream import BinanceStreamSession, webs
 from kairospy.ports import Environment
 from kairospy.connectors.binance.stream import BinanceCanonicalStreamService
 from kairospy.contracts import MarketEventKind, QuotePayload, TradePayload
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.market_data import BoundedEventChannel, CanonicalCaptureWriter, CapturedCanonicalEventSource
 
 

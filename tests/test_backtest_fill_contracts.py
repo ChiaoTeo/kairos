@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 import unittest
 from datetime import timedelta
@@ -12,12 +12,12 @@ from kairospy.backtest.clock import BacktestClock
 from kairospy.backtest.fill import FillModelType, FixedCommissionModel, ListedOptionComboFillModel
 from kairospy.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
 from kairospy.backtest.portfolio import BacktestPortfolio
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import AccountKey, AccountType, VenueId
-from kairospy.domain.intent import LegIntent, OpenStructureIntent
-from kairospy.domain.market_data import Quote
-from kairospy.domain.order import Fill, LegFill, OrderStatus, TimeInForce
-from kairospy.domain.product import ListedOptionSpec
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import AccountKey, AccountType, VenueId
+from kairospy.trading.intent import LegIntent, OpenStructureIntent
+from kairospy.trading.market_data import Quote
+from kairospy.trading.order import Fill, LegFill, OrderStatus, TimeInForce
+from kairospy.trading.product import ListedOptionSpec
 from kairospy.risk.engine import RiskDecisionType, RiskEngine
 from kairospy.risk.limits import RiskLimits
 from kairospy.storage.codec import from_primitive, to_primitive
@@ -113,7 +113,7 @@ class BacktestFillContractTests(unittest.TestCase):
 
     def test_single_sided_quote_uses_directional_fallback_and_is_counted(self) -> None:
         from dataclasses import replace
-        from kairospy.study_platform.snapshot import InstrumentSnapshot
+        from kairospy.capture.snapshot import InstrumentSnapshot
         portfolio = BacktestPortfolio(Decimal("100000"), self.catalog, self.account)
         structure_id = uuid4()
         portfolio.apply_fill(Fill(uuid4(), uuid4(), uuid4(), "test", structure_id, self.second.timestamp, (LegFill(self.long, TradeSide.BUY, 1, Decimal("2.2")),), Decimal("-2.2"), 1, Decimal("1"), Decimal("0"), False))

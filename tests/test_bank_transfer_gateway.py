@@ -5,7 +5,7 @@ import unittest
 from uuid import uuid4
 
 from kairospy.connectors.transfer import BankTransferGateway
-from kairospy.domain.identity import AssetId
+from kairospy.trading.identity import AssetId
 from kairospy.reference.identity import LocationId, RailId
 from kairospy.treasury import BankTransferInstruction, FeePolicy, TransferStatus
 

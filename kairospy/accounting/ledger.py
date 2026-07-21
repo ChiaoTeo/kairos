@@ -4,10 +4,10 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from kairospy.domain.execution import DividendPayment, FundingPayment, TradeExecution
-from kairospy.domain.identity import AccountKey, AssetId
-from kairospy.domain.ledger import Ledger, LedgerBook, LedgerEntry, LedgerEntryType, LedgerTransaction
-from kairospy.domain.product import ProductType, is_option_spec, option_multiplier
+from kairospy.trading.execution import DividendPayment, FundingPayment, TradeExecution
+from kairospy.trading.identity import AccountKey, AssetId
+from kairospy.trading.ledger import Ledger, LedgerBook, LedgerEntry, LedgerEntryType, LedgerTransaction
+from kairospy.trading.product import ProductType, is_option_spec, option_multiplier
 from kairospy.products.calculators import PositionCalculatorRegistry
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.access import contract_spec, definition_at, product_type, settlement_asset, trade_cash_asset

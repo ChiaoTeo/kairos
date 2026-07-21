@@ -7,9 +7,9 @@ from enum import StrEnum
 from zoneinfo import ZoneInfo
 
 from kairospy import __version__
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.market_data import Greeks, Quote
-from kairospy.domain.product import (
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.market_data import Greeks, Quote
+from kairospy.trading.product import (
     ExerciseStyle,
     IndexSpec,
     ListedOptionSpec,
@@ -29,7 +29,7 @@ from kairospy.reference import (
     VenueType,
 )
 from kairospy.reference.factory import publish_instrument
-from kairospy.study_platform.snapshot import DataQualityIssue, InstrumentSnapshot
+from kairospy.capture.snapshot import DataQualityIssue, InstrumentSnapshot
 
 from .feed import InstrumentLifecycleSnapshot, MarketReplayDataset, MarketSnapshot, SettlementType, build_manifest
 

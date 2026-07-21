@@ -6,9 +6,9 @@ from kairospy.data.products import Datasets
 from kairospy.product_surface import Data
 
 
-# Study replay accepts Q2 data. Use RunMode.BACKTEST only after the exact
+# Workspace replay accepts Q2 data. Use RunMode.BACKTEST only after the exact
 # Release has passed Q3 review and is approved_for_backtest.
-data = Data().reader(run_mode=RunMode.STUDY)
+data = Data().reader(run_mode=RunMode.BACKTEST)
 feed = data.replay(
     Datasets.MARKET_EVENTS_OPTIONS_US_SPXW,
     datetime(2026, 7, 15, 13, 30, tzinfo=timezone.utc),

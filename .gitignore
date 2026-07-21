@@ -14,5 +14,3 @@ build/
 /config
 .kairos/
 !.kairos/project.json
-strategies/
-studies/

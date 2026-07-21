@@ -1,13 +1,16 @@
 {
-  "created": [],
+  "created": [
+    ".kairos/workspace/",
+    ".kairos/run/"
+  ],
   "kairospy_version": "0.1.0",
   "name": "kairospy",
   "next_steps": [
     "kairospy configure massive",
     "kairospy configure binance --environment testnet",
     "kairospy doctor",
-    "kairospy data catalog --refresh",
-    "python studies/starter.py"
+    "kairospy data start",
+    "kairospy workspace create alpha"
   ],
   "reused": [
     ".kairos/",
@@ -17,16 +20,11 @@
     ".kairos/data/curated/",
     ".kairos/data/events/",
     ".kairos/data/reference/",
-    "studies/",
-    "strategies/",
     "kairos.toml",
     ".env.example",
     "pyproject.toml",
     ".gitignore",
-    "README.md",
-    "studies/starter.py",
-    "strategies/__init__.py",
-    "strategies/starter_sma.py"
+    "README.md"
   ],
   "root": "."
 }

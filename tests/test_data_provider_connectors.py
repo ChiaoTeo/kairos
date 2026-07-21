@@ -18,12 +18,16 @@ from kairospy.connectors.deribit.datasets import (
     DeribitDvolDatasetConnector, DeribitOptionSnapshotDatasetConnector, DeribitOptionTradesDatasetConnector,
 )
 from kairospy.connectors.massive.datasets import MassiveEquityHourlyOhlcvDatasetConnector
+from kairospy.connectors.massive.datasets import MassiveEquityDailyMarketOhlcvDatasetConnector
+from kairospy.connectors.massive.config import MassiveConfig
+from kairospy.connectors.massive.market_data import MassiveAggregateBarsRequest, MassiveHistoricalMarketDataService
 from kairospy.data import (
     AcquisitionLimits, AcquisitionRequest, AcquirePolicy, OutputFormat, ProviderRegistry, SourceBinding, TimeRange,
 )
 from kairospy.data.products import (
     BINANCE_USDM_PERPETUAL_HOURLY, BTC_DERIBIT_OPTION_QUOTES, BTC_DERIBIT_OPTION_TRADES,
-    BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,
+    BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
+    US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,
 )
 from kairospy.data.bootstrap import default_provider_registry, register_configured_products, register_default_products
 from kairospy.data import DatasetClient
@@ -31,6 +35,13 @@ from kairospy.data import DatasetClient
 
 START = datetime(2026, 1, 2, tzinfo=timezone.utc)
 END = START + timedelta(days=1)
+
+
+def _require_optional_module(testcase: unittest.TestCase, module: str, message: str) -> None:
+    try:
+        __import__(module)
+    except ImportError:
+        testcase.skipTest(message)
 
 
 class _Archive:
@@ -80,7 +91,50 @@ class _MassiveHourlySource:
         ))
 
 
+class _MassiveDailySource:
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.calls = []
+
+    def fetch_pages(self, resource, params):
+        from types import SimpleNamespace
+        self.calls.append({"resource": resource, "params": dict(params)})
+        directory = self.root / "source/provider=massive/resource=fake-daily" / f"request_id={len(self.calls)}"
+        directory.mkdir(parents=True, exist_ok=True)
+        receipt = {"resource": resource, "parameters": dict(params), "status": "complete"}
+        (directory / "receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+        return SimpleNamespace(directory=directory, receipt=receipt, fingerprint=f"daily{len(self.calls)}")
+
+    def iter_results(self, archive):
+        symbol = str(archive.receipt["resource"]).split("/")[4]
+        base = 100 if symbol == "AAPL" else 200
+        timestamp = int(datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc).timestamp() * 1000)
+        return iter(({
+            "t": timestamp, "o": base, "h": base + 1, "l": base - 1, "c": base + 0.5,
+            "v": 1000, "n": 5, "vw": base + 0.25,
+        },))
+
+
 class ProviderConnectorContractTests(unittest.TestCase):
+    def test_massive_historical_market_data_service_returns_source_artifact(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = _MassiveDailySource(root)
+            service = MassiveHistoricalMarketDataService(root, client=object(), source=source)
+
+            artifact = service.fetch_aggregate_bars(MassiveAggregateBarsRequest(
+                "AAPL", 1, "day", date(2026, 1, 2), date(2026, 1, 2), adjusted=True,
+            ))
+
+            self.assertEqual(artifact.artifact.provider, "massive")
+            self.assertEqual(artifact.artifact.service, "historical_market_data")
+            self.assertEqual(artifact.artifact.resource, "equity_aggregate_bars")
+            self.assertEqual(artifact.artifact.request_fingerprint, "daily1")
+            self.assertTrue(str(artifact.artifact.receipt_path).endswith("receipt.json"))
+            self.assertEqual(source.calls[0]["resource"], "/v2/aggs/ticker/AAPL/range/1/day/2026-01-02/2026-01-02")
+            self.assertEqual(source.calls[0]["params"]["adjusted"], True)
+            self.assertEqual(len(tuple(service.iter_aggregate_bar_results(artifact))), 1)
+
     def test_binance_graceful_shutdown_bounds_archive_index_requests(self):
         with TemporaryDirectory() as temporary:
             source = Path(temporary)
@@ -126,6 +180,8 @@ class ProviderConnectorContractTests(unittest.TestCase):
             self.assertEqual(plan["planned_symbols"], 3)
 
     def test_massive_equity_hourly_acquires_and_reads_like_full_market_product(self):
+        _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
+        _require_optional_module(self, "duckdb", "query optional dependency is not installed")
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             register_default_products(root)
@@ -154,6 +210,44 @@ class ProviderConnectorContractTests(unittest.TestCase):
             self.assertEqual(release.provider, "massive")
             self.assertEqual(release.venue, "us-securities")
             self.assertTrue((root / release.relative_path / "lineage.json").exists())
+
+    def test_default_registry_registers_builtin_massive_daily_products_when_credentials_are_available(self):
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            register_default_products(root)
+            with patch("kairospy.data.bootstrap._massive_config_for_project", return_value=MassiveConfig("test-key")):
+                providers = default_provider_registry(root)
+            self.assertTrue(providers.available("massive", str(US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY.key)))
+
+    def test_massive_equity_daily_acquires_bounded_builtin_product(self):
+        _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            register_default_products(root)
+            connector = MassiveEquityDailyMarketOhlcvDatasetConnector(root, client=object(), view="vendor_adjusted")
+            connector.source = _MassiveDailySource(root)
+            providers = ProviderRegistry()
+            providers.register(connector, (US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,))
+            client = DatasetClient(
+                root, providers=providers,
+                acquisition_limits=AcquisitionLimits(maximum_requests=10, maximum_instruments=10),
+            )
+
+            rows = client.get(
+                US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY.product,
+                start="2026-01-02T00:00:00Z",
+                end="2026-01-03T00:00:00Z",
+                instruments=("equity:us:AAPL", "equity:us:MSFT"),
+                fields=("period_start", "period_end", "instrument_id", "symbol", "close"),
+                acquire=AcquirePolicy.IF_MISSING,
+            ).collect(OutputFormat.ROWS)
+
+            self.assertEqual([row["symbol"] for row in rows], ["AAPL", "MSFT"])
+            self.assertEqual({row["instrument_id"] for row in rows}, {"equity:us:AAPL", "equity:us:MSFT"})
+            release = DatasetClient(root).resolve(str(US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY.key))
+            self.assertEqual(release.provider, "massive")
+            self.assertEqual(release.venue, "us-securities")
+            self.assertTrue((root / release.relative_path / "manifest.json").exists())
 
     def test_full_market_instrument_limits_fail_before_provider_downloads(self):
         with TemporaryDirectory() as temporary:

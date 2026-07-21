@@ -16,7 +16,7 @@ from kairospy.connectors.massive.equity_identity import MassiveEquityIdentityRes
 from kairospy.connectors.massive.reference_store import MassiveReferenceStore
 from kairospy.connectors.massive.reference_pipeline import MassiveReferencePipeline
 from kairospy.connectors.massive import MassiveClient, MassiveConfig, MassiveResponse
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.reference import MappingTargetType, ProviderId, ProviderSymbolMapping, ReferenceCatalog, ReferenceCatalogRepository
 from tests.test_massive_daily_ohlcv import _EquitySource
 

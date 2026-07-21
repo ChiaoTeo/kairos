@@ -46,13 +46,13 @@ class TypedQualityProfileTests(unittest.TestCase):
         release = DatasetRelease(
             f"{profile}-release", key, "1", f"quality.{profile}.v1", "1", "fixture", "1",
             relative, "parquet", str(manifest["dataset_sha256"]), "fixture", None, (),
-            DatasetStatus.APPROVED_FOR_STUDY, QualityLevel.STUDY,
+            DatasetStatus.APPROVED_FOR_WORKSPACE, QualityLevel.WORKSPACE,
             storage_kind=DatasetStorageKind.TABULAR,
         )
         catalog = DataCatalog(root)
         catalog.register_product_spec(DataProductContract(
             product, f"canonical/{profile}", release.schema_id, {}, DatasetStorageKind.TABULAR,
-            "1", profile, QualityLevel.STUDY,
+            "1", profile, QualityLevel.WORKSPACE,
         ))
         catalog.register_release(release)
         catalog.save()
@@ -187,13 +187,13 @@ class TypedQualityProfileTests(unittest.TestCase):
         release = DatasetRelease(
             "identity-release", product.key, "1", "reference.identity.v1", "1",
             "fixture", "1", relative, "json", digest, "fixture", None, (),
-            DatasetStatus.APPROVED_FOR_STUDY, QualityLevel.STUDY,
+            DatasetStatus.APPROVED_FOR_WORKSPACE, QualityLevel.WORKSPACE,
             storage_kind=DatasetStorageKind.REFERENCE,
         )
         catalog = DataCatalog(root)
         catalog.register_product_spec(DataProductContract(
             product, "reference/provider=massive/equity_identity", release.schema_id, {},
-            DatasetStorageKind.REFERENCE, "1", "equity_identity", QualityLevel.STUDY,
+            DatasetStorageKind.REFERENCE, "1", "equity_identity", QualityLevel.WORKSPACE,
         ))
         catalog.register_release(release)
         catalog.save()
@@ -224,13 +224,13 @@ class TypedQualityProfileTests(unittest.TestCase):
         release = DatasetRelease(
             "corporate-action-release", product.key, "1", "reference.corporate_actions.v1", "1",
             "fixture", "1", relative, "json", digest, "fixture", None, (),
-            DatasetStatus.APPROVED_FOR_STUDY, QualityLevel.STUDY,
+            DatasetStatus.APPROVED_FOR_WORKSPACE, QualityLevel.WORKSPACE,
             storage_kind=DatasetStorageKind.REFERENCE,
         )
         catalog = DataCatalog(root)
         catalog.register_product_spec(DataProductContract(
             product, "reference/provider=massive/corporate_actions", release.schema_id, {},
-            DatasetStorageKind.REFERENCE, "1", "corporate_action", QualityLevel.STUDY,
+            DatasetStorageKind.REFERENCE, "1", "corporate_action", QualityLevel.WORKSPACE,
         ))
         catalog.register_release(release)
         catalog.save()

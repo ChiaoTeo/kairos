@@ -6,8 +6,8 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.intent import HedgeIntent, Intent, TargetExposureIntent, TargetPositionIntent
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.intent import HedgeIntent, Intent, TargetExposureIntent, TargetPositionIntent
 
 
 class IntentStatus(StrEnum):

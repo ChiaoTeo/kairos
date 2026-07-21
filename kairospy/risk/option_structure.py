@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from kairospy.domain.product import OptionRight, OptionSpec, option_multiplier
+from kairospy.trading.product import OptionRight, OptionSpec, option_multiplier
 
 
 def maximum_expiry_loss(legs: tuple[tuple[OptionSpec,int],...],entry_credit: Decimal,quantity: int=1) -> Decimal:

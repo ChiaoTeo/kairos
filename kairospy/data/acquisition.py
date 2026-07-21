@@ -1,87 +1,30 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
 from .catalog import DataCatalog
-from .contracts import DatasetLike, DataProductContract, DatasetRelease, SourceBinding
+from .builders import DataProductBuilder
+from .contracts import DatasetLike, DataProductContract, DatasetRelease
+from .acquisition_primitives import (
+    AcquisitionEstimate, AcquisitionLimits, AcquisitionPlan, AcquisitionRequest, TimeRange,
+)
 
 
-@dataclass(frozen=True, slots=True)
-class TimeRange:
-    start: datetime
-    end: datetime
+class ProviderConnector(DataProductBuilder, Protocol):
+    """Legacy name for a DataProductBuilder.
 
-    def __post_init__(self) -> None:
-        if self.start.tzinfo is None or self.end.tzinfo is None or self.start >= self.end:
-            raise ValueError("time range requires timezone-aware [start,end) with start before end")
+    The object registered here builds governed Data datasets from provider
+    sources. External provider access belongs in ``kairospy.connectors``.
+    """
 
-
-@dataclass(frozen=True, slots=True)
-class AcquisitionRequest:
-    logical_key: str
-    missing: tuple[TimeRange, ...]
-    source: SourceBinding
-    instruments: tuple[str, ...] = ()
-    fields: tuple[str, ...] = ()
-    base_release_id: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class AcquisitionEstimate:
-    requests: int
-    bytes: int | None = None
-    cost_class: str = "unknown"
-    instruments: int | None = None
-
-    def __post_init__(self) -> None:
-        if (
-            self.requests < 0
-            or self.bytes is not None and self.bytes < 0
-            or self.instruments is not None and self.instruments < 0
-        ):
-            raise ValueError("acquisition estimates cannot be negative")
-
-
-@dataclass(frozen=True, slots=True)
-class AcquisitionLimits:
-    maximum_requests: int = 10_000
-    maximum_ranges: int = 366
-    maximum_instruments: int = 10_000
-    maximum_bytes: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class AcquisitionPlan:
-    logical_key: str
-    requested: TimeRange
-    local_release_id: str | None
-    covered: tuple[TimeRange, ...]
-    missing: tuple[TimeRange, ...]
-    candidates: tuple[SourceBinding, ...]
-    selected: SourceBinding | None
-    source_policy_version: str = "priority-v1"
-    connector_available: bool = False
-    estimate: AcquisitionEstimate | None = None
-
-    @property
-    def complete(self) -> bool:
-        return not self.missing
-
-    @property
-    def executable(self) -> bool:
-        return self.complete or self.selected is not None and self.connector_available
-
-
-class ProviderConnector(Protocol):
     provider: str
 
     def supports(self, logical_key: str) -> bool:
-        """Return whether this connector can publish the requested product."""
+        """Return whether this builder can publish the requested Data Product."""
 
     def acquire(self, request: AcquisitionRequest) -> DatasetRelease:
-        """Archive Source, canonicalize, validate and return one immutable release."""
+        """Archive Source, canonicalize, validate and return an internal dataset revision."""
 
     def estimate(self, request: AcquisitionRequest) -> AcquisitionEstimate:
         """Return a conservative request/size estimate without network access."""
@@ -95,14 +38,14 @@ class ProviderRegistry:
     def register(self, connector: ProviderConnector, specs: tuple[DataProductContract, ...] = ()) -> None:
         provider = connector.provider.strip()
         if not provider:
-            raise ValueError("provider connector must declare a provider")
+            raise ValueError("Data Product builder must declare a provider")
         values = self._connectors.setdefault(provider, [])
         if connector not in values:
             values.append(connector)
         for spec in specs:
             key = str(spec.key)
             if not connector.supports(key):
-                raise ValueError(f"connector {provider!r} does not support declared data product contract {key!r}")
+                raise ValueError(f"Data Product builder for provider {provider!r} does not support declared Data Product {key!r}")
             if not any(source.provider == provider for source in spec.product.sources):
                 raise ValueError(f"data product contract {key!r} does not declare provider {provider!r}")
             previous = self._specs.get(key)
@@ -113,9 +56,12 @@ class ProviderRegistry:
     def get(self, provider: str, logical_key: str) -> ProviderConnector:
         matches = [item for item in self._connectors.get(provider, ()) if item.supports(logical_key)]
         if not matches:
-            raise RuntimeError(f"no acquisition connector registered for provider {provider!r} and product {logical_key!r}")
+            raise RuntimeError(
+                f"no Data Product builder registered for provider {provider!r} and Data Product {logical_key!r}; "
+                f"run `kairospy providers doctor {provider}` or `kairospy data products doctor {logical_key}`"
+            )
         if len(matches) > 1:
-            raise RuntimeError(f"multiple acquisition connectors claim provider {provider!r} and product {logical_key!r}")
+            raise RuntimeError(f"multiple Data Product builders claim provider {provider!r} and Data Product {logical_key!r}")
         return matches[0]
 
     def available(self, provider: str, logical_key: str) -> bool:

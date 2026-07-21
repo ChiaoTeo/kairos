@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.domain.capability import MarketDataCapabilities, MarketDataKind
-from kairospy.domain.identity import VenueId
-from kairospy.domain.market_data import Quote
-from kairospy.domain.product import ProductType
+from kairospy.trading.capability import MarketDataCapabilities, MarketDataKind
+from kairospy.trading.identity import VenueId
+from kairospy.trading.market_data import Quote
+from kairospy.trading.product import ProductType
 from kairospy.reference import InstrumentDefinition
 
 from .rest_transport import BinanceTransport, RateLimiter

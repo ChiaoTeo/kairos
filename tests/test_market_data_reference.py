@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import unittest
 
-from kairospy.domain.capability import MarketDataCapabilities, MarketDataKind
-from kairospy.domain.identity import AssetId, InstrumentId
-from kairospy.domain.product import CryptoSpotSpec, ProductType
+from kairospy.trading.capability import MarketDataCapabilities, MarketDataKind
+from kairospy.trading.identity import AssetId, InstrumentId
+from kairospy.trading.product import CryptoSpotSpec, ProductType
 from kairospy.market_data.subscriptions import MarketDataRequirement, SubscriptionPlanner
 from kairospy.reference import (
     EconomicProduct, InstrumentDefinition, InstrumentLifecycle,

@@ -7,13 +7,13 @@ import json
 from pathlib import Path
 
 from kairospy.backtest.feed import MarketSnapshot
-from kairospy.domain.product import ListedOptionSpec, OptionRight
+from kairospy.trading.product import ListedOptionSpec, OptionRight
 from kairospy.pricing.option_valuation import ValuationSnapshot
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.access import contract_spec, definition_at
 
 from .runtime import FactorQuality, FactorSnapshot, FactorSpec, implementation_hash
-from kairospy.study_platform.features import FeatureEngine
+from kairospy.capture.features import FeatureEngine
 
 
 @dataclass(frozen=True, slots=True)

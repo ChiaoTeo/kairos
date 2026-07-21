@@ -16,7 +16,7 @@ from kairospy.connectors.binance.order_book import (
 )
 from kairospy.connectors.binance.rest_transport import UrllibBinanceTransport
 from kairospy.connectors.binance.stream import BinanceCanonicalStreamService
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.market_data import (
     BoundedEventChannel, CanonicalCaptureWriter, CanonicalOrderBookProjection,
     CapturedCanonicalEventSource,

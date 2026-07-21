@@ -41,7 +41,7 @@ class SurfaceFeaturePublisher:
             f"Point-in-time calibrated SVI surfaces derived from {input_release.product_key}.",
             {"underlying": underlying, "model": "svi", "frequency": "event"},
             "available_time",
-            owner="study-platform",
+            owner="workspace-platform",
         )
         spec = DataProductContract(
             product,
@@ -54,7 +54,7 @@ class SurfaceFeaturePublisher:
             DatasetStorageKind.TABULAR,
             "1",
             "feature",
-            QualityLevel.STUDY,
+            QualityLevel.WORKSPACE,
         )
         catalog.register_product_spec(spec, enrich=True)
         catalog.save()
@@ -109,7 +109,7 @@ class SurfaceFeaturePublisher:
             venue=None,
             transform_id="surface_snapshot_to_feature",
             transform_version="1",
-            quality_level=QualityLevel.STUDY,
+            quality_level=QualityLevel.WORKSPACE,
         )
         assessment = DatasetQualityService(self.root).assess(release.release_id)
         if not assessment.passed:

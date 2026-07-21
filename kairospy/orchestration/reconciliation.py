@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING
 
 from kairospy.application.clock import Clock, SystemClock
 from kairospy.ports import AccountPort, AccountState
-from kairospy.domain.identity import AccountKey, AssetId, InstrumentId
-from kairospy.domain.ledger import Ledger, LedgerBook
+from kairospy.trading.identity import AccountKey, AssetId, InstrumentId
+from kairospy.trading.ledger import Ledger, LedgerBook
 from kairospy.risk.strategy_positions import StrategyPositionBook
 
 if TYPE_CHECKING:

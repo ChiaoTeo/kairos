@@ -4,15 +4,15 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from kairospy.contracts import BarPayload
-from kairospy.domain.execution import TradeSide
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.intent import TargetExposureIntent
+from kairospy.trading.execution import TradeSide
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.intent import TargetExposureIntent
 from kairospy.execution.intent_status import IntentExecutionTracker, IntentExecutionView
 from kairospy.features.runtime import FactorRuntime
 from kairospy.market_data.stream import EventSource
 from kairospy.risk.portfolio_governance import PositionSizer
-from kairospy.strategies.strategy_protocols import StrategyContext
-from kairospy.strategies.runtime import GovernedStrategyRuntime
+from kairospy.strategy.protocols import StrategyContext
+from kairospy.strategy.runtime import GovernedStrategyRuntime
 
 from .strategy_run_loop import GovernedStrategyRunLoop, StrategyRunResult
 

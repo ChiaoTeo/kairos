@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 
 
 @dataclass(frozen=True, slots=True)

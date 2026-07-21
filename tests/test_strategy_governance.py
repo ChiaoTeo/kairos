@@ -1,20 +1,20 @@
-from kairospy.domain.identity import InstitutionId
+from kairospy.trading.identity import InstitutionId
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 import unittest
 
-from kairospy.domain.capability import TimeInForce
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.intent import TargetPositionIntent
-from kairospy.domain.product import ProductType
-from kairospy.domain.strategy_contract import EconomicIntent, StrategyLifecycle, StrategySpec
+from kairospy.trading.capability import TimeInForce
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.intent import TargetPositionIntent
+from kairospy.trading.product import ProductType
+from kairospy.trading.strategy_contract import EconomicIntent, StrategyLifecycle, StrategySpec
 from kairospy.execution.planner import LeggingPolicy
 from kairospy.execution.policy import ExecutionMode, ExecutionPolicy, PartialFillPolicy
 from kairospy.execution.strategy_planner import plan_economic_intent
-from kairospy.domain.order import ExecutionInstructions
-from kairospy.domain.capability import OrderType
+from kairospy.trading.order import ExecutionInstructions
+from kairospy.trading.capability import OrderType
 from kairospy.risk.portfolio_governance import (
     AllocationDecisionType, PortfolioAllocator, StrategyAllocation,
 )
@@ -26,7 +26,7 @@ def spec():
         ("short_volatility",), ("variance_risk_premium",), ("gamma", "jump"),
         (("underlying", "BTC"),), ("skew", "atm_iv"), (("threshold", .8),),
         (("structure", "iron_condor"),), ("high_skew",), ("hold_7d",), ("daily",),
-        Decimal(".02"), ("synchronous_quotes",), ("combo_orders",), "study-hash",
+        Decimal(".02"), ("synchronous_quotes",), ("combo_orders",), "evidence-hash",
     )
 
 
@@ -35,13 +35,13 @@ class StrategyGovernanceTest(unittest.TestCase):
         strategy = spec()
         with self.assertRaises(ValueError):
             strategy.promote(StrategyLifecycle.LIVE_APPROVED)
-        promoted = strategy.promote(StrategyLifecycle.STUDY_VALIDATED)
-        self.assertEqual(promoted.lifecycle, StrategyLifecycle.STUDY_VALIDATED)
+        promoted = strategy.promote(StrategyLifecycle.RESEARCH_VALIDATED)
+        self.assertEqual(promoted.lifecycle, StrategyLifecycle.RESEARCH_VALIDATED)
         self.assertEqual(promoted.spec_hash, strategy.spec_hash)
 
     def test_legacy_lifecycle_alias_is_not_public(self):
         with self.assertRaises(ValueError):
-            StrategyLifecycle("RE" + "SEARCH_VALIDATED")
+            StrategyLifecycle("STUDY_VALIDATED")
 
     def test_economic_intent_preserves_strategy_and_evidence_hashes(self):
         strategy = spec(); now = datetime.now(timezone.utc)
@@ -92,7 +92,7 @@ class StrategyGovernanceTest(unittest.TestCase):
             intents=(target,),risk_budget=Decimal("1000"),urgency="normal",execution_policy_id="taker-v1",feature_snapshot_hash="x")
         policy=ExecutionPolicy("taker-v1","1",ExecutionMode.TAKER,TimeInForce.IOC,Decimal("10"))
         instructions={instrument:ExecutionInstructions(OrderType.MARKET,TimeInForce.IOC)}
-        from kairospy.domain.identity import AccountKey,AccountType,VenueId
+        from kairospy.trading.identity import AccountKey,AccountType,VenueId
         account=AccountKey(InstitutionId("sim"),"a",AccountType.CRYPTO_SPOT)
         plan=plan_economic_intent(intent,policy=policy,accounts={instrument:account},current_positions={},instructions=instructions,now=now)
         self.assertEqual(plan.strategy_spec_hash,strategy.spec_hash)

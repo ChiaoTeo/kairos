@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Mapping
 
 from kairospy.ports import OrderRecoveryPort, VenueOrderStatus
-from kairospy.domain.identity import AccountKey
+from kairospy.trading.identity import AccountKey
 from kairospy.execution.ingestion import DurableExecutionIngestionService
 from kairospy.execution.order_state import DurableOrderRecord, DurableOrderStatus
 from kairospy.orchestration.runtime_store import SQLiteRuntimeStore

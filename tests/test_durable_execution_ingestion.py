@@ -10,11 +10,11 @@ from uuid import UUID
 from kairospy.accounting.ledger import LedgerService
 from kairospy.ports import OrderAck
 from kairospy.connectors.binance.user_data_stream import UserFillUpdate
-from kairospy.domain.execution import DividendPayment, FundingPayment, TradeExecution, TradeSide
-from kairospy.domain.corporate_action import SplitEvent
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.ledger import Ledger, LedgerBook
-from kairospy.domain.product import CryptoSpotSpec, ProductType
+from kairospy.trading.execution import DividendPayment, FundingPayment, TradeExecution, TradeSide
+from kairospy.trading.corporate_action import SplitEvent
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.ledger import Ledger, LedgerBook
+from kairospy.trading.product import CryptoSpotSpec, ProductType
 from kairospy.execution.ingestion import DurableAccountingIngestionService, DurableExecutionIngestionService
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.orchestration.runtime_store import SQLiteRuntimeStore

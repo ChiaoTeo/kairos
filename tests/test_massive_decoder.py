@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from kairospy.connectors.massive.decoder import decode_option_snapshots
-from kairospy.domain.identity import InstrumentId
+from kairospy.trading.identity import InstrumentId
 from kairospy.reference import MappingTargetType, ProviderId, ProviderSymbolMapping, ReferenceCatalog
 
 

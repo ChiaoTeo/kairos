@@ -4,8 +4,8 @@ import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.domain.identity import AssetId
-from kairospy.domain.product import OptionRight
+from kairospy.trading.identity import AssetId
+from kairospy.trading.product import OptionRight
 from kairospy.market_data import DayCount, RateCurve, RateNode, cost_of_carry_forward, parity_forward, zero_rate
 from kairospy.pricing import PricingInput, PricingModel, SolverStatus, black_scholes, black76, implied_volatility
 

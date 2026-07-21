@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from kairospy.ports import AccountState
-from kairospy.domain.identity import AccountKey
+from kairospy.trading.identity import AccountKey
 
 from .account_gateway import BinanceAccountGateway
 from .execution_gateway import BinanceExecutionGateway

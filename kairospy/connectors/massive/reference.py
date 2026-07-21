@@ -7,8 +7,8 @@ from typing import Iterable, Mapping
 from zoneinfo import ZoneInfo
 
 from kairospy.backtest.calendar import TradingCalendar
-from kairospy.domain.identity import AssetId, InstrumentId, VenueId
-from kairospy.domain.product import EquitySpec, ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairospy.trading.identity import AssetId, InstrumentId, VenueId
+from kairospy.trading.product import EquitySpec, ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
 from kairospy.reference import (
     AssetDefinition, AssetType, ListingDefinition, ListingId, MappingTargetType,
     ProviderId, ProviderSymbolMapping, ReferenceCatalog, TradingRules,

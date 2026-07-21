@@ -6,8 +6,8 @@ from decimal import Decimal
 from pathlib import Path
 
 from kairospy.contracts import CanonicalEventEnvelope
-from kairospy.domain.identity import InstrumentId
-from kairospy.domain.market_data import Bar
+from kairospy.trading.identity import InstrumentId
+from kairospy.trading.market_data import Bar
 
 from .runtime import (
     CanonicalBarFactorRuntime, FactorQuality, FactorSnapshot, FactorSpec, implementation_hash,

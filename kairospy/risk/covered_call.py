@@ -4,10 +4,10 @@ from decimal import Decimal
 
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.access import contract_spec, definition_at
-from kairospy.domain.intent import CoveredCallIntent
-from kairospy.domain.ledger import Ledger, LedgerBook
-from kairospy.domain.identity import AccountKey, AssetId
-from kairospy.domain.product import ListedOptionSpec
+from kairospy.trading.intent import CoveredCallIntent
+from kairospy.trading.ledger import Ledger, LedgerBook
+from kairospy.trading.identity import AccountKey, AssetId
+from kairospy.trading.product import ListedOptionSpec
 
 
 def validate_covered_call(intent: CoveredCallIntent, account: AccountKey, ledger: Ledger, catalog: ReferenceCatalog, at) -> None:
