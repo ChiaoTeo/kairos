@@ -139,6 +139,10 @@ def load_project_config_or_none(start: str | Path = ".") -> KairosProjectConfig 
         return None
 
 
+def load_dotenv_file(path: str | Path = ".env") -> None:
+    _load_dotenv(Path(path))
+
+
 def set_config_value(path: str | Path, dotted_path: str, value: str) -> None:
     config_path = Path(path).expanduser().resolve()
     data = KairosProjectConfig.load(config_path).data if config_path.exists() else {}

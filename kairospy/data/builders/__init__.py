@@ -3,6 +3,7 @@ from .product_builders import DataProductBuilder, DataProductBuilderRegistry, Da
 from .ohlcv import (
     EquityOhlcvDataProductBuilder,
     EquityOhlcvSourceBinding,
+    OptionHourlyOhlcvDataProductBuilder,
     equity_daily_ohlcv_rows,
     equity_hourly_ohlcv_arrow_schema,
     equity_hourly_ohlcv_rows,
@@ -12,6 +13,9 @@ from .ohlcv import (
     equity_ohlcv_schema,
     equity_symbol,
     merge_equity_ohlcv_rows,
+    option_hourly_ohlcv_rows,
+    option_ohlcv_row,
+    option_symbol,
     write_equity_ohlcv_dataset,
 )
 
@@ -22,6 +26,7 @@ __all__ = [
     "DatasetBuildResult",
     "EquityOhlcvDataProductBuilder",
     "EquityOhlcvSourceBinding",
+    "OptionHourlyOhlcvDataProductBuilder",
     "ProductSourceBinding",
     "TaskRangePlan",
     "UniversePlan",
@@ -34,5 +39,8 @@ __all__ = [
     "equity_ohlcv_schema",
     "equity_symbol",
     "merge_equity_ohlcv_rows",
+    "option_hourly_ohlcv_rows",
+    "option_ohlcv_row",
+    "option_symbol",
     "write_equity_ohlcv_dataset",
 ]

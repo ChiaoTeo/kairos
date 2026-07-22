@@ -49,7 +49,7 @@ class MassiveAggregateBarsArtifact:
 
 
 class MassiveAggregateBarsResource(ProviderResource):
-    resource_id = "equity_aggregate_bars"
+    resource_id = "aggregate_bars"
 
     def __init__(self, root: str | Path, source: MassiveVendorArchiveClient) -> None:
         self.root = Path(root)

@@ -2,10 +2,11 @@ from .catalog import DataCatalog
 from .builders import (
     DataProductBuilder, DataProductBuilderRegistry, DataProductTaskPlan, DatasetBuildResult, ProductSourceBinding,
     TaskRangePlan, UniversePlan,
-    EquityOhlcvDataProductBuilder, EquityOhlcvSourceBinding,
+    EquityOhlcvDataProductBuilder, EquityOhlcvSourceBinding, OptionHourlyOhlcvDataProductBuilder,
     equity_daily_ohlcv_rows, equity_hourly_ohlcv_arrow_schema, equity_hourly_ohlcv_rows,
     equity_hourly_ohlcv_schema, equity_ohlcv_arrow_schema, equity_ohlcv_row, equity_ohlcv_schema,
-    equity_symbol, merge_equity_ohlcv_rows, write_equity_ohlcv_dataset,
+    equity_symbol, merge_equity_ohlcv_rows, option_hourly_ohlcv_rows, option_ohlcv_row, option_symbol,
+    write_equity_ohlcv_dataset,
 )
 from .acquisition import (
     AcquisitionEstimate, AcquisitionLimits, AcquisitionPlan, AcquisitionRequest, CoveragePlanner, ProviderConnector,
@@ -77,10 +78,11 @@ __all__ += [
     "DatasetBuildResult", "ProductSourceBinding", "TaskRangePlan", "UniversePlan",
 ]
 __all__ += [
-    "EquityOhlcvDataProductBuilder", "EquityOhlcvSourceBinding",
+    "EquityOhlcvDataProductBuilder", "EquityOhlcvSourceBinding", "OptionHourlyOhlcvDataProductBuilder",
     "equity_daily_ohlcv_rows", "equity_hourly_ohlcv_arrow_schema", "equity_hourly_ohlcv_rows",
     "equity_hourly_ohlcv_schema", "equity_ohlcv_arrow_schema", "equity_ohlcv_row",
-    "equity_ohlcv_schema", "equity_symbol", "merge_equity_ohlcv_rows", "write_equity_ohlcv_dataset",
+    "equity_ohlcv_schema", "equity_symbol", "merge_equity_ohlcv_rows",
+    "option_hourly_ohlcv_rows", "option_ohlcv_row", "option_symbol", "write_equity_ohlcv_dataset",
 ]
 __all__ += ["DataDiagnosticIssue", "DataDiagnosticsService"]
 __all__ += [

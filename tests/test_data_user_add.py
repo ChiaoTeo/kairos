@@ -738,6 +738,7 @@ class DataUserAddTests(unittest.TestCase):
         self.assertNotIn("protocol_name", products["market.ohlcv.crypto.binance.btc-usdt.1d"])
         self.assertNotIn("layer", products["market.ohlcv.crypto.binance.btc-usdt.1d"])
         self.assertIn("massive.equity.ohlcv.1d", products["market.ohlcv.equity.us.massive.1d.vendor_adjusted"]["aliases"])
+        self.assertIn("massive.option.ohlcv.1h", products["market.ohlcv.option.us.massive.1h.raw"]["aliases"])
 
     def test_data_product_list_text_exposes_product_discovery_fields(self) -> None:
         completed = subprocess.run(

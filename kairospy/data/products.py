@@ -67,6 +67,15 @@ _US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY_PRODUCT = _product(
     primary_time="available_time",
     sources=(SourceBinding("massive", "us-securities", 90, QualityLevel.WORKSPACE, ("rest",)),),
 )
+_US_OPTION_MASSIVE_RAW_HOURLY_PRODUCT = _product(
+    "market.ohlcv.option.us.massive.1h.raw",
+    "Massive US option hourly raw OHLCV",
+    DatasetLayer.CANONICAL,
+    {"asset_class": "option", "region": "us", "provider": "massive", "frequency": "1h",
+     "view": "raw", "universe": "full-market-or-explicit-contracts"},
+    primary_time="available_time",
+    sources=(SourceBinding("massive", "opra", 100, QualityLevel.WORKSPACE, ("flat-file", "rest")),),
+)
 _US_EQUITY_MASSIVE_CORPORATE_ACTIONS_PRODUCT = _product(
     "reference.corporate_actions.equity.us.massive",
     "Massive US equity split and dividend events",
@@ -223,6 +232,17 @@ US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY = DataProductContract(
     quality_profile="ohlcv",
     minimum_publication_level=QualityLevel.WORKSPACE,
 )
+US_OPTION_MASSIVE_RAW_HOURLY = DataProductContract(
+    _governed(
+        _US_OPTION_MASSIVE_RAW_HOURLY_PRODUCT,
+        "Massive US option raw hourly OHLCV bars from OPRA minute aggregates or explicit REST option contracts.",
+    ),
+    "canonical/market/ohlcv/asset_class=option/region=us/provider=massive/interval=1h/view=raw",
+    "market.ohlcv.option.us.1h.v1",
+    _capabilities(point_in_time_universe=False, products=("option",), maximum_validation_level=2),
+    quality_profile="ohlcv",
+    minimum_publication_level=QualityLevel.WORKSPACE,
+)
 US_EQUITY_MASSIVE_CORPORATE_ACTIONS = DataProductContract(
     _governed(
         _US_EQUITY_MASSIVE_CORPORATE_ACTIONS_PRODUCT,
@@ -346,6 +366,7 @@ class Datasets:
     MARKET_OHLCV_EQUITY_US_MASSIVE_1D_VENDOR_ADJUSTED = US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY.product
     MARKET_OHLCV_EQUITY_US_MASSIVE_1H_RAW = US_EQUITY_MASSIVE_RAW_HOURLY.product
     MARKET_OHLCV_EQUITY_US_MASSIVE_1H_VENDOR_ADJUSTED = US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.product
+    MARKET_OHLCV_OPTION_US_MASSIVE_1H_RAW = US_OPTION_MASSIVE_RAW_HOURLY.product
     REFERENCE_CORPORATE_ACTIONS_EQUITY_US_MASSIVE = US_EQUITY_MASSIVE_CORPORATE_ACTIONS.product
     REFERENCE_IDENTITY_EQUITY_US_MASSIVE = US_EQUITY_MASSIVE_IDENTITY.product
     MARKET_RETURNS_EQUITY_US_1D = US_EQUITY_RETURNS_DAILY.product

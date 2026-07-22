@@ -222,17 +222,24 @@ class MassiveFlatFileClient:
 
 
 class MassiveFlatFileBatchDownloader:
-    """Resumable, bounded downloader for daily OPRA day-aggregate files."""
+    """Resumable, bounded downloader for daily Massive Flat Files."""
 
     PREFIX = "us_options_opra/day_aggs_v1"
 
-    def __init__(self, flat_files: MassiveFlatFileClient, *, calendar: TradingCalendar | None = None) -> None:
+    def __init__(self, flat_files: MassiveFlatFileClient, *, prefix: str | None = None,
+                 calendar: TradingCalendar | None = None) -> None:
         self.flat_files = flat_files
+        self.prefix = (prefix or self.PREFIX).strip("/")
+        if not self.prefix:
+            raise ValueError("Massive Flat File batch prefix cannot be empty")
         self.calendar = calendar or TradingCalendar()
 
     @classmethod
     def file_key(cls, trading_day: date) -> str:
         return f"{cls.PREFIX}/{trading_day:%Y/%m}/{trading_day:%Y-%m-%d}.csv.gz"
+
+    def key_for(self, trading_day: date) -> str:
+        return f"{self.prefix}/{trading_day:%Y/%m}/{trading_day:%Y-%m-%d}.csv.gz"
 
     def download_range(self, start: date, end: date, *, max_files: int = 5, dry_run: bool = False) -> dict[str, object]:
         if not start < end:
@@ -243,7 +250,7 @@ class MassiveFlatFileBatchDownloader:
         items: list[dict[str, object]] = []
         attempted = 0
         for trading_day in trading_days:
-            key = self.file_key(trading_day)
+            key = self.key_for(trading_day)
             local = self.flat_files.local_file(key)
             if local is not None:
                 items.append({"date": trading_day.isoformat(), "key": key, "status": "already_downloaded", "path": str(local)})
@@ -272,12 +279,12 @@ class MassiveFlatFileBatchDownloader:
         for item in items:
             counts[str(item["status"])] = counts.get(str(item["status"]), 0) + 1
         report: dict[str, object] = {
-            "provider": "massive", "resource": self.PREFIX, "boundary": "[start,end)",
+            "provider": "massive", "resource": self.prefix, "boundary": "[start,end)",
             "start": start.isoformat(), "end": end.isoformat(), "trading_days": len(trading_days),
             "max_files": max_files, "dry_run": dry_run, "counts": counts, "items": items,
             "created_at": self.flat_files.now().isoformat(),
         }
-        fingerprint = request_fingerprint(self.PREFIX, {"start": start.isoformat(), "end": end.isoformat(), "max_files": max_files, "dry_run": dry_run})
+        fingerprint = request_fingerprint(self.prefix, {"start": start.isoformat(), "end": end.isoformat(), "max_files": max_files, "dry_run": dry_run})
         content_hash = sha256(json.dumps(report, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         report_path = self.flat_files.root / "source" / "provider=massive" / "resource=flat-files" / "batches" / f"batch-{fingerprint}-{content_hash[:16]}.json"
         write_json(report_path, report)

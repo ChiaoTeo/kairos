@@ -27,7 +27,7 @@ from kairospy.data.products import (
     BTC_SPOT_DAILY, US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MASSIVE_CORPORATE_ACTIONS,
     US_EQUITY_MASSIVE_IDENTITY,
     US_EQUITY_MASSIVE_RAW_DAILY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY, US_EQUITY_MOMENTUM_DAILY,
-    US_EQUITY_RETURNS_DAILY, US_EQUITY_UNIVERSE_DAILY,
+    US_EQUITY_RETURNS_DAILY, US_EQUITY_UNIVERSE_DAILY, US_OPTION_MASSIVE_RAW_HOURLY,
 )
 
 
@@ -57,6 +57,7 @@ class DataProductContractTests(unittest.TestCase):
             US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
             US_EQUITY_MASSIVE_CORPORATE_ACTIONS,
             US_EQUITY_MASSIVE_IDENTITY,
+            US_OPTION_MASSIVE_RAW_HOURLY,
             US_EQUITY_RETURNS_DAILY,
             US_EQUITY_UNIVERSE_DAILY,
             US_EQUITY_LIQUIDITY_DAILY,
@@ -67,13 +68,16 @@ class DataProductContractTests(unittest.TestCase):
             for spec in expected:
                 restored = catalog.product_spec(str(spec.key))
                 self.assertEqual(restored, spec)
-                self.assertIn("equity", restored.capabilities["supported_products"])
+                expected_product = "option" if str(restored.key) == str(US_OPTION_MASSIVE_RAW_HOURLY.key) else "equity"
+                self.assertIn(expected_product, restored.capabilities["supported_products"])
                 self.assertTrue(restored.relative_path)
             self.assertEqual(US_EQUITY_MASSIVE_RAW_DAILY.minimum_publication_level, QualityLevel.WORKSPACE)
             self.assertEqual(US_EQUITY_MASSIVE_CORPORATE_ACTIONS.quality_profile, "corporate_action")
             self.assertEqual(US_EQUITY_MASSIVE_CORPORATE_ACTIONS.storage_kind, DatasetStorageKind.REFERENCE)
             self.assertEqual(US_EQUITY_MASSIVE_IDENTITY.quality_profile, "equity_identity")
             self.assertEqual(US_EQUITY_MASSIVE_IDENTITY.storage_kind, DatasetStorageKind.REFERENCE)
+            self.assertEqual(US_OPTION_MASSIVE_RAW_HOURLY.product.sources[0].venue, "opra")
+            self.assertEqual(US_OPTION_MASSIVE_RAW_HOURLY.product.dimensions["universe"], "full-market-or-explicit-contracts")
             self.assertEqual(US_EQUITY_MOMENTUM_DAILY.minimum_publication_level, QualityLevel.BACKTEST)
 
     def test_dynamic_config_compiles_once_for_catalog_and_connector(self) -> None:

@@ -1154,7 +1154,7 @@ def _prompt_bool(label: str, default: bool) -> bool:
 
 
 def _massive_marketdata_config(args: argparse.Namespace | None = None) -> MassiveConfig:
-    from kairospy.infrastructure.configuration import ConfigError, load_project_config_or_none
+    from kairospy.infrastructure.configuration import ConfigError, load_dotenv_file, load_project_config_or_none
     from kairospy.integrations.config import resolve_massive_marketdata_config
 
     config = getattr(args, "_kairospy_project_config", None) if args is not None else None
@@ -1164,10 +1164,14 @@ def _massive_marketdata_config(args: argparse.Namespace | None = None) -> Massiv
             return resolve_massive_marketdata_config(config)
         except ConfigError:
             pass
+    load_dotenv_file()
     return MassiveConfig.from_env()
 
 
 def main(argv: list[str] | None = None) -> int:
+    from kairospy.infrastructure.configuration import load_dotenv_file
+
+    load_dotenv_file()
     raw_argv = sys.argv[1:] if argv is None else argv
     parser = _parser()
     if not raw_argv:

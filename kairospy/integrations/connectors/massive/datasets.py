@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
+import gzip
 import json
 from pathlib import Path
 import shutil
@@ -10,16 +12,23 @@ from uuid import uuid4
 from kairospy.products.common import TradingCalendar
 from kairospy.data.acquisition import AcquisitionEstimate, AcquisitionRequest
 from kairospy.data.catalog import DataCatalog
+from kairospy.data.columnar_publishing import publish_intraday_staging_parquet
 from kairospy.data.contracts import DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel
 from kairospy.data.products import (
+    US_OPTION_MASSIVE_RAW_HOURLY,
     US_EQUITY_MASSIVE_RAW_DAILY,
     US_EQUITY_MASSIVE_RAW_HOURLY,
     US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
     US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,
 )
+from kairospy.data.products import capabilities_payload
 from kairospy.data.builders import (
     EquityOhlcvDataProductBuilder,
     EquityOhlcvSourceBinding,
+    OptionHourlyOhlcvDataProductBuilder,
+    equity_ohlcv_arrow_schema,
+    equity_ohlcv_schema,
+    option_ohlcv_row,
 )
 from kairospy.infrastructure.storage.data_lake import write_json
 
@@ -27,7 +36,7 @@ from .client import MassiveClient
 from .equity_daily_ohlcv import MassiveEquityDailyOhlcvPipeline
 from .market_data import MassiveAggregateBarsRequest, MassiveHistoricalMarketDataService
 from .pipeline import MassiveOptionDataPipeline
-from .vendor_archive import MassiveVendorArchiveClient
+from .vendor_archive import MassiveFlatFileBatchDownloader, MassiveFlatFileClient, MassiveVendorArchiveClient
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +252,182 @@ class MassiveEquityHourlyOhlcvDatasetConnector:
         return self.builder.discover_symbols()
 
 
+class MassiveOptionHourlyOhlcvDatasetConnector:
+    provider = "massive"
+    minute_aggs_prefix = "us_options_opra/minute_aggs_v1"
+
+    def __init__(self, root: str | Path, client: MassiveClient) -> None:
+        self.root = Path(root)
+        self.client = client
+        self.market_data = MassiveHistoricalMarketDataService(self.root, client)
+        self.flat_files = MassiveFlatFileClient(self.root, client)
+        self.flat_file_batch = MassiveFlatFileBatchDownloader(self.flat_files, prefix=self.minute_aggs_prefix)
+        self.calendar = TradingCalendar()
+        self.builder = OptionHourlyOhlcvDataProductBuilder(
+            self.root,
+            self.market_data,
+            EquityOhlcvSourceBinding(
+                product=US_OPTION_MASSIVE_RAW_HOURLY,
+                provider=self.provider,
+                venue="opra",
+                view="raw",
+                adjusted=False,
+                interval="PT1H",
+                timespan="hour",
+                aggregate_request=MassiveAggregateBarsRequest,
+                source_dataset="options_rest_aggregate_bars",
+                transform_id="massive.option_hourly_ohlcv",
+                producer_transform="massive_option_hourly_aggregate_to_ohlcv",
+                cost_class="entitled-rest-explicit-option-hourly",
+            ),
+            discover_symbols=lambda: (),
+            estimate_symbol_count=lambda: 0,
+        )
+
+    @property
+    def product(self):
+        return US_OPTION_MASSIVE_RAW_HOURLY
+
+    @property
+    def source(self):
+        return self.market_data.source
+
+    @source.setter
+    def source(self, value) -> None:
+        self.market_data.source = value
+
+    def supports(self, logical_key: str) -> bool:
+        return self.builder.supports(logical_key)
+
+    def estimate(self, request: AcquisitionRequest) -> AcquisitionEstimate:
+        if not request.instruments:
+            days = sum(len(self._trading_days(item.start.date(), item.end.date())) for item in request.missing)
+            return AcquisitionEstimate(days, cost_class="entitled-flat-file-opra-minute-aggs")
+        return self.builder.estimate(request)
+
+    def task_plan(self, request: AcquisitionRequest) -> dict[str, object]:
+        if not request.instruments:
+            ranges = []
+            for missing in request.missing:
+                range_total = range_cached = 0
+                for trading_day in self._trading_days(missing.start.date(), missing.end.date()):
+                    range_total += 1
+                    if self.flat_files.local_file(self.flat_file_batch.key_for(trading_day)) is not None:
+                        range_cached += 1
+                from kairospy.data.builders import DataProductTaskPlan, TaskRangePlan, UniversePlan
+
+                ranges.append(TaskRangePlan(missing.start, missing.end, range_total, range_cached))
+            return DataProductTaskPlan(
+                self.provider,
+                "flat-file-minute-aggregate-to-hour",
+                tuple(ranges),
+                universe=UniversePlan("full-market-opra", 0, {"symbol_count_unknown": True}),
+                metadata={
+                    "source_prefix": self.minute_aggs_prefix,
+                    "interval": "PT1H",
+                    "resume_supported": True,
+                    "requires_instruments": False,
+                    "view": "raw",
+                },
+            ).to_primitive()
+        return self.builder.task_plan(request)
+
+    def acquire(self, request: AcquisitionRequest) -> DatasetRelease:
+        if not request.instruments:
+            return self._acquire_full_market_flat_file(request)
+        return self.builder.acquire(request)
+
+    def _acquire_full_market_flat_file(self, request: AcquisitionRequest) -> DatasetRelease:
+        if not self.supports(request.logical_key) or request.source.provider != self.provider:
+            raise ValueError("Massive option hourly OHLCV connector received an unsupported acquisition request")
+        if not request.missing:
+            raise ValueError("Massive option hourly OHLCV connector requires a non-empty acquisition window")
+        staging = self.root / "tmp" / "columnar" / f"massive-option-ohlcv-pt1h-{uuid4().hex}"
+        try:
+            stats = self._stage_full_market_flat_files(request, staging)
+            if int(stats["rows"]) <= 0:
+                raise RuntimeError("Massive OPRA minute aggregate Flat Files produced no option hourly OHLCV rows")
+            lineage = {
+                "lineage_version": 2,
+                "producer": {
+                    "name": type(self).__name__,
+                    "transform": "massive_opra_minute_aggregate_to_option_hourly_ohlcv",
+                    "version": "1",
+                },
+                "source": {
+                    "provider": self.provider,
+                    "venue": "opra",
+                    "dataset": self.minute_aggs_prefix,
+                    "transport": "flat-file",
+                    "authentication": "api-key",
+                },
+                "request_windows": [
+                    {"start": item.start.isoformat(), "end": item.end.isoformat(), "boundary": "[start,end)"}
+                    for item in request.missing
+                ],
+                "universe": {
+                    "kind": "full-market",
+                    "selection": "all OPRA option tickers present in Massive minute aggregate Flat Files",
+                },
+                "view": "raw",
+                "adjusted": False,
+                "point_in_time_safe": True,
+                "source_receipts": list(stats["source_receipts"]),
+                "publishing": {"engine": "duckdb-parquet", "staged_files": stats["staged_files"]},
+            }
+            result = publish_intraday_staging_parquet(
+                self.root,
+                US_OPTION_MASSIVE_RAW_HOURLY,
+                staging,
+                schema=equity_ohlcv_schema(US_OPTION_MASSIVE_RAW_HOURLY.schema_id, "PT1H"),
+                lineage=lineage,
+                interval=timedelta(hours=1),
+                capabilities=capabilities_payload(US_OPTION_MASSIVE_RAW_HOURLY, "pending"),
+                provider=self.provider,
+                venue="opra",
+                transform_id="massive.option_hourly_ohlcv.flat_file",
+                transform_version="1",
+                quality_level=QualityLevel.WORKSPACE,
+                primary_key=("venue", "instrument_id", "period_start", "interval"),
+                order_by=("period_start", "instrument_id"),
+            )
+            return result.release
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    def _stage_full_market_flat_files(self, request: AcquisitionRequest, staging: Path) -> dict[str, object]:
+        pa, pq = _pyarrow()
+        staged_files = 0
+        total_rows = 0
+        receipts: list[str] = []
+        for trading_day in self._request_trading_days(request):
+            key = self.flat_file_batch.key_for(trading_day)
+            path = self.flat_files.download(key)
+            receipt_path = path.parent / "receipt.json"
+            receipts.append(_relative_to(receipt_path, self.root))
+            rows = _hourly_rows_from_minute_file(path, request.missing)
+            if not rows:
+                continue
+            partition = staging / f"event_year={trading_day.year:04d}" / f"event_month={trading_day.month:02d}"
+            partition.mkdir(parents=True, exist_ok=True)
+            target = partition / f"opra-minute-aggs-{trading_day.isoformat()}.parquet"
+            pq.write_table(pa.Table.from_pylist(rows, schema=equity_ohlcv_arrow_schema(pa)), target, compression="zstd")
+            staged_files += 1
+            total_rows += len(rows)
+        return {"rows": total_rows, "staged_files": staged_files, "source_receipts": receipts}
+
+    def _request_trading_days(self, request: AcquisitionRequest) -> tuple[date, ...]:
+        days: set[date] = set()
+        for missing in request.missing:
+            days.update(self._trading_days(missing.start.date(), missing.end.date()))
+        return tuple(sorted(days))
+
+    def _trading_days(self, start: date, end: date) -> tuple[date, ...]:
+        if start >= end:
+            end = start + timedelta(days=1)
+        return tuple(self.calendar.trading_days_between(start, end - timedelta(days=1)))
+
+
 class MassiveOptionEventsDatasetConnector:
     provider = "massive"
 
@@ -308,6 +493,96 @@ class MassiveOptionEventsDatasetConnector:
         from kairospy.data.release_metadata import ensure_release_metadata
         ensure_release_metadata(self.root, release.release_id)
         return release
+
+
+def _hourly_rows_from_minute_file(path: Path, ranges: tuple) -> list[dict[str, object]]:
+    required = {"ticker", "volume", "open", "close", "high", "low", "window_start", "transactions"}
+    groups: dict[tuple[str, datetime], dict[str, object]] = {}
+    with gzip.open(path, "rt", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        if not required <= set(reader.fieldnames or ()):
+            raise ValueError(f"Massive OPRA minute aggregate schema mismatch: {path}")
+        for row in reader:
+            ticker = str(row["ticker"]).strip().upper()
+            if not ticker:
+                continue
+            minute_start = _timestamp_from_provider_ns(row["window_start"])
+            if not any(item.start <= minute_start < item.end for item in ranges):
+                continue
+            hour_start = _opra_hour_start(minute_start)
+            key = (ticker, hour_start)
+            volume = float(row.get("volume") or 0)
+            transactions = int(float(row.get("transactions") or 0))
+            group = groups.setdefault(key, {
+                "first_time": minute_start,
+                "last_time": minute_start,
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": 0.0,
+                "transactions": 0,
+                "vwap_numerator": 0.0,
+                "vwap_volume": 0.0,
+            })
+            if minute_start < group["first_time"]:
+                group["first_time"] = minute_start
+                group["open"] = float(row["open"])
+            if minute_start >= group["last_time"]:
+                group["last_time"] = minute_start
+                group["close"] = float(row["close"])
+            group["high"] = max(float(group["high"]), float(row["high"]))
+            group["low"] = min(float(group["low"]), float(row["low"]))
+            group["volume"] = float(group["volume"]) + volume
+            group["transactions"] = int(group["transactions"]) + transactions
+            raw_vwap = row.get("vwap")
+            if raw_vwap not in {None, ""} and volume > 0:
+                group["vwap_numerator"] = float(group["vwap_numerator"]) + float(raw_vwap) * volume
+                group["vwap_volume"] = float(group["vwap_volume"]) + volume
+    rows = []
+    for (ticker, hour_start), group in sorted(groups.items(), key=lambda item: (item[0][1], item[0][0])):
+        vwap = None
+        if float(group["vwap_volume"]) > 0:
+            vwap = float(group["vwap_numerator"]) / float(group["vwap_volume"])
+        raw = {
+            "t": int(hour_start.timestamp() * 1000),
+            "o": group["open"],
+            "h": group["high"],
+            "l": group["low"],
+            "c": group["close"],
+            "v": group["volume"],
+            "n": group["transactions"],
+            "vw": vwap,
+        }
+        rows.append(option_ohlcv_row(ticker, "raw", raw, hour_start, hour_start + timedelta(hours=1), "PT1H"))
+    return rows
+
+
+def _timestamp_from_provider_ns(value: object) -> datetime:
+    return datetime.fromtimestamp(int(value) / 1_000_000_000, tz=timezone.utc)
+
+
+def _opra_hour_start(value: datetime) -> datetime:
+    base = value.astimezone(timezone.utc).replace(second=0, microsecond=0)
+    if base.minute >= 30:
+        return base.replace(minute=30)
+    return (base - timedelta(hours=1)).replace(minute=30)
+
+
+def _pyarrow():
+    try:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+    except ImportError as error:
+        raise RuntimeError("Massive option hourly OHLCV requires the 'data' optional dependency") from error
+    return pa, pq
+
+
+def _relative_to(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
 
 
 def _replace_dataset_id(value, previous: str, current: str) -> None:

@@ -1,6 +1,9 @@
 from datetime import date, datetime, timedelta, timezone
+import gzip
+from hashlib import sha256
 from io import BytesIO
 import json
+import os
 from pathlib import Path
 from threading import Event
 from tempfile import TemporaryDirectory
@@ -19,15 +22,17 @@ from kairospy.integrations.connectors.deribit.datasets import (
 )
 from kairospy.integrations.connectors.massive.datasets import MassiveEquityHourlyOhlcvDatasetConnector
 from kairospy.integrations.connectors.massive.datasets import MassiveEquityDailyMarketOhlcvDatasetConnector
+from kairospy.integrations.connectors.massive.datasets import MassiveOptionHourlyOhlcvDatasetConnector
 from kairospy.integrations.connectors.massive.config import MassiveConfig
 from kairospy.integrations.connectors.massive.market_data import MassiveAggregateBarsRequest, MassiveHistoricalMarketDataService
+from kairospy.integrations.connectors.massive.vendor_archive import request_fingerprint
 from kairospy.data import (
     AcquisitionLimits, AcquisitionRequest, AcquirePolicy, OutputFormat, ProviderRegistry, SourceBinding, TimeRange,
 )
 from kairospy.data.products import (
     BINANCE_USDM_PERPETUAL_HOURLY, BTC_DERIBIT_OPTION_QUOTES, BTC_DERIBIT_OPTION_TRADES,
     BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
-    US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,
+    US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY, US_OPTION_MASSIVE_RAW_HOURLY,
 )
 from kairospy.data.bootstrap import default_provider_registry, register_configured_products, register_default_products
 from kairospy.data import DatasetClient
@@ -42,6 +47,25 @@ def _require_optional_module(testcase: unittest.TestCase, module: str, message: 
         __import__(module)
     except ImportError:
         testcase.skipTest(message)
+
+
+def _opra_minute_flat(root: Path, value: str, rows: list[tuple[str, str, int, float, float, float, float, int]]) -> None:
+    key = f"us_options_opra/minute_aggs_v1/{value[:4]}/{value[5:7]}/{value}.csv.gz"
+    directory = root / "source/provider=massive/resource=flat-files" / f"request_id={request_fingerprint(key, {})}"
+    directory.mkdir(parents=True)
+    path = directory / f"{value}.csv.gz"
+    with gzip.open(path, "wt", encoding="utf-8", newline="") as handle:
+        handle.write("ticker,volume,open,close,high,low,window_start,transactions\n")
+        for ticker, timestamp, volume, open_, close, high, low, transactions in rows:
+            nanos = int(datetime.fromisoformat(timestamp).timestamp() * 1_000_000_000)
+            handle.write(f"{ticker},{volume},{open_},{close},{high},{low},{nanos},{transactions}\n")
+    digest = sha256(path.read_bytes()).hexdigest()
+    (directory / "receipt.json").write_text(json.dumps({
+        "status": "complete",
+        "file_key": key,
+        "bytes": path.stat().st_size,
+        "sha256": digest,
+    }), encoding="utf-8")
 
 
 class _Archive:
@@ -128,7 +152,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
 
             self.assertEqual(artifact.artifact.provider, "massive")
             self.assertEqual(artifact.artifact.service, "historical_market_data")
-            self.assertEqual(artifact.artifact.resource, "equity_aggregate_bars")
+            self.assertEqual(artifact.artifact.resource, "aggregate_bars")
             self.assertEqual(artifact.artifact.request_fingerprint, "daily1")
             self.assertTrue(str(artifact.artifact.receipt_path).endswith("receipt.json"))
             self.assertEqual(source.calls[0]["resource"], "/v2/aggs/ticker/AAPL/range/1/day/2026-01-02/2026-01-02")
@@ -211,6 +235,88 @@ class ProviderConnectorContractTests(unittest.TestCase):
             self.assertEqual(release.venue, "us-securities")
             self.assertTrue((root / release.relative_path / "lineage.json").exists())
 
+    def test_massive_option_hourly_acquires_explicit_contract_bars(self):
+        _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
+        _require_optional_module(self, "duckdb", "query optional dependency is not installed")
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            register_default_products(root)
+            connector = MassiveOptionHourlyOhlcvDatasetConnector(root, client=object())
+            connector.source = _MassiveHourlySource(root)
+            providers = ProviderRegistry()
+            providers.register(connector, (US_OPTION_MASSIVE_RAW_HOURLY,))
+            client = DatasetClient(
+                root, providers=providers,
+                acquisition_limits=AcquisitionLimits(maximum_requests=10, maximum_instruments=10),
+            )
+
+            rows = client.get(
+                US_OPTION_MASSIVE_RAW_HOURLY.product,
+                start="2026-01-02T14:30:00Z",
+                end="2026-01-02T17:30:00Z",
+                instruments=("option:us:NVDA260130C00100000", "option:us:NVDA260130P00100000"),
+                fields=("period_start", "instrument_id", "symbol", "product", "close"),
+                acquire=AcquirePolicy.IF_MISSING,
+            ).collect(OutputFormat.ROWS)
+
+            self.assertEqual({row["product"] for row in rows}, {"option"})
+            self.assertEqual(
+                {row["instrument_id"] for row in rows},
+                {"option:us:NVDA260130C00100000", "option:us:NVDA260130P00100000"},
+            )
+            self.assertEqual({row["symbol"] for row in rows}, {"O:NVDA260130C00100000", "O:NVDA260130P00100000"})
+            self.assertEqual(connector.source.calls[0]["resource"], "/v2/aggs/ticker/O:NVDA260130C00100000/range/1/hour/2026-01-02/2026-01-02")
+            self.assertFalse(connector.source.calls[0]["params"]["adjusted"])
+            release = DatasetClient(root).resolve(str(US_OPTION_MASSIVE_RAW_HOURLY.key))
+            self.assertEqual(release.provider, "massive")
+            self.assertEqual(release.venue, "opra")
+            self.assertTrue((root / release.relative_path / "lineage.json").exists())
+
+    def test_massive_option_hourly_full_market_uses_minute_flat_files(self):
+        _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
+        _require_optional_module(self, "duckdb", "query optional dependency is not installed")
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            register_default_products(root)
+            _opra_minute_flat(root, "2026-01-02", [
+                ("O:NVDA260130C00100000", "2026-01-02T14:30:00+00:00", 10, 1.0, 1.0, 1.0, 1.0, 1),
+                ("O:NVDA260130C00100000", "2026-01-02T14:31:00+00:00", 20, 1.1, 1.2, 1.3, 1.0, 2),
+                ("O:NVDA260130C00100000", "2026-01-02T15:30:00+00:00", 30, 2.0, 2.5, 2.7, 1.9, 3),
+                ("O:NVDA260130P00100000", "2026-01-02T14:30:00+00:00", 5, 3.0, 3.1, 3.2, 2.9, 1),
+            ])
+            connector = MassiveOptionHourlyOhlcvDatasetConnector(root, client=object())
+            providers = ProviderRegistry()
+            providers.register(connector, (US_OPTION_MASSIVE_RAW_HOURLY,))
+            client = DatasetClient(
+                root, providers=providers,
+                acquisition_limits=AcquisitionLimits(maximum_requests=10, maximum_instruments=10),
+            )
+
+            rows = client.get(
+                US_OPTION_MASSIVE_RAW_HOURLY.product,
+                start="2026-01-02T14:30:00Z",
+                end="2026-01-02T17:30:00Z",
+                provider="massive",
+                venue="opra",
+                fields=("period_start", "instrument_id", "symbol", "open", "high", "low", "close", "volume", "trade_count"),
+                acquire=AcquirePolicy.IF_MISSING,
+            ).collect(OutputFormat.ROWS)
+
+            self.assertEqual(len(rows), 3)
+            first = rows[0]
+            self.assertEqual(first["period_start"].isoformat(), "2026-01-02T14:30:00")
+            self.assertEqual(first["instrument_id"], "option:us:NVDA260130C00100000")
+            self.assertEqual(first["open"], 1.0)
+            self.assertEqual(first["close"], 1.2)
+            self.assertEqual(first["high"], 1.3)
+            self.assertEqual(first["low"], 1.0)
+            self.assertEqual(first["volume"], 30.0)
+            self.assertEqual(first["trade_count"], 3)
+            release = DatasetClient(root).resolve(str(US_OPTION_MASSIVE_RAW_HOURLY.key))
+            lineage = json.loads((root / release.relative_path / "lineage.json").read_text())
+            self.assertEqual(lineage["source"]["dataset"], "us_options_opra/minute_aggs_v1")
+            self.assertEqual(lineage["source"]["transport"], "flat-file")
+
     def test_default_registry_registers_builtin_massive_daily_products_when_credentials_are_available(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -218,6 +324,26 @@ class ProviderConnectorContractTests(unittest.TestCase):
             with patch("kairospy.data.bootstrap._massive_config_for_project", return_value=MassiveConfig("test-key")):
                 providers = default_provider_registry(root)
             self.assertTrue(providers.available("massive", str(US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY.key)))
+            self.assertTrue(providers.available("massive", str(US_OPTION_MASSIVE_RAW_HOURLY.key)))
+
+    def test_default_registry_loads_cwd_dotenv_legacy_massive_key(self):
+        old_environ = os.environ.copy()
+        old_cwd = Path.cwd()
+        try:
+            os.environ.pop("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY", None)
+            os.environ.pop("MASSIVE_API_KEY", None)
+            with TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / ".env").write_text("MASSIVE_API_KEY=test-key\n", encoding="utf-8")
+                os.chdir(root)
+                register_default_products(root)
+                providers = default_provider_registry(root)
+                self.assertTrue(providers.available("massive", str(US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.key)))
+                self.assertTrue(providers.available("massive", str(US_OPTION_MASSIVE_RAW_HOURLY.key)))
+        finally:
+            os.chdir(old_cwd)
+            os.environ.clear()
+            os.environ.update(old_environ)
 
     def test_massive_equity_daily_acquires_bounded_builtin_product(self):
         _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")

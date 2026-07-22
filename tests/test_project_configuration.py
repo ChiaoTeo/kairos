@@ -7,6 +7,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from kairospy.infrastructure.configuration import KairosProjectConfig, set_config_value, unset_config_value
 from kairospy.integrations.config import (
@@ -67,6 +68,27 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             finally:
                 os.environ.clear()
                 os.environ.update(old)
+
+    def test_cli_loads_cwd_dotenv_before_parser_defaults(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            lake = root / "lake-from-dotenv"
+            (root / ".env").write_text(f"KAIROSPY_LAKE_ROOT={lake}\n", encoding="utf-8")
+            old_environ = os.environ.copy()
+            old_cwd = Path.cwd()
+            captured = {}
+            try:
+                os.environ.pop("KAIROSPY_LAKE_ROOT", None)
+                os.chdir(root)
+                from kairospy.surface.cli import main as cli_main
+
+                with patch.object(cli_main, "_providers", side_effect=lambda args: captured.setdefault("lake_root", args.lake_root) and 0):
+                    self.assertEqual(cli_main.main(["providers", "list"]), 0)
+                self.assertEqual(captured["lake_root"], str(lake))
+            finally:
+                os.chdir(old_cwd)
+                os.environ.clear()
+                os.environ.update(old_environ)
 
     def test_integration_config_resolves_provider_service_and_account_binding(self) -> None:
         with TemporaryDirectory() as directory:

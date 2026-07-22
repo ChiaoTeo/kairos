@@ -24,7 +24,7 @@ from .products import (
     BTC_SPOT_DAILY, BINANCE_USDM_PERPETUAL_HOURLY, BTC_DERIBIT_TERM_SKEW_DAILY,
     BTC_IV_RV_DAILY, BTC_TERM_SKEW_HOURLY, US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MASSIVE_RAW_DAILY,
     US_EQUITY_MASSIVE_CORPORATE_ACTIONS, US_EQUITY_MASSIVE_IDENTITY, US_EQUITY_MASSIVE_RAW_HOURLY,
-    US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,
+    US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY, US_OPTION_MASSIVE_RAW_HOURLY,
     US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
     US_EQUITY_MOMENTUM_DAILY, US_EQUITY_RETURNS_DAILY, US_EQUITY_UNIVERSE_DAILY,
 )
@@ -39,6 +39,7 @@ KNOWN_PRODUCTS = (*DEFAULT_ACQUIRABLE_PRODUCTS, BTC_IV_RV_DAILY, BTC_TERM_SKEW_H
                   BTC_DERIBIT_TERM_SKEW_DAILY, US_EQUITY_MASSIVE_RAW_DAILY,
                   US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY, US_EQUITY_MASSIVE_CORPORATE_ACTIONS,
                   US_EQUITY_MASSIVE_RAW_HOURLY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,
+                  US_OPTION_MASSIVE_RAW_HOURLY,
                   US_EQUITY_MASSIVE_IDENTITY, US_EQUITY_RETURNS_DAILY, US_EQUITY_UNIVERSE_DAILY,
                   US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MOMENTUM_DAILY)
 
@@ -115,6 +116,7 @@ def default_provider_registry(
         from kairospy.integrations.connectors.massive.datasets import (
             MassiveEquityDailyMarketOhlcvDatasetConnector,
             MassiveEquityHourlyOhlcvDatasetConnector,
+            MassiveOptionHourlyOhlcvDatasetConnector,
         )
         massive_config = _massive_config_for_project()
         providers.register(
@@ -140,6 +142,12 @@ def default_provider_registry(
                 root, MassiveClient(massive_config), view="adjusted",
             ),
             (US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,),
+        )
+        providers.register(
+            MassiveOptionHourlyOhlcvDatasetConnector(
+                root, MassiveClient(massive_config),
+            ),
+            (US_OPTION_MASSIVE_RAW_HOURLY,),
         )
     except (ConfigError, RuntimeError, ValueError):
         pass
@@ -259,7 +267,7 @@ class _ConfiguredMassiveEquityConnector:
 
 
 def _massive_config_for_project():
-    from kairospy.infrastructure.configuration import ConfigError, load_project_config_or_none
+    from kairospy.infrastructure.configuration import ConfigError, load_dotenv_file, load_project_config_or_none
     from kairospy.integrations.config import resolve_massive_marketdata_config
     from kairospy.integrations.connectors.massive.config import MassiveConfig
 
@@ -269,6 +277,7 @@ def _massive_config_for_project():
             return resolve_massive_marketdata_config(config)
         except ConfigError:
             pass
+    load_dotenv_file()
     return MassiveConfig.from_env()
 
 

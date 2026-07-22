@@ -330,6 +330,125 @@ class EquityOhlcvDataProductBuilder:
         raise RuntimeError(f"unsupported equity OHLCV interval {self.binding.interval!r}")
 
 
+class OptionHourlyOhlcvDataProductBuilder(EquityOhlcvDataProductBuilder):
+    """Build bounded US option hourly OHLCV datasets from provider aggregate bars."""
+
+    def discover_symbols(self) -> tuple[str, ...]:
+        return ()
+
+    def estimate(self, request: object) -> AcquisitionEstimate:
+        missing = tuple(getattr(request, "missing"))
+        instruments = tuple(getattr(request, "instruments", ()))
+        symbol_count = len({option_symbol(item) for item in instruments if str(item).strip()})
+        return AcquisitionEstimate(
+            len(missing) * symbol_count,
+            cost_class=self.binding.cost_class,
+            instruments=symbol_count,
+        )
+
+    def task_plan(self, request: object) -> dict[str, object]:
+        instruments = tuple(getattr(request, "instruments", ()))
+        if not instruments:
+            ranges = tuple(TaskRangePlan(item.start, item.end, 0, 0) for item in tuple(getattr(request, "missing")))
+            return DataProductTaskPlan(
+                self.provider,
+                "rest-paginated-aggregate",
+                ranges,
+                universe=UniversePlan("explicit-instruments-required", 0),
+                metadata={
+                    "view": self.binding.view,
+                    "interval": self.binding.interval,
+                    "resume_supported": True,
+                    "requires_instruments": True,
+                    "instrument_format": "O:ROOTYYMMDDC/P######## or option:us:ROOTYYMMDDC/P########",
+                },
+            ).to_primitive()
+        return super().task_plan(request)
+
+    def _validate_request(self, request: object) -> None:
+        super()._validate_request(request)
+        if self.binding.interval != "PT1H" or self.binding.timespan != "hour":
+            raise ValueError("option OHLCV builder currently supports hourly bars only")
+        if not tuple(getattr(request, "instruments", ())):
+            raise ValueError("Massive option hourly OHLCV acquisition requires at least one --instrument O:... ticker")
+
+    def _stage_intraday(self, symbols: tuple[str, ...], request: object, staging: Path) -> dict[str, object]:
+        pa, pq = _pyarrow()
+        total_rows = 0
+        staged_files = 0
+        receipts: list[str] = []
+        for missing in tuple(getattr(request, "missing")):
+            start_date, end_date = self._request_dates(missing)
+            for symbol in symbols:
+                artifact = self._fetch(symbol, start_date, end_date)
+                receipt = getattr(getattr(artifact, "artifact", None), "receipt_path", None)
+                if receipt is not None:
+                    receipts.append(str(receipt))
+                rows = list(option_hourly_ohlcv_rows(
+                    symbol,
+                    self.binding.view,
+                    self.market_data.iter_aggregate_bar_results(artifact),
+                    missing.start,
+                    missing.end,
+                ))
+                if not rows:
+                    continue
+                partition = staging / f"event_year={rows[0]['period_start'].year:04d}" / f"event_month={rows[0]['period_start'].month:02d}"
+                partition.mkdir(parents=True, exist_ok=True)
+                fingerprint = getattr(getattr(artifact, "artifact", None), "request_fingerprint", "")
+                target = partition / f"{_safe_filename(symbol)}-{str(fingerprint)[:16] or uuid_hex()}.parquet"
+                pq.write_table(pa.Table.from_pylist(rows, schema=equity_ohlcv_arrow_schema(pa)), target, compression="zstd")
+                total_rows += len(rows)
+                staged_files += 1
+        return {"rows": total_rows, "staged_files": staged_files, "source_receipts": receipts}
+
+    def _lineage(
+        self,
+        request: object,
+        symbols: tuple[str, ...],
+        receipts: tuple[str, ...],
+        *,
+        extra: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        lineage = {
+            "lineage_version": 2,
+            "producer": {
+                "name": type(self).__name__,
+                "transform": self.binding.producer_transform,
+                "version": self.binding.producer_version,
+            },
+            "source": {
+                "provider": self.provider,
+                "venue": self.binding.venue,
+                "dataset": self.binding.source_dataset,
+                "transport": "rest",
+                "authentication": "api-key",
+            },
+            "request_windows": [
+                {"start": item.start.isoformat(), "end": item.end.isoformat(), "boundary": "[start,end)"}
+                for item in tuple(getattr(request, "missing"))
+            ],
+            "universe": {
+                "kind": "bounded",
+                "symbols": list(symbols),
+                "selection": "explicit Massive option tickers from acquisition instruments",
+            },
+            "view": self.binding.view,
+            "adjusted": self.binding.adjusted,
+            "point_in_time_safe": True,
+            "source_receipts": list(receipts),
+        }
+        if extra:
+            lineage.update(extra)
+        return lineage
+
+    def _symbols(self, request: object) -> tuple[str, ...]:
+        symbols = tuple(sorted({option_symbol(item) for item in tuple(getattr(request, "instruments", ())) if str(item).strip()}))
+        if not symbols:
+            raise RuntimeError("Massive option hourly OHLCV acquisition requires explicit option instruments")
+        return symbols
+
+
 def equity_hourly_ohlcv_rows(symbol: str, view: str, raw_rows, start: datetime, end: datetime):
     for raw in raw_rows:
         period_start = datetime.fromtimestamp(int(raw["t"]) / 1000, tz=timezone.utc)
@@ -337,6 +456,16 @@ def equity_hourly_ohlcv_rows(symbol: str, view: str, raw_rows, start: datetime, 
             continue
         period_end = period_start + timedelta(hours=1)
         yield equity_ohlcv_row(symbol, view, raw, period_start, period_end, "PT1H")
+
+
+def option_hourly_ohlcv_rows(symbol: str, view: str, raw_rows, start: datetime, end: datetime):
+    ticker = option_symbol(symbol)
+    for raw in raw_rows:
+        period_start = datetime.fromtimestamp(int(raw["t"]) / 1000, tz=timezone.utc)
+        if not start <= period_start < end:
+            continue
+        period_end = period_start + timedelta(hours=1)
+        yield option_ohlcv_row(ticker, view, raw, period_start, period_end, "PT1H")
 
 
 def equity_daily_ohlcv_rows(symbol: str, view: str, raw_rows, start: datetime, end: datetime, calendar):
@@ -382,10 +511,51 @@ def equity_ohlcv_row(
     }
 
 
+def option_ohlcv_row(
+    symbol: str,
+    view: str,
+    raw: dict[str, object],
+    period_start: datetime,
+    period_end: datetime,
+    interval: str,
+) -> dict[str, object]:
+    ticker = option_symbol(symbol)
+    return {
+        "period_start": period_start,
+        "period_end": period_end,
+        "event_time": period_end,
+        "available_time": period_end,
+        "venue": "opra",
+        "instrument_id": f"option:us:{ticker.removeprefix('O:')}",
+        "symbol": ticker,
+        "product": "option",
+        "interval": interval,
+        "price_view": view,
+        "open": float(raw["o"]),
+        "high": float(raw["h"]),
+        "low": float(raw["l"]),
+        "close": float(raw["c"]),
+        "volume": float(raw.get("v", 0)),
+        "trade_count": int(raw.get("n", 0)),
+        "vwap": float(raw["vw"]) if raw.get("vw") is not None else None,
+    }
+
+
 def equity_symbol(value: object) -> str:
     text = str(value).strip().upper()
     if text.startswith("EQUITY:US:"):
         text = text.split(":", 2)[2]
+    return text
+
+
+def option_symbol(value: object) -> str:
+    text = str(value).strip().upper()
+    if text.startswith("OPTION:US:"):
+        text = text.split(":", 2)[2]
+    if not text.startswith("O:"):
+        text = f"O:{text}"
+    if len(text) <= 2:
+        raise ValueError("Massive option ticker cannot be empty")
     return text
 
 
@@ -555,6 +725,10 @@ def _json_default(value: object):
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     return str(value)
+
+
+def _safe_filename(value: str) -> str:
+    return "".join(character if character.isalnum() or character in "._-" else "_" for character in value) or "symbol"
 
 
 def uuid_hex() -> str:

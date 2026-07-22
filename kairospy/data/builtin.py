@@ -15,6 +15,9 @@ BuiltInCapability = Literal["historical", "live", "both"]
 
 BUILT_IN_PRODUCT_ALIASES = {
     "massive.equity.ohlcv.1d": "market.ohlcv.equity.us.massive.1d.vendor_adjusted",
+    "massive.equity.ohlcv.1h": "market.ohlcv.equity.us.massive.1h.adjusted",
+    "massive.option.ohlcv.1h": "market.ohlcv.option.us.massive.1h.raw",
+    "massive.options.ohlcv.1h": "market.ohlcv.option.us.massive.1h.raw",
 }
 
 

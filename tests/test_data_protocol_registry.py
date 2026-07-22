@@ -216,9 +216,12 @@ class DataProtocolRegistryTests(unittest.TestCase):
     def test_builtin_registry_resolves_user_facing_alias(self) -> None:
         registry = BuiltInDataProductRegistry.from_default_products()
         product = registry.resolve("massive.equity.ohlcv.1d")
+        option = registry.resolve("massive.option.ohlcv.1h")
 
         self.assertEqual(product.key, "market.ohlcv.equity.us.massive.1d.vendor_adjusted")
         self.assertEqual(registry.aliases()["massive.equity.ohlcv.1d"], product.key)
+        self.assertEqual(option.key, "market.ohlcv.option.us.massive.1h.raw")
+        self.assertEqual(registry.aliases()["massive.option.ohlcv.1h"], option.key)
 
     def test_builtin_live_protocol_exposes_runtime_config(self) -> None:
         products = BuiltInDataProductRegistry.from_default_products().list()

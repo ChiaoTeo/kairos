@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -26,6 +27,16 @@ def response(value, status=200):
 
 
 class MassiveConnectorTests(unittest.TestCase):
+    def test_config_accepts_legacy_massive_api_key_env(self):
+        old = os.environ.copy()
+        try:
+            os.environ.pop("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY", None)
+            os.environ["MASSIVE_API_KEY"] = "legacy-secret"
+            self.assertEqual(MassiveConfig.from_env().api_key, "legacy-secret")
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
     def test_config_rejects_non_private_hosts(self):
         with self.assertRaises(ValueError):
             MassiveConfig("secret", rest_base="https://api.massive.com")

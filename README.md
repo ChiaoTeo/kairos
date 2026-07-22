@@ -116,6 +116,34 @@ kairospy data acquire \
   --yes
 ```
 
+Massive 期权小时 OHLCV 不传 `--instrument` 时会下载 OPRA minute aggregates Flat Files 并本地聚合成全市场 1h bars：
+
+```bash
+kairospy data acquire \
+  --dataset market.ohlcv.option.us.massive.1h.raw \
+  --start 2026-01-02T14:30:00+00:00 \
+  --end 2026-01-02T21:00:00+00:00 \
+  --provider massive \
+  --venue opra \
+  --max-requests 10 \
+  --yes
+```
+
+如果只需要少量显式 OPRA option tickers，可以加 `--instrument`，此时使用 Massive REST hourly aggregates：
+
+```bash
+kairospy data acquire \
+  --dataset market.ohlcv.option.us.massive.1h.raw \
+  --start 2026-01-02T14:30:00+00:00 \
+  --end 2026-01-02T21:00:00+00:00 \
+  --provider massive \
+  --venue opra \
+  --instrument O:NVDA260130C00100000 \
+  --instrument O:NVDA260130P00100000 \
+  --max-requests 10 \
+  --yes
+```
+
 项目根目录的 `.env` 会自动加载，并且不会覆盖 shell 中已经存在的环境变量。全市场下载建议先使用 `--dry-run` 和 `--max-requests/--max-instruments` 控制范围。
 
 可选安装富文本和交互增强：
