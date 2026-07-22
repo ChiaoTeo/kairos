@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -10,18 +10,18 @@ import tempfile
 import unittest
 from uuid import UUID
 
-from kairospy.accounting.ledger import LedgerService
-from kairospy.ports import OrderAck, OrderRequest
-from kairospy.trading.capability import OrderType
-from kairospy.trading.execution import TradeExecution, TradeSide
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.trading.ledger import Ledger
-from kairospy.trading.order import ExecutionInstructions, TimeInForce
-from kairospy.trading.product import CryptoSpotSpec, ProductType
+from kairospy.portfolio.accounting.ledger import LedgerService
+from kairospy.integrations.ports import OrderAck, OrderRequest
+from kairospy.execution.orders import OrderType
+from kairospy.execution.events import TradeExecution, TradeSide
+from kairospy.identity import AccountRef, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.portfolio.ledger import Ledger
+from kairospy.execution.orders import ExecutionInstructions, TimeInForce
+from kairospy.reference.contracts import CryptoSpotSpec, ProductType
 from kairospy.execution.order_state import DurableOrderStatus
-from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
-from kairospy.orchestration.kill_switch import KillSwitch
-from kairospy.application.clock import FixedClock
+from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
+from kairospy.governance.kill_switch import KillSwitch
+from kairospy.runtime.clock import FixedClock
 from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 
@@ -33,7 +33,7 @@ def request(client_order_id: str = "client-1") -> OrderRequest:
         "strategy-v1",
         "intent-1",
         "correlation-1",
-        AccountKey(InstitutionId("simulated"), "account-1", AccountType.SECURITIES_MARGIN),
+        AccountRef(InstitutionId("simulated"), "account-1", AccountType.SECURITIES_MARGIN),
         InstrumentId("instrument-1"),
         TradeSide.BUY,
         Decimal("1"),

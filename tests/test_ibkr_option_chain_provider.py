@@ -6,9 +6,9 @@ from decimal import Decimal
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from kairospy.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
-from kairospy.trading.identity import AssetId, InstrumentId, VenueId
-from kairospy.trading.product import (
+from kairospy.integrations.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
+from kairospy.identity import AssetId, InstrumentId, VenueId
+from kairospy.reference.contracts import (
     ExerciseStyle,
     ListedOptionSpec,
     OptionRight,
@@ -16,7 +16,7 @@ from kairospy.trading.product import (
     SettlementSession,
     SettlementType,
 )
-from kairospy.capture.spec import OptionChainCaptureSpec
+from kairospy.research.capture.spec import OptionChainCaptureSpec
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.contracts import InstrumentDefinition
 from tests.reference_support import publish_test_instrument
@@ -72,7 +72,7 @@ class IbkrOptionChainProviderTests(unittest.TestCase):
         provider._contracts = {}
         provider.catalog = ReferenceCatalog()
 
-        with patch("kairospy.connectors.ibkr.option_chain_provider.sleep"):
+        with patch("kairospy.integrations.connectors.ibkr.option_chain_provider.sleep"):
             result = provider.underlying(OptionChainCaptureSpec())
 
         self.assertEqual(result.instrument_id, InstrumentId("index:spx"))

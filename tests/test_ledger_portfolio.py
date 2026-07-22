@@ -1,23 +1,27 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from kairospy.accounting.conversion import AssetConversionGraph, ConversionRate
-from kairospy.accounting.ledger import LedgerService
-from kairospy.accounting.portfolio import Portfolio
-from kairospy.trading.execution import FundingPayment, TradeExecution, TradeSide
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.trading.ledger import Ledger, LedgerBook, LedgerEntry, LedgerEntryType, LedgerTransaction
-from kairospy.trading.product import ContractType, CryptoSpotSpec, PerpetualSpec, ProductType
+from kairospy.portfolio.accounting.conversion import AssetConversionGraph, ConversionRate
+from kairospy.portfolio.accounting.ledger import LedgerService
+from kairospy.portfolio.accounting.portfolio import Portfolio
+from kairospy.portfolio.account_ports import AccountState, VenueBalance
+from kairospy.portfolio.projection import portfolio_view_from_snapshot
+from kairospy.execution.events import TradeExecution, TradeSide
+from kairospy.portfolio.ledger_events import FundingPayment
+from kairospy.identity import AccountRef, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.portfolio.ledger import Ledger, LedgerBook, LedgerEntry, LedgerEntryType, LedgerTransaction
+from kairospy.reference.contracts import ContractType, CryptoSpotSpec, PerpetualSpec, ProductType
 from kairospy.products.calculators import PositionCalculatorRegistry
 from kairospy.risk.margin import CryptoCrossMarginPolicy
 from kairospy.risk.view import build_risk_view
 from kairospy.reference import ReferenceCatalog
+from kairospy.strategy.views import MarketView
 from tests.reference_support import publish_test_instrument
 
 
@@ -33,7 +37,7 @@ def definition(catalog, instrument_id, product_type, spec, base, quote):
 
 class LedgerPortfolioTests(unittest.TestCase):
     def setUp(self):
-        self.account = AccountKey(InstitutionId("binance"), "paper", AccountType.CRYPTO_SPOT)
+        self.account = AccountRef(InstitutionId("binance"), "paper", AccountType.CRYPTO_SPOT)
         self.catalog = ReferenceCatalog()
         self.spot = definition(self.catalog, "BTC-USDT", ProductType.CRYPTO_SPOT, CryptoSpotSpec(AssetId("BTC"), AssetId("USDT"), Decimal("10")), "BTC", "USDT")
         self.linear = definition(self.catalog, "BTC-USDT-PERP", ProductType.PERPETUAL, PerpetualSpec(AssetId("BTC"), AssetId("USDT"), "BTCUSDT", Decimal("1"), ContractType.LINEAR, 28800), "BTC", "USDT")
@@ -63,6 +67,47 @@ class LedgerPortfolioTests(unittest.TestCase):
         usdt = next(item for item in snapshot.balances if item.asset == AssetId("USDT"))
         self.assertEqual(usdt.total, Decimal("4995.0"))
         self.assertEqual(snapshot.net_asset_value, Decimal("10095.0"))
+
+    def test_portfolio_view_projects_ledger_account_and_market_evidence(self):
+        self.service.deposit(self.account, AssetId("USDT"), Decimal("10000"), NOW, "initial")
+        self.service.trade(TradeExecution(uuid4(), NOW + timedelta(seconds=1), self.account, self.spot.instrument_id, TradeSide.BUY, Decimal("0.1"), Decimal("50000"), AssetId("USDT"), Decimal("5"), "order-1"))
+        graph = AssetConversionGraph()
+        at = NOW + timedelta(seconds=2)
+        graph.update(ConversionRate(AssetId("USDT"), AssetId("USD"), Decimal("1"), at, "synthetic"))
+        snapshot = Portfolio(self.ledger, self.catalog, AssetId("USD")).snapshot(at, {self.spot.instrument_id: Decimal("51000")}, graph)
+        account_state = AccountState(
+            self.account,
+            (VenueBalance(AssetId("USDT"), Decimal("4995.0"), available=Decimal("4995.0")),),
+            ((self.spot.instrument_id, Decimal("0.1")),),
+            ("order-1",),
+            at,
+        )
+        market_view = MarketView(at, 7, (self.spot.instrument_id,), available_instruments=(self.spot.instrument_id,))
+
+        view = portfolio_view_from_snapshot(
+            snapshot,
+            ledger=self.ledger,
+            account_states=(account_state,),
+            market_view=market_view,
+        )
+
+        self.assertEqual(view.reporting_asset, "USD")
+        self.assertEqual(view.accounts, (self.account.value,))
+        self.assertEqual(view.cash, Decimal("4995.0"))
+        self.assertEqual(view.equity_mid, Decimal("10095.0"))
+        self.assertEqual(view.valuation_status, "complete")
+        self.assertEqual(view.balances[0].asset, "USDT")
+        self.assertEqual(view.balances[0].total, Decimal("4995.0"))
+        self.assertEqual(view.positions[0].account, self.account.value)
+        self.assertEqual(view.positions[0].market_value_mid, Decimal("5100.0"))
+        self.assertEqual(view.positions[0].unrealized_pnl_mid, Decimal("100.0"))
+        self.assertEqual(view.ledger_transaction_count, 2)
+        self.assertGreater(view.ledger_entry_count, 0)
+        self.assertEqual(view.last_ledger_at, NOW + timedelta(seconds=1))
+        self.assertEqual(view.account_state_at, at)
+        self.assertEqual(view.market_state_at, at)
+        self.assertNotEqual(view.ledger_hash, "none")
+        self.assertNotEqual(view.state_hash, "none")
 
     def test_missing_conversion_marks_portfolio_partial(self):
         self.service.deposit(self.account, AssetId("BTC"), Decimal("1"), NOW, "btc")

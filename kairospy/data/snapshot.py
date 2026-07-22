@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from kairospy.storage.data_lake import write_json
+from kairospy.infrastructure.storage.data_lake import write_json
 
 
 @dataclass(frozen=True, slots=True)

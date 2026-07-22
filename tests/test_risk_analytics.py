@@ -3,9 +3,9 @@ from __future__ import annotations
 import unittest
 from decimal import Decimal
 
-from kairospy.trading.identity import InstrumentId
-from kairospy.trading.product import OptionRight
-from kairospy.pricing import PricingInput, PricingModel
+from kairospy.identity import InstrumentId
+from kairospy.reference.contracts import OptionRight
+from kairospy.analytics.pricing import PricingInput, PricingModel
 from kairospy.risk import RevaluationPosition, Scenario, ScenarioEngine, explain_scenario, historical_var_es, standard_scenario_grid
 
 

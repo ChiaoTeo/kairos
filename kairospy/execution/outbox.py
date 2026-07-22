@@ -3,16 +3,16 @@ from __future__ import annotations
 import asyncio
 from typing import Callable, TYPE_CHECKING
 
-from kairospy.ports import ComboOrderRequest, OrderRequest
-from kairospy.application.clock import Clock, SystemClock
+from kairospy.execution.ports import ComboOrderRequest, OrderRequest
+from kairospy.runtime.clock import Clock, SystemClock
 from kairospy.execution.router import ExecutionRouter
-from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
-from kairospy.orchestration.kill_switch import KillSwitch
+from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
 
 from .command import OutboxRecord
 
 if TYPE_CHECKING:
-    from kairospy.application.runtime import KairosApplication
+    from kairospy.governance.kill_switch import KillSwitch
+    from kairospy.runtime.application import KairosApplication
 
 
 class DurableOrderCommandService:

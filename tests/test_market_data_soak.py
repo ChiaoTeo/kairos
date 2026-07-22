@@ -7,12 +7,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairospy.contracts import canonicalize_market_event
-from kairospy.trading.identity import InstrumentId
-from kairospy.market_data import (
-    BoundedEventChannel, MarketEventEnvelope, MarketEventType, run_binance_market_soak,
-    run_binance_market_restart_campaign,
-)
+from kairospy.market.canonical import canonicalize_market_event
+from kairospy.identity import InstrumentId
+from kairospy.market.source_events import MarketEventEnvelope, MarketEventType
+from kairospy.market.soak import run_binance_market_restart_campaign, run_binance_market_soak
+from kairospy.market.stream import BoundedEventChannel
 
 
 class StopSession:

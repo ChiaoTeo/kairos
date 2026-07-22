@@ -341,12 +341,12 @@ async def _binance_quote_stream(
 ) -> AsyncIterator[Mapping[str, object]]:
     import asyncio
 
-    from kairospy.connectors.binance.market_stream import BinanceStreamSession, WebSocketClientConnector, websocket_url
-    from kairospy.connectors.binance.stream import BinanceCanonicalStreamService
-    from kairospy.trading.identity import InstrumentId
-    from kairospy.market_data import BoundedEventChannel
-    from kairospy.ports import Environment
-    from kairospy.storage.codec import to_primitive
+    from kairospy.integrations.connectors.binance.market_stream import BinanceStreamSession, WebSocketClientConnector, websocket_url
+    from kairospy.integrations.connectors.binance.stream import BinanceCanonicalStreamService
+    from kairospy.identity import InstrumentId
+    from kairospy.market.stream import BoundedEventChannel
+    from kairospy.environment import Environment
+    from kairospy.infrastructure.storage.codec import to_primitive
 
     connector = request.params.get("connector") or WebSocketClientConnector()
     environment = _environment(request.params.get("environment"))
@@ -385,7 +385,7 @@ async def _binance_quote_stream(
 
 
 def _environment(value: object) -> "Environment":
-    from kairospy.ports import Environment
+    from kairospy.environment import Environment
 
     if isinstance(value, Environment):
         return value

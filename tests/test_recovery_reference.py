@@ -6,10 +6,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairospy.application.recovery import RuntimeRecoveryService
-from kairospy.trading.identity import AssetId, InstrumentId
-from kairospy.trading.product import FutureSpec, ContractType, ProductType
-from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.runtime.recovery import RuntimeRecoveryService
+from kairospy.identity import AssetId, InstrumentId
+from kairospy.reference.contracts import FutureSpec, ContractType, ProductType
+from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
 from kairospy.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
 
 

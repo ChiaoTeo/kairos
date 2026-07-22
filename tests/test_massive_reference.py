@@ -9,14 +9,14 @@ from tempfile import TemporaryDirectory
 import unittest
 from pathlib import Path
 
-from kairospy.__main__ import main
-from kairospy.connectors.massive.corporate_actions import MassiveCorporateActionDecoder
-from kairospy.connectors.massive.equity_daily_ohlcv import MassiveEquityDailyOhlcvPipeline
-from kairospy.connectors.massive.equity_identity import MassiveEquityIdentityResolver
-from kairospy.connectors.massive.reference_store import MassiveReferenceStore
-from kairospy.connectors.massive.reference_pipeline import MassiveReferencePipeline
-from kairospy.connectors.massive import MassiveClient, MassiveConfig, MassiveResponse
-from kairospy.trading.identity import InstrumentId
+from kairospy.surface.cli.main import main
+from kairospy.integrations.connectors.massive.corporate_actions import MassiveCorporateActionDecoder
+from kairospy.integrations.connectors.massive.equity_daily_ohlcv import MassiveEquityDailyOhlcvPipeline
+from kairospy.integrations.connectors.massive.equity_identity import MassiveEquityIdentityResolver
+from kairospy.integrations.connectors.massive.reference_store import MassiveReferenceStore
+from kairospy.integrations.connectors.massive.reference_pipeline import MassiveReferencePipeline
+from kairospy.integrations.connectors.massive import MassiveClient, MassiveConfig, MassiveResponse
+from kairospy.identity import InstrumentId
 from kairospy.reference import MappingTargetType, ProviderId, ProviderSymbolMapping, ReferenceCatalog, ReferenceCatalogRepository
 from tests.test_massive_daily_ohlcv import _EquitySource
 

@@ -4,9 +4,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from decimal import Decimal
 
-from kairospy.accounting.portfolio import PortfolioSnapshot
-from kairospy.trading.identity import AccountKey, InstrumentId
-from kairospy.trading.product import is_option_spec, option_multiplier
+from kairospy.portfolio.accounting.portfolio import PortfolioSnapshot
+from kairospy.identity import AccountRef, InstrumentId
+from kairospy.reference.contracts import is_option_spec, option_multiplier
 from kairospy.risk.margin import MarginResult
 from kairospy.reference import ReferenceCatalog, ReferenceRole
 
@@ -42,7 +42,7 @@ def build_risk_view(
     catalog: ReferenceCatalog,
     *,
     unit_greeks: dict[InstrumentId, tuple[Decimal, Decimal, Decimal, Decimal]] | None = None,
-    margins: dict[AccountKey, MarginResult] | None = None,
+    margins: dict[AccountRef, MarginResult] | None = None,
     liquidation_prices: dict[InstrumentId, Decimal] | None = None,
     liquidity_flags: tuple[str, ...] = (),
 ) -> UnifiedRiskView:

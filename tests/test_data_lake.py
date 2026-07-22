@@ -4,8 +4,8 @@ from tempfile import TemporaryDirectory
 import json
 import unittest
 
-from kairospy.storage.data_lake import write_daily_dataset
-from kairospy.configuration import DEFAULT_LAKE_ROOT
+from kairospy.infrastructure.storage.data_lake import write_daily_dataset
+from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
 from kairospy.data import DataCatalog, DatasetRelease
 from kairospy.data.client import DatasetClient
 from kairospy.data.products import BTC_IV_RV_DAILY, BTC_SPOT_DAILY

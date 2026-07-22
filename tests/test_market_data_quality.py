@@ -4,8 +4,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from kairospy.trading.identity import InstrumentId
-from kairospy.market_data import OptionMarketObservation, blocking_issues, validate_option_observation
+from kairospy.identity import InstrumentId
+from kairospy.market import OptionMarketObservation, blocking_issues, validate_option_observation
 
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)

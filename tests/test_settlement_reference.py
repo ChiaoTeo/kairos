@@ -4,12 +4,12 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
 
-from kairospy.trading.identity import AssetId, InstrumentId, VenueId
-from kairospy.trading.product import (
+from kairospy.identity import AssetId, InstrumentId, VenueId
+from kairospy.reference.contracts import (
     EquitySpec, ExerciseStyle, ListedOptionSpec, OptionRight, ProductType,
     SettlementSession, SettlementType,
 )
-from kairospy.lifecycle import SettlementResolver
+from kairospy.products.common.lifecycle import SettlementResolver
 from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 

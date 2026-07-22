@@ -23,7 +23,7 @@ Data 产品的用户心智只有几个概念：
 Python API 只有一个产品入口：`Data`。接入、管理、检查都从 `Data` 开始；需要消费已经 ready 的 Dataset 时，由 `Data.reader()` 产生读取客户端。
 
 ```python
-from kairospy.product_surface import Data
+from kairospy.surface.product import Data
 
 data = Data(".kairos/data")
 

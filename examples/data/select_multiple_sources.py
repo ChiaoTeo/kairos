@@ -1,7 +1,7 @@
 import argparse
 
 from kairospy.data import OutputFormat
-from kairospy.product_surface import Data
+from kairospy.surface.product import Data
 
 
 parser = argparse.ArgumentParser()

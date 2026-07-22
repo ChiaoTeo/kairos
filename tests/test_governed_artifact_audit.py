@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairospy.__main__ import main
+from kairospy.surface.cli.main import main
 from kairospy.data import (
     DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease, DatasetStatus, QualityLevel,
 )

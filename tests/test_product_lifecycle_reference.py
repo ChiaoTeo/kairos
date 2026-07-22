@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from kairospy.accounting.ledger import LedgerService
-from kairospy.trading.corporate_action import DelistingEvent, SymbolChangeEvent
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.trading.ledger import Ledger
-from kairospy.trading.product import ContractType, EquitySpec, PerpetualSpec, ProductType
+from kairospy.portfolio.accounting.ledger import LedgerService
+from kairospy.products.equity.corporate_actions import DelistingEvent, SymbolChangeEvent
+from kairospy.identity import AccountRef, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.portfolio.ledger import Ledger
+from kairospy.reference.contracts import ContractType, EquitySpec, PerpetualSpec, ProductType
 from kairospy.products.equity.corporate_actions import CorporateActionService
 from kairospy.products.perpetual.funding import FundingEngine
 from kairospy.reference import (
@@ -46,7 +46,7 @@ class ProductLifecycleReferenceTests(unittest.TestCase):
         spec = PerpetualSpec(AssetId("BTC"), AssetId("USDT"), "index", Decimal("1"), ContractType.LINEAR, 28800)
         catalog.products.add(EconomicProduct(product, ProductType.PERPETUAL, "BTC perp", NOW, currency=AssetId("USDT")))
         catalog.instruments.add(InstrumentDefinition(instrument, product, ProductType.PERPETUAL, spec, InstrumentLifecycle(), NOW))
-        ledger = Ledger(); account = AccountKey(InstitutionId("binance"), "main", AccountType.DERIVATIVES)
+        ledger = Ledger(); account = AccountRef(InstitutionId("binance"), "main", AccountType.DERIVATIVES)
         payment = FundingEngine(LedgerService(ledger, catalog)).apply(account, instrument, Decimal("2"), Decimal("50000"), Decimal("0.0001"), NOW)
         self.assertEqual(payment.amount, Decimal("-10.0000"))
 

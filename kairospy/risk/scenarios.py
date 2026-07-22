@@ -4,8 +4,8 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from math import log
 
-from kairospy.trading.identity import InstrumentId
-from kairospy.pricing import PricingInput, PricingModel, PricingResult, price_with_volatility
+from kairospy.identity import InstrumentId
+from kairospy.analytics.pricing import PricingInput, PricingModel, PricingResult, price_with_volatility
 
 
 @dataclass(frozen=True, slots=True)

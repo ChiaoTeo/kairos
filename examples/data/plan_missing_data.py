@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from kairospy.data.products import BTC_SPOT_DAILY
 from kairospy.data.bootstrap import register_default_products
-from kairospy.product_surface import Data
+from kairospy.surface.product import Data
 
 
 register_default_products()

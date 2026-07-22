@@ -4,10 +4,10 @@ from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from kairospy.connectors.transfer import BankTransferGateway
-from kairospy.trading.identity import AssetId
+from kairospy.integrations.connectors.transfer import BankTransferGateway
+from kairospy.identity import AssetId
 from kairospy.reference.identity import LocationId, RailId
-from kairospy.treasury import BankTransferInstruction, FeePolicy, TransferStatus
+from kairospy.portfolio.treasury import BankTransferInstruction, FeePolicy, TransferStatus
 
 
 class Gateway:

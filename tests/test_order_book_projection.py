@@ -6,12 +6,11 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairospy.contracts import canonical_from_trading_market_data
-from kairospy.trading.identity import InstrumentId
-from kairospy.trading.market_data import OrderBookDelta, OrderBookLevel, OrderBookSnapshot
-from kairospy.market_data import (
-    CanonicalCaptureWriter, CanonicalOrderBookProjection, CapturedCanonicalEventSource,
-)
+from kairospy.market.canonical import canonical_from_trading_market_data
+from kairospy.identity import InstrumentId
+from kairospy.market.capture import CanonicalCaptureWriter, CapturedCanonicalEventSource
+from kairospy.market.projections import CanonicalOrderBookProjection
+from kairospy.market.types import OrderBookDelta, OrderBookLevel, OrderBookSnapshot
 
 
 INSTRUMENT = InstrumentId("crypto:binance:spot:BTCUSDT")

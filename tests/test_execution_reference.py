@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
-from kairospy.ports import Environment, OrderAck, OrderRequest
-from kairospy.trading.capability import ExecutionCapabilities, OrderType
-from kairospy.trading.execution import TradeSide
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.trading.order import ExecutionInstructions, TimeInForce
-from kairospy.trading.product import EquitySpec, ProductType
+from kairospy.integrations.ports import Environment, OrderAck, OrderRequest
+from kairospy.execution.orders import ExecutionCapabilities, OrderType
+from kairospy.execution.events import TradeSide
+from kairospy.identity import AccountRef, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.execution.orders import ExecutionInstructions, TimeInForce
+from kairospy.reference.contracts import EquitySpec, ProductType
 from kairospy.execution.router import ExecutionRouter
 from kairospy.reference import (
     BrokerId, EconomicProduct, ExecutionRoute, InstrumentDefinition,
@@ -49,7 +49,7 @@ class ExecutionReferenceTests(unittest.TestCase):
         instrument_id = InstrumentId("equity:us:AAPL")
         product_id = ProductId("product:equity:us:AAPL")
         listing_id = ListingId("listing:xnas:AAPL")
-        account = AccountKey(InstitutionId("ibkr"), "paper", AccountType.SECURITIES_MARGIN)
+        account = AccountRef(InstitutionId("ibkr"), "paper", AccountType.SECURITIES_MARGIN)
         catalog.products.add(EconomicProduct(product_id, ProductType.EQUITY, "Apple", NOW, currency=AssetId("USD")))
         catalog.instruments.add(InstrumentDefinition(instrument_id, product_id, ProductType.EQUITY, EquitySpec("NASDAQ", "US", AssetId("USD")), InstrumentLifecycle(listed_at=NOW), NOW))
         catalog.listings.add(ListingDefinition(listing_id, instrument_id, VenueId("xnas"), "AAPL", AssetId("USD"), TradingRules(Decimal("0.01"), Decimal("1"), Decimal("1")), NOW))
@@ -66,7 +66,7 @@ class ExecutionReferenceTests(unittest.TestCase):
         instrument_id = InstrumentId("equity:us:AAPL")
         product_id = ProductId("product:equity:us:AAPL")
         listing_id = ListingId("listing:xnas:AAPL")
-        account = AccountKey(InstitutionId("ibkr"), "paper", AccountType.SECURITIES_MARGIN)
+        account = AccountRef(InstitutionId("ibkr"), "paper", AccountType.SECURITIES_MARGIN)
         catalog.products.add(EconomicProduct(product_id, ProductType.EQUITY, "Apple", NOW))
         catalog.instruments.add(InstrumentDefinition(instrument_id, product_id, ProductType.EQUITY, EquitySpec("NASDAQ", "US", AssetId("USD")), InstrumentLifecycle(), NOW))
         catalog.listings.add(ListingDefinition(listing_id, instrument_id, VenueId("xnas"), "AAPL", AssetId("USD"), TradingRules(Decimal("0.01"), Decimal("1"), Decimal("1")), NOW))

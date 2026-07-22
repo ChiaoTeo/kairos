@@ -53,8 +53,8 @@ class KairosProjectInitTests(unittest.TestCase):
             self.assertEqual(readme.read_text(encoding="utf-8"), "custom notes\n")
 
     def test_project_initializer_is_available_from_kairospy_namespace(self) -> None:
-        from kairospy.project import initialize_project as subpackage_initialize_project
-        from kairospy.project import initialize_project as project_initialize_project
+        from kairospy.surface.project import initialize_project as subpackage_initialize_project
+        from kairospy.surface.project import initialize_project as project_initialize_project
 
         self.assertIs(initialize_project, project_initialize_project)
         self.assertIs(subpackage_initialize_project, project_initialize_project)

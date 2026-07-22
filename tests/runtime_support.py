@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kairospy.ports import Environment
-from kairospy.application import ApplicationConfig, RuntimePaths, KairosApplication
-from kairospy.application.clock import Clock
-from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.integrations.ports import Environment
+from kairospy.runtime.application import KairosApplication
+from kairospy.runtime.config import ApplicationConfig, RuntimePaths
+from kairospy.runtime.clock import Clock
+from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
 
 
 def operational_application(

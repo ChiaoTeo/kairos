@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairospy.storage.data_lake import write_json
+from kairospy.infrastructure.storage.data_lake import write_json
 
 from .catalog import DataCatalog
 from .contracts import DataReleaseManifest, DataSetContractArtifact, DatasetStorageKind, QualityLevel
@@ -50,7 +50,7 @@ def _market_replay_payloads(directory: Path, release, product) -> dict[str, obje
     parquet = directory / "slices.parquet"
     files = []
     if parquet.exists():
-        from kairospy.storage.data_lake import sha256_bytes
+        from kairospy.infrastructure.storage.data_lake import sha256_bytes
         files.append({
             "path": parquet.name, "bytes": parquet.stat().st_size,
             "sha256": sha256_bytes(parquet.read_bytes()), "rows": dataset.manifest.slice_count,

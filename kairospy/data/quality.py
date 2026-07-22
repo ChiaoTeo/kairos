@@ -8,8 +8,8 @@ import json
 import math
 from pathlib import Path
 
-from kairospy.configuration import DEFAULT_LAKE_ROOT
-from kairospy.storage.data_lake import write_json
+from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
+from kairospy.infrastructure.storage.data_lake import write_json
 
 from .catalog import DataCatalog
 from .client import DatasetClient

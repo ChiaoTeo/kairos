@@ -5,20 +5,20 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from kairospy.accounting.conversion import AssetConversionGraph, ConversionRate
-from kairospy.accounting.ledger import LedgerService
-from kairospy.accounting.portfolio import Portfolio
-from kairospy.trading.corporate_action import (
+from kairospy.portfolio.accounting.conversion import AssetConversionGraph, ConversionRate
+from kairospy.portfolio.accounting.ledger import LedgerService
+from kairospy.portfolio.accounting.portfolio import Portfolio
+from kairospy.products.equity.corporate_actions import (
     CorporateActionType, DelistingEvent, InstrumentExchangeEvent, StockDividendEvent, SymbolChangeEvent,
 )
-from kairospy.trading.derivative_event import DerivativeEventType, DerivativePositionEvent
-from kairospy.trading.event import EventEnvelope
-from kairospy.trading.execution import TradeExecution, TradeSide
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
-from kairospy.trading.ledger import Ledger, LedgerBook
-from kairospy.trading.market_data import IndexPrice, VolatilitySurfacePoint
-from kairospy.trading.market_state import MarketState, apply_market_event
-from kairospy.trading.product import (
+from kairospy.products.common.lifecycle.derivatives import DerivativeEventType, DerivativePositionEvent
+from kairospy.market.events import EventEnvelope
+from kairospy.execution.events import TradeExecution, TradeSide
+from kairospy.identity import AccountRef, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
+from kairospy.portfolio.ledger import Ledger, LedgerBook
+from kairospy.market.types import IndexPrice, VolatilitySurfacePoint
+from kairospy.market.state import MarketState, apply_market_event
+from kairospy.reference.contracts import (
     ContractType, EquitySpec, ExerciseStyle, FutureSpec, ListedOptionSpec, OptionRight,
     ProductType, SettlementSession, SettlementType,
 )
@@ -33,7 +33,7 @@ from tests.reference_support import publish_test_instrument
 
 NOW = datetime(2026, 7, 14, 8, tzinfo=timezone.utc)
 VENUE = VenueId("test")
-ACCOUNT = AccountKey(InstitutionId("xnas"), "main", AccountType.SECURITIES_MARGIN)
+ACCOUNT = AccountRef(InstitutionId("xnas"), "main", AccountType.SECURITIES_MARGIN)
 
 
 def equity(catalog: ReferenceCatalog, instrument_id: str, symbol: str) -> InstrumentDefinition:
@@ -48,8 +48,8 @@ class ProductEventTests(unittest.TestCase):
     def test_transfers_locked_balance_borrow_interest_and_stablecoin_depeg(self) -> None:
         ledger, catalog = Ledger(), ReferenceCatalog()
         service = LedgerService(ledger, catalog)
-        source = AccountKey(InstitutionId("xnas"), "source", AccountType.CRYPTO_SPOT)
-        destination = AccountKey(InstitutionId("xnas"), "destination", AccountType.DERIVATIVES)
+        source = AccountRef(InstitutionId("xnas"), "source", AccountType.CRYPTO_SPOT)
+        destination = AccountRef(InstitutionId("xnas"), "destination", AccountType.DERIVATIVES)
         service.deposit(source, AssetId("USDT"), Decimal("100"), NOW, "deposit")
         service.transfer(source, destination, AssetId("USDT"), Decimal("30"), NOW + timedelta(seconds=1), "margin-transfer")
         service.reclassify_balance(source, AssetId("USDT"), Decimal("20"), LedgerBook.CASH, LedgerBook.LOCKED, NOW + timedelta(seconds=2), "lock")

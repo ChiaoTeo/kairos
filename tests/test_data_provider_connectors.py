@@ -8,19 +8,19 @@ import unittest
 from unittest.mock import patch
 from zipfile import ZipFile
 
-from kairospy.connectors.binance.datasets import (
+from kairospy.integrations.connectors.binance.datasets import (
     BinanceOptionQuotesDatasetConnector, BinanceUsdmPerpetualHourlyDatasetConnector,
 )
-from kairospy.connectors.binance.historical_archive import (
+from kairospy.integrations.connectors.binance.historical_archive import (
     BinanceUsdmPerpetualHourlyArchiveProvider, GracefulShutdown,
 )
-from kairospy.connectors.deribit.datasets import (
+from kairospy.integrations.connectors.deribit.datasets import (
     DeribitDvolDatasetConnector, DeribitOptionSnapshotDatasetConnector, DeribitOptionTradesDatasetConnector,
 )
-from kairospy.connectors.massive.datasets import MassiveEquityHourlyOhlcvDatasetConnector
-from kairospy.connectors.massive.datasets import MassiveEquityDailyMarketOhlcvDatasetConnector
-from kairospy.connectors.massive.config import MassiveConfig
-from kairospy.connectors.massive.market_data import MassiveAggregateBarsRequest, MassiveHistoricalMarketDataService
+from kairospy.integrations.connectors.massive.datasets import MassiveEquityHourlyOhlcvDatasetConnector
+from kairospy.integrations.connectors.massive.datasets import MassiveEquityDailyMarketOhlcvDatasetConnector
+from kairospy.integrations.connectors.massive.config import MassiveConfig
+from kairospy.integrations.connectors.massive.market_data import MassiveAggregateBarsRequest, MassiveHistoricalMarketDataService
 from kairospy.data import (
     AcquisitionLimits, AcquisitionRequest, AcquirePolicy, OutputFormat, ProviderRegistry, SourceBinding, TimeRange,
 )
@@ -317,7 +317,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
             archive = BinanceUsdmPerpetualHourlyArchiveProvider(progress=progress, stop_event=stopped)
             start = datetime(2020, 1, 1, tzinfo=timezone.utc)
             end = datetime(2021, 9, 1, tzinfo=timezone.utc)
-            with patch("kairospy.connectors.binance.historical_archive.download", return_value=self._hourly_zip()) as fetch:
+            with patch("kairospy.integrations.connectors.binance.historical_archive.download", return_value=self._hourly_zip()) as fetch:
                 with self.assertRaisesRegex(GracefulShutdown, "Stopped cleanly"):
                     archive.fetch(("BTCUSDT",), start, end, Path(temporary), actual_archives=False)
             self.assertGreater(fetch.call_count, 0)
@@ -339,7 +339,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
             events = []
             archive = BinanceUsdmPerpetualHourlyArchiveProvider(progress=events.append)
             source = Path(temporary)
-            with patch("kairospy.connectors.binance.historical_archive.download", return_value=self._hourly_zip()) as fetch:
+            with patch("kairospy.integrations.connectors.binance.historical_archive.download", return_value=self._hourly_zip()) as fetch:
                 rows = archive.fetch(("BTCUSDT",), START, END, source)
             self.assertEqual(len(rows), 1)
             self.assertEqual(fetch.call_count, 1)
@@ -349,7 +349,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
             self.assertTrue(payload.with_name("receipt.json").exists())
 
             events.clear()
-            with patch("kairospy.connectors.binance.historical_archive.download",
+            with patch("kairospy.integrations.connectors.binance.historical_archive.download",
                        side_effect=AssertionError("cached payload must not be downloaded")) as fetch:
                 rows = archive.fetch(("BTCUSDT",), START, END, source)
             self.assertEqual(len(rows), 1)
@@ -360,12 +360,12 @@ class ProviderConnectorContractTests(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             archive = BinanceUsdmPerpetualHourlyArchiveProvider()
             source = Path(temporary)
-            with patch("kairospy.connectors.binance.historical_archive.download",
+            with patch("kairospy.integrations.connectors.binance.historical_archive.download",
                        side_effect=TimeoutError("temporary network failure")):
                 with self.assertRaisesRegex(RuntimeError, "rerun the same command to resume"):
                     archive.fetch(("BTCUSDT",), START, END, source)
             self.assertFalse(any(source.glob("**/payload.zip")))
-            with patch("kairospy.connectors.binance.historical_archive.download", return_value=self._hourly_zip()):
+            with patch("kairospy.integrations.connectors.binance.historical_archive.download", return_value=self._hourly_zip()):
                 rows = archive.fetch(("BTCUSDT",), START, END, source)
             self.assertEqual(len(rows), 1)
             self.assertTrue(any(source.glob("**/payload.zip")))
@@ -382,7 +382,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
             }
             with patch.object(archive, "_monthly_archive_records", return_value=[]), \
                     patch.object(archive, "_daily_archive_records", return_value=[daily]), \
-                    patch("kairospy.connectors.binance.historical_archive.download", return_value=self._hourly_zip()):
+                    patch("kairospy.integrations.connectors.binance.historical_archive.download", return_value=self._hourly_zip()):
                 rows = archive.fetch(("BTCUSDT",), START, END, Path(temporary), actual_archives=True)
             self.assertEqual(len(rows), 1)
             self.assertEqual(events[-1]["downloaded"], 1)
@@ -396,7 +396,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
             payload.parent.mkdir(parents=True)
             payload.write_bytes(b"interrupted partial zip")
             archive = BinanceUsdmPerpetualHourlyArchiveProvider()
-            with patch("kairospy.connectors.binance.historical_archive.download", return_value=self._hourly_zip()) as fetch:
+            with patch("kairospy.integrations.connectors.binance.historical_archive.download", return_value=self._hourly_zip()) as fetch:
                 rows = archive.fetch(("BTCUSDT",), START, END, source)
             self.assertEqual(len(rows), 1)
             self.assertEqual(fetch.call_count, 1)
@@ -412,7 +412,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
                 {"symbol": "ETHUSDC", "contractType": "PERPETUAL", "quoteAsset": "USDC"},
             ]}
             with patch.object(archive, "_archive_symbols", return_value=("OLDUSDT",)), \
-                    patch("kairospy.connectors.binance.historical_archive.download_json", return_value=current):
+                    patch("kairospy.integrations.connectors.binance.historical_archive.download_json", return_value=current):
                 symbols = archive.discover_symbols(Path(temporary))
             self.assertEqual(symbols, ("BTCUSDT", "OLDUSDT"))
             catalog = Path(temporary) / "provider=binance/dataset=usdm_perpetual_reference/symbol_catalog.json"

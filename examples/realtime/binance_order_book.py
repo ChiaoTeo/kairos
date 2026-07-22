@@ -9,19 +9,17 @@ import json
 from pathlib import Path
 import sys
 
-from kairospy.ports import Environment
-from kairospy.connectors.binance.market_stream import BinanceStreamSession, WebSocketClientConnector, websocket_url
-from kairospy.connectors.binance.order_book import (
+from kairospy.integrations.ports import Environment
+from kairospy.integrations.connectors.binance.market_stream import BinanceStreamSession, WebSocketClientConnector, websocket_url
+from kairospy.integrations.connectors.binance.order_book import (
     BinanceOrderBookSnapshotProvider, BinanceOrderBookSyncService,
 )
-from kairospy.connectors.binance.rest_transport import UrllibBinanceTransport
-from kairospy.connectors.binance.stream import BinanceCanonicalStreamService
-from kairospy.trading.identity import InstrumentId
-from kairospy.market_data import (
-    BoundedEventChannel, CanonicalCaptureWriter, CanonicalOrderBookProjection,
-    CapturedCanonicalEventSource,
-)
-from kairospy.storage.codec import to_primitive
+from kairospy.integrations.connectors.binance.rest_transport import UrllibBinanceTransport
+from kairospy.integrations.connectors.binance.stream import BinanceCanonicalStreamService
+from kairospy.identity import InstrumentId
+from kairospy.market import BoundedEventChannel, CanonicalOrderBookProjection
+from kairospy.market.capture import CanonicalCaptureWriter, CapturedCanonicalEventSource
+from kairospy.infrastructure.storage.codec import to_primitive
 
 
 async def capture(args) -> dict[str, object]:

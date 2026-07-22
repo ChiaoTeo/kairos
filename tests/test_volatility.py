@@ -7,10 +7,10 @@ from decimal import Decimal
 from pathlib import Path
 
 from kairospy.data import DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease
-from kairospy.data.surface_features import SurfaceFeaturePublisher, load_surface_features
-from kairospy.trading.identity import InstrumentId
-from kairospy.trading.product import OptionRight
-from kairospy.volatility import CalibrationStatus, SviParameters, VolObservation, build_surface, surface_implied_volatility, total_variance
+from kairospy.surface.data_features import SurfaceFeaturePublisher, load_surface_features
+from kairospy.identity import InstrumentId
+from kairospy.reference.contracts import OptionRight
+from kairospy.analytics.volatility import CalibrationStatus, SviParameters, VolObservation, build_surface, surface_implied_volatility, total_variance
 
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
@@ -35,14 +35,18 @@ class VolatilityTests(unittest.TestCase):
         first = SviParameters(Decimal("0.005"), Decimal("0.08"), Decimal("-0.3"), Decimal("0"), Decimal("0.1"))
         second = SviParameters(Decimal("0.01"), Decimal("0.10"), Decimal("-0.2"), Decimal("0"), Decimal("0.12"))
         data = tuple(observations(first_expiry, Decimal("0.08219178"), first) + observations(second_expiry, Decimal("0.16438356"), second))
-        surface = build_surface(UNDERLYING, NOW, data)
-        replay = build_surface(UNDERLYING, NOW, tuple(reversed(data)))
+        available = NOW + timedelta(seconds=3)
+        surface = build_surface(UNDERLYING, NOW, data, available_time=available)
+        replay = build_surface(UNDERLYING, NOW, tuple(reversed(data)), available_time=available)
         self.assertEqual(surface.surface_id, replay.surface_id)
+        self.assertEqual(surface.available_time, available)
         self.assertTrue(all(item.status is CalibrationStatus.CALIBRATED for item in surface.smiles))
         self.assertEqual(surface.calibration_status, CalibrationStatus.CALIBRATED)
         self.assertGreater(surface_implied_volatility(surface, first_expiry, Decimal("0")), 0)
         between = surface_implied_volatility(surface, NOW + timedelta(days=45), Decimal("0"))
         self.assertGreater(between, 0)
+        with self.assertRaisesRegex(ValueError, "available_time"):
+            build_surface(UNDERLYING, NOW, data, available_time=NOW - timedelta(seconds=1))
 
     def test_insufficient_smile_is_reported_not_silently_fitted(self) -> None:
         expiry = NOW + timedelta(days=30)

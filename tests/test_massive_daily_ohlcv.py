@@ -9,10 +9,10 @@ from tempfile import TemporaryDirectory
 import unittest
 from types import SimpleNamespace
 
-from kairospy.connectors.massive import MassiveEquityDailyOhlcvPipeline, MassiveEquityHourlyOhlcvPipeline, SpxwDailyOhlcvPipeline
-from kairospy.connectors.massive.vendor_archive import MassiveFlatFileBatchDownloader, request_fingerprint
+from kairospy.integrations.connectors.massive import MassiveEquityDailyOhlcvPipeline, MassiveEquityHourlyOhlcvPipeline, SpxwDailyOhlcvPipeline
+from kairospy.integrations.connectors.massive.vendor_archive import MassiveFlatFileBatchDownloader, request_fingerprint
 from kairospy.data import DataCatalog, DatasetQualityService, QualityLevel, DatasetClient
-from kairospy.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
+from kairospy.analytics.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
 
 
 HEADER = "ticker,volume,open,close,high,low,window_start,transactions\n"

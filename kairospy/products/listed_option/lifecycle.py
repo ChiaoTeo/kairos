@@ -6,13 +6,13 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from kairospy.accounting.ledger import LedgerService
-from kairospy.trading.identity import AccountKey, AssetId, InstrumentId
-from kairospy.trading.ledger import LedgerBook, LedgerEntryType
-from kairospy.trading.product import ListedOptionSpec, OptionRight, SettlementType
+from kairospy.portfolio.accounting.ledger import LedgerService
+from kairospy.identity import AccountRef, AssetId, InstrumentId
+from kairospy.portfolio.ledger import LedgerBook, LedgerEntryType
+from kairospy.reference.contracts import ListedOptionSpec, OptionRight, SettlementType
 from kairospy.reference import ReferenceCatalog, SettlementMethod, SettlementTermsDefinition
 from kairospy.reference.access import contract_spec, definition_at, trade_cash_asset
-from kairospy.lifecycle import SettlementResolver
+from kairospy.products.common.lifecycle import SettlementResolver
 
 
 class PhysicalOptionEventType(StrEnum):
@@ -25,7 +25,7 @@ class PhysicalOptionEventType(StrEnum):
 class PhysicalOptionEvent:
     event_id: UUID
     event_type: PhysicalOptionEventType
-    account: AccountKey
+    account: AccountRef
     option_id: InstrumentId
     contracts: Decimal
     timestamp: datetime
@@ -78,7 +78,7 @@ class OptionLifecycleService:
         )
         self.ledger_service.ledger.post(transaction)
 
-    def expire(self, account: AccountKey, option_id: InstrumentId, underlying_price: Decimal, timestamp: datetime) -> None:
+    def expire(self, account: AccountRef, option_id: InstrumentId, underlying_price: Decimal, timestamp: datetime) -> None:
         definition = definition_at(self.ledger_service.catalog, option_id, timestamp)
         spec = contract_spec(definition)
         if not isinstance(spec, ListedOptionSpec):

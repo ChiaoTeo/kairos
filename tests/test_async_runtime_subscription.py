@@ -7,21 +7,23 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairospy.application import (
-    ApplicationConfig, AsyncServiceSupervisor, AsyncKairosRuntime, ManagedServiceSpec, ManagedServiceStatus,
-    RuntimePaths, RuntimeStatus, ServiceCriticality, KairosApplication,
+from kairospy.runtime import (
+    AsyncServiceSupervisor, ManagedServiceSpec, ManagedServiceStatus, ServiceCriticality,
 )
-from kairospy.ports import Environment
-from kairospy.trading.capability import MarketDataCapabilities, MarketDataKind
-from kairospy.trading.identity import AssetId, InstrumentId, VenueId
-from kairospy.trading.product import EquitySpec, ProductType
+from kairospy.integrations.ports import Environment
+from kairospy.market.subscriptions import MarketDataCapabilities, MarketDataKind
+from kairospy.identity import AssetId, InstrumentId, VenueId
+from kairospy.reference.contracts import EquitySpec, ProductType
 from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
-from kairospy.market_data import (
+from kairospy.market.subscriptions import (
     CapturePolicy, DeliveryMode, MarketDataRequirement, SubscriptionAction,
     SubscriptionPlanner, SubscriptionReconciler,
 )
-from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.runtime.application import RuntimeStatus, KairosApplication
+from kairospy.runtime.async_runtime import AsyncKairosRuntime
+from kairospy.runtime.config import ApplicationConfig, RuntimePaths
+from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
 
 
 NOW = datetime(2026, 7, 17, 12, tzinfo=timezone.utc)

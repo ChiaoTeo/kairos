@@ -4,10 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import AsyncIterator, Iterable, Iterator
 
-from kairospy.contracts import CanonicalEventEnvelope, canonicalize_market_event
-from kairospy.trading.identity import InstrumentId
-from kairospy.market_data import MarketEventEnvelope, MarketEventType, ParquetMarketEventRepository
-from kairospy.backtest.feed import MarketReplayDataset, MarketSnapshot, MarketSnapshotReplayFeed
+from kairospy.market.canonical import CanonicalEventEnvelope, canonicalize_market_event
+from kairospy.identity import InstrumentId
+from kairospy.market.source_events import MarketEventEnvelope, MarketEventType
+from kairospy.market.repository import ParquetMarketEventRepository
+from kairospy.market.snapshots import MarketReplayDataset, MarketSnapshot, MarketSnapshotReplayFeed
 
 from .contracts import DataView, DatasetRelease
 
@@ -25,7 +26,7 @@ class ReplaySpec:
         if self.start.tzinfo is None or self.end.tzinfo is None or self.start >= self.end:
             raise ValueError("replay requires timezone-aware [start,end) with start before end")
         if self.release.content_hash is None:
-            raise ValueError("backtest replay requires a release with a frozen content hash")
+            raise ValueError("deterministic replay requires a release with a frozen content hash")
 
 
 class ReplayEventFeed:
@@ -83,7 +84,7 @@ class ReplaySnapshotFeed:
 
     def __init__(self, release: DatasetRelease, dataset: MarketReplayDataset) -> None:
         if release.content_hash is None:
-            raise ValueError("backtest replay requires a release with a frozen content hash")
+            raise ValueError("deterministic replay requires a release with a frozen content hash")
         if dataset.manifest.dataset_id != release.release_id:
             raise ValueError("MarketReplayDataset identity does not match the frozen Catalog release")
         if dataset.manifest.content_hash != release.content_hash:

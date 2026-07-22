@@ -2,43 +2,43 @@ from __future__ import annotations
 
 import unittest
 
-from kairospy.ports import (
+from kairospy.integrations.ports import (
     AccountPort,
     ExecutionPort,
     MarketDataPort,
     ReferenceDataPort,
 )
-from kairospy.ports.account import AccountPort as AccountPortModuleExport
-from kairospy.ports.execution import ExecutionPort as ExecutionPortModuleExport
-from kairospy.ports.market_data import MarketDataPort as MarketDataPortModuleExport
-from kairospy.ports.reference_data import ReferenceDataPort as ReferenceDataPortModuleExport
-from kairospy.connectors.binance import (
+from kairospy.integrations.ports.account import AccountPort as AccountPortModuleExport
+from kairospy.integrations.ports.execution import ExecutionPort as ExecutionPortModuleExport
+from kairospy.integrations.ports.market_data import MarketDataPort as MarketDataPortModuleExport
+from kairospy.integrations.ports.reference_data import ReferenceDataPort as ReferenceDataPortModuleExport
+from kairospy.integrations.connectors.binance import (
     BinanceAccountGateway,
     BinanceExecutionGateway,
     BinanceMarketDataClient,
     BinanceSpotReferenceDataClient,
 )
-from kairospy.connectors.ibkr import (
+from kairospy.integrations.connectors.ibkr import (
     IbkrAccountGateway,
     IbkrExecutionGateway,
     IbkrMarketDataClient,
     IbkrReferenceDataClient,
 )
-from kairospy.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
-from kairospy.connectors.market_data_router import CompositeMarketDataClient
-from kairospy.connectors.massive import (
+from kairospy.integrations.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
+from kairospy.integrations.connectors.market_data_router import CompositeMarketDataClient
+from kairospy.integrations.connectors.massive import (
     MassiveEquityDailyOhlcvDatasetConnector,
     MassiveEquityDailyOhlcvPipeline,
     MassiveEquityDailyOhlcvProductConfig,
     OptionDailyOhlcvPipeline,
     SpxwDailyOhlcvPipeline,
 )
-from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
-from kairospy.connectors.transfer import (
+from kairospy.integrations.connectors.simulated import SimulatedExecutionAccountGateway
+from kairospy.integrations.connectors.transfer import (
     BankTransferGateway,
     BinanceTransferGateway,
 )
-from kairospy.treasury.transfer_gateway import (
+from kairospy.portfolio.treasury.transfer_gateway import (
     SimulatedTransferGateway,
     TransferGateway,
 )

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from kairospy.accounting.ledger import LedgerService
-from kairospy.trading.execution import TradeExecution, TradeSide
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.trading.ledger import Ledger, LedgerBook
-from kairospy.trading.product import EquitySpec, ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairospy.portfolio.accounting.ledger import LedgerService
+from kairospy.execution.events import TradeExecution, TradeSide
+from kairospy.identity import AccountRef, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.portfolio.ledger import Ledger, LedgerBook
+from kairospy.reference.contracts import EquitySpec, ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
 from kairospy.products.listed_option.lifecycle import OptionLifecycleService, PhysicalOptionEvent, PhysicalOptionEventType
 from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
@@ -28,7 +28,7 @@ class OptionLifecycleReferenceTests(unittest.TestCase):
         spec = ListedOptionSpec(underlying, NOW + timedelta(days=30), Decimal("200"), OptionRight.CALL, ExerciseStyle.AMERICAN, SettlementType.PHYSICAL, SettlementSession.PM, Decimal("100"), NOW + timedelta(days=30))
         publish_test_instrument(catalog, option, ProductType.LISTED_OPTION, "AAPL-C", spec, AssetId("USD"), VenueId("xnas"), "AAPL-C", NOW, NOW + timedelta(days=31))
         ledger = Ledger(); service = LedgerService(ledger, catalog)
-        account = AccountKey(InstitutionId("ibkr"), "paper", AccountType.SECURITIES_MARGIN)
+        account = AccountRef(InstitutionId("ibkr"), "paper", AccountType.SECURITIES_MARGIN)
         return underlying, option, catalog, ledger, service, account
 
     def test_current_exercise_posts_underlying_instrument_and_strike_cash(self):

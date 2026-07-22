@@ -5,8 +5,8 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-from kairospy.storage.codec import to_primitive
-from kairospy.storage.data_lake import write_json
+from kairospy.infrastructure.storage.codec import to_primitive
+from kairospy.infrastructure.storage.data_lake import write_json
 
 from .catalog import DataCatalog
 from .contracts import (

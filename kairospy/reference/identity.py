@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 
 class _NormalizedId:

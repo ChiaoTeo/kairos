@@ -6,9 +6,10 @@ import json
 from pathlib import Path
 from typing import Iterable, Iterator, Literal
 
-from kairospy.trading.identity import InstrumentId
-from kairospy.configuration import DEFAULT_LAKE_ROOT
-from kairospy.market_data import MarketEventType, ParquetMarketEventRepository
+from kairospy.identity import InstrumentId
+from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
+from kairospy.market.source_events import MarketEventType
+from kairospy.market.repository import ParquetMarketEventRepository
 from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
 
 from .catalog import DataCatalog
@@ -405,8 +406,8 @@ class DatasetClient:
         path = self.root / release.relative_path / "collection.json"
         if not path.exists():
             return None
-        from kairospy.capture.data_store import CollectionManifest
-        from kairospy.storage.codec import from_primitive
+        from kairospy.research.capture.data_store import CollectionManifest
+        from kairospy.infrastructure.storage.codec import from_primitive
         return from_primitive(json.loads(path.read_text(encoding="utf-8")), CollectionManifest)
 
     @staticmethod

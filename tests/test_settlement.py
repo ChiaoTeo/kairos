@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 import unittest
 from decimal import Decimal
 from uuid import uuid4
 
-from kairospy.backtest.synthetic_scenarios import SyntheticScenario, build_synthetic_backtest_dataset
-from kairospy.backtest.portfolio import BacktestPortfolio
-from kairospy.backtest.settlement import due_settlements, intrinsic_value
-from kairospy.trading.execution import TradeSide
-from kairospy.trading.identity import AccountKey, AccountType, VenueId
-from kairospy.trading.order import Fill, LegFill
-from kairospy.trading.product import ListedOptionSpec, OptionRight
+from kairospy.runtime.profiles.backtest.synthetic_scenarios import SyntheticScenario, build_synthetic_backtest_dataset
+from kairospy.runtime.profiles.backtest.portfolio import BacktestPortfolio
+from kairospy.runtime.profiles.backtest.settlement import due_settlements, intrinsic_value
+from kairospy.execution.events import TradeSide
+from kairospy.identity import AccountRef, AccountType, VenueId
+from kairospy.execution.fills import Fill, LegFill
+from kairospy.reference.contracts import ListedOptionSpec, OptionRight
 
 
 class SettlementTests(unittest.TestCase):
@@ -33,7 +33,7 @@ class SettlementTests(unittest.TestCase):
                 catalog = dataset.reference_catalog()
                 by_strike = {definition.contract_spec.strike: definition.instrument_id for definition in dataset.definitions if isinstance(definition.contract_spec, ListedOptionSpec)}
                 short, long = by_strike[Decimal("6000")], by_strike[Decimal("5950")]
-                portfolio = BacktestPortfolio(Decimal("100000"), catalog, AccountKey(InstitutionId("backtest"), scenario.value, AccountType.SECURITIES_MARGIN))
+                portfolio = BacktestPortfolio(Decimal("100000"), catalog, AccountRef(InstitutionId("backtest"), scenario.value, AccountType.SECURITIES_MARGIN))
                 structure_id = uuid4()
                 fill = Fill(
                     uuid4(), uuid4(), uuid4(), "test", structure_id, dataset.slices[1].timestamp,
@@ -57,7 +57,7 @@ class SettlementTests(unittest.TestCase):
         catalog = dataset.reference_catalog()
         by_strike = {definition.contract_spec.strike: definition.instrument_id for definition in dataset.definitions if isinstance(definition.contract_spec, ListedOptionSpec)}
         short, long = by_strike[Decimal("6000")], by_strike[Decimal("5950")]
-        portfolio = BacktestPortfolio(Decimal("100000"), catalog, AccountKey(InstitutionId("backtest"), "missing", AccountType.SECURITIES_MARGIN))
+        portfolio = BacktestPortfolio(Decimal("100000"), catalog, AccountRef(InstitutionId("backtest"), "missing", AccountType.SECURITIES_MARGIN))
         structure_id = uuid4()
         portfolio.apply_fill(Fill(uuid4(), uuid4(), uuid4(), "test", structure_id, dataset.slices[1].timestamp, (LegFill(short, TradeSide.SELL, 1, Decimal("5")), LegFill(long, TradeSide.BUY, 1, Decimal("2.2"))), Decimal("2.8"), 1, Decimal("1"), Decimal("0"), False))
         with self.assertRaisesRegex(ValueError, "missing official settlement"):

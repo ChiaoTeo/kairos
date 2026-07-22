@@ -7,13 +7,14 @@ import json
 import tempfile
 import unittest
 
-from kairospy.contracts import canonical_from_trading_market_data
-from kairospy.trading.identity import InstrumentId
-from kairospy.trading.market_data import Quote
-from kairospy.market_data import (
-    CaptureResourceExceeded, RotatingCanonicalCaptureWriter,
+from kairospy.market.canonical import canonical_from_trading_market_data
+from kairospy.identity import InstrumentId
+from kairospy.market.capture import (
+    CaptureResourceExceeded,
+    RotatingCanonicalCaptureWriter,
     RotatingCapturedCanonicalEventSource,
 )
+from kairospy.market.types import Quote
 
 
 INSTRUMENT = InstrumentId("crypto:binance:spot:BTCUSDT")

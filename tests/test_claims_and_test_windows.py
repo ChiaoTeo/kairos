@@ -2,9 +2,9 @@ from tempfile import TemporaryDirectory
 from pathlib import Path
 import unittest
 
-from kairospy.validation import TestWindowRegistry,TestWindowUse
+from kairospy.research.validation import TestWindowRegistry,TestWindowUse
 from tests.test_validation_framework import registration
-from kairospy.validation import (
+from kairospy.research.validation import (
     DataCapabilities,EvidenceStatus,OutOfSampleEvidence,ProductProtocol,ExperimentValidationResult,
     SampleSufficiency,ValidationLevel,ValidationState,authorize_claim,
 )

@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 import unittest
 
-from kairospy.connectors.massive import MassiveClient, MassiveConfig, MassiveResponse
-from kairospy.connectors.massive.entitlement_diagnostics import MassiveEntitlementDiagnostics
+from kairospy.integrations.connectors.massive import MassiveClient, MassiveConfig, MassiveResponse
+from kairospy.integrations.connectors.massive.entitlement_diagnostics import MassiveEntitlementDiagnostics
 
 
 class StubTransport:

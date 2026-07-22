@@ -16,7 +16,7 @@ from kairospy.data.contracts import DataProductContract, DatasetRelease, Quality
 from kairospy.data.products import capabilities_payload
 from kairospy.data.publishing import DatasetPublisher, content_release_id_from_rows
 from kairospy.data.publishing import merge_release_rows
-from kairospy.storage.data_lake import write_json
+from kairospy.infrastructure.storage.data_lake import write_json
 
 from .planning import DataProductTaskPlan, TaskRangePlan, UniversePlan
 

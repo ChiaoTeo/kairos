@@ -13,19 +13,20 @@ import unittest
 from unittest.mock import patch
 from uuid import UUID
 
-from kairospy.contracts import CanonicalEventEnvelope, MarketEventKind, QuotePayload
-from kairospy.trading.identity import InstrumentId
-from kairospy.__main__ import main
-from kairospy.market_data import CanonicalCaptureWriter
-from kairospy.connectors.massive.config import MassiveConfig
-from kairospy.product_surface import Data
+from kairospy.market.canonical import CanonicalEventEnvelope, MarketEventKind, QuotePayload
+from kairospy.identity import InstrumentId
+from kairospy.surface.cli.main import main
+from kairospy.market.capture import CanonicalCaptureWriter
+from kairospy.integrations.connectors.massive.config import MassiveConfig
+from kairospy.surface.product import Data
 from kairospy.data import (
     BuiltInDataProductRegistry, BuiltInHistoricalDataProtocol, DataCatalog, DataProductContract,
     DataProductDefinition, DatasetClient, DatasetKey, DatasetLayer, DatasetRelease, DatasetStatus, QualityLevel,
-    SourceCacheStore, default_builtin_protocol_registry, stable_artifact_hash,
+    default_builtin_protocol_registry, stable_artifact_hash,
 )
 from kairospy.data.freshness import load_live_view_manifest, update_live_view_manifest_freshness
-from kairospy.storage.data_lake import utc_midnight, write_daily_dataset
+from kairospy.infrastructure.storage.source_cache import SourceCacheStore
+from kairospy.infrastructure.storage.data_lake import utc_midnight, write_daily_dataset
 
 
 def _live_manifest_path(root: str | Path, payload: dict[str, object]) -> Path:
@@ -1270,7 +1271,7 @@ class DataUserAddTests(unittest.TestCase):
             reconnected = Data(temporary).reconnect(
                 "market.orderbook.crypto.binance.usdm.btc-usdt",
             )
-            from kairospy.product_surface import data_sample, _args
+            from kairospy.surface.product import data_sample, _args
             data_sample(_args(
                 temporary,
                 source="binance.orderbook",
@@ -1324,7 +1325,7 @@ class DataUserAddTests(unittest.TestCase):
 
         with TemporaryDirectory() as temporary:
             connector = Connector()
-            from kairospy.product_surface import data_sample, _args
+            from kairospy.surface.product import data_sample, _args
 
             sampled = data_sample(_args(
                 temporary,
@@ -1390,7 +1391,7 @@ class DataUserAddTests(unittest.TestCase):
 
     def test_data_sample_text_summary_shows_orderbook_parameters_without_rows(self) -> None:
         from argparse import Namespace
-        from kairospy.__main__ import _emit_data_payload
+        from kairospy.surface.cli.main import _emit_data_payload
 
         payload = {
             "product": "data",
@@ -1468,7 +1469,7 @@ class DataUserAddTests(unittest.TestCase):
         self.assertEqual(live["runtime"]["stream"], "btcusdt@bookTicker")
 
     def test_removed_data_product_api_name_is_not_exposed(self) -> None:
-        import kairospy.product_surface as product_surface
+        import kairospy.surface.product as product_surface
 
         self.assertFalse(hasattr(product_surface, "DataProductApi"))
         self.assertFalse(hasattr(Data, "start_config"))

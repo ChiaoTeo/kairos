@@ -5,16 +5,16 @@ from decimal import Decimal
 import unittest
 from uuid import UUID
 
-from kairospy.backtest.feed import MarketSnapshot
-from kairospy.backtest.portfolio import PortfolioSnapshot
-from kairospy.trading.execution import TradeSide
-from kairospy.trading.capability import TimeInForce
-from kairospy.trading.identity import AssetId, InstrumentId
-from kairospy.trading.intent import LegIntent, OpenStructureIntent
-from kairospy.trading.market_data import Greeks, Quote
-from kairospy.trading.product import ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairospy.market.snapshots import MarketSnapshot
+from kairospy.runtime.profiles.backtest.portfolio import PortfolioSnapshot
+from kairospy.execution.events import TradeSide
+from kairospy.execution.orders import TimeInForce
+from kairospy.identity import AssetId, InstrumentId
+from kairospy.strategy.intents import LegIntent, OpenStructureIntent
+from kairospy.market.types import Greeks, Quote
+from kairospy.reference.contracts import ExerciseStyle, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
 from kairospy.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
-from kairospy.capture.snapshot import InstrumentSnapshot
+from kairospy.market.slices import InstrumentSnapshot
 from kairospy.risk.engine import RiskDecisionType, RiskEngine
 from kairospy.risk.limits import RiskLimits
 

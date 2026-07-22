@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.trading.product import ContractType, PerpetualSpec, ProductType, SettlementSession
+from kairospy.identity import AccountRef, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.reference.contracts import ContractType, PerpetualSpec, ProductType, SettlementSession
 from kairospy.reference import (
     AssetDefinition, AssetType, BenchmarkDefinition, BenchmarkId, BenchmarkType, BrokerId,
     ContractSeries, EconomicProduct, ExecutionRoute, InstrumentDefinition,
@@ -17,6 +17,7 @@ from kairospy.reference import (
     SettlementMethod, SettlementTerms, TradingRules,
     VenueDefinition, VenueType,
 )
+from kairospy.strategy.views import ReferenceView
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
@@ -63,8 +64,36 @@ class ReferenceCatalogTests(unittest.TestCase):
         self.assertEqual(self.catalog.references(self.instrument.instrument_id, ReferenceRole.SETTLEMENT_BENCHMARK, NOW), (reference,))
         self.assertEqual(self.catalog.validate_integrity(NOW), ())
 
+    def test_reference_view_projects_point_in_time_catalog_evidence(self) -> None:
+        account = AccountRef(InstitutionId("binance"), "main", AccountType.DERIVATIVES)
+        route = ExecutionRoute(RouteId("route:binance:main:btcusdt"), BrokerId("binance"), account, self.listing.listing_id, NOW)
+        mapping = ProviderSymbolMapping(
+            ProviderId("massive"), "crypto", "X:BTCUSDT", MappingTargetType.INSTRUMENT,
+            self.instrument.instrument_id.value, NOW,
+        )
+        self.catalog.routes.add(route)
+        self.catalog.add_mapping(mapping)
+
+        view = ReferenceView.from_catalog(self.catalog, as_of=NOW)
+
+        self.assertEqual(view.instrument_ids, (self.instrument.instrument_id.value,))
+        self.assertEqual(view.product_ids, (self.product.product_id.value,))
+        self.assertEqual(view.product_types, ((ProductType.PERPETUAL.value, 1),))
+        self.assertEqual(view.listing_ids, (self.listing.listing_id.value,))
+        self.assertEqual(view.route_ids, (route.route_id.value,))
+        self.assertEqual(
+            view.contract_summaries,
+            ((self.instrument.instrument_id.value, self.product.product_id.value, ProductType.PERPETUAL.value),),
+        )
+        self.assertEqual(view.mapping_count, 1)
+        self.assertEqual(view.version_effective_from, NOW)
+        self.assertIsNone(view.version_effective_to)
+        self.assertEqual(view.integrity_issue_count, 0)
+        self.assertEqual(view.integrity_hash, "none")
+        self.assertNotEqual(view.catalog_hash, "none")
+
     def test_execution_route_resolves_through_listing(self) -> None:
-        account = AccountKey(InstitutionId("binance"), "main", AccountType.DERIVATIVES)
+        account = AccountRef(InstitutionId("binance"), "main", AccountType.DERIVATIVES)
         route = ExecutionRoute(RouteId("route:binance:main:btcusdt"), BrokerId("binance"), account, self.listing.listing_id, NOW)
         self.catalog.routes.add(route)
         self.assertEqual(self.catalog.resolve_execution_route(account, self.instrument.instrument_id, NOW), route)
@@ -92,7 +121,7 @@ class ReferenceCatalogTests(unittest.TestCase):
             ProviderId("vendor"), "symbols", "UNKNOWN", MappingTargetType.INSTRUMENT,
             "instrument:missing", NOW,
         ))
-        account = AccountKey(InstitutionId("ibkr"), "paper", AccountType.DERIVATIVES)
+        account = AccountRef(InstitutionId("ibkr"), "paper", AccountType.DERIVATIVES)
         self.catalog.routes.add(ExecutionRoute(
             RouteId("route:mismatch"), BrokerId("binance"), account, self.listing.listing_id, NOW,
         ))

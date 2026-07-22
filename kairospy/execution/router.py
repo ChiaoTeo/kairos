@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from kairospy.ports import ComboOrderRequest, ExecutionPort, OrderRequest
+from kairospy.execution.ports import ComboOrderRequest, ExecutionPort, OrderRequest
 from kairospy.reference.catalog import ReferenceCatalog
 
 

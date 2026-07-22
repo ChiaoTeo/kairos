@@ -1,6 +1,6 @@
 from kairospy.data import OutputFormat
 from kairospy.data.products import BTC_SPOT_DAILY
-from kairospy.product_surface import Data
+from kairospy.surface.product import Data
 
 
 data = Data().reader()

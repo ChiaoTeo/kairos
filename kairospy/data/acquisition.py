@@ -15,7 +15,7 @@ class ProviderConnector(DataProductBuilder, Protocol):
     """Legacy name for a DataProductBuilder.
 
     The object registered here builds governed Data datasets from provider
-    sources. External provider access belongs in ``kairospy.connectors``.
+    sources. External provider access belongs in ``kairospy.integrations.connectors``.
     """
 
     provider: str

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from kairospy.configuration import DEFAULT_LAKE_ROOT
+from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
 
 from .catalog import DataCatalog
 from .contracts import DatasetRelease, DatasetStatus, QualityLevel

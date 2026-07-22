@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairospy.validation import (
+from kairospy.research.validation import (
     CapitalSpec, DataCapabilities, DataGap, DataGapPlan, EvidenceStatus,
     ExecutionArchetype, GateRequirement, OutOfSampleEvidence, ProductProtocol,
     ExperimentValidationResult, ReturnDriver, SampleSufficiency, ExperimentRegistration,

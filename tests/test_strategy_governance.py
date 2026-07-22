@@ -1,23 +1,26 @@
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 import unittest
 
-from kairospy.trading.capability import TimeInForce
-from kairospy.trading.identity import InstrumentId
-from kairospy.trading.intent import TargetPositionIntent
-from kairospy.trading.product import ProductType
-from kairospy.trading.strategy_contract import EconomicIntent, StrategyLifecycle, StrategySpec
+from kairospy.execution.orders import TimeInForce
+from kairospy.identity import InstrumentId
+from kairospy.strategy.intents import TargetPositionIntent
+from kairospy.reference.contracts import ProductType
+from kairospy.strategy.contracts import EconomicIntent, StrategyLifecycle, StrategySpec
 from kairospy.execution.planner import LeggingPolicy
 from kairospy.execution.policy import ExecutionMode, ExecutionPolicy, PartialFillPolicy
 from kairospy.execution.strategy_planner import plan_economic_intent
-from kairospy.trading.order import ExecutionInstructions
-from kairospy.trading.capability import OrderType
+from kairospy.execution.orders import ExecutionInstructions
+from kairospy.execution.orders import OrderType
 from kairospy.risk.portfolio_governance import (
     AllocationDecisionType, PortfolioAllocator, StrategyAllocation,
 )
+from kairospy.risk.engine import RiskDecision, RiskDecisionType
+from kairospy.risk.limits import RiskLimits
+from kairospy.strategy.views import BudgetView
 
 
 def spec():
@@ -85,6 +88,43 @@ class StrategyGovernanceTest(unittest.TestCase):
         self.assertEqual(decision.approved_risk_budget, Decimal("1500"))
         self.assertEqual(intent.intents, (target,))
 
+    def test_budget_view_projects_risk_allocation_and_governance_evidence(self):
+        strategy = spec(); now = datetime(2026, 7, 19, tzinfo=timezone.utc)
+        target = TargetPositionIntent(uuid4(), strategy.strategy_id, InstrumentId("BTC"), Decimal("1"), "test")
+        intent = EconomicIntent.create(strategy=strategy, decision_time=now, valid_until=now+timedelta(minutes=5),
+            intents=(target,), risk_budget=Decimal("2000"), urgency="normal", execution_policy_id="taker-v1",
+            feature_snapshot_hash="feature-hash")
+        allocation = PortfolioAllocator((StrategyAllocation("btc_condor", Decimal("1500")),), Decimal("10000")).approve(intent)
+        risk_decision = RiskDecision(
+            uuid4(), target.intent_id, RiskDecisionType.APPROVED, "all",
+            "all pre-trade checks passed", 1, 1,
+        )
+
+        view = BudgetView.from_evidence(
+            as_of=now,
+            allocation_decisions=(allocation,),
+            risk_decisions=(risk_decision,),
+            risk_limits=RiskLimits(min_remaining_cash=Decimal("100")),
+            runtime_state={"status": "reduce_only", "reason": "operator intervention"},
+            committed_capital=Decimal("500"),
+        )
+
+        self.assertEqual(view.approved_capital, Decimal("1500"))
+        self.assertEqual(view.remaining_capital, Decimal("1000"))
+        self.assertEqual(view.decision_count, 2)
+        self.assertEqual(view.approved_count, 1)
+        self.assertEqual(view.resized_count, 1)
+        self.assertEqual(view.rejected_count, 0)
+        self.assertTrue(view.reduce_only)
+        self.assertEqual(view.blocked_reason, "operator intervention")
+        self.assertIn(("risk:all", "approved:all pre-trade checks passed"), view.risk_state)
+        self.assertIn(("allocation:btc_condor", "resized:risk budget reduced by allocation gate"), view.risk_state)
+        self.assertNotEqual(view.risk_decision_hash, "none")
+        self.assertNotEqual(view.allocation_hash, "none")
+        self.assertNotEqual(view.limit_hash, "none")
+        self.assertNotEqual(view.governance_hash, "none")
+        self.assertNotEqual(view.state_hash, "none")
+
     def test_economic_planner_enforces_policy_identity_and_validity(self):
         strategy=spec();now=datetime.now(timezone.utc);instrument=InstrumentId("BTC")
         target=TargetPositionIntent(uuid4(),strategy.strategy_id,instrument,Decimal("1"),"test")
@@ -92,8 +132,8 @@ class StrategyGovernanceTest(unittest.TestCase):
             intents=(target,),risk_budget=Decimal("1000"),urgency="normal",execution_policy_id="taker-v1",feature_snapshot_hash="x")
         policy=ExecutionPolicy("taker-v1","1",ExecutionMode.TAKER,TimeInForce.IOC,Decimal("10"))
         instructions={instrument:ExecutionInstructions(OrderType.MARKET,TimeInForce.IOC)}
-        from kairospy.trading.identity import AccountKey,AccountType,VenueId
-        account=AccountKey(InstitutionId("sim"),"a",AccountType.CRYPTO_SPOT)
+        from kairospy.identity import AccountRef,AccountType,VenueId
+        account=AccountRef(InstitutionId("sim"),"a",AccountType.CRYPTO_SPOT)
         plan=plan_economic_intent(intent,policy=policy,accounts={instrument:account},current_positions={},instructions=instructions,now=now)
         self.assertEqual(plan.strategy_spec_hash,strategy.spec_hash)
         with self.assertRaises(ValueError):

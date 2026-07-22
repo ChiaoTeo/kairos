@@ -7,17 +7,18 @@ import tempfile
 import unittest
 from uuid import UUID
 
-from kairospy.accounting.ledger import LedgerService
-from kairospy.ports import OrderAck
-from kairospy.connectors.binance.user_data_stream import UserFillUpdate
-from kairospy.trading.execution import DividendPayment, FundingPayment, TradeExecution, TradeSide
-from kairospy.trading.corporate_action import SplitEvent
-from kairospy.trading.identity import AssetId, InstrumentId, VenueId
-from kairospy.trading.ledger import Ledger, LedgerBook
-from kairospy.trading.product import CryptoSpotSpec, ProductType
+from kairospy.portfolio.accounting.ledger import LedgerService
+from kairospy.integrations.ports import OrderAck
+from kairospy.integrations.connectors.binance.user_data_stream import UserFillUpdate
+from kairospy.execution.events import TradeExecution, TradeSide
+from kairospy.portfolio.ledger_events import DividendPayment, FundingPayment
+from kairospy.products.equity.corporate_actions import SplitEvent
+from kairospy.identity import AssetId, InstrumentId, VenueId
+from kairospy.portfolio.ledger import Ledger, LedgerBook
+from kairospy.reference.contracts import CryptoSpotSpec, ProductType
 from kairospy.execution.ingestion import DurableAccountingIngestionService, DurableExecutionIngestionService
 from kairospy.execution.order_state import DurableOrderStatus
-from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
 from kairospy.products.equity.corporate_actions import CorporateActionService
 from tests.test_runtime_store import request
 from kairospy.reference import BrokerId, ExecutionRoute, ReferenceCatalog, RouteId

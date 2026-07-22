@@ -6,8 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairospy.connectors.massive import MassiveClient, MassiveConfig, MassiveFlatFileBatchDownloader, MassiveFlatFileClient, MassiveResponse, MassiveVendorArchiveClient, OutsideDownloadWindow
-from kairospy.connectors.massive.client import MassiveError
+from kairospy.integrations.connectors.massive import MassiveClient, MassiveConfig, MassiveFlatFileBatchDownloader, MassiveFlatFileClient, MassiveResponse, MassiveVendorArchiveClient, OutsideDownloadWindow
+from kairospy.integrations.connectors.massive.client import MassiveError
 
 
 class StubTransport:

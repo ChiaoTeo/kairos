@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from kairospy.ports import ComboOrderRequest, OrderAck, OrderRequest
+from kairospy.execution.ports import ComboOrderRequest, OrderAck, OrderRequest
 
 
 DurableOrderRequest = OrderRequest | ComboOrderRequest

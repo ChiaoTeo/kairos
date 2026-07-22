@@ -6,11 +6,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairospy.trading.identity import AssetId, InstrumentId, VenueId
-from kairospy.trading.market_data import Quote
-from kairospy.trading.product import CryptoSpotSpec, EquitySpec, ProductType
-from kairospy.capture.normalized_series import NormalizedSeriesCaptureService
-from kairospy.capture.series import SeriesCaptureSpec
+from kairospy.identity import AssetId, InstrumentId, VenueId
+from kairospy.market.types import Quote
+from kairospy.reference.contracts import CryptoSpotSpec, EquitySpec, ProductType
+from kairospy.research.capture.normalized_series import NormalizedSeriesCaptureService
+from kairospy.research.capture.series import SeriesCaptureSpec
 from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 

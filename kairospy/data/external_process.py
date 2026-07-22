@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from typing import Mapping
 
-from kairospy.storage.data_lake import write_json
+from kairospy.infrastructure.storage.data_lake import write_json
 
 from .acquisition_primitives import AcquisitionEstimate
 from .builders.planning import DataProductTaskPlan, TaskRangePlan

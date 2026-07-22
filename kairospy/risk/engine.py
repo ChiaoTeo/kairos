@@ -3,20 +3,36 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import StrEnum
-from typing import Callable
+from typing import Callable, Protocol
 from uuid import UUID, uuid4
 
-from kairospy.backtest.execution import combo_quote
-from kairospy.backtest.feed import MarketSnapshot
-from kairospy.backtest.portfolio import PortfolioSnapshot
+from kairospy.market import MarketSlice
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.access import contract_spec, definition_at
-from kairospy.trading.execution import TradeSide
-from kairospy.trading.intent import Intent, OpenStructureIntent
-from kairospy.trading.product import is_option_spec, option_multiplier
+from kairospy.execution.events import TradeSide
+from kairospy.strategy.intents import Intent, OpenStructureIntent
+from kairospy.reference.contracts import is_option_spec, option_multiplier
 from .option_structure import maximum_expiry_loss
 
 from .limits import RiskLimits
+
+
+class PortfolioRiskSnapshot(Protocol):
+    cash: Decimal
+    equity_liquidation: Decimal
+    open_structures: tuple[object, ...]
+    delta: Decimal | None
+    gamma: Decimal | None
+    vega: Decimal | None
+    greeks_coverage: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class ComboQuote:
+    natural: Decimal
+    midpoint: Decimal
+    max_spread: Decimal
+    sufficient_size: bool
 
 
 class RiskDecisionType(StrEnum):
@@ -44,7 +60,14 @@ class RiskEngine:
         self.catalog = catalog
         self.id_factory = id_factory
 
-    def evaluate(self, intent: Intent, portfolio: PortfolioSnapshot, market: MarketSnapshot, *, reduce_only: bool = False) -> tuple[Intent | None, RiskDecision]:
+    def evaluate(
+        self,
+        intent: Intent,
+        portfolio: PortfolioRiskSnapshot,
+        market: MarketSlice,
+        *,
+        reduce_only: bool = False,
+    ) -> tuple[Intent | None, RiskDecision]:
         original_quantity = intent.quantity
         resize_decision = None
         reject = lambda rule, reason, actual=None, threshold=None: (None, RiskDecision(self.id_factory(), intent.intent_id, RiskDecisionType.REJECTED, rule, reason, intent.quantity, 0, actual, threshold))
@@ -52,7 +75,7 @@ class RiskEngine:
             return reject("data_quality", "market slice contains quality issues")
         if reduce_only and isinstance(intent, OpenStructureIntent):
             return reject("reduce_only", "post-trade risk state permits closing orders only")
-        quote = combo_quote(intent.legs, market, intent.quantity)
+        quote = _combo_quote(intent.legs, market, intent.quantity)
         if quote is None:
             return reject("quote", "missing or crossed quote")
         if quote.max_spread > self.limits.max_bid_ask_spread:
@@ -117,7 +140,7 @@ class RiskEngine:
             return intent, resize_decision
         return intent, RiskDecision(self.id_factory(), intent.intent_id, RiskDecisionType.APPROVED, "all", "all pre-trade checks passed", intent.quantity, intent.quantity)
 
-    def post_trade_violations(self, portfolio: PortfolioSnapshot) -> tuple[str, ...]:
+    def post_trade_violations(self, portfolio: PortfolioRiskSnapshot) -> tuple[str, ...]:
         violations = []
         if portfolio.cash < self.limits.min_remaining_cash:
             violations.append("minimum_cash")
@@ -128,3 +151,25 @@ class RiskEngine:
         if portfolio.greeks_coverage < self.limits.min_greeks_coverage:
             violations.append("greeks_coverage")
         return tuple(violations)
+
+
+def _combo_quote(legs, market: MarketSlice, quantity: int) -> ComboQuote | None:
+    snapshots = {item.instrument_id: item for item in market.instruments}
+    natural = Decimal("0")
+    midpoint = Decimal("0")
+    max_spread = Decimal("0")
+    sufficient = True
+    for leg in legs:
+        item = snapshots.get(leg.instrument_id)
+        quote = item.quote if item else None
+        if not quote or quote.bid is None or quote.ask is None or quote.bid > quote.ask:
+            return None
+        mid = (quote.bid + quote.ask) / 2
+        executable = quote.ask if leg.side is TradeSide.BUY else quote.bid
+        natural += Decimal(-leg.side.sign) * executable * leg.ratio
+        midpoint += Decimal(-leg.side.sign) * mid * leg.ratio
+        max_spread = max(max_spread, quote.ask - quote.bid)
+        available = quote.ask_size if leg.side is TradeSide.BUY else quote.bid_size
+        if available is None or available < Decimal(quantity * leg.ratio):
+            sufficient = False
+    return ComboQuote(natural, midpoint, max_spread, sufficient)

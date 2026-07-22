@@ -5,7 +5,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Callable, Generic, Iterable, TypeVar
 
-from kairospy.trading.identity import AccountKey, InstrumentId
+from kairospy.identity import AccountRef, InstrumentId
 
 from .identity import BenchmarkId, ListingId, ProductId
 from .contracts import (
@@ -141,7 +141,7 @@ class ReferenceCatalog:
     def active_listings(self, instrument_id: InstrumentId, at: datetime) -> tuple[ListingDefinition, ...]:
         return tuple(item for item in self.listings.values(at) if item.instrument_id == instrument_id)
 
-    def resolve_execution_route(self, account: AccountKey, instrument_id: InstrumentId, at: datetime) -> ExecutionRoute:
+    def resolve_execution_route(self, account: AccountRef, instrument_id: InstrumentId, at: datetime) -> ExecutionRoute:
         listing_ids = {item.listing_id for item in self.active_listings(instrument_id, at)}
         matches = [item for item in self.routes.values(at) if item.account_key == account and item.listing_id in listing_ids]
         if len(matches) != 1:

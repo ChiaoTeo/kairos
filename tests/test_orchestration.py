@@ -7,27 +7,27 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
-from kairospy.accounting.ledger import LedgerService
-from kairospy.ports import ComboLegRequest, ComboOrderRequest, Environment, OrderRequest
-from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
-from kairospy.trading.capability import ExecutionCapabilities, OrderType
-from kairospy.trading.execution import TradeSide
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
-from kairospy.trading.ledger import Ledger
-from kairospy.trading.order import ExecutionInstructions, TimeInForce
-from kairospy.trading.intent import (
+from kairospy.portfolio.accounting.ledger import LedgerService
+from kairospy.integrations.ports import ComboLegRequest, ComboOrderRequest, Environment, OrderRequest
+from kairospy.integrations.connectors.simulated import SimulatedExecutionAccountGateway
+from kairospy.execution.orders import ExecutionCapabilities, OrderType
+from kairospy.execution.events import TradeSide
+from kairospy.identity import AccountRef, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
+from kairospy.portfolio.ledger import Ledger
+from kairospy.execution.orders import ExecutionInstructions, TimeInForce
+from kairospy.strategy.intents import (
     CancelIntent, HedgeIntent, LegIntent, OpenStructureIntent, TransferIntent,
 )
-from kairospy.trading.product import CryptoSpotSpec, ProductType
+from kairospy.reference.contracts import CryptoSpotSpec, ProductType
 from kairospy.execution.router import ExecutionRiskLimits, ExecutionRouter
 from kairospy.execution.planner import LeggingPolicy, NativeComboPlan, SequentialLegPlan, plan_combo
 from kairospy.execution.strategy_planner import plan_strategy_intent
-from kairospy.orchestration.coordinator import ExecutionCoordinator
-from kairospy.orchestration.event_log import PersistentEventLog
-from kairospy.orchestration.kill_switch import KillSwitch
-from kairospy.orchestration.monitoring import AlertSeverity, OperationalMonitor
-from kairospy.orchestration.reconciliation import ReconciliationService
-from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.runtime.coordinator import ExecutionCoordinator
+from kairospy.runtime.store.event_log import PersistentEventLog
+from kairospy.governance.kill_switch import KillSwitch
+from kairospy.governance.observability import AlertSeverity, OperationalMonitor
+from kairospy.governance.reconciliation import ReconciliationService
+from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
 from tests.runtime_support import operational_application
 from kairospy.reference import BrokerId, ExecutionRoute, ListingId, ReferenceCatalog, RouteId
 from tests.reference_support import publish_test_instrument
@@ -35,7 +35,7 @@ from tests.reference_support import publish_test_instrument
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
 VENUE = VenueId("sim")
-ACCOUNT = AccountKey(InstitutionId("sim"), "test", AccountType.CRYPTO_SPOT)
+ACCOUNT = AccountRef(InstitutionId("sim"), "test", AccountType.CRYPTO_SPOT)
 INSTRUMENT = InstrumentId("BTC-USDT")
 
 
@@ -85,7 +85,8 @@ class OrchestrationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "events.jsonl"
             store = SQLiteRuntimeStore(Path(directory) / "runtime.sqlite3")
-            from kairospy.application import ApplicationConfig, FunctionProbe, RuntimePaths, KairosApplication
+            from kairospy.runtime.application import FunctionProbe, KairosApplication
+            from kairospy.runtime.config import ApplicationConfig, RuntimePaths
             blocked_application = KairosApplication(
                 ApplicationConfig(Environment.TESTNET, RuntimePaths.under(directory)), store,
                 runtime_id="blocked-readiness",
@@ -234,7 +235,7 @@ class OrchestrationTests(unittest.TestCase):
         self.assertEqual(len(structure.combo_orders), 1)
         self.assertEqual(len(structure.combo_orders[0].legs), 2)
 
-        other_account = AccountKey(InstitutionId("sim"), "other", AccountType.CRYPTO_SPOT)
+        other_account = AccountRef(InstitutionId("sim"), "other", AccountType.CRYPTO_SPOT)
         transfer_intent = TransferIntent(intent_id, "allocator", ACCOUNT, other_account, AssetId("USDT"), Decimal("100"), "rebalance")
         transfer = plan_strategy_intent(transfer_intent, accounts={}, current_positions={}, instructions={})
         self.assertEqual(transfer.transfers, (transfer_intent,))

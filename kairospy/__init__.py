@@ -11,7 +11,7 @@ __all__ = [
 
 def __getattr__(name: str):
     if name == "initialize_project":
-        from kairospy.project import initialize_project
+        from kairospy.surface.project import initialize_project
 
         return initialize_project
     if name == "Workspace":

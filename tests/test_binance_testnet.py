@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 import os
 import unittest
 
-from kairospy.ports import Environment
-from kairospy.ports import ReferenceDataRequest
-from kairospy.connectors.binance.account_gateway import BinanceAccountGateway
-from kairospy.connectors.binance.reference_data import BinanceSpotReferenceDataClient
-from kairospy.connectors.binance.request_signing import BinanceSigner, synchronize_clock
-from kairospy.connectors.binance.rest_transport import RateLimiter, UrllibBinanceTransport
-from kairospy.trading.identity import AccountKey, AccountType, VenueId
-from kairospy.trading.product import ProductType
+from kairospy.integrations.ports import Environment
+from kairospy.integrations.ports import ReferenceDataRequest
+from kairospy.integrations.connectors.binance.account_gateway import BinanceAccountGateway
+from kairospy.integrations.connectors.binance.reference_data import BinanceSpotReferenceDataClient
+from kairospy.integrations.connectors.binance.request_signing import BinanceSigner, synchronize_clock
+from kairospy.integrations.connectors.binance.rest_transport import RateLimiter, UrllibBinanceTransport
+from kairospy.identity import AccountRef, AccountType, VenueId
+from kairospy.reference.contracts import ProductType
 
 
 @unittest.skipUnless(
@@ -28,7 +28,7 @@ class BinanceTestnetContractTests(unittest.TestCase):
         self.assertEqual(catalog.active_listings(definition.instrument_id, definition.effective_from)[0].trading_symbol, "BTCUSDT")
         signer = BinanceSigner(os.environ["BINANCE_TESTNET_API_KEY"], os.environ["BINANCE_TESTNET_API_SECRET"])
         synchronize_clock(transport, signer, limiter)
-        account = AccountKey(InstitutionId("binance"), os.getenv("BINANCE_TESTNET_ACCOUNT", "testnet"), AccountType.CRYPTO_SPOT)
+        account = AccountRef(InstitutionId("binance"), os.getenv("BINANCE_TESTNET_ACCOUNT", "testnet"), AccountType.CRYPTO_SPOT)
         state = BinanceAccountGateway(transport, signer, Environment.TESTNET, limiter=limiter).account_state(account)
         self.assertEqual(state.account, account)
 

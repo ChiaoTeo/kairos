@@ -5,7 +5,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
-from kairospy.storage.data_lake import write_json
+from kairospy.infrastructure.storage.data_lake import write_json
 
 from .catalog import DataCatalog
 from .contracts import DatasetRelease, DatasetStatus, QualityLevel

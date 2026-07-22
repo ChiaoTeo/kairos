@@ -1,23 +1,23 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, VenueId
-from kairospy.trading.ledger import Ledger, LedgerBook
+from kairospy.identity import AccountRef, AccountType, AssetId, VenueId
+from kairospy.portfolio.ledger import Ledger, LedgerBook
 from kairospy.reference.identity import LocationId
-from kairospy.treasury import FeePolicy, TransferOperation, TransferStatus, TreasuryAccountingProjector, TreasuryLedgerPostingService
+from kairospy.portfolio.treasury import FeePolicy, TransferOperation, TransferStatus, TreasuryAccountingProjector, TreasuryLedgerPostingService
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
 SOURCE = LocationId("source"); DESTINATION = LocationId("destination")
-SOURCE_ACCOUNT = AccountKey(InstitutionId("exchange-a"), "source", AccountType.CRYPTO_SPOT)
-DESTINATION_ACCOUNT = AccountKey(InstitutionId("exchange-b"), "destination", AccountType.CRYPTO_SPOT)
-TRANSIT = AccountKey(InstitutionId("treasury"), "transit", AccountType.SUB_ACCOUNT)
+SOURCE_ACCOUNT = AccountRef(InstitutionId("exchange-a"), "source", AccountType.CRYPTO_SPOT)
+DESTINATION_ACCOUNT = AccountRef(InstitutionId("exchange-b"), "destination", AccountType.CRYPTO_SPOT)
+TRANSIT = AccountRef(InstitutionId("treasury"), "transit", AccountType.SUB_ACCOUNT)
 
 
 class TreasuryAccountingProjectionTests(unittest.TestCase):

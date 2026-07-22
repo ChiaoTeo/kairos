@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 import asyncio
 from datetime import datetime, timezone
@@ -9,19 +9,22 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairospy.ports import OrderAck, OrderRequest
-from kairospy.ports import Environment
-from kairospy.application import ApplicationConfig, AsyncKairosRuntime, ManagedServiceSpec, RuntimePaths, KairosApplication
-from kairospy.application.clock import FixedClock
-from kairospy.trading.capability import OrderType
-from kairospy.trading.execution import TradeSide
-from kairospy.trading.identity import AccountKey, AccountType, InstrumentId, VenueId
-from kairospy.trading.order import ExecutionInstructions, TimeInForce
+from kairospy.integrations.ports import OrderAck, OrderRequest
+from kairospy.integrations.ports import Environment
+from kairospy.runtime.clock import FixedClock
+from kairospy.runtime import ManagedServiceSpec
+from kairospy.execution.orders import OrderType
+from kairospy.execution.events import TradeSide
+from kairospy.identity import AccountRef, AccountType, InstrumentId, VenueId
+from kairospy.execution.orders import ExecutionInstructions, TimeInForce
 from kairospy.execution.command import OutboxStatus
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher
-from kairospy.orchestration.kill_switch import KillSwitch
-from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.governance.kill_switch import KillSwitch
+from kairospy.runtime.application import KairosApplication
+from kairospy.runtime.async_runtime import AsyncKairosRuntime
+from kairospy.runtime.config import ApplicationConfig, RuntimePaths
+from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
 
 
 NOW = datetime(2026, 7, 17, 12, tzinfo=timezone.utc)
@@ -30,7 +33,7 @@ NOW = datetime(2026, 7, 17, 12, tzinfo=timezone.utc)
 def request() -> OrderRequest:
     return OrderRequest(
         "internal-1", "client-1", "strategy-v1", "intent-1", "correlation-1",
-        AccountKey(InstitutionId("simulated"), "account-1", AccountType.SECURITIES_MARGIN),
+        AccountRef(InstitutionId("simulated"), "account-1", AccountType.SECURITIES_MARGIN),
         InstrumentId("instrument-1"), TradeSide.BUY, Decimal("1"),
         ExecutionInstructions(OrderType.LIMIT, TimeInForce.DAY, Decimal("10")),
     )

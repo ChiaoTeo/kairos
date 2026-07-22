@@ -6,12 +6,12 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from kairospy.backtest.feed import MarketSnapshot
-from kairospy.trading.identity import AssetId, InstrumentId, VenueId
-from kairospy.trading.market_data import Greeks, Quote
-from kairospy.trading.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from kairospy.capture.retention import DeltaLegWatchlist
-from kairospy.capture.snapshot import InstrumentSnapshot
+from kairospy.market.snapshots import MarketSnapshot
+from kairospy.identity import AssetId, InstrumentId, VenueId
+from kairospy.market.types import Greeks, Quote
+from kairospy.reference.contracts import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairospy.research.capture.retention import DeltaLegWatchlist
+from kairospy.market.slices import InstrumentSnapshot
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.contracts import InstrumentDefinition
 from tests.reference_support import publish_test_instrument

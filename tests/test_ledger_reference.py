@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from kairospy.accounting.ledger import LedgerService
-from kairospy.trading.execution import TradeExecution, TradeSide
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.trading.ledger import Ledger, LedgerBook
-from kairospy.trading.product import CryptoSpotSpec, ProductType
+from kairospy.portfolio.accounting.ledger import LedgerService
+from kairospy.execution.events import TradeExecution, TradeSide
+from kairospy.identity import AccountRef, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.portfolio.ledger import Ledger, LedgerBook
+from kairospy.reference.contracts import CryptoSpotSpec, ProductType
 from kairospy.reference import EconomicProduct, InstrumentDefinition, InstrumentLifecycle, ProductId, ReferenceCatalog
 
 
@@ -26,7 +26,7 @@ class LedgerReferenceTests(unittest.TestCase):
         catalog.products.add(EconomicProduct(product, ProductType.CRYPTO_SPOT, "BTC/USDT", NOW, currency=AssetId("USDT")))
         catalog.instruments.add(InstrumentDefinition(instrument, product, ProductType.CRYPTO_SPOT, CryptoSpotSpec(AssetId("BTC"), AssetId("USDT")), InstrumentLifecycle(), NOW))
         ledger = Ledger(); service = LedgerService(ledger, catalog)
-        account = AccountKey(InstitutionId("binance"), "spot", AccountType.CRYPTO_SPOT)
+        account = AccountRef(InstitutionId("binance"), "spot", AccountType.CRYPTO_SPOT)
         service.trade(TradeExecution(uuid4(), NOW, account, instrument, TradeSide.BUY, Decimal("0.1"), Decimal("50000"), AssetId("USDT"), Decimal("5"), "order"))
         self.assertEqual(ledger.book_balance(account, LedgerBook.CASH, AssetId("USDT")), Decimal("-5005"))
         self.assertEqual(ledger.book_balance(account, LedgerBook.POSITION, AssetId(f"POSITION:{instrument.value}")), Decimal("0.1"))

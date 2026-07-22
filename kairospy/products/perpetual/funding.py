@@ -4,10 +4,10 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid5
 
-from kairospy.accounting.ledger import LedgerService
-from kairospy.trading.execution import FundingPayment
-from kairospy.trading.identity import AccountKey, InstrumentId
-from kairospy.trading.product import ContractType, PerpetualSpec
+from kairospy.portfolio.accounting.ledger import LedgerService
+from kairospy.portfolio.ledger_events import FundingPayment
+from kairospy.identity import AccountRef, InstrumentId
+from kairospy.reference.contracts import ContractType, PerpetualSpec
 from kairospy.reference.access import contract_spec, definition_at
 
 
@@ -15,7 +15,7 @@ class FundingEngine:
     def __init__(self, ledger_service: LedgerService) -> None:
         self.ledger_service = ledger_service
 
-    def apply(self, account: AccountKey, instrument_id: InstrumentId, position_quantity: Decimal, mark_price: Decimal, funding_rate: Decimal, timestamp: datetime):
+    def apply(self, account: AccountRef, instrument_id: InstrumentId, position_quantity: Decimal, mark_price: Decimal, funding_rate: Decimal, timestamp: datetime):
         definition = definition_at(self.ledger_service.catalog, instrument_id, timestamp)
         spec = contract_spec(definition)
         if not isinstance(spec, PerpetualSpec):

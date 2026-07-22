@@ -4,17 +4,17 @@ from dataclasses import dataclass
 from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid5
 
-from kairospy.ports import ComboLegRequest, ComboOrderRequest, OrderRequest
-from kairospy.trading.capability import OrderType
-from kairospy.trading.execution import TradeSide
-from kairospy.trading.identity import AccountKey, InstrumentId
-from kairospy.trading.intent import (
-    CancelIntent, CashAndCarryIntent, CloseStructureIntent, CoveredCallIntent,
-    HedgeIntent, OpenStructureIntent, ProtectivePutIntent, TargetPositionIntent,
+from kairospy.execution.ports import ComboLegRequest, ComboOrderRequest, OrderRequest
+from kairospy.execution.orders import OrderType
+from kairospy.execution.events import TradeSide
+from kairospy.identity import AccountRef, InstrumentId
+from kairospy.strategy.archetypes import CashAndCarryIntent, CoveredCallIntent, ProtectivePutIntent
+from kairospy.strategy.intents import (
+    CancelIntent, CloseStructureIntent, HedgeIntent, OpenStructureIntent, TargetPositionIntent,
     TransferIntent,
 )
-from kairospy.trading.order import ExecutionInstructions
-from kairospy.trading.strategy_contract import EconomicIntent
+from kairospy.execution.orders import ExecutionInstructions
+from kairospy.strategy.contracts import EconomicIntent
 from kairospy.execution.policy import ExecutionPolicy
 from kairospy.execution.planner import LeggingPolicy
 
@@ -38,7 +38,7 @@ class EconomicExecutionPlan:
 
 
 def plan_economic_intent(economic_intent: EconomicIntent, *, policy: ExecutionPolicy,
-                         accounts: dict[InstrumentId, AccountKey], current_positions: dict[InstrumentId, Decimal],
+                         accounts: dict[InstrumentId, AccountRef], current_positions: dict[InstrumentId, Decimal],
                          instructions: dict[InstrumentId, ExecutionInstructions], now,
                          working_orders: tuple[OrderRequest, ...] = (), attempt: int = 1) -> EconomicExecutionPlan:
     if now.tzinfo is None: raise ValueError("planning time must be timezone-aware")
@@ -55,7 +55,7 @@ def plan_economic_intent(economic_intent: EconomicIntent, *, policy: ExecutionPo
         economic_intent.strategy_spec_hash,policy.policy_id,plans)
 
 
-def plan_strategy_intent(intent, *, accounts: dict[InstrumentId, AccountKey], current_positions: dict[InstrumentId, Decimal], instructions: dict[InstrumentId, ExecutionInstructions], working_orders: tuple[OrderRequest, ...] = (), attempt: int = 1) -> StrategyExecutionPlan:
+def plan_strategy_intent(intent, *, accounts: dict[InstrumentId, AccountRef], current_positions: dict[InstrumentId, Decimal], instructions: dict[InstrumentId, ExecutionInstructions], working_orders: tuple[OrderRequest, ...] = (), attempt: int = 1) -> StrategyExecutionPlan:
     if attempt < 1: raise ValueError("execution attempt must be positive")
     combo_orders = ()
     transfers = ()
@@ -109,7 +109,7 @@ def _order(intent, instrument_id, accounts, instructions, side, quantity, index,
     )
 
 
-def _combo_order(intent, accounts: dict[InstrumentId, AccountKey], attempt: int) -> ComboOrderRequest:
+def _combo_order(intent, accounts: dict[InstrumentId, AccountRef], attempt: int) -> ComboOrderRequest:
     missing = [leg.instrument_id for leg in intent.legs if leg.instrument_id not in accounts]
     if missing:
         raise LookupError(f"execution account missing for combo legs: {', '.join(item.value for item in missing)}")

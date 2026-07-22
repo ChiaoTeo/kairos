@@ -15,15 +15,16 @@ from kairospy.data import (
     QualityLevel, DatasetClient, RunMode, SourceBinding, TimeRange,
     ConsolidatedTradeBuilder, ConsolidatedTradeInput, ConsolidatedTradePolicy,
 )
-from kairospy.trading.identity import InstrumentId
-from kairospy.connectors.binance.datasets import BinanceSpotDatasetConnector
-from kairospy.market_data import MarketEventEnvelope, MarketEventType, ParquetMarketEventRepository
-from kairospy.storage.data_lake import write_daily_dataset, write_event_dataset
+from kairospy.identity import InstrumentId
+from kairospy.integrations.connectors.binance.datasets import BinanceSpotDatasetConnector
+from kairospy.market.source_events import MarketEventEnvelope, MarketEventType
+from kairospy.market.repository import ParquetMarketEventRepository
+from kairospy.infrastructure.storage.data_lake import write_daily_dataset, write_event_dataset
 from kairospy.data.products import BTC_SPOT_DAILY
 from kairospy.data.publishing import content_release_id, merge_release_rows, publish_release, release_path
 from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairospy.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
-from kairospy.__main__ import main
+from kairospy.runtime.profiles.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
+from kairospy.surface.cli.main import main
 
 
 NOW = datetime(2026, 7, 15, 14, 30, tzinfo=timezone.utc)
@@ -696,9 +697,11 @@ class DatasetClientTests(unittest.TestCase):
                 storage_kind=DatasetStorageKind.MARKET_SNAPSHOTS,
             )); catalog.save()
             feed = DatasetClient(temporary, run_mode=RunMode.BACKTEST).replay_snapshots(product)
-            first = tuple(item.timestamp for item in feed.between(dataset.manifest.start, dataset.manifest.end))
+            first_markets = tuple(feed.between(dataset.manifest.start, dataset.manifest.end))
+            first = tuple(item.timestamp for item in first_markets)
             second = tuple(item.timestamp for item in feed.between(dataset.manifest.start, dataset.manifest.end))
             self.assertEqual(first, second)
+            self.assertEqual(first_markets[0].data_binding, dataset.manifest.dataset_id)
             self.assertEqual(feed.content_hash, dataset.manifest.content_hash)
 
     def test_run_modes_enforce_release_promotion_and_quality(self):

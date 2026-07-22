@@ -1,27 +1,27 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 import unittest
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
-from kairospy.ports import (
+from kairospy.integrations.ports import (
     ComboLegRequest, ComboOrderRequest, Environment, OrderRequest, ReferenceDataRequest, VenueOrderStatus,
 )
-from kairospy.connectors.ibkr.account_gateway import IbkrAccountGateway
-from kairospy.connectors.ibkr.execution_gateway import IbkrExecutionGateway
-from kairospy.connectors.ibkr.ingestion import IbkrDurableFillIngestion
-from kairospy.connectors.ibkr.market_data_client import IbkrMarketDataClient
-from kairospy.connectors.ibkr.reference_data import IbkrReferenceDataClient
-from kairospy.trading.capability import OrderType
-from kairospy.trading.execution import TradeSide
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, VenueId
-from kairospy.trading.order import ExecutionInstructions, TimeInForce
-from kairospy.trading.product import ProductType
+from kairospy.integrations.connectors.ibkr.account_gateway import IbkrAccountGateway
+from kairospy.integrations.connectors.ibkr.execution_gateway import IbkrExecutionGateway
+from kairospy.integrations.connectors.ibkr.ingestion import IbkrDurableFillIngestion
+from kairospy.integrations.connectors.ibkr.market_data_client import IbkrMarketDataClient
+from kairospy.integrations.connectors.ibkr.reference_data import IbkrReferenceDataClient
+from kairospy.execution.orders import OrderType
+from kairospy.execution.events import TradeSide
+from kairospy.identity import AccountRef, AccountType, AssetId, VenueId
+from kairospy.execution.orders import ExecutionInstructions, TimeInForce
+from kairospy.reference.contracts import ProductType
 from kairospy.execution.recovery import OrderRecoveryReport
-from kairospy.application.clock import FixedClock
+from kairospy.runtime.clock import FixedClock
 
 
 NOW = datetime(2026, 7, 14, tzinfo=timezone.utc)
@@ -124,7 +124,7 @@ class IbkrGatewayClientTests(unittest.TestCase):
             stock, end=NOW + timedelta(days=1), duration="1 D", bar_size="1 min",
         )[0]
         self.assertEqual((bar.open, bar.close, bar.end - bar.start), (Decimal("100"), Decimal("101"), timedelta(minutes=1)))
-        account = AccountKey(InstitutionId("ibkr"), "DU123", AccountType.SECURITIES_MARGIN)
+        account = AccountRef(InstitutionId("ibkr"), "DU123", AccountType.SECURITIES_MARGIN)
         request = OrderRequest(
             "internal", "client", "stock-strategy", "intent", "correlation", account,
             stock.instrument_id, TradeSide.BUY, Decimal("10"),
@@ -144,7 +144,7 @@ class IbkrGatewayClientTests(unittest.TestCase):
     def test_ibkr_synchronized_trade_and_fill_recovery(self) -> None:
         session = FakeSession()
         stock = IbkrReferenceDataClient(session).sync(ReferenceDataRequest(ProductType.EQUITY, ("AAPL",))).instruments.values()[0]
-        account = AccountKey(InstitutionId("ibkr"), "DU123", AccountType.SECURITIES_MARGIN)
+        account = AccountRef(InstitutionId("ibkr"), "DU123", AccountType.SECURITIES_MARGIN)
         request = OrderRequest(
             "internal-recovery", "client-recovery", "strategy", "intent", "correlation", account,
             stock.instrument_id, TradeSide.BUY, Decimal("10"),
@@ -180,7 +180,7 @@ class IbkrGatewayClientTests(unittest.TestCase):
             ("AAPL:20260821:200:C", "AAPL:20260821:210:C"),
         )).instruments.values()
         self.assertTrue(all(item.instrument_type is ProductType.LISTED_OPTION for item in definitions))
-        account = AccountKey(InstitutionId("ibkr"), "DU123", AccountType.SECURITIES_MARGIN)
+        account = AccountRef(InstitutionId("ibkr"), "DU123", AccountType.SECURITIES_MARGIN)
         request = ComboOrderRequest(
             "combo-internal", "combo-client", "covered-call", "combo-intent", "combo-correlation",
             account,
@@ -198,7 +198,7 @@ class IbkrGatewayClientTests(unittest.TestCase):
             ProductType.LISTED_OPTION,
             ("AAPL:20260821:200:C", "AAPL:20260821:210:C"),
         )).instruments.values()
-        account = AccountKey(InstitutionId("ibkr"), "DU123", AccountType.SECURITIES_MARGIN)
+        account = AccountRef(InstitutionId("ibkr"), "DU123", AccountType.SECURITIES_MARGIN)
         request = ComboOrderRequest(
             "combo-recovery-internal", "combo-recovery-client", "spread", "intent", "correlation",
             account,

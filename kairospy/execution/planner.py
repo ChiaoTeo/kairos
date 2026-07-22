@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from kairospy.ports import ComboOrderRequest, OrderRequest
-from kairospy.trading.capability import ExecutionCapabilities
+from kairospy.execution.ports import ComboOrderRequest, OrderRequest
+from kairospy.execution.orders import ExecutionCapabilities
 
 
 class LeggingPolicy(StrEnum):

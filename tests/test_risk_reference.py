@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
-from kairospy.accounting.portfolio import PortfolioSnapshot, Position
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.trading.product import ContractType, PerpetualSpec, ProductType
+from kairospy.portfolio.accounting.portfolio import PortfolioSnapshot, Position
+from kairospy.identity import AccountRef, AccountType, AssetId, InstrumentId, VenueId
+from kairospy.reference.contracts import ContractType, PerpetualSpec, ProductType
 from kairospy.reference import (
     BrokerId, EconomicProduct, ExecutionRoute, InstrumentDefinition,
     InstrumentLifecycle, InstrumentReference, ListingDefinition, ListingId,
@@ -27,7 +27,7 @@ class RiskReferenceTests(unittest.TestCase):
         instrument_id = InstrumentId("crypto:binance:perpetual:BTCUSDT")
         product_id = ProductId("product:perpetual:BTC")
         listing_id = ListingId("listing:binance-usdm:BTCUSDT")
-        account = AccountKey(InstitutionId("binance"), "main", AccountType.DERIVATIVES)
+        account = AccountRef(InstitutionId("binance"), "main", AccountType.DERIVATIVES)
         spec = PerpetualSpec(AssetId("BTC"), AssetId("USDT"), "btc-index", Decimal("1"), ContractType.LINEAR, 28800)
         catalog.products.add(EconomicProduct(product_id, ProductType.PERPETUAL, "BTC perpetual", NOW, currency=AssetId("USDT")))
         catalog.instruments.add(InstrumentDefinition(instrument_id, product_id, ProductType.PERPETUAL, spec, InstrumentLifecycle(), NOW))

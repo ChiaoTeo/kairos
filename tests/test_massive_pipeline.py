@@ -7,15 +7,15 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairospy.connectors.massive import MassiveClient, MassiveConfig, MassiveMarketSnapshotBuilder, MassiveResponse
-from kairospy.connectors.massive.pipeline import MassiveOptionDataPipeline
+from kairospy.integrations.connectors.massive import MassiveClient, MassiveConfig, MassiveMarketSnapshotBuilder, MassiveResponse
+from kairospy.integrations.connectors.massive.pipeline import MassiveOptionDataPipeline
 from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairospy.pricing import OptionValuationService
-from kairospy.market_data import ParquetMarketEventRepository
-from kairospy.connectors.massive.datasets import MassiveOptionEventsDatasetConnector, MassiveOptionProductConfig
+from kairospy.analytics.pricing import OptionValuationService
+from kairospy.market.repository import ParquetMarketEventRepository
+from kairospy.integrations.connectors.massive.datasets import MassiveOptionEventsDatasetConnector, MassiveOptionProductConfig
 from kairospy.data import AcquisitionRequest, DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, SourceBinding, TimeRange
-from kairospy.trading.identity import InstrumentId
-from kairospy.market_data import MarketEventEnvelope, MarketEventType
+from kairospy.identity import InstrumentId
+from kairospy.market.source_events import MarketEventEnvelope, MarketEventType
 
 
 class StubTransport:
@@ -85,6 +85,7 @@ class MassivePipelineTests(unittest.TestCase):
             self.assertEqual(dict(curated.slices[1].reference_prices).popitem()[1], 6000)
             _, valuation = OptionValuationService(MassiveMarketSnapshotBuilder(temporary, dataset_root=Path(temporary) / "datasets").catalog).value(curated.slices[1])
             self.assertEqual(len(valuation.instruments), 1)
+            self.assertEqual(valuation.available_time, curated.slices[1].available_time)
             offline = MassiveOptionDataPipeline(temporary, MassiveClient(MassiveConfig("secret"), StubTransport([])), now=lambda: end + timedelta(days=1))
             rebuilt = offline.prepare_options(dataset_id="options.us.massive.spxw.test.v1", underlying="SPX", option_tickers=(ticker,), start=start, end=end)
             self.assertEqual(rebuilt["dataset_sha256"], manifest["dataset_sha256"])

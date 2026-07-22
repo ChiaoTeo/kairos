@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from kairospy.backtest.feed import MarketReplayDataset, build_manifest
-from kairospy.storage.data_lake import write_json
+from kairospy.market.snapshots import MarketReplayDataset, build_manifest
+from kairospy.infrastructure.storage.data_lake import write_json
 
 from .catalog import DataCatalog
 from .client import DatasetClient

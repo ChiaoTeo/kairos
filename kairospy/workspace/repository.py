@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from kairospy.configuration import KairosProjectConfig, PROJECT_STATE_DIR
+from kairospy.infrastructure.configuration import KairosProjectConfig, PROJECT_STATE_DIR
 
 from .model import WorkspaceBinding, WorkspaceManifest
 

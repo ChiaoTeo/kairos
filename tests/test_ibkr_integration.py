@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 import os
 import unittest
 
-from kairospy.ports import Environment
-from kairospy.connectors.ibkr.account_gateway import IbkrAccountGateway
-from kairospy.connectors.ibkr.session import IbkrSession
-from kairospy.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
-from kairospy.trading.identity import AccountKey, AccountType, VenueId
-from kairospy.capture.spec import OptionChainCaptureSpec
+from kairospy.integrations.ports import Environment
+from kairospy.integrations.connectors.ibkr.account_gateway import IbkrAccountGateway
+from kairospy.integrations.connectors.ibkr.session import IbkrSession
+from kairospy.integrations.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
+from kairospy.identity import AccountRef, AccountType, VenueId
+from kairospy.research.capture.spec import OptionChainCaptureSpec
 
 
 @unittest.skipUnless(os.getenv("RUN_IBKR_INTEGRATION") == "1", "set RUN_IBKR_INTEGRATION=1 to connect to IBKR")
@@ -39,7 +39,7 @@ class IbkrIntegrationTests(unittest.TestCase):
         try:
             session.connect()
             account_id = os.getenv("IBKR_ACCOUNT") or session.ib.managedAccounts()[0]
-            account = AccountKey(InstitutionId("ibkr"), account_id, AccountType.SECURITIES_MARGIN)
+            account = AccountRef(InstitutionId("ibkr"), account_id, AccountType.SECURITIES_MARGIN)
             state = IbkrAccountGateway(session, Environment.PAPER).account_state(account)
             self.assertEqual(state.account, account)
         finally:

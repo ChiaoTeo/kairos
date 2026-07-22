@@ -1,7 +1,7 @@
 from datetime import date
 import unittest
 
-from kairospy.validation import (
+from kairospy.research.validation import (
     assess_robustness,block_bootstrap_mean_ci,chronological_split,
     validate_predictability,walk_forward_splits,
 )

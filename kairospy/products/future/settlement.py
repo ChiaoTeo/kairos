@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from kairospy.accounting.ledger import LedgerService
-from kairospy.trading.derivative_event import DerivativeEventType, DerivativePositionEvent
-from kairospy.trading.execution import TradeExecution, TradeSide
-from kairospy.trading.identity import AssetId
-from kairospy.trading.ledger import LedgerBook
-from kairospy.trading.product import FutureSpec, PerpetualSpec
+from kairospy.portfolio.accounting.ledger import LedgerService
+from kairospy.products.common.lifecycle.derivatives import DerivativeEventType, DerivativePositionEvent
+from kairospy.execution.events import TradeExecution, TradeSide
+from kairospy.identity import AssetId
+from kairospy.portfolio.ledger import LedgerBook
+from kairospy.reference.contracts import FutureSpec, PerpetualSpec
 from kairospy.reference.access import contract_spec, definition_at
 
 

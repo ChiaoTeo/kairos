@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import unittest
 
-from kairospy.connectors.massive.reference import MassiveReferenceImporter
-from kairospy.trading.identity import AssetId
+from kairospy.integrations.connectors.massive.reference import MassiveReferenceImporter
+from kairospy.identity import AssetId
 from kairospy.reference import AssetType, ReferenceCatalog
 
 

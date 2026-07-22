@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Mapping
 
-from kairospy.ports import OrderRecoveryPort, VenueOrderStatus
-from kairospy.trading.identity import AccountKey
+from kairospy.execution.ports import OrderRecoveryPort, VenueOrderStatus
+from kairospy.identity import AccountRef
 from kairospy.execution.ingestion import DurableExecutionIngestionService
 from kairospy.execution.order_state import DurableOrderRecord, DurableOrderStatus
-from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +27,7 @@ class VenueOrderRecoveryService:
     def __init__(
         self,
         store: SQLiteRuntimeStore,
-        gateways: Mapping[AccountKey, OrderRecoveryPort],
+        gateways: Mapping[AccountRef, OrderRecoveryPort],
         ingestion: DurableExecutionIngestionService,
     ) -> None:
         self.store = store

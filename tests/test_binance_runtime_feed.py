@@ -7,8 +7,7 @@ from threading import Event
 import tempfile
 import unittest
 
-from kairospy.application import ApplicationConfig, AsyncKairosRuntime, KairosApplication, RuntimePaths, runtime_feed_plan
-from kairospy.connectors.binance import BinanceRuntimeFeedFactory
+from kairospy.integrations.connectors.binance import BinanceRuntimeFeedFactory
 from kairospy.data import (
     DataCatalog,
     DataSetContractArtifact,
@@ -21,8 +20,12 @@ from kairospy.data import (
     write_live_view_manifest,
 )
 from kairospy.data.products import BTC_SPOT_DAILY
-from kairospy.ports import Environment
-from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.integrations.ports import Environment
+from kairospy.runtime.application import KairosApplication
+from kairospy.runtime.async_runtime import AsyncKairosRuntime
+from kairospy.runtime.config import ApplicationConfig, RuntimePaths
+from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
+from kairospy.runtime import runtime_feed_plan
 
 
 class OneMessageConnection:

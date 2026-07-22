@@ -3,7 +3,7 @@ from itertools import islice
 
 from kairospy.data import DataView, RunMode
 from kairospy.data.products import Datasets
-from kairospy.product_surface import Data
+from kairospy.surface.product import Data
 
 
 # Workspace replay accepts Q2 data. Use RunMode.BACKTEST only after the exact

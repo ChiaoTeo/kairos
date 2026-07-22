@@ -16,7 +16,7 @@ class LiveDataService:
         self.root = Path(root)
 
     def connect(self, args) -> dict[str, object]:
-        from kairospy import product_surface
+        from kairospy.surface import product as product_surface
         from kairospy.data import (
             BuiltInDataProductRegistry, LiveDataRequest, LiveViewManifest,
             default_builtin_protocol_registry, live_view_manifest_path,
@@ -137,7 +137,7 @@ class LiveDataService:
         }
 
     def reconnect(self, args) -> dict[str, object]:
-        from kairospy import product_surface
+        from kairospy.surface import product as product_surface
 
         request_args = _with_lake_root(args, self.root)
         manifest = product_surface._latest_live_view_manifest(self.root, str(request_args.dataset))

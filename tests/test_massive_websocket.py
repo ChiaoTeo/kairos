@@ -9,10 +9,11 @@ import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.connectors.massive.websocket import MassiveCanonicalStreamService, MassiveLiveStream
-from kairospy.contracts import MarketEventKind, QuotePayload
-from kairospy.trading.identity import InstrumentId
-from kairospy.market_data import BoundedEventChannel, MarketEventEnvelope, MarketEventType
+from kairospy.integrations.connectors.massive.websocket import MassiveCanonicalStreamService, MassiveLiveStream
+from kairospy.market.canonical import MarketEventKind, QuotePayload
+from kairospy.identity import InstrumentId
+from kairospy.market.source_events import MarketEventEnvelope, MarketEventType
+from kairospy.market.stream import BoundedEventChannel
 
 
 class FakeWebSocketClient:

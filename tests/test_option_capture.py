@@ -9,14 +9,14 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
-from kairospy.trading.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
-from kairospy.trading.identity import AssetId, InstrumentId, VenueId
-from kairospy.trading.market_data import OptionChain
-from kairospy.trading.market_data import Greeks, Quote
-from kairospy.trading.product import IndexSpec, ProductType
-from kairospy.capture.option_capture import OptionCaptureService
-from kairospy.capture.spec import OptionChainCaptureSpec
-from kairospy.storage.repository import FileOptionCaptureRepository
+from kairospy.market.events import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
+from kairospy.identity import AssetId, InstrumentId, VenueId
+from kairospy.market.types import OptionChain
+from kairospy.market.types import Greeks, Quote
+from kairospy.reference.contracts import IndexSpec, ProductType
+from kairospy.research.capture.option_capture import OptionCaptureService
+from kairospy.research.capture.spec import OptionChainCaptureSpec
+from kairospy.infrastructure.storage.repository import FileOptionCaptureRepository
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.contracts import InstrumentDefinition
 from tests.reference_support import publish_test_instrument

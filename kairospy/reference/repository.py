@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kairospy.trading.product import (
+from kairospy.reference.contracts import (
     CryptoOptionSpec, CryptoSpotSpec, EquitySpec, FutureSpec, IndexSpec,
     ListedOptionSpec, PerpetualSpec, ProductType, TokenizedEquitySpec,
 )
-from kairospy.storage.codec import from_primitive, to_primitive
+from kairospy.infrastructure.storage.codec import from_primitive, to_primitive
 
 from .catalog import ReferenceCatalog
 from .contracts import (

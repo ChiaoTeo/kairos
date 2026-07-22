@@ -8,8 +8,8 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairospy.configuration import KairosProjectConfig, set_config_value, unset_config_value
-from kairospy.project import initialize_project
+from kairospy.infrastructure.configuration import KairosProjectConfig, set_config_value, unset_config_value
+from kairospy.surface.project import initialize_project
 
 
 class KairosProjectConfigurationTests(unittest.TestCase):
@@ -57,7 +57,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             [
                 sys.executable, "-c",
                 "from kairospy.data.bootstrap import register_default_products; "
-                "from kairospy.connectors.binance import BinanceRuntimeFeedFactory; "
+                "from kairospy.integrations.connectors.binance import BinanceRuntimeFeedFactory; "
                 "from kairospy.workspace import Workspace; "
                 "print(register_default_products.__name__, BinanceRuntimeFeedFactory.__name__, Workspace.__name__)",
             ],

@@ -1,26 +1,27 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 import unittest
 from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-from kairospy.backtest.execution import ExecutionPlanner, combo_quote
-from kairospy.backtest.clock import BacktestClock
-from kairospy.backtest.fill import FillModelType, FixedCommissionModel, ListedOptionComboFillModel
-from kairospy.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
-from kairospy.backtest.portfolio import BacktestPortfolio
-from kairospy.trading.execution import TradeSide
-from kairospy.trading.identity import AccountKey, AccountType, VenueId
-from kairospy.trading.intent import LegIntent, OpenStructureIntent
-from kairospy.trading.market_data import Quote
-from kairospy.trading.order import Fill, LegFill, OrderStatus, TimeInForce
-from kairospy.trading.product import ListedOptionSpec
+from kairospy.runtime.profiles.backtest.execution import ExecutionPlanner, combo_quote
+from kairospy.runtime.profiles.backtest.clock import BacktestClock
+from kairospy.runtime.profiles.backtest.fill import FillModelType, FixedCommissionModel, ListedOptionComboFillModel
+from kairospy.runtime.profiles.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
+from kairospy.runtime.profiles.backtest.portfolio import BacktestPortfolio
+from kairospy.execution.events import TradeSide
+from kairospy.identity import AccountRef, AccountType, VenueId
+from kairospy.strategy.intents import LegIntent, OpenStructureIntent
+from kairospy.market.types import Quote
+from kairospy.execution.fills import Fill, LegFill
+from kairospy.execution.orders import OrderStatus, TimeInForce
+from kairospy.reference.contracts import ListedOptionSpec
 from kairospy.risk.engine import RiskDecisionType, RiskEngine
 from kairospy.risk.limits import RiskLimits
-from kairospy.storage.codec import from_primitive, to_primitive
+from kairospy.infrastructure.storage.codec import from_primitive, to_primitive
 
 
 class BacktestFillContractTests(unittest.TestCase):
@@ -37,7 +38,7 @@ class BacktestFillContractTests(unittest.TestCase):
         self.long = by_strike[Decimal("5950")]
         self.legs = (LegIntent(self.short, TradeSide.SELL), LegIntent(self.long, TradeSide.BUY))
         self.intent = OpenStructureIntent("test", self.legs, 1, Decimal("0.50"), TimeInForce.DAY, "test")
-        self.account = AccountKey(InstitutionId("backtest"), "unit", AccountType.SECURITIES_MARGIN)
+        self.account = AccountRef(InstitutionId("backtest"), "unit", AccountType.SECURITIES_MARGIN)
 
     def test_models_serialize_and_order_state_machine_rejects_illegal_transition(self) -> None:
         self.assertEqual(from_primitive(to_primitive(self.intent), OpenStructureIntent), self.intent)
@@ -113,7 +114,7 @@ class BacktestFillContractTests(unittest.TestCase):
 
     def test_single_sided_quote_uses_directional_fallback_and_is_counted(self) -> None:
         from dataclasses import replace
-        from kairospy.capture.snapshot import InstrumentSnapshot
+        from kairospy.market.slices import InstrumentSnapshot
         portfolio = BacktestPortfolio(Decimal("100000"), self.catalog, self.account)
         structure_id = uuid4()
         portfolio.apply_fill(Fill(uuid4(), uuid4(), uuid4(), "test", structure_id, self.second.timestamp, (LegFill(self.long, TradeSide.BUY, 1, Decimal("2.2")),), Decimal("-2.2"), 1, Decimal("1"), Decimal("0"), False))

@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from kairospy.reference.contracts import InstrumentDefinition
-from kairospy.trading.product import ContractType, ProductType, option_multiplier
+from kairospy.reference.contracts import ContractType, ProductType, option_multiplier
 
 
 class PositionCalculator(Protocol):

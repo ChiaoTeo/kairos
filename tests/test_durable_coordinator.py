@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -9,18 +9,18 @@ import tempfile
 import unittest
 from uuid import UUID
 
-from kairospy.ports import ComboLegRequest, ComboOrderRequest, OrderAck, OrderRequest
-from kairospy.application.clock import FixedClock
-from kairospy.trading.capability import OrderType
-from kairospy.trading.execution import TradeSide
-from kairospy.trading.identity import AccountKey, AccountType, InstrumentId, VenueId
-from kairospy.trading.intent import CancelIntent
-from kairospy.trading.order import ExecutionInstructions, TimeInForce
+from kairospy.integrations.ports import ComboLegRequest, ComboOrderRequest, OrderAck, OrderRequest
+from kairospy.runtime.clock import FixedClock
+from kairospy.execution.orders import OrderType
+from kairospy.execution.events import TradeSide
+from kairospy.identity import AccountRef, AccountType, InstrumentId, VenueId
+from kairospy.strategy.intents import CancelIntent
+from kairospy.execution.orders import ExecutionInstructions, TimeInForce
 from kairospy.execution.order_state import DurableOrderStatus
-from kairospy.orchestration.coordinator import ExecutionCoordinator
-from kairospy.orchestration.event_log import PersistentEventLog
-from kairospy.orchestration.kill_switch import KillSwitch
-from kairospy.orchestration.runtime_store import SQLiteRuntimeStore
+from kairospy.runtime.coordinator import ExecutionCoordinator
+from kairospy.runtime.store.event_log import PersistentEventLog
+from kairospy.governance.kill_switch import KillSwitch
+from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
 from tests.runtime_support import operational_application
 
 
@@ -30,7 +30,7 @@ NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
 def order_request() -> OrderRequest:
     return OrderRequest(
         "internal-1", "client-1", "strategy-v1", "intent-1", "correlation-1",
-        AccountKey(InstitutionId("simulated"), "account-1", AccountType.SECURITIES_MARGIN),
+        AccountRef(InstitutionId("simulated"), "account-1", AccountType.SECURITIES_MARGIN),
         InstrumentId("instrument-1"), TradeSide.BUY, Decimal("1"),
         ExecutionInstructions(OrderType.LIMIT, TimeInForce.DAY, Decimal("10")),
     )

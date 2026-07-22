@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
-from kairospy.ports import ReferenceDataRequest
-from kairospy.trading.identity import AssetId, InstrumentId, VenueId
-from kairospy.trading.product import CryptoSpotSpec, EquitySpec, ProductType
+from kairospy.integrations.ports import ReferenceDataRequest
+from kairospy.identity import AssetId, InstrumentId, VenueId
+from kairospy.reference.contracts import CryptoSpotSpec, EquitySpec, ProductType
 from kairospy.reference import (
     AssetDefinition, AssetType, ListingDefinition, ListingId, MappingTargetType,
     ProviderId, ProviderSymbolMapping, ReferenceCatalog, TradingRules,

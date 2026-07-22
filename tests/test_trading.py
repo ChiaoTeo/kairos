@@ -6,18 +6,18 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
-from kairospy.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider, decimal_or_none
-from kairospy.trading.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
-from kairospy.trading.identity import AssetId, InstrumentId, VenueId
-from kairospy.trading.market_data import OptionChain
-from kairospy.trading.market_data import Greeks, Quote
-from kairospy.trading.market_state import MarketState, apply_market_event
-from kairospy.trading.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
-from kairospy.capture.option_snapshot_analysis import analyze_option_snapshot
-from kairospy.capture.option_universe_selector import select_expirations, select_instruments, select_strikes
-from kairospy.capture.snapshot import build_snapshot
-from kairospy.capture.spec import OptionChainCaptureSpec
-from kairospy.storage.codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, snapshot_to_primitive
+from kairospy.integrations.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider, decimal_or_none
+from kairospy.market.events import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
+from kairospy.identity import AssetId, InstrumentId, VenueId
+from kairospy.market.types import OptionChain
+from kairospy.market.types import Greeks, Quote
+from kairospy.market.state import MarketState, apply_market_event
+from kairospy.reference.contracts import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairospy.research.capture.option_snapshot_analysis import analyze_option_snapshot
+from kairospy.research.capture.option_universe_selector import select_expirations, select_instruments, select_strikes
+from kairospy.research.capture.snapshot import build_snapshot
+from kairospy.research.capture.spec import OptionChainCaptureSpec
+from kairospy.infrastructure.storage.codec import event_from_primitive, event_to_primitive, snapshot_from_primitive, snapshot_to_primitive
 from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 

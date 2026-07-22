@@ -6,10 +6,10 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 
-from kairospy.connectors.binance.market_stream import parse_market_stream_event
-from kairospy.contracts import canonical_from_trading_market_data
-from kairospy.trading.identity import InstrumentId
-from kairospy.storage.codec import to_primitive
+from kairospy.integrations.connectors.binance.market_stream import parse_market_stream_event
+from kairospy.integrations.contracts import canonical_from_trading_market_data
+from kairospy.identity import InstrumentId
+from kairospy.infrastructure.storage.codec import to_primitive
 
 
 ROOT = Path(__file__).parent

@@ -7,13 +7,13 @@ import tempfile
 import unittest
 
 from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairospy.trading.identity import AssetId, InstrumentId, VenueId
-from kairospy.trading.market_data import Quote
-from kairospy.trading.product import ContractType, FutureSpec, ProductType
+from kairospy.identity import AssetId, InstrumentId, VenueId
+from kairospy.market.types import Quote
+from kairospy.reference.contracts import ContractType, FutureSpec, ProductType
 from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
-from kairospy.capture.normalized_series import NormalizedSeriesCaptureService
-from kairospy.capture.series import SeriesCaptureSpec
+from kairospy.research.capture.normalized_series import NormalizedSeriesCaptureService
+from kairospy.research.capture.series import SeriesCaptureSpec
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)

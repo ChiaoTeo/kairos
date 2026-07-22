@@ -8,14 +8,14 @@ from decimal import Decimal
 from pathlib import Path
 
 from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairospy.trading.event import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
-from kairospy.trading.identity import AssetId, InstrumentId, VenueId
-from kairospy.trading.market_data import OptionChain
-from kairospy.trading.market_data import Greeks, Quote
-from kairospy.trading.product import IndexSpec, OptionRight, ProductType
-from kairospy.capture.series import SeriesCaptureService, SeriesCaptureSpec
-from kairospy.capture.data_store import MarketSnapshotCollectionPublisher
-from kairospy.capture.spec import OptionChainCaptureSpec
+from kairospy.market.events import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
+from kairospy.identity import AssetId, InstrumentId, VenueId
+from kairospy.market.types import OptionChain
+from kairospy.market.types import Greeks, Quote
+from kairospy.reference.contracts import IndexSpec, OptionRight, ProductType
+from kairospy.research.capture.series import SeriesCaptureService, SeriesCaptureSpec
+from kairospy.research.capture.data_store import MarketSnapshotCollectionPublisher
+from kairospy.research.capture.spec import OptionChainCaptureSpec
 from kairospy.reference import ReferenceCatalog
 from tests.reference_support import publish_test_instrument
 

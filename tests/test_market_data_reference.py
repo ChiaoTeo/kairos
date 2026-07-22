@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import unittest
 
-from kairospy.trading.capability import MarketDataCapabilities, MarketDataKind
-from kairospy.trading.identity import AssetId, InstrumentId
-from kairospy.trading.product import CryptoSpotSpec, ProductType
-from kairospy.market_data.subscriptions import MarketDataRequirement, SubscriptionPlanner
+from kairospy.market.subscriptions import MarketDataCapabilities, MarketDataKind
+from kairospy.identity import AssetId, InstrumentId
+from kairospy.reference.contracts import CryptoSpotSpec, ProductType
+from kairospy.market.subscriptions import MarketDataRequirement, SubscriptionPlanner
 from kairospy.reference import (
     EconomicProduct, InstrumentDefinition, InstrumentLifecycle,
     MappingTargetType, ProductId, ProviderId, ProviderSymbolMapping,

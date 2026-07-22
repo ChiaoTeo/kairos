@@ -4,13 +4,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 
-from kairospy.configuration import DEFAULT_LAKE_ROOT
+from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
 
 from .client import DatasetClient
 from .contracts import DatasetKey, DatasetLayer, DatasetLike, DataProductDefinition, QualityLevel
 from .products import DataProductContract
 from .publishing import content_release_id, publish_release, release_path
-from kairospy.storage.data_lake import write_event_dataset
+from kairospy.infrastructure.storage.data_lake import write_event_dataset
 
 
 @dataclass(frozen=True, slots=True)

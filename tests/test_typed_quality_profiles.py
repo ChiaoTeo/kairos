@@ -11,7 +11,7 @@ from kairospy.data import (
     DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DataProductContract, DatasetQualityService,
     DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel,
 )
-from kairospy.storage.data_lake import write_daily_dataset, write_json
+from kairospy.infrastructure.storage.data_lake import write_daily_dataset, write_json
 
 
 NOW = datetime(2026, 1, 2, tzinfo=timezone.utc)

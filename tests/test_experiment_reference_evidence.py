@@ -4,14 +4,14 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import unittest
 
-from kairospy.trading.identity import AssetId, InstrumentId, VenueId
-from kairospy.trading.product import CryptoSpotSpec, ProductType
+from kairospy.identity import AssetId, InstrumentId, VenueId
+from kairospy.reference.contracts import CryptoSpotSpec, ProductType
 from kairospy.reference import (
     EconomicProduct, InstrumentDefinition, InstrumentLifecycle,
     ListingDefinition, ListingId, ProductId, ReferenceCatalog, TradingRules,
     VenueDefinition, VenueType,
 )
-from kairospy.capture.snapshot import build_reference_evidence
+from kairospy.research.capture.snapshot import build_reference_evidence
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)

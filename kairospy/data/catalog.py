@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from kairospy.configuration import DEFAULT_LAKE_ROOT
+from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
 
 from .contracts import (
     DataView, DatasetKey, DatasetLayer, DataProductDefinition, DataProductContract, DatasetRelease, DatasetStatus,

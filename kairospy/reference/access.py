@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from kairospy.trading.identity import AssetId, InstrumentId
+from kairospy.identity import AssetId, InstrumentId
 
 from .catalog import ReferenceCatalog
 

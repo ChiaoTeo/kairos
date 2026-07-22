@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kairospy.configuration import DEFAULT_LAKE_ROOT
-from kairospy.connectors.binance.datasets import (
+from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
+from kairospy.integrations.connectors.binance.datasets import (
     BinanceOptionQuotesDatasetConnector, BinanceSpotDatasetConnector,
     BinanceUsdmPerpetualHourlyDatasetConnector,
 )
-from kairospy.connectors.binance.historical_archive import BinanceUsdmPerpetualHourlyArchiveProvider
-from kairospy.connectors.deribit.datasets import (
+from kairospy.integrations.connectors.binance.historical_archive import BinanceUsdmPerpetualHourlyArchiveProvider
+from kairospy.integrations.connectors.deribit.datasets import (
     DeribitDvolDatasetConnector, DeribitOptionSnapshotDatasetConnector, DeribitOptionTradesDatasetConnector,
 )
 
@@ -81,7 +81,7 @@ def default_provider_registry(root: str | Path = DEFAULT_LAKE_ROOT, *, connector
     ):
         providers.register(connector, tuple(spec for spec in specs if connector.supports(str(spec.key))))
     if connector_config is not None:
-        from kairospy.connectors.massive.datasets import MassiveEquityDailyOhlcvProductConfig, MassiveOptionProductConfig
+        from kairospy.integrations.connectors.massive.datasets import MassiveEquityDailyOhlcvProductConfig, MassiveOptionProductConfig
         configured = {str(spec.key): spec for spec in configured_product_specs(connector_config)}
         for raw in _massive_option_products(connector_config):
             spec = configured[str(raw["logical_key"])]
@@ -102,10 +102,10 @@ def default_provider_registry(root: str | Path = DEFAULT_LAKE_ROOT, *, connector
             )
             providers.register(connector, (spec,))
         register_provider_extensions(root, connector_config, providers)
-    from kairospy.configuration import ConfigError
+    from kairospy.infrastructure.configuration import ConfigError
     try:
-        from kairospy.connectors.massive.client import MassiveClient
-        from kairospy.connectors.massive.datasets import (
+        from kairospy.integrations.connectors.massive.client import MassiveClient
+        from kairospy.integrations.connectors.massive.datasets import (
             MassiveEquityDailyMarketOhlcvDatasetConnector,
             MassiveEquityHourlyOhlcvDatasetConnector,
         )
@@ -221,8 +221,8 @@ class _ConfiguredMassiveConnector:
         return AcquisitionEstimate(days * len(self.config.option_tickers) * 3 + 6, cost_class="entitled")
 
     def acquire(self, request):
-        from kairospy.connectors.massive.client import MassiveClient
-        from kairospy.connectors.massive.datasets import MassiveOptionEventsDatasetConnector
+        from kairospy.integrations.connectors.massive.client import MassiveClient
+        from kairospy.integrations.connectors.massive.datasets import MassiveOptionEventsDatasetConnector
         return MassiveOptionEventsDatasetConnector(
             self.root, MassiveClient(_massive_config_for_project()), self.config,
         ).acquire(request)
@@ -243,16 +243,16 @@ class _ConfiguredMassiveEquityConnector:
         return AcquisitionEstimate(days, cost_class="entitled-rest-bounded-ticker")
 
     def acquire(self, request):
-        from kairospy.connectors.massive.client import MassiveClient
-        from kairospy.connectors.massive.datasets import MassiveEquityDailyOhlcvDatasetConnector
+        from kairospy.integrations.connectors.massive.client import MassiveClient
+        from kairospy.integrations.connectors.massive.datasets import MassiveEquityDailyOhlcvDatasetConnector
         return MassiveEquityDailyOhlcvDatasetConnector(
             self.root, MassiveClient(_massive_config_for_project()), self.config,
         ).acquire(request)
 
 
 def _massive_config_for_project():
-    from kairospy.configuration import ConfigError, load_project_config_or_none
-    from kairospy.connectors.massive.config import MassiveConfig
+    from kairospy.infrastructure.configuration import ConfigError, load_project_config_or_none
+    from kairospy.integrations.connectors.massive.config import MassiveConfig
 
     config = load_project_config_or_none()
     if config is not None:

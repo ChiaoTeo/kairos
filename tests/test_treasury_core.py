@@ -1,24 +1,24 @@
 from __future__ import annotations
 
-from kairospy.trading.identity import InstitutionId
+from kairospy.identity import InstitutionId
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 import unittest
 from uuid import uuid4
 
-from kairospy.trading.identity import AccountKey, AccountType, AssetId, VenueId
-from kairospy.trading.ledger import Ledger, LedgerBook
+from kairospy.identity import AccountRef, AccountType, AssetId, VenueId
+from kairospy.portfolio.ledger import Ledger, LedgerBook
 from kairospy.reference.identity import LocationId
-from kairospy.treasury import TransferOperation, TransferOperationStore, TransferStatus, TreasuryLedgerPostingService
+from kairospy.portfolio.treasury import TransferOperation, TransferOperationStore, TransferStatus, TreasuryLedgerPostingService
 
 
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
 SOURCE = LocationId("location:binance:spot")
 DESTINATION = LocationId("location:binance:futures")
-SOURCE_ACCOUNT = AccountKey(InstitutionId("binance"), "spot", AccountType.CRYPTO_SPOT)
-DESTINATION_ACCOUNT = AccountKey(InstitutionId("binance"), "futures", AccountType.DERIVATIVES)
-TRANSIT_ACCOUNT = AccountKey(InstitutionId("treasury"), "in-transit", AccountType.SUB_ACCOUNT)
+SOURCE_ACCOUNT = AccountRef(InstitutionId("binance"), "spot", AccountType.CRYPTO_SPOT)
+DESTINATION_ACCOUNT = AccountRef(InstitutionId("binance"), "futures", AccountType.DERIVATIVES)
+TRANSIT_ACCOUNT = AccountRef(InstitutionId("treasury"), "in-transit", AccountType.SUB_ACCOUNT)
 
 
 class TreasuryCoreTests(unittest.TestCase):

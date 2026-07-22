@@ -7,7 +7,7 @@ from pathlib import Path
 import shutil
 from uuid import uuid4
 
-from kairospy.storage.data_lake import sha256_bytes, write_json
+from kairospy.infrastructure.storage.data_lake import sha256_bytes, write_json
 
 from .contracts import DatasetRelease, QualityLevel
 from .products import DataProductContract

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
 
-from kairospy.connectors import (
+from kairospy.integrations.connectors import (
     DataPlaneEndpoint, ExecutionService, ExecutionServiceSpec, HistoricalMarketDataService, ProviderCodec,
     ProviderConnector, ProviderDataPlane, ProviderDataPlaneSpec, ProviderEstimate, ProviderEvent, ProviderHealth,
     ProviderResource, ProviderResourceSpec, ProviderService, ProviderServiceSpec, ProviderTransport,
@@ -14,13 +14,13 @@ from kairospy.data import (
     equity_hourly_ohlcv_rows, equity_ohlcv_schema, equity_symbol,
 )
 from kairospy.data.products import US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY
-from kairospy.connectors.binance.execution_gateway import (
+from kairospy.integrations.connectors.binance.execution_gateway import (
     BinanceExecutionGateway, BinanceOptionsExecutionGateway,
 )
-from kairospy.connectors.ibkr.execution_gateway import IbkrExecutionGateway
-from kairospy.connectors.simulated import SimulatedExecutionAccountGateway
-from kairospy.trading.identity import AccountKey, AccountType, InstitutionId, VenueId
-from kairospy.ports import Environment
+from kairospy.integrations.connectors.ibkr.execution_gateway import IbkrExecutionGateway
+from kairospy.integrations.connectors.simulated import SimulatedExecutionAccountGateway
+from kairospy.identity import AccountRef, AccountType, InstitutionId, VenueId
+from kairospy.integrations.ports import Environment
 
 
 class ProviderDataBoundaryTests(unittest.TestCase):
@@ -183,7 +183,7 @@ class ProviderDataBoundaryTests(unittest.TestCase):
         ibkr = IbkrExecutionGateway(SimpleNamespace(readonly=True, contracts={}, ib=object()), Environment.PAPER)
         simulated = SimulatedExecutionAccountGateway(
             VenueId("simulated"),
-            AccountKey(InstitutionId("simulated"), "account-1", AccountType.CRYPTO_SPOT),
+            AccountRef(InstitutionId("simulated"), "account-1", AccountType.CRYPTO_SPOT),
         )
 
         self.assertEqual(spot.service_id, "spot_execution")

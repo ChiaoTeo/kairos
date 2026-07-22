@@ -3,13 +3,13 @@ from decimal import Decimal
 from uuid import uuid4
 import unittest
 
-from kairospy.backtest.maker import (
+from kairospy.runtime.profiles.backtest.maker import (
     BookEventType,FifoMakerFillModel,HybridAction,HybridExecutionStateMachine,
     IncrementalBookEvent,MakerOrderState,
 )
-from kairospy.trading.capability import TimeInForce
-from kairospy.trading.execution import TradeSide
-from kairospy.trading.identity import InstrumentId
+from kairospy.execution.orders import TimeInForce
+from kairospy.execution.events import TradeSide
+from kairospy.identity import InstrumentId
 from kairospy.execution.policy import ExecutionMode,ExecutionPolicy,PartialFillPolicy
 
 

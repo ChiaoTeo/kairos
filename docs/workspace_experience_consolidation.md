@@ -393,14 +393,15 @@ KairoSpy 不应该要求用户把代码放进固定的 `studies/` 或 `strategie
 
 ### 4.6 Strategy Design
 
-Strategy 不是工作区，但策略需要有明确 protocol。参考 `kairos_v2` 的设计，策略应该是事件驱动的可运行代码：Run/Hub 提供只读上下文和系统事件，策略返回决策；副作用由 Run runtime 执行。
+Strategy 不是工作区，但策略需要有明确 protocol。当前公开 SDK 只保留一个用户可感知的策略协议：Run/Hub 提供只读 `Context`，策略返回 `Intent`；副作用、治理包装、风控和执行由 Run runtime 负责。
 
 核心原则：
 
 - 策略不持有 Workspace；Run 构建策略时把 Workspace 解析后的数据句柄传入。
-- 策略运行时只读 `StrategyContext`。
+- 策略运行时只读 `Context`。
 - 策略不直接下单、不直接访问 provider、不直接读全局 `.kairos/data`。
-- 策略返回 `StrategyDecision`，Run adapter 将 decision 转换成 intent / order plan / rebalance plan。
+- 策略返回 `strategy.intents.Intent`；`StrategyDecision` 只作为审计/解释记录，不作为主输出合同。
+- Run runtime 将 `Intent` 包装成 `EconomicIntent`，再进入 risk / execution。
 - readiness、available、unavailable 这类运行状态由 Run runtime 推导后传给策略。
 
 #### 4.6.1 文件级合约
@@ -409,7 +410,7 @@ Strategy 不是工作区，但策略需要有明确 protocol。参考 `kairos_v2
 
 ```python
 from kairospy import Workspace
-from kairospy.strategy import StrategyDecision, StrategyEvent
+from kairospy.strategy import Strategy
 
 
 REQUIRES = {
@@ -432,7 +433,7 @@ REQUIRES = {
 }
 
 
-def build(workspace: Workspace, params: dict) -> "StrategyProtocol":
+def build(workspace: Workspace, params: dict) -> Strategy:
     return SmaCross(
         bars=workspace.data.get("bars"),
         fast=int(params.get("fast", 20)),
@@ -444,123 +445,66 @@ def build(workspace: Workspace, params: dict) -> "StrategyProtocol":
 
 `build(workspace, params)` 是 entrypoint。它只从 Workspace 读取已绑定的数据本地名。
 
-#### 4.6.2 Python Protocol 草案
+#### 4.6.2 Python Protocol
 
 核心包应只保留 protocol，不保留具体策略实现：
 
 ```python
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
-from typing import Any, Mapping, Protocol, Sequence
-from uuid import UUID, uuid4
-
-
-class StrategyEventKind(StrEnum):
-    START = "start"
-    TICK = "tick"
-    DATA = "data"
-    FILL = "fill"
-    READY = "ready"
-    UNAVAILABLE = "unavailable"
-    AVAILABLE = "available"
-    STOP = "stop"
+from typing import Protocol, Sequence
 
 
 @dataclass(frozen=True, slots=True)
-class StrategyEvent:
-    kind: StrategyEventKind
-    timestamp: datetime
-    name: str = ""
-    payload: Mapping[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
-class StrategyContext:
-    run_id: str
-    workspace_id: str
-    mode: str
-    now: datetime
-    data: "WorkspaceDataView"
-    portfolio: "PortfolioView | None" = None
-    account: "AccountView | None" = None
-    market: "MarketView | None" = None
-    readiness: "ReadinessView | None" = None
-    state: Mapping[str, Any] = field(default_factory=dict)
+class Context:
+    market: "MarketView"
+    portfolio: "PortfolioView"
+    features: "FeatureView"
+    reference: "ReferenceView"
+    orders: "OrderView"
+    intents: "IntentView"
+    budget: "BudgetView"
 
 
 @dataclass(frozen=True, slots=True)
 class StrategyDecision:
-    decision_id: UUID
-    timestamp: datetime
-    contract: str
-    actions: tuple[Mapping[str, Any], ...]
+    timestamp: str
+    action: str
     reason: str
-    confidence: float | None = None
-    valid_until: datetime | None = None
-    diagnostics: Mapping[str, Any] = field(default_factory=dict)
+    candidates: tuple[str, ...] = ()
 
     @classmethod
-    def none(cls, *, timestamp: datetime, reason: str) -> "StrategyDecision":
-        return cls(uuid4(), timestamp, "none.v1", (), reason)
+    def none(cls, *, timestamp: datetime | str, reason: str) -> "StrategyDecision":
+        return cls(str(timestamp), "none", reason)
 
 
-class StrategyProtocol(Protocol):
+class Strategy(Protocol):
     @property
     def strategy_id(self) -> str: ...
 
-    def on_start(self, context: StrategyContext) -> Sequence[StrategyDecision]:
-        ...
+    @property
+    def decisions(self) -> tuple[StrategyDecision, ...]: ...
 
-    def on_event(
-        self,
-        event: StrategyEvent,
-        context: StrategyContext,
-    ) -> Sequence[StrategyDecision]:
-        ...
+    def on_start(self, context: Context) -> Sequence["Intent"]: ...
 
-    def on_tick(
-        self,
-        tick: int,
-        context: StrategyContext,
-    ) -> Sequence[StrategyDecision]:
-        ...
+    def on_market(self, context: Context) -> Sequence["Intent"]: ...
 
-    def on_stop(self, context: StrategyContext) -> Sequence[StrategyDecision]:
-        ...
+    def on_fill(self, fill: "Fill", context: Context) -> Sequence["Intent"]: ...
 
-    def can_exit(self, context: StrategyContext) -> bool:
-        ...
+    def on_end(self, context: Context) -> Sequence["Intent"]: ...
 ```
 
-这对应 `kairos_v2` 的思路：
+运行链路保持单一：
 
 ```text
-on_start
-on_event(CoreEvent)
-on_tick
-on_strategy_event(Ready / Unavailable / Available)
-on_stop
-can_exit
+Context -> Strategy -> Intent -> EconomicIntent -> Risk -> Execution
 ```
-
-Python 版合并为：
-
-```text
-on_start(context)
-on_event(event, context)
-on_tick(tick, context)
-on_stop(context)
-can_exit(context)
-```
-
-其中 `Ready / Unavailable / Available` 作为 `StrategyEvent.kind` 传入，不需要单独一个方法。
 
 #### 4.6.3 简化策略也应支持
 
-为了让普通用户容易写策略，Run adapter 应支持更小的 callable：
+为了让普通用户容易写研究/信号入口，surface 层可以支持更小的 callable，但这只是入口适配，不是第二套核心策略协议：
 
 ```python
 def decide(context):
@@ -569,62 +513,65 @@ def decide(context):
     return StrategyDecision(...)
 ```
 
-等价适配：
-
-```text
-decide(context) -> on_tick(...)
-```
-
 因此支持三种 entrypoint：
 
 | Entrypoint | 适用场景 |
 |---|---|
-| `build(workspace, params) -> StrategyProtocol` | 完整事件驱动策略 |
-| `decide(context) -> StrategyDecision | list[StrategyDecision]` | 简单 backtest / signal 策略 |
+| `build(workspace, params) -> Strategy` | 完整可执行策略 |
+| `decide(context) -> StrategyDecision | list[StrategyDecision]` | 简单 research / signal 入口，不进入执行链 |
 | `run(workspace, params) -> artifact` | 研究、因子、报告，不进入交易 runtime |
 
 #### 4.6.4 示例策略
 
 ```python
+from uuid import uuid4
+
+from kairospy.strategy import StrategyDecision, TargetPositionIntent
+
+
 class SmaCross:
     def __init__(self, *, bars, fast: int = 20, slow: int = 50) -> None:
         self.strategy_id = "sma-cross"
         self.bars = bars
         self.fast = fast
         self.slow = slow
+        self._decisions = []
+
+    @property
+    def decisions(self):
+        return tuple(self._decisions)
 
     def on_start(self, context):
         return ()
 
-    def on_event(self, event, context):
-        if event.kind == StrategyEventKind.UNAVAILABLE:
-            return (StrategyDecision.none(timestamp=context.now, reason="runtime unavailable"),)
-        return ()
-
-    def on_tick(self, tick, context):
+    def on_market(self, context):
         bars = self.bars.pandas()
         signal = compute_sma_cross(bars, fast=self.fast, slow=self.slow)
         if signal == "flat":
-            return (StrategyDecision.none(timestamp=context.now, reason="no crossover"),)
+            self._decisions.append(StrategyDecision.none(timestamp=context.now, reason="no crossover"))
+            return ()
+        target = 1 if signal == "long" else 0
+        self._decisions.append(StrategyDecision(
+            timestamp=context.now.isoformat(),
+            action="target_position",
+            reason=f"sma_cross fast={self.fast} slow={self.slow}",
+            candidates=("workspace:bars.primary",),
+        ))
         return (
-            StrategyDecision(
-                decision_id=uuid4(),
-                timestamp=context.now,
-                contract="target_position.v1",
-                actions=({
-                    "kind": "target_position",
-                    "instrument": "workspace:bars.primary",
-                    "target": 1 if signal == "long" else 0,
-                },),
+            TargetPositionIntent(
+                intent_id=uuid4(),
+                strategy_id=self.strategy_id,
+                instrument_id=context.reference.primary_instrument_id("bars"),
+                quantity=target,
                 reason=f"sma_cross fast={self.fast} slow={self.slow}",
             ),
         )
 
-    def on_stop(self, context):
+    def on_fill(self, fill, context):
         return ()
 
-    def can_exit(self, context):
-        return True
+    def on_end(self, context):
+        return ()
 
 
 def build(workspace, params):
@@ -746,7 +693,7 @@ created -> prepared -> running -> completed
 4. 加载 entrypoint module。
 5. 读取 `REQUIRES` 并校验 bindings、params、mode。
 6. 调用 `build(workspace, params)` 或适配 `decide(context)`。
-7. 创建 `StrategyContext`。
+7. 创建 `Context`。
 8. 按 mode 驱动策略 lifecycle。
 9. 把 decisions、orders、fills、metrics、errors 写入 Run workspace。
 
@@ -762,7 +709,7 @@ Run mode 只决定 runtime binding，不改变策略代码：
 | `paper` | Live View | paper/simulated account |
 | `live` | Live View | real account, requires explicit live confirmation |
 
-策略只看到 `StrategyContext` 和 `StrategyEvent`。Run 负责把不同 mode 的数据和执行能力适配成统一上下文。
+策略只看到 `Context`。Run 负责把不同 mode 的数据和执行能力适配成统一上下文。
 
 ## 5. CLI 收敛建议
 
@@ -966,7 +913,7 @@ Run workspace
 
 ### 8.1 应删除的 CLI 入口
 
-删除 `kairospy/__main__.py` 中作为顶层产品入口的 Study/Strategy workspace 命令：
+删除 `kairospy/surface/cli/main.py` 中作为顶层产品入口的 Study/Strategy workspace 命令：
 
 ```text
 study open
@@ -1000,9 +947,9 @@ strategy promote
 
 对应代码位置：
 
-- `kairospy/__main__.py` 里 `study = commands.add_parser("study", ...)` 整段。
-- `kairospy/__main__.py` 里 `strategy_product = commands.add_parser("strategy", ...)` 整段。
-- `kairospy/__main__.py` handlers 中所有 `("study", ...)` 和 `("strategy", ...)` 映射。
+- `kairospy/surface/cli/main.py` 里 `study = commands.add_parser("study", ...)` 整段。
+- `kairospy/surface/cli/main.py` 里 `strategy_product = commands.add_parser("strategy", ...)` 整段。
+- `kairospy/surface/cli/main.py` handlers 中所有 `("study", ...)` 和 `("strategy", ...)` 映射。
 - `_study_freeze_dispatch`、`_study_inspect_dispatch`、`_strategy_inspect_dispatch` 这类为旧分支服务的 dispatch helper。
 
 保留或迁移到新入口：
@@ -1028,7 +975,7 @@ kairospy/study_platform/workspace.py
 - `kairospy/study_platform/session.py` 中基于 `StudyWorkspaceRepository` 的 `open_study` / `StudySession` 工作区逻辑。
 - `kairospy/study_platform/__init__.py` 中导出的 `StudyWorkspace`、`StudyWorkspaceRepository`、`StudyWorkspaceStatus`、`open_study`。
 - `kairospy/product_workflow.py` 中创建、冻结、检查 `StudyWorkspace` 的流程。
-- `features/us_equity_momentum_diagnostics.py` 中读取 `study-workspaces/.../input_releases.json` 的诊断逻辑。
+- `analytics/features/us_equity_momentum_diagnostics.py` 中读取 `study-workspaces/.../input_releases.json` 的诊断逻辑。
 
 迁移方向：
 
@@ -1045,7 +992,7 @@ study-candidates                     -> artifacts/research
 删除 Strategy 作为 workspace / lock 的模型：
 
 ```text
-kairospy/product_surface.py
+kairospy/surface/product.py
   strategy_open
   strategy_bind_factor
   strategy_set_risk
@@ -1108,15 +1055,15 @@ kairospy/strategies/runtime.py            -> kairospy/strategy/runtime.py 或 ka
 保留内容应只包括：
 
 - `Strategy` protocol。
-- `StrategyContext` / decision context。
+- `Context` / decision context。
 - `StrategyDecision` 或更通用的 decision contract。
 - 将用户 strategy callable 适配到 Run runtime 的 adapter。
 
-`kairospy/application/strategy_runtime.py`、`strategy_run_loop.py` 中可复用的运行组件可以保留，但要改成由 `run start --workspace ... --entrypoint ...` 调用，而不是由 Strategy Workspace / Strategy Lock 调用。
+`kairospy/runtime/kernel.py`、`runtime/composition.py`、`runtime/profiles/*` 中可复用的运行组件可以保留，但要改成由 `run start --workspace ... --entrypoint ...` 调用，而不是由 Strategy Workspace / Strategy Lock 调用。
 
-### 8.4 应拆分 product_surface.py
+### 8.4 应拆分 surface/product.py
 
-`kairospy/product_surface.py` 目前同时承载 Data、Study、Strategy、Run 多套产品 surface。新模型下应拆分：
+`kairospy/surface/product.py` 目前同时承载 Data、Study、Strategy、Run 多套产品 surface。新模型下应拆分：
 
 保留并迁移：
 
@@ -1150,7 +1097,7 @@ ProductPaths.workspaces 或 WorkspacePaths
 
 ### 8.5 应删除的 init 脚手架
 
-删除 `kairospy/project.py` 中默认创建 Study/Strategy 源码目录和 starter 文件的逻辑：
+删除 `kairospy/surface/project.py` 中默认创建 Study/Strategy 源码目录和 starter 文件的逻辑：
 
 ```text
 _directories():
@@ -1182,7 +1129,7 @@ kairospy run start --workspace alpha --entrypoint ...
 - `tests/test_study_workspace.py`
 - `tests/test_study_session.py` 中验证 `StudyWorkspaceRepository`、`study-workspaces`、`open_study` 的用例。
 - `tests/test_product_cli.py` 中验证 `study add-data`、`study add-factor`、`strategy bind-factor`、`strategy set-model-code` 的用例。
-- `tests/test_four_product_surface.py` 中验证 Study/Strategy workspace freeze、lock、promotion 的用例。
+- `tests/test_four_surface/product.py` 中验证 Study/Strategy workspace freeze、lock、promotion 的用例。
 - `tests/test_crypto_momentum_study_start.py` 中依赖 `open_study` 或 governed study start 的用例。
 
 迁移为新测试：
@@ -1250,14 +1197,14 @@ bars = workspace.data.get("bars")
 这些已经从 `study_platform` 包名迁出到更准确的包：
 
 ```text
-kairospy/study_platform/option_capture.py        -> kairospy/capture/option_capture.py
-kairospy/study_platform/spec.py                  -> kairospy/capture/spec.py
-kairospy/study_platform/snapshot.py              -> kairospy/capture/snapshot.py
-kairospy/study_platform/series.py                -> kairospy/capture/series.py
-kairospy/study_platform/normalized_series.py     -> kairospy/capture/normalized_series.py
-kairospy/study_platform/validation/*             -> kairospy/validation/*
-kairospy/study_platform/data_store.py            -> kairospy/capture/data_store.py
-kairospy/study_platform/features.py              -> kairospy/capture/features.py
+kairospy/study_platform/option_capture.py        -> kairospy/research/capture/option_capture.py
+kairospy/study_platform/spec.py                  -> kairospy/research/capture/spec.py
+kairospy/study_platform/snapshot.py              -> kairospy/research/capture/snapshot.py
+kairospy/study_platform/series.py                -> kairospy/research/capture/series.py
+kairospy/study_platform/normalized_series.py     -> kairospy/research/capture/normalized_series.py
+kairospy/study_platform/validation/*             -> kairospy/research/validation/*
+kairospy/study_platform/data_store.py            -> kairospy/research/capture/data_store.py
+kairospy/study_platform/features.py              -> kairospy/research/capture/features.py
 ```
 
 `kairospy/study_platform` 目录本身已删除。删除的是 `Study Workspace` 产品模型和旧包名，不是捕获、验证、特征工程这些能力。
@@ -1298,8 +1245,8 @@ kairospy scaffold strategy --template sma-cross --output src/strategies/sma_cros
 - 策略协议新增到 `kairospy/strategy`。
 - `kairospy/strategies` 整包已删除，核心包不再内置 SMA、Bull Put、Covered Call、Cash and Carry、BTC Iron Condor 等策略。
 - `kairospy/product_workflow.py`、`kairospy/api.py`、旧内置策略 backtest/reference 封装已删除。
-- `kairospy/study_platform` 包名已删除，可复用能力迁到 `kairospy/capture` 和 `kairospy/validation`。
-- 旧 `StudyProductApi` / `StrategyProductApi` 和 `product_surface.py` 里的旧 `study_*` / `strategy_*` 产品函数已删除。
+- `kairospy/study_platform` 包名已删除，可复用能力迁到 `kairospy/research/capture` 和 `kairospy/research/validation`。
+- 旧 `StudyProductApi` / `StrategyProductApi` 和 `surface/product.py` 里的旧 `study_*` / `strategy_*` 产品函数已删除。
 - 根项目状态中的旧 `.kairos/data/strategies` 和 `.kairos/data/study-workspaces` 已删除；新状态只保留 `.kairos/workspace/{name}` 和 `.kairos/run/{run_id}`。
 - `.gitignore` 不再默认忽略 `studies/` 或 `strategies/`，用户代码目录由用户自己组织和纳入版本管理。
 

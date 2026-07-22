@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kairospy.backtest.feed import (
+from kairospy.market.snapshots import (
     InstrumentLifecycleSnapshot, DatasetManifest, MarketReplayDataset, MarketSnapshot, build_manifest,
 )
 from kairospy.reference.repository import instrument_from_primitive, instrument_to_primitive
 from kairospy.reference.contracts import EconomicProduct, InstrumentReference, SettlementTermsDefinition
-from kairospy.storage.codec import from_primitive, to_primitive
+from kairospy.infrastructure.storage.codec import from_primitive, to_primitive
 
 
 class MarketSnapshotStorageDriver:

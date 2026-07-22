@@ -11,7 +11,7 @@ from kairospy.data import (
     LiveDataRequest, LiveDataService,
     default_builtin_protocol_registry,
 )
-from kairospy.product_surface import _args
+from kairospy.surface.product import _args
 
 
 class DataProtocolRegistryTests(unittest.TestCase):
@@ -79,7 +79,7 @@ class DataProtocolRegistryTests(unittest.TestCase):
             def fail_if_delegated(_args):
                 raise AssertionError("HistoricalDataService.add must own the user file pipeline")
 
-            with patch("kairospy.product_surface._data_add_impl", fail_if_delegated):
+            with patch("kairospy.surface.product._data_add_impl", fail_if_delegated):
                 payload = HistoricalDataService(root).add(_args(
                     root,
                     source=source,
@@ -102,7 +102,7 @@ class DataProtocolRegistryTests(unittest.TestCase):
             def fail_if_delegated(_args):
                 raise AssertionError("HistoricalDataService.use_builtin must own the built-in pipeline")
 
-            with patch("kairospy.product_surface._data_use_impl", fail_if_delegated):
+            with patch("kairospy.surface.product._data_use_impl", fail_if_delegated):
                 payload = HistoricalDataService(root).use_builtin(_args(
                     root,
                     key="market.ohlcv.crypto.binance.btc-usdt.1d",
@@ -131,7 +131,7 @@ class DataProtocolRegistryTests(unittest.TestCase):
             def fail_if_delegated(_args):
                 raise AssertionError("LiveDataService.connect must own the live pipeline")
 
-            with patch("kairospy.product_surface._data_connect_impl", fail_if_delegated):
+            with patch("kairospy.surface.product._data_connect_impl", fail_if_delegated):
                 payload = LiveDataService(root).connect(_args(
                     root,
                     source=Path("binance.quote"),
@@ -173,7 +173,7 @@ class DataProtocolRegistryTests(unittest.TestCase):
             def fail_if_delegated(_args):
                 raise AssertionError("LiveDataService.reconnect must own the reconnect pipeline")
 
-            with patch("kairospy.product_surface._data_reconnect_impl", fail_if_delegated):
+            with patch("kairospy.surface.product._data_reconnect_impl", fail_if_delegated):
                 payload = service.reconnect(_args(
                     root,
                     dataset="market.quote.crypto.binance.reconnect-btc-usdt",

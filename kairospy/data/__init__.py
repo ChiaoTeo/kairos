@@ -52,7 +52,6 @@ from .live_service import LiveDataService
 from .manifest import (
     DEFAULT_DATA_MANIFEST, DataManifest, DataManifestDataset, DataManifestError,
 )
-from .source_cache import SourceCacheEntry, SourceCacheStore
 from .builtin import (
     BuiltInDataProduct, BuiltInDataProductRegistry, BuiltInHistoricalDataProtocol, BuiltInLiveDataProtocol,
     default_builtin_protocol_registry,
@@ -114,6 +113,5 @@ __all__ += [
 __all__ += [
     "DEFAULT_DATA_MANIFEST", "DataManifest", "DataManifestDataset", "DataManifestError",
 ]
-__all__ += ["SourceCacheEntry", "SourceCacheStore"]
 __all__ += ["ProviderExtensionContext"]
 __all__ += ["ExternalProcessDataProductBuilder", "ExternalProcessProductBinding"]

@@ -17,7 +17,7 @@ class HistoricalDataService:
         self.root = Path(root)
 
     def add(self, args) -> dict[str, object]:
-        from kairospy import product_surface
+        from kairospy.surface import product as product_surface
         from kairospy.data.metadata import DatasetMetadataInference
 
         request = _with_lake_root(args, self.root)
@@ -59,7 +59,7 @@ class HistoricalDataService:
         }
 
     def use_builtin(self, args) -> dict[str, object]:
-        from kairospy import product_surface
+        from kairospy.surface import product as product_surface
         from kairospy.data import (
             BuiltInDataProductRegistry, HistoricalDataRequest, default_builtin_protocol_registry,
         )

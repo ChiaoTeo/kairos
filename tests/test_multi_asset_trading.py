@@ -5,9 +5,19 @@ import unittest
 from datetime import datetime, time, timezone
 from decimal import Decimal
 
-from kairospy.trading.capability import ExecutionCapabilities, MarketDataCapabilities, MarketDataKind, OrderType, ReferenceCapabilities
-from kairospy.trading.identity import Amount, AssetId, InstrumentId, VenueId
-from kairospy.trading.product import ExerciseStyle, IndexSpec, ListedOptionSpec, OptionRight, ProductType, SettlementSession, SettlementType
+from kairospy.execution.orders import ExecutionCapabilities, OrderType
+from kairospy.identity import Amount, AssetId, InstrumentId, VenueId
+from kairospy.market.subscriptions import MarketDataCapabilities, MarketDataKind
+from kairospy.reference.contracts import (
+    ExerciseStyle,
+    IndexSpec,
+    ListedOptionSpec,
+    OptionRight,
+    ProductType,
+    ReferenceCapabilities,
+    SettlementSession,
+    SettlementType,
+)
 from kairospy.reference import ReferenceCatalog
 from kairospy.reference.repository import ReferenceCatalogRepository
 from tests.reference_support import publish_test_instrument

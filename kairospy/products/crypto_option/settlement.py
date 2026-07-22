@@ -5,17 +5,17 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid5
 
-from kairospy.accounting.ledger import LedgerService
+from kairospy.portfolio.accounting.ledger import LedgerService
 from kairospy.execution.ingestion import DurableAccountingIngestionService
-from kairospy.trading.identity import AccountKey, AssetId, InstrumentId
-from kairospy.trading.ledger import LedgerBook, LedgerEntryType
-from kairospy.trading.product import CryptoOptionSpec, OptionRight
+from kairospy.identity import AccountRef, AssetId, InstrumentId
+from kairospy.portfolio.ledger import LedgerBook, LedgerEntryType
+from kairospy.reference.contracts import CryptoOptionSpec, OptionRight
 from kairospy.reference.access import contract_spec, definition_at
 
 
 @dataclass(frozen=True, slots=True)
 class CryptoOptionSettlementEvent:
-    account: AccountKey
+    account: AccountRef
     instrument_id: InstrumentId
     settlement_price: Decimal
     timestamp: datetime
@@ -25,14 +25,14 @@ class CryptoOptionSettlementService:
     def __init__(self, ledger_service: LedgerService) -> None:
         self.ledger_service = ledger_service
 
-    def settle(self, account: AccountKey, instrument_id: InstrumentId, settlement_price: Decimal, timestamp: datetime):
+    def settle(self, account: AccountRef, instrument_id: InstrumentId, settlement_price: Decimal, timestamp: datetime):
         transaction = self.build_settlement(account, instrument_id, settlement_price, timestamp)
         if transaction is None:
             return None
         self.ledger_service.ledger.post(transaction)
         return transaction
 
-    def build_settlement(self, account: AccountKey, instrument_id: InstrumentId, settlement_price: Decimal, timestamp: datetime):
+    def build_settlement(self, account: AccountRef, instrument_id: InstrumentId, settlement_price: Decimal, timestamp: datetime):
         definition = definition_at(self.ledger_service.catalog, instrument_id, timestamp)
         spec = contract_spec(definition)
         if not isinstance(spec, CryptoOptionSpec):
@@ -66,7 +66,7 @@ class DurableCryptoOptionSettlementService:
         self.settlement_service = settlement_service
         self.ingestion = ingestion
 
-    def settle(self, account: AccountKey, instrument_id: InstrumentId, settlement_price: Decimal, timestamp: datetime):
+    def settle(self, account: AccountRef, instrument_id: InstrumentId, settlement_price: Decimal, timestamp: datetime):
         event = CryptoOptionSettlementEvent(account, instrument_id, settlement_price, timestamp)
         transaction = self.settlement_service.build_settlement(
             account, instrument_id, settlement_price, timestamp,
