@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -12,6 +12,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from kairospy.reference.contracts import ProductType
 
 from .intents import Intent
+from .stop_policy import StopPolicy
 
 
 class StrategyLifecycle(StrEnum):
@@ -58,6 +59,7 @@ class StrategySpec:
     required_data_capabilities: tuple[str, ...]
     required_execution_capabilities: tuple[str, ...]
     evidence_hash: str
+    default_stop_policy: StopPolicy = field(default_factory=StopPolicy.conservative)
 
     def __post_init__(self) -> None:
         if not self.strategy_id or not self.version or not self.products:

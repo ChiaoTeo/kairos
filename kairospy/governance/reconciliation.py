@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import Callable, TYPE_CHECKING
 
 from kairospy.runtime.clock import Clock, SystemClock
+from kairospy.infrastructure.storage.codec import to_primitive
 from kairospy.portfolio.account_ports import AccountPort, AccountState
 from kairospy.identity import AccountRef, AssetId, InstrumentId
 from kairospy.portfolio.ledger import Ledger, LedgerBook
@@ -90,3 +92,86 @@ class ReconciliationService:
                     "strategy_position", instrument, Decimal(virtual), Decimal(account_value),
                 ))
         return ReconciliationReport(account, self.clock.now(), tuple(differences))
+
+
+class ReconciliationMonitorService:
+    """Managed service that periodically persists account reconciliation status."""
+
+    STATE_KEY_PREFIX = "reconciliation"
+
+    def __init__(
+        self,
+        service: ReconciliationService,
+        account: AccountRef,
+        store: "SQLiteRuntimeStore",
+        *,
+        run_id: str,
+        interval_seconds: float = 5.0,
+        clock: Clock | None = None,
+        on_mismatch: Callable[[ReconciliationReport], None] | None = None,
+    ) -> None:
+        if not str(run_id).strip():
+            raise ValueError("reconciliation monitor requires run_id")
+        if interval_seconds <= 0:
+            raise ValueError("reconciliation monitor interval must be positive")
+        self.service = service
+        self.account = account
+        self.store = store
+        self.run_id = str(run_id)
+        self.interval_seconds = interval_seconds
+        self.clock = clock or SystemClock()
+        self.on_mismatch = on_mismatch
+
+    @property
+    def state_key(self) -> str:
+        return f"{self.STATE_KEY_PREFIX}:{self.run_id}:{self.account.value}"
+
+    def managed_service(self, name: str | None = None):
+        from kairospy.runtime.service_supervisor import ManagedServiceSpec
+
+        return ManagedServiceSpec(name or f"account-reconciliation:{self.account.value}", self.run)
+
+    async def run(self) -> None:
+        self._persist_phase("running", {"reason": "started"})
+        try:
+            while True:
+                self.check_once()
+                await asyncio.sleep(self.interval_seconds)
+        except asyncio.CancelledError:
+            self._persist_phase("stopped", {"reason": "service stopped"})
+            raise
+        except Exception as error:
+            self._persist_phase("failed", {
+                "error_type": type(error).__name__,
+                "message": str(error),
+            })
+            raise
+
+    def check_once(self) -> ReconciliationReport:
+        report = self.service.reconcile(self.account)
+        payload = {
+            "run_id": self.run_id,
+            "phase": "matched" if report.matched else "mismatched",
+            "matched": report.matched,
+            "report": to_primitive(report),
+            "checked_at": report.checked_at.isoformat(),
+        }
+        self.store.set_runtime_state(self.state_key, payload, report.checked_at)
+        self.store.set_runtime_state(f"{self.STATE_KEY_PREFIX}:last", payload, report.checked_at)
+        if not report.matched and self.on_mismatch is not None:
+            self.on_mismatch(report)
+        return report
+
+    def _persist_phase(self, phase: str, evidence: dict[str, object]) -> None:
+        at = self.clock.now()
+        self.store.set_runtime_state(
+            self.state_key,
+            {
+                "run_id": self.run_id,
+                "phase": phase,
+                "matched": phase == "matched",
+                "updated_at": at.isoformat(),
+                **evidence,
+            },
+            at,
+        )

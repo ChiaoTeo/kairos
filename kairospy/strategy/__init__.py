@@ -19,7 +19,8 @@ from .protocols import (
     Strategy,
     StrategyDecision,
 )
-from .runtime import GovernedStrategyRuntime
+from .runtime import GovernedStrategyRuntime, StrategyRuntime
+from .stop_policy import StopAction, StopPolicy, StopReason, StopRule
 from .views import (
     BudgetView,
     FeatureView,
@@ -58,7 +59,12 @@ __all__ = [
     "Strategy",
     "StrategyDecision",
     "StrategyLifecycle",
+    "StrategyRuntime",
     "StrategySpec",
+    "StopAction",
+    "StopPolicy",
+    "StopReason",
+    "StopRule",
     "StructureIntent",
     "TargetExposureIntent",
     "TargetPositionIntent",

@@ -458,13 +458,22 @@ class ProviderConnectorContractTests(unittest.TestCase):
                 "dimensions": {"venue": "opra", "asset_class": "option"},
             }]}))
             register_configured_products(temporary, config)
-            client = DatasetClient(temporary, providers=default_provider_registry(temporary, connector_config=config))
+            client = DatasetClient(
+                temporary,
+                providers=default_provider_registry(
+                    temporary,
+                    data_product_config=json.loads(config.read_text(encoding="utf-8")),
+                ),
+            )
             plan = client.plan("market.events.options.us.test", start=START, end=END,
                                provider="massive", venue="opra")
             self.assertTrue(plan.connector_available)
             self.assertEqual(plan.estimate.cost_class, "entitled")
-            with patch("kairospy.data.bootstrap._massive_config_for_project", side_effect=RuntimeError("MASSIVE_API_KEY is required")):
-                with self.assertRaisesRegex(RuntimeError, "MASSIVE_API_KEY"):
+            with patch(
+                "kairospy.data.bootstrap._massive_config_for_project",
+                side_effect=RuntimeError("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY is required"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"):
                     client.acquire(plan)
 
     def test_massive_equity_configuration_plans_without_credentials_and_acquire_fails_before_network(self):
@@ -476,13 +485,22 @@ class ProviderConnectorContractTests(unittest.TestCase):
                 "view": "raw",
             }]}))
             register_configured_products(temporary, config)
-            client = DatasetClient(temporary, providers=default_provider_registry(temporary, connector_config=config))
+            client = DatasetClient(
+                temporary,
+                providers=default_provider_registry(
+                    temporary,
+                    data_product_config=json.loads(config.read_text(encoding="utf-8")),
+                ),
+            )
             plan = client.plan("market.ohlcv.equity.us.massive.nvda.1d.raw", start=START, end=END,
                                provider="massive", venue="us-securities")
             self.assertTrue(plan.connector_available)
             self.assertEqual(plan.estimate.cost_class, "entitled-rest-bounded-ticker")
-            with patch("kairospy.data.bootstrap._massive_config_for_project", side_effect=RuntimeError("MASSIVE_API_KEY is required")):
-                with self.assertRaisesRegex(RuntimeError, "MASSIVE_API_KEY"):
+            with patch(
+                "kairospy.data.bootstrap._massive_config_for_project",
+                side_effect=RuntimeError("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY is required"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"):
                     client.acquire(plan)
 
     def test_binance_option_connector_contract(self):

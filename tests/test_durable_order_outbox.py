@@ -19,7 +19,7 @@ from kairospy.identity import AccountRef, AccountType, InstrumentId, VenueId
 from kairospy.execution.orders import ExecutionInstructions, TimeInForce
 from kairospy.execution.command import OutboxStatus
 from kairospy.execution.order_state import DurableOrderStatus
-from kairospy.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher
+from kairospy.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher, DurableOrderDispatcherService
 from kairospy.governance.kill_switch import KillSwitch
 from kairospy.runtime.application import KairosApplication
 from kairospy.runtime.async_runtime import AsyncKairosRuntime
@@ -36,6 +36,22 @@ def request() -> OrderRequest:
         AccountRef(InstitutionId("simulated"), "account-1", AccountType.SECURITIES_MARGIN),
         InstrumentId("instrument-1"), TradeSide.BUY, Decimal("1"),
         ExecutionInstructions(OrderType.LIMIT, TimeInForce.DAY, Decimal("10")),
+    )
+
+
+def reduce_only_request() -> OrderRequest:
+    original = request()
+    return OrderRequest(
+        original.internal_order_id,
+        "client-reduce-only",
+        original.strategy_id,
+        original.intent_id,
+        original.correlation_id,
+        original.account,
+        original.instrument_id,
+        original.side,
+        original.quantity,
+        ExecutionInstructions(OrderType.LIMIT, TimeInForce.DAY, Decimal("10"), reduce_only=True),
     )
 
 
@@ -155,8 +171,15 @@ class DurableOrderOutboxTests(unittest.IsolatedAsyncioTestCase):
             application = KairosApplication(
                 ApplicationConfig(Environment.PAPER, paths), store, runtime_id="outbox-runtime-fixture",
             )
+            service = DurableOrderDispatcherService(
+                store,
+                dispatcher,
+                run_id="outbox-runtime-fixture",
+                idle_wait_seconds=0.001,
+                clock=FixedClock(NOW),
+            )
             runtime = AsyncKairosRuntime(application, (
-                ManagedServiceSpec("order-outbox-dispatcher", lambda: dispatcher.run(idle_wait_seconds=0.001)),
+                service.managed_service(),
             ))
 
             await runtime.start()
@@ -168,6 +191,9 @@ class DurableOrderOutboxTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(store.outbox_commands()[0].status, OutboxStatus.COMPLETED)
             self.assertEqual(store.order("client-1").status, DurableOrderStatus.ACKNOWLEDGED)  # type: ignore[union-attr]
             await runtime.stop()
+            state = store.runtime_state(service.state_key)
+            assert isinstance(state, dict)
+            self.assertEqual(state["phase"], "stopped")
 
     async def test_command_service_enforces_application_and_kill_switch_gates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -193,6 +219,60 @@ class DurableOrderOutboxTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(validations, [])
             self.assertEqual(store.outbox_commands(), ())
+            application.stop()
+
+    async def test_reconciliation_mismatch_blocks_non_reducing_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = RuntimePaths.under(root)
+            store = SQLiteRuntimeStore(paths.runtime_database)
+            application = KairosApplication(
+                ApplicationConfig(Environment.PAPER, paths), store, runtime_id="command-service-reconciliation",
+            )
+            service = DurableOrderCommandService(
+                store,
+                application,
+                KillSwitch((), FixedClock(NOW), store),
+                lambda _request: None,
+                clock=FixedClock(NOW),
+            )
+            application.start()
+            application.run()
+            store.set_runtime_state("reconciliation:last", {"matched": False, "phase": "mismatched"}, NOW)
+
+            with self.assertRaisesRegex(RuntimeError, "reconciliation mismatch"):
+                service.submit(request())
+
+            accepted = service.submit(reduce_only_request())
+
+            self.assertEqual(accepted.status, OutboxStatus.PENDING)
+            application.stop()
+
+    async def test_risk_runtime_state_blocks_non_reducing_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = RuntimePaths.under(root)
+            store = SQLiteRuntimeStore(paths.runtime_database)
+            application = KairosApplication(
+                ApplicationConfig(Environment.PAPER, paths), store, runtime_id="command-service-risk",
+            )
+            service = DurableOrderCommandService(
+                store,
+                application,
+                KillSwitch((), FixedClock(NOW), store),
+                lambda _request: None,
+                clock=FixedClock(NOW),
+            )
+            application.start()
+            application.run()
+            store.set_runtime_state("risk_runtime:last", {"status": "stale", "limits_hash": "old"}, NOW)
+
+            with self.assertRaisesRegex(RuntimeError, "risk runtime"):
+                service.submit(request())
+
+            accepted = service.submit(reduce_only_request())
+
+            self.assertEqual(accepted.status, OutboxStatus.PENDING)
             application.stop()
 
 

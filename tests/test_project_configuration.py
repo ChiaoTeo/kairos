@@ -9,6 +9,12 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from kairospy.infrastructure.configuration import KairosProjectConfig, set_config_value, unset_config_value
+from kairospy.integrations.config import (
+    resolve_account_binding,
+    resolve_binance_trading_credentials,
+    resolve_massive_marketdata_config,
+    resolve_provider_service_config,
+)
 from kairospy.surface.project import initialize_project
 
 
@@ -18,17 +24,20 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             root = Path(directory)
             initialize_project(root, name="Config Desk")
 
-            env = {"MASSIVE_API_KEY": "secret"}
+            env = {"KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY": "secret"}
             old = os.environ.copy()
             try:
-                os.environ.pop("MASSIVE_API_KEY", None)
-                with self.assertRaisesRegex(Exception, "Massive API key is missing"):
-                    KairosProjectConfig.discover(root).massive_config()
+                os.environ.pop("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY", None)
+                with self.assertRaisesRegex(Exception, "Massive market data credential is missing"):
+                    resolve_massive_marketdata_config(KairosProjectConfig.discover(root))
                 os.environ.update(env)
                 config = KairosProjectConfig.discover(root / "notebooks")
                 self.assertEqual(config.root, root.resolve())
-                self.assertEqual(config.massive_config().api_key, "secret")
-                self.assertEqual(config.to_redacted_dict()["providers"]["massive"]["api_key"], "env:MASSIVE_API_KEY")
+                self.assertEqual(resolve_massive_marketdata_config(config).api_key, "secret")
+                self.assertEqual(
+                    config.to_redacted_dict()["credentials"]["massive_marketdata_primary"]["api_key"],
+                    "env:KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY",
+                )
             finally:
                 os.environ.clear()
                 os.environ.update(old)
@@ -37,18 +46,77 @@ class KairosProjectConfigurationTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             initialize_project(root, name="Dotenv Desk")
-            (root / ".env").write_text("MASSIVE_API_KEY=dotenv-secret\nQUOTED=\"quoted value\"\n", encoding="utf-8")
+            (root / ".env").write_text(
+                "KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY=dotenv-secret\nQUOTED=\"quoted value\"\n",
+                encoding="utf-8",
+            )
             old = os.environ.copy()
-            os.environ.pop("MASSIVE_API_KEY", None)
+            os.environ.pop("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY", None)
             os.environ.pop("QUOTED", None)
             try:
-                self.assertEqual(KairosProjectConfig.discover(root).massive_config().api_key, "dotenv-secret")
+                self.assertEqual(
+                    resolve_massive_marketdata_config(KairosProjectConfig.discover(root)).api_key,
+                    "dotenv-secret",
+                )
                 self.assertEqual(os.environ["QUOTED"], "quoted value")
-                os.environ["MASSIVE_API_KEY"] = "shell-secret"
-                self.assertEqual(KairosProjectConfig.discover(root).massive_config().api_key, "shell-secret")
+                os.environ["KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"] = "shell-secret"
+                self.assertEqual(
+                    resolve_massive_marketdata_config(KairosProjectConfig.discover(root)).api_key,
+                    "shell-secret",
+                )
             finally:
                 os.environ.clear()
                 os.environ.update(old)
+
+    def test_integration_config_resolves_provider_service_and_account_binding(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Resolver Desk")
+            old = os.environ.copy()
+            try:
+                os.environ["KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_KEY"] = "test-key"
+                os.environ["KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_SECRET"] = "test-secret"
+                config = KairosProjectConfig.discover(root)
+                service = resolve_provider_service_config(config, "binance", "execution_testnet")
+                account = resolve_account_binding(config, "binance_testnet_spot")
+                credentials = resolve_binance_trading_credentials(config, "testnet")
+
+                self.assertEqual(service.credential, "binance_trading_testnet_spot")
+                self.assertEqual(account.credential, "binance_trading_testnet_spot")
+                self.assertEqual(account.provider, "binance")
+                self.assertEqual(credentials.api_key, "test-key")
+                self.assertEqual(credentials.api_secret, "test-secret")
+            finally:
+                os.environ.clear()
+                os.environ.update(old)
+
+    def test_accounts_doctor_checks_account_binding_without_general_doctor_noise(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Accounts Desk")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+            env["KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_KEY"] = "test-key"
+            env["KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_SECRET"] = "test-secret"
+
+            doctor = subprocess.run(
+                [
+                    sys.executable, "-m", "kairospy", "--format", "json",
+                    "accounts", "doctor", "binance_testnet_spot",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            payload = json.loads(doctor.stdout)
+
+            self.assertEqual(payload["status"], "available")
+            self.assertEqual(payload["account"], "binance_testnet_spot")
+            self.assertEqual(payload["provider"], "binance")
+            self.assertEqual(payload["checks"]["account_query"], "not_run")
+            self.assertEqual(payload["issues"], [])
 
     def test_data_bootstrap_import_is_safe_from_cold_process(self) -> None:
         env = dict(os.environ)
@@ -75,13 +143,39 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             initialize_project(root, name="Config Desk")
             path = root / "kairos.toml"
 
-            set_config_value(path, "providers.massive.api_key", "env:KAIROSPY_MASSIVE_KEY")
+            set_config_value(path, "credentials.massive_marketdata_primary.api_key", "env:KAIROSPY_MASSIVE_KEY")
             config = KairosProjectConfig.load(path)
-            self.assertEqual(config.get("providers.massive.api_key"), "env:KAIROSPY_MASSIVE_KEY")
+            self.assertEqual(config.get("credentials.massive_marketdata_primary.api_key"), "env:KAIROSPY_MASSIVE_KEY")
 
-            self.assertTrue(unset_config_value(path, "providers.massive.api_key"))
+            self.assertTrue(unset_config_value(path, "credentials.massive_marketdata_primary.api_key"))
             config = KairosProjectConfig.load(path)
-            self.assertIsNone(config.get("providers.massive.api_key"))
+            self.assertIsNone(config.get("credentials.massive_marketdata_primary.api_key"))
+
+    def test_project_config_validate_rejects_legacy_provider_credentials_and_runtime_live(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Legacy Config Desk")
+            path = root / "kairos.toml"
+            path.write_text(
+                path.read_text(encoding="utf-8") + "\n".join([
+                    "",
+                    "[providers.legacy]",
+                    'api_key = "env:MASSIVE_API_KEY"',
+                    "",
+                    "[runtime.live]",
+                    "enabled = true",
+                    "",
+                    "[credentials.legacy_binance]",
+                    'api_key = "env:BINANCE_LIVE_API_KEY"',
+                ]) + "\n",
+                encoding="utf-8",
+            )
+
+            issues = KairosProjectConfig.load(path).validate()
+
+            self.assertTrue(any("providers.legacy.api_key is not valid project config" in issue for issue in issues))
+            self.assertTrue(any("[runtime.live] is not valid project config" in issue for issue in issues))
+            self.assertTrue(any("legacy environment variable BINANCE_LIVE_API_KEY" in issue for issue in issues))
 
     def test_cli_config_and_doctor_use_local_project(self) -> None:
         with TemporaryDirectory() as directory:
@@ -89,7 +183,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             initialize_project(root, name="Cli Desk")
             env = dict(os.environ)
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
-            env["MASSIVE_API_KEY"] = "secret"
+            env["KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"] = "secret"
 
             show = subprocess.run(
                 [sys.executable, "-m", "kairospy", "--format", "json", "config", "show"],
@@ -101,7 +195,10 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             )
             payload = json.loads(show.stdout)
             self.assertEqual(payload["project"]["name"], "cli-desk")
-            self.assertEqual(payload["providers"]["massive"]["api_key"], "env:MASSIVE_API_KEY")
+            self.assertEqual(
+                payload["credentials"]["massive_marketdata_primary"]["api_key"],
+                "env:KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY",
+            )
 
             doctor = subprocess.run(
                 [sys.executable, "-m", "kairospy", "--format", "json", "doctor"],
@@ -112,7 +209,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
                 env=env,
             )
             checks = json.loads(doctor.stdout)["checks"]
-            self.assertIn({"name": "massive", "status": "ok", "detail": "credentials resolved"}, checks)
+            self.assertIn({"name": "config", "status": "ok", "detail": "kairos.toml is structurally valid"}, checks)
             self.assertIn("next_steps", json.loads(doctor.stdout))
 
     def test_cli_configure_provider_shortcuts_write_project_config(self) -> None:
@@ -143,9 +240,9 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             )
 
             config = KairosProjectConfig.load(root / "kairos.toml")
-            self.assertEqual(config.get("providers.massive.api_key"), "env:MY_MASSIVE_KEY")
-            self.assertEqual(config.get("providers.binance.live.api_key"), "env:MY_BINANCE_KEY")
-            self.assertEqual(config.get("providers.binance.live.api_secret"), "env:MY_BINANCE_SECRET")
+            self.assertEqual(config.get("credentials.massive_marketdata_primary.api_key"), "env:MY_MASSIVE_KEY")
+            self.assertEqual(config.get("credentials.binance_trading_live_spot.api_key"), "env:MY_BINANCE_KEY")
+            self.assertEqual(config.get("credentials.binance_trading_live_spot.api_secret"), "env:MY_BINANCE_SECRET")
 
     def test_cli_human_output_uses_professional_status_tables(self) -> None:
         with TemporaryDirectory() as directory:
@@ -153,7 +250,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             initialize_project(root, name="Output Desk")
             env = dict(os.environ)
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
-            env["MASSIVE_API_KEY"] = "secret"
+            env["KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"] = "secret"
 
             doctor = subprocess.run(
                 [sys.executable, "-m", "kairospy", "doctor"],
@@ -164,7 +261,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
                 env=env,
             )
             self.assertIn("Kairos Doctor", doctor.stdout)
-            self.assertIn("massive", doctor.stdout)
+            self.assertIn("config", doctor.stdout)
             self.assertIn("OK", doctor.stdout)
 
             status = subprocess.run(
@@ -188,7 +285,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
                 env=env,
             )
             self.assertIn("Kairos Configuration", show.stdout)
-            self.assertIn("providers.massive.api_key", show.stdout)
+            self.assertIn("credentials.massive_marketdata_primary.api_key", show.stdout)
 
     def test_cli_configure_interactive_accepts_piped_answers(self) -> None:
         with TemporaryDirectory() as directory:
@@ -208,8 +305,8 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             )
 
             config = KairosProjectConfig.load(root / "kairos.toml")
-            self.assertEqual(config.get("providers.binance.testnet.api_key"), "env:PIPE_BINANCE_KEY")
-            self.assertEqual(config.get("providers.binance.testnet.api_secret"), "env:PIPE_BINANCE_SECRET")
+            self.assertEqual(config.get("credentials.binance_trading_testnet_spot.api_key"), "env:PIPE_BINANCE_KEY")
+            self.assertEqual(config.get("credentials.binance_trading_testnet_spot.api_secret"), "env:PIPE_BINANCE_SECRET")
 
     def test_cli_data_acquire_lists_products_and_accepts_interactive_dry_run(self) -> None:
         with TemporaryDirectory() as directory:
@@ -246,7 +343,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             self.assertIn("Kairos Acquisition Plan", dry_run.stdout)
             self.assertIn("market.ohlcv.crypto.binance.btc-usdt.1d", dry_run.stdout)
 
-            (root / ".env").write_text("MASSIVE_API_KEY=test-key\n", encoding="utf-8")
+            (root / ".env").write_text("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY=test-key\n", encoding="utf-8")
             massive_human_plan = subprocess.run(
                 [
                     sys.executable, "-m", "kairospy", "data", "acquire",

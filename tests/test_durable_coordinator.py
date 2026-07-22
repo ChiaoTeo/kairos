@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from kairospy.identity import InstitutionId
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -14,7 +15,12 @@ from kairospy.runtime.clock import FixedClock
 from kairospy.execution.orders import OrderType
 from kairospy.execution.events import TradeSide
 from kairospy.identity import AccountRef, AccountType, InstrumentId, VenueId
+from kairospy.reference.contracts import ProductType
+from kairospy.runtime.application import RuntimeStatus
+from kairospy.runtime.stop_controller import RuntimeStopController
+from kairospy.strategy.contracts import StrategyLifecycle, StrategySpec
 from kairospy.strategy.intents import CancelIntent
+from kairospy.strategy.stop_policy import StopAction, StopPolicy, StopReason, StopRule
 from kairospy.execution.orders import ExecutionInstructions, TimeInForce
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.runtime.coordinator import ExecutionCoordinator
@@ -27,12 +33,35 @@ from tests.runtime_support import operational_application
 NOW = datetime(2026, 7, 17, tzinfo=timezone.utc)
 
 
-def order_request() -> OrderRequest:
+def order_request(*, client_id: str = "client-1", strategy_id: str = "strategy-v1") -> OrderRequest:
     return OrderRequest(
-        "internal-1", "client-1", "strategy-v1", "intent-1", "correlation-1",
+        f"internal-{client_id}", client_id, strategy_id, "intent-1", "correlation-1",
         AccountRef(InstitutionId("simulated"), "account-1", AccountType.SECURITIES_MARGIN),
         InstrumentId("instrument-1"), TradeSide.BUY, Decimal("1"),
         ExecutionInstructions(OrderType.LIMIT, TimeInForce.DAY, Decimal("10")),
+    )
+
+
+def strategy_spec(strategy_id: str = "strategy-v1") -> StrategySpec:
+    return StrategySpec(
+        strategy_id,
+        "1.0.0",
+        StrategyLifecycle.DRAFT,
+        (ProductType.CRYPTO_SPOT,),
+        ("target_position",),
+        ("momentum",),
+        ("price",),
+        (("instrument", "instrument-1"),),
+        ("price",),
+        (("threshold", "0"),),
+        (("target", "position"),),
+        ("enter",),
+        ("exit",),
+        ("manual",),
+        Decimal("0.01"),
+        ("bars",),
+        ("limit_orders",),
+        "evidence-hash",
     )
 
 
@@ -142,6 +171,101 @@ class DurableCoordinatorTests(unittest.TestCase):
             assert cancelled is not None
             self.assertEqual(cancelled.status, DurableOrderStatus.CANCELLED)
             self.assertEqual(router.cancellations, [ack.venue_order_id])
+
+    def test_strategy_scoped_cancellation_only_cancels_matching_working_orders(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = SQLiteRuntimeStore(root / "runtime.sqlite3")
+            router = RecordingRouter()
+            coordinator = ExecutionCoordinator(
+                router, {}, KillSwitch(()), PersistentEventLog(root / "events.jsonl"),
+                FixedClock(NOW), store,
+                application=operational_application(root, store, clock=FixedClock(NOW)),
+            )
+            target = order_request(client_id="target-client", strategy_id="strategy-v1")
+            other = order_request(client_id="other-client", strategy_id="strategy-v2")
+            coordinator.submit(target, NOW)
+            coordinator.submit(other, NOW)
+
+            working = store.strategy_working_orders("strategy-v1")
+            self.assertEqual(tuple(item.request.client_order_id for item in working), ("target-client",))
+            result = coordinator.cancel_strategy_orders("strategy-v1", target.account, "operator stop")
+
+            self.assertEqual(result.cancelled_client_order_ids, ("target-client",))
+            self.assertEqual(result.failures, ())
+            self.assertEqual(store.order("target-client").status, DurableOrderStatus.CANCELLED)  # type: ignore[union-attr]
+            self.assertEqual(store.order("other-client").status, DurableOrderStatus.ACKNOWLEDGED)  # type: ignore[union-attr]
+            self.assertEqual(router.cancellations, ["venue-1"])
+
+    def test_runtime_stop_controller_applies_reduce_only_cancels_and_persists_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = SQLiteRuntimeStore(root / "runtime.sqlite3")
+            router = RecordingRouter()
+            application = operational_application(root, store, clock=FixedClock(NOW))
+            coordinator = ExecutionCoordinator(
+                router, {}, KillSwitch(()), PersistentEventLog(root / "events.jsonl"),
+                FixedClock(NOW), store,
+                application=application,
+            )
+            order = order_request()
+            coordinator.submit(order, NOW)
+
+            report = RuntimeStopController(
+                application,
+                coordinator,
+                strategy_spec(order.strategy_id),
+                accounts=(order.account,),
+                clock=FixedClock(NOW),
+            ).execute(StopReason.RISK_BREACH)
+
+            self.assertEqual(report.requested_action, StopAction.REDUCE_ONLY)
+            self.assertEqual(report.action, StopAction.REDUCE_ONLY)
+            self.assertTrue(report.reduce_only_applied)
+            self.assertEqual(report.cancelled_client_order_ids, (order.client_order_id,))
+            self.assertEqual(application.status, RuntimeStatus.REDUCE_ONLY)
+            self.assertEqual(store.order(order.client_order_id).status, DurableOrderStatus.CANCELLED)  # type: ignore[union-attr]
+            state = store.runtime_state(f"runtime_stop:{order.strategy_id}:risk_breach")
+            assert isinstance(state, dict)
+            self.assertEqual(state["action"], "reduce_only")
+            self.assertEqual(state["cancelled_client_order_ids"], [order.client_order_id])
+            last = store.runtime_state("runtime_stop:last")
+            assert isinstance(last, dict)
+            self.assertEqual(last["strategy_id"], order.strategy_id)
+            self.assertEqual(last["reason"], "risk_breach")
+
+    def test_runtime_stop_controller_reports_flatten_manual_approval_when_downgraded(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = SQLiteRuntimeStore(root / "runtime.sqlite3")
+            application = operational_application(root, store, clock=FixedClock(NOW))
+            coordinator = ExecutionCoordinator(
+                RecordingRouter(), {}, KillSwitch(()), PersistentEventLog(root / "events.jsonl"),
+                FixedClock(NOW), store,
+                application=application,
+            )
+            strategy = replace(
+                strategy_spec("strategy-v1"),
+                default_stop_policy=StopPolicy((
+                    StopRule(StopReason.MANUAL, StopAction.FLATTEN),
+                )),
+            )
+
+            report = RuntimeStopController(
+                application,
+                coordinator,
+                strategy,
+                accounts=(),
+                clock=FixedClock(NOW),
+            ).execute(StopReason.MANUAL)
+
+            self.assertEqual(report.requested_action, StopAction.FLATTEN)
+            self.assertEqual(report.action, StopAction.REDUCE_ONLY)
+            self.assertTrue(report.flatten_requires_manual_approval)
+            self.assertTrue(report.reduce_only_applied)
+            last = store.runtime_state("runtime_stop:last")
+            assert isinstance(last, dict)
+            self.assertTrue(last["flatten_requires_manual_approval"])
 
 
 if __name__ == "__main__":

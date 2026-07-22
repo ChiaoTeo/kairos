@@ -22,7 +22,7 @@ class MassiveConfig:
 
     def __post_init__(self) -> None:
         if not self.api_key.strip():
-            raise ValueError("MASSIVE_API_KEY cannot be empty")
+            raise ValueError("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY cannot be empty")
         rest = urlparse(self.rest_base)
         socket = urlparse(self.socket_base)
         if rest.hostname != _ALLOWED_REST_HOST or rest.scheme != "https":
@@ -34,7 +34,7 @@ class MassiveConfig:
 
     @classmethod
     def from_env(cls) -> "MassiveConfig":
-        value = os.environ.get("MASSIVE_API_KEY")
+        value = os.environ.get("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY")
         if not value:
-            raise RuntimeError("MASSIVE_API_KEY is required")
+            raise RuntimeError("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY is required")
         return cls(value)

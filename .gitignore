@@ -12,5 +12,5 @@ build/
 .DS_Store
 .env
 /config
-.kairos/
-!.kairos/project.json
+/.kairos/
+/kairos.toml

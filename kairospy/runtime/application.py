@@ -181,6 +181,13 @@ class KairosApplication:
             raise ValueError("runtime degradation requires a reason")
         self._set_status(RuntimeStatus.REDUCE_ONLY if reduce_only else RuntimeStatus.DEGRADED, reason=reason)
 
+    def clear_reduce_only(self, reason: str) -> None:
+        if self.status is not RuntimeStatus.REDUCE_ONLY:
+            raise RuntimeError(f"runtime cannot clear reduce-only from {self.status.value}")
+        if not reason.strip():
+            raise ValueError("runtime clear reduce-only requires a reason")
+        self._set_status(RuntimeStatus.RUNNING, reason=reason)
+
     def stop(self) -> None:
         if self.status is RuntimeStatus.STOPPED:
             return

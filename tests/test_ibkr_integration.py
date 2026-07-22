@@ -19,9 +19,9 @@ class IbkrIntegrationTests(unittest.TestCase):
         spec = OptionChainCaptureSpec()
         provider = IbkrSpxwOptionChainProvider(
             spec,
-            host=os.getenv("IBKR_HOST", "127.0.0.1"),
-            port=int(os.getenv("IBKR_PORT", "4001")),
-            client_id=int(os.getenv("IBKR_CLIENT_ID", "91")),
+            host=os.getenv("KAIROS_IBKR_TRADING_PAPER_MAIN_HOST", "127.0.0.1"),
+            port=int(os.getenv("KAIROS_IBKR_TRADING_PAPER_MAIN_PORT", "4001")),
+            client_id=int(os.getenv("KAIROS_IBKR_TRADING_PAPER_MAIN_CLIENT_ID", "91")),
             readonly=True,
         )
         try:
@@ -33,12 +33,14 @@ class IbkrIntegrationTests(unittest.TestCase):
 
     def test_paper_account_balances_positions_and_open_orders_are_queryable(self) -> None:
         session = IbkrSession(
-            os.getenv("IBKR_HOST", "127.0.0.1"), int(os.getenv("IBKR_PORT", "4001")),
-            int(os.getenv("IBKR_CLIENT_ID", "92")), True,
+            os.getenv("KAIROS_IBKR_TRADING_PAPER_MAIN_HOST", "127.0.0.1"),
+            int(os.getenv("KAIROS_IBKR_TRADING_PAPER_MAIN_PORT", "4001")),
+            int(os.getenv("KAIROS_IBKR_TRADING_PAPER_MAIN_CLIENT_ID", "92")),
+            True,
         )
         try:
             session.connect()
-            account_id = os.getenv("IBKR_ACCOUNT") or session.ib.managedAccounts()[0]
+            account_id = os.getenv("KAIROS_IBKR_TRADING_PAPER_MAIN_ACCOUNT") or session.ib.managedAccounts()[0]
             account = AccountRef(InstitutionId("ibkr"), account_id, AccountType.SECURITIES_MARGIN)
             state = IbkrAccountGateway(session, Environment.PAPER).account_state(account)
             self.assertEqual(state.account, account)

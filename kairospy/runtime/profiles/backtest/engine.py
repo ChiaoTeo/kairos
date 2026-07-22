@@ -10,6 +10,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from kairospy.reference.access import contract_spec, definition_at
 from kairospy.execution.events import TradeSide
 from kairospy.identity import AccountRef, AccountType, AssetId, VenueId
+from kairospy.execution.intent_coordinator import IntentCoordinator
 from kairospy.strategy.intents import CloseStructureIntent, LegIntent
 from kairospy.execution.fills import Fill
 from kairospy.execution.orders import Order, OrderStatus, TimeInForce
@@ -22,6 +23,7 @@ from kairospy.risk.analytics import historical_var_es
 from kairospy.risk.scenarios import RevaluationPosition, ScenarioEngine, standard_scenario_grid
 from kairospy.infrastructure.storage.codec import to_primitive
 from kairospy.strategy.protocols import Context, Strategy
+from kairospy.strategy.runtime import StrategyRuntime
 from kairospy.strategy.views import BudgetView, FeatureView, MarketView, OrderView, PortfolioView, ReferenceView
 
 from .clock import BacktestClock
@@ -72,12 +74,14 @@ class BacktestEngine:
         commission = FixedCommissionModel(self.config.commission_per_contract, Decimal("1"), self.config.regulatory_fee_per_contract)
         fill_model = ListedOptionComboFillModel(FillModelType(self.config.fill_model), commission, catalog, id_factory=ids.next)
         risk = RiskEngine(self.risk_limits, catalog, ids.next)
+        strategy_runtime = StrategyRuntime(self.strategy)
         valuation_service = OptionValuationService(catalog)
         feature_engine = FeatureEngine()
         account = AccountRef(InstitutionId("backtest"), str(run_id), AccountType.SECURITIES_MARGIN)
         portfolio = BacktestPortfolio(self.config.initial_cash, catalog, account)
         clock = BacktestClock()
         orders: dict[UUID, Order] = {}
+        intent_coordinator = IntentCoordinator()
         intents, decisions, fills, settlements, snapshots, equity = [], [], [], [], [], []
         validity = []
         started = False
@@ -131,15 +135,16 @@ class BacktestEngine:
                 FeatureView.from_snapshots(features, latest_factor_snapshots),
                 ReferenceView.from_catalog(catalog, as_of=market.timestamp),
                 OrderView.from_orders(working_orders),
+                intents=intent_coordinator.intent_view(orders=tuple(orders.values()), execution_records=tuple(fills)),
                 budget=BudgetView(reduce_only=reduce_only),
             )
             generated = []
             if not started:
-                generated.extend(self.strategy.on_start(context))
+                generated.extend(strategy_runtime.intents_on_start(context))
                 started = True
             for fill in new_fills:
-                generated.extend(self.strategy.on_fill(fill, context))
-            generated.extend(self.strategy.on_market(context))
+                generated.extend(strategy_runtime.intents_on_fill(fill, context))
+            generated.extend(strategy_runtime.intents_on_market(context))
             if post_trade and snapshot.open_structures:
                 closing_ids = {intent.structure_id for intent in generated if isinstance(intent, CloseStructureIntent)}
                 for structure in snapshot.open_structures:
@@ -150,13 +155,16 @@ class BacktestEngine:
                         structure.strategy_id, structure.structure_id, legs, structure.quantity, None,
                         TimeInForce.DAY, f"post-trade risk reduction: {','.join(post_trade)}", ids.next(),
                     ))
+            intent_coordinator.publish_progress(generated)
             for intent in generated:
                 intents.append(intent)
                 approved, decision = risk.evaluate(intent, snapshot, market, reduce_only=reduce_only)
                 decisions.append(decision)
-                if approved is not None:
-                    order = planner.plan(approved, market.timestamp).transition(OrderStatus.WORKING)
-                    orders[order.order_id] = order
+                if approved is None:
+                    intent_coordinator.mark_blocked(intent, reason=decision.reason)
+                    continue
+                order = planner.plan(approved, market.timestamp).transition(OrderStatus.WORKING)
+                orders[order.order_id] = order
             if post_trade:
                 validity.extend(f"post_trade:{item}" for item in post_trade)
             snapshots.append(snapshot)
@@ -170,8 +178,11 @@ class BacktestEngine:
             FeatureView.from_snapshots(build_features(end_valuation), latest_factor_snapshots),
             ReferenceView.from_catalog(catalog, as_of=last_market.timestamp),
             OrderView.from_orders(tuple(order for order in orders.values() if not order.status.terminal)),
+            intents=intent_coordinator.intent_view(orders=tuple(orders.values()), execution_records=tuple(fills)),
         )
-        for intent in self.strategy.on_end(end_context):
+        end_intents = strategy_runtime.intents_on_end(end_context)
+        intent_coordinator.publish_progress(end_intents)
+        for intent in end_intents:
             intents.append(intent)
         for order_id, order in list(orders.items()):
             if not order.status.terminal:

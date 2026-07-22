@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, Mapping
 
 from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
 from kairospy.integrations.connectors.binance.datasets import (
@@ -27,7 +28,7 @@ from .products import (
     US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
     US_EQUITY_MOMENTUM_DAILY, US_EQUITY_RETURNS_DAILY, US_EQUITY_UNIVERSE_DAILY,
 )
-from .provider_extensions import provider_extension_specs, register_provider_extensions
+from .provider_extensions import CONFIG_PATH_KEY, provider_extension_specs, register_provider_extensions
 
 
 DEFAULT_ACQUIRABLE_PRODUCTS = (
@@ -59,16 +60,21 @@ def register_default_products(root: str | Path = DEFAULT_LAKE_ROOT) -> DataCatal
     return catalog
 
 
-def register_configured_products(root: str | Path, config_path: str | Path) -> DataCatalog:
+def register_configured_products(root: str | Path, config: str | Path | Mapping[str, Any] | None = None) -> DataCatalog:
     catalog = DataCatalog(root)
-    for spec in configured_product_specs(config_path):
+    for spec in configured_product_specs(_configured_data_products(config)):
         catalog.register_product_spec(spec, enrich=True)
     catalog.save()
     return catalog
 
 
-def default_provider_registry(root: str | Path = DEFAULT_LAKE_ROOT, *, connector_config: str | Path | None = None,
-                              progress=None, stop_event=None) -> ProviderRegistry:
+def default_provider_registry(
+    root: str | Path = DEFAULT_LAKE_ROOT,
+    *,
+    data_product_config: str | Path | Mapping[str, Any] | None = None,
+    progress=None,
+    stop_event=None,
+) -> ProviderRegistry:
     providers = ProviderRegistry()
     specs = KNOWN_PRODUCTS
     for connector in (
@@ -80,10 +86,11 @@ def default_provider_registry(root: str | Path = DEFAULT_LAKE_ROOT, *, connector
         DeribitOptionSnapshotDatasetConnector(root),
     ):
         providers.register(connector, tuple(spec for spec in specs if connector.supports(str(spec.key))))
-    if connector_config is not None:
+    configured_config = _configured_data_products(data_product_config)
+    if configured_config:
         from kairospy.integrations.connectors.massive.datasets import MassiveEquityDailyOhlcvProductConfig, MassiveOptionProductConfig
-        configured = {str(spec.key): spec for spec in configured_product_specs(connector_config)}
-        for raw in _massive_option_products(connector_config):
+        configured = {str(spec.key): spec for spec in configured_product_specs(configured_config)}
+        for raw in _massive_option_products(configured_config):
             spec = configured[str(raw["logical_key"])]
             connector = _ConfiguredMassiveConnector(
                 root, MassiveOptionProductConfig(
@@ -93,7 +100,7 @@ def default_provider_registry(root: str | Path = DEFAULT_LAKE_ROOT, *, connector
                 ),
             )
             providers.register(connector, (spec,))
-        for raw in _massive_equity_products(connector_config):
+        for raw in _massive_equity_products(configured_config):
             spec = configured[str(raw["logical_key"])]
             connector = _ConfiguredMassiveEquityConnector(
                 root, MassiveEquityDailyOhlcvProductConfig(
@@ -101,7 +108,7 @@ def default_provider_registry(root: str | Path = DEFAULT_LAKE_ROOT, *, connector
                 ),
             )
             providers.register(connector, (spec,))
-        register_provider_extensions(root, connector_config, providers)
+        register_provider_extensions(root, configured_config, providers)
     from kairospy.infrastructure.configuration import ConfigError
     try:
         from kairospy.integrations.connectors.massive.client import MassiveClient
@@ -139,9 +146,10 @@ def default_provider_registry(root: str | Path = DEFAULT_LAKE_ROOT, *, connector
     return providers
 
 
-def configured_product_specs(config_path: str | Path) -> tuple[DataProductContract, ...]:
+def configured_product_specs(config: str | Path | Mapping[str, Any] | None = None) -> tuple[DataProductContract, ...]:
+    configured = _configured_data_products(config)
     specs = []
-    for raw in _massive_option_products(config_path):
+    for raw in _massive_option_products(configured):
         logical_key = str(raw["logical_key"])
         product = DataProductDefinition(
             DatasetKey(logical_key), str(raw.get("title") or logical_key),
@@ -170,7 +178,7 @@ def configured_product_specs(config_path: str | Path) -> tuple[DataProductContra
             str(raw.get("quality_profile", "market_event")),
             QualityLevel(str(raw.get("minimum_publication_level", QualityLevel.BACKTEST.value))),
         ))
-    for raw in _massive_equity_products(config_path):
+    for raw in _massive_equity_products(configured):
         logical_key = str(raw["logical_key"])
         view = str(raw.get("view", "vendor_adjusted"))
         product = DataProductDefinition(
@@ -202,7 +210,7 @@ def configured_product_specs(config_path: str | Path) -> tuple[DataProductContra
             str(raw.get("quality_profile", "equity_ohlcv")),
             QualityLevel(str(raw.get("minimum_publication_level", QualityLevel.WORKSPACE.value))),
         ))
-    specs.extend(provider_extension_specs(config_path))
+    specs.extend(provider_extension_specs(configured))
     return tuple(specs)
 
 
@@ -252,19 +260,72 @@ class _ConfiguredMassiveEquityConnector:
 
 def _massive_config_for_project():
     from kairospy.infrastructure.configuration import ConfigError, load_project_config_or_none
+    from kairospy.integrations.config import resolve_massive_marketdata_config
     from kairospy.integrations.connectors.massive.config import MassiveConfig
 
     config = load_project_config_or_none()
     if config is not None:
         try:
-            return config.massive_config()
+            return resolve_massive_marketdata_config(config)
         except ConfigError:
             pass
     return MassiveConfig.from_env()
 
 
-def _massive_option_products(path: str | Path) -> tuple[dict[str, object], ...]:
-    value = json.loads(Path(path).read_text(encoding="utf-8"))
+def _configured_data_products(config: str | Path | Mapping[str, Any] | None = None) -> dict[str, Any]:
+    if config is None:
+        project_config = _project_config_data_products()
+        return project_config
+    if isinstance(config, Mapping):
+        return {str(key): value for key, value in dict(config).items()}
+    return _provider_config_file(Path(config))
+
+
+def _project_config_data_products() -> dict[str, Any]:
+    from kairospy.infrastructure.configuration import load_project_config_or_none
+
+    config = load_project_config_or_none()
+    if config is None:
+        return {}
+    payload: dict[str, Any] = {
+        "massive_option_products": [],
+        "massive_equity_products": [],
+        "provider_extensions": [],
+    }
+    tables = config.get("data_products", {})
+    if isinstance(tables, dict):
+        for name, value in tables.items():
+            if not isinstance(value, dict):
+                continue
+            raw = dict(value)
+            raw.setdefault("logical_key", raw.get("key") or name)
+            kind = str(raw.pop("kind", raw.pop("type", "")) or "").strip()
+            if kind in {"massive_option", "massive_option_product"}:
+                payload["massive_option_products"].append(raw)
+            elif kind in {"massive_equity", "massive_equity_product"}:
+                payload["massive_equity_products"].append(raw)
+            elif kind in {"external_process", "process", "python", "provider_extension"}:
+                payload["provider_extensions"].append(raw)
+    extensions = config.get("provider_extensions", {})
+    if isinstance(extensions, dict):
+        payload["provider_extensions"].extend(dict(value) for value in extensions.values() if isinstance(value, dict))
+    result = {key: value for key, value in payload.items() if value}
+    if result:
+        result[CONFIG_PATH_KEY] = str(config.path)
+    return result
+
+
+def _provider_config_file(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        return {}
+    payload = dict(value)
+    payload[CONFIG_PATH_KEY] = str(path.expanduser().resolve())
+    return payload
+
+
+def _massive_option_products(config: Mapping[str, Any]) -> tuple[dict[str, object], ...]:
+    value = dict(config)
     products = value.get("massive_option_products") if isinstance(value, dict) else None
     if products is None:
         return ()
@@ -273,8 +334,8 @@ def _massive_option_products(path: str | Path) -> tuple[dict[str, object], ...]:
     return tuple(dict(item) for item in products)
 
 
-def _massive_equity_products(path: str | Path) -> tuple[dict[str, object], ...]:
-    value = json.loads(Path(path).read_text(encoding="utf-8"))
+def _massive_equity_products(config: Mapping[str, Any]) -> tuple[dict[str, object], ...]:
+    value = dict(config)
     products = value.get("massive_equity_products") if isinstance(value, dict) else None
     if products is None:
         return ()

@@ -117,11 +117,9 @@ class BuiltInDataProductRegistry:
 
 
 class BuiltInHistoricalDataProtocol:
-    def __init__(self, root: str | Path, product: BuiltInDataProduct,
-                 *, connector_config: str | Path | None = None) -> None:
+    def __init__(self, root: str | Path, product: BuiltInDataProduct) -> None:
         self.root = Path(root)
         self.product = product
-        self.connector_config = connector_config
 
     def load(self, request: HistoricalDataRequest):
         plan, release = self.prepare(request, dry_run=False)
@@ -169,9 +167,8 @@ class BuiltInHistoricalDataProtocol:
         from .client import DatasetClient
 
         register_default_products(self.root)
-        if self.connector_config is not None:
-            register_configured_products(self.root, self.connector_config)
-        providers = default_provider_registry(self.root, connector_config=self.connector_config)
+        register_configured_products(self.root)
+        providers = default_provider_registry(self.root)
         return DatasetClient(self.root, providers=providers)
 
 
@@ -197,15 +194,13 @@ class BuiltInLiveDataProtocol:
 def default_builtin_protocol_registry(
     root: str | Path,
     products: Iterable[BuiltInDataProduct],
-    *,
-    connector_config: str | Path | None = None,
 ) -> DataProtocolRegistry:
     registry = DataProtocolRegistry()
     for product in products:
         if product.capability in {"historical", "both"}:
             registry.register_historical(
                 product.protocol_name,
-                BuiltInHistoricalDataProtocol(root, product, connector_config=connector_config),
+                BuiltInHistoricalDataProtocol(root, product),
             )
         if product.capability in {"live", "both"}:
             registry.register_live(product.protocol_name, BuiltInLiveDataProtocol(product))

@@ -29,6 +29,43 @@ from kairospy.infrastructure.storage.source_cache import SourceCacheStore
 from kairospy.infrastructure.storage.data_lake import utc_midnight, write_daily_dataset
 
 
+def _write_project_data_product_config(root: str | Path, payload: dict[str, object]) -> None:
+    path = Path(root) / "kairos.toml"
+    lines = [
+        "[project]",
+        'name = "data-product-test"',
+        "",
+        "[paths]",
+        'lake_root = "."',
+        "",
+    ]
+    for index, raw in enumerate(payload.get("provider_extensions", ())):
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("provider") or f"extension_{index}").replace("-", "_").replace(".", "_")
+        lines.extend([f"[provider_extensions.{name}]"])
+        for key, value in raw.items():
+            if key == "products":
+                continue
+            lines.append(f"{key} = {_toml_value(value)}")
+        for product in raw.get("products", ()):
+            lines.extend(["", f"[[provider_extensions.{name}.products]]"])
+            for key, value in dict(product).items():
+                lines.append(f"{key} = {_toml_value(value)}")
+        lines.append("")
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def _toml_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def _live_manifest_path(root: str | Path, payload: dict[str, object]) -> Path:
     directory = Path(root) / "live-views" / str(payload["dataset"]).replace(".", "/")
     manifests = sorted(directory.glob("*/manifest.json"))
@@ -148,8 +185,7 @@ class DataUserAddTests(unittest.TestCase):
 
     def test_provider_doctor_includes_external_process_extension(self) -> None:
         with TemporaryDirectory() as temporary:
-            config = Path(temporary) / "connectors.json"
-            config.write_text(json.dumps({
+            _write_project_data_product_config(temporary, {
                 "provider_extensions": [{
                     "kind": "external_process",
                     "provider": "demo-process",
@@ -162,21 +198,20 @@ class DataUserAddTests(unittest.TestCase):
                         "fields": ["period_start", "symbol", "value"],
                     }],
                 }],
-            }), encoding="utf-8")
-            with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main([
-                    "--lake-root", temporary, "--format", "json",
-                    "providers", "doctor", "demo-process",
-                    "--provider-config", str(config),
-                ]), 0)
-                provider_payload = json.loads(output.getvalue())
-            with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main([
-                    "--lake-root", temporary, "--format", "json",
-                    "data", "products", "doctor", "market.demo.process.signal",
-                    "--provider-config", str(config),
-                ]), 0)
-                product_payload = json.loads(output.getvalue())
+            })
+            with chdir(temporary):
+                with StringIO() as output, redirect_stdout(output):
+                    self.assertEqual(main([
+                        "--lake-root", temporary, "--format", "json",
+                        "providers", "doctor", "demo-process",
+                    ]), 0)
+                    provider_payload = json.loads(output.getvalue())
+                with StringIO() as output, redirect_stdout(output):
+                    self.assertEqual(main([
+                        "--lake-root", temporary, "--format", "json",
+                        "data", "products", "doctor", "market.demo.process.signal",
+                    ]), 0)
+                    product_payload = json.loads(output.getvalue())
 
         self.assertEqual(provider_payload["provider"], "demo-process")
         self.assertEqual(provider_payload["status"], "available")
@@ -209,8 +244,7 @@ class DataUserAddTests(unittest.TestCase):
                 ]),
                 encoding="utf-8",
             )
-            config = root / "connectors.json"
-            config.write_text(json.dumps({
+            _write_project_data_product_config(root, {
                 "provider_extensions": [{
                     "kind": "external_process",
                     "provider": "demo-process",
@@ -223,22 +257,22 @@ class DataUserAddTests(unittest.TestCase):
                         "fields": ["period_start", "symbol", "value"],
                     }],
                 }],
-            }), encoding="utf-8")
+            })
 
-            with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main([
-                    "--lake-root", temporary, "--format", "json",
-                    "data", "acquire",
-                    "--dataset", "market.demo.process.signal",
-                    "--start", "2026-01-01T00:00:00+00:00",
-                    "--end", "2026-01-02T00:00:00+00:00",
-                    "--provider", "demo-process",
-                    "--venue", "test",
-                    "--connector-config", str(config),
-                    "--instrument", "AAPL",
-                    "--yes",
-                ]), 0)
-                documents = _json_documents(output.getvalue())
+            with chdir(root):
+                with StringIO() as output, redirect_stdout(output):
+                    self.assertEqual(main([
+                        "--lake-root", temporary, "--format", "json",
+                        "data", "acquire",
+                        "--dataset", "market.demo.process.signal",
+                        "--start", "2026-01-01T00:00:00+00:00",
+                        "--end", "2026-01-02T00:00:00+00:00",
+                        "--provider", "demo-process",
+                        "--venue", "test",
+                        "--instrument", "AAPL",
+                        "--yes",
+                    ]), 0)
+                    documents = _json_documents(output.getvalue())
 
         payload = documents[-1]
         self.assertEqual(payload["operation"], "acquire")
@@ -272,8 +306,7 @@ class DataUserAddTests(unittest.TestCase):
                 ]),
                 encoding="utf-8",
             )
-            config = root / "connectors.json"
-            config.write_text(json.dumps({
+            _write_project_data_product_config(root, {
                 "provider_extensions": [{
                     "kind": "external_process",
                     "provider": "demo-process",
@@ -286,21 +319,21 @@ class DataUserAddTests(unittest.TestCase):
                         "fields": ["period_start", "symbol", "value"],
                     }],
                 }],
-            }), encoding="utf-8")
+            })
 
-            with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main([
-                    "--lake-root", temporary, "--format", "json",
-                    "data", "use", "market.demo.process.signal",
-                    "--as", "research.demo_process_signal",
-                    "--start", "2026-01-01T00:00:00+00:00",
-                    "--end", "2026-01-02T00:00:00+00:00",
-                    "--provider", "demo-process",
-                    "--venue", "test",
-                    "--provider-config", str(config),
-                    "--instrument", "AAPL",
-                ]), 0)
-                payload = json.loads(output.getvalue())
+            with chdir(root):
+                with StringIO() as output, redirect_stdout(output):
+                    self.assertEqual(main([
+                        "--lake-root", temporary, "--format", "json",
+                        "data", "use", "market.demo.process.signal",
+                        "--as", "research.demo_process_signal",
+                        "--start", "2026-01-01T00:00:00+00:00",
+                        "--end", "2026-01-02T00:00:00+00:00",
+                        "--provider", "demo-process",
+                        "--venue", "test",
+                        "--instrument", "AAPL",
+                    ]), 0)
+                    payload = json.loads(output.getvalue())
             release_provider = DataCatalog(temporary).release("research.demo_process_signal").provider
 
         self.assertEqual(payload["operation"], "use")
@@ -340,7 +373,7 @@ class DataUserAddTests(unittest.TestCase):
         self.assertNotIn("provider-fetch", completed.stdout)
         self.assertNotIn("==SUPPRESS==", completed.stdout)
 
-    def test_data_use_help_prefers_provider_config_name(self) -> None:
+    def test_data_use_help_does_not_expose_provider_config_file(self) -> None:
         completed = subprocess.run(
             [sys.executable, "-m", "kairospy", "data", "use", "--help"],
             cwd=Path(__file__).resolve().parents[1],
@@ -348,8 +381,8 @@ class DataUserAddTests(unittest.TestCase):
             capture_output=True,
             check=True,
         )
-        self.assertIn("--provider-config", completed.stdout)
-        self.assertIn("PROVIDER_CONFIG", completed.stdout)
+        self.assertNotIn("--provider-config", completed.stdout)
+        self.assertNotIn("PROVIDER_CONFIG", completed.stdout)
         self.assertNotIn("--connector-config", completed.stdout)
         self.assertNotIn("CONNECTOR_CONFIG", completed.stdout)
 
@@ -783,10 +816,9 @@ class DataUserAddTests(unittest.TestCase):
         self.assertIn("massive.equity.ohlcv.1d", payload["aliases"])
         self.assertEqual(payload["next_command"], "kairospy data use --list-products")
 
-    def test_data_use_unknown_product_lists_provider_config_products(self) -> None:
+    def test_data_use_unknown_product_lists_project_config_products(self) -> None:
         with TemporaryDirectory() as temporary:
-            config = Path(temporary) / "providers.json"
-            config.write_text(json.dumps({
+            _write_project_data_product_config(temporary, {
                 "provider_extensions": [{
                     "kind": "external_process",
                     "provider": "demo-process",
@@ -799,17 +831,17 @@ class DataUserAddTests(unittest.TestCase):
                         "fields": ["period_start", "symbol", "value"],
                     }],
                 }],
-            }), encoding="utf-8")
-            with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main([
-                    "--lake-root", temporary, "--format", "json",
-                    "data", "use", "unknown.product",
-                    "--provider-config", str(config),
-                    "--start", "2026-01-01T00:00:00+00:00",
-                    "--end", "2026-01-02T00:00:00+00:00",
-                    "--dry-run",
-                ]), 2)
-                payload = json.loads(output.getvalue())
+            })
+            with chdir(temporary):
+                with StringIO() as output, redirect_stdout(output):
+                    self.assertEqual(main([
+                        "--lake-root", temporary, "--format", "json",
+                        "data", "use", "unknown.product",
+                        "--start", "2026-01-01T00:00:00+00:00",
+                        "--end", "2026-01-02T00:00:00+00:00",
+                        "--dry-run",
+                    ]), 2)
+                    payload = json.loads(output.getvalue())
 
         self.assertIn("market.demo.process.signal", payload["known_keys"])
 

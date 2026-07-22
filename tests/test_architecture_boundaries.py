@@ -136,6 +136,10 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             ExecutionCapabilities,
             ExecutionInstructions,
             Fill,
+            IntentCoordinator,
+            IntentExecutionTracker,
+            IntentExecutionView,
+            IntentStatus,
             LegFill,
             MarginMode,
             Order,
@@ -163,6 +167,48 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(Fill.__module__, "kairospy.execution.fills")
         self.assertEqual(LegFill.__module__, "kairospy.execution.fills")
         self.assertEqual(Settlement.__module__, "kairospy.execution.fills")
+        self.assertEqual(IntentCoordinator.__module__, "kairospy.execution.intent_coordinator")
+        self.assertEqual(IntentExecutionTracker.__module__, "kairospy.execution.intent_status")
+        self.assertEqual(IntentExecutionView.__module__, "kairospy.execution.intent_status")
+        self.assertEqual(IntentStatus.__module__, "kairospy.execution.intent_status")
+
+    def test_runtime_does_not_mutate_intent_tracker_directly(self) -> None:
+        forbidden = (
+            ".tracker.publish(",
+            ".tracker.refresh_target(",
+            ".tracker.mark_satisfied(",
+            ".tracker.mark_blocked(",
+            "self.intent_tracker.publish(",
+            "self.intent_tracker.refresh_target(",
+            "self.intent_tracker.mark_satisfied(",
+            "self.intent_tracker.mark_blocked(",
+        )
+        violations = []
+        for path in sorted(RUNTIME.rglob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                if token in text:
+                    violations.append(f"{path.relative_to(ROOT)}: {token}")
+        self.assertEqual(violations, [], "runtime must mutate intent progress through IntentCoordinator:\n" + "\n".join(violations))
+
+    def test_runtime_does_not_bypass_intent_coordinator_with_strategy_runtime_shortcuts(self) -> None:
+        forbidden = (
+            "strategy_runtime.on_start(",
+            "strategy_runtime.on_market(",
+            "strategy_runtime.on_fill(",
+            "strategy_runtime.on_end(",
+            "self.strategy.on_start(",
+            "self.strategy.on_market(",
+            "self.strategy.on_fill(",
+            "self.strategy.on_end(",
+        )
+        violations = []
+        for path in sorted(RUNTIME.rglob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                if token in text:
+                    violations.append(f"{path.relative_to(ROOT)}: {token}")
+        self.assertEqual(violations, [], "runtime must collect Strategy intents and publish through IntentCoordinator:\n" + "\n".join(violations))
 
     def test_portfolio_owner_exports_ledger_accounting_and_treasury(self) -> None:
         from kairospy.portfolio.accounting.conversion import AssetConversionGraph, ConversionRate
@@ -666,11 +712,25 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(violations, [], "risk extensions must consume archetype-neutral requests, not strategy archetype models:\n" + "\n".join(violations))
 
     def test_infrastructure_owner_exports_configuration_and_storage_primitives(self) -> None:
-        from kairospy.infrastructure.configuration import ConfigError, DEFAULT_LAKE_ROOT, KairosProjectConfig, set_config_value
+        from kairospy.infrastructure.configuration import (
+            ConfigError,
+            CredentialRef,
+            DEFAULT_LAKE_ROOT,
+            KairosProjectConfig,
+            ProjectConfigLoader,
+            set_config_value,
+        )
         from kairospy.infrastructure.storage.source_cache import SourceCacheEntry, SourceCacheStore
         from kairospy.infrastructure.storage.codec import event_from_primitive, event_to_primitive, from_primitive, to_primitive
         from kairospy.infrastructure.storage.data_lake import sha256_bytes, utc_midnight, write_daily_dataset, write_json
         from kairospy.infrastructure.storage.repository import FileOptionCaptureRepository, RunManifest, RunStatus, new_manifest
+        from kairospy.integrations.config import (
+            AccountBinding,
+            CredentialResolver,
+            ProviderServiceConfig,
+            resolve_binance_trading_credentials,
+            resolve_massive_marketdata_config,
+        )
 
         self.assertFalse(STORAGE.exists())
         self.assertFalse((ROOT / "kairospy" / "configuration.py").exists())
@@ -682,9 +742,18 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertTrue((INFRASTRUCTURE / "storage" / "source_cache.py").exists())
         self.assertFalse((ROOT / "kairospy" / "data" / "source_cache.py").exists())
         self.assertEqual(ConfigError.__module__, "kairospy.infrastructure.configuration")
+        self.assertEqual(CredentialRef.__module__, "kairospy.infrastructure.configuration")
         self.assertEqual(KairosProjectConfig.__module__, "kairospy.infrastructure.configuration")
+        self.assertEqual(ProjectConfigLoader.__module__, "kairospy.infrastructure.configuration")
         self.assertEqual(set_config_value.__module__, "kairospy.infrastructure.configuration")
+        self.assertFalse(hasattr(KairosProjectConfig, "massive_config"))
+        self.assertFalse(hasattr(KairosProjectConfig, "binance_credentials"))
         self.assertEqual(DEFAULT_LAKE_ROOT, ".kairos/data")
+        self.assertEqual(AccountBinding.__module__, "kairospy.integrations.config")
+        self.assertEqual(CredentialResolver.__module__, "kairospy.integrations.config")
+        self.assertEqual(ProviderServiceConfig.__module__, "kairospy.integrations.config")
+        self.assertEqual(resolve_binance_trading_credentials.__module__, "kairospy.integrations.config")
+        self.assertEqual(resolve_massive_marketdata_config.__module__, "kairospy.integrations.config")
         self.assertEqual(to_primitive.__module__, "kairospy.infrastructure.storage.codec")
         self.assertEqual(from_primitive.__module__, "kairospy.infrastructure.storage.codec")
         self.assertEqual(event_to_primitive.__module__, "kairospy.infrastructure.storage.codec")
@@ -855,6 +924,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             LiveRunDaemon,
             LiveRunDaemonPhase,
             LiveRunDaemonSnapshot,
+            LiveRunKernelService,
             ManagedServiceEvidenceProvider,
             ManagedServiceSpec,
             ManagedServiceStatus,
@@ -867,7 +937,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             RunCommandSubmitter,
             RunCommandSubmitterBinding,
             RunEventProvider,
+            RunInstance,
             RunKernel,
+            RunManifestBuilder,
             RunModeComposition,
             RunProfile,
             RunRequest,
@@ -884,8 +956,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             SubmitResult,
             backtest_composition,
             bind_live_runtime_components,
-            live_runtime_profile_from_config,
-            load_live_runtime_binding_config,
+            live_runtime_binding_config_from_run_config,
             paper_trading_composition,
             runtime_feed_plan,
         )
@@ -911,6 +982,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(LiveRunDaemon.__module__, "kairospy.runtime.live_daemon")
         self.assertEqual(LiveRunDaemonPhase.__module__, "kairospy.runtime.live_daemon")
         self.assertEqual(LiveRunDaemonSnapshot.__module__, "kairospy.runtime.live_daemon")
+        self.assertEqual(LiveRunKernelService.__module__, "kairospy.runtime.live_daemon")
         self.assertEqual(ManagedServiceEvidenceProvider.__module__, "kairospy.runtime.bindings")
         self.assertEqual(PreparedRun.__module__, "kairospy.runtime.kernel")
         self.assertEqual(ProfileResult.__module__, "kairospy.runtime.kernel")
@@ -919,7 +991,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(RunArtifactWriter.__module__, "kairospy.runtime.kernel")
         self.assertIsNotNone(RunArtifactWriterFactory)
         self.assertEqual(RunCommandSubmitterBinding.__module__, "kairospy.runtime.kernel")
+        self.assertEqual(RunInstance.__module__, "kairospy.runtime.run_instance")
         self.assertEqual(RunKernel.__module__, "kairospy.runtime.kernel")
+        self.assertEqual(RunManifestBuilder.__module__, "kairospy.runtime.run_instance")
         self.assertEqual(RunModeComposition.__module__, "kairospy.runtime.composition")
         self.assertEqual(RunProfile.__module__, "kairospy.runtime.kernel")
         self.assertEqual(RunRequest.__module__, "kairospy.runtime.kernel")
@@ -933,8 +1007,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(RuntimeFeedServicePlan.__module__, "kairospy.runtime.composition")
         self.assertEqual(backtest_composition.__module__, "kairospy.runtime.composition")
         self.assertEqual(bind_live_runtime_components.__module__, "kairospy.runtime.live_binding")
-        self.assertEqual(live_runtime_profile_from_config.__module__, "kairospy.runtime.live_config")
-        self.assertEqual(load_live_runtime_binding_config.__module__, "kairospy.runtime.live_config")
+        self.assertEqual(live_runtime_binding_config_from_run_config.__module__, "kairospy.runtime.live_config")
         self.assertEqual(paper_trading_composition.__module__, "kairospy.runtime.composition")
         self.assertEqual(runtime_feed_plan.__module__, "kairospy.runtime.composition")
         self.assertEqual(AsyncServiceSupervisor.__module__, "kairospy.runtime.service_supervisor")
@@ -1176,6 +1249,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             Strategy,
             StrategyDecision,
             StrategyLifecycle,
+            StrategyRuntime,
             StrategySpec,
             TargetExposureIntent,
             TargetPositionIntent,
@@ -1257,6 +1331,7 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertIn("submit method", view_schema("OrderView").forbidden_dependencies)
         self.assertEqual(Strategy.__module__, "kairospy.strategy.protocols")
         self.assertEqual(StrategyDecision.__module__, "kairospy.strategy.protocols")
+        self.assertEqual(StrategyRuntime.__module__, "kairospy.strategy.runtime")
         timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
         context = Context(
             MarketView(timestamp, 1, ()),

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import NAMESPACE_URL, uuid5
 from kairospy.execution.ports import ComboOrderRequest, OrderAck, OrderRequest
 from kairospy.runtime.clock import Clock, SystemClock
 from kairospy.strategy.intents import CancelIntent
@@ -37,6 +38,13 @@ class PersistedCancellationRecord:
     intent: CancelIntent
     account: AccountRef
     venue_order_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyCancellationResult:
+    strategy_id: str
+    cancelled_client_order_ids: tuple[str, ...]
+    failures: tuple[tuple[str, str], ...] = ()
 
 
 class ExecutionCoordinator:
@@ -247,6 +255,35 @@ class ExecutionCoordinator:
             cancellation_id, "order_cancelled",
             PersistedCancellationRecord(intent, account, ack.venue_order_id),
         )
+
+    def cancel_strategy_orders(
+        self,
+        strategy_id: str,
+        account: AccountRef,
+        reason: str,
+    ) -> StrategyCancellationResult:
+        self.application.require_operational()
+        if self.runtime_store is None:
+            raise RuntimeError("strategy-scoped cancellation requires a runtime store")
+        if not strategy_id.strip() or not reason.strip():
+            raise ValueError("strategy-scoped cancellation requires strategy_id and reason")
+        cancelled: list[str] = []
+        failures: list[tuple[str, str]] = []
+        records = self.runtime_store.working_orders(strategy_id=strategy_id, account=account)
+        for record in records:
+            intent = CancelIntent(
+                uuid5(NAMESPACE_URL, f"kairospy:cancel-strategy-order:{strategy_id}:{record.request.client_order_id}"),
+                strategy_id,
+                record.request.client_order_id,
+                reason,
+            )
+            try:
+                self.cancel(intent, account)
+            except Exception as error:
+                failures.append((record.request.client_order_id, str(error)))
+            else:
+                cancelled.append(record.request.client_order_id)
+        return StrategyCancellationResult(strategy_id, tuple(cancelled), tuple(failures))
 
     def _validate_combo_reduce_only(self, request: ComboOrderRequest) -> None:
         service = self.reconciliation.get(request.account)

@@ -4,10 +4,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 from kairospy.execution.ingestion import DurableExecutionIngestionService
-from kairospy.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher
+from kairospy.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher, DurableOrderDispatcherService
 from kairospy.execution.recovery import VenueOrderRecoveryService
 from kairospy.execution.router import ExecutionRouter
 from kairospy.execution.ports import ComboOrderRequest, Environment, ExecutionPort, OrderRecoveryPort, OrderRequest
+from kairospy.governance.reconciliation import ReconciliationMonitorService, ReconciliationService
 from kairospy.identity import AccountRef
 from kairospy.portfolio.account_ports import AccountPort
 from kairospy.portfolio.accounting.ledger import LedgerService
@@ -21,9 +22,13 @@ from kairospy.runtime.bindings import (
     ExecutionRecoveryBinding,
 )
 from kairospy.runtime.clock import Clock
+from kairospy.runtime.coordinator import ExecutionCoordinator
 from kairospy.runtime.kernel import BoundRunProfile
 from kairospy.runtime.live_config import LiveRuntimeBindingConfig
+from kairospy.runtime.stop_controller import RuntimeStopController
+from kairospy.runtime.store.event_log import PersistentEventLog
 from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
+from kairospy.strategy.contracts import StrategySpec
 
 if TYPE_CHECKING:
     from kairospy.governance.kill_switch import KillSwitch
@@ -46,7 +51,7 @@ class LiveRuntimeComponents:
     clock: Clock | None = None
     kill_switch: KillSwitch | None = None
     validate_order: Callable[[OrderRequest | ComboOrderRequest], None] | None = None
-    dispatch_immediately: bool = True
+    dispatch_immediately: bool = False
     max_market_events: int | None = None
 
     def __post_init__(self) -> None:
@@ -76,11 +81,89 @@ class LiveRuntimeComponents:
             ),
         )
 
-    def bind(self) -> BoundRunProfile:
+    def execution_router(self) -> ExecutionRouter:
+        return ExecutionRouter(self.reference_catalog, (self.execution_gateway,))
+
+    def runtime_kill_switch(self) -> "KillSwitch":
         from kairospy.governance.kill_switch import KillSwitch
 
-        router = ExecutionRouter(self.reference_catalog, (self.execution_gateway,))
-        kill_switch = self.kill_switch or KillSwitch((self.execution_gateway,), self.clock, self.store)
+        return self.kill_switch or KillSwitch((self.execution_gateway,), self.clock, self.store)
+
+    def reconciliation_services(self) -> dict[AccountRef, ReconciliationService]:
+        ledger = self.ledger or self.store.load_ledger()
+        return {
+            account: ReconciliationService(
+                ledger,
+                self.account_gateway,
+                clock=self.clock,
+                runtime_store=self.store,
+            )
+            for account in self._accounts
+        }
+
+    def reconciliation_monitor_services(
+        self,
+        run_id: str,
+        *,
+        interval_seconds: float = 5.0,
+    ) -> tuple[ReconciliationMonitorService, ...]:
+        def on_mismatch(report) -> None:
+            if self.application.status.value in {"ready", "running", "degraded", "reduce_only"}:
+                self.application.degrade(
+                    f"reconciliation mismatches: {report.account.value}",
+                    reduce_only=True,
+                )
+
+        return tuple(
+            ReconciliationMonitorService(
+                service,
+                account,
+                self.store,
+                run_id=run_id,
+                interval_seconds=interval_seconds,
+                clock=self.clock,
+                on_mismatch=on_mismatch,
+            )
+            for account, service in self.reconciliation_services().items()
+        )
+
+    def execution_coordinator(self) -> ExecutionCoordinator:
+        return ExecutionCoordinator(
+            self.execution_router(),
+            self.reconciliation_services(),
+            self.runtime_kill_switch(),
+            PersistentEventLog(self.store.path.parent / "events.jsonl"),
+            self.clock,
+            self.store,
+            application=self.application,
+        )
+
+    def outbox_dispatcher_service(
+        self,
+        run_id: str,
+        *,
+        idle_wait_seconds: float = 0.05,
+    ) -> DurableOrderDispatcherService:
+        return DurableOrderDispatcherService(
+            self.store,
+            DurableOrderDispatcher(self.store, self.execution_router(), clock=self.clock),
+            run_id=run_id,
+            idle_wait_seconds=idle_wait_seconds,
+            clock=self.clock,
+        )
+
+    def stop_controller(self, strategy: StrategySpec) -> RuntimeStopController:
+        return RuntimeStopController(
+            self.application,
+            self.execution_coordinator(),
+            strategy,
+            accounts=self._accounts,
+            clock=self.clock,
+        )
+
+    def bind(self) -> BoundRunProfile:
+        router = self.execution_router()
+        kill_switch = self.runtime_kill_switch()
         command_service = DurableOrderCommandService(
             self.store,
             self.application,

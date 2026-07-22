@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from .events import DataWarningRaised, GovernancePayload
 from .promotion import PromotionDecision, PromotionEvidence, PromotionError, PromotionPolicy
 from .readiness import ReadinessDecision, ReadinessError, ReadinessEvidence, ReadinessStatus, decide_readiness, require_readiness
+from .stop_resolver import StopDecision, resolve_stop_policy
 
 if TYPE_CHECKING:
     from .audit import GovernanceAudit
@@ -25,9 +26,11 @@ __all__ = [
     "ReadinessStatus",
     "RunArtifact",
     "RunArtifactRepository",
+    "StopDecision",
     "audit_governance",
     "decide_readiness",
     "require_readiness",
+    "resolve_stop_policy",
 ]
 
 

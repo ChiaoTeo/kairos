@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import Mapping, TYPE_CHECKING
 
 from kairospy.runtime.clock import Clock, SystemClock
 from kairospy.execution.ports import ExecutionPort
@@ -58,9 +58,10 @@ class KillSwitch:
             }, result.triggered_at)
         return result
 
-    def reset(self, *, actor: str, reason: str) -> None:
+    def reset(self, *, actor: str, reason: str, evidence: Mapping[str, object] | None = None) -> None:
         if not actor.strip() or not reason.strip():
             raise ValueError("kill switch reset requires actor and reason")
+        evidence = dict(evidence or {})
         self.triggered = False
         self.reduce_only = False
         at = self.clock.now()
@@ -71,4 +72,5 @@ class KillSwitch:
                 "reset_by": actor,
                 "reset_reason": reason,
                 "reset_at": at.isoformat(),
+                **({"reset_evidence": evidence} if evidence else {}),
             }, at)

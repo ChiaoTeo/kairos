@@ -48,15 +48,26 @@ from .bindings import (
     ExecutionPortCommandSubmitter,
     ManagedServiceEvidenceProvider,
 )
+from .control import (
+    OperatorCommandBus,
+    OperatorCommandRecord,
+    OperatorCommandStatus,
+    OperatorCommandType,
+)
 from .launch import (
     RunArtifactWriterFactory,
     RuntimeLaunchResult,
     RuntimeRunLauncher,
 )
+from .run_instance import RunInstance, RunManifestBuilder
 from .live_config import (
     LiveRuntimeBindingConfig,
-    live_runtime_profile_from_config,
-    load_live_runtime_binding_config,
+    live_runtime_binding_config_from_run_config,
+)
+from .live_registry import (
+    LiveRunHeartbeat,
+    LiveRunProcessIdentity,
+    LiveRunRegistry,
 )
 from .live_binding import (
     LiveRuntimeComponents,
@@ -66,6 +77,7 @@ from .live_daemon import (
     LiveRunDaemon,
     LiveRunDaemonPhase,
     LiveRunDaemonSnapshot,
+    LiveRunKernelService,
 )
 from .service_supervisor import (
     AsyncServiceSupervisor,
@@ -75,6 +87,7 @@ from .service_supervisor import (
     ServiceCriticality,
     ServiceFault,
 )
+from .stop_controller import RuntimeStopController, StopExecutionReport
 
 __all__ = [
     "AsyncServiceSupervisor",
@@ -90,12 +103,20 @@ __all__ = [
     "LiveRuntimeBindingConfig",
     "LiveRuntimeComponents",
     "LiveRunDaemon",
+    "LiveRunHeartbeat",
     "LiveRunDaemonPhase",
     "LiveRunDaemonSnapshot",
+    "LiveRunKernelService",
+    "LiveRunProcessIdentity",
+    "LiveRunRegistry",
     "ManagedServiceSnapshot",
     "ManagedServiceEvidenceProvider",
     "ManagedServiceSpec",
     "ManagedServiceStatus",
+    "OperatorCommandBus",
+    "OperatorCommandRecord",
+    "OperatorCommandStatus",
+    "OperatorCommandType",
     "PreparedRun",
     "ProfileResult",
     "RecoveryResult",
@@ -105,7 +126,9 @@ __all__ = [
     "RunCommandSubmitter",
     "RunCommandSubmitterBinding",
     "RunEventProvider",
+    "RunInstance",
     "RunKernel",
+    "RunManifestBuilder",
     "RunModeComposition",
     "RunProfile",
     "RunRequest",
@@ -119,10 +142,12 @@ __all__ = [
     "RuntimeFeedServicePlan",
     "RuntimeLaunchResult",
     "RuntimeRunLauncher",
+    "RuntimeStopController",
     "RuntimeStrategyPlan",
     "RuntimeStrategyServicePlan",
     "ServiceCriticality",
     "ServiceFault",
+    "StopExecutionReport",
     "StrategyRunResult",
     "SubmitResult",
     "RunRecoveryHandler",
@@ -130,8 +155,7 @@ __all__ = [
     "historical_simulation_composition",
     "live_composition",
     "bind_live_runtime_components",
-    "live_runtime_profile_from_config",
-    "load_live_runtime_binding_config",
+    "live_runtime_binding_config_from_run_config",
     "paper_trading_composition",
     "runtime_execution_plan",
     "runtime_feed_plan",

@@ -24,7 +24,7 @@ from kairospy.infrastructure.storage.codec import from_primitive, to_primitive
 from kairospy.runtime.testing.faults import RuntimeFaultInjector, RuntimeFaultPoint, inject
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,6 +379,39 @@ class SQLiteRuntimeStore:
                 (account.value, *statuses),
             ).fetchall()
         return tuple(from_primitive(json.loads(row["ack_json"]), OrderAck).venue_order_id for row in rows)
+
+    def working_orders(
+        self,
+        *,
+        strategy_id: str | None = None,
+        account: AccountRef | None = None,
+    ) -> tuple[DurableOrderRecord, ...]:
+        statuses = (
+            DurableOrderStatus.ACKNOWLEDGED.value,
+            DurableOrderStatus.PARTIALLY_FILLED.value,
+        )
+        predicates = ["status IN (?, ?)"]
+        parameters: list[object] = [*statuses]
+        if strategy_id is not None:
+            if not strategy_id.strip():
+                raise ValueError("strategy id cannot be empty")
+        if account is not None:
+            predicates.append("account_key = ?")
+            parameters.append(account.value)
+        query = (
+            "SELECT * FROM orders WHERE "
+            + " AND ".join(predicates)
+            + " ORDER BY created_at, client_order_id"
+        )
+        with self.transaction() as connection:
+            rows = connection.execute(query, tuple(parameters)).fetchall()
+        records = tuple(_order_record(row) for row in rows)
+        if strategy_id is None:
+            return records
+        return tuple(record for record in records if record.request.strategy_id == strategy_id)
+
+    def strategy_working_orders(self, strategy_id: str) -> tuple[DurableOrderRecord, ...]:
+        return self.working_orders(strategy_id=strategy_id)
 
     def load_strategy_position_book(self, account: AccountRef) -> StrategyPositionBook:
         """Rebuild virtual strategy ownership solely from committed execution facts."""
@@ -795,6 +828,44 @@ class SQLiteRuntimeStore:
                     attempts INTEGER NOT NULL DEFAULT 0,
                     last_error TEXT
                 );
+                CREATE TABLE IF NOT EXISTS operator_commands(
+                    command_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    command_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    claimed_by TEXT,
+                    claimed_at TEXT,
+                    accepted_at TEXT,
+                    completed_at TEXT,
+                    expires_at TEXT,
+                    result_json TEXT,
+                    error_type TEXT,
+                    error_message TEXT,
+                    UNIQUE(run_id, idempotency_key)
+                );
+                CREATE INDEX IF NOT EXISTS operator_commands_pending_idx
+                    ON operator_commands(run_id, status, created_at);
+                CREATE INDEX IF NOT EXISTS operator_commands_created_idx
+                    ON operator_commands(run_id, created_at);
+                CREATE TABLE IF NOT EXISTS runtime_heartbeats(
+                    run_id TEXT PRIMARY KEY,
+                    runtime_id TEXT NOT NULL,
+                    process_id TEXT NOT NULL,
+                    pid INTEGER NOT NULL,
+                    host TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    config_hash TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    heartbeat_at TEXT NOT NULL,
+                    observed_state TEXT NOT NULL,
+                    desired_state TEXT NOT NULL,
+                    state_json TEXT NOT NULL
+                );
                 """
             )
             order_columns = {row[1] for row in connection.execute("PRAGMA table_info(orders)").fetchall()}
@@ -807,7 +878,7 @@ class SQLiteRuntimeStore:
             row = connection.execute("SELECT version FROM schema_info").fetchone()
             if row is None:
                 connection.execute("INSERT INTO schema_info(version) VALUES (?)", (SCHEMA_VERSION,))
-            elif int(row[0]) in {1, 2, 3, 4, 5, 6}:
+            elif int(row[0]) in {1, 2, 3, 4, 5, 6, 7, 8}:
                 connection.execute("UPDATE schema_info SET version = ?", (SCHEMA_VERSION,))
             elif int(row[0]) != SCHEMA_VERSION:
                 raise RuntimeError(f"unsupported runtime store schema version: {row[0]}")

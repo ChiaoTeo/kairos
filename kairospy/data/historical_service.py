@@ -72,16 +72,12 @@ class HistoricalDataService:
         try:
             built_in = registry.resolve(str(request_args.key))
         except KeyError as error:
-            configured_keys: tuple[str, ...] = ()
-            if getattr(request_args, "connector_config", None) is not None:
-                try:
-                    return self._use_configured_product(request_args)
-                except KeyError:
-                    from kairospy.data.bootstrap import configured_product_specs
+            try:
+                return self._use_configured_product(request_args)
+            except KeyError:
+                from kairospy.data.bootstrap import configured_product_specs
 
-                    configured_keys = tuple(
-                        str(spec.key) for spec in configured_product_specs(request_args.connector_config)
-                    )
+                configured_keys = tuple(str(spec.key) for spec in configured_product_specs())
             raise product_surface.DataProductNotFoundError(
                 str(request_args.key),
                 known_keys=tuple(item.key for item in registry.list()) + configured_keys,
@@ -94,8 +90,7 @@ class HistoricalDataService:
         dataset_id = str(getattr(request_args, "as_dataset", None) or built_in.default_dataset_name)
         target_use = str(getattr(request_args, "for_use", None) or "workspace")
 
-        connector_config = getattr(request_args, "connector_config", None)
-        protocols = default_builtin_protocol_registry(self.root, registry.list(), connector_config=connector_config)
+        protocols = default_builtin_protocol_registry(self.root, registry.list())
         adapter = protocols.historical(built_in.protocol_name)
         historical_request = HistoricalDataRequest(
             dataset_id,
@@ -146,9 +141,8 @@ class HistoricalDataService:
 
         if not getattr(request_args, "start", None) or not getattr(request_args, "end", None):
             raise ValueError("--start and --end are required when using a configured historical Data Product")
-        connector_config = getattr(request_args, "connector_config")
-        register_configured_products(self.root, connector_config)
-        providers = default_provider_registry(self.root, connector_config=connector_config)
+        register_configured_products(self.root)
+        providers = default_provider_registry(self.root)
         client = DatasetClient(self.root, providers=providers)
         product_key = str(request_args.key)
         product = client.catalog.product(product_key)

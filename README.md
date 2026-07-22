@@ -69,9 +69,9 @@ kairospy init --interactive
 配置外部 provider：
 
 ```bash
-export MASSIVE_API_KEY='...'
-export BINANCE_TESTNET_API_KEY='...'
-export BINANCE_TESTNET_API_SECRET='...'
+export KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY='...'
+export KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_KEY='...'
+export KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_SECRET='...'
 
 kairospy configure massive
 kairospy configure binance --environment testnet
@@ -124,13 +124,13 @@ kairospy data acquire \
 python3 -m pip install 'kairospy[cli]'
 ```
 
-如果你是从源码参与开发，再使用 editable 安装：
+如果你是从源码参与开发，使用 uv 同步 editable 开发环境：
 
 ```bash
-python3 -m venv pyenv
-./pyenv/bin/pip install -e '.[data,query,notebook]'
-./pyenv/bin/kairospy --help
-./pyenv/bin/kairospy tutorial sma
+uv sync --extra data --extra query --extra notebook --extra cli --extra massive
+uv run kairospy --help
+uv run kairospy tutorial sma
+uv run pytest
 ```
 
 静态命名和打包边界检查：
@@ -163,7 +163,7 @@ workspace = Workspace.open_or_create("alpha")
 workspace.data.bind("bars", dataset="market.equity.us.ohlcv.1d")
 
 # Strategy code is ordinary user code. Run it with:
-# kairospy run start --workspace alpha --mode backtest --entrypoint my_strategy:decide
+# kairospy run start --config configs/runs/backtest.example.toml
 ```
 
 ## 📚 其他

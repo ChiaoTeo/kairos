@@ -1,10 +1,12 @@
 # KairoSpy 工作区体验收敛方案
 
-状态：Draft，user-experience first  
+状态：Superseded for Run start by RunConfig，user-experience first
 日期：2026-07-21  
 适用对象：KairoSpy Project、Data Workspace、Run Workspace 的产品体验和 CLI 收敛
 
 本文从真实用户路径出发，重新定义 KairoSpy 的工作区边界。核心结论是：不要把 Study 和 Strategy 做成工作区。普通用户只需要一个绑定数据的 Workspace；真正需要新工作区语义的是 Run。
+
+更新：Run 启动入口已被 `docs/configuration_layering_and_run_config_design.md` 的 RunConfig 分层取代。当前用户入口是 `kairospy run start --config configs/runs/<name>.toml`；本文中早期出现的 `run start --workspace ... --entrypoint ... --mode ...` 示例只保留为历史设计上下文，不再是有效主路径。
 
 ## 1. 核心判断
 
@@ -401,7 +403,7 @@ Strategy 不是工作区，但策略需要有明确 protocol。当前公开 SDK 
 - 策略运行时只读 `Context`。
 - 策略不直接下单、不直接访问 provider、不直接读全局 `.kairos/data`。
 - 策略返回 `strategy.intents.Intent`；`StrategyDecision` 只作为审计/解释记录，不作为主输出合同。
-- Run runtime 将 `Intent` 包装成 `EconomicIntent`，再进入 risk / execution。
+- `IntentCoordinator` 将 `Intent` 幂等发布到 intent progress projection；governed runtime 再由它包装成 `EconomicIntent` 进入 risk / execution，legacy/backtest 路径可以只使用 progress projection。
 - readiness、available、unavailable 这类运行状态由 Run runtime 推导后传给策略。
 
 #### 4.6.1 文件级合约
@@ -441,7 +443,7 @@ def build(workspace: Workspace, params: dict) -> Strategy:
     )
 ```
 
-`REQUIRES` 是静态需求声明。Run start 先用它校验 Workspace data view、params、mode、account 和 execution capabilities，再加载策略。
+`REQUIRES` 是静态需求声明。Run start 先用它校验 Workspace data view、params、mode、account、`execution_requirements` 与 execution owner/run binding support evidence，再加载策略；这里不引入 connector capability model。
 
 `build(workspace, params)` 是 entrypoint。它只从 Workspace 读取已绑定的数据本地名。
 
@@ -500,6 +502,19 @@ class Strategy(Protocol):
 
 ```text
 Context -> Strategy -> Intent -> EconomicIntent -> Risk -> Execution
+```
+
+代码边界是：
+
+```text
+StrategyRuntime
+  calls Strategy hooks and collects Intent
+
+IntentCoordinator
+  publishes Intent, owns progress updates, wraps EconomicIntent for governed runs
+
+Execution/Risk adapters
+  advance orders/fills and update IntentCoordinator
 ```
 
 #### 4.6.3 简化策略也应支持
@@ -685,12 +700,12 @@ created -> prepared -> running -> completed
 
 #### 4.7.3 Run start 流程
 
-`kairospy run start --workspace alpha --entrypoint ...` 做这些事：
+`kairospy run start --config configs/runs/<name>.toml` 做这些事：
 
 1. 读取 Project config。
-2. 打开 Workspace。
+2. 读取 RunConfig，并从 RunConfig 打开 Workspace。
 3. 固定 Workspace data view 到 `workspace_snapshot.json`。
-4. 加载 entrypoint module。
+4. 加载 RunConfig 中声明的 entrypoint module。
 5. 读取 `REQUIRES` 并校验 bindings、params、mode。
 6. 调用 `build(workspace, params)` 或适配 `decide(context)`。
 7. 创建 `Context`。
@@ -734,8 +749,9 @@ kairospy workspace bind-live NAME --name LOCAL --dataset LIVE_VIEW
 kairospy workspace inspect NAME
 kairospy workspace register-entrypoint NAME --name ENTRY --kind strategy --entrypoint module:callable
 
-kairospy run create RUN_ID --workspace NAME --mode MODE --entrypoint module:callable
-kairospy run start --workspace NAME --mode MODE --entrypoint module:callable
+kairospy run config validate configs/runs/NAME.toml
+kairospy run config explain configs/runs/NAME.toml
+kairospy run start --config configs/runs/NAME.toml
 kairospy run inspect RUN_ID
 ```
 
@@ -762,11 +778,11 @@ kairospy run start --snapshot ...
 ```text
 study add-data      -> workspace bind-data
 strategy add-data   -> workspace bind-data
-strategy set-model  -> run start --entrypoint 或 workspace register-entrypoint
+strategy set-model  -> RunConfig [strategy] 或 workspace register-entrypoint
 study freeze        -> workspace artifact freeze
 strategy freeze     -> workspace artifact freeze 或 run snapshot
-run start --study   -> run start --workspace NAME --entrypoint module:callable
-run start --snapshot -> run start --workspace NAME --entrypoint module:callable
+run start --study   -> run start --config configs/runs/NAME.toml
+run start --snapshot -> run start --config configs/runs/NAME.toml
 ```
 
 主路径收敛到：
@@ -888,7 +904,7 @@ kairospy data start
 kairospy workspace create alpha
 kairospy workspace bind-data alpha --name bars --dataset bars.us.equity.1d
 python src/my_script.py
-kairospy run start --workspace alpha --mode backtest --entrypoint my_strategies.sma_cross:SmaCross
+kairospy run start --config configs/runs/backtest.toml
 ```
 
 公开文档中应避免说：
@@ -1059,7 +1075,7 @@ kairospy/strategies/runtime.py            -> kairospy/strategy/runtime.py 或 ka
 - `StrategyDecision` 或更通用的 decision contract。
 - 将用户 strategy callable 适配到 Run runtime 的 adapter。
 
-`kairospy/runtime/kernel.py`、`runtime/composition.py`、`runtime/profiles/*` 中可复用的运行组件可以保留，但要改成由 `run start --workspace ... --entrypoint ...` 调用，而不是由 Strategy Workspace / Strategy Lock 调用。
+`kairospy/runtime/kernel.py`、`runtime/composition.py`、`runtime/profiles/*` 中可复用的运行组件可以保留，但要改成由 `run start --config ...` 解析出的 RunConfig 调用，而不是由 Strategy Workspace / Strategy Lock 调用。
 
 ### 8.4 应拆分 surface/product.py
 
@@ -1119,7 +1135,7 @@ next_steps:
 kairospy workspace create alpha
 kairospy workspace bind-data alpha --name bars --dataset ...
 python src/my_script.py
-kairospy run start --workspace alpha --entrypoint ...
+kairospy run start --config configs/runs/backtest.toml
 ```
 
 ### 8.6 应迁移的测试和示例
@@ -1234,8 +1250,8 @@ kairospy scaffold strategy --template sma-cross --output src/strategies/sma_cros
 - `kairospy init` 不再创建 `studies/`、`strategies/` 和 starter 文件。
 - 新增统一 `kairospy workspace create/bind-data/bind-live/inspect`。
 - 新增 `Workspace.open_or_create("name")` 和 `workspace.data` API。
-- `run start` 只接受 `--workspace NAME --entrypoint module:callable --mode ...`。
-- `run start` 写入 `.kairos/run/{run_id}`，并生成 `workspace_snapshot.json`、`entrypoint.json`、`artifacts/decisions.json` 和 `reports/summary.json`；`run(workspace, params)` 这类研究/报告入口会额外写入 `artifacts/result.json`。
+- `run start` 只接受 `--config configs/runs/<name>.toml` 作为可复用 RunConfig 入口。
+- `run start --config` 写入 `.kairos/run/{run_id}`，并生成 `manifest.json`、`resolved_config.toml`、`workspace_snapshot.json`、`entrypoint.json`、`artifacts/decisions.json` 和 `reports/summary.json`；`run(workspace, params)` 这类研究/报告入口会额外写入 `artifacts/result.json`。
 - 顶层 CLI 不再暴露 `study` / `strategy` / `backtest` / `factor` / `tutorial` 命令。
 - `run` 子命令不再暴露旧的 Strategy Release 路径：`backtest`、`simulate`、`paper`、`shadow`、`artifact-replay`、`capture-replay`。
 - 用户可见的 Data target use 从 `study` / `research` 收敛为 `workspace`。
@@ -1260,8 +1276,8 @@ kairospy scaffold strategy --template sma-cross --output src/strategies/sma_cros
 - 已完成：`kairospy init` 不创建 `studies/`、`strategies/` 和 starter 文件。
 - 已完成：统一 `workspace create/bind-data/bind-live/inspect`。
 - 已完成：`Workspace.open_or_create("name")` 代码 API。
-- 已完成：`run start --workspace ... --entrypoint ...`，不依赖 Strategy Lock。
-- 已完成：删除 `run start --study` / `run start --snapshot`，Run 只接受 Workspace + strategy entrypoint。
+- 已完成：`run start --config configs/runs/<name>.toml`，不依赖 Strategy Lock，RunConfig 承载 workspace、entrypoint、mode、params、bindings 和 guards。
+- 已完成：删除 `run start --study` / `run start --snapshot`，Run 用户入口只接受 RunConfig 文件；Workspace 和 strategy entrypoint 是 RunConfig 字段。
 
 ### P1
 

@@ -7,6 +7,7 @@ from kairospy.market.canonical import BarPayload
 from kairospy.execution.events import TradeSide
 from kairospy.identity import InstrumentId
 from kairospy.strategy.intents import TargetExposureIntent
+from kairospy.execution.intent_coordinator import IntentCoordinator
 from kairospy.execution.intent_status import IntentExecutionTracker, IntentExecutionView
 from kairospy.analytics.features.runtime import FactorRuntime
 from kairospy.market.stream import EventSource
@@ -50,7 +51,7 @@ class ImmediateIntentBacktestResult:
 
 class _ImmediateExecutionHooks:
     def __init__(self, *, instrument_id: InstrumentId, initial_cash: Decimal, fee_bps: Decimal,
-                 lot_size: Decimal, tracker: IntentExecutionTracker) -> None:
+                 lot_size: Decimal, coordinator: IntentCoordinator) -> None:
         if initial_cash <= 0:
             raise ValueError("immediate backtest requires positive initial cash")
         if fee_bps < 0 or lot_size <= 0:
@@ -60,7 +61,7 @@ class _ImmediateExecutionHooks:
         self.approved_capital = initial_cash
         self.fee_rate = fee_bps / Decimal("10000")
         self.lot_size = lot_size
-        self.tracker = tracker
+        self.coordinator = coordinator
         self.cash = initial_cash
         self.position = Decimal("0")
         self.price = Decimal("0")
@@ -85,11 +86,12 @@ class _ImmediateExecutionHooks:
                 intent, approved_capital=capital, reference_price=self.price, lot_size=self.lot_size,
             )
             if not sized.approved or sized.intent is None:
+                self.coordinator.mark_blocked(intent, reason=sized.reason)
                 continue
             target = sized.intent.target_quantity
             delta = target - self.position
             if delta == 0:
-                self.tracker.mark_satisfied(intent)
+                self.coordinator.mark_satisfied(intent)
                 continue
             side = TradeSide.BUY if delta > 0 else TradeSide.SELL
             quantity = abs(delta)
@@ -115,7 +117,7 @@ class _ImmediateExecutionHooks:
             # Backtest execution is synchronous: after the immediate fill the economic
             # intent is complete for this event. Market realism remains in the chosen
             # price and fee model; asynchronous behavior belongs to historical simulation.
-            self.tracker.mark_satisfied(intent, filled_quantity=quantity)
+            self.coordinator.mark_satisfied(intent, filled_quantity=quantity)
 
     def on_end(self, context) -> None:
         return None
@@ -128,9 +130,10 @@ async def run_immediate_target_backtest(
     lot_size: Decimal = Decimal("0.0001"),
 ) -> ImmediateIntentBacktestResult:
     tracker = IntentExecutionTracker(quantity_tolerance=lot_size)
+    coordinator = IntentCoordinator(strategy_runtime, tracker)
     hooks = _ImmediateExecutionHooks(
         instrument_id=instrument_id, initial_cash=initial_cash, fee_bps=fee_bps,
-        lot_size=lot_size, tracker=tracker,
+        lot_size=lot_size, coordinator=coordinator,
     )
     result = await GovernedStrategyRunLoop(
         source, factor_runtime, strategy_runtime,
@@ -139,9 +142,9 @@ async def run_immediate_target_backtest(
             PortfolioView.from_snapshot(hooks.portfolio, timestamp=market.timestamp),
             reference=ReferenceView.from_catalog(catalog, as_of=market.timestamp),
         ),
-        approved_capital=initial_cash, hooks=hooks, intent_tracker=tracker,
+        approved_capital=initial_cash, hooks=hooks, intent_coordinator=coordinator,
     ).run()
-    return ImmediateIntentBacktestResult(result, tuple(hooks.trades), hooks.portfolio, tracker.views)
+    return ImmediateIntentBacktestResult(result, tuple(hooks.trades), hooks.portfolio, coordinator.views)
 
 
 # The canonical target-intent backtest uses synchronous execution by default.

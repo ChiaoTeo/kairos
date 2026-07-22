@@ -16,7 +16,9 @@ from kairospy.reference.contracts import ProductType
 
 
 @unittest.skipUnless(
-    os.getenv("RUN_BINANCE_TESTNET") == "1" and os.getenv("BINANCE_TESTNET_API_KEY") and os.getenv("BINANCE_TESTNET_API_SECRET"),
+    os.getenv("RUN_BINANCE_TESTNET") == "1"
+    and os.getenv("KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_KEY")
+    and os.getenv("KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_SECRET"),
     "set RUN_BINANCE_TESTNET=1 and testnet-only Binance credentials",
 )
 class BinanceTestnetContractTests(unittest.TestCase):
@@ -26,9 +28,16 @@ class BinanceTestnetContractTests(unittest.TestCase):
         catalog = BinanceSpotReferenceDataClient(transport, limiter).sync(ReferenceDataRequest(ProductType.CRYPTO_SPOT, ("BTCUSDT",)))
         definition = catalog.instruments.values()[0]
         self.assertEqual(catalog.active_listings(definition.instrument_id, definition.effective_from)[0].trading_symbol, "BTCUSDT")
-        signer = BinanceSigner(os.environ["BINANCE_TESTNET_API_KEY"], os.environ["BINANCE_TESTNET_API_SECRET"])
+        signer = BinanceSigner(
+            os.environ["KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_KEY"],
+            os.environ["KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_SECRET"],
+        )
         synchronize_clock(transport, signer, limiter)
-        account = AccountRef(InstitutionId("binance"), os.getenv("BINANCE_TESTNET_ACCOUNT", "testnet"), AccountType.CRYPTO_SPOT)
+        account = AccountRef(
+            InstitutionId("binance"),
+            os.getenv("KAIROS_BINANCE_TRADING_TESTNET_SPOT_ACCOUNT", "testnet"),
+            AccountType.CRYPTO_SPOT,
+        )
         state = BinanceAccountGateway(transport, signer, Environment.TESTNET, limiter=limiter).account_state(account)
         self.assertEqual(state.account, account)
 

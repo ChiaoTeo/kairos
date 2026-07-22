@@ -1,5 +1,6 @@
 from kairospy.identity import InstitutionId
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
@@ -10,6 +11,8 @@ from kairospy.identity import InstrumentId
 from kairospy.strategy.intents import TargetPositionIntent
 from kairospy.reference.contracts import ProductType
 from kairospy.strategy.contracts import EconomicIntent, StrategyLifecycle, StrategySpec
+from kairospy.strategy.stop_policy import StopAction, StopPolicy, StopReason, StopRule
+from kairospy.governance.stop_resolver import resolve_stop_policy
 from kairospy.execution.planner import LeggingPolicy
 from kairospy.execution.policy import ExecutionMode, ExecutionPolicy, PartialFillPolicy
 from kairospy.execution.strategy_planner import plan_economic_intent
@@ -45,6 +48,31 @@ class StrategyGovernanceTest(unittest.TestCase):
     def test_legacy_lifecycle_alias_is_not_public(self):
         with self.assertRaises(ValueError):
             StrategyLifecycle("STUDY_VALIDATED")
+
+    def test_strategy_declares_stop_policy_but_system_keeps_risk_floor(self):
+        strategy = spec()
+        self.assertEqual(
+            strategy.default_stop_policy.action_for(StopReason.MANUAL),
+            StopAction.CANCEL_ORDERS,
+        )
+        loose = replace(
+            strategy,
+            default_stop_policy=StopPolicy((
+                StopRule(StopReason.RISK_BREACH, StopAction.KEEP_POSITIONS),
+                StopRule(StopReason.EMERGENCY, StopAction.FLATTEN),
+            )),
+        )
+
+        risk_decision = resolve_stop_policy(loose, StopReason.RISK_BREACH)
+        self.assertEqual(risk_decision.requested_action, StopAction.KEEP_POSITIONS)
+        self.assertEqual(risk_decision.action, StopAction.REDUCE_ONLY)
+        self.assertTrue(risk_decision.requires_reduce_only)
+
+        emergency = resolve_stop_policy(loose, StopReason.EMERGENCY)
+        self.assertEqual(emergency.requested_action, StopAction.FLATTEN)
+        self.assertEqual(emergency.action, StopAction.REDUCE_ONLY)
+        approved_emergency = resolve_stop_policy(loose, StopReason.EMERGENCY, allow_flatten=True)
+        self.assertEqual(approved_emergency.action, StopAction.FLATTEN)
 
     def test_economic_intent_preserves_strategy_and_evidence_hashes(self):
         strategy = spec(); now = datetime.now(timezone.utc)

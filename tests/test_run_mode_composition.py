@@ -29,10 +29,11 @@ from kairospy.runtime import (
     SubmitResult, RuntimeRecoveryBinding, backtest_composition, historical_simulation_composition,
     live_composition, paper_trading_composition,
     bind_live_runtime_components,
-    load_live_runtime_binding_config,
+    live_runtime_binding_config_from_run_config,
     runtime_execution_plan, runtime_feed_plan, runtime_strategy_plan,
 )
 from kairospy.infrastructure.configuration import KairosProjectConfig
+from kairospy.runtime.run_config import RunConfig, RunConfigResolver, RunConfigValidationReport
 from kairospy.integrations import (
     LiveMarketEventSourceBinding,
     LiveProviderPorts,
@@ -77,7 +78,7 @@ from kairospy.runtime.config import ApplicationConfig, RuntimePaths
 from kairospy.runtime.kernel import CanonicalBarMarketProjection, GovernedStrategyRunLoop
 from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
 from kairospy.strategy.views import FeatureView, MarketView, PortfolioView, ReferenceView
-from kairospy.strategy import Context, StrategyLifecycle
+from kairospy.strategy import Context, StopAction, StopReason, StrategyLifecycle, StrategySpec
 from kairospy.execution.command import OutboxStatus
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher
@@ -949,55 +950,42 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(artifact.payload["execution"]["profile_status"], expected_status.value)
 
-    def test_live_runtime_config_builds_bound_profile_without_connector_capability_model(self) -> None:
+    def test_live_runtime_config_builds_bound_profile_from_run_config_without_connector_capability_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "kairos.toml"
+            config_path = Path(directory) / "configs" / "runs" / "live.toml"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
             config_path.write_text(
                 "\n".join([
-                    "[project]",
+                    "schema_version = 1",
+                    "",
+                    "[run]",
                     'name = "live-runtime-config"',
+                    'mode = "live"',
+                    'workspace = "alpha"',
+                    'entrypoint = "strategy:build"',
                     "",
-                    "[data]",
-                    'lake_root = ".kairos/data"',
+                    "[bindings]",
+                    'account = "binance_live_spot"',
+                    'market = ["ticks"]',
+                    'execution = "binance_live_spot"',
                     "",
-                    "[runtime.live]",
-                    "enabled = true",
-                    'profile_id = "profile:live"',
+                    "[live]",
                     'provider = "binance"',
                     'execution_driver = "binance-live"',
-                    'account_binding_hash = "account-binding-hash"',
-                    'data_binding_hash = "live-data-hash"',
-                    'strategy_hash = "strategy-hash"',
-                    'config_hash = "config-hash"',
                     'binding_id = "live-runtime-binding"',
+                    'recovery_binding_id = "live-recovery"',
                     "",
-                    "[runtime.live.recovery]",
-                    'binding_id = "live-recovery"',
-                    "ready = true",
-                    'reason = "startup recovery complete"',
-                    "",
-                    "[runtime.live.promotion]",
+                    "[evidence]",
+                    'readiness = "readiness:live"',
+                    'promotion = "promotion:live"',
                     'from_stage = "PAPER_APPROVED"',
                     'to_stage = "LIVE_LIMITED"',
-                    'dataset_hash = "live-data-hash"',
-                    'strategy_hash = "strategy-hash"',
-                    'config_hash = "config-hash"',
-                    "gate_passed = true",
-                    'evidence_refs = { readiness = "readiness:live" }',
-                    "",
-                    "[[runtime.live.readiness]]",
-                    'status = "pass"',
-                    'required_ports = ["market", "reference", "execution", "account"]',
-                    'account_binding = "account-binding-hash"',
-                    'connector_id = "binance"',
-                    'evidence_refs = { connector = "binance-live-ready" }',
-                    "",
                 ]) + "\n",
                 encoding="utf-8",
             )
-            config = KairosProjectConfig.load(config_path)
+            config = RunConfig.load(config_path)
 
-            live_config = load_live_runtime_binding_config(
+            live_config = live_runtime_binding_config_from_run_config(
                 config,
                 workspace_hash="live-data-hash",
                 strategy_hash="strategy-hash",
@@ -1023,6 +1011,96 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls, ["strategy"])
         self.assertEqual(result.strategy_run_hash, "strategy-audit")
         self.assertEqual(result.status, RunStatus.FAILED)
+
+    def test_run_config_strategy_spec_loads_from_strategy_code_and_rejects_stop_policy_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "strategy_defs.py").write_text(
+                "\n".join([
+                    "from decimal import Decimal",
+                    "from kairospy.reference import ProductType",
+                    "from kairospy.strategy import StrategyLifecycle, StrategySpec",
+                    "",
+                    "def spec():",
+                    "    return StrategySpec(",
+                    "        'run-config-strategy', '1.0.0', StrategyLifecycle.LIVE_LIMITED,",
+                    "        (ProductType.CRYPTO_SPOT,), ('target_position',), ('momentum',), ('price',),",
+                    "        (('instrument', 'BTC-USDT'),), ('price',), (('threshold', '0'),),",
+                    "        (('target', 'position'),), ('enter',), ('exit',), ('manual',),",
+                    "        Decimal('0.01'), ('bars',), ('limit_orders',), 'strategy-evidence'",
+                    "    )",
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            config_path = root / "configs" / "runs" / "live.toml"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                "\n".join([
+                    "schema_version = 1",
+                    "",
+                    "[run]",
+                    'name = "live-runtime-config"',
+                    'mode = "live"',
+                    'workspace = "alpha"',
+                    'entrypoint = "strategy_defs:spec"',
+                    "",
+                    "[strategy]",
+                    'spec = "strategy_defs:spec"',
+                    "",
+                    "[bindings]",
+                    'account = "binance_live_spot"',
+                    "",
+                    "[live]",
+                    'provider = "binance"',
+                    "",
+                    "[evidence]",
+                    'readiness = "readiness:live"',
+                    'promotion = "promotion:live"',
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            spec = RunConfig.load(config_path).strategy_spec(project_root=root)
+
+            assert spec is not None
+            self.assertEqual(spec.strategy_id, "run-config-strategy")
+            self.assertEqual(spec.default_stop_policy.action_for(StopReason.RISK_BREACH), StopAction.REDUCE_ONLY)
+
+            bad_config = root / "configs" / "runs" / "bad-live.toml"
+            bad_config.write_text(
+                config_path.read_text(encoding="utf-8") + "\n[strategy.stop_policy]\nmanual = \"flatten\"\n",
+                encoding="utf-8",
+            )
+            issues = RunConfig.load(bad_config).validate()
+            self.assertTrue(any("strategy.stop_policy is not supported" in issue for issue in issues))
+
+    def test_run_config_resolver_returns_typed_validation_report(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "configs" / "runs" / "backtest.toml"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                "\n".join([
+                    "schema_version = 1",
+                    "",
+                    "[run]",
+                    'name = "backtest"',
+                    'mode = "backtest"',
+                    'workspace = "alpha"',
+                    'entrypoint = "strategy:build"',
+                ]) + "\n",
+                encoding="utf-8",
+            )
+
+            resolver = RunConfigResolver(project_root=root)
+            report = resolver.validate("configs/runs/backtest.toml")
+            args = resolver.to_start_args(config_path)
+
+            self.assertIsInstance(report, RunConfigValidationReport)
+            self.assertTrue(report.valid)
+            self.assertEqual(report.issues, ())
+            self.assertEqual(report.path, config_path.resolve())
+            self.assertEqual(args.workspace, "alpha")
+            self.assertEqual(resolver.explain(config_path)["run"]["mode"], "backtest")
 
     def test_live_runtime_components_bind_provider_ports_to_market_outbox_and_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1058,6 +1136,7 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
                 market_event_source=AsyncIterableEventSource(("market-1",)),
                 order_recovery_gateway=gateway,
                 clock=FixedClock(at),
+                dispatch_immediately=True,
                 max_market_events=1,
             )
 
@@ -1083,18 +1162,130 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(order.status, DurableOrderStatus.ACKNOWLEDGED)
             self.assertEqual(gateway.open_orders(account), (order.ack.venue_order_id,))  # type: ignore[union-attr]
 
+            report = components.stop_controller(_live_strategy_spec()).execute(StopReason.RISK_BREACH)
+
+            self.assertEqual(report.strategy_id, "strategy")
+            self.assertEqual(report.reason, StopReason.RISK_BREACH)
+            self.assertTrue(report.reduce_only_applied)
+            self.assertEqual(report.cancelled_client_order_ids, ("client-1",))
+            self.assertEqual(report.cancellation_failures, ())
+            self.assertEqual(application.status, RuntimeStatus.REDUCE_ONLY)
+            self.assertEqual(gateway.open_orders(account), ())
+            cancelled_order = store.order("client-1")
+            assert cancelled_order is not None
+            self.assertEqual(cancelled_order.status, DurableOrderStatus.CANCELLED)
+
+    async def test_live_runtime_components_default_to_outbox_only_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            at = datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
+            root = Path(directory)
+            paths = RuntimePaths.under(root)
+            store = SQLiteRuntimeStore(paths.runtime_database)
+            account = _account()
+            application = KairosApplication(
+                ApplicationConfig(Environment.LIVE, paths),
+                store,
+                runtime_id="live-components-outbox-only",
+                accounts=(account,),
+                recovery=_ReadyRuntimeRecovery(),
+                clock=FixedClock(at),
+            )
+            application.start()
+            application.run()
+            gateway = SimulatedExecutionAccountGateway(
+                VenueId("simulated"),
+                account,
+                environment=Environment.LIVE,
+                clock=FixedClock(at),
+            )
+            components = LiveRuntimeComponents(
+                _live_runtime_config(),
+                application,
+                store,
+                _live_catalog(account),
+                gateway,
+                gateway,
+                accounts=(account,),
+                order_recovery_gateway=gateway,
+                clock=FixedClock(at),
+            )
+            profile = bind_live_runtime_components(components)
+
+            submit = RunKernel(profile).submit((_order_request("client-1"),))
+
+            self.assertEqual(submit.accepted_command_ids, ("submit:client-1",))
+            self.assertEqual(submit.evidence["dispatch_count"], 0)
+            self.assertEqual(submit.evidence["outbox"][0]["status"], OutboxStatus.PENDING.value)
+            order = store.order("client-1")
+            assert order is not None
+            self.assertEqual(order.status, DurableOrderStatus.PLANNED)
+            self.assertEqual(gateway.open_orders(account), ())
+
+            service = components.outbox_dispatcher_service("run-1")
+
+            self.assertTrue(await service.dispatcher.dispatch_once())
+            dispatched = store.order("client-1")
+            assert dispatched is not None
+            self.assertEqual(dispatched.status, DurableOrderStatus.ACKNOWLEDGED)
+            self.assertEqual(gateway.open_orders(account), (dispatched.ack.venue_order_id,))  # type: ignore[union-attr]
+
+    async def test_live_runtime_components_publish_reconciliation_monitor_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            at = datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
+            root = Path(directory)
+            paths = RuntimePaths.under(root)
+            store = SQLiteRuntimeStore(paths.runtime_database)
+            account = _account()
+            application = KairosApplication(
+                ApplicationConfig(Environment.LIVE, paths),
+                store,
+                runtime_id="live-components-reconciliation",
+                accounts=(account,),
+                recovery=_ReadyRuntimeRecovery(),
+                clock=FixedClock(at),
+            )
+            application.start()
+            application.run()
+            gateway = SimulatedExecutionAccountGateway(
+                VenueId("simulated"),
+                account,
+                environment=Environment.LIVE,
+                clock=FixedClock(at),
+            )
+            components = LiveRuntimeComponents(
+                _live_runtime_config(),
+                application,
+                store,
+                _live_catalog(account),
+                gateway,
+                gateway,
+                accounts=(account,),
+                order_recovery_gateway=gateway,
+                clock=FixedClock(at),
+            )
+            monitor = components.reconciliation_monitor_services("run-1", interval_seconds=0.001)[0]
+
+            report = monitor.check_once()
+            scoped = store.runtime_state(monitor.state_key)
+            last = store.runtime_state("reconciliation:last")
+
+            self.assertTrue(report.matched)
+            assert isinstance(scoped, dict)
+            assert isinstance(last, dict)
+            self.assertEqual(scoped["phase"], "matched")
+            self.assertEqual(scoped["run_id"], "run-1")
+            self.assertEqual(last["report"]["account"]["account_id"], account.account_id)
+
     def test_live_provider_ports_factory_builds_binance_live_ports_without_capability_model(self) -> None:
         account = AccountRef(InstitutionId("binance"), "main", AccountType.CRYPTO_SPOT)
         config = KairosProjectConfig(
             Path("/tmp/kairospy-live-test"),
             Path("/tmp/kairospy-live-test/kairos.toml"),
             {
-                "providers": {
-                    "binance": {
-                        "live": {
-                            "api_key": "test-key",
-                            "api_secret": "test-secret",
-                        },
+                "credentials": {
+                    "binance_trading_live_spot": {
+                        "api_key": "test-key",
+                        "api_secret": "test-secret",
                     },
                 },
             },
@@ -1128,8 +1319,8 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
                 root,
                 root / "kairos.toml",
                 {
-                    "data": {"lake_root": str(root)},
-                    "providers": {"binance": {"live": {"api_key": "key", "api_secret": "secret"}}},
+                    "paths": {"lake_root": str(root)},
+                    "credentials": {"binance_trading_live_spot": {"api_key": "key", "api_secret": "secret"}},
                 },
             )
 
@@ -1704,6 +1895,29 @@ def _live_catalog(account: AccountRef) -> ReferenceCatalog:
     return catalog
 
 
+def _live_strategy_spec(strategy_id: str = "strategy") -> StrategySpec:
+    return StrategySpec(
+        strategy_id,
+        "1.0.0",
+        StrategyLifecycle.LIVE_LIMITED,
+        (ProductType.CRYPTO_SPOT,),
+        ("target_position",),
+        ("momentum",),
+        ("price",),
+        (("instrument", "BTC-USDT"),),
+        ("price",),
+        (("threshold", "0"),),
+        (("target", "position"),),
+        ("enter",),
+        ("exit",),
+        ("manual",),
+        Decimal("0.01"),
+        ("bars",),
+        ("limit_orders",),
+        "strategy-hash",
+    )
+
+
 class _AsyncEventSource:
     def __init__(self, events: tuple[object, ...]) -> None:
         self._events = events
@@ -1744,6 +1958,18 @@ class _TestFactorSnapshot:
 
 class _NoopStrategyRuntime:
     strategy = SimpleNamespace(decisions=())
+
+    def intents_on_start(self, context: Context):
+        return ()
+
+    def intents_on_market(self, context: Context):
+        return ()
+
+    def intents_on_end(self, context: Context):
+        return ()
+
+    def wrap_intents(self, intents, context, *, approved_equity=None):
+        return None
 
     def on_start(self, context: Context):
         return None

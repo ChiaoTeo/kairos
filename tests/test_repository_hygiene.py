@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import subprocess
+from tempfile import TemporaryDirectory
 import tomllib
 import unittest
 
@@ -141,25 +142,38 @@ class RepositoryHygieneTests(unittest.TestCase):
             "kairospy init",
             "kairospy workspace create alpha",
             "安装包只包含 Kairos 产品库和 CLI",
-            "如果你是从源码参与开发，再使用 editable 安装",
-            "./pyenv/bin/pip install -e",
+            "如果你是从源码参与开发，使用 uv 同步 editable 开发环境",
+            "uv sync --extra data --extra query --extra notebook --extra cli --extra massive",
         )
         for marker in required:
             self.assertIn(marker, readme)
-        self.assertLess(readme.index("python3 -m pip install kairospy"), readme.index("./pyenv/bin/pip install -e"))
+        self.assertLess(
+            readme.index("python3 -m pip install kairospy"),
+            readme.index("uv sync --extra data --extra query --extra notebook --extra cli --extra massive"),
+        )
         self.assertNotIn("pip install kairospy\nmkdir", readme)
         self.assertNotIn("pip install trader", readme)
         self.assertNotIn("trader init", readme)
 
     def test_generated_project_metadata_uses_portable_root(self):
-        metadata = (ROOT / ".kairos" / "project.json").read_text(encoding="utf-8")
+        from kairospy.surface.project import initialize_project
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="kairospy")
+            metadata = (root / ".kairos" / "project.json").read_text(encoding="utf-8")
         self.assertIn('"name": "kairospy"', metadata)
         self.assertIn('"root": "."', metadata)
-        self.assertNotIn(str(ROOT), metadata)
+        self.assertNotIn(str(root), metadata)
         self.assertNotIn('"name": "trader"', metadata)
 
     def test_root_kairospy_toml_does_not_use_study_section(self):
-        config = (ROOT / "kairos.toml").read_text(encoding="utf-8")
+        from kairospy.surface.project import initialize_project
+
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="kairospy")
+            config = (root / "kairos.toml").read_text(encoding="utf-8")
         self.assertIn('name = "kairospy"', config)
         self.assertNotIn("[study]", config)
         self.assertNotIn("[research]", config)

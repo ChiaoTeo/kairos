@@ -6,8 +6,8 @@ from kairospy.data import BuiltInDataProductRegistry
 from kairospy.data.bootstrap import configured_product_specs, default_provider_registry
 
 
-def providers_list(root: str | Path, *, connector_config: str | Path | None = None) -> dict[str, object]:
-    rows = _provider_rows(root, connector_config=connector_config)
+def providers_list(root: str | Path) -> dict[str, object]:
+    rows = _provider_rows(root)
     return {
         "product": "providers",
         "operation": "list",
@@ -27,11 +27,9 @@ def providers_list(root: str | Path, *, connector_config: str | Path | None = No
 def provider_doctor(
     root: str | Path,
     provider: str,
-    *,
-    connector_config: str | Path | None = None,
 ) -> dict[str, object]:
     provider_id = str(provider).strip().lower()
-    rows = [row for row in _provider_rows(root, connector_config=connector_config) if row["provider"] == provider_id]
+    rows = [row for row in _provider_rows(root) if row["provider"] == provider_id]
     if not rows:
         return {
             "product": "providers",
@@ -70,11 +68,9 @@ def provider_doctor(
 def data_product_doctor(
     root: str | Path,
     product_key: str,
-    *,
-    connector_config: str | Path | None = None,
 ) -> dict[str, object]:
     requested_key = str(product_key).strip()
-    rows = _provider_rows(root, connector_config=connector_config)
+    rows = _provider_rows(root)
     products = [product for row in rows for product in row["products"]]
     product = _find_data_product(products, requested_key)
     if product is None:
@@ -112,9 +108,9 @@ def data_product_doctor(
     return payload
 
 
-def _provider_rows(root: str | Path, *, connector_config: str | Path | None) -> list[dict[str, object]]:
-    products = _provider_data_products(connector_config=connector_config)
-    providers = default_provider_registry(root, connector_config=connector_config)
+def _provider_rows(root: str | Path) -> list[dict[str, object]]:
+    products = _provider_data_products()
+    providers = default_provider_registry(root)
     grouped: dict[str, list[dict[str, object]]] = {}
     for product in products:
         provider = str(product.get("provider") or "").strip().lower()
@@ -185,7 +181,7 @@ def _data_product_next_commands(product: dict[str, object]) -> list[str]:
     return commands
 
 
-def _provider_data_products(*, connector_config: str | Path | None) -> list[dict[str, object]]:
+def _provider_data_products() -> list[dict[str, object]]:
     rows = []
     aliases_by_target: dict[str, list[str]] = {}
     registry = BuiltInDataProductRegistry.from_default_products()
@@ -202,23 +198,22 @@ def _provider_data_products(*, connector_config: str | Path | None) -> list[dict
             "requires_account": item.requires_account,
             "aliases": sorted(aliases_by_target.get(item.key, ())),
         })
-    if connector_config is not None:
-        known = {str(item["key"]) for item in rows}
-        for spec in configured_product_specs(connector_config):
-            source = spec.product.sources[0] if spec.product.sources else None
-            key = str(spec.key)
-            if key in known:
-                continue
-            rows.append({
-                "key": key,
-                "title": spec.product.title,
-                "capability": "historical",
-                "dataset": key,
-                "provider": source.provider if source is not None else None,
-                "venue": source.venue if source is not None else None,
-                "requires_account": bool(source and source.provider in {"massive", "ibkr"}),
-                "aliases": [],
-            })
+    known = {str(item["key"]) for item in rows}
+    for spec in configured_product_specs():
+        source = spec.product.sources[0] if spec.product.sources else None
+        key = str(spec.key)
+        if key in known:
+            continue
+        rows.append({
+            "key": key,
+            "title": spec.product.title,
+            "capability": "historical",
+            "dataset": key,
+            "provider": source.provider if source is not None else None,
+            "venue": source.venue if source is not None else None,
+            "requires_account": bool(source and source.provider in {"massive", "ibkr"}),
+            "aliases": [],
+        })
     return rows
 
 

@@ -7,13 +7,13 @@
 验证 Python reference：
 
 ```bash
-./pyenv/bin/python examples/connectors/reference_connector/verify_contract.py
+uv run python examples/connectors/reference_connector/verify_contract.py
 ```
 
 验证未来 Rust binary：
 
 ```bash
-./pyenv/bin/python examples/connectors/reference_connector/verify_contract.py \
+uv run python examples/connectors/reference_connector/verify_contract.py \
   --command './target/release/kairospy-binance-gateway --contract-vectors examples/connectors/reference_connector/contract_vectors.json'
 ```
 

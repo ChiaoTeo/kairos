@@ -4,10 +4,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import tomllib
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from kairospy.integrations.connectors.massive.config import MassiveConfig
+from typing import Any
 
 
 CONFIG_FILE_NAME = "kairos.toml"
@@ -27,9 +24,30 @@ class ConfigValue:
 
 
 @dataclass(frozen=True, slots=True)
-class BinanceCredentials:
-    api_key: str
-    api_secret: str
+class CredentialRef:
+    name: str
+    field: str
+    value: ConfigValue
+
+    @property
+    def raw(self) -> Any:
+        return self.value.raw
+
+    @property
+    def resolved(self) -> Any:
+        return self.value.resolved
+
+    @property
+    def source(self) -> str:
+        return self.value.source
+
+
+class ProjectConfigLoader:
+    def discover(self, start: str | Path = ".") -> "KairosProjectConfig":
+        return KairosProjectConfig.discover(start)
+
+    def load(self, path: str | Path) -> "KairosProjectConfig":
+        return KairosProjectConfig.load(path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,29 +98,8 @@ class KairosProjectConfig:
         path = Path(str(value)).expanduser()
         return path if path.is_absolute() else self.root / path
 
-    def massive_config(self) -> MassiveConfig:
-        from kairospy.integrations.connectors.massive.config import MassiveConfig
-
-        api_key = self.resolve("providers.massive.api_key").resolved
-        if not api_key:
-            raise ConfigError(
-                "Massive API key is missing. Set MASSIVE_API_KEY or configure providers.massive.api_key."
-            )
-        timeout = int(self.resolve("providers.massive.timeout_seconds", 30).resolved)
-        retries = int(self.resolve("providers.massive.max_retries", 4).resolved)
-        return MassiveConfig(str(api_key), timeout_seconds=timeout, max_retries=retries)
-
-    def binance_credentials(self, environment: str = "testnet") -> BinanceCredentials:
-        base = f"providers.binance.{environment}"
-        key = self.resolve(f"{base}.api_key").resolved
-        secret = self.resolve(f"{base}.api_secret").resolved
-        if not key or not secret:
-            prefix = "BINANCE_TESTNET" if environment == "testnet" else "BINANCE_LIVE"
-            raise ConfigError(
-                f"Binance {environment} credentials are missing. Set {prefix}_API_KEY/{prefix}_API_SECRET "
-                f"or configure {base}.api_key and {base}.api_secret."
-            )
-        return BinanceCredentials(str(key), str(secret))
+    def path_value(self, name: str, default: str) -> Path:
+        return self.relative_path(f"paths.{name}", default)
 
     def validate(self) -> list[str]:
         issues: list[str] = []
@@ -110,19 +107,25 @@ class KairosProjectConfig:
             issues.append("[project] table is required")
         if not self.get("project.name"):
             issues.append("project.name is required")
-        data_root = self.relative_path("data.lake_root", DEFAULT_LAKE_ROOT)
+        data_root = self.path_value("lake_root", DEFAULT_LAKE_ROOT)
         if not data_root.exists():
-            issues.append(f"data.lake_root does not exist: {data_root}")
-        for key_path in (
-            "providers.massive.api_key",
-            "providers.binance.testnet.api_key",
-            "providers.binance.testnet.api_secret",
-            "providers.binance.live.api_key",
-            "providers.binance.live.api_secret",
-        ):
-            raw = self.get(key_path)
-            if isinstance(raw, str) and raw.startswith("env:") and not os.environ.get(raw[4:]):
-                issues.append(f"{key_path} references unset environment variable {raw[4:]}")
+            issues.append(f"paths.lake_root does not exist: {data_root}")
+        credentials = self.get("credentials", {})
+        if credentials is not None and not isinstance(credentials, dict):
+            issues.append("[credentials] must be a table")
+        elif isinstance(credentials, dict):
+            for key_path, raw in _credential_secret_refs(credentials):
+                if isinstance(raw, str) and raw.startswith("env:") and not os.environ.get(raw[4:]):
+                    issues.append(f"credentials.{key_path} references unset environment variable {raw[4:]}")
+                if isinstance(raw, str) and raw.startswith("env:") and raw[4:] in _LEGACY_ENV_NAMES:
+                    issues.append(f"credentials.{key_path} references legacy environment variable {raw[4:]}")
+        runtime = self.get("runtime", {})
+        if isinstance(runtime, dict) and isinstance(runtime.get("live"), dict):
+            issues.append("[runtime.live] is not valid project config; move live launch intent into RunConfig")
+        providers = self.get("providers", {})
+        if isinstance(providers, dict):
+            for key_path in _legacy_provider_secret_paths(providers):
+                issues.append(f"providers.{key_path} is not valid project config; use credentials.* and service credential refs")
         return issues
 
     def to_redacted_dict(self) -> dict[str, Any]:
@@ -229,6 +232,42 @@ def _redact(value: Any, *, key: str = "") -> Any:
             return value
         return "***" if value else value
     return value
+
+
+def _credential_secret_refs(credentials: dict[str, Any]) -> list[tuple[str, Any]]:
+    refs: list[tuple[str, Any]] = []
+    secret_fields = {"api_key", "api_secret", "secret", "password", "passphrase", "token"}
+    for credential_name, raw_credential in credentials.items():
+        if not isinstance(raw_credential, dict):
+            continue
+        for field, value in raw_credential.items():
+            if field.lower() in secret_fields:
+                refs.append((f"{credential_name}.{field}", value))
+    return refs
+
+
+_LEGACY_ENV_NAMES = {
+    "MASSIVE_API_KEY",
+    "BINANCE_TESTNET_API_KEY",
+    "BINANCE_TESTNET_API_SECRET",
+    "BINANCE_LIVE_API_KEY",
+    "BINANCE_LIVE_API_SECRET",
+    "IBKR_HOST",
+    "IBKR_PORT",
+    "IBKR_CLIENT_ID",
+    "IBKR_ACCOUNT",
+}
+
+
+def _legacy_provider_secret_paths(value: dict[str, Any], prefix: tuple[str, ...] = ()) -> list[str]:
+    offenders: list[str] = []
+    for key, item in value.items():
+        path = (*prefix, str(key))
+        if str(key).lower() in {"api_key", "api_secret", "passphrase", "secret", "password", "token"}:
+            offenders.append(".".join(path))
+        elif isinstance(item, dict):
+            offenders.extend(_legacy_provider_secret_paths(item, path))
+    return offenders
 
 
 def _render_toml(data: dict[str, Any]) -> str:

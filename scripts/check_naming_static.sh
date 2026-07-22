@@ -73,17 +73,17 @@ for marker in \
   'python3 -m pip install kairospy' \
   'mkdir my-kairospy-project' \
   'kairospy init' \
-  'python studies/starter.py' \
-  '安装包只包含 Kairos 产品库和 CLI，不包含本仓库顶层 `studies/` 源码研究工作区' \
-  '如果你是从源码参与开发，再使用 editable 安装' \
-  './pyenv/bin/pip install -e'
+  'kairospy workspace create alpha' \
+  '安装包只包含 Kairos 产品库和 CLI' \
+  '如果你是从源码参与开发，使用 uv 同步 editable 开发环境' \
+  'uv sync --extra data --extra query --extra notebook --extra cli --extra massive'
 do
   rg -F "$marker" README.md >/dev/null || fail "README missing user install marker: $marker"
 done
 readme_user_line="$(rg -n -F 'python3 -m pip install kairospy' README.md | head -n 1 | cut -d: -f1)"
-readme_source_line="$(rg -n -F './pyenv/bin/pip install -e' README.md | head -n 1 | cut -d: -f1)"
+readme_source_line="$(rg -n -F 'uv sync --extra data --extra query --extra notebook --extra cli --extra massive' README.md | head -n 1 | cut -d: -f1)"
 if [[ -z "$readme_user_line" || -z "$readme_source_line" || "$readme_user_line" -ge "$readme_source_line" ]]; then
-  fail "README does not present user pip install before source editable install"
+  fail "README does not present user pip install before source uv editable setup"
 fi
 readme_legacy_install="$(
   rg -n 'pip install trader|pip install kairospy$|trader init' README.md || true
@@ -91,7 +91,7 @@ readme_legacy_install="$(
 require_empty "README contains legacy trader install commands" "$readme_legacy_install"
 
 rg -n 'name = "kairospy"' pyproject.toml >/dev/null || fail "pyproject.toml distribution name is not kairospy"
-rg -n 'kairospy = "kairospy.__main__:main"' pyproject.toml >/dev/null || fail "pyproject.toml does not publish kairospy CLI"
+rg -n 'kairospy = "kairospy.surface.cli.main:main"' pyproject.toml >/dev/null || fail "pyproject.toml does not publish kairospy CLI"
 [[ -f .github/workflows/release.yml ]] || fail "missing GitHub release workflow"
 rg -n 'environment: pypi' .github/workflows/release.yml >/dev/null || fail "release workflow does not use pypi environment"
 rg -n 'id-token: write' .github/workflows/release.yml >/dev/null || fail "release workflow does not grant OIDC id-token permission"

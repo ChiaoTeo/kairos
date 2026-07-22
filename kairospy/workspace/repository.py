@@ -117,7 +117,7 @@ class Workspace:
     def data_root(self) -> Path:
         try:
             config = KairosProjectConfig.discover(self.repository.project_root)
-            return config.relative_path("data.lake_root", f"{PROJECT_STATE_DIR}/data")
+            return config.relative_path("paths.lake_root", f"{PROJECT_STATE_DIR}/data")
         except Exception:
             return self.repository.project_root / PROJECT_STATE_DIR / "data"
 

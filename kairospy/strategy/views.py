@@ -517,15 +517,16 @@ class IntentView(_ViewContract):
     ) -> "IntentView":
         evidence = _intent_execution_evidence(orders, outbox_records, execution_records)
         progress = {
-            item.intent_id: item
+            str(item.intent_id): item
             for item in (IntentProgressView.from_execution(item) for item in executions)
         }
         for intent_id, update in evidence.items():
-            current = progress.get(intent_id)
+            key = str(intent_id)
+            current = progress.get(key)
             if current is None:
-                progress[intent_id] = _intent_progress_from_evidence(intent_id, update)
+                progress[key] = _intent_progress_from_evidence(intent_id, update)
             else:
-                progress[intent_id] = _merge_intent_execution_evidence(current, update)
+                progress[key] = _merge_intent_execution_evidence(current, update)
         values = tuple(sorted(progress.values(), key=lambda item: (item.scope_key, str(item.intent_id))))
         times = tuple(
             item for progress_item in values
@@ -537,7 +538,7 @@ class IntentView(_ViewContract):
         return cls(values, last_state_at, _hash(payload) if values else "none")
 
     def execution(self, intent_id: UUID) -> IntentProgressView | None:
-        return next((item for item in self.executions if item.intent_id == intent_id), None)
+        return next((item for item in self.executions if str(item.intent_id) == str(intent_id)), None)
 
     def active(self, scope: Any) -> IntentProgressView | None:
         key = scope if isinstance(scope, str) else scope.key
@@ -966,7 +967,7 @@ def _value(value: Any) -> str:
 
 def _client_order_id(order: Any) -> str | None:
     request = getattr(order, "request", order)
-    value = getattr(request, "client_order_id", None)
+    value = getattr(request, "client_order_id", None) or getattr(order, "order_id", None)
     return str(value) if value is not None else None
 
 
@@ -983,8 +984,11 @@ def _intent_id_from_outbox(record: Any) -> UUID | str:
 
 
 def _intent_id_from_execution_record(record: Any) -> UUID | str:
-    order = getattr(record, "order")
-    return _intent_id_from_order(order)
+    order = getattr(record, "order", None)
+    if order is not None:
+        return _intent_id_from_order(order)
+    execution = getattr(record, "execution", record)
+    return getattr(execution, "intent_id", "")
 
 
 def _intent_execution_evidence(
@@ -1016,8 +1020,9 @@ def _intent_execution_evidence(
             bucket["last_error"] = getattr(order, "reason")
     for record in execution_records:
         intent_id = _intent_id_from_execution_record(record)
-        request = getattr(getattr(record, "order"), "request")
-        execution = getattr(record, "execution")
+        order = getattr(record, "order", None)
+        execution = getattr(record, "execution", record)
+        request = getattr(order, "request", order) if order is not None else execution
         bucket = evidence.setdefault(intent_id, _empty_intent_evidence())
         bucket["scope_key"] = _scope_key_from_request(request)
         bucket["filled_quantity"] += getattr(execution, "quantity", Decimal("0"))
@@ -1067,8 +1072,10 @@ def _intent_progress_from_evidence(intent_id: UUID | str, evidence: dict[str, An
 
 
 def _merge_intent_execution_evidence(current: IntentProgressView, evidence: dict[str, Any]) -> IntentProgressView:
+    evidence_status = _intent_status_from_evidence(evidence)
     return replace(
         current,
+        status=evidence_status if evidence_status != "pending" else current.status,
         working_quantity=evidence["working_quantity"] or current.working_quantity,
         filled_quantity=evidence["filled_quantity"] or current.filled_quantity,
         attempt_count=current.attempt_count + evidence["attempt_count"],

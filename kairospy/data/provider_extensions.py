@@ -25,6 +25,9 @@ from .external_process import (
 )
 
 
+CONFIG_PATH_KEY = "__kairos_config_path__"
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderExtensionContext:
     root: Path
@@ -33,9 +36,10 @@ class ProviderExtensionContext:
     extension: Mapping[str, object]
 
 
-def provider_extension_specs(config_path: str | Path) -> tuple[DataProductContract, ...]:
+def provider_extension_specs(config: str | Path | Mapping[str, Any]) -> tuple[DataProductContract, ...]:
     specs: list[DataProductContract] = []
-    for extension in _provider_extensions(config_path):
+    config_path = _config_base_path(config)
+    for extension in _provider_extensions(config):
         if _extension_kind(extension) in {"external_process", "process"}:
             specs.extend(_external_process_product_specs(extension))
             continue
@@ -46,8 +50,9 @@ def provider_extension_specs(config_path: str | Path) -> tuple[DataProductContra
     return tuple(specs)
 
 
-def register_provider_extensions(root: str | Path, config_path: str | Path, registry: object) -> None:
-    for extension in _provider_extensions(config_path):
+def register_provider_extensions(root: str | Path, config: str | Path | Mapping[str, Any], registry: object) -> None:
+    config_path = _config_base_path(config)
+    for extension in _provider_extensions(config):
         if _extension_kind(extension) in {"external_process", "process"}:
             specs = _external_process_product_specs(extension)
             registry.register(
@@ -128,8 +133,8 @@ def _as_product_specs(value: object) -> tuple[DataProductContract, ...]:
     raise ValueError("provider extension products must be DataProductContract objects")
 
 
-def _provider_extensions(config_path: str | Path) -> tuple[Mapping[str, object], ...]:
-    value = json.loads(Path(config_path).read_text(encoding="utf-8"))
+def _provider_extensions(config: str | Path | Mapping[str, Any]) -> tuple[Mapping[str, object], ...]:
+    value = dict(config) if isinstance(config, Mapping) else json.loads(Path(config).read_text(encoding="utf-8"))
     extensions = value.get("provider_extensions") if isinstance(value, dict) else None
     if extensions is None:
         return ()
@@ -141,6 +146,15 @@ def _provider_extensions(config_path: str | Path) -> tuple[Mapping[str, object],
             raise ValueError(f"provider config provider_extensions[{index}] must be an object")
         result.append(dict(item))
     return tuple(result)
+
+
+def _config_base_path(config: str | Path | Mapping[str, Any]) -> Path:
+    if isinstance(config, Mapping):
+        config_path = config.get(CONFIG_PATH_KEY)
+        if config_path:
+            return Path(str(config_path)).expanduser().resolve()
+        return Path.cwd()
+    return Path(config)
 
 
 def _extension_kind(extension: Mapping[str, object]) -> str:

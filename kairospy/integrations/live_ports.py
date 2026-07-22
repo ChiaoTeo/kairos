@@ -9,6 +9,7 @@ from kairospy.identity import AccountRef, AccountType, InstitutionId, Instrument
 from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT, KairosProjectConfig
 from kairospy.environment import Environment
 from kairospy.execution.ports import ExecutionPort, OrderRecoveryPort
+from kairospy.integrations.config import resolve_binance_trading_credentials
 from kairospy.portfolio.account_ports import AccountPort
 from kairospy.reference.catalog import ReferenceCatalog
 
@@ -101,7 +102,7 @@ def build_live_market_event_source(
     from kairospy.integrations.connectors.binance import BinanceRuntimeFeedFactory
     from kairospy.runtime import runtime_feed_plan
 
-    root = Path(lake_root) if lake_root is not None else config.relative_path("data.lake_root", DEFAULT_LAKE_ROOT)
+    root = Path(lake_root) if lake_root is not None else config.relative_path("paths.lake_root", DEFAULT_LAKE_ROOT)
     manifest_path = live_view_manifest_path(root, dataset, live_view_id)
     manifest = load_live_view_manifest(manifest_path)
     gate = evaluate_live_view_freshness(manifest, policy=LIVE_VIEW_CONFIGURED_FRESHNESS_POLICY)
@@ -163,7 +164,7 @@ def _binance_live_ports(
         UrllibBinanceTransport,
     )
 
-    credentials = config.binance_credentials("live")
+    credentials = resolve_binance_trading_credentials(config, "live")
     signer = BinanceSigner(credentials.api_key, credentials.api_secret)
     build_transport = transport_factory or (lambda base_url: UrllibBinanceTransport(base_url))
     at = datetime.now(timezone.utc)

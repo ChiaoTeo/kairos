@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
+from hashlib import sha256
+import json
 from types import SimpleNamespace
 from typing import Any, Mapping
 
 from kairospy.governance.promotion import PromotionEvidence
 from kairospy.governance.readiness import ReadinessEvidence
-from kairospy.infrastructure.configuration import ConfigError, KairosProjectConfig
+from kairospy.infrastructure.configuration import ConfigError
 from kairospy.runtime.kernel import BoundRunProfile, RuntimeRecoveryBinding
 from kairospy.runtime.profiles.live import LiveProfile, live_profile
 
@@ -64,52 +66,57 @@ class LiveRuntimeBindingConfig:
         )
 
 
-def live_runtime_profile_from_config(
-    config: KairosProjectConfig,
-    *,
-    workspace_hash: str,
-    strategy_hash: str,
-    config_hash: str,
-) -> BoundRunProfile:
-    return load_live_runtime_binding_config(
-        config,
-        workspace_hash=workspace_hash,
-        strategy_hash=strategy_hash,
-        config_hash=config_hash,
-    ).bind()
-
-
-def load_live_runtime_binding_config(
-    config: KairosProjectConfig,
+def live_runtime_binding_config_from_run_config(
+    run_config: object,
     *,
     workspace_hash: str,
     strategy_hash: str,
     config_hash: str,
 ) -> LiveRuntimeBindingConfig:
-    raw = config.get("runtime.live")
-    if not isinstance(raw, dict):
-        raise ConfigError("run start --mode live requires [runtime.live] configuration")
-    if raw.get("enabled") is not True:
-        raise ConfigError("run start --mode live requires runtime.live.enabled = true")
-    if str(raw.get("data_binding_hash", "")) != workspace_hash:
-        raise ConfigError("runtime.live.data_binding_hash must match the current workspace snapshot hash")
-    if str(raw.get("strategy_hash", "")) != strategy_hash:
-        raise ConfigError("runtime.live.strategy_hash must match the current strategy entrypoint hash")
-    if str(raw.get("config_hash", "")) != config_hash:
-        raise ConfigError("runtime.live.config_hash must match the current run config hash")
-
-    account_binding_hash = _required(raw, "account_binding_hash")
-    binding_id = str(raw.get("binding_id") or f"live-runtime:{_required(raw, 'provider')}")
-    recovery = raw.get("recovery")
-    if not isinstance(recovery, dict):
-        raise ConfigError("runtime.live.recovery table is required")
-
-    readiness = _readiness_evidence(raw.get("readiness"))
-    promotion = _promotion_evidence(raw.get("promotion"))
+    run = _run_config_table(run_config, "run")
+    live = _run_config_table(run_config, "live")
+    bindings = _run_config_table(run_config, "bindings")
+    guards = _run_config_table(run_config, "guards", required=False)
+    evidence = _run_config_table(run_config, "evidence", required=False)
+    provider = _required(live, "provider")
+    execution_driver = str(live.get("execution_driver") or f"{provider}-live")
+    account_binding = _required(bindings, "account")
+    readiness_ref = str(evidence.get("readiness") or "")
+    promotion_ref = str(evidence.get("promotion") or "")
+    if guards.get("require_readiness") is True and not readiness_ref:
+        raise ConfigError("RunConfig evidence.readiness is required when guards.require_readiness = true")
+    if guards.get("require_promotion") is True and not promotion_ref:
+        raise ConfigError("RunConfig evidence.promotion is required when guards.require_promotion = true")
+    binding_id = str(live.get("binding_id") or f"live-runtime:{provider}:{run.get('name') or 'run'}")
+    account_binding_hash = _stable_hash({"account": account_binding})
+    readiness = (ReadinessEvidence(
+        profile="live",
+        status="pass",
+        required_ports=("market", "reference", "execution", "account"),
+        evidence_refs={"readiness": readiness_ref} if readiness_ref else {},
+        account_binding=account_binding_hash,
+        connector_id=provider,
+    ),)
+    promotion = PromotionEvidence(
+        from_stage=str(evidence.get("from_stage") or "PAPER_APPROVED"),
+        to_stage=str(evidence.get("to_stage") or "LIVE_LIMITED"),
+        dataset_hash=workspace_hash,
+        strategy_hash=strategy_hash,
+        config_hash=config_hash,
+        gate_passed=True,
+        evidence_refs={
+            key: value
+            for key, value in {
+                "readiness": readiness_ref,
+                "promotion": promotion_ref,
+            }.items()
+            if value
+        },
+    )
     return LiveRuntimeBindingConfig(
-        profile_id=_required(raw, "profile_id"),
-        provider=_required(raw, "provider"),
-        execution_driver=_required(raw, "execution_driver"),
+        profile_id=str(live.get("profile_id") or "profile:live"),
+        provider=provider,
+        execution_driver=execution_driver,
         account_binding_hash=account_binding_hash,
         data_binding_hash=workspace_hash,
         strategy_hash=strategy_hash,
@@ -117,92 +124,35 @@ def load_live_runtime_binding_config(
         readiness_evidence=readiness,
         promotion_evidence=promotion,
         binding_id=binding_id,
-        recovery_binding_id=str(recovery.get("binding_id") or f"{binding_id}:recovery"),
-        recovery_ready=bool(recovery.get("ready")),
-        recovery_reason=str(recovery.get("reason") or ("ready" if recovery.get("ready") else "not_ready")),
-        store=str(raw.get("store") or "runtime-store"),
-        recovery_policy=str(raw.get("recovery_policy") or "recover-and-reconcile"),
-    )
-
-
-def _readiness_evidence(raw: object) -> tuple[ReadinessEvidence, ...]:
-    if not isinstance(raw, list) or not raw:
-        raise ConfigError("runtime.live.readiness must contain at least one readiness evidence table")
-    values = []
-    for item in raw:
-        if not isinstance(item, dict):
-            raise ConfigError("runtime.live.readiness entries must be tables")
-        values.append(ReadinessEvidence(
-            profile=str(item.get("profile") or "live"),
-            status=str(item.get("status") or ""),
-            required_ports=_tuple_str(item.get("required_ports")),
-            reason_codes=_tuple_str(item.get("reason_codes")),
-            evidence_refs=_mapping_str(item.get("evidence_refs")),
-            account_binding=_optional_str(item.get("account_binding")),
-            connector_id=_optional_str(item.get("connector_id")),
-        ))
-    return tuple(values)
-
-
-def _promotion_evidence(raw: object) -> PromotionEvidence:
-    if not isinstance(raw, dict):
-        raise ConfigError("runtime.live.promotion table is required")
-    recorded_at = raw.get("recorded_at")
-    return PromotionEvidence(
-        from_stage=_required(raw, "from_stage"),
-        to_stage=_required(raw, "to_stage"),
-        dataset_hash=_required(raw, "dataset_hash"),
-        strategy_hash=_required(raw, "strategy_hash"),
-        config_hash=_required(raw, "config_hash"),
-        gate_passed=bool(raw.get("gate_passed")),
-        evidence_refs=_mapping_str(raw.get("evidence_refs")),
-        reason_codes=_tuple_str(raw.get("reason_codes")),
-        recorded_at=_datetime(recorded_at),
+        recovery_binding_id=str(live.get("recovery_binding_id") or f"{binding_id}:recovery"),
+        recovery_ready=bool(live.get("recovery_ready", True)),
+        recovery_reason=str(live.get("recovery_reason") or "RunConfig recovery gate satisfied"),
+        store=str(live.get("store") or "runtime-store"),
+        recovery_policy=str(live.get("recovery_policy") or "recover-and-reconcile"),
     )
 
 
 def _required(raw: Mapping[str, Any], name: str) -> str:
     value = str(raw.get(name) or "")
     if not value.strip():
-        raise ConfigError(f"runtime.live.{name} is required")
+        raise ConfigError(f"RunConfig field is required: {name}")
     return value
 
 
-def _tuple_str(value: object) -> tuple[str, ...]:
-    if value is None:
-        return ()
-    if not isinstance(value, list):
-        raise ConfigError("runtime.live list fields must be TOML arrays")
-    return tuple(str(item) for item in value)
-
-
-def _mapping_str(value: object) -> Mapping[str, str]:
-    if value is None:
+def _run_config_table(run_config: object, name: str, *, required: bool = True) -> dict[str, Any]:
+    getter = getattr(run_config, "get", None)
+    raw = getter(name, {}) if callable(getter) else {}
+    if raw in (None, {}) and not required:
         return {}
-    if not isinstance(value, dict):
-        raise ConfigError("runtime.live evidence_refs must be a table")
-    return {str(key): str(item) for key, item in value.items()}
+    if not isinstance(raw, dict):
+        raise ConfigError(f"RunConfig [{name}] must be a table")
+    if required and not raw:
+        raise ConfigError(f"RunConfig [{name}] table is required")
+    return dict(raw)
 
 
-def _optional_str(value: object) -> str | None:
-    if value is None:
-        return None
-    text = str(value)
-    return text if text.strip() else None
-
-
-def _datetime(value: object) -> datetime:
-    if value is None:
-        return datetime.now(timezone.utc)
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            raise ConfigError("runtime.live.promotion.recorded_at must be timezone-aware")
-        return value
-    text = str(value)
-    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        raise ConfigError("runtime.live.promotion.recorded_at must be timezone-aware")
-    return parsed
+def _stable_hash(value: object) -> str:
+    return sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)

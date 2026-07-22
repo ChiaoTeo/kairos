@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import inspect
 from typing import Awaitable, Callable, Mapping
 
 from .application import KairosApplication, ProbeResult, RuntimeStatus
 from .bindings import ManagedServiceEvidenceProvider
-from .kernel import RunArtifactWriter, RunKernel, RunRequest, RunResult, StrategyRunResult
+from .kernel import RunArtifactWriter, RunKernel, RunRequest, RunResult, RunStatus, StrategyRunResult
 from .service_supervisor import AsyncServiceSupervisor, ManagedServiceSpec
+from kairospy.infrastructure.storage.codec import to_primitive
 
 
 RunArtifactWriterFactory = Callable[[Mapping[str, object]], RunArtifactWriter]
@@ -39,6 +41,7 @@ class RuntimeRunLauncher:
         managed_services: tuple[ManagedServiceSpec, ...] = (),
         service_evidence_binding_id: str = "runtime-services",
         service_stop_timeout_seconds: float = 5.0,
+        shutdown_handler: Callable[..., object] | None = None,
     ) -> None:
         if service_evidence_provider is not None and managed_services:
             raise ValueError("runtime launcher accepts either service_evidence_provider or managed_services")
@@ -52,6 +55,7 @@ class RuntimeRunLauncher:
         self.managed_services = tuple(managed_services)
         self.service_evidence_binding_id = service_evidence_binding_id
         self.service_stop_timeout_seconds = service_stop_timeout_seconds
+        self.shutdown_handler = shutdown_handler
 
     def run(
         self,
@@ -71,6 +75,7 @@ class RuntimeRunLauncher:
                 self.service_evidence_binding_id,
             )
         stopped_services = False
+        shutdown_attempted = False
         evidence: dict[str, object] | None = None
 
         def refresh_service_evidence() -> None:
@@ -86,15 +91,28 @@ class RuntimeRunLauncher:
             stopped_services = True
             refresh_service_evidence()
 
+        def run_shutdown_handler(reason: str) -> None:
+            nonlocal shutdown_attempted
+            if self.shutdown_handler is None or shutdown_attempted:
+                return
+            shutdown_attempted = True
+            report = self._run_shutdown_handler(reason)
+            if evidence is not None and report is not None:
+                try:
+                    evidence["stop_report"] = to_primitive(report)
+                except TypeError:
+                    evidence["stop_report"] = str(report)
+
         self._ensure_application_running()
         if service_supervisor is not None:
             self._run_async(lambda: service_supervisor.start(self.managed_services))
         evidence = self._evidence(service_evidence_provider)
         writer = artifact_writer_factory(evidence) if artifact_writer_factory is not None else artifact_writer
-        if writer is not None and service_supervisor is not None:
+        if writer is not None and (service_supervisor is not None or self.shutdown_handler is not None):
             base_writer = writer
 
             def finalizing_writer(prepared, strategy_result, profile_result):
+                run_shutdown_handler("crash" if profile_result.status is RunStatus.FAILED else "scheduled")
                 stop_services()
                 return base_writer(prepared, strategy_result, profile_result)
 
@@ -102,8 +120,12 @@ class RuntimeRunLauncher:
 
         try:
             result = self.kernel.run(request, strategy_runner, artifact_writer=writer)
+            run_shutdown_handler("crash" if result.status is RunStatus.FAILED else "scheduled")
             stop_services()
             return RuntimeLaunchResult(result, evidence)
+        except Exception:
+            run_shutdown_handler("crash")
+            raise
         finally:
             stop_services()
 
@@ -134,11 +156,33 @@ class RuntimeRunLauncher:
             self.application.run()
         self.application.require_operational()
 
+    def _run_shutdown_handler(self, reason: str) -> object | None:
+        if self.shutdown_handler is None:
+            return None
+        try:
+            signature = inspect.signature(self.shutdown_handler)
+        except (TypeError, ValueError):
+            result = self.shutdown_handler(reason)
+        else:
+            positional = tuple(
+                parameter
+                for parameter in signature.parameters.values()
+                if parameter.kind in {
+                    parameter.POSITIONAL_ONLY,
+                    parameter.POSITIONAL_OR_KEYWORD,
+                    parameter.VAR_POSITIONAL,
+                }
+            )
+            result = self.shutdown_handler(reason) if positional else self.shutdown_handler()
+        if inspect.isawaitable(result):
+            return self._run_async(lambda: result)
+        return result
+
     @staticmethod
-    def _run_async(operation: Callable[[], Awaitable[None]]) -> None:
+    def _run_async(operation: Callable[[], Awaitable[object]]) -> object:
         if _has_running_loop():
             raise RuntimeError("runtime launcher cannot manage async services inside a running event loop")
-        asyncio.run(operation())
+        return asyncio.run(operation())
 
 
 def _probe_result(value: ProbeResult) -> dict[str, object]:

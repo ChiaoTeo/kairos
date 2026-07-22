@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -21,6 +23,65 @@ from kairospy.reference import ProductType, ReferenceCatalog
 from kairospy.reference.contracts import CryptoSpotSpec
 from kairospy.reference.repository import ReferenceCatalogRepository
 from tests.reference_support import publish_test_instrument
+
+
+def _write_run_config(
+    root: Path,
+    filename: str,
+    *,
+    mode: str,
+    entrypoint: str,
+    params: dict[str, str] | None = None,
+    bind_provider: bool = False,
+    market: str = "bars",
+    extra: str = "",
+) -> Path:
+    path = root / "configs" / "runs" / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    param_lines = "\n".join(f'{key} = "{value}"' for key, value in (params or {}).items())
+    sections = [
+        "schema_version = 1",
+        "",
+        "[run]",
+        f'name = "{Path(filename).stem}"',
+        f'mode = "{mode}"',
+        'workspace = "alpha"',
+        f'entrypoint = "{entrypoint}"',
+    ]
+    if param_lines:
+        sections.extend(["", "[params]", param_lines])
+    if mode == "paper":
+        sections.extend(["", "[bindings]", 'account = "binance_testnet_spot"', f'market = ["{market}"]'])
+    if mode == "live":
+        sections.extend([
+            "",
+            "[bindings]",
+            'account = "binance_live_spot"',
+            f'market = ["{market}"]',
+            'execution = "binance_live_spot"',
+            "",
+            "[live]",
+            'provider = "binance"',
+            'execution_driver = "binance-live"',
+            'binding_id = "live-runtime-binding"',
+            'recovery_binding_id = "live-recovery"',
+        ])
+        if bind_provider:
+            sections.append("bind_provider = true")
+        sections.extend([
+            "",
+            "[evidence]",
+            'readiness = "governance:readiness/test-live.json"',
+            'promotion = "governance:promotion/test-live.json"',
+        ])
+    if extra:
+        sections.extend(["", extra.strip()])
+    path.write_text("\n".join(sections).rstrip() + "\n", encoding="utf-8")
+    return path
+
+
+def _file_sha256(path: Path) -> str:
+    return sha256(path.read_bytes()).hexdigest()
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -102,6 +163,13 @@ class WorkspaceTests(unittest.TestCase):
             )
             env = dict(os.environ)
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+            run_config = _write_run_config(
+                root,
+                "workspace-run.toml",
+                mode="backtest",
+                entrypoint="my_strategy:decide",
+                params={"fast": "20"},
+            )
 
             started = subprocess.run(
                 [
@@ -112,14 +180,8 @@ class WorkspaceTests(unittest.TestCase):
                     "json",
                     "run",
                     "start",
-                    "--workspace",
-                    "alpha",
-                    "--mode",
-                    "backtest",
-                    "--entrypoint",
-                    "my_strategy:decide",
-                    "--param",
-                    "fast=20",
+                    "--config",
+                    str(run_config),
                 ],
                 cwd=root,
                 check=True,
@@ -136,6 +198,16 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(run_root.parent.resolve(), (root / ".kairos" / "run").resolve())
             self.assertTrue((run_root / "manifest.json").exists())
             self.assertTrue((run_root / "workspace_snapshot.json").exists())
+            self.assertTrue((run_root / "resolved_config.toml").exists())
+            manifest = json.loads((run_root / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["project_config"]["hash"], _file_sha256(root / "kairos.toml"))
+            self.assertEqual(manifest["run_config"]["hash"], _file_sha256(run_config))
+            self.assertEqual(manifest["run_config"]["resolved_config_artifact"], str(run_root / "resolved_config.toml"))
+            self.assertEqual(manifest["strategy"]["hash"], payload["strategy"]["hash"])
+            self.assertTrue(manifest["params_hash"])
+            self.assertTrue(manifest["config_hash"])
+            self.assertIn("account_binding_hash", manifest["bindings"])
+            self.assertIn("readiness_ref", manifest["guards"])
             decisions = json.loads((run_root / "artifacts" / "decisions.json").read_text(encoding="utf-8"))
             self.assertEqual(decisions[0]["workspace"], "alpha")
 
@@ -199,6 +271,13 @@ class WorkspaceTests(unittest.TestCase):
             )
             env = dict(os.environ)
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+            run_config = _write_run_config(
+                root,
+                "research-report.toml",
+                mode="backtest",
+                entrypoint="research_report:run",
+                params={"window": "30d"},
+            )
 
             started = subprocess.run(
                 [
@@ -209,14 +288,8 @@ class WorkspaceTests(unittest.TestCase):
                     "json",
                     "run",
                     "start",
-                    "--workspace",
-                    "alpha",
-                    "--mode",
-                    "backtest",
-                    "--entrypoint",
-                    "research_report:run",
-                    "--param",
-                    "window=30d",
+                    "--config",
+                    str(run_config),
                 ],
                 cwd=root,
                 check=True,
@@ -260,6 +333,13 @@ class WorkspaceTests(unittest.TestCase):
             )
             env = dict(os.environ)
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+            run_config = _write_run_config(
+                root,
+                "builder-strategy.toml",
+                mode="historical-simulation",
+                entrypoint="builder_strategy:build",
+                params={"slow": "50"},
+            )
 
             started = subprocess.run(
                 [
@@ -270,14 +350,8 @@ class WorkspaceTests(unittest.TestCase):
                     "json",
                     "run",
                     "start",
-                    "--workspace",
-                    "alpha",
-                    "--mode",
-                    "historical-simulation",
-                    "--entrypoint",
-                    "builder_strategy:build",
-                    "--param",
-                    "slow=50",
+                    "--config",
+                    str(run_config),
                 ],
                 cwd=root,
                 check=True,
@@ -308,6 +382,12 @@ class WorkspaceTests(unittest.TestCase):
             )
             env = dict(os.environ)
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+            run_config = _write_run_config(
+                root,
+                "paper-run.toml",
+                mode="paper",
+                entrypoint="paper_strategy:decide",
+            )
 
             started = subprocess.run(
                 [
@@ -318,12 +398,8 @@ class WorkspaceTests(unittest.TestCase):
                     "json",
                     "run",
                     "start",
-                    "--workspace",
-                    "alpha",
-                    "--mode",
-                    "paper",
-                    "--entrypoint",
-                    "paper_strategy:decide",
+                    "--config",
+                    str(run_config),
                 ],
                 cwd=root,
                 check=True,
@@ -363,48 +439,19 @@ class WorkspaceTests(unittest.TestCase):
                 "module": "live_strategy",
                 "callable": "decide",
             })
-            config_hash = stable_artifact_hash({"params": {}})
+            run_config = _write_run_config(
+                root,
+                "live-run.toml",
+                mode="live",
+                entrypoint="live_strategy:decide",
+            )
+            config_hash = stable_artifact_hash({"params": {}, "run_config_hash": _file_sha256(run_config)})
             config_path = root / "kairos.toml"
             config_path.write_text(
                 config_path.read_text(encoding="utf-8").replace(
                     "live_trading_enabled = false",
                     "live_trading_enabled = true",
-                )
-                + "\n".join([
-                    "",
-                    "[runtime.live]",
-                    "enabled = true",
-                    'profile_id = "profile:live"',
-                    'provider = "binance"',
-                    'execution_driver = "binance-live"',
-                    'account_binding_hash = "account-binding-hash"',
-                    f'data_binding_hash = "{workspace_hash}"',
-                    f'strategy_hash = "{strategy_hash}"',
-                    f'config_hash = "{config_hash}"',
-                    'binding_id = "live-runtime-binding"',
-                    "",
-                    "[runtime.live.recovery]",
-                    'binding_id = "live-recovery"',
-                    "ready = true",
-                    'reason = "startup recovery complete"',
-                    "",
-                    "[runtime.live.promotion]",
-                    'from_stage = "PAPER_APPROVED"',
-                    'to_stage = "LIVE_LIMITED"',
-                    f'dataset_hash = "{workspace_hash}"',
-                    f'strategy_hash = "{strategy_hash}"',
-                    f'config_hash = "{config_hash}"',
-                    "gate_passed = true",
-                    'evidence_refs = { readiness = "readiness:live" }',
-                    "",
-                    "[[runtime.live.readiness]]",
-                    'status = "pass"',
-                    'required_ports = ["market", "reference", "execution", "account"]',
-                    'account_binding = "account-binding-hash"',
-                    'connector_id = "binance"',
-                    'evidence_refs = { connector = "binance-live-ready" }',
-                    "",
-                ]),
+                ),
                 encoding="utf-8",
             )
             env = dict(os.environ)
@@ -419,13 +466,9 @@ class WorkspaceTests(unittest.TestCase):
                     "json",
                     "run",
                     "start",
-                    "--workspace",
-                    "alpha",
-                    "--mode",
-                    "live",
+                    "--config",
+                    str(run_config),
                     "--confirm-live",
-                    "--entrypoint",
-                    "live_strategy:decide",
                 ],
                 cwd=root,
                 check=True,
@@ -469,60 +512,26 @@ class WorkspaceTests(unittest.TestCase):
                 "module": "live_strategy",
                 "callable": "decide",
             })
-            config_hash = stable_artifact_hash({"params": {}})
+            run_config = _write_run_config(
+                root,
+                "live-provider.toml",
+                mode="live",
+                entrypoint="live_strategy:decide",
+                bind_provider=True,
+            )
+            config_hash = stable_artifact_hash({"params": {}, "run_config_hash": _file_sha256(run_config)})
             config_path = root / "kairos.toml"
             config_path.write_text(
                 config_path.read_text(encoding="utf-8").replace(
                     "live_trading_enabled = false",
                     "live_trading_enabled = true",
-                )
-                + "\n".join([
-                    "",
-                    "[runtime.live]",
-                    "enabled = true",
-                    'profile_id = "profile:live"',
-                    'provider = "binance"',
-                    'execution_driver = "binance-live"',
-                    'account_binding_hash = "account-binding-hash"',
-                    f'data_binding_hash = "{workspace_hash}"',
-                    f'strategy_hash = "{strategy_hash}"',
-                    f'config_hash = "{config_hash}"',
-                    'binding_id = "live-runtime-binding"',
-                    "",
-                    "[runtime.live.provider_binding]",
-                    "enabled = true",
-                    'account = "binance:crypto_spot:main"',
-                    'product = "spot"',
-                    'reference_catalog_path = ".kairos/data/reference/catalog.json"',
-                    "",
-                    "[runtime.live.recovery]",
-                    'binding_id = "live-recovery"',
-                    "ready = true",
-                    'reason = "startup recovery complete"',
-                    "",
-                    "[runtime.live.promotion]",
-                    'from_stage = "PAPER_APPROVED"',
-                    'to_stage = "LIVE_LIMITED"',
-                    f'dataset_hash = "{workspace_hash}"',
-                    f'strategy_hash = "{strategy_hash}"',
-                    f'config_hash = "{config_hash}"',
-                    "gate_passed = true",
-                    'evidence_refs = { readiness = "readiness:live" }',
-                    "",
-                    "[[runtime.live.readiness]]",
-                    'status = "pass"',
-                    'required_ports = ["market", "reference", "execution", "account"]',
-                    'account_binding = "account-binding-hash"',
-                    'connector_id = "binance"',
-                    'evidence_refs = { connector = "binance-live-ready" }',
-                    "",
-                ]),
+                ),
                 encoding="utf-8",
             )
             env = dict(os.environ)
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
-            env["BINANCE_LIVE_API_KEY"] = "test-key"
-            env["BINANCE_LIVE_API_SECRET"] = "test-secret"
+            env["KAIROS_BINANCE_TRADING_LIVE_SPOT_API_KEY"] = "test-key"
+            env["KAIROS_BINANCE_TRADING_LIVE_SPOT_API_SECRET"] = "test-secret"
 
             started = subprocess.run(
                 [
@@ -533,13 +542,9 @@ class WorkspaceTests(unittest.TestCase):
                     "json",
                     "run",
                     "start",
-                    "--workspace",
-                    "alpha",
-                    "--mode",
-                    "live",
+                    "--config",
+                    str(run_config),
                     "--confirm-live",
-                    "--entrypoint",
-                    "live_strategy:decide",
                 ],
                 cwd=root,
                 check=True,
@@ -585,68 +590,33 @@ class WorkspaceTests(unittest.TestCase):
                 "module": "live_strategy",
                 "callable": "decide",
             })
-            config_hash = stable_artifact_hash({"params": {}})
+            run_config = _write_run_config(
+                root,
+                "live-market.toml",
+                mode="live",
+                entrypoint="live_strategy:decide",
+                bind_provider=True,
+                market="ticks",
+                extra="\n".join([
+                    "[bindings.live_views.ticks]",
+                    f'dataset = "{dataset_id}"',
+                    f'live_view_id = "{live_view_id}"',
+                    'journal_root = ".kairos/data/live-journals"',
+                ]),
+            )
+            config_hash = stable_artifact_hash({"params": {}, "run_config_hash": _file_sha256(run_config)})
             config_path = root / "kairos.toml"
             config_path.write_text(
                 config_path.read_text(encoding="utf-8").replace(
                     "live_trading_enabled = false",
                     "live_trading_enabled = true",
-                )
-                + "\n".join([
-                    "",
-                    "[runtime.live]",
-                    "enabled = true",
-                    'profile_id = "profile:live"',
-                    'provider = "binance"',
-                    'execution_driver = "binance-live"',
-                    'account_binding_hash = "account-binding-hash"',
-                    f'data_binding_hash = "{workspace_hash}"',
-                    f'strategy_hash = "{strategy_hash}"',
-                    f'config_hash = "{config_hash}"',
-                    'binding_id = "live-runtime-binding"',
-                    "",
-                    "[runtime.live.provider_binding]",
-                    "enabled = true",
-                    'account = "binance:crypto_spot:main"',
-                    'product = "spot"',
-                    'reference_catalog_path = ".kairos/data/reference/catalog.json"',
-                    "",
-                    "[runtime.live.market_binding]",
-                    "enabled = true",
-                    'provider = "binance"',
-                    'name = "ticks"',
-                    f'dataset = "{dataset_id}"',
-                    f'live_view_id = "{live_view_id}"',
-                    'journal_root = ".kairos/data/live-journals"',
-                    "",
-                    "[runtime.live.recovery]",
-                    'binding_id = "live-recovery"',
-                    "ready = true",
-                    'reason = "startup recovery complete"',
-                    "",
-                    "[runtime.live.promotion]",
-                    'from_stage = "PAPER_APPROVED"',
-                    'to_stage = "LIVE_LIMITED"',
-                    f'dataset_hash = "{workspace_hash}"',
-                    f'strategy_hash = "{strategy_hash}"',
-                    f'config_hash = "{config_hash}"',
-                    "gate_passed = true",
-                    'evidence_refs = { readiness = "readiness:live" }',
-                    "",
-                    "[[runtime.live.readiness]]",
-                    'status = "pass"',
-                    'required_ports = ["market", "reference", "execution", "account"]',
-                    'account_binding = "account-binding-hash"',
-                    'connector_id = "binance"',
-                    'evidence_refs = { connector = "binance-live-ready", live_view = "live:binance:btcusdt-book" }',
-                    "",
-                ]),
+                ),
                 encoding="utf-8",
             )
             env = dict(os.environ)
             env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
-            env["BINANCE_LIVE_API_KEY"] = "test-key"
-            env["BINANCE_LIVE_API_SECRET"] = "test-secret"
+            env["KAIROS_BINANCE_TRADING_LIVE_SPOT_API_KEY"] = "test-key"
+            env["KAIROS_BINANCE_TRADING_LIVE_SPOT_API_SECRET"] = "test-secret"
 
             started = subprocess.run(
                 [
@@ -657,13 +627,9 @@ class WorkspaceTests(unittest.TestCase):
                     "json",
                     "run",
                     "start",
-                    "--workspace",
-                    "alpha",
-                    "--mode",
-                    "live",
+                    "--config",
+                    str(run_config),
                     "--confirm-live",
-                    "--entrypoint",
-                    "live_strategy:decide",
                 ],
                 cwd=root,
                 check=True,
@@ -678,15 +644,209 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(runtime_bindings["market_event_provider"], "live-runtime-binding:market-events")
             self.assertEqual(runtime_bindings["command_submitter"], "live-runtime-binding:outbox")
             self.assertTrue(governance["config"]["run_request"]["metadata"]["market_binding"])
+            self.assertFalse(governance["config"]["run_request"]["metadata"]["market_services_supervised"])
             services = payload["runtime_launch"]["services"]["services"]
-            self.assertEqual(
-                sorted(item["name"] for item in services),
-                [
-                    "feed-monitor:ticks:live:binance:btcusdt-book",
-                    "feed:ticks:live:binance:btcusdt-book",
-                ],
+            self.assertEqual(len(services), 1)
+            self.assertTrue(services[0]["name"].startswith("outbox-dispatcher:"))
+            self.assertEqual(services[0]["status"], "stopped")
+
+    def test_run_start_live_run_config_strategy_spec_binds_stop_controller_on_shutdown(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Workspace Live Stop Policy Binding")
+            _write_binance_reference_catalog(root / ".kairos" / "data" / "reference" / "catalog.json")
+            workspace = Workspace.open_or_create("alpha", start=root)
+            (root / "live_strategy.py").write_text(
+                "\n".join([
+                    "from decimal import Decimal",
+                    "from kairospy.reference import ProductType",
+                    "from kairospy.strategy import StrategyLifecycle, StrategySpec",
+                    "",
+                    "def decide(context):",
+                    "    return {'action': 'hold', 'mode': context.mode}",
+                    "",
+                    "def spec():",
+                    "    return StrategySpec(",
+                    "        'live-stop-strategy', '1.0.0', StrategyLifecycle.LIVE_LIMITED,",
+                    "        (ProductType.CRYPTO_SPOT,), ('target_position',), ('momentum',), ('price',),",
+                    "        (('instrument', 'BTC-USDT'),), ('price',), (('threshold', '0'),),",
+                    "        (('target', 'position'),), ('enter',), ('exit',), ('manual',),",
+                    "        Decimal('0.01'), ('bars',), ('limit_orders',), 'strategy-evidence'",
+                    "    )",
+                ]) + "\n",
+                encoding="utf-8",
             )
-            self.assertEqual({item["status"] for item in services}, {"created"})
+            workspace_hash = stable_artifact_hash(workspace.snapshot())
+            strategy_hash = stable_artifact_hash({
+                "entrypoint": "live_strategy:decide",
+                "module": "live_strategy",
+                "callable": "decide",
+            })
+            run_config = _write_run_config(
+                root,
+                "live-stop-policy.toml",
+                mode="live",
+                entrypoint="live_strategy:decide",
+                bind_provider=True,
+                extra="\n".join([
+                    "[strategy]",
+                    'spec = "live_strategy:spec"',
+                ]),
+            )
+            config_hash = stable_artifact_hash({"params": {}, "run_config_hash": _file_sha256(run_config)})
+            config_path = root / "kairos.toml"
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8").replace(
+                    "live_trading_enabled = false",
+                    "live_trading_enabled = true",
+                ),
+                encoding="utf-8",
+            )
+
+            from kairospy.infrastructure.configuration import KairosProjectConfig
+            from kairospy.integrations import LiveProviderPorts
+            from kairospy.integrations.connectors.simulated import SimulatedExecutionAccountGateway
+            from kairospy.integrations.ports import Environment
+            from kairospy.identity import AccountRef, AccountType, InstitutionId
+            from kairospy.runtime.run_config import load_run_config
+            from kairospy.surface.product import _launch_workspace_live_run, _strategy_run_result_from_workspace_execution
+
+            account = AccountRef(InstitutionId("binance"), "main", AccountType.CRYPTO_SPOT)
+            gateway = SimulatedExecutionAccountGateway(VenueId("binance"), account, environment=Environment.LIVE)
+            provider_ports = LiveProviderPorts(
+                "binance",
+                "binance-live",
+                account,
+                gateway,
+                gateway,
+                None,
+            )
+
+            with patch("kairospy.integrations.live_ports.build_live_provider_ports", return_value=provider_ports):
+                runtime_launch, run_result = _launch_workspace_live_run(
+                    KairosProjectConfig.discover(root),
+                    root / ".kairos" / "run" / "live-stop-policy",
+                    "run_live_stop_policy",
+                    workspace.name,
+                    workspace_hash,
+                    strategy_hash,
+                    config_hash,
+                    {},
+                    lambda _prepared: _strategy_run_result_from_workspace_execution({"decisions": []}),
+                    run_config=load_run_config(run_config),
+                    workspace_snapshot=workspace.snapshot(),
+                    confirm_live=True,
+            )
+
+            self.assertEqual(runtime_launch["stop_report"]["strategy_id"], "live-stop-strategy")
+            self.assertEqual(runtime_launch["stop_report"]["reason"], "crash")
+            self.assertEqual(runtime_launch["stop_report"]["action"], "cancel_orders")
+            self.assertEqual(runtime_launch["stop_report"]["cancelled_client_order_ids"], [])
+            governance = json.loads(Path(run_result.artifact_refs[-1]).read_text(encoding="utf-8"))
+            metadata = governance["config"]["run_request"]["metadata"]["stop_policy"]
+            self.assertEqual(metadata["strategy_id"], "live-stop-strategy")
+            self.assertTrue(metadata["controller_bound"])
+            self.assertEqual(
+                governance["execution"]["runtime_launch"]["stop_report"]["strategy_id"],
+                "live-stop-strategy",
+            )
+
+    def test_run_live_start_uses_run_config_to_bind_services_and_stop_controller(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Workspace Live Daemon RunConfig")
+            _write_binance_reference_catalog(root / ".kairos" / "data" / "reference" / "catalog.json")
+            Workspace.open_or_create("alpha", start=root)
+            (root / "live_strategy.py").write_text(
+                "\n".join([
+                    "from decimal import Decimal",
+                    "from kairospy.reference import ProductType",
+                    "from kairospy.strategy import StrategyLifecycle, StrategySpec",
+                    "",
+                    "def decide(context):",
+                    "    return {'action': 'hold', 'mode': context.mode}",
+                    "",
+                    "def spec():",
+                    "    return StrategySpec(",
+                    "        'live-daemon-strategy', '1.0.0', StrategyLifecycle.LIVE_LIMITED,",
+                    "        (ProductType.CRYPTO_SPOT,), ('target_position',), ('momentum',), ('price',),",
+                    "        (('instrument', 'BTC-USDT'),), ('price',), (('threshold', '0'),),",
+                    "        (('target', 'position'),), ('enter',), ('exit',), ('manual',),",
+                    "        Decimal('0.01'), ('bars',), ('limit_orders',), 'strategy-evidence'",
+                    "    )",
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            run_config = _write_run_config(
+                root,
+                "live-daemon.toml",
+                mode="live",
+                entrypoint="live_strategy:decide",
+                bind_provider=True,
+                extra="\n".join([
+                    "[strategy]",
+                    'spec = "live_strategy:spec"',
+                ]),
+            )
+            config_path = root / "kairos.toml"
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8").replace(
+                    "live_trading_enabled = false",
+                    "live_trading_enabled = true",
+                ),
+                encoding="utf-8",
+            )
+
+            from kairospy.integrations import LiveProviderPorts
+            from kairospy.integrations.connectors.simulated import SimulatedExecutionAccountGateway
+            from kairospy.integrations.ports import Environment
+            from kairospy.identity import AccountRef, AccountType, InstitutionId
+            from kairospy.surface import product as product_surface
+
+            account = AccountRef(InstitutionId("binance"), "main", AccountType.CRYPTO_SPOT)
+            gateway = SimulatedExecutionAccountGateway(VenueId("binance"), account, environment=Environment.LIVE)
+            provider_ports = LiveProviderPorts(
+                "binance",
+                "binance-live",
+                account,
+                gateway,
+                gateway,
+                gateway,
+            )
+
+            with patch("kairospy.integrations.live_ports.build_live_provider_ports", return_value=provider_ports):
+                cwd = Path.cwd()
+                os.chdir(root)
+                try:
+                    started = product_surface.run_live(SimpleNamespace(
+                        live_action="start",
+                        run_id="venue-a-live",
+                        config=run_config,
+                        confirm_live=True,
+                        duration_seconds=0,
+                        poll_seconds=0.01,
+                        param=[],
+                    ))
+                    status = product_surface.run_live(SimpleNamespace(
+                        live_action="status",
+                        run_id="venue-a-live",
+                        stale_after_seconds=5.0,
+                    ))
+                finally:
+                    os.chdir(cwd)
+
+            self.assertEqual(started["status"], "stopped")
+            self.assertEqual(started["run_config"]["provider_binding"], True)
+            self.assertEqual(started["run_config"]["stop_policy"]["strategy_id"], "live-daemon-strategy")
+            self.assertEqual(started["stop_report"]["strategy_id"], "live-daemon-strategy")
+            self.assertEqual(started["stop_report"]["reason"], "scheduled")
+            self.assertEqual(started["stop_report"]["action"], "cancel_orders")
+            self.assertTrue(any(
+                service["name"] == "strategy-run:venue-a-live"
+                for service in started["services"]
+            ))
+            self.assertEqual(status["run_config"]["stop_policy"]["strategy_id"], "live-daemon-strategy")
+            self.assertEqual(status["stop_report"]["reason"], "scheduled")
 
     def test_run_start_live_market_binding_can_supervise_data_product_services(self) -> None:
         with TemporaryDirectory() as directory:
@@ -705,62 +865,27 @@ class WorkspaceTests(unittest.TestCase):
                 "module": "live_strategy",
                 "callable": "decide",
             })
-            config_hash = stable_artifact_hash({"params": {}})
+            run_config = _write_run_config(
+                root,
+                "live-supervised.toml",
+                mode="live",
+                entrypoint="live_strategy:decide",
+                bind_provider=True,
+                market="ticks",
+                extra="\n".join([
+                    "[bindings.live_views.ticks]",
+                    f'dataset = "{dataset_id}"',
+                    f'live_view_id = "{live_view_id}"',
+                    "supervise_services = true",
+                ]),
+            )
+            config_hash = stable_artifact_hash({"params": {}, "run_config_hash": _file_sha256(run_config)})
             config_path = root / "kairos.toml"
             config_path.write_text(
                 config_path.read_text(encoding="utf-8").replace(
                     "live_trading_enabled = false",
                     "live_trading_enabled = true",
-                )
-                + "\n".join([
-                    "",
-                    "[runtime.live]",
-                    "enabled = true",
-                    'profile_id = "profile:live"',
-                    'provider = "binance"',
-                    'execution_driver = "binance-live"',
-                    'account_binding_hash = "account-binding-hash"',
-                    f'data_binding_hash = "{workspace_hash}"',
-                    f'strategy_hash = "{strategy_hash}"',
-                    f'config_hash = "{config_hash}"',
-                    'binding_id = "live-runtime-binding"',
-                    "",
-                    "[runtime.live.provider_binding]",
-                    "enabled = true",
-                    'account = "binance:crypto_spot:main"',
-                    'product = "spot"',
-                    'reference_catalog_path = ".kairos/data/reference/catalog.json"',
-                    "",
-                    "[runtime.live.market_binding]",
-                    "enabled = true",
-                    "supervise_services = true",
-                    'provider = "binance"',
-                    'name = "ticks"',
-                    f'dataset = "{dataset_id}"',
-                    f'live_view_id = "{live_view_id}"',
-                    "",
-                    "[runtime.live.recovery]",
-                    'binding_id = "live-recovery"',
-                    "ready = true",
-                    'reason = "startup recovery complete"',
-                    "",
-                    "[runtime.live.promotion]",
-                    'from_stage = "PAPER_APPROVED"',
-                    'to_stage = "LIVE_LIMITED"',
-                    f'dataset_hash = "{workspace_hash}"',
-                    f'strategy_hash = "{strategy_hash}"',
-                    f'config_hash = "{config_hash}"',
-                    "gate_passed = true",
-                    'evidence_refs = { readiness = "readiness:live" }',
-                    "",
-                    "[[runtime.live.readiness]]",
-                    'status = "pass"',
-                    'required_ports = ["market", "reference", "execution", "account"]',
-                    'account_binding = "account-binding-hash"',
-                    'connector_id = "binance"',
-                    'evidence_refs = { connector = "binance-live-ready", live_view = "live:binance:btcusdt-book" }',
-                    "",
-                ]),
+                ),
                 encoding="utf-8",
             )
 
@@ -771,6 +896,7 @@ class WorkspaceTests(unittest.TestCase):
             from kairospy.identity import AccountRef, AccountType, InstitutionId
             from kairospy.market.stream import IterableEventSource
             from kairospy.runtime import ManagedServiceSpec
+            from kairospy.runtime.run_config import load_run_config
             from kairospy.surface.product import _launch_workspace_live_run, _strategy_run_result_from_workspace_execution
 
             account = AccountRef(InstitutionId("binance"), "main", AccountType.CRYPTO_SPOT)
@@ -819,6 +945,8 @@ class WorkspaceTests(unittest.TestCase):
                     config_hash,
                     {},
                     lambda _prepared: _strategy_run_result_from_workspace_execution({"decisions": []}),
+                    run_config=load_run_config(run_config),
+                    workspace_snapshot=workspace.snapshot(),
                     confirm_live=True,
                 )
 
@@ -848,14 +976,10 @@ class WorkspaceTests(unittest.TestCase):
                     "json",
                     "run",
                     "start",
-                    "--workspace",
-                    "alpha",
-                    "--entrypoint",
-                    "my_strategy:decide",
+                    "--config",
+                    "configs/runs/backtest.example.toml",
                     "--snapshot",
                     "old@1.0.0",
-                    "--mode",
-                    "backtest",
                 ],
                 cwd=root,
                 capture_output=True,
@@ -906,6 +1030,47 @@ class WorkspaceTests(unittest.TestCase):
         self.assertIn("compare", completed.stdout)
         for old in ("backtest", "simulate", "paper", "shadow", "artifact-replay", "capture-replay"):
             self.assertNotIn(f"\n    {old}", completed.stdout)
+
+    def test_run_start_help_requires_run_config_not_workspace_flags(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "-m", "kairospy", "run", "start", "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPATH": os.getcwd() + os.pathsep + os.environ.get("PYTHONPATH", "")},
+        )
+
+        self.assertIn("--config", completed.stdout)
+        self.assertNotIn("--workspace", completed.stdout)
+        self.assertNotIn("--entrypoint", completed.stdout)
+        self.assertNotIn("--mode", completed.stdout)
+
+    def test_run_config_validate_and_explain_use_run_config_file(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Run Config Cli")
+            run_config = root / "configs" / "runs" / "backtest.example.toml"
+            env = {**os.environ, "PYTHONPATH": os.getcwd() + os.pathsep + os.environ.get("PYTHONPATH", "")}
+
+            validated = subprocess.run(
+                [sys.executable, "-m", "kairospy", "--format", "json", "run", "config", "validate", str(run_config)],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            explained = subprocess.run(
+                [sys.executable, "-m", "kairospy", "--format", "json", "run", "config", "explain", str(run_config)],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            self.assertTrue(json.loads(validated.stdout)["valid"])
+            self.assertEqual(json.loads(explained.stdout)["run"]["mode"], "backtest")
 
 
 def _write_binance_reference_catalog(path: Path) -> None:

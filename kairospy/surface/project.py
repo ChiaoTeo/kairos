@@ -48,11 +48,10 @@ def initialize_project(target: str | Path = ".", *, name: str | None = None, for
         created=tuple(created),
         reused=tuple(reused),
         next_steps=(
-            "kairospy configure massive",
-            "kairospy configure binance --environment testnet",
-            "kairospy doctor",
+            "kairospy config validate",
             "kairospy data start",
             "kairospy workspace create alpha",
+            "kairospy run config validate configs/runs/backtest.example.toml",
         ),
     )
     metadata = {**result.to_dict(), "root": ".", "kairospy_version": __version__}
@@ -96,6 +95,8 @@ def _directories() -> tuple[Path, ...]:
         Path(DEFAULT_LAKE_ROOT) / "reference",
         Path(PROJECT_STATE_DIR) / "workspace",
         Path(PROJECT_STATE_DIR) / "run",
+        Path(PROJECT_STATE_DIR) / "governance",
+        Path("configs") / "runs",
     )
 
 
@@ -103,6 +104,9 @@ def _files(project_name: str) -> tuple[tuple[Path, str], ...]:
     return (
         (Path("kairos.toml"), _kairospy_toml(project_name)),
         (Path(".env.example"), _env_example()),
+        (Path("configs") / "runs" / "backtest.example.toml", _run_config_backtest_example()),
+        (Path("configs") / "runs" / "paper.example.toml", _run_config_paper_example()),
+        (Path("configs") / "runs" / "live.example.toml", _run_config_live_example()),
         (Path("pyproject.toml"), _pyproject_toml(project_name)),
         (Path(".gitignore"), _gitignore()),
         (Path("README.md"), _readme(project_name)),
@@ -149,13 +153,21 @@ def _kairospy_toml(project_name: str) -> str:
     return f"""# Kairos project configuration.
 # Secrets should normally stay in environment variables and be referenced as env:NAME.
 
+schema_version = 1
+
 [project]
 name = "{project_name}"
 timezone = "UTC"
 
-[data]
+[paths]
 # All relative paths are resolved from this project directory.
 lake_root = "{DEFAULT_LAKE_ROOT}"
+workspace_root = ".kairos/workspace"
+run_root = ".kairos/run"
+governance_root = ".kairos/governance"
+reference_catalog = ".kairos/data/reference/catalog.json"
+
+[data]
 default_quality = "Q2"
 default_provider = "auto"
 
@@ -170,35 +182,177 @@ format = "text"
 language = "auto"
 run_control = true
 
+[credentials.massive_marketdata_primary]
+purpose = "market_data"
+kind = "api_key"
+api_key = "env:KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"
+
+[credentials.binance_trading_testnet_spot]
+purpose = "trading"
+kind = "api_key_secret"
+api_key = "env:KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_KEY"
+api_secret = "env:KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_SECRET"
+
+[credentials.binance_trading_live_spot]
+purpose = "trading"
+kind = "api_key_secret"
+api_key = "env:KAIROS_BINANCE_TRADING_LIVE_SPOT_API_KEY"
+api_secret = "env:KAIROS_BINANCE_TRADING_LIVE_SPOT_API_SECRET"
+
 [providers.massive]
-api_key = "env:MASSIVE_API_KEY"
+type = "data_vendor"
+enabled = true
+
+[providers.massive.services.historical_market_data]
+credential = "massive_marketdata_primary"
 timeout_seconds = 30
 max_retries = 4
 
-[providers.binance.testnet]
-api_key = "env:BINANCE_TESTNET_API_KEY"
-api_secret = "env:BINANCE_TESTNET_API_SECRET"
+[providers.binance]
+type = "exchange"
+enabled = true
 
-[providers.binance.live]
-api_key = "env:BINANCE_LIVE_API_KEY"
-api_secret = "env:BINANCE_LIVE_API_SECRET"
+[providers.binance.services.market_data]
+environment = "live"
+credential = ""
+public = true
+
+[providers.binance.services.execution_testnet]
+environment = "testnet"
+credential = "binance_trading_testnet_spot"
+
+[providers.binance.services.execution_live]
+environment = "live"
+credential = "binance_trading_live_spot"
+
+[accounts.binance_testnet_spot]
+account_ref = "binance:crypto_spot:testnet"
+provider = "binance"
+environment = "testnet"
+credential = "binance_trading_testnet_spot"
+permissions = ["account:read", "order:write", "order:cancel"]
+allowed_products = ["spot"]
+capital_scope = "testnet"
+
+[accounts.binance_live_spot]
+account_ref = "binance:crypto_spot:main"
+provider = "binance"
+environment = "live"
+credential = "binance_trading_live_spot"
+permissions = ["account:read", "order:write", "order:cancel"]
+allowed_products = ["spot"]
+capital_scope = "main-live"
 """
 
 
 def _env_example() -> str:
-    return """# kairos.toml references these values with env:VARIABLE_NAME.
+    return f"""# kairos.toml references these values with env:VARIABLE_NAME.
 # Keep real credentials out of version control.
 
-MASSIVE_API_KEY=
+KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY=
 
-BINANCE_TESTNET_API_KEY=
-BINANCE_TESTNET_API_SECRET=
+KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_KEY=
+KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_SECRET=
 
-BINANCE_LIVE_API_KEY=
-BINANCE_LIVE_API_SECRET=
+KAIROS_BINANCE_TRADING_LIVE_SPOT_API_KEY=
+KAIROS_BINANCE_TRADING_LIVE_SPOT_API_SECRET=
 
 # Optional runtime overrides.
 KAIROSPY_LAKE_ROOT={DEFAULT_LAKE_ROOT}
+"""
+
+
+def _run_config_backtest_example() -> str:
+    return """schema_version = 1
+
+[run]
+name = "example-backtest"
+mode = "backtest"
+workspace = "alpha"
+entrypoint = "strategies.example:build"
+
+[params]
+fast = 20
+slow = 50
+
+[backtest]
+start = "2025-01-01T00:00:00+00:00"
+end = "2026-01-01T00:00:00+00:00"
+initial_cash = "1000000"
+base_currency = "USD"
+
+[guards]
+freeze_workspace = true
+fail_on_missing_data = true
+"""
+
+
+def _run_config_paper_example() -> str:
+    return """schema_version = 1
+
+[run]
+name = "example-paper"
+mode = "paper"
+workspace = "alpha"
+entrypoint = "strategies.example:build"
+
+[params]
+risk_budget = "0.02"
+
+[bindings]
+account = "binance_testnet_spot"
+market = ["ticks"]
+
+[paper]
+environment = "testnet"
+execution_driver = "binance-testnet"
+recovery_policy = "recover-and-reconcile"
+
+[guards]
+require_live_view_freshness = true
+require_account_query = true
+require_reconciliation = true
+"""
+
+
+def _run_config_live_example() -> str:
+    return """schema_version = 1
+
+[run]
+name = "example-live"
+mode = "live"
+workspace = "alpha"
+entrypoint = "strategies.example:build"
+
+[strategy]
+spec = "strategies.example:spec"
+
+[params]
+max_gross_exposure = "50000"
+max_order_notional = "1000"
+
+[bindings]
+account = "binance_live_spot"
+market = ["ticks"]
+execution = "binance_live_spot"
+
+[live]
+provider = "binance"
+execution_driver = "binance-live"
+recovery_policy = "recover-and-reconcile"
+
+[guards]
+confirm_live_required = true
+require_readiness = true
+require_promotion = true
+require_account_lock = true
+require_order_recovery = true
+require_reconciliation = true
+start_reduce_only = true
+
+[evidence]
+readiness = "governance:readiness/example-live.json"
+promotion = "governance:promotion/example-live.json"
 """
 
 
@@ -234,14 +388,17 @@ This is a Kairos quantitative data, strategy code, and run project.
 ## Start
 
 ```bash
-export MASSIVE_API_KEY=...
-kairospy doctor
+export KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY=...
+kairospy config validate
 kairospy data start
 kairospy workspace create alpha
+kairospy run config validate configs/runs/backtest.example.toml
 ```
 
 Kairos-managed data lives under `.kairos/data/`. Workspace bindings live under `.kairos/workspace/`,
 and run artifacts live under `.kairos/run/`. Keep your Python code in whichever source directory
 fits your project.
-Configure providers only in `kairos.toml`; credentials should normally be referenced with `env:VARIABLE_NAME`.
+Reusable run configuration lives under `configs/runs/`. Configure providers only in `kairos.toml`;
+account bindings also live there.
+credentials should normally be referenced with `env:VARIABLE_NAME`.
 """

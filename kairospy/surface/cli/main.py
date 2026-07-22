@@ -185,7 +185,6 @@ def _parser() -> argparse.ArgumentParser:
     data_use.add_argument("--end", help="exclusive ISO-8601 timestamp with timezone")
     data_use.add_argument("--provider")
     data_use.add_argument("--venue")
-    _add_provider_config_arg(data_use)
     data_use.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat for a bounded universe")
     data_use.add_argument("--for", dest="for_use", choices=("workspace", "backtest", "production"),
                           default="workspace", help="target use; defaults to workspace")
@@ -230,7 +229,6 @@ def _parser() -> argparse.ArgumentParser:
     data_product_actions.add_parser("list", help="list built-in Data products")
     data_product_doctor = data_product_actions.add_parser("doctor", help="diagnose one Data Product")
     data_product_doctor.add_argument("product", help="Data Product key or alias")
-    _add_provider_config_arg(data_product_doctor)
     data_protocol = data_actions.add_parser("protocol", help="create and check user Data protocols")
     data_protocol_actions = data_protocol.add_subparsers(dest="protocol_action", required=True)
     data_protocol_actions.add_parser("list", help="list supported user Data protocol types")
@@ -334,7 +332,6 @@ def _parser() -> argparse.ArgumentParser:
     prepare_data.add_argument("--quality", choices=tuple(item.value for item in QualityLevel), default=QualityLevel.WORKSPACE.value)
     prepare_data.add_argument("--provider")
     prepare_data.add_argument("--venue")
-    _add_provider_config_arg(prepare_data)
     prepare_data.add_argument("--acquire-missing", action="store_true")
     _add_acquisition_limit_args(prepare_data)
     prepare_data.add_argument("--promote", action="store_true", help="explicitly approve promotion after quality passes")
@@ -350,7 +347,6 @@ def _parser() -> argparse.ArgumentParser:
     )
     prepare_us_equity_momentum.add_argument("--start", required=True, help="inclusive ISO-8601 timestamp with timezone")
     prepare_us_equity_momentum.add_argument("--end", required=True, help="exclusive ISO-8601 timestamp with timezone")
-    _add_provider_config_arg(prepare_us_equity_momentum)
     prepare_us_equity_momentum.add_argument("--provider", default="massive")
     prepare_us_equity_momentum.add_argument("--venue", default="us-securities")
     prepare_us_equity_momentum.add_argument("--dataset-id", default="us-equity-momentum.bounded.v1")
@@ -428,7 +424,6 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--end", required=action == "plan", help="exclusive ISO-8601 timestamp with timezone")
         command.add_argument("--provider")
         command.add_argument("--venue")
-        _add_provider_config_arg(command)
         command.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat for a bounded universe")
         _add_acquisition_limit_args(command)
         if action == "acquire":
@@ -601,10 +596,8 @@ def _parser() -> argparse.ArgumentParser:
     providers = commands.add_parser("providers", help="inspect Providers and Data Product readiness")
     providers_actions = providers.add_subparsers(dest="action", required=True)
     providers_list = providers_actions.add_parser("list", help="list known Providers")
-    _add_provider_config_arg(providers_list)
     providers_doctor = providers_actions.add_parser("doctor", help="diagnose one Provider")
     providers_doctor.add_argument("provider", help="Provider name, for example massive or binance")
-    _add_provider_config_arg(providers_doctor)
     features = commands.add_parser("features", help="build reusable feature datasets")
     feature_actions = features.add_subparsers(dest="action", required=True)
     build_features = feature_actions.add_parser("build")
@@ -631,7 +624,7 @@ def _parser() -> argparse.ArgumentParser:
     config_validate = config_actions.add_parser("validate", help="validate the discovered configuration")
     config_validate.add_argument("--strict", action="store_true", help="return non-zero when warnings exist")
     config_set = config_actions.add_parser("set", help="set a TOML value by dotted path")
-    config_set.add_argument("path", help="dotted TOML path, for example providers.massive.api_key")
+    config_set.add_argument("path", help="dotted TOML path, for example credentials.massive_marketdata_primary.api_key")
     config_set.add_argument("value", help="scalar value; use env:VARIABLE_NAME for credentials")
     config_unset = config_actions.add_parser("unset", help="remove a TOML value by dotted path")
     config_unset.add_argument("path", help="dotted TOML path to remove")
@@ -641,7 +634,7 @@ def _parser() -> argparse.ArgumentParser:
     configure.add_argument("--interactive", action="store_true", help="prompt for provider and credential environment variables")
     configure_actions = configure.add_subparsers(dest="provider", required=False)
     configure_massive = configure_actions.add_parser("massive", help="configure Massive credentials")
-    configure_massive.add_argument("--api-key-env", default="MASSIVE_API_KEY", help="environment variable containing the Massive API key")
+    configure_massive.add_argument("--api-key-env", default="KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY", help="environment variable containing the Massive API key")
     configure_binance = configure_actions.add_parser("binance", help="configure Binance credentials")
     configure_binance.add_argument("--environment", choices=("testnet", "live"), default="testnet")
     configure_binance.add_argument("--api-key-env", help="environment variable containing the Binance API key")
@@ -700,6 +693,10 @@ def _parser() -> argparse.ArgumentParser:
     reconcile.add_argument("--account-id", default="default")
     reconcile.add_argument("--product", choices=("securities", "spot", "futures", "options"), default="spot")
     reconcile.add_argument("--inverse", action="store_true")
+    accounts = commands.add_parser("accounts", help="inspect configured trading AccountBindings")
+    accounts_actions = accounts.add_subparsers(dest="action", required=True)
+    accounts_doctor = accounts_actions.add_parser("doctor", help="diagnose one configured AccountBinding")
+    accounts_doctor.add_argument("account", help="AccountBinding name from kairos.toml, for example binance_live_spot")
     order = commands.add_parser("order", help="submit an explicitly audited manual operations order")
     order_actions=order.add_subparsers(dest="action",required=True);order_submit=order_actions.add_parser("submit")
     order_submit.add_argument("--venue",choices=("ibkr","binance","simulated"),required=True)
@@ -771,17 +768,40 @@ def _parser() -> argparse.ArgumentParser:
 
     run_product = commands.add_parser("run", help="run strategy code from a Workspace across backtest, simulation, paper or live")
     run_actions = run_product.add_subparsers(dest="action", required=True)
-    run_start = run_actions.add_parser("start", help="start a Run workspace from a Workspace and strategy entrypoint")
-    run_start.add_argument("--workspace", required=True, help="Workspace id whose data view drives the run")
-    run_start.add_argument("--entrypoint", required=True, help="strategy entrypoint as module:callable")
+    run_start = run_actions.add_parser("start", help="start a reusable RunConfig")
+    run_start.add_argument("--config", required=True, type=Path, help="RunConfig TOML path, for example configs/runs/backtest.toml")
     run_start.add_argument("--param", action="append", default=[], help="strategy parameter key=value; repeatable")
-    run_start.add_argument("--mode", required=True, choices=("backtest", "historical-simulation", "paper", "live"))
     run_start.add_argument("--confirm-live", action="store_true", help="required explicit confirmation for live runs")
     run_start.add_argument(
         "--supervise-live-services",
         action="store_true",
         help="for live runs, start configured live market services under the runtime supervisor",
     )
+    run_config = run_actions.add_parser("config", help="validate or explain reusable RunConfig files")
+    run_config_actions = run_config.add_subparsers(dest="config_action", required=True)
+    run_config_validate = run_config_actions.add_parser("validate", help="validate a RunConfig TOML file")
+    run_config_validate.add_argument("path", type=Path)
+    run_config_validate.add_argument("--strict", action="store_true")
+    run_config_explain = run_config_actions.add_parser("explain", help="show the resolved RunConfig launch intent")
+    run_config_explain.add_argument("path", type=Path)
+    run_live = run_actions.add_parser("live", help="operate a named long-lived live run")
+    run_live.add_argument(
+        "live_action",
+        choices=("start", "recover", "status", "stop", "kill-switch", "reset-kill-switch", "reload-risk-limits"),
+        nargs="?",
+        default="status",
+    )
+    run_live.add_argument("--run-id", required=True, help="unique run instance id")
+    run_live.add_argument("--config", type=Path, help="RunConfig TOML path for start/recover")
+    run_live.add_argument("--param", action="append", default=[], help="strategy parameter key=value; repeatable")
+    run_live.add_argument("--confirm-live", action="store_true", help="required explicit confirmation for live start/recover")
+    run_live.add_argument("--duration-seconds", type=float, help="bounded foreground run duration; omit to run until stop/fault")
+    run_live.add_argument("--poll-seconds", type=float, default=0.25, help="foreground daemon stop-request poll interval")
+    run_live.add_argument("--stale-after-seconds", type=float, default=5.0, help="heartbeat age before live status is stale")
+    run_live.add_argument("--reason", help="operator reason for stop requests")
+    run_live.add_argument("--actor", default="cli", help="operator actor for control commands")
+    run_live.add_argument("--reconciliation-evidence", help="required evidence reference for reset-kill-switch")
+    run_live.add_argument("--risk-limits-hash", help="limits hash for reload-risk-limits")
     run_inspect = run_actions.add_parser("inspect"); run_inspect.add_argument("--db", type=Path)
     run_inspect.add_argument("--artifact",type=Path);run_inspect.add_argument("--at")
     run_inspect.add_argument("--run-id")
@@ -819,13 +839,6 @@ def _add_acquisition_limit_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-requests", type=int, default=10_000, help="maximum provider requests allowed for this acquisition")
     parser.add_argument("--max-instruments", type=int, default=10_000, help="maximum instruments allowed for this acquisition")
     parser.add_argument("--max-bytes", type=int, help="maximum estimated bytes allowed for this acquisition")
-
-
-def _add_provider_config_arg(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--provider-config", dest="connector_config", metavar="PROVIDER_CONFIG", type=Path,
-                        help="JSON configuration for additional Providers")
-    parser.add_argument("--connector-config", dest="connector_config", type=Path,
-                        help=argparse.SUPPRESS)
 
 
 def _add_sma_run_arguments(parser):
@@ -867,13 +880,13 @@ def _apply_project_config_defaults(args: argparse.Namespace, raw_argv: list[str]
     if config is None:
         return
     setattr(args, "_kairospy_project_config", config)
-    lake_root = config.relative_path("data.lake_root", DEFAULT_LAKE_ROOT)
+    lake_root = config.relative_path("paths.lake_root", DEFAULT_LAKE_ROOT)
     defaults = {
-        "--lake-root": ("lake_root", "data.lake_root", DEFAULT_LAKE_ROOT),
-        "--dataset-root": ("dataset_root", "data.dataset_root", str(lake_root / "curated")),
-        "--catalog-path": ("catalog_path", "data.catalog_path", str(lake_root / "catalog" / "instruments.json")),
-        "--reference-catalog-path": ("reference_catalog_path", "data.reference_catalog_path", str(lake_root / "reference" / "catalog.json")),
-        "--event-log-path": ("event_log_path", "data.event_log_path", str(lake_root / "events" / "kairospy.jsonl")),
+        "--lake-root": ("lake_root", "paths.lake_root", DEFAULT_LAKE_ROOT),
+        "--dataset-root": ("dataset_root", "paths.dataset_root", str(lake_root / "curated")),
+        "--catalog-path": ("catalog_path", "paths.catalog_path", str(lake_root / "catalog" / "instruments.json")),
+        "--reference-catalog-path": ("reference_catalog_path", "paths.reference_catalog", str(lake_root / "reference" / "catalog.json")),
+        "--event-log-path": ("event_log_path", "paths.event_log", str(lake_root / "events" / "kairospy.jsonl")),
     }
     for option, (attribute, dotted_path, default) in defaults.items():
         if not hasattr(args, attribute) or _has_cli_option(raw_argv, option):
@@ -944,7 +957,7 @@ def _project_command(args: argparse.Namespace) -> int:
         "project": config.get("project.name", config.root.name),
         "root": str(config.root),
         "config": str(config.path),
-        "data_root": str(config.relative_path("data.lake_root", DEFAULT_LAKE_ROOT)),
+        "data_root": str(config.relative_path("paths.lake_root", DEFAULT_LAKE_ROOT)),
         "default_environment": config.get("execution.default_environment", "simulated"),
         "live_trading": "enabled" if config.get("execution.live_trading_enabled", False) else "locked",
     }
@@ -964,16 +977,24 @@ def _configure_command(args: argparse.Namespace) -> int:
         if args.provider is None:
             args = _prompt_configure_args(args)
         if args.provider == "massive":
-            set_config_value(config.path, "providers.massive.api_key", f"env:{args.api_key_env}")
+            set_config_value(config.path, "credentials.massive_marketdata_primary.api_key", f"env:{args.api_key_env}")
             message = f"Configured Massive API key from {args.api_key_env}"
         elif args.provider == "binance":
             key_env = args.api_key_env or (
-                "BINANCE_TESTNET_API_KEY" if args.environment == "testnet" else "BINANCE_LIVE_API_KEY"
+                "KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_KEY"
+                if args.environment == "testnet"
+                else "KAIROS_BINANCE_TRADING_LIVE_SPOT_API_KEY"
             )
             secret_env = args.api_secret_env or (
-                "BINANCE_TESTNET_API_SECRET" if args.environment == "testnet" else "BINANCE_LIVE_API_SECRET"
+                "KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_SECRET"
+                if args.environment == "testnet"
+                else "KAIROS_BINANCE_TRADING_LIVE_SPOT_API_SECRET"
             )
-            base = f"providers.binance.{args.environment}"
+            base = (
+                "credentials.binance_trading_testnet_spot"
+                if args.environment == "testnet"
+                else "credentials.binance_trading_live_spot"
+            )
             set_config_value(config.path, f"{base}.api_key", f"env:{key_env}")
             set_config_value(config.path, f"{base}.api_secret", f"env:{secret_env}")
             message = f"Configured Binance {args.environment} credentials from {key_env}/{secret_env}"
@@ -1003,21 +1024,16 @@ def _doctor(args: argparse.Namespace) -> int:
         _print_doctor(checks, args.format)
         return 2
     checks.append({"name": "project", "status": "ok", "detail": str(config.path)})
-    for issue in config.validate():
-        checks.append({"name": "config", "status": "warning", "detail": issue})
-    if not any(item["name"] == "config" for item in checks):
+    if not isinstance(config.get("project"), dict) or not config.get("project.name"):
+        checks.append({"name": "config", "status": "warning", "detail": "[project].name is required"})
+    else:
         checks.append({"name": "config", "status": "ok", "detail": "kairos.toml is structurally valid"})
-    try:
-        config.massive_config()
-        checks.append({"name": "massive", "status": "ok", "detail": "credentials resolved"})
-    except Exception as exc:
-        checks.append({"name": "massive", "status": "warning", "detail": str(exc)})
-    for environment in ("testnet", "live"):
-        try:
-            config.binance_credentials(environment)
-            checks.append({"name": f"binance.{environment}", "status": "ok", "detail": "credentials resolved"})
-        except Exception as exc:
-            checks.append({"name": f"binance.{environment}", "status": "warning", "detail": str(exc)})
+    lake_root = config.relative_path("paths.lake_root", DEFAULT_LAKE_ROOT)
+    checks.append({
+        "name": "data",
+        "status": "ok" if lake_root.exists() else "warning",
+        "detail": f"lake root: {lake_root}",
+    })
     _print_doctor(checks, args.format)
     failed = any(item["status"] == "error" or (args.strict and item["status"] == "warning") for item in checks)
     return 2 if failed else 0
@@ -1043,12 +1059,10 @@ def _doctor_next_steps(checks: list[dict[str, object]]) -> list[str]:
     if by_name.get("project") == "error":
         steps.append("kairospy init")
         return steps
-    if by_name.get("massive") in {"warning", "warn", "error"}:
-        steps.append("kairospy configure massive")
-    if by_name.get("binance.testnet") in {"warning", "warn", "error"}:
-        steps.append("kairospy configure binance --environment testnet")
-    if by_name.get("binance.live") in {"warning", "warn", "error"}:
-        steps.append("kairospy configure binance --environment live")
+    if by_name.get("config") in {"warning", "warn", "error"}:
+        steps.append("kairospy config validate")
+    if by_name.get("data") in {"warning", "warn", "error"}:
+        steps.append("kairospy data start")
     if not steps:
         steps.append("kairospy data catalog")
     return steps
@@ -1071,11 +1085,19 @@ def _prompt_configure_args(args: argparse.Namespace) -> argparse.Namespace:
     provider = _prompt_choice("Provider", ("massive", "binance"), default="massive")
     setattr(args, "provider", provider)
     if provider == "massive":
-        setattr(args, "api_key_env", _prompt_text("Massive API key environment variable", "MASSIVE_API_KEY"))
+        setattr(args, "api_key_env", _prompt_text("Massive API key environment variable", "KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"))
         return args
     environment = _prompt_choice("Binance environment", ("testnet", "live"), default="testnet")
-    default_key = "BINANCE_TESTNET_API_KEY" if environment == "testnet" else "BINANCE_LIVE_API_KEY"
-    default_secret = "BINANCE_TESTNET_API_SECRET" if environment == "testnet" else "BINANCE_LIVE_API_SECRET"
+    default_key = (
+        "KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_KEY"
+        if environment == "testnet"
+        else "KAIROS_BINANCE_TRADING_LIVE_SPOT_API_KEY"
+    )
+    default_secret = (
+        "KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_SECRET"
+        if environment == "testnet"
+        else "KAIROS_BINANCE_TRADING_LIVE_SPOT_API_SECRET"
+    )
     setattr(args, "environment", environment)
     setattr(args, "api_key_env", _prompt_text("Binance API key environment variable", default_key))
     setattr(args, "api_secret_env", _prompt_text("Binance API secret environment variable", default_secret))
@@ -1131,14 +1153,15 @@ def _prompt_bool(label: str, default: bool) -> bool:
     return bool(default if value is None else value)
 
 
-def _massive_config(args: argparse.Namespace | None = None) -> MassiveConfig:
+def _massive_marketdata_config(args: argparse.Namespace | None = None) -> MassiveConfig:
     from kairospy.infrastructure.configuration import ConfigError, load_project_config_or_none
+    from kairospy.integrations.config import resolve_massive_marketdata_config
 
     config = getattr(args, "_kairospy_project_config", None) if args is not None else None
     config = config or load_project_config_or_none()
     if config is not None:
         try:
-            return config.massive_config()
+            return resolve_massive_marketdata_config(config)
         except ConfigError:
             pass
     return MassiveConfig.from_env()
@@ -1165,6 +1188,8 @@ def main(argv: list[str] | None = None) -> int:
         return _providers(args)
     if args.group == "catalog":
         return _catalog(args)
+    if args.group == "accounts":
+        return _accounts(args)
     if args.group == "account":
         return _account(args)
     if args.group == "order":
@@ -1318,9 +1343,11 @@ def _product_command(args: argparse.Namespace) -> int:
     from kairospy.surface import product as product_surface
     from kairospy.integrations.connectors.binance.historical_archive import GracefulShutdown
 
-    if args.group == "run" and args.action in {"start", "inspect", "replay", "compare"}:
+    if args.group == "run" and args.action in {"start", "config", "live", "inspect", "replay", "compare"}:
         handlers = {
             ("run", "start"): product_surface.run_start,
+            ("run", "config"): product_surface.run_config,
+            ("run", "live"): product_surface.run_live,
             ("run", "inspect"): product_surface.run_inspect,
             ("run", "replay"): product_surface.run_replay,
             ("run", "compare"): product_surface.run_compare,
@@ -1340,6 +1367,9 @@ def _product_command(args: argparse.Namespace) -> int:
             print(json.dumps(to_primitive(payload), ensure_ascii=False, indent=2, sort_keys=True))
         else:
             print(render_product_result(args.group, args.action, payload, resolve_language(args.lang)))
+        if args.group == "run" and args.action == "config" and getattr(args, "config_action", None) == "validate":
+            if payload.get("issues") and getattr(args, "strict", False):
+                return 2
         return 0
 
     raise SystemExit(f"unsupported product command {args.group} {args.action}")
@@ -1400,11 +1430,9 @@ def _providers(args: argparse.Namespace) -> int:
     from kairospy.surface import providers as provider_surface
 
     if args.action == "list":
-        payload = provider_surface.providers_list(args.lake_root, connector_config=args.connector_config)
+        payload = provider_surface.providers_list(args.lake_root)
     else:
-        payload = provider_surface.provider_doctor(
-            args.lake_root, args.provider, connector_config=args.connector_config,
-        )
+        payload = provider_surface.provider_doctor(args.lake_root, args.provider)
     _emit_provider_payload(args, "Kairos Providers" if args.action == "list" else "Kairos Provider Diagnostics", payload)
     return 2 if payload.get("status") == "unknown_provider" else 0
 
@@ -1755,10 +1783,9 @@ def _data(args: argparse.Namespace) -> int:
         return 0 if payload["status"] == "passed" else 2
     if args.action == "prepare":
         register_default_products(args.lake_root)
-        if args.connector_config is not None:
-            register_configured_products(args.lake_root, args.connector_config)
+        register_configured_products(args.lake_root)
         providers = default_provider_registry(
-            args.lake_root, connector_config=args.connector_config,
+            args.lake_root,
             progress=None,
         )
         client = DatasetClient(args.lake_root, providers=providers, acquisition_limits=_acquisition_limits(args))
@@ -1864,10 +1891,9 @@ def _data(args: argparse.Namespace) -> int:
         print(json.dumps({"alias": args.alias, "release_id": release.release_id}, indent=2)); return 0
     if args.action in {"plan", "acquire"}:
         register_default_products(args.lake_root)
-        if args.connector_config is not None:
-            register_configured_products(args.lake_root, args.connector_config)
+        register_configured_products(args.lake_root)
         providers = default_provider_registry(
-            args.lake_root, connector_config=args.connector_config,
+            args.lake_root,
             progress=None,
         )
         client = DatasetClient(args.lake_root, providers=providers, acquisition_limits=_acquisition_limits(args))
@@ -1914,7 +1940,7 @@ def _data(args: argparse.Namespace) -> int:
         moved = MassiveVendorArchiveClient.quarantine_non_https(args.lake_root)
         print(json.dumps({"quarantined": len(moved), "paths": [str(item) for item in moved]}, ensure_ascii=False, indent=2)); return 0
     if args.action == "sync-provider-reference":
-        pipeline = MassiveReferencePipeline(args.lake_root, MassiveClient(_massive_config(args)))
+        pipeline = MassiveReferencePipeline(args.lake_root, MassiveClient(_massive_marketdata_config(args)))
         result: dict[str, object] = {"code_tables": pipeline.sync_code_tables()}
         if args.equity_tickers:
             result["equity_tickers"] = pipeline.sync_equity_tickers(include_inactive=not args.active_only)
@@ -1939,7 +1965,7 @@ def _data(args: argparse.Namespace) -> int:
         print(f"{dataset.manifest.dataset_id}: slices={dataset.manifest.slice_count} hash={dataset.manifest.content_hash}")
         return 0
     if args.action == "provider-entitlement-diagnostics":
-        report = MassiveEntitlementDiagnostics(MassiveClient(_massive_config(args))).check(
+        report = MassiveEntitlementDiagnostics(MassiveClient(_massive_marketdata_config(args))).check(
             underlying=args.underlying, option_ticker=args.option_ticker, date=args.date)
         print(json.dumps({
             "ready": report.ready,
@@ -1953,14 +1979,14 @@ def _data(args: argparse.Namespace) -> int:
         result = ParquetMarketEventRepository(Path(args.lake_root) / "canonical" / "market").compact(args.dataset)
         print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
     if args.action == "provider-fetch":
-        client = MassiveClient(_massive_config(args))
+        client = MassiveClient(_massive_marketdata_config(args))
         archive = MassiveVendorArchiveClient(args.lake_root, client)
         resource, params = _massive_request(args)
         result = archive.fetch_pages(resource, params, max_pages=args.max_pages)
         print(json.dumps({"fingerprint": result.fingerprint, "directory": str(result.directory), "receipt": result.receipt}, ensure_ascii=False, indent=2))
         return 0
     if args.action == "provider-flat-file":
-        client = MassiveClient(_massive_config(args))
+        client = MassiveClient(_massive_marketdata_config(args))
         flat = MassiveFlatFileClient(args.lake_root, client)
         if args.operation == "usage":
             print(json.dumps(flat.usage(), ensure_ascii=False, indent=2)); return 0
@@ -1970,7 +1996,7 @@ def _data(args: argparse.Namespace) -> int:
             print(json.dumps(flat.cache_status(args.key), ensure_ascii=False, indent=2)); return 0
         print(flat.download(args.key)); return 0
     if args.action == "provider-flat-file-batch":
-        flat = MassiveFlatFileClient(args.lake_root, MassiveClient(_massive_config(args)))
+        flat = MassiveFlatFileClient(args.lake_root, MassiveClient(_massive_marketdata_config(args)))
         report = MassiveFlatFileBatchDownloader(flat).download_range(
             date.fromisoformat(args.start), date.fromisoformat(args.end), max_files=args.max_files, dry_run=args.dry_run,
         )
@@ -1987,7 +2013,7 @@ def _data(args: argparse.Namespace) -> int:
         print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
     if args.action in {"prepare-equity-daily-ohlcv", "prepare-equity-day-aggs"}:
         manifest = MassiveEquityDailyOhlcvPipeline(
-            args.lake_root, MassiveClient(_massive_config(args)),
+            args.lake_root, MassiveClient(_massive_marketdata_config(args)),
         ).prepare(
             args.dataset_id, args.ticker, date.fromisoformat(args.start), date.fromisoformat(args.end),
             view=args.view,
@@ -1995,7 +2021,7 @@ def _data(args: argparse.Namespace) -> int:
         print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
     if args.action in {"prepare-equity-hourly-ohlcv", "prepare-equity-hour-aggs"}:
         manifest = MassiveEquityHourlyOhlcvPipeline(
-            args.lake_root, MassiveClient(_massive_config(args)),
+            args.lake_root, MassiveClient(_massive_marketdata_config(args)),
         ).prepare(
             args.dataset_id, args.ticker, date.fromisoformat(args.start), date.fromisoformat(args.end),
             view=args.view,
@@ -2581,10 +2607,9 @@ def _prepare_us_equity_momentum(args: argparse.Namespace) -> dict[str, object]:
     if start.tzinfo is None or end.tzinfo is None or start >= end:
         raise ValueError("US equity momentum preparation requires timezone-aware increasing [start,end) timestamps")
     register_default_products(args.lake_root)
-    if args.connector_config is not None:
-        register_configured_products(args.lake_root, args.connector_config)
+    register_configured_products(args.lake_root)
     providers = default_provider_registry(
-        args.lake_root, connector_config=args.connector_config,
+        args.lake_root,
         progress=None if args.quiet else None,
     )
     client = DatasetClient(args.lake_root, providers=providers)
@@ -2736,7 +2761,7 @@ def _sync_us_equity_momentum_corporate_actions(
     if not ticker_map:
         raise ValueError("cannot sync corporate actions because prepared raw releases contain no ticker/instrument rows")
 
-    archive = MassiveVendorArchiveClient(lake_root, MassiveClient(_massive_config()))
+    archive = MassiveVendorArchiveClient(lake_root, MassiveClient(_massive_marketdata_config()))
     events: list[dict[str, object]] = []
     receipts: list[str] = []
     per_ticker: dict[str, dict[str, int]] = {}
@@ -3150,6 +3175,108 @@ def _account(args: argparse.Namespace) -> int:
     return 0 if report.matched else 2
 
 
+def _accounts(args: argparse.Namespace) -> int:
+    from kairospy.infrastructure.configuration import ConfigError, KairosProjectConfig
+    from kairospy.integrations.config import CredentialResolver, resolve_account_binding
+
+    try:
+        config = KairosProjectConfig.discover(Path.cwd())
+        binding = resolve_account_binding(config, args.account)
+    except ConfigError as error:
+        payload = {
+            "product": "accounts",
+            "operation": "doctor",
+            "account": args.account,
+            "status": "unknown_account",
+            "issues": [{"code": "unknown_account", "message": str(error)}],
+        }
+        _emit_accounts_payload(args, payload)
+        return 2
+    resolver = CredentialResolver(config)
+    credential_fields = _account_credential_fields(binding.credential, config.get(f"credentials.{binding.credential}", {}))
+    credential_refs = []
+    issues = []
+    for field in credential_fields:
+        ref = resolver.field(binding.credential, field)
+        provided = ref.resolved not in (None, "")
+        credential_refs.append({
+            "credential": binding.credential,
+            "field": field,
+            "source": ref.source,
+            "provided": provided,
+        })
+        if not provided:
+            issues.append({
+                "code": "missing_credential",
+                "field": field,
+                "source": ref.source,
+            })
+    if not binding.account_ref:
+        issues.append({"code": "missing_account_ref"})
+    if not binding.provider:
+        issues.append({"code": "missing_provider"})
+    if not binding.environment:
+        issues.append({"code": "missing_environment"})
+    if not binding.permissions:
+        issues.append({"code": "missing_permissions"})
+    payload = {
+        "product": "accounts",
+        "operation": "doctor",
+        "account": binding.name,
+        "status": "available" if not issues else "needs_configuration",
+        "account_ref": binding.account_ref,
+        "provider": binding.provider,
+        "environment": binding.environment,
+        "permissions": list(binding.permissions),
+        "allowed_products": list(binding.allowed_products),
+        "capital_scope": binding.capital_scope,
+        "credential": binding.credential,
+        "credential_refs": credential_refs,
+        "checks": {
+            "account_binding": bool(binding.account_ref and binding.provider and binding.environment),
+            "credentials": not any(item["code"] == "missing_credential" for item in issues),
+            "permissions": bool(binding.permissions),
+            "account_query": "not_run",
+        },
+        "issues": issues,
+    }
+    _emit_accounts_payload(args, payload)
+    return 0 if not issues else 2
+
+
+def _account_credential_fields(name: str, raw: object) -> tuple[str, ...]:
+    if isinstance(raw, dict):
+        explicit = tuple(
+            field for field in ("api_key", "api_secret", "passphrase", "host", "port", "client_id")
+            if field in raw
+        )
+        if explicit:
+            return explicit
+        kind = str(raw.get("kind") or "")
+        if kind == "api_key_secret_passphrase":
+            return ("api_key", "api_secret", "passphrase")
+        if kind == "api_key_secret":
+            return ("api_key", "api_secret")
+    if name.startswith("ibkr_"):
+        return ("host", "port", "client_id")
+    return ("api_key", "api_secret")
+
+
+def _emit_accounts_payload(args: argparse.Namespace, payload: dict[str, object]) -> None:
+    if args.format == "json":
+        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        return
+    print(f"Account: {payload.get('account')}")
+    print(f"Status: {payload.get('status')}")
+    if payload.get("account_ref"):
+        print(f"Account Ref: {payload.get('account_ref')}")
+    if payload.get("provider"):
+        print(f"Provider: {payload.get('provider')}")
+    for issue in payload.get("issues", ()):
+        if isinstance(issue, dict):
+            print(f"Issue: {issue.get('code')}")
+
+
 def _runtime_l4_preflight(args: argparse.Namespace) -> dict[str, object]:
     import socket
     environment = Environment(args.environment)
@@ -3172,11 +3299,15 @@ def _runtime_l4_preflight(args: argparse.Namespace) -> dict[str, object]:
         except (LookupError, ValueError) as error:
             instrument_reason = str(error)
     if args.venue == "binance":
-        external_ready = bool(os.getenv("BINANCE_TESTNET_API_KEY") and os.getenv("BINANCE_TESTNET_API_SECRET"))
-        external_reason = "testnet credentials present" if external_ready else "BINANCE_TESTNET_API_KEY/API_SECRET are missing"
+        try:
+            _credentials(Environment.TESTNET)
+            external_ready = True
+            external_reason = "Binance testnet credential resolved from Kairos project config"
+        except SystemExit as error:
+            external_ready = False
+            external_reason = str(error)
     else:
-        host = os.getenv("IBKR_HOST", "127.0.0.1")
-        port = int(os.getenv("IBKR_PORT", "4001"))
+        host, port, _client_id = _ibkr_connection_settings()
         connection = socket.socket(); connection.settimeout(0.25)
         try:
             connection.connect((host, port)); external_ready = True
@@ -3399,28 +3530,32 @@ def _submit_order_or_runtime_soak(args: argparse.Namespace) -> int:
 
 
 def _ibkr_session(*, readonly: bool) -> IbkrSession:
-    return IbkrSession(
-        os.getenv("IBKR_HOST", "127.0.0.1"), int(os.getenv("IBKR_PORT", "4001")),
-        int(os.getenv("IBKR_CLIENT_ID", "51")), readonly,
-    )
+    host, port, client_id = _ibkr_connection_settings()
+    return IbkrSession(host, port, client_id, readonly)
+
+
+def _ibkr_connection_settings() -> tuple[str, int, int]:
+    from kairospy.infrastructure.configuration import load_project_config_or_none
+    from kairospy.integrations.config import resolve_ibkr_trading_connection
+
+    config = load_project_config_or_none()
+    settings = resolve_ibkr_trading_connection(config)
+    return settings.host, settings.port, settings.client_id
 
 
 def _credentials(environment: Environment) -> tuple[str, str]:
     from kairospy.infrastructure.configuration import ConfigError, load_project_config_or_none
+    from kairospy.integrations.config import resolve_binance_trading_credentials
 
     config = load_project_config_or_none()
     config_environment = "testnet" if environment is Environment.TESTNET else "live"
-    if config is not None:
-        try:
-            credentials = config.binance_credentials(config_environment)
-            return credentials.api_key, credentials.api_secret
-        except ConfigError:
-            pass
-    prefix = "BINANCE_TESTNET" if environment is Environment.TESTNET else "BINANCE_LIVE"
-    key, secret = os.getenv(f"{prefix}_API_KEY"), os.getenv(f"{prefix}_API_SECRET")
-    if not key or not secret:
-        raise SystemExit(f"missing {prefix}_API_KEY/{prefix}_API_SECRET environment variables")
-    return key, secret
+    if config is None:
+        raise SystemExit("missing Kairos project config for Binance trading credentials")
+    try:
+        credentials = resolve_binance_trading_credentials(config, config_environment)
+    except ConfigError as error:
+        raise SystemExit(str(error)) from error
+    return credentials.api_key, credentials.api_secret
 
 
 def _account_gateway(venue: str, environment: Environment, account: AccountRef, ledger, product: str, catalog, inverse: bool):

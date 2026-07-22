@@ -10,11 +10,12 @@ from typing import Callable, Iterable, Mapping, Protocol, TYPE_CHECKING
 
 from kairospy.data.contracts import RunMode
 from kairospy.strategy.contracts import EconomicIntent
+from kairospy.execution.intent_coordinator import IntentCoordinator
 from kairospy.execution.intent_status import IntentExecutionTracker
 from kairospy.infrastructure.storage.codec import to_primitive
 from kairospy.strategy.protocols import Context, StrategyDecision
 from kairospy.strategy.runtime import GovernedStrategyRuntime
-from kairospy.strategy.views import BudgetView, FeatureView, IntentView
+from kairospy.strategy.views import BudgetView, FeatureView
 
 if TYPE_CHECKING:
     from kairospy.analytics.features.runtime import FactorRuntime, FactorSnapshot
@@ -574,6 +575,7 @@ class GovernedStrategyRunLoop:
         approved_capital: Decimal,
         hooks: StrategyRunHooks | None = None,
         intent_tracker: IntentExecutionTracker | None = None,
+        intent_coordinator: IntentCoordinator | None = None,
     ) -> None:
         if approved_capital <= 0:
             raise ValueError("strategy run requires positive approved capital")
@@ -583,7 +585,9 @@ class GovernedStrategyRunLoop:
         self.context_factory = context_factory
         self.approved_capital = approved_capital
         self.hooks = hooks
-        self.intent_tracker = intent_tracker or IntentExecutionTracker()
+        self.intent_coordinator = intent_coordinator or IntentCoordinator(
+            strategy_runtime, intent_tracker or IntentExecutionTracker(),
+        )
 
     async def run(self) -> StrategyRunResult:
         market_projection = CanonicalBarMarketProjection()
@@ -605,7 +609,7 @@ class GovernedStrategyRunLoop:
             context = replace(
                 base,
                 features=FeatureView.from_snapshots(existing=base.features.values, factor_snapshots=(factor,)),
-                intents=IntentView.from_executions(self.intent_tracker.views),
+                intents=self.intent_coordinator.intent_view(),
                 budget=BudgetView.from_evidence(
                     as_of=event.available_time,
                     approved_capital=self.approved_capital,
@@ -617,23 +621,26 @@ class GovernedStrategyRunLoop:
                 ),
             )
             if not started:
-                if intent := self.strategy_runtime.on_start(context):
+                if intent := self.intent_coordinator.publish(
+                    self.strategy_runtime.intents_on_start(context),
+                    context,
+                ):
                     intents.append(intent)
-                    for item in intent.intents:
-                        self.intent_tracker.publish(item)
                 started = True
-            if intent := self.strategy_runtime.on_market(context):
+            if intent := self.intent_coordinator.publish(
+                self.strategy_runtime.intents_on_market(context),
+                context,
+            ):
                 intents.append(intent)
-                for item in intent.intents:
-                    self.intent_tracker.publish(item)
                 if self.hooks is not None:
                     self.hooks.on_intent(event, market, factor, intent)
             last_context = context
         if last_context is not None:
-            if intent := self.strategy_runtime.on_end(last_context):
+            if intent := self.intent_coordinator.publish(
+                self.strategy_runtime.intents_on_end(last_context),
+                last_context,
+            ):
                 intents.append(intent)
-                for item in intent.intents:
-                    self.intent_tracker.publish(item)
             if self.hooks is not None:
                 self.hooks.on_end(last_context)
         decisions = tuple(self.strategy_runtime.strategy.decisions)

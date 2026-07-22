@@ -60,7 +60,6 @@ class DataManifestDataset:
             freshness_seconds=self.freshness_seconds or 5.0,
             provider=None,
             venue=None,
-            connector_config=None,
             refresh=False,
             dry_run=False,
             list_products=False,

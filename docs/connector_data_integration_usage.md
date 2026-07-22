@@ -15,8 +15,8 @@
 | 看可用 Data Product | `kairospy data products list` |
 | 检查某个 Data Product 能不能用 | `kairospy data products doctor <product-or-alias>` |
 | 使用内置 Data Product 生成 Dataset | `kairospy data use <product-or-alias> --as <dataset>` |
-| 接入 Python 代码资产 | Provider config file + `provider_extensions[]` + `products(context)` / `register(registry, context)` |
-| 接入 C++/Rust/旧脚本 | Provider config file + `provider_extensions[]` + `kind: external_process` |
+| 接入 Python 代码资产 | `kairos.toml` + `[provider_extensions.*]` + `products(context)` / `register(registry, context)` |
+| 接入 C++/Rust/旧脚本 | `kairos.toml` + `[provider_extensions.*]` + `kind = "external_process"` |
 
 ## 0. 用户工作流
 
@@ -77,11 +77,7 @@ kairospy providers doctor massive
 
 这个命令可以显示具体 Data Product 是否 `available`，但默认仍不暴露 `ProviderConnector`、`DataProductBuilder`、`ProductSourceBinding`、`DatasetRelease` 这类内部名词。
 
-如果用户使用额外 provider 配置：
-
-```bash
-kairospy providers doctor massive --provider-config ./providers.massive.json
-```
+如果用户接入额外 provider，应写入项目根目录的 `kairos.toml`，诊断命令会自动发现项目配置。
 
 ### 0.2 查看 Data Product
 
@@ -174,28 +170,17 @@ kairospy data use massive.equity.ohlcv.1d \
   --for backtest
 ```
 
-如果需要额外配置：
-
-```bash
-kairospy data use <product> \
-  --as <dataset> \
-  --start <iso-start> \
-  --end <iso-end> \
-  --provider-config ./providers.json
-```
+如果需要额外 provider 或 Data Product 配置，应先写入项目 `kairos.toml`，再使用同一条 `data use` 命令。
 
 ## 2. 接入 Python Provider Extension
 
 当用户已有 Python SDK wrapper、内部 API client 或历史代码时，推荐使用 Python in-process extension。
 
-`providers.json`：
+`kairos.toml`：
 
-```json
-{
-  "provider_extensions": [
-    {"path": "./my_provider.py"}
-  ]
-}
+```toml
+[provider_extensions.my_provider]
+path = "./my_provider.py"
 ```
 
 `my_provider.py`：
@@ -258,37 +243,33 @@ def register(registry, context):
 验证：
 
 ```bash
-kairospy providers doctor my-provider --provider-config ./providers.json
-kairospy data products doctor market.my_provider.signal.1d --provider-config ./providers.json
+kairospy providers doctor my-provider
+kairospy data products doctor market.my_provider.signal.1d
 ```
 
 ## 3. 接入外部进程 Provider
 
 当用户已有 C++、Rust、旧 Python 脚本、独立行情网关或高性能下载器时，不需要改写成 KairoSpy 内部类。可以让外部进程通过 stdin 接收 request JSON，并向 stdout 输出 artifact manifest。
 
-`providers.json`：
+`kairos.toml`：
 
-```json
-{
-  "provider_extensions": [
-    {
-      "kind": "external_process",
-      "provider": "my-process",
-      "venue": "internal",
-      "command": ["./my_downloader", "--format", "kairospy-json"],
-      "timeout_seconds": 300,
-      "products": [
-        {
-          "logical_key": "market.my_process.signal.1d",
-          "title": "My process daily signal",
-          "primary_time": "period_start",
-          "fields": ["period_start", "symbol", "value"],
-          "dimensions": {"asset_class": "equity", "frequency": "1d"}
-        }
-      ]
-    }
-  ]
-}
+```toml
+[provider_extensions.my_process]
+kind = "external_process"
+provider = "my-process"
+venue = "internal"
+command = ["./my_downloader", "--format", "kairospy-json"]
+timeout_seconds = 300
+
+[[provider_extensions.my_process.products]]
+logical_key = "market.my_process.signal.1d"
+title = "My process daily signal"
+primary_time = "period_start"
+fields = ["period_start", "symbol", "value"]
+
+[provider_extensions.my_process.products.dimensions]
+asset_class = "equity"
+frequency = "1d"
 ```
 
 外部进程 stdout 输出 file-backed Source artifact manifest：
@@ -316,8 +297,7 @@ kairospy data use market.my_process.signal.1d \
   --as market.my_process.signal.1d \
   --start 2026-01-01T00:00:00+00:00 \
   --end 2026-01-02T00:00:00+00:00 \
-  --provider my-process \
-  --provider-config ./providers.json
+  --provider my-process
 ```
 
 `kairospy data acquire --dataset ...` 仍保留为高级/兼容入口。它的完成输出也应使用 Dataset 术语；内部 build record id 不作为常规用户字段暴露。
@@ -475,19 +455,20 @@ Revision: rev_...
 
 Provider 扩展的用户配置也应该使用业务化字段，而不是内部 binding 类名：
 
-```yaml
-providers:
-  massive:
-    credentials: env:MASSIVE_API_KEY
+```toml
+[credentials.massive_marketdata_primary]
+api_key = "env:KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"
 
-data_products:
-  us_equity_daily:
-    product: market.ohlcv.equity.us.massive.1d.vendor_adjusted
-    provider: massive
-    source:
-      resource: equity_ohlcv
-      interval: 1d
-      view: vendor_adjusted
+[providers.massive.services.historical_market_data]
+credential = "massive_marketdata_primary"
+resource = "equity_ohlcv"
+rate_limit = "vendor-default"
+
+[data_products.us_equity_daily]
+kind = "massive_equity"
+logical_key = "market.ohlcv.equity.us.massive.1d.vendor_adjusted"
+ticker = "AAPL"
+view = "vendor_adjusted"
 ```
 
 系统内部可以把这段配置解析成 `ProductSourceBinding`，但用户不需要手写 Python binding 对象。
@@ -977,14 +958,11 @@ ProviderConnector
 - 已有交易通道。
 - 复用 vendor SDK wrapper。
 
-当前 Python in-process 扩展入口建议使用 Provider config file 的 `provider_extensions`：
+当前 Python in-process 扩展入口建议使用项目 `kairos.toml` 的 `[provider_extensions.*]`：
 
-```json
-{
-  "provider_extensions": [
-    {"path": "./my_provider.py"}
-  ]
-}
+```toml
+[provider_extensions.my_provider]
+path = "./my_provider.py"
 ```
 
 扩展模块暴露两个稳定函数：
@@ -1392,8 +1370,8 @@ DataProductBuilder 负责：
 
 ### 第四阶段：用户扩展
 
-- 已支持 Provider config file 的 `provider_extensions[]` 加载 Python provider extension。
-- CLI 推荐使用 `--provider-config`；旧 `--connector-config` 保留为兼容参数。
+- 已支持项目 `kairos.toml` 的 `[provider_extensions.*]` 加载 Python provider extension。
+- CLI 不再暴露独立 provider 配置文件参数；provider 扩展统一从项目配置发现。
 - 已支持 Python `products(context)` 注册用户 Data Product contract。
 - 已支持 Python `register(registry, context)` 注册用户 DataProductBuilder。
 - 已支持 `kind: external_process` 的 file-backed Dataset artifact manifest。

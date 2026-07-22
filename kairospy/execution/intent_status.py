@@ -141,6 +141,26 @@ class IntentExecutionTracker:
         self._views[current.scope.key] = updated
         return updated
 
+    def mark_blocked(self, intent: Intent, *, reason: str) -> IntentExecutionView:
+        if not reason.strip():
+            raise ValueError("blocked intent requires a reason")
+        current = self.publish(intent)
+        updated = IntentExecutionView(
+            current.intent_id,
+            current.scope,
+            IntentStatus.BLOCKED,
+            current.target_quantity,
+            current.fulfilled_quantity,
+            current.remaining_quantity,
+            current.working_quantity,
+            current.filled_quantity,
+            current.attempt_count,
+            current.last_attempt_at,
+            reason,
+        )
+        self._views[current.scope.key] = updated
+        return updated
+
 
 def _target_quantity(intent: Intent) -> Decimal | None:
     if isinstance(intent, TargetPositionIntent):

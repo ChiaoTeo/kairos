@@ -88,7 +88,7 @@ class DataProductContractTests(unittest.TestCase):
             }]}), encoding="utf-8")
             compiled = configured_product_specs(config)[0]
             catalog = register_configured_products(directory, config)
-            providers = default_provider_registry(directory, connector_config=config)
+            providers = default_provider_registry(directory, data_product_config=config)
 
             self.assertEqual(catalog.product_spec(str(compiled.key)), compiled)
             self.assertEqual(providers.product_spec(str(compiled.key)), compiled)
@@ -108,7 +108,7 @@ class DataProductContractTests(unittest.TestCase):
             }]}), encoding="utf-8")
             compiled = configured_product_specs(config)[0]
             catalog = register_configured_products(directory, config)
-            providers = default_provider_registry(directory, connector_config=config)
+            providers = default_provider_registry(directory, data_product_config=config)
 
             self.assertEqual(catalog.product_spec(str(compiled.key)), compiled)
             self.assertEqual(providers.product_spec(str(compiled.key)), compiled)
@@ -159,7 +159,7 @@ class DataProductContractTests(unittest.TestCase):
 
             compiled = configured_product_specs(config)[0]
             catalog = register_configured_products(directory, config)
-            providers = default_provider_registry(directory, connector_config=config)
+            providers = default_provider_registry(directory, data_product_config=config)
             request = AcquisitionRequest(
                 str(compiled.key),
                 (TimeRange(
@@ -219,7 +219,7 @@ class DataProductContractTests(unittest.TestCase):
             }), encoding="utf-8")
 
             catalog = register_configured_products(directory, config)
-            providers = default_provider_registry(directory, connector_config=config)
+            providers = default_provider_registry(directory, data_product_config=config)
             client = DatasetClient(directory, providers=providers)
             plan = client.plan(
                 "market.demo.process.signal",
