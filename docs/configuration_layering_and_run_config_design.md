@@ -31,7 +31,7 @@ Data -> Workspace -> Code -> Run -> Replay -> Audit
 | `kairospy/infrastructure/configuration.py` | 发现并解析 `kairos.toml`，加载 `.env`，解析通用 `env:`，提供 `ProjectConfigLoader` / `ConfigValue` / `CredentialRef` | 不承载 provider/account credential 业务规则 |
 | `kairospy/integrations/config.py` | 解析 `ProviderServiceConfig`、`AccountBinding` 和 provider/account credential refs | provider-specific credential schema 收口在 integrations 层 |
 | `kairospy/surface/project.py` | `kairospy init` 生成 `kairos.toml`、`.env.example` 和 `configs/runs/*.example.toml` | 默认保持 live fail-closed |
-| `kairospy/data/bootstrap.py` | 注册内置 Data Product 和项目配置中的 Data Product / provider extension | 额外 provider extension 从 `kairos.toml` 自动发现，不再通过独立 CLI 参数传入 |
+| `kairospy/data/extensions/bootstrap.py` | 注册内置 Data Product 和项目配置中的 Data Product / provider extension | 额外 provider extension 从 `kairos.toml` 自动发现，不再通过独立 CLI 参数传入 |
 | `kairospy/workspace/repository.py` | Workspace manifest、data aliases、WorkspaceData facade | 边界正确，只应继续保持 data projection 语义 |
 | `kairospy/runtime/run_config.py` | `RunConfig`、`RunConfigResolver`、`RunConfigValidationReport` | 用户侧 reusable run intent 入口 |
 | `kairospy/runtime/run_instance.py` | `RunInstance`、`RunManifestBuilder` | RunInstance manifest 构造和冻结事实结构 |

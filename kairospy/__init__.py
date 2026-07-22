@@ -1,5 +1,7 @@
 """Kairos quantitative data, workspace, strategy protocol, and run toolkit."""
 
+from kairospy.workspace import Workspace
+
 __version__ = "0.1.0"
 
 __all__ = [
@@ -14,8 +16,4 @@ def __getattr__(name: str):
         from kairospy.surface.project import initialize_project
 
         return initialize_project
-    if name == "Workspace":
-        from kairospy.workspace import Workspace
-
-        return Workspace
     raise AttributeError(f"module 'kairospy' has no attribute {name!r}")

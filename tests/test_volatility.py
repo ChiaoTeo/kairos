@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from kairospy.data import DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease
+from kairospy.data.catalog import DataCatalog
+from kairospy.data.contracts import DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease
 from kairospy.surface.data_features import SurfaceFeaturePublisher, load_surface_features
 from kairospy.identity import InstrumentId
 from kairospy.reference.contracts import OptionRight
@@ -74,9 +75,8 @@ class VolatilityTests(unittest.TestCase):
                 "curated/input", "parquet", "input-hash",
             ))
             catalog.save()
-            release = SurfaceFeaturePublisher(root).publish((surface,), input_release_id="surface-input")
-            self.assertTrue((root / release.relative_path).exists())
-            self.assertEqual(load_surface_features(root, release.release_id), (surface,))
+            with self.assertRaisesRegex(RuntimeError, "Feature Release publishing has been removed"):
+                SurfaceFeaturePublisher(root).publish((surface,), input_release_id="surface-input")
 
 
 if __name__ == "__main__":

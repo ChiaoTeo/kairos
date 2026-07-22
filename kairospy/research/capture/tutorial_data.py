@@ -4,14 +4,14 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from kairospy.data import (
-    DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DataProductContract, DatasetStorageKind,
+from kairospy.data.contracts import (
+    DatasetKey, DatasetLayer, DataProductDefinition, DataProductContract, DatasetStorageKind,
     QualityLevel, SourceBinding,
 )
-from kairospy.data.publishing import publish_release, release_path
+from kairospy.data.storage.store import DatasetStore
+from kairospy.data.storage.writer import DatasetWriter
 from kairospy.identity import InstrumentId
 from kairospy.market.types import Bar
-from kairospy.infrastructure.storage.data_lake import write_intraday_dataset
 
 
 SMA_TUTORIAL_RELEASE_ID = "fixture:sma-bars-v1"
@@ -51,52 +51,28 @@ def tutorial_sma_bars() -> tuple[Bar, ...]:
 
 
 def ensure_sma_tutorial_dataset(root: str | Path):
-    """Publish the bundled fixture through the same governed path used by real workspace data."""
-    lake = Path(root)
-    catalog = DataCatalog(lake)
-    try:
-        release = catalog.release(SMA_TUTORIAL_RELEASE_ID)
-    except KeyError:
-        release = None
-    if release is not None:
-        directory = lake / release.relative_path
-        if not directory.exists():
-            raise FileNotFoundError(f"tutorial Dataset Release directory is missing: {directory}")
-        return release
-
+    """Ensure the bundled fixture exists in the simplified DatasetStore."""
+    store = DatasetStore(root)
+    dataset_id = str(SMA_TUTORIAL_DATASET.key)
+    if list(store.data_path(dataset_id).rglob("*.parquet")):
+        return dataset_id
     rows = [_bar_row(bar) for bar in tutorial_sma_bars()]
-    directory = lake / release_path(SMA_TUTORIAL_DATASET, SMA_TUTORIAL_RELEASE_ID)
-    schema = {
-        "schema_id": SMA_TUTORIAL_DATASET.schema_id,
-        "schema_version": 1,
-        "primary_key": ["instrument_id", "period_start"],
-        "primary_time": "available_time",
-        "fields": {
-            "instrument_id": {"type": "string"},
-            "period_start": {"type": "datetime", "timezone": "UTC"},
-            "period_end": {"type": "datetime", "timezone": "UTC"},
-            "event_time": {"type": "datetime", "timezone": "UTC"},
-            "available_time": {"type": "datetime", "timezone": "UTC"},
-            "open": {"type": "decimal"}, "high": {"type": "decimal"},
-            "low": {"type": "decimal"}, "close": {"type": "decimal"},
-            "volume": {"type": "decimal"},
+    store.ensure_dataset(
+        dataset_id,
+        metadata={
+            "title": SMA_TUTORIAL_DATASET.product.title,
+            "schema": SMA_TUTORIAL_DATASET.schema_id,
+            "source": "synthetic-fixture",
         },
-    }
-    lineage = {
-        "lineage_version": 2, "dataset_id": SMA_TUTORIAL_RELEASE_ID,
-        "producer": {"name": "kairospy.research.capture.tutorial_data", "version": "1"},
-        "source": {"provider": "synthetic-fixture"}, "point_in_time_safe": True,
-        "synthetic": True,
-    }
-    manifest = write_intraday_dataset(
-        directory, rows, dataset_id=SMA_TUTORIAL_RELEASE_ID, schema=schema, lineage=lineage,
-        interval=timedelta(hours=1), capabilities=dict(SMA_TUTORIAL_DATASET.capabilities),
     )
-    return publish_release(
-        lake, SMA_TUTORIAL_DATASET, SMA_TUTORIAL_RELEASE_ID, manifest,
-        provider="synthetic-fixture", venue="tutorial", transform_id="bundled-sma-bars",
-        transform_version="1", quality_level=QualityLevel.BACKTEST,
+    DatasetWriter(store).upsert(
+        dataset_id,
+        rows,
+        key=("instrument_id", "period_start"),
+        partition_by=("event_day",),
+        time_field="period_start",
     )
+    return dataset_id
 
 
 def _bar_row(bar: Bar) -> dict[str, object]:

@@ -8,9 +8,13 @@ from kairospy.integrations.connectors import (
     ProviderResource, ProviderResourceSpec, ProviderService, ProviderServiceSpec, ProviderTransport,
     SourceArtifact, TransportRequest, TransportResponse,
 )
-from kairospy.data import (
-    DataProductBuilderRegistry, DataProductTaskPlan, DatasetBuildResult, EquityOhlcvDataProductBuilder,
-    EquityOhlcvSourceBinding, DatasetPublisher, ProductSourceBinding, ProviderRegistry, TaskRangePlan, UniversePlan,
+from kairospy.data.acquisition import ProviderRegistry
+from kairospy.data.acquisition.planning import DataProductTaskPlan, TaskRangePlan, UniversePlan
+from kairospy.data.acquisition.product_builders import (
+    DataProductBuilderRegistry, DatasetBuildResult, ProductSourceBinding,
+)
+from kairospy.data.products.market_ohlcv import (
+    EquityOhlcvDataProductBuilder, EquityOhlcvSourceBinding,
     equity_hourly_ohlcv_rows, equity_ohlcv_schema, equity_symbol,
 )
 from kairospy.data.products import US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY
@@ -65,7 +69,6 @@ class ProviderDataBoundaryTests(unittest.TestCase):
         self.assertEqual(result.dataset_id, "market.ohlcv.equity.us.1d")
         self.assertEqual(result.build_id, "build-test")
         self.assertEqual(DataProductBuilderRegistry().builders(), ())
-        self.assertTrue(DatasetPublisher("/tmp/kairospy-test"))
         self.assertTrue(ProviderConnector)
         self.assertTrue(ProviderService)
         self.assertTrue(ProviderResource)

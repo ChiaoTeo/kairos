@@ -8,94 +8,84 @@ import tempfile
 import unittest
 
 from kairospy.surface.cli.main import main
-from kairospy.data import (
-    DataCatalog, DataDiagnosticsService, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease,
-    DatasetStatus, QualityLevel,
-)
-from kairospy.infrastructure.storage.data_lake import write_daily_dataset
 
 
 class DataProductExperienceTests(unittest.TestCase):
-    def _lake(self, directory: str) -> tuple[DataProductDefinition, DatasetRelease]:
-        root = Path(directory)
-        product = DataProductDefinition(
-            DatasetKey("market.ohlcv.crypto.test.btc-usdt.1d"), "BTC daily test data", DatasetLayer.CANONICAL,
-            "Daily BTC/USDT bars for governed workspace and backtesting",
-            {"asset_class": "crypto", "instrument": "BTC-USDT", "frequency": "1d"},
-            "period_start", owner="data-platform",
-        )
-        relative_path = "canonical/test/release-test-1"
-        target = root / relative_path
-        manifest = write_daily_dataset(
-            target, [{"period_start": "2026-01-01T00:00:00Z", "value": 1}],
-            dataset_id="release-test-1", schema={"schema_id": "market.ohlcv.v1", "primary_key": ["period_start"]},
-            lineage={"source": {"provider": "test"}},
-        )
-        for name in ("usage", "release"):
-            (target / f"{name}.json").write_text(json.dumps({"name": name}), encoding="utf-8")
-        release = DatasetRelease(
-            "release-test-1", product.key, "1", "market.ohlcv.v1", "1", "fixture", "1",
-            relative_path, "parquet", str(manifest["dataset_sha256"]), "test", "test", (),
-            DatasetStatus.APPROVED_FOR_BACKTEST, QualityLevel.BACKTEST,
-        )
-        catalog = DataCatalog(root)
-        catalog.register_product(product)
-        catalog.register_release(release)
-        catalog.save()
-        return product, release
-
-    def test_search_describe_doctor_and_strict_health_form_a_data_workflow(self) -> None:
+    def test_file_dataset_workflow_uses_dataset_store_terms(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            product, release = self._lake(directory)
-            report = DataDiagnosticsService(directory).audit()
-            self.assertTrue(report["healthy"])
-            with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main([
-                    "--lake-root", directory, "--format", "json", "data", "search",
-                    "--dimension", "instrument=BTC-USDT", "--dimension", "frequency=1d",
-                ]), 0)
-                search = json.loads(output.getvalue())
-                self.assertEqual(search["products"][0]["dataset"], str(product.key))
-                self.assertNotIn("release_id", json.dumps(search))
-                self.assertNotIn("logical_key", json.dumps(search))
-                self.assertNotIn("selected_release", json.dumps(search))
-                self.assertNotIn("layer", json.dumps(search))
-            with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main(["--lake-root", directory, "data", "describe", "--dataset", str(product.key)]), 0)
-                rendered = output.getvalue()
-                self.assertIn(str(product.key), rendered)
-                self.assertIn("ready_for_backtest", rendered)
-                self.assertNotIn(release.release_id, rendered)
-            with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main(["--lake-root", directory, "--format", "json", "data", "doctor", "--dataset", str(product.key)]), 0)
-                self.assertIn('"healthy": true', output.getvalue())
-            with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main(["--lake-root", directory, "--format", "json", "data", "diagnostics", "--strict"]), 0)
-            with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main([
-                    "--lake-root", directory, "data", "query", "--dataset", release.release_id,
-                    "--limit", "1",
-                ]), 0)
-                rendered = output.getvalue()
-                self.assertIn(str(product.key), rendered)
-                self.assertNotIn("Release", rendered)
-            snapshot = Path(directory) / "workspace" / "test-workspace" / "data_snapshot.json"
-            with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main([
-                    "--lake-root", directory, "data", "freeze", "--workspace", "test-workspace",
-                    "--dataset", release.release_id, "--output", str(snapshot),
-                ]), 0)
-                self.assertTrue(snapshot.exists())
+            root = Path(directory)
+            source = root / "signals.csv"
+            source.write_text(
+                "event_time,instrument_id,signal\n"
+                "2026-01-01T00:00:00+00:00,BTC,1\n",
+                encoding="utf-8",
+            )
 
-    def test_strict_health_fails_with_actionable_missing_metadata(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            product, release = self._lake(directory)
-            (Path(directory) / release.relative_path / "quality.json").unlink()
             with StringIO() as output, redirect_stdout(output):
-                self.assertEqual(main(["--lake-root", directory, "--format", "json", "data", "diagnostics", "--strict"]), 2)
-                self.assertIn("missing_quality", output.getvalue())
-            doctor = DataDiagnosticsService(directory).doctor(str(product.key))
-            self.assertIn("missing_quality", doctor["issues"])
+                self.assertEqual(main([
+                    "--lake-root", directory, "--format", "json",
+                    "data", "add", str(source), "--name", "research.signal", "--time", "event_time",
+                ]), 0)
+                added = json.loads(output.getvalue())
+
+            self.assertEqual(added["dataset"], "research.signal")
+            self.assertEqual(added["historical"]["status"], "ready")
+            self.assertTrue((root / "datasets" / "research" / "signal" / "data").exists())
+            self.assertFalse((root / "releases").exists())
+            self.assertFalse((root / "current.ref").exists())
+
+            for action in ("search", "describe", "doctor", "metadata", "diagnostics"):
+                with self.subTest(action=action):
+                    args = ["--lake-root", directory, "--format", "json", "data", action]
+                    if action in {"describe", "doctor", "metadata"}:
+                        args.append("research.signal")
+                    with StringIO() as output, redirect_stdout(output):
+                        self.assertEqual(main(args), 0)
+                        payload = json.loads(output.getvalue())
+                    encoded = json.dumps(payload, sort_keys=True)
+                    self.assertNotIn("release_id", encoded)
+                    self.assertNotIn("content_hash", encoded)
+                    self.assertNotIn("quality_level", encoded)
+
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main([
+                    "--lake-root", directory, "--format", "json",
+                    "data", "query", "research.signal", "--limit", "1",
+                ]), 0)
+                queried = json.loads(output.getvalue())
+            self.assertEqual(queried["rows"][0]["signal"], 1)
+
+            tmp = root / "datasets" / "research" / "signal" / "tmp" / "stale"
+            tmp.mkdir(parents=True)
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main(["--lake-root", directory, "--format", "json", "data", "repair-index"]), 0)
+                repaired = json.loads(output.getvalue())
+            self.assertEqual(repaired["status"], "rebuilt")
+            self.assertTrue((root / "index" / "cache.sqlite3").exists())
+
+            with StringIO() as output, redirect_stdout(output):
+                self.assertEqual(main([
+                    "--lake-root", directory, "--format", "json", "data", "clean-tmp", "--dataset", "research.signal",
+                ]), 0)
+                cleaned = json.loads(output.getvalue())
+            self.assertEqual(cleaned["count"], 1)
+            self.assertFalse(tmp.exists())
+
+    def test_removed_commands_report_removed_instead_of_release_contracts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            commands = [
+                ("releases", ["data", "releases"]),
+                ("freeze", ["data", "freeze", "--workspace", "w", "--dataset", "d", "--output", str(Path(directory) / "x.json")]),
+                ("compare", ["data", "compare", "--first", "a", "--second", "b"]),
+                ("audit-artifact", ["data", "audit-artifact", "--artifact", str(Path(directory) / "artifact.json")]),
+            ]
+            for action, args in commands:
+                with self.subTest(action=action):
+                    with StringIO() as output, redirect_stdout(output):
+                        self.assertEqual(main(["--lake-root", directory, "--format", "json", *args]), 2)
+                        payload = json.loads(output.getvalue())
+                    self.assertEqual(payload["status"], "removed")
+                    self.assertNotIn("ready_for_workspace", json.dumps(payload))
 
 
 if __name__ == "__main__":

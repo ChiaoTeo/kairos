@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.data.snapshots.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairospy.runtime.profiles.backtest.synthetic_scenarios import build_synthetic_backtest_dataset
 from kairospy.market.types import Quote
 from kairospy.research.capture.data_store import MarketSnapshotCollectionPublisher, merge_datasets

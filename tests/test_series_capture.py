@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.data.snapshots.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairospy.market.events import GreeksUpdated, QuoteUpdated, UnderlyingPriceUpdated, envelope
 from kairospy.identity import AssetId, InstrumentId, VenueId
 from kairospy.market.types import OptionChain

@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.data.snapshots.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairospy.identity import AssetId, InstrumentId, VenueId
 from kairospy.market.types import Quote
 from kairospy.reference.contracts import CryptoSpotSpec, EquitySpec, ProductType

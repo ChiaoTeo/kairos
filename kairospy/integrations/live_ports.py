@@ -92,7 +92,7 @@ def build_live_market_event_source(
     if not name.strip() or not dataset.strip() or not live_view_id.strip():
         raise ValueError("live market binding requires name, dataset, and live_view_id")
 
-    from kairospy.data import (
+    from kairospy.data.quality.freshness import (
         LIVE_VIEW_CONFIGURED_FRESHNESS_POLICY,
         evaluate_live_view_freshness,
         freshness_gate_to_primitive,

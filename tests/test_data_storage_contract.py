@@ -5,8 +5,8 @@ import json
 import tempfile
 import unittest
 
-from kairospy.data import (
-    DataCatalog,
+from kairospy.data.catalog import DataCatalog
+from kairospy.data.contracts import (
     DatasetKey,
     DatasetLayer,
     DataProductDefinition,

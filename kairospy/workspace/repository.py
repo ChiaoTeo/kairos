@@ -86,7 +86,7 @@ class WorkspaceData:
             raise ValueError(f"workspace binding {name!r} is not a historical dataset")
         from kairospy.data import DatasetClient
 
-        return DatasetClient(self.workspace.data_root).get(binding.release_id or binding.dataset)
+        return DatasetClient(self.workspace.data_root).query(binding.dataset)
 
     def live(self, name: str) -> WorkspaceBinding:
         binding = self.workspace.binding(name)
@@ -154,19 +154,7 @@ class Workspace:
         }
 
     def _binding(self, name: str, kind: str, dataset: str) -> WorkspaceBinding:
-        release_id = None
-        content_hash = None
-        if kind == "dataset":
-            try:
-                from kairospy.data import DataCatalog
-
-                release = DataCatalog(self.data_root).release(dataset)
-                release_id = release.release_id
-                content_hash = release.content_hash
-            except Exception:
-                release_id = None
-                content_hash = None
-        return WorkspaceBinding(name=name, kind=kind, dataset=dataset, release_id=release_id, content_hash=content_hash)
+        return WorkspaceBinding(name=name, kind=kind, dataset=dataset, release_id=None, content_hash=None)
 
     def _save_binding(self, binding: WorkspaceBinding) -> WorkspaceBinding:
         bindings = dict(self.manifest.bindings)

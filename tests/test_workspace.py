@@ -14,8 +14,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from kairospy.data import DataSetContractArtifact, LiveViewManifest, live_view_manifest_path, write_live_view_manifest
-from kairospy.data.contracts import stable_artifact_hash
+from kairospy.data.contracts import DataSetContractArtifact, LiveViewManifest, stable_artifact_hash
+from kairospy.data.quality.freshness import live_view_manifest_path, write_live_view_manifest
 from kairospy.data.products import BTC_SPOT_DAILY
 from kairospy.identity import AssetId, InstrumentId, VenueId
 from kairospy import Workspace, initialize_project
@@ -367,6 +367,105 @@ class WorkspaceTests(unittest.TestCase):
             decisions = json.loads((run_root / "artifacts" / "decisions.json").read_text(encoding="utf-8"))
             self.assertEqual(decisions[0]["workspace"], "alpha")
             self.assertEqual(decisions[0]["slow"], "50")
+
+    def test_run_start_accepts_standard_strategy_protocol(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Workspace Protocol Strategy")
+            csv_path = root / "ticks.csv"
+            csv_path.write_text(
+                "\n".join([
+                    "timestamp,instrument_id,close",
+                    "2026-01-02T14:30:00+00:00,equity:us:AAPL,187.42",
+                    "2026-01-02T14:31:00+00:00,equity:us:AAPL,187.76",
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "kairospy",
+                    "--format",
+                    "json",
+                    "data",
+                    "add",
+                    str(csv_path),
+                    "--name",
+                    "local.ticks",
+                    "--time",
+                    "timestamp",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            Workspace.open_or_create("alpha", start=root).data.bind("market", dataset="local.ticks")
+            (root / "protocol_strategy.py").write_text(
+                "\n".join([
+                    "from kairospy.strategy.protocols import StrategyDecision",
+                    "",
+                    "class ProtocolStrategy:",
+                    "    strategy_id = 'protocol-print-v1'",
+                    "    def __init__(self, workspace, params):",
+                    "        self._decisions = []",
+                    "    @property",
+                    "    def decisions(self):",
+                    "        return tuple(self._decisions)",
+                    "    def on_start(self, context):",
+                    "        return ()",
+                    "    def on_market(self, context):",
+                    "        self._decisions.append(StrategyDecision(str(context.now), 'seen', 'market context', tuple(str(i) for i in context.market.instruments)))",
+                    "        print(f'market:{context.market.sequence}:{context.market.reference_prices[0][1]}')",
+                    "        return ()",
+                    "    def on_fill(self, fill, context):",
+                    "        return ()",
+                    "    def on_end(self, context):",
+                    "        return ()",
+                    "",
+                    "def build(workspace, params):",
+                    "    return ProtocolStrategy(workspace, params)",
+                ])
+                + "\n",
+                encoding="utf-8",
+            )
+            run_config = _write_run_config(
+                root,
+                "protocol-strategy.toml",
+                mode="backtest",
+                entrypoint="protocol_strategy:build",
+                params={"limit": "2"},
+            )
+
+            started = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "kairospy",
+                    "--format",
+                    "json",
+                    "run",
+                    "start",
+                    "--config",
+                    str(run_config),
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            payload = json.loads(started.stdout[started.stdout.rfind("\n{") + 1:])
+            run_root = Path(payload["run_workspace"])
+            self.assertEqual(payload["strategy"]["entrypoint_kind"], "workspace_strategy_protocol")
+            self.assertIn("market:1:187.42", started.stdout)
+            decisions = json.loads((run_root / "artifacts" / "decisions.json").read_text(encoding="utf-8"))
+            self.assertEqual([item["action"] for item in decisions], ["seen", "seen"])
 
     def test_run_start_paper_uses_runtime_launcher_and_governance_artifact(self) -> None:
         with TemporaryDirectory() as directory:

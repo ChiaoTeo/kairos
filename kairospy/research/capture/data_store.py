@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from kairospy.market.snapshots import MarketReplayDataset, build_manifest
-from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.data.snapshots.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairospy.infrastructure.storage.codec import from_primitive, to_primitive
 
 

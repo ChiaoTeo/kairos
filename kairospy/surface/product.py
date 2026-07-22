@@ -18,8 +18,8 @@ from types import SimpleNamespace
 from typing import Any, Iterable
 
 from kairospy.runtime import paper_trading_composition, runtime_execution_plan, runtime_feed_plan
-from kairospy.data import (
-    DataCatalog,
+from kairospy.data.catalog import DataCatalog
+from kairospy.data.contracts import (
     DataReleaseManifest,
     DataSetContractArtifact,
     DataProductContract,
@@ -30,13 +30,15 @@ from kairospy.data import (
     DatasetStatus,
     DatasetStorageKind,
     LiveViewManifest,
-    PAPER_LIVE_FRESHNESS_POLICY,
     QualityLevel,
     SourceBinding,
     data_release_ref,
+    stable_artifact_hash,
+)
+from kairospy.data.quality.freshness import (
+    PAPER_LIVE_FRESHNESS_POLICY,
     live_view_manifest_path,
     resolve_live_dataset_subscription,
-    stable_artifact_hash,
     write_live_view_manifest,
 )
 from kairospy.research.capture.tutorial_data import ensure_sma_tutorial_dataset
@@ -55,20 +57,24 @@ class InputTableRef(dict):
 
     def arrow(self, *, columns: tuple[str, ...] | list[str] | None = None):
         from kairospy.data import OutputFormat
-        return self._query(columns).collect(OutputFormat.ARROW)
+        return self._read(columns, OutputFormat.ARROW)
 
     def pandas(self, *, columns: tuple[str, ...] | list[str] | None = None):
         from kairospy.data import OutputFormat
-        return self._query(columns).collect(OutputFormat.PANDAS)
+        return self._read(columns, OutputFormat.PANDAS)
 
     def rows(self, *, columns: tuple[str, ...] | list[str] | None = None) -> list[dict[str, object]]:
         from kairospy.data import OutputFormat
-        return self._query(columns).collect(OutputFormat.ROWS)
+        return self._read(columns, OutputFormat.ROWS)
 
-    def _query(self, columns):
+    def _read(self, columns, output):
         from kairospy.data import DatasetClient
-        release_id = str(self["release_id"])
-        return DatasetClient(self._root).get(release_id, fields=tuple(columns) if columns is not None else None)
+
+        return DatasetClient(self._root).read(
+            str(self["dataset"]),
+            columns=tuple(columns) if columns is not None else None,
+            output=output,
+        )
 
 
 class DataAddInputError(ValueError):
@@ -196,8 +202,8 @@ def _dataset_not_found_error(operation: str, dataset_id: str) -> DataDatasetInpu
         dataset_id,
         code="dataset_not_found",
         status="needs_input",
-        message=f"Dataset {dataset_id} is not registered.",
-        why="This command needs an existing Dataset name. Add user data, use a built-in product, or connect a live source first.",
+        message=f"Dataset {dataset_id} does not exist.",
+        why="This command reads the Dataset Store directly and needs a Dataset directory or alias.",
         next_command="kairospy data start",
     )
 
@@ -208,8 +214,8 @@ def _historical_not_configured_error(operation: str, dataset_id: str) -> DataDat
         dataset_id,
         code="historical_not_configured",
         status="needs_data",
-        message=f"Dataset {dataset_id} has no historical data release.",
-        why="This command needs historical data. A live-only Dataset can be monitored or reconnected, but cannot be queried, validated, or promoted for backtest.",
+        message=f"Dataset {dataset_id} has no historical data files.",
+        why="This command needs files under the Dataset data/ directory. Live-only Datasets can expose a live path but cannot be queried as history.",
         next_command=f"kairospy data add <file> --name {dataset_id}",
     )
 
@@ -220,10 +226,28 @@ class Data:
 
     root: str | Path = "data"
 
-    def reader(self, *, run_mode: object = "workspace", **kwargs: object):
+    def reader(self):
         from kairospy.data import DatasetClient
 
-        return DatasetClient(self.root, run_mode=run_mode, **kwargs)
+        return DatasetClient(self.root)
+
+    def read(self, dataset: str, **query: object):
+        return self.reader().read(dataset, **query)
+
+    def live(self, dataset: str, *, view: str = "default"):
+        return self.reader().live(dataset, view=view)
+
+    def alias(self, dataset: str, alias: str) -> dict[str, object]:
+        from kairospy.data import DatasetStore
+
+        path = DatasetStore(self.root).alias(dataset, alias)
+        return {
+            "product": "data",
+            "operation": "alias",
+            "dataset": dataset,
+            "alias": alias,
+            "path": str(path),
+        }
 
     def products(self) -> dict[str, object]:
         return data_product_list(_args(self.root))
@@ -291,7 +315,7 @@ class Data:
             for_use=for_use,
         ))
 
-    def connect(self, source: str | Path, *, as_dataset: str, time: str = "timestamp",
+    def connect(self, source: str | Path, *, as_dataset: str | None = None, time: str = "timestamp",
                 account: str | None = None, channel: str | None = None,
                 instruments: tuple[str, ...] = (), freshness_seconds: float = 5.0,
                 for_use: str = "shadow", market: str = "spot", levels: int | None = None,
@@ -402,11 +426,10 @@ class Data:
         return data_download(_args(self.root, key=key))
 
     def dataset(self, name: str) -> dict[str, object]:
-        release = DataCatalog(self.root).release(name)
         return InputTableRef(self.root, {
             "product": "data",
             "operation": "dataset",
-            **_data_release_evidence(Path(self.root), release),
+            "dataset": name,
         })
 
     def register_download(self, key: str, spec: str | Path) -> dict[str, object]:
@@ -475,23 +498,18 @@ def data_download(args) -> dict[str, object]:
     key = args.key
     if key not in BUILTIN_DOWNLOAD_KEYS:
         return _download_registered_data_product(args)
-    release = ensure_sma_tutorial_dataset(args.lake_root)
-    evidence = _data_release_evidence(Path(args.lake_root), release)
+    dataset_id = ensure_sma_tutorial_dataset(args.lake_root)
+    data_path = Path(args.lake_root) / "datasets" / Path(*str(dataset_id).split(".")) / "data"
+    files = sorted(path for path in data_path.rglob("*.parquet"))
     report = {
         "product": "data",
         "operation": "download",
         "key": key,
-        "dataset": str(release.product_key),
-        "release_id": release.release_id,
-        "content_hash": release.content_hash,
-        "contract_hash": evidence["contract_hash"],
-        "manifest_hash": evidence["manifest_hash"],
-        "primary_time": evidence.get("primary_time"),
-        "fields": evidence.get("fields", []),
-        "quality_level": release.quality_level.value,
-        "artifact": str(Path(args.lake_root) / release.relative_path),
-        "artifact_ref": evidence["artifact_ref"],
-        "contract": "DataSet Contract",
+        "dataset": str(dataset_id),
+        "files": len(files),
+        "artifact": str(data_path),
+        "artifact_ref": f"data://{dataset_id}",
+        "contract": "DatasetStore",
     }
     report_path = Path(args.lake_root) / "downloads" / key / "report.json"
     _write_json(report_path, report)
@@ -529,12 +547,12 @@ def data_start(args) -> dict[str, object]:
         {
             "kind": "product",
             "description": "built-in historical Data product",
-            "template": "kairospy data start --kind product --product massive.equity.ohlcv.1d --as market.equity.us.ohlcv.1d --start 2024-01-01T00:00:00Z --end 2024-02-01T00:00:00Z",
+            "template": "kairospy data start --kind product --product massive.equity.ohlcv.1d --start 2024-01-01T00:00:00Z --end 2024-02-01T00:00:00Z",
         },
         {
             "kind": "live",
             "description": "live source or LiveDataProtocol connector",
-            "template": "kairospy data start --kind live --source binance.quote --as market.quote.crypto.binance.btc-usdt --account binance-testnet --instrument BTCUSDT --channel quote --for paper",
+            "template": "kairospy data start --kind live --source binance.quote --account binance-testnet --instrument BTCUSDT --channel quote --for paper",
         },
     ]
     if not kind:
@@ -554,7 +572,7 @@ def data_start(args) -> dict[str, object]:
         missing.append("--product")
     if kind in {"file", "connector"} and not dataset:
         missing.append("--name")
-    if kind in {"product", "live"} and not dataset:
+    if kind == "live" and source is not None and Path(source).exists() and not dataset:
         missing.append("--as")
     if kind == "live":
         if _data_start_live_requires_account(source) and not getattr(args, "account", None):
@@ -636,9 +654,9 @@ def _data_start_command(args, kind: str, dataset: str | None) -> str | None:
             parts.extend(["--instrument", str(instrument)])
         return _shell_command(parts)
     if kind == "product":
-        if not product or dataset is None:
+        if not product:
             return None
-        parts = ["kairospy", "data", "use", str(product), "--as", dataset]
+        parts = ["kairospy", "data", "use", str(product)]
         if getattr(args, "start_time", None):
             parts.extend(["--start", str(args.start_time)])
         if getattr(args, "end_time", None):
@@ -650,9 +668,11 @@ def _data_start_command(args, kind: str, dataset: str | None) -> str | None:
             parts.extend(["--for", target_use])
         return _shell_command(parts)
     if kind == "live":
-        if source is None or dataset is None:
+        if source is None:
             return None
-        parts = ["kairospy", "data", "connect", str(source), "--as", dataset]
+        parts = ["kairospy", "data", "connect", str(source)]
+        if Path(source).exists() and dataset is not None:
+            parts.extend(["--as", dataset])
         for key in ("account", "channel", "time", "market", "levels", "interval"):
             value = getattr(args, key, None)
             if value:
@@ -679,7 +699,7 @@ def data_add(args) -> dict[str, object]:
 
 
 def _data_add_impl(args) -> dict[str, object]:
-    from kairospy.data.historical_service import HistoricalDataService
+    from kairospy.data.acquisition.historical_service import HistoricalDataService
 
     return HistoricalDataService(args.lake_root).add(args)
 
@@ -822,7 +842,7 @@ def data_use(args) -> dict[str, object]:
 
 
 def _data_use_impl(args) -> dict[str, object]:
-    from kairospy.data.historical_service import HistoricalDataService
+    from kairospy.data.acquisition.historical_service import HistoricalDataService
 
     return HistoricalDataService(args.lake_root).use_builtin(args)
 
@@ -1066,7 +1086,7 @@ def data_connect(args) -> dict[str, object]:
 
 
 def _data_connect_impl(args) -> dict[str, object]:
-    from kairospy.data.live_service import LiveDataService
+    from kairospy.data.live.services import LiveDataService
 
     return LiveDataService(args.lake_root).connect(args)
 
@@ -1086,7 +1106,7 @@ def _live_runtime_config(protocol, request) -> dict[str, object]:
 def data_sample(args, *, on_row=None) -> dict[str, object]:
     import asyncio
 
-    from kairospy.data import BuiltInDataProductRegistry, LiveDataRequest, default_builtin_protocol_registry
+    from kairospy.data import BuiltInDataProductRegistry, LiveDataRequest, built_in_dataset_id, default_builtin_protocol_registry
 
     raw_limit = getattr(args, "limit", 5)
     limit = 5 if raw_limit is None else int(raw_limit)
@@ -1108,7 +1128,14 @@ def data_sample(args, *, on_row=None) -> dict[str, object]:
         raise ValueError(f"built-in data product {built_in.key!r} is not a live source")
     protocols = default_builtin_protocol_registry(args.lake_root, registry.list())
     protocol = protocols.live(built_in.protocol_name)
-    dataset_id = str(getattr(args, "as_dataset", None) or built_in.default_dataset_name)
+    dataset_id = built_in_dataset_id(
+        built_in,
+        instruments=tuple(getattr(args, "instrument", ()) or ()),
+        params=_live_source_params(args),
+    )
+    requested_dataset = str(getattr(args, "as_dataset", None) or "").strip()
+    if requested_dataset and requested_dataset != dataset_id:
+        raise ValueError("built-in data products use canonical Dataset IDs; create an alias after sampling instead")
     request = LiveDataRequest(
         dataset_id,
         instruments=tuple(getattr(args, "instrument", ()) or ()),
@@ -1194,43 +1221,23 @@ def _runtime_summary(runtime_config: dict[str, object]) -> dict[str, object]:
 
 
 def data_doctor(args) -> dict[str, object]:
-    from kairospy.data.diagnostics import DataDiagnosticsService
-
-    return DataDiagnosticsService(args.lake_root).doctor(_dataset_argument(args))
+    return _dataset_store_status(Path(args.lake_root), _dataset_argument(args), operation="doctor")
 
 
 def data_list(args) -> dict[str, object]:
-    from kairospy.data import DataCatalog, load_live_view_manifest
-    from kairospy.data.diagnostics import DataDiagnosticsService
+    from kairospy.data import DatasetStore
 
     root = Path(args.lake_root)
-    catalog = DataCatalog(root)
-    dimensions = getattr(args, "dimension", {}) or {}
-    products = catalog.search(**dimensions) if dimensions else catalog.products()
-    dataset_names = {str(product.key) for product in products}
-    live_root = root / "live-views"
-    if live_root.exists():
-        for path in sorted(live_root.glob("**/manifest.json")):
-            manifest = load_live_view_manifest(path)
-            dataset_names.add(manifest.dataset_id)
-
-    diagnostics = DataDiagnosticsService(root)
-    rows = []
-    for dataset in sorted(dataset_names):
-        status = diagnostics.doctor(dataset)
-        rows.append({
-            "dataset": dataset,
-            "status": status.get("status"),
-            "time": status.get("time"),
-            "ready_for": list(status.get("ready_for") or ()),
-            "blocked_for": list(status.get("blocked_for") or ()),
-            "issues": list(status.get("issues") or ()),
-        })
+    store = DatasetStore(root)
+    rows = [
+        _dataset_store_status(root, str(dataset), operation="list")
+        for dataset in store.list_datasets()
+    ]
     return {
         "product": "data",
         "operation": "list",
         "datasets": rows,
-        "products": rows,
+        "aliases": store.aliases(),
     }
 
 
@@ -1240,57 +1247,48 @@ def data_metadata(args) -> dict[str, object]:
     override_time = str(getattr(args, "time", "") or "").strip()
     if override_time:
         return _override_dataset_primary_time(root, dataset, override_time)
-    readiness = data_doctor(args)
-    historical: dict[str, object] = {
-        "configured": False,
-        "schema": {},
-        "quality": {},
-        "coverage": {},
-    }
-    try:
-        catalog = DataCatalog(root)
-        product = catalog.product(dataset)
-        releases = catalog.releases(product)
-    except KeyError:
-        product = None
-        releases = ()
-    if product is not None and releases:
-        release = catalog.release(product)
-        release_dir = root / release.relative_path
-        quality = _read_optional_json(release_dir / "quality.json")
-        manifest = _read_optional_json(release_dir / "manifest.json")
-        fields = list(quality.get("fields") or manifest.get("fields") or ())
-        historical = {
-            "configured": True,
-            "format": release.format,
-            "status": release.status.value,
-            "quality_level": release.quality_level.value,
-            "schema": {
-                "primary_time": product.primary_time,
-                "fields": fields,
-            },
-            "quality": {
-                "gate_passed": quality.get("gate_passed"),
-                "diagnostic_passed": quality.get("diagnostic_passed"),
-                "row_count": quality.get("row_count"),
-                "checks": [
-                    {"name": item.get("name"), "passed": item.get("passed"), "kind": item.get("kind")}
-                    for item in [*quality.get("gate_checks", ()), *quality.get("diagnostic_checks", ())]
-                    if isinstance(item, dict)
-                ],
-            },
-            "coverage": _metadata_coverage(quality, product.primary_time),
-        }
-    live_views = _live_view_metadata_payloads(root, dataset)
-    if product is None and not live_views:
+
+    from kairospy.data import DatasetReader, DatasetStore
+
+    store = DatasetStore(root)
+    dataset_id = store.resolve(dataset)
+    dataset_path = store.dataset_path(dataset_id)
+    if not dataset_path.exists():
         raise _dataset_not_found_error("metadata", dataset)
+    metadata = _read_optional_json(store.layout.dataset_json_path(dataset_id))
+    data_files = _dataset_data_files(store, dataset_id)
+    live_views = _live_view_metadata_payloads(root, str(dataset_id))
+    fields = [str(item) for item in metadata.get("fields") or ()]
+    row_count: int | None = None
+    if data_files:
+        try:
+            table = DatasetReader(store).read(dataset_id, output="arrow")
+            fields = list(table.column_names) or fields
+            row_count = table.num_rows
+        except Exception:
+            row_count = None
+    primary_time = _dataset_primary_time(metadata, fields, live_views)
     return {
         "product": "data",
         "operation": "metadata",
-        "dataset": dataset,
-        "source_kind": readiness.get("source_kind"),
-        "time": readiness.get("time"),
-        "historical": historical,
+        "dataset": str(dataset_id),
+        "path": str(dataset_path),
+        "source_kind": _dataset_source_kind(metadata, live_views),
+        "time": primary_time,
+        "historical": {
+            "configured": bool(data_files),
+            "status": "ready" if data_files else "not_configured",
+            "data_root": str(store.data_path(dataset_id)),
+            "file_count": len(data_files),
+            "schema": {
+                "primary_time": primary_time,
+                "fields": fields,
+            },
+            "coverage": {
+                "row_count": row_count,
+                "boundary": "[start,end)",
+            },
+        },
         "live": {
             "configured": bool(live_views),
             "views": live_views,
@@ -1299,8 +1297,6 @@ def data_metadata(args) -> dict[str, object]:
 
 
 def _override_dataset_primary_time(root: Path, dataset: str, primary_time: str) -> dict[str, object]:
-    from dataclasses import replace
-
     if not primary_time:
         raise DataDatasetInputError(
             "metadata",
@@ -1311,32 +1307,34 @@ def _override_dataset_primary_time(root: Path, dataset: str, primary_time: str) 
             why="Dataset metadata needs a primary time field to support point-in-time reads and readiness checks.",
             next_command=f"kairospy data metadata {dataset} --time <field>",
         )
-    catalog = DataCatalog(root)
-    try:
-        spec = catalog.product_spec(dataset)
-    except KeyError as error:
-        if _live_view_metadata_payloads(root, dataset):
-            return _override_live_primary_time(root, dataset, primary_time)
-        raise _dataset_not_found_error("metadata", dataset) from error
-    known_fields = _metadata_historical_fields(root, spec)
+    from kairospy.data import DatasetStore
+
+    store = DatasetStore(root)
+    dataset_id = store.resolve(dataset)
+    if not store.dataset_path(dataset_id).exists():
+        raise _dataset_not_found_error("metadata", dataset)
+    known_fields = _dataset_known_fields(store, dataset_id)
     if known_fields and primary_time not in known_fields:
         raise DataDatasetInputError(
             "metadata",
-            dataset,
+            str(dataset_id),
             code="time_field_not_found",
             status="needs_input",
-            message=f"Time field {primary_time} is not present in Dataset {dataset}.",
+            message=f"Time field {primary_time} is not present in Dataset {dataset_id}.",
             why="Metadata override can only point at a field that exists in the Dataset schema.",
             next_command=f"kairospy data metadata {dataset} --time <field>",
         )
-    updated_product = replace(spec.product, primary_time=primary_time)
-    updated = replace(spec, product=updated_product)
-    catalog.update_product_spec(
-        updated,
-        actor="data-metadata",
-        reason=f"override Dataset primary time to {primary_time}",
+    metadata_path = store.layout.dataset_json_path(dataset_id)
+    metadata = _read_optional_json(metadata_path)
+    metadata.update({"dataset": str(dataset_id), "primary_time": primary_time})
+    if known_fields:
+        metadata["fields"] = known_fields
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        json.dumps(metadata, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
     )
-    payload = data_metadata(_args(root, dataset=dataset))
+    payload = data_metadata(_args(root, dataset=str(dataset_id)))
     return {
         **payload,
         "operation": "metadata",
@@ -1349,103 +1347,49 @@ def _override_dataset_primary_time(root: Path, dataset: str, primary_time: str) 
 
 
 def _override_live_primary_time(root: Path, dataset: str, primary_time: str) -> dict[str, object]:
-    from dataclasses import replace
-    from kairospy.data import load_live_view_manifest
-
-    directory = root / "live-views" / dataset.replace(".", "/")
-    manifests = []
-    for path in sorted(directory.glob("*/manifest.json")):
-        manifest = load_live_view_manifest(path)
-        if manifest.dataset_id == dataset:
-            manifests.append((path, manifest))
-    if not manifests:
-        raise _dataset_not_found_error("metadata", dataset)
-    known_fields = sorted({field for _, manifest in manifests for field in manifest.fields})
-    if primary_time not in known_fields:
-        raise DataDatasetInputError(
-            "metadata",
-            dataset,
-            code="time_field_not_found",
-            status="needs_input",
-            message=f"Time field {primary_time} is not present in Dataset {dataset}.",
-            why="Metadata override can only point at a field that exists in the live Dataset schema.",
-            next_command=f"kairospy data metadata {dataset} --time <field>",
-        )
-    for path, manifest in manifests:
-        write_live_view_manifest(path, replace(manifest, primary_time=primary_time))
-    payload = data_metadata(_args(root, dataset=dataset))
-    return {
-        **payload,
-        "status": "updated",
-        "updated": {
-            "time": primary_time,
-            "fields": known_fields,
-        },
-    }
+    return _override_dataset_primary_time(root, dataset, primary_time)
 
 
 def _metadata_historical_fields(root: Path, spec: DataProductContract) -> list[str]:
+    from kairospy.data import DatasetStore
+
+    store = DatasetStore(root)
     try:
-        release = DataCatalog(root).release(spec.key)
-    except KeyError:
+        return _dataset_known_fields(store, str(spec.key))
+    except Exception:
         return []
-    release_dir = root / release.relative_path
-    quality = _read_optional_json(release_dir / "quality.json")
-    manifest = _read_optional_json(release_dir / "manifest.json")
-    fields = list(quality.get("fields") or manifest.get("fields") or ())
-    return [str(field) for field in fields]
 
 
 def data_validate(args) -> dict[str, object]:
-    from kairospy.data import DatasetQualityService
-
     root = Path(args.lake_root)
-    catalog = DataCatalog(root)
-    release_arg = getattr(args, "release", None)
-    if release_arg:
-        if getattr(args, "dataset", None) or getattr(args, "dataset_arg", None):
-            raise ValueError("use either Dataset or --release, not both")
-        release = catalog.release(str(release_arg))
-        target = release.release_id
-        legacy_release_mode = True
-    else:
-        dataset = _dataset_argument(args)
-        try:
-            release = catalog.release(dataset)
-        except KeyError as error:
-            if _live_view_metadata_payloads(root, dataset):
-                raise _historical_not_configured_error("validate", dataset) from error
-            raise _dataset_not_found_error("validate", dataset) from error
-        target = release.release_id
-        legacy_release_mode = False
-
-    assessment = DatasetQualityService(root).assess(target)
-    checks = _user_quality_checks(assessment.checks)
-    issues = [
-        {
-            "name": item["name"],
-            "severity": item["severity"],
-            "requirement": item["requirement"],
-            "value": item["value"],
-        }
-        for item in checks
-        if item["severity"] == "gate" and not item["passed"]
-    ]
-    payload: dict[str, object] = {
+    dataset = _dataset_argument(args)
+    status = _dataset_store_status(root, dataset, operation="validate")
+    passed = status["status"] == "ready"
+    return {
         "product": "data",
         "operation": "validate",
-        "dataset": str(release.product_key),
-        "status": "passed" if assessment.passed else "needs_fix",
-        "profile": assessment.profile,
-        "quality_level": assessment.level.value,
-        "ready_for": _ready_for_quality(assessment.level) if assessment.passed else [],
-        "blocked_for": _blocked_for_quality(assessment.level, passed=assessment.passed),
-        "issues": issues,
-        "checks": checks,
+        "dataset": status["dataset"],
+        "status": "passed" if passed else "needs_data",
+        "ready_for": status["ready_for"],
+        "blocked_for": status["blocked_for"],
+        "issues": status["issues"],
+        "checks": [
+            {
+                "name": "dataset_directory",
+                "passed": True,
+                "severity": "diagnostic",
+                "requirement": "Dataset directory exists",
+                "value": status["path"],
+            },
+            {
+                "name": "historical_or_live_data",
+                "passed": passed,
+                "severity": "diagnostic",
+                "requirement": "Dataset has files under data/ or a configured live view",
+                "value": status["status"],
+            },
+        ],
     }
-    if legacy_release_mode:
-        payload["release_id"] = release.release_id
-    return payload
 
 
 def data_replay(args) -> dict[str, object]:
@@ -1454,21 +1398,22 @@ def data_replay(args) -> dict[str, object]:
 
     root = Path(args.lake_root)
     dataset = _dataset_argument(args)
+    metadata = data_metadata(_args(root, dataset=dataset))
+    time_field = str(metadata.get("time") or "")
     try:
-        query = DatasetClient(root).get(
+        rows = list(DatasetClient(root).read(
             dataset,
             start=getattr(args, "start", None),
             end=getattr(args, "end", None),
             instruments=tuple(getattr(args, "instrument", ()) or ()),
-            fields=tuple(getattr(args, "field", ()) or ()) or None,
-        )
-    except KeyError as error:
-        if _live_view_metadata_payloads(root, dataset):
-            return _data_replay_live_capture(root, args, dataset)
+            columns=tuple(getattr(args, "field", ()) or ()) or None,
+            output=OutputFormat.ROWS,
+            time_field=time_field or None,
+        ))
+    except FileNotFoundError as error:
+        if metadata.get("live", {}).get("configured"):
+            raise _historical_not_configured_error("replay", dataset) from error
         raise _dataset_not_found_error("replay", dataset) from error
-    rows = list(query.collect(OutputFormat.ROWS))
-    explain = query.explain()
-    time_field = str(explain.get("time_field") or "")
     rows = _sort_replay_rows(rows, time_field)
     limit = int(getattr(args, "limit", 20) or 20)
     if limit <= 0:
@@ -1476,7 +1421,7 @@ def data_replay(args) -> dict[str, object]:
     return {
         "product": "data",
         "operation": "replay",
-        "dataset": str(explain.get("logical_name") or dataset),
+        "dataset": str(metadata.get("dataset") or dataset),
         "time": time_field or None,
         "window": {
             "start": getattr(args, "start", None),
@@ -1484,7 +1429,7 @@ def data_replay(args) -> dict[str, object]:
             "boundary": "[start,end)",
         },
         "replay": {
-            "source": "governed_dataset",
+            "source": "dataset_store",
             "order": time_field or "storage_order",
             "deterministic": True,
         },
@@ -1666,6 +1611,129 @@ def _blocked_for_quality(level: QualityLevel, *, passed: bool) -> list[str]:
     return ["workspace", "backtest", "production"]
 
 
+def _dataset_store_status(root: Path, dataset: str, *, operation: str) -> dict[str, object]:
+    from kairospy.data import DatasetStore
+
+    store = DatasetStore(root)
+    dataset_id = store.resolve(dataset)
+    dataset_path = store.dataset_path(dataset_id)
+    if not dataset_path.exists():
+        raise _dataset_not_found_error(operation, dataset)
+    metadata = _read_optional_json(store.layout.dataset_json_path(dataset_id))
+    data_files = _dataset_data_files(store, dataset_id)
+    live_views = _live_view_metadata_payloads(root, str(dataset_id))
+    fields = [str(item) for item in metadata.get("fields") or ()]
+    if not fields:
+        fields = _dataset_known_fields(store, dataset_id)
+    primary_time = _dataset_primary_time(metadata, fields, live_views)
+    ready_for: list[str] = []
+    if data_files:
+        ready_for.append("read")
+    if live_views:
+        ready_for.append("live")
+    issues = [] if ready_for else ["empty_dataset"]
+    return {
+        "product": "data",
+        "operation": operation,
+        "dataset": str(dataset_id),
+        "path": str(dataset_path),
+        "status": "ready" if ready_for else "needs_data",
+        "source_kind": _dataset_source_kind(metadata, live_views),
+        "time": primary_time,
+        "ready_for": ready_for,
+        "blocked_for": [item for item in ("read", "live") if item not in ready_for],
+        "issues": issues,
+        "historical": {
+            "status": "ready" if data_files else "not_configured",
+            "ready_for": ["read"] if data_files else [],
+            "blocked_for": [] if data_files else ["read"],
+            "issues": [],
+            "file_count": len(data_files),
+            "data_root": str(store.data_path(dataset_id)),
+        },
+        "live": {
+            "status": "configured" if live_views else "not_configured",
+            "ready_for": ["live"] if live_views else [],
+            "blocked_for": [] if live_views else ["live"],
+            "issues": [],
+            "views": live_views,
+            "live_root": str(store.live_path(dataset_id)),
+        },
+    }
+
+
+def _dataset_data_files(store, dataset: object) -> list[Path]:
+    data_root = store.data_path(dataset)
+    if not data_root.exists():
+        return []
+    return sorted(
+        path
+        for pattern in ("**/*.parquet", "**/*.csv")
+        for path in data_root.glob(pattern)
+        if path.is_file() and not _dataset_relative_tmp(path, data_root)
+    )
+
+
+def _dataset_relative_tmp(path: Path, root: Path) -> bool:
+    try:
+        parts = path.relative_to(root).parts
+    except ValueError:
+        parts = path.parts
+    return any(part == "tmp" or part.startswith(".tmp") for part in parts)
+
+
+def _dataset_known_fields(store, dataset: object) -> list[str]:
+    metadata = _read_optional_json(store.layout.dataset_json_path(store.resolve(dataset)))
+    fields = [str(item) for item in metadata.get("fields") or ()]
+    if fields:
+        return fields
+    if _dataset_data_files(store, dataset):
+        try:
+            from kairospy.data import DatasetReader
+
+            return list(DatasetReader(store).read(dataset, output="arrow").column_names)
+        except Exception:
+            return []
+    live_fields = sorted({
+        str(field)
+        for view in _live_view_metadata_payloads(store.root, str(store.resolve(dataset)))
+        for field in view.get("fields", ())
+    })
+    return live_fields
+
+
+def _dataset_primary_time(
+    metadata: dict[str, object],
+    fields: Iterable[str],
+    live_views: Iterable[dict[str, object]],
+) -> str | None:
+    configured = str(metadata.get("primary_time") or "").strip()
+    if configured:
+        return configured
+    for view in live_views:
+        value = str(view.get("primary_time") or "").strip()
+        if value:
+            return value
+    field_set = {str(field) for field in fields}
+    for candidate in ("event_time", "timestamp", "period_start", "available_time", "time", "date"):
+        if candidate in field_set:
+            return candidate
+    return None
+
+
+def _dataset_source_kind(metadata: dict[str, object], live_views: Iterable[dict[str, object]]) -> str | None:
+    source = metadata.get("source") if isinstance(metadata.get("source"), dict) else {}
+    value = str(source.get("source_kind") or "").strip()
+    if value:
+        return value
+    for view in live_views:
+        view_source = view.get("source") if isinstance(view.get("source"), dict) else {}
+        value = str(view_source.get("source_kind") or "").strip()
+        if value:
+            return value
+    return None
+
+
 def _read_optional_json(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
@@ -1692,31 +1760,39 @@ def _metadata_coverage(quality: dict[str, object], primary_time: str) -> dict[st
 
 
 def _live_view_metadata_payloads(root: Path, dataset: str) -> list[dict[str, object]]:
-    from kairospy.data import evaluate_live_view_freshness, load_live_view_manifest
+    from kairospy.data import DatasetStore
 
-    directory = root / "live-views" / dataset.replace(".", "/")
+    store = DatasetStore(root)
+    try:
+        dataset_id = store.resolve(dataset)
+    except ValueError:
+        return []
+    directory = store.live_path(dataset_id)
     payloads = []
-    for path in sorted(directory.glob("*/manifest.json")):
-        manifest = load_live_view_manifest(path)
-        if manifest.dataset_id != dataset:
+    for path in sorted(directory.glob("*/state.json")):
+        state = _read_optional_json(path)
+        if str(state.get("dataset") or dataset_id) != str(dataset_id):
             continue
-        plane = manifest.live_data_plane
+        plane = state.get("live_data_plane") if isinstance(state.get("live_data_plane"), dict) else {}
         freshness = plane.get("freshness") if isinstance(plane.get("freshness"), dict) else {}
-        gate = evaluate_live_view_freshness(manifest, policy=PAPER_LIVE_FRESHNESS_POLICY)
+        source = state.get("source") if isinstance(state.get("source"), dict) else {}
         payloads.append({
-            "primary_time": manifest.primary_time,
-            "fields": list(manifest.fields),
+            "view": path.parent.name,
+            "path": str(path.parent),
+            "status": state.get("status") or "configured",
+            "primary_time": state.get("primary_time"),
+            "fields": list(state.get("fields") or ()),
             "freshness_policy": {
-                "name": PAPER_LIVE_FRESHNESS_POLICY.name,
+                "name": "configured",
                 "max_age_seconds": freshness.get("max_age_seconds"),
-                "status": manifest.freshness_status,
-                "passed": gate.passed,
-                "channel_failures": list(gate.channel_failures),
+                "status": state.get("status") or "configured",
+                "passed": True,
+                "channel_failures": [],
             },
             "source": {
                 key: value
-                for key, value in manifest.source.items()
-                if key in {"source_kind", "provider", "venue", "channel", "instrument_id", "stream"}
+                for key, value in source.items()
+                if key in {"name", "source_kind", "provider", "venue", "channel", "instrument_id", "stream", "market"}
             },
         })
     return payloads
@@ -1765,13 +1841,13 @@ def data_reconnect(args) -> dict[str, object]:
 
 
 def _data_reconnect_impl(args) -> dict[str, object]:
-    from kairospy.data.live_service import LiveDataService
+    from kairospy.data.live.services import LiveDataService
 
     return LiveDataService(args.lake_root).reconnect(args)
 
 
 def _latest_live_view_manifest(root: Path, dataset: str):
-    from kairospy.data import load_live_view_manifest
+    from kairospy.data.quality.freshness import load_live_view_manifest
 
     directory = root / "live-views" / dataset.replace(".", "/")
     candidates = []
@@ -1783,66 +1859,20 @@ def _latest_live_view_manifest(root: Path, dataset: str):
 
 
 def data_promote(args) -> dict[str, object]:
-    from kairospy.data import DatasetQualityService, evaluate_data_promotion_policy
-
     dataset = str(args.dataset)
-    target_quality = _promotion_quality(str(args.for_use))
-    target_status = _promotion_status(target_quality)
-    root = Path(args.lake_root)
-    catalog = DataCatalog(root)
-    try:
-        release = catalog.release(dataset)
-    except KeyError as error:
-        if _live_view_metadata_payloads(root, dataset):
-            raise _historical_not_configured_error("promote", dataset) from error
-        raise _dataset_not_found_error("promote", dataset) from error
-    try:
-        assessment = DatasetQualityService(root).assess(release.release_id)
-        policy = evaluate_data_promotion_policy(release.release_id, assessment, target_quality)
-    except Exception as error:
-        return {
-            "product": "data",
-            "operation": "promote",
-            "dataset": dataset,
-            "target": str(args.for_use),
-            "status": "needs_fix",
-            "ready_for": ["workspace"] if release.status is DatasetStatus.APPROVED_FOR_WORKSPACE else [],
-            "blocked_for": [str(args.for_use)],
-            "issues": [f"{type(error).__name__}: {error}"],
-        }
-    if not policy.passed:
-        return {
-            "product": "data",
-            "operation": "promote",
-            "dataset": dataset,
-            "target": str(args.for_use),
-            "status": "needs_fix",
-            "quality_level": assessment.level.value,
-            "ready_for": ["workspace"] if release.status is DatasetStatus.APPROVED_FOR_WORKSPACE else [],
-            "blocked_for": [str(args.for_use)],
-            "issues": [policy.reason],
-            "checks": [
-                {"name": item.name, "passed": item.passed, "severity": item.severity}
-                for item in assessment.checks
-            ],
-        }
-    current = DataCatalog(root).release(release.release_id)
-    promoted = current
-    actor = getattr(args, "actor", None) or "data-promote"
-    reason = getattr(args, "reason", None) or f"promote Dataset {dataset} for {args.for_use}"
-    while _dataset_status_rank(promoted.status) < _dataset_status_rank(target_status):
-        promoted = DataCatalog(root).promote(promoted.release_id, _next_dataset_status(promoted.status),
-                                             actor=actor, reason=reason)
     return {
         "product": "data",
         "operation": "promote",
         "dataset": dataset,
         "target": str(args.for_use),
-        "status": _ready_status(promoted.status),
-        "quality_level": assessment.level.value,
-        "ready_for": _ready_for_status(promoted.status),
-        "blocked_for": _blocked_for_status(promoted.status),
-        "issues": [],
+        "status": "removed",
+        "ready_for": [],
+        "blocked_for": [str(args.for_use)],
+        "issues": [{
+            "code": "promotion_removed",
+            "message": "Dataset promotion has been removed from the Data product.",
+            "why": "Datasets only describe stored data and read paths. Backtest or production approval belongs outside Dataset storage.",
+        }],
     }
 
 
@@ -1906,34 +1936,17 @@ def _blocked_for_status(status: DatasetStatus) -> list[str]:
 
 
 def data_audit(args) -> dict[str, object]:
-    root = Path(args.lake_root)
     dataset = str(args.dataset)
-    verbose = bool(getattr(args, "verbose", False))
-    releases = []
-    try:
-        catalog = DataCatalog(root)
-        product = catalog.product(dataset)
-        releases = [
-            _release_audit_payload(root, release, verbose=verbose)
-            for release in catalog.releases(product)
-        ]
-    except KeyError:
-        releases = []
-    live_views = _live_view_audit_payloads(root, dataset, verbose=verbose)
-    if not releases and not live_views:
-        raise KeyError(f"unknown Dataset for audit: {dataset}")
     return {
         "product": "data",
         "operation": "audit",
         "dataset": dataset,
-        "historical": {
-            "release_count": len(releases),
-            "releases": releases,
-        },
-        "live": {
-            "live_view_count": len(live_views),
-            "live_views": live_views,
-        },
+        "status": "removed",
+        "issues": [{
+            "code": "audit_removed",
+            "message": "Dataset audit evidence has been removed from the Data product.",
+            "why": "Dataset Store reads use the file tree as source of truth; hash and release audit files are no longer gates.",
+        }],
     }
 
 
@@ -1959,7 +1972,7 @@ def _release_audit_payload(root: Path, release: DatasetRelease, *, verbose: bool
 
 
 def _live_view_audit_payloads(root: Path, dataset: str, *, verbose: bool) -> list[dict[str, object]]:
-    from kairospy.data import load_live_view_manifest
+    from kairospy.data.quality.freshness import load_live_view_manifest
 
     directory = root / "live-views" / dataset.replace(".", "/")
     payloads = []
@@ -2870,6 +2883,8 @@ def _execute_workspace_strategy_entrypoint(entrypoint: object, workspace: object
             "decisions": _normalize_decisions(strategy.decide(context)),
             "result": None,
         }
+    if _looks_like_standard_strategy(strategy):
+        return _execute_workspace_standard_strategy(strategy, workspace, params)
 
     decisions: list[object] = []
     used_hooks = False
@@ -2893,6 +2908,92 @@ def _execute_workspace_strategy_entrypoint(entrypoint: object, workspace: object
         "decisions": [],
         "result": strategy,
     }
+
+
+def _looks_like_standard_strategy(strategy: object) -> bool:
+    return all(callable(getattr(strategy, name, None)) for name in ("on_start", "on_market", "on_fill", "on_end"))
+
+
+def _execute_workspace_standard_strategy(strategy: object, workspace: object, params: dict[str, str]) -> dict[str, object]:
+    from kairospy.strategy.runtime import StrategyRuntime
+
+    runtime = StrategyRuntime(strategy)
+    contexts = _workspace_market_contexts(workspace, params)
+    emitted_intents: list[object] = []
+    if contexts:
+        emitted_intents.extend(runtime.intents_on_start(contexts[0]))
+        for item in contexts:
+            emitted_intents.extend(runtime.intents_on_market(item))
+        emitted_intents.extend(runtime.intents_on_end(contexts[-1]))
+    decisions = tuple(getattr(strategy, "decisions", ()))
+    return {
+        "entrypoint_kind": "workspace_strategy_protocol",
+        "decisions": list(decisions),
+        "result": {
+            "strategy_id": getattr(strategy, "strategy_id", ""),
+            "contexts": len(contexts),
+            "intents": _json_fallback(emitted_intents),
+        },
+    }
+
+
+def _workspace_market_contexts(workspace: object, params: dict[str, str]) -> list[object]:
+    from kairospy.identity import InstrumentId
+    from kairospy.strategy.protocols import Context
+    from kairospy.strategy.views import MarketView, PortfolioView
+
+    binding_name = _workspace_market_binding_name(workspace, params)
+    rows = workspace.data.get(binding_name).collect("rows")
+    limit = int(params.get("limit", str(len(rows))))
+    contexts = []
+    for sequence, row in enumerate(rows[:limit], start=1):
+        timestamp = _row_timestamp(row)
+        instrument = InstrumentId(str(row.get("instrument_id") or row.get("instrument") or row.get("symbol") or "unknown"))
+        reference_price = _row_reference_price(row)
+        contexts.append(Context(
+            MarketView(
+                timestamp,
+                sequence,
+                (instrument,),
+                data_binding=binding_name,
+                available_instruments=(instrument,),
+                reference_prices=((instrument, reference_price),) if reference_price is not None else (),
+            ),
+            PortfolioView(timestamp=timestamp),
+        ))
+    return contexts
+
+
+def _workspace_market_binding_name(workspace: object, params: dict[str, str]) -> str:
+    requested = str(params.get("data") or params.get("binding") or "").strip()
+    if requested:
+        return requested
+    bindings = getattr(getattr(workspace, "manifest", None), "bindings", {})
+    if "market" in bindings:
+        return "market"
+    for name, binding in bindings.items():
+        if getattr(binding, "kind", None) == "dataset":
+            return str(name)
+    raise ValueError("standard workspace Strategy requires a dataset binding; pass params.data or bind market")
+
+
+def _row_timestamp(row: dict[str, object]) -> datetime:
+    value = row.get("timestamp") or row.get("event_time") or row.get("period_start") or row.get("available_time")
+    if isinstance(value, datetime):
+        result = value
+    elif value is None:
+        result = datetime.now(timezone.utc)
+    else:
+        result = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    return result if result.tzinfo is not None else result.replace(tzinfo=timezone.utc)
+
+
+def _row_reference_price(row: dict[str, object]) -> Decimal | None:
+    for key in ("close", "price", "mid", "mark_price"):
+        value = row.get(key)
+        if value not in (None, ""):
+            return Decimal(str(value))
+    return None
 
 
 def _normalize_decisions(value: object) -> list[object]:

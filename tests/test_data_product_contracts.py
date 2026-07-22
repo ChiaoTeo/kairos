@@ -8,17 +8,18 @@ import sys
 import tempfile
 import unittest
 
-from kairospy.data.bootstrap import (
+from kairospy.data.extensions.bootstrap import (
     configured_product_specs, default_provider_registry, register_configured_products,
     register_default_products,
 )
-from kairospy.data import AcquisitionRequest, DatasetClient, TimeRange
+from kairospy.data import DatasetClient
+from kairospy.data.acquisition import AcquisitionRequest, TimeRange
 from kairospy.data.catalog import DataCatalog
 from kairospy.data.contracts import (
     DataProductContract, DataReleaseManifest, DataSetContractArtifact, DatasetStorageKind, LiveViewManifest,
     QualityLevel,
 )
-from kairospy.data.freshness import (
+from kairospy.data.quality.freshness import (
     PAPER_LIVE_FRESHNESS_POLICY, evaluate_live_view_freshness, live_view_channel_diagnostics,
     find_live_view_manifest, live_view_freshness_evidence, live_view_manifest_path, update_live_view_manifest_freshness,
     resolve_live_view_subscription, write_live_view_manifest,
@@ -26,12 +27,28 @@ from kairospy.data.freshness import (
 from kairospy.data.products import (
     BTC_SPOT_DAILY, US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MASSIVE_CORPORATE_ACTIONS,
     US_EQUITY_MASSIVE_IDENTITY,
-    US_EQUITY_MASSIVE_RAW_DAILY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY, US_EQUITY_MOMENTUM_DAILY,
-    US_EQUITY_RETURNS_DAILY, US_EQUITY_UNIVERSE_DAILY, US_OPTION_MASSIVE_RAW_HOURLY,
+    US_EQUITY_MASSIVE_RAW_DAILY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
+    US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY, US_EQUITY_MOMENTUM_DAILY, US_EQUITY_RETURNS_DAILY,
+    US_EQUITY_UNIVERSE_DAILY, US_OPTION_MASSIVE_RAW_HOURLY,
 )
 
 
 class DataProductContractTests(unittest.TestCase):
+    def test_data_package_root_only_exposes_facades_and_foundational_contracts(self) -> None:
+        allowed = {
+            "__init__.py",
+            "api.py",
+            "contracts.py",
+            "ids.py",
+            "layout.py",
+            "protocols.py",
+        }
+        modules = {
+            path.name
+            for path in (Path("kairospy") / "data").glob("*.py")
+        }
+        self.assertEqual(modules, allowed)
+
     def test_builtin_specs_are_the_catalog_and_provider_registry_contract(self) -> None:
         self.assertFalse((Path("kairospy") / "data" / "models.py").exists())
         self.assertIs(DataProductContract, type(BTC_SPOT_DAILY))
@@ -50,6 +67,34 @@ class DataProductContractTests(unittest.TestCase):
             registry = json.loads((Path(directory) / "catalog" / "datasets.json").read_text())
             self.assertEqual(registry["schema_version"], 4)
             self.assertGreaterEqual(len(registry["product_specs"]), 8)
+
+    def test_builtin_product_contracts_live_in_explicit_python_modules(self) -> None:
+        from kairospy.data.products.builtin import KNOWN_PRODUCTS
+        from kairospy.data.products.builtin import binance, massive
+        from kairospy.data.products.builtin.market_ohlcv import (
+            OHLCV_BUCKET_PARTITIONING,
+            OHLCV_INCREMENTAL_CONTRACT,
+            OHLCV_PRIMARY_KEY,
+            OHLCV_TIME_PARTITIONING,
+            OPTION_OHLCV_INSTRUMENT_BUCKETS,
+        )
+
+        product_keys = [str(item.key) for item in KNOWN_PRODUCTS]
+        config_files = list((Path("kairospy") / "data" / "products" / "builtin").glob("*.json"))
+        config_files.extend((Path("kairospy") / "data" / "products" / "builtin").glob("*.yaml"))
+        config_files.extend((Path("kairospy") / "data" / "products" / "builtin").glob("*.yml"))
+
+        self.assertIs(binance.BTC_SPOT_DAILY, BTC_SPOT_DAILY)
+        self.assertIs(massive.US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY)
+        self.assertEqual(len(product_keys), len(set(product_keys)))
+        self.assertEqual(config_files, [])
+        self.assertTrue(callable(binance.register))
+        self.assertTrue(callable(massive.equity_hourly_builder))
+        self.assertEqual(OHLCV_PRIMARY_KEY, ("venue", "instrument_id", "period_start", "interval"))
+        self.assertEqual(OHLCV_TIME_PARTITIONING, ("event_year", "event_month"))
+        self.assertEqual(OHLCV_BUCKET_PARTITIONING, ("event_year", "event_month", "instrument_bucket"))
+        self.assertEqual(OHLCV_INCREMENTAL_CONTRACT["overlap"], "1_period")
+        self.assertEqual(OPTION_OHLCV_INSTRUMENT_BUCKETS, 64)
 
     def test_us_equity_momentum_products_are_registered_as_explicit_contracts(self) -> None:
         expected = (
@@ -127,9 +172,10 @@ class DataProductContractTests(unittest.TestCase):
             extension = root / "demo_provider.py"
             extension.write_text(
                 "\n".join([
-                    "from kairospy.data import (",
-                    "    AcquisitionEstimate, DataProductContract, DataProductDefinition, DatasetKey,",
-                    "    DatasetLayer, DatasetStorageKind, QualityLevel, SourceBinding,",
+                    "from kairospy.data.acquisition import AcquisitionEstimate",
+                    "from kairospy.data.contracts import (",
+                    "    DataProductContract, DataProductDefinition, DatasetKey, DatasetLayer,",
+                    "    DatasetStorageKind, QualityLevel, SourceBinding,",
                     ")",
                     "KEY = 'market.demo.extension.ohlcv'",
                     "def products(context):",
@@ -179,7 +225,7 @@ class DataProductContractTests(unittest.TestCase):
             self.assertEqual(providers.product_spec(str(compiled.key)), compiled)
             self.assertEqual(providers.get("demo", str(compiled.key)).estimate(request).cost_class, "python-extension")
 
-    def test_external_process_extension_acquires_file_manifest_dataset(self) -> None:
+    def test_external_process_extension_registers_product_without_dataset_client_acquire(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             provider_script = root / "external_provider.py"
@@ -222,24 +268,11 @@ class DataProductContractTests(unittest.TestCase):
                 }],
             }), encoding="utf-8")
 
-            catalog = register_configured_products(directory, config)
             providers = default_provider_registry(directory, data_product_config=config)
-            client = DatasetClient(directory, providers=providers)
-            plan = client.plan(
-                "market.demo.process.signal",
-                start=datetime(2026, 1, 1, tzinfo=timezone.utc),
-                end=datetime(2026, 1, 2, tzinfo=timezone.utc),
-                provider="demo-process",
-                venue="test",
-            )
-            release = client.acquire(plan, instruments=("AAPL",))
+            catalog = register_configured_products(directory, config)
 
             self.assertEqual(catalog.product_spec("market.demo.process.signal").product.sources[0].provider, "demo-process")
             self.assertTrue(providers.available("demo-process", "market.demo.process.signal"))
-            self.assertEqual(release.provider, "demo-process")
-            self.assertEqual(release.venue, "test")
-            self.assertTrue((root / release.relative_path / "manifest.json").exists())
-            self.assertTrue((root / release.relative_path / "release.json").exists())
 
     def test_product_spec_rejects_unsafe_physical_layout(self) -> None:
         with self.assertRaisesRegex(ValueError, "safe lake-relative"):

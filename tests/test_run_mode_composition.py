@@ -62,8 +62,9 @@ from kairospy.governance import (
 from kairospy.identity import AccountRef, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
 from kairospy.integrations.connectors.simulated import SimulatedExecutionAccountGateway
 from kairospy.integrations.ports import ComboLegRequest, ComboOrderRequest, Environment, OrderAck, OrderRequest
-from kairospy.data import (
-    DataSetContractArtifact, LiveViewFreshnessMonitor, LiveViewManifest, PAPER_LIVE_FRESHNESS_POLICY,
+from kairospy.data.contracts import DataSetContractArtifact, LiveViewManifest
+from kairospy.data.quality.freshness import (
+    LiveViewFreshnessMonitor, PAPER_LIVE_FRESHNESS_POLICY,
     evaluate_live_view_freshness, live_view_freshness_evidence, live_view_manifest_path, load_live_view_manifest,
     write_live_view_manifest,
 )

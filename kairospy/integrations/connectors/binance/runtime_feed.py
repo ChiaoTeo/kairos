@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Mapping
 
 from kairospy.market.canonical import CanonicalEventEnvelope
-from kairospy.data import (
+from kairospy.data.quality.freshness import (
     LiveViewFreshnessMonitor,
     live_view_freshness_evidence,
     live_view_manifest_path,

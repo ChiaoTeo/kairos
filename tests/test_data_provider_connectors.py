@@ -26,16 +26,16 @@ from kairospy.integrations.connectors.massive.datasets import MassiveOptionHourl
 from kairospy.integrations.connectors.massive.config import MassiveConfig
 from kairospy.integrations.connectors.massive.market_data import MassiveAggregateBarsRequest, MassiveHistoricalMarketDataService
 from kairospy.integrations.connectors.massive.vendor_archive import request_fingerprint
-from kairospy.data import (
-    AcquisitionLimits, AcquisitionRequest, AcquirePolicy, OutputFormat, ProviderRegistry, SourceBinding, TimeRange,
-)
+from kairospy.data import DatasetClient, OutputFormat
+from kairospy.data.acquisition import AcquisitionLimits, AcquisitionRequest, ProviderRegistry, TimeRange
+from kairospy.data.contracts import AcquirePolicy, SourceBinding
+from kairospy.data.products.market_ohlcv import equity_ohlcv_schema, write_equity_ohlcv_dataset
 from kairospy.data.products import (
     BINANCE_USDM_PERPETUAL_HOURLY, BTC_DERIBIT_OPTION_QUOTES, BTC_DERIBIT_OPTION_TRADES,
     BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
     US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY, US_OPTION_MASSIVE_RAW_HOURLY,
 )
-from kairospy.data.bootstrap import default_provider_registry, register_configured_products, register_default_products
-from kairospy.data import DatasetClient
+from kairospy.data.extensions.bootstrap import default_provider_registry, register_configured_products, register_default_products
 
 
 START = datetime(2026, 1, 2, tzinfo=timezone.utc)
@@ -203,6 +203,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
             self.assertEqual([item["tasks"] for item in plan["matrix"]], [1, 0, 1, 1])
             self.assertEqual(plan["planned_symbols"], 3)
 
+    @unittest.skip("DatasetClient provider acquisition planning was removed from the Data product")
     def test_massive_equity_hourly_acquires_and_reads_like_full_market_product(self):
         _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
         _require_optional_module(self, "duckdb", "query optional dependency is not installed")
@@ -233,8 +234,72 @@ class ProviderConnectorContractTests(unittest.TestCase):
             release = DatasetClient(root).resolve(str(US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.key))
             self.assertEqual(release.provider, "massive")
             self.assertEqual(release.venue, "us-securities")
-            self.assertTrue((root / release.relative_path / "lineage.json").exists())
+            lineage = json.loads((root / release.relative_path / "lineage.json").read_text())
+            self.assertEqual(lineage["request"]["dataset"], str(US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.key))
+            self.assertEqual(lineage["request"]["instruments"], ["equity:us:AAPL", "equity:us:MSFT"])
+            self.assertEqual(lineage["universe"]["scope"], "bounded")
+            self.assertEqual(lineage["universe"]["kind"], "bounded")
+            self.assertEqual(lineage["universe"]["requested_instruments"], ["equity:us:AAPL", "equity:us:MSFT"])
+            self.assertEqual(lineage["universe"]["observed_instruments"], ["equity:us:AAPL", "equity:us:MSFT"])
+            self.assertEqual(lineage["universe"]["completeness"], "partial")
+            release_manifest = json.loads((root / release.relative_path / "data_release_manifest.json").read_text())
+            self.assertEqual(release_manifest["source"]["request"]["dataset"], str(US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.key))
+            self.assertEqual(release_manifest["source"]["universe"]["scope"], "bounded")
 
+    @unittest.skip("DatasetClient provider acquisition planning was removed from the Data product")
+    def test_bounded_release_does_not_satisfy_full_market_acquisition_plan(self):
+        _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
+        _require_optional_module(self, "duckdb", "query optional dependency is not installed")
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            register_default_products(root)
+            connector = MassiveEquityHourlyOhlcvDatasetConnector(root, client=object(), view="adjusted")
+            connector.source = _MassiveHourlySource(root)
+            providers = ProviderRegistry()
+            providers.register(connector, (US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY,))
+            client = DatasetClient(
+                root, providers=providers,
+                acquisition_limits=AcquisitionLimits(maximum_requests=10, maximum_instruments=10),
+            )
+
+            client.get(
+                US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.product,
+                start="2026-01-02T14:30:00Z",
+                end="2026-01-02T16:30:00Z",
+                instruments=("equity:us:AAPL",),
+                fields=("period_start", "instrument_id", "symbol", "close"),
+                acquire=AcquirePolicy.IF_MISSING,
+            ).collect(OutputFormat.ROWS)
+            release = DatasetClient(root).resolve(str(US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.key))
+            connector.source.calls.clear()
+
+            same_selection = client.plan(
+                US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.product,
+                start=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
+                end=datetime(2026, 1, 2, 16, 30, tzinfo=timezone.utc),
+                instruments=("AAPL",),
+            )
+            self.assertTrue(same_selection.complete)
+            self.assertEqual(same_selection.local_release_id, release.release_id)
+
+            full_market = client.plan(
+                US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.product,
+                start=datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc),
+                end=datetime(2026, 1, 2, 16, 30, tzinfo=timezone.utc),
+            )
+            self.assertFalse(full_market.complete)
+            self.assertEqual(full_market.local_release_id, release.release_id)
+
+            with self.assertRaisesRegex(RuntimeError, "estimates 8000 instruments"):
+                client.get(
+                    US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY.product,
+                    start="2026-01-02T14:30:00Z",
+                    end="2026-01-02T16:30:00Z",
+                    acquire=AcquirePolicy.IF_MISSING,
+                )
+            self.assertEqual(connector.source.calls, [])
+
+    @unittest.skip("DatasetClient provider acquisition planning was removed from the Data product")
     def test_massive_option_hourly_acquires_explicit_contract_bars(self):
         _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
         _require_optional_module(self, "duckdb", "query optional dependency is not installed")
@@ -270,8 +335,27 @@ class ProviderConnectorContractTests(unittest.TestCase):
             release = DatasetClient(root).resolve(str(US_OPTION_MASSIVE_RAW_HOURLY.key))
             self.assertEqual(release.provider, "massive")
             self.assertEqual(release.venue, "opra")
-            self.assertTrue((root / release.relative_path / "lineage.json").exists())
+            lineage = json.loads((root / release.relative_path / "lineage.json").read_text())
+            self.assertEqual(lineage["request"]["dataset"], str(US_OPTION_MASSIVE_RAW_HOURLY.key))
+            self.assertEqual(
+                lineage["request"]["instruments"],
+                ["option:us:NVDA260130C00100000", "option:us:NVDA260130P00100000"],
+            )
+            self.assertEqual(lineage["universe"]["scope"], "bounded")
+            self.assertEqual(lineage["universe"]["requested_instruments"], [
+                "option:us:NVDA260130C00100000",
+                "option:us:NVDA260130P00100000",
+            ])
+            self.assertEqual(lineage["universe"]["observed_instruments"], [
+                "option:us:NVDA260130C00100000",
+                "option:us:NVDA260130P00100000",
+            ])
+            self.assertEqual(lineage["universe"]["completeness"], "partial")
+            release_manifest = json.loads((root / release.relative_path / "data_release_manifest.json").read_text())
+            self.assertEqual(release_manifest["source"]["request"]["dataset"], str(US_OPTION_MASSIVE_RAW_HOURLY.key))
+            self.assertEqual(release_manifest["source"]["universe"]["scope"], "bounded")
 
+    @unittest.skip("DatasetClient provider acquisition planning was removed from the Data product")
     def test_massive_option_hourly_full_market_uses_minute_flat_files(self):
         _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
         _require_optional_module(self, "duckdb", "query optional dependency is not installed")
@@ -316,12 +400,24 @@ class ProviderConnectorContractTests(unittest.TestCase):
             lineage = json.loads((root / release.relative_path / "lineage.json").read_text())
             self.assertEqual(lineage["source"]["dataset"], "us_options_opra/minute_aggs_v1")
             self.assertEqual(lineage["source"]["transport"], "flat-file")
+            self.assertEqual(lineage["request"]["dataset"], str(US_OPTION_MASSIVE_RAW_HOURLY.key))
+            self.assertEqual(lineage["request"]["instruments"], [])
+            self.assertEqual(lineage["universe"]["scope"], "full_market")
+            self.assertEqual(lineage["universe"]["kind"], "full-market")
+            self.assertEqual(lineage["universe"]["completeness"], "complete_or_best_effort")
+            self.assertIn("OPRA option tickers", lineage["universe"]["selection_source"])
+            release_manifest = json.loads((root / release.relative_path / "data_release_manifest.json").read_text())
+            self.assertEqual(release_manifest["source"]["request"]["dataset"], str(US_OPTION_MASSIVE_RAW_HOURLY.key))
+            self.assertEqual(release_manifest["source"]["universe"]["scope"], "full_market")
+            manifest = json.loads((root / release.relative_path / "manifest.json").read_text())
+            self.assertEqual(manifest["partitioning"], ["event_year", "event_month", "instrument_bucket"])
+            self.assertTrue(any("/instrument_bucket=" in item["path"] for item in manifest["files"]))
 
     def test_default_registry_registers_builtin_massive_daily_products_when_credentials_are_available(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             register_default_products(root)
-            with patch("kairospy.data.bootstrap._massive_config_for_project", return_value=MassiveConfig("test-key")):
+            with patch("kairospy.data.extensions.bootstrap._massive_config_for_project", return_value=MassiveConfig("test-key")):
                 providers = default_provider_registry(root)
             self.assertTrue(providers.available("massive", str(US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY.key)))
             self.assertTrue(providers.available("massive", str(US_OPTION_MASSIVE_RAW_HOURLY.key)))
@@ -345,6 +441,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
             os.environ.clear()
             os.environ.update(old_environ)
 
+    @unittest.skip("DatasetClient provider acquisition planning was removed from the Data product")
     def test_massive_equity_daily_acquires_bounded_builtin_product(self):
         _require_optional_module(self, "pyarrow", "pyarrow optional dependency is not installed")
         with TemporaryDirectory() as temporary:
@@ -374,7 +471,15 @@ class ProviderConnectorContractTests(unittest.TestCase):
             self.assertEqual(release.provider, "massive")
             self.assertEqual(release.venue, "us-securities")
             self.assertTrue((root / release.relative_path / "manifest.json").exists())
+            quality = json.loads((root / release.relative_path / "quality.json").read_text())
+            checks = {item["name"]: item for item in quality["checks"]}
+            self.assertTrue(quality["passed"])
+            self.assertTrue(checks["schema_timezones"]["passed"])
+            self.assertEqual(checks["unique_primary_key"]["value"], 0)
+            self.assertEqual(checks["valid_ohlc"]["value"], 0)
+            self.assertEqual(checks["non_negative_volume"]["value"], 0)
 
+    @unittest.skip("DatasetClient provider acquisition planning was removed from the Data product")
     def test_full_market_instrument_limits_fail_before_provider_downloads(self):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -397,6 +502,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
                 )
             self.assertEqual(connector.source.calls, [])
 
+    @unittest.skip("DatasetClient provider acquisition planning was removed from the Data product")
     def test_binance_full_market_instrument_limits_use_provider_estimate(self):
         class Archive:
             called = False
@@ -575,6 +681,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
             Archive(), "binance", "binance",
         )
 
+    @unittest.skip("DatasetClient provider acquisition planning was removed from the Data product")
     def test_massive_configuration_plans_without_credentials_and_acquire_fails_before_network(self):
         with TemporaryDirectory() as temporary, patch.dict("os.environ", {}, clear=True):
             config = Path(temporary) / "connectors.json"
@@ -596,12 +703,13 @@ class ProviderConnectorContractTests(unittest.TestCase):
             self.assertTrue(plan.connector_available)
             self.assertEqual(plan.estimate.cost_class, "entitled")
             with patch(
-                "kairospy.data.bootstrap._massive_config_for_project",
+                "kairospy.data.extensions.bootstrap._massive_config_for_project",
                 side_effect=RuntimeError("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY is required"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"):
                     client.acquire(plan)
 
+    @unittest.skip("DatasetClient provider acquisition planning was removed from the Data product")
     def test_massive_equity_configuration_plans_without_credentials_and_acquire_fails_before_network(self):
         with TemporaryDirectory() as temporary, patch.dict("os.environ", {}, clear=True):
             config = Path(temporary) / "connectors.json"
@@ -623,7 +731,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
             self.assertTrue(plan.connector_available)
             self.assertEqual(plan.estimate.cost_class, "entitled-rest-bounded-ticker")
             with patch(
-                "kairospy.data.bootstrap._massive_config_for_project",
+                "kairospy.data.extensions.bootstrap._massive_config_for_project",
                 side_effect=RuntimeError("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY is required"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"):
@@ -687,21 +795,11 @@ class ProviderConnectorContractTests(unittest.TestCase):
             self.assertTrue(connector.supports(str(product.key)))
             self.assertGreaterEqual(connector.estimate(request).requests, 1)
             wrong = AcquisitionRequest(str(product.key), request.missing, SourceBinding("wrong", venue))
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(RuntimeError, "release publishing has been removed"):
                 connector.acquire(wrong)
-            first = connector.acquire(request)
-            second = connector.acquire(request)
-            self.assertEqual(first.release_id, second.release_id)
-            self.assertEqual(first.content_hash, second.content_hash)
-            self.assertEqual((first.provider, first.venue), (provider, venue))
-            self.assertTrue(first.release_id.startswith("ds_"))
-            directory = Path(temporary) / first.relative_path
-            for name in ("schema", "lineage", "coverage", "quality", "manifest", "capabilities", "usage", "release"):
-                self.assertTrue((directory / f"{name}.json").exists(), name)
-            lineage = json.loads((directory / "lineage.json").read_text())
-            self.assertEqual(lineage["source"]["provider"], provider)
-            self.assertEqual(lineage["source"]["venue"], venue)
-            self.assertEqual(source.calls, 2)
+            with self.assertRaisesRegex(RuntimeError, "release publishing has been removed"):
+                connector.acquire(request)
+            self.assertEqual(source.calls, 0)
 
 
 if __name__ == "__main__":

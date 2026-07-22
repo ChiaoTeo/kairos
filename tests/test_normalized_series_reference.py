@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.data.snapshots.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairospy.identity import AssetId, InstrumentId, VenueId
 from kairospy.market.types import Quote
 from kairospy.reference.contracts import ContractType, FutureSpec, ProductType

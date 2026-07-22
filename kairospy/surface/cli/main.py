@@ -63,18 +63,28 @@ from kairospy.research.capture.report import summarize
 from kairospy.research.capture.option_capture import OptionCaptureService
 from kairospy.research.capture.spec import MarketDataType, OptionChainCaptureSpec
 from kairospy.infrastructure.storage.repository import FileOptionCaptureRepository
-from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.data.snapshots.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairospy.infrastructure.storage.codec import restore_primitives, to_primitive
 from kairospy.infrastructure.storage.data_lake import write_json
 from kairospy.research.capture.series import SeriesCaptureProgress, SeriesCaptureService, SeriesCaptureSpec
 from kairospy.research.capture.normalized_series import NormalizedSeriesCaptureService
 from kairospy.analytics.pricing import PricingInput, PricingModel, OptionValuationService, implied_volatility, price_with_volatility
 from kairospy.risk import RevaluationPosition, Scenario, ScenarioEngine, explain_scenario
-from kairospy.data import (
-    AcquisitionLimits, DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetQualityService, DatasetRelease,
-    DatasetStatus, DatasetStorageKind, OutputFormat, QualityLevel, DatasetClient, RunMode,
+from kairospy.data import DatasetClient, OutputFormat
+from kairospy.data.acquisition import AcquisitionLimits
+from kairospy.data.catalog import DataCatalog
+from kairospy.data.contracts import (
+    DatasetKey,
+    DatasetLayer,
+    DataProductDefinition,
+    DatasetRelease,
+    DatasetStatus,
+    DatasetStorageKind,
+    QualityLevel,
+    RunMode,
 )
-from kairospy.data.bootstrap import default_provider_registry, register_configured_products, register_default_products
+from kairospy.data.quality.services import DatasetQualityService
+from kairospy.data.extensions.bootstrap import default_provider_registry, register_configured_products, register_default_products
 from kairospy.market.repository import ParquetMarketEventRepository
 from kairospy.analytics.features import BtcIvRvFeatureBuilder, BtcTermSkewFeatureBuilder, BtcDeribitTradeSkewFeatureBuilder
 from kairospy.analytics.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
@@ -82,7 +92,7 @@ from kairospy.analytics.features.us_equity_momentum import UsEquityMomentumDatas
 
 def _program_name() -> str:
     executable = Path(sys.argv[0]).name
-    if executable in {"kairospy"}:
+    if executable in {"kairospy", "kairos"}:
         return executable
     return "kairospy"
 
@@ -131,14 +141,14 @@ def _parser() -> argparse.ArgumentParser:
     workspace_bind_data = workspace_actions.add_parser("bind-data", help="bind a Dataset to a workspace-local name")
     workspace_bind_data.add_argument("workspace")
     workspace_bind_data.add_argument("--name", required=True, help="workspace-local data name")
-    workspace_bind_data.add_argument("--dataset", required=True, help="Dataset name, alias, or release id")
+    workspace_bind_data.add_argument("--dataset", required=True, help="Dataset ID or alias")
     workspace_bind_live = workspace_actions.add_parser("bind-live", help="bind a Live View to a workspace-local name")
     workspace_bind_live.add_argument("workspace")
     workspace_bind_live.add_argument("--name", required=True, help="workspace-local live data name")
     workspace_bind_live.add_argument("--dataset", required=True, help="Live View dataset name")
     workspace_inspect = workspace_actions.add_parser("inspect", help="inspect Workspace bindings")
     workspace_inspect.add_argument("name")
-    data = commands.add_parser("data", help="prepare and inspect governed market datasets")
+    data = commands.add_parser("data", help="manage Dataset Store data and built-in Data products")
     data_actions = data.add_subparsers(dest="action", required=True)
     data_apply = data_actions.add_parser("apply", help="apply a Data manifest such as kairos.data.toml")
     data_apply.add_argument("manifest", nargs="?", type=Path, default=Path("kairos.data.toml"),
@@ -153,16 +163,16 @@ def _parser() -> argparse.ArgumentParser:
     data_start.add_argument("--source", type=Path, help="connector path or live source key; also accepted for --kind file")
     data_start.add_argument("--product", help="built-in Data product key")
     data_start.add_argument("--name", help="Dataset name to expose")
-    data_start.add_argument("--as", dest="as_dataset", help="Dataset name to expose")
+    data_start.add_argument("--as", dest="as_dataset", help="Dataset ID for user file or connector sources")
     data_start.add_argument("--time", help="primary time field")
     data_start.add_argument("--start", dest="start_time", help="historical start timestamp")
     data_start.add_argument("--end", dest="end_time", help="historical end timestamp")
     data_start.add_argument("--account", help="account or credential reference for live data")
     data_start.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat as needed")
     data_start.add_argument("--channel", help="live channel name")
-    data_start.add_argument("--market", choices=("spot", "usdm"), default="spot", help="market type for built-in Binance live sources")
+    data_start.add_argument("--market", help="provider market selector, for example spot, usdm, stocks, or perpetual")
     data_start.add_argument("--levels", type=int, choices=(5, 10, 20), help="order book depth levels for Binance orderbook")
-    data_start.add_argument("--interval", choices=("100ms", "1000ms"), help="Binance orderbook update interval")
+    data_start.add_argument("--interval", help="provider interval selector")
     data_start.add_argument("--for", dest="for_use", choices=("workspace", "backtest", "shadow", "paper", "live"),
                             help="target use; defaults to workspace for historical data and shadow for live data")
     data_add = data_actions.add_parser("add", help="add user-defined historical data as a named Dataset")
@@ -179,7 +189,6 @@ def _parser() -> argparse.ArgumentParser:
         description="Use a historical Data Product. Run 'kairospy data products list' to see built-in product keys, titles, capabilities and account requirements.",
     )
     data_use.add_argument("key", nargs="?", help="Data Product key or alias")
-    data_use.add_argument("--as", dest="as_dataset", help="Dataset name to expose; defaults to the Data Product key")
     data_use.add_argument("--list-products", action="store_true", help="list built-in Data products and exit")
     data_use.add_argument("--start", help="inclusive ISO-8601 timestamp with timezone")
     data_use.add_argument("--end", help="exclusive ISO-8601 timestamp with timezone")
@@ -192,15 +201,15 @@ def _parser() -> argparse.ArgumentParser:
     data_use.add_argument("--dry-run", action="store_true", help="show the plan without downloading")
     data_connect = data_actions.add_parser("connect", help="connect a live Data source")
     data_connect.add_argument("source", type=Path, help="built-in live source key or user LiveDataProtocol connector path")
-    data_connect.add_argument("--as", dest="as_dataset", required=True, help="Dataset name to expose")
+    data_connect.add_argument("--as", dest="as_dataset", help="Dataset ID for user LiveDataProtocol connector paths; not accepted for built-in products")
     data_connect.add_argument("--protocol", choices=("live",), default="live")
     data_connect.add_argument("--time", default="timestamp", help="primary time field; defaults to timestamp")
     data_connect.add_argument("--account", help="account or credential reference for this live source")
     data_connect.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat for a bounded universe")
     data_connect.add_argument("--channel", help="live channel name")
-    data_connect.add_argument("--market", choices=("spot", "usdm"), default="spot", help="market type for built-in Binance live sources")
+    data_connect.add_argument("--market", help="provider market selector, for example spot, usdm, stocks, or perpetual")
     data_connect.add_argument("--levels", type=int, choices=(5, 10, 20), help="order book depth levels for Binance orderbook")
-    data_connect.add_argument("--interval", choices=("100ms", "1000ms"), help="Binance orderbook update interval")
+    data_connect.add_argument("--interval", help="provider interval selector")
     data_connect.add_argument("--for", dest="for_use", choices=("shadow", "paper", "live"),
                               default="shadow", help="target use; defaults to shadow")
     data_connect.add_argument("--freshness-seconds", type=float, default=5.0, help="freshness max age required before paper/live use")
@@ -209,18 +218,18 @@ def _parser() -> argparse.ArgumentParser:
     data_sample.add_argument("--as", dest="as_dataset", help="temporary Dataset name for sample context")
     data_sample.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat as needed")
     data_sample.add_argument("--channel", help="live channel name")
-    data_sample.add_argument("--market", choices=("spot", "usdm"), help="market type for built-in Binance live sources")
+    data_sample.add_argument("--market", help="provider market selector")
     data_sample.add_argument("--levels", type=int, choices=(5, 10, 20), help="order book depth levels for Binance orderbook")
-    data_sample.add_argument("--interval", choices=("100ms", "1000ms"), help="Binance orderbook update interval")
+    data_sample.add_argument("--interval", help="provider interval selector")
     data_sample.add_argument("--limit", type=_positive_int, default=5, help="maximum rows to sample")
     data_reconnect = data_actions.add_parser("reconnect", help="reconnect a configured live Dataset")
     data_reconnect.add_argument("dataset", help="Dataset name to reconnect")
     data_reconnect.add_argument("--account", help="override account or credential reference")
     data_reconnect.add_argument("--instrument", action="append", default=[], help="override instruments; repeat for a bounded universe")
     data_reconnect.add_argument("--channel", help="override live channel name")
-    data_reconnect.add_argument("--market", choices=("spot", "usdm"), help="override market type for built-in Binance live sources")
+    data_reconnect.add_argument("--market", help="override provider market selector")
     data_reconnect.add_argument("--levels", type=int, choices=(5, 10, 20), help="override order book depth levels for Binance orderbook")
-    data_reconnect.add_argument("--interval", choices=("100ms", "1000ms"), help="override Binance orderbook update interval")
+    data_reconnect.add_argument("--interval", help="override provider interval selector")
     data_reconnect.add_argument("--freshness-seconds", type=float, help="override freshness max age")
     data_product = data_actions.add_parser(
         "products", aliases=("product",), help="list built-in Data products",
@@ -294,14 +303,14 @@ def _parser() -> argparse.ArgumentParser:
     soak_binance.add_argument("--artifact", type=Path)
     soak_binance.add_argument(
         "--live-view-manifest", type=Path,
-        help="Live View manifest to mark healthy/unhealthy with audited soak channel diagnostics",
+        help="Live View manifest to update with soak channel diagnostics",
     )
     inspect_data = data_actions.add_parser("inspect", help="show schema, lineage and time coverage")
     inspect_data.add_argument("--dataset", required=True)
     list_data = data_actions.add_parser("list", help="list Datasets and readiness")
     list_data.add_argument("--dimension", action="append", default=[], help="key=value dimension; repeatable")
-    releases_data = data_actions.add_parser("releases", help="list local dataset releases and versions")
-    releases_data.add_argument("--dataset", help="logical dataset key, release id, or alias")
+    releases_data = data_actions.add_parser("releases", help="removed: Data no longer has releases or versions")
+    releases_data.add_argument("--dataset", help="Dataset ID or alias")
     releases_data.add_argument("--dimension", action="append", default=[], help="key=value dimension; repeatable")
     search_data = data_actions.add_parser("search", help="find Datasets by structured dimensions")
     search_data.add_argument("--dimension", action="append", default=[], help="key=value dimension; repeatable")
@@ -315,17 +324,20 @@ def _parser() -> argparse.ArgumentParser:
     metadata_data.add_argument("dataset_arg", nargs="?", help="Dataset name to inspect")
     metadata_data.add_argument("--dataset", dest="dataset", help="Dataset name to inspect; kept for compatibility")
     metadata_data.add_argument("--time", help="override the Dataset primary time field")
-    diagnostics_data = data_actions.add_parser("diagnostics", help="audit all Catalog products and releases")
+    diagnostics_data = data_actions.add_parser("diagnostics", help="diagnose Dataset Store entries")
     diagnostics_data.add_argument("--strict", action="store_true", help="return non-zero when errors exist")
+    repair_index_data = data_actions.add_parser("repair-index", help="rebuild the optional Dataset Store index cache")
+    repair_index_data.add_argument("--strict", action="store_true", help=argparse.SUPPRESS)
+    clean_tmp_data = data_actions.add_parser("clean-tmp", help="remove Dataset Store temporary write directories")
+    clean_tmp_data.add_argument("--dataset", help="Dataset ID or alias; defaults to all Datasets")
     us_equity_diagnostics = data_actions.add_parser("us-equity-momentum-diagnostics", help="audit the local US equity momentum data package")
     us_equity_diagnostics.add_argument("--workspace", default="us-equity-momentum")
     us_equity_diagnostics.add_argument("--version", default="1.0.0")
     us_equity_diagnostics.add_argument("--strict", action="store_true", help="return non-zero when diagnostics errors exist")
-    validate_data = data_actions.add_parser("validate", help="validate a Dataset quality profile")
+    validate_data = data_actions.add_parser("validate", help="inspect whether a Dataset has readable historical or live data")
     validate_data.add_argument("dataset_arg", nargs="?", help="Dataset name to validate")
     validate_data.add_argument("--dataset", dest="dataset", help="Dataset name to validate; kept for compatibility")
-    validate_data.add_argument("--release", help="release id to validate; kept for internal compatibility")
-    prepare_data = data_actions.add_parser("prepare", help="plan, acquire, validate and optionally promote a product")
+    prepare_data = data_actions.add_parser("prepare", help="removed: provider products now own ingestion")
     prepare_data.add_argument("--dataset", required=True)
     prepare_data.add_argument("--start", required=True)
     prepare_data.add_argument("--end", required=True)
@@ -334,7 +346,7 @@ def _parser() -> argparse.ArgumentParser:
     prepare_data.add_argument("--venue")
     prepare_data.add_argument("--acquire-missing", action="store_true")
     _add_acquisition_limit_args(prepare_data)
-    prepare_data.add_argument("--promote", action="store_true", help="explicitly approve promotion after quality passes")
+    prepare_data.add_argument("--promote", action="store_true", help="removed; retained only so the removed command can explain the migration")
     prepare_data.add_argument("--actor", default="data-prepare")
     prepare_data.add_argument("--reason", default="explicit data preparation")
     prepare_us_equity_momentum = data_actions.add_parser(
@@ -384,28 +396,26 @@ def _parser() -> argparse.ArgumentParser:
     replay_data.add_argument("--field", action="append", default=[])
     replay_data.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat as needed")
     replay_data.add_argument("--limit", type=_positive_int, default=20)
-    freeze_data = data_actions.add_parser("freeze", help="freeze one or more dataset inputs for a workspace")
+    freeze_data = data_actions.add_parser("freeze", help="removed: Dataset Store does not freeze workspace inputs")
     freeze_data.add_argument("--workspace", required=True)
     freeze_data.add_argument("--dataset", action="append", required=True)
     freeze_data.add_argument("--output", type=Path, required=True)
     freeze_data.add_argument("--code-version", default=__version__)
-    compare_data = data_actions.add_parser("compare", help="compare two immutable dataset releases")
+    compare_data = data_actions.add_parser("compare", help="removed: Data no longer has immutable releases")
     compare_data.add_argument("--first", required=True)
     compare_data.add_argument("--second", required=True)
-    audit_artifact = data_actions.add_parser("audit-artifact", help="verify an artifact consumes frozen Q3/Q4 releases")
+    audit_artifact = data_actions.add_parser("audit-artifact", help="removed: release artifact audit is outside Data")
     audit_artifact.add_argument("--artifact", type=Path, required=True)
-    audit_data = data_actions.add_parser("audit", help="show Dataset audit evidence")
+    audit_data = data_actions.add_parser("audit", help="removed: Dataset Store has no audit gate")
     audit_data.add_argument("dataset", help="Dataset name to audit")
-    audit_data.add_argument("--verbose", action="store_true", help="include internal manifest, hash and path evidence")
-    alias_data = data_actions.add_parser("alias", help="promote an audited floating alias to an approved release")
+    audit_data.add_argument("--verbose", action="store_true", help="ignored; Dataset Store has no hash audit gate")
+    alias_data = data_actions.add_parser("alias", help="create a Dataset alias")
+    alias_data.add_argument("dataset_arg", nargs="?", help="canonical Dataset ID")
+    alias_data.add_argument("--dataset", dest="dataset", help="canonical Dataset ID")
     alias_data.add_argument("--alias", required=True)
-    alias_data.add_argument("--release", required=True)
-    alias_data.add_argument("--actor", required=True)
-    alias_data.add_argument("--reason", required=True)
-    alias_data.add_argument("--quality-report-hash", required=True)
-    catalog_data = data_actions.add_parser("catalog", help="list governed logical datasets, versions, aliases and formats")
-    catalog_data.add_argument("--refresh", action="store_true", help="discover and persist existing governed datasets")
-    copy_data = data_actions.add_parser("copy", help="copy a governed dataset release between local data lake roots")
+    catalog_data = data_actions.add_parser("catalog", help="list Dataset Store entries")
+    catalog_data.add_argument("--refresh", action="store_true", help="ignored; Dataset Store is discovered from files")
+    copy_data = data_actions.add_parser("copy", help="removed: copy Dataset files directly or rebuild from provider ingestion")
     copy_data.add_argument("--from", dest="source_root", required=True, type=Path,
                            help="source data lake root, for example /path/to/project/.kairos/data")
     copy_data.add_argument("--to", dest="target_root", type=Path,
@@ -416,8 +426,8 @@ def _parser() -> argparse.ArgumentParser:
                            help="also copy source/provider=<provider> raw provider cache, such as Binance payload.zip files")
     copy_data.add_argument("--overwrite", action="store_true", help="overwrite existing copied files")
     copy_data.add_argument("--dry-run", action="store_true", help="show what would be copied without writing files")
-    for action, help_text in (("plan", "show local coverage and missing-data acquisition plan"),
-                              ("acquire", "acquire missing data and publish an immutable release")):
+    for action, help_text in (("plan", "removed: provider products now own ingestion planning"),
+                              ("acquire", "removed: provider products now own ingestion")):
         command = data_actions.add_parser(action, help=help_text)
         command.add_argument("--dataset", required=action == "plan")
         command.add_argument("--start", required=action == "plan", help="inclusive ISO-8601 timestamp with timezone")
@@ -1502,7 +1512,7 @@ def _data(args: argparse.Namespace) -> int:
         try:
             payload = product_surface.data_add(args)
         except Exception as error:
-            from kairospy.data.metadata import DataNeedsTimeError
+            from kairospy.data.storage.metadata import DataNeedsTimeError
 
             if isinstance(error, DataNeedsTimeError):
                 payload = error.to_payload(dataset_id=str(args.name), source=args.source)
@@ -1664,7 +1674,7 @@ def _data(args: argparse.Namespace) -> int:
         result = asyncio.run(soak())
         payload = to_primitive(result)
         if args.live_view_manifest is not None:
-            from kairospy.data import update_live_view_manifest_freshness
+            from kairospy.data.quality.freshness import update_live_view_manifest_freshness
             manifest = update_live_view_manifest_freshness(args.live_view_manifest, payload)
             payload["live_view_manifest"] = {
                 "artifact": str(args.live_view_manifest),
@@ -1727,14 +1737,15 @@ def _data(args: argparse.Namespace) -> int:
         from kairospy.surface import product as product_surface
         args.dimension = _dimension_filters(args.dimension)
         payload = product_surface.data_list(args)
-        _emit_data_payload(args, "Kairos Data Products", payload)
+        _emit_data_payload(args, "Kairos Datasets", payload)
         return 0
     if args.action == "releases":
-        payload = {"releases": DatasetClient(args.lake_root).releases(
-            args.dataset, **_dimension_filters(args.dimension),
-        )}
+        payload = _removed_data_command_payload(
+            "releases",
+            "Data Store Datasets are unversioned directories; use `kairospy data list` or `kairospy data metadata <dataset>`.",
+        )
         _emit_data_payload(args, "Kairos Data Releases", payload)
-        return 0
+        return 2
     if args.action == "search":
         from kairospy.surface import product as product_surface
         args.dimension = _dimension_filters(args.dimension)
@@ -1765,11 +1776,36 @@ def _data(args: argparse.Namespace) -> int:
         _emit_data_payload(args, "Kairos Dataset Metadata", payload)
         return 0
     if args.action == "diagnostics":
-        from kairospy.data.diagnostics import DataDiagnosticsService
-        service = DataDiagnosticsService(args.lake_root)
-        report = service.audit()
+        from kairospy.surface import product as product_surface
+
+        report = product_surface.data_list(args)
+        report["operation"] = "diagnostics"
+        report["healthy"] = all(item.get("status") == "ready" for item in report.get("datasets", ()))
         _emit_data_payload(args, "Kairos Data Diagnostics", report)
         return 2 if args.strict and not report["healthy"] else 0
+    if args.action == "repair-index":
+        from kairospy.data import DatasetStore
+
+        path = DatasetStore(args.lake_root).rebuild_index()
+        _emit_data_payload(args, "Kairos Dataset Index", {
+            "product": "data",
+            "operation": "repair-index",
+            "status": "rebuilt",
+            "index": str(path),
+        })
+        return 0
+    if args.action == "clean-tmp":
+        from kairospy.data import DatasetStore
+
+        removed = DatasetStore(args.lake_root).clean_tmp(getattr(args, "dataset", None))
+        _emit_data_payload(args, "Kairos Dataset Tmp", {
+            "product": "data",
+            "operation": "clean-tmp",
+            "status": "cleaned",
+            "removed": [str(path) for path in removed],
+            "count": len(removed),
+        })
+        return 0
     if args.action == "us-equity-momentum-diagnostics":
         from kairospy.analytics.features import UsEquityMomentumDiagnostics
         report = UsEquityMomentumDiagnostics(args.lake_root).report(workspace=args.workspace, version=args.version)
@@ -1786,44 +1822,47 @@ def _data(args: argparse.Namespace) -> int:
         _emit_data_payload(args, "Kairos Data Validation", payload)
         return 0 if payload["status"] == "passed" else 2
     if args.action == "prepare":
-        register_default_products(args.lake_root)
-        register_configured_products(args.lake_root)
-        providers = default_provider_registry(
-            args.lake_root,
-            progress=None,
+        payload = _removed_data_command_payload(
+            "prepare",
+            "Dataset preparation no longer publishes releases or promotes quality levels; use built-in product ingestion commands.",
         )
-        client = DatasetClient(args.lake_root, providers=providers, acquisition_limits=_acquisition_limits(args))
-        from kairospy.data.preparation import DataPreparationService
-        prepared = DataPreparationService(client).prepare(
-            args.dataset, start=datetime.fromisoformat(args.start), end=datetime.fromisoformat(args.end),
-            minimum_quality=QualityLevel(args.quality), provider=args.provider, venue=args.venue,
-            acquire_missing=args.acquire_missing, promote=args.promote, actor=args.actor, reason=args.reason,
-        )
-        _emit_data_payload(args, "Kairos Data Preparation", to_primitive(prepared)); return 0
+        _emit_data_payload(args, "Kairos Data Preparation", payload)
+        return 2
     if args.action == "prepare-us-equity-momentum":
-        result = _prepare_us_equity_momentum(args)
-        print(json.dumps(to_primitive(result), ensure_ascii=False, indent=2))
-        return 0 if result["readiness"]["summary"]["errors"] == 0 else 2
+        payload = _removed_data_command_payload(
+            "prepare-us-equity-momentum",
+            "This workflow depended on release preparation and will be rebuilt on top of Dataset Store ingestion.",
+        )
+        _emit_data_payload(args, "Kairos US Equity Momentum Preparation", payload)
+        return 2
     if args.action == "query":
         if args.limit <= 0:
             raise SystemExit("--limit must be positive")
         dataset = _dataset_argument(args)
+        from kairospy.surface import product as product_surface
+        metadata = None
         try:
-            query = DatasetClient(args.lake_root).get(
-                dataset, start=args.start, end=args.end, fields=tuple(args.field) or None,
+            metadata = product_surface.data_metadata(args)
+            rows = DatasetClient(args.lake_root).read(
+                dataset,
+                start=args.start,
+                end=args.end,
+                columns=tuple(args.field) or None,
+                output=OutputFormat.ROWS,
+                time_field=str(metadata.get("time") or "") or None,
             )
-        except KeyError as error:
-            from kairospy.surface import product as product_surface
-            if product_surface._live_view_metadata_payloads(Path(args.lake_root), dataset):
+        except product_surface.DataDatasetInputError as error:
+            _emit_data_payload(args, "Kairos Data Query", error.to_payload())
+            return 2
+        except (FileNotFoundError, KeyError) as error:
+            if isinstance(metadata, dict) and metadata.get("live", {}).get("configured"):
                 payload = product_surface._historical_not_configured_error("query", dataset).to_payload()
             else:
                 payload = product_surface._dataset_not_found_error("query", dataset).to_payload()
             _emit_data_payload(args, "Kairos Data Query", payload)
             return 2
-        rows = query.collect(OutputFormat.ROWS)
-        logical_name = str(query.explain().get("logical_name") or dataset)
         payload = {
-            "product": "data", "operation": "query", "dataset": logical_name,
+            "product": "data", "operation": "query", "dataset": str(metadata.get("dataset") or dataset),
             "returned_rows": min(len(rows), args.limit), "total_rows": len(rows),
             "rows": to_primitive(rows[:args.limit]),
         }
@@ -1839,93 +1878,67 @@ def _data(args: argparse.Namespace) -> int:
         _emit_data_payload(args, "Kairos Data Replay", payload)
         return 0
     if args.action == "freeze":
-        client = DatasetClient(args.lake_root)
-        queries = tuple(client.get(dataset) for dataset in args.dataset)
-        target = client.freeze_snapshot(
-            args.output, args.workspace, queries, code_version=args.code_version,
+        payload = _removed_data_command_payload(
+            "freeze",
+            "Dataset Store does not know workspaces or frozen release refs; strategy/runtime snapshots should own reproducibility.",
         )
-        print(json.dumps({
-            "workspace": args.workspace, "snapshot": str(target),
-            "release_ids": [query.release_id for query in queries],
-        }, ensure_ascii=False, indent=2)); return 0
+        _emit_data_payload(args, "Kairos Data Freeze", payload)
+        return 2
     if args.action == "catalog":
-        if args.refresh:
-            register_default_products(args.lake_root)
-        catalog = DataCatalog(args.lake_root)
-        if args.refresh:
-            catalog.discover(); catalog.save()
-        values = [{
-            "logical_key": str(product.key), "title": product.title, "layer": product.layer.value,
-            "dimensions": dict(product.dimensions), "primary_time": product.primary_time,
-            "sources": to_primitive(product.sources),
-            "releases": [{
-                "release_id": release.release_id, "version": release.release_version,
-                "provider": release.provider, "venue": release.venue, "content_hash": release.content_hash,
-                "quality_level": release.quality_level.value, "status": release.status.value,
-                "published_at": release.published_at, "aliases": list(release.aliases),
-            } for release in catalog.releases(product)],
-        } for product in catalog.products()]
-        _emit_data_payload(args, "Kairos Data Catalog", {"products": values}); return 0
+        from kairospy.surface import product as product_surface
+
+        _emit_data_payload(args, "Kairos Data Catalog", product_surface.data_list(args))
+        return 0
     if args.action == "copy":
-        from kairospy.data.transfer import copy_dataset_release
-        result = copy_dataset_release(
-            args.source_root,
-            args.target_root or args.lake_root,
-            args.dataset,
-            release=args.release,
-            include_source_cache=args.include_source_cache,
-            overwrite=args.overwrite,
-            dry_run=args.dry_run,
+        payload = _removed_data_command_payload(
+            "copy",
+            "Dataset release copy has been removed from the Data product.",
+            "Copy Dataset Store directories directly or rebuild datasets through provider ingestion.",
         )
-        _emit_data_payload(args, "Kairos Data Copy", to_primitive(result)); return 0
+        _emit_data_payload(args, "Kairos Data Copy", payload)
+        return 2
     if args.action == "compare":
-        comparison = DatasetClient(args.lake_root).compare(args.first, args.second)
-        print(json.dumps(comparison, ensure_ascii=False, indent=2)); return 0
+        payload = _removed_data_command_payload(
+            "compare",
+            "Data Store has no release identity to compare; compare Dataset tables explicitly in analysis code.",
+        )
+        _emit_data_payload(args, "Kairos Data Compare", payload)
+        return 2
     if args.action == "audit-artifact":
-        from kairospy.data.artifact_audit import audit_governed_artifact
-        report = audit_governed_artifact(args.lake_root, args.artifact)
-        print(json.dumps(to_primitive(report), ensure_ascii=False, indent=2))
-        return 0 if report.passed else 2
+        payload = _removed_data_command_payload(
+            "audit-artifact",
+            "Release artifact audit has moved out of Dataset storage.",
+        )
+        _emit_data_payload(args, "Kairos Data Audit Artifact", payload)
+        return 2
     if args.action == "alias":
-        catalog = DataCatalog(args.lake_root)
-        release = catalog.promote_alias(
-            args.alias, args.release, actor=args.actor, reason=args.reason,
-            quality_report_hash=args.quality_report_hash,
-        )
-        print(json.dumps({"alias": args.alias, "release_id": release.release_id}, indent=2)); return 0
+        from kairospy.data import DatasetStore
+
+        dataset = _dataset_argument(args)
+        store = DatasetStore(args.lake_root)
+        dataset_id = store.resolve(dataset)
+        if not store.dataset_path(dataset_id).exists():
+            from kairospy.surface import product as product_surface
+
+            _emit_data_payload(args, "Kairos Dataset Alias", product_surface._dataset_not_found_error("alias", dataset).to_payload())
+            return 2
+        path = store.alias(dataset_id, args.alias)
+        _emit_data_payload(args, "Kairos Dataset Alias", {
+            "product": "data",
+            "operation": "alias",
+            "dataset": str(dataset_id),
+            "alias": args.alias,
+            "path": str(path),
+            "status": "ready",
+        })
+        return 0
     if args.action in {"plan", "acquire"}:
-        register_default_products(args.lake_root)
-        register_configured_products(args.lake_root)
-        providers = default_provider_registry(
-            args.lake_root,
-            progress=None,
+        payload = _removed_data_command_payload(
+            args.action,
+            "Dataset Store no longer plans/acquires immutable releases; provider-specific product ingestion owns this workflow.",
         )
-        client = DatasetClient(args.lake_root, providers=providers, acquisition_limits=_acquisition_limits(args))
-        if args.action == "acquire" and getattr(args, "list_products", False):
-            _emit_data_payload(args, "Kairos Acquirable Data Products", {"products": _acquirable_product_rows(client, providers)})
-            return 0
-        interactive_acquire = args.action == "acquire" and not (args.dataset and args.start and args.end)
-        if args.action == "acquire":
-            _prompt_acquire_args(args, client, providers)
-        if not args.dataset or not args.start or not args.end:
-            raise SystemExit("--dataset, --start and --end are required outside interactive acquire")
-        start, end = datetime.fromisoformat(args.start), datetime.fromisoformat(args.end)
-        plan = client.plan(args.dataset, start=start, end=end, provider=args.provider, venue=args.venue)
-        plan = _plan_with_cli_instruments(plan, providers, tuple(args.instrument))
-        if args.action == "plan":
-            _emit_data_payload(args, "Kairos Acquisition Plan", _acquisition_plan_payload(plan, providers, tuple(args.instrument))); return 0
-        _emit_data_payload(args, "Kairos Acquisition Plan", _acquisition_plan_payload(plan, providers, tuple(args.instrument)))
-        if args.dry_run:
-            return 0
-        should_confirm = interactive_acquire or sys.stdin.isatty()
-        if should_confirm and not args.yes and not _prompt_bool("Proceed with acquisition", False):
-            print("Acquisition cancelled")
-            return 1
-        try:
-            release = client.acquire(plan, instruments=tuple(args.instrument), refresh=args.refresh)
-        except RuntimeError as error:
-            raise SystemExit(str(error)) from error
-        _emit_data_payload(args, "Kairos Dataset", _dataset_acquire_payload(release)); return 0
+        _emit_data_payload(args, "Kairos Acquisition Plan", payload)
+        return 2
     if args.action == "promote":
         if getattr(args, "for_use", None):
             if not args.dataset:
@@ -2042,6 +2055,19 @@ def _data(args: argparse.Namespace) -> int:
     return 0
 
 
+def _removed_data_command_payload(operation: str, why: str) -> dict[str, object]:
+    return {
+        "product": "data",
+        "operation": operation,
+        "status": "removed",
+        "issues": [{
+            "code": f"{operation.replace('-', '_')}_removed",
+            "message": f"kairospy data {operation} has been removed.",
+            "why": why,
+        }],
+    }
+
+
 def _emit_data_payload(args: argparse.Namespace, title: str, payload: object) -> None:
     from kairospy.surface.cli.output import (
         render_builtin_data_products, render_data_catalog, render_dataset_detail, render_dataset_list,
@@ -2079,14 +2105,14 @@ def _emit_data_payload(args: argparse.Namespace, title: str, payload: object) ->
     if args.action == "use" and primitive.get("operation") == "use":
         print(_render_data_use_payload(title, primitive))
         return
-    if args.action == "list" and isinstance(primitive.get("products"), list):
-        print(render_dataset_list(title, primitive["products"]))
+    if args.action == "list" and isinstance(primitive.get("datasets"), list):
+        print(render_dataset_list(title, primitive["datasets"]))
         return
     if args.action == "releases" and isinstance(primitive.get("releases"), list):
         print(render_dataset_releases(title, primitive["releases"]))
         return
-    if args.action == "search" and isinstance(primitive.get("products"), list):
-        print(render_dataset_list(title, primitive["products"]))
+    if args.action == "search" and isinstance(primitive.get("datasets"), list):
+        print(render_dataset_list(title, primitive["datasets"]))
         return
     if args.action == "acquire" and isinstance(primitive.get("products"), list):
         print(render_dataset_list(title, primitive["products"]))
@@ -2243,7 +2269,7 @@ def _plan_with_cli_instruments(plan, providers, instruments: tuple[str, ...]):
     if not instruments or plan.selected is None or not plan.connector_available:
         return plan
     from dataclasses import replace
-    from kairospy.data import AcquisitionRequest
+    from kairospy.data.acquisition import AcquisitionRequest
 
     connector = providers.get(plan.selected.provider, plan.logical_key)
     request = AcquisitionRequest(
@@ -2262,7 +2288,7 @@ def _acquisition_plan_payload(plan, providers, instruments: tuple[str, ...]) -> 
     task_plan = getattr(connector, "task_plan", None)
     if task_plan is None:
         return payload
-    from kairospy.data import AcquisitionRequest
+    from kairospy.data.acquisition import AcquisitionRequest
 
     request = AcquisitionRequest(
         plan.logical_key, plan.missing, plan.selected, instruments,
@@ -2604,83 +2630,11 @@ def _massive_request(args: argparse.Namespace) -> tuple[str, dict[str, object]]:
 
 
 def _prepare_us_equity_momentum(args: argparse.Namespace) -> dict[str, object]:
-    from kairospy.data.preparation import DataPreparationService
-    from kairospy.analytics.features import UsEquityMomentumDiagnostics
-
-    start, end = datetime.fromisoformat(args.start), datetime.fromisoformat(args.end)
-    if start.tzinfo is None or end.tzinfo is None or start >= end:
-        raise ValueError("US equity momentum preparation requires timezone-aware increasing [start,end) timestamps")
-    register_default_products(args.lake_root)
-    register_configured_products(args.lake_root)
-    providers = default_provider_registry(
-        args.lake_root,
-        progress=None if args.quiet else None,
+    return _removed_data_command_payload(
+        "prepare-us-equity-momentum",
+        "This workflow depended on release preparation and will be rebuilt on top of Dataset Store ingestion.",
+        "Use Data Product ingestion and Dataset Store reads directly.",
     )
-    client = DatasetClient(args.lake_root, providers=providers)
-    prepared_raw = []
-    raw_release_paths = []
-    for raw_dataset in args.raw_dataset:
-        raw = DataPreparationService(client).prepare(
-            raw_dataset,
-            start=start,
-            end=end,
-            minimum_quality=QualityLevel.WORKSPACE,
-            provider=args.provider,
-            venue=args.venue,
-            acquire_missing=True,
-            promote=False,
-            actor="us-equity-momentum-one-click",
-            reason="prepare US equity momentum source data",
-        )
-        prepared_raw.append(raw)
-        raw_release_paths.append(client.catalog.release(raw.release_id).relative_path)
-    raw_source_directory = _common_lake_directory(args.lake_root, raw_release_paths)
-    corporate_actions_directory = args.corporate_actions_directory
-    corporate_action_sync = None
-    if corporate_actions_directory is None and args.sync_corporate_actions:
-        corporate_action_sync = _sync_us_equity_momentum_corporate_actions(
-            args.lake_root, raw_release_paths, start, end, dataset_id=args.dataset_id,
-        )
-        corporate_actions_directory = corporate_action_sync["directory"]
-    reference_directory = args.reference_directory
-    reference_evidence = {"directory": reference_directory, "auto_detected": False}
-    if reference_directory is None:
-        reference_evidence = _latest_us_equity_identity_reference(args.lake_root)
-        reference_directory = reference_evidence["directory"]
-    policy = UsEquityMomentumPolicy(
-        minimum_price=args.minimum_price,
-        minimum_adv20=args.minimum_adv20,
-        minimum_history=args.minimum_history,
-    )
-    features_manifest = UsEquityMomentumDatasetBuilder(args.lake_root).build_from_ohlcv_directory(
-        raw_source_directory,
-        dataset_id=args.dataset_id,
-        policy=policy,
-        corporate_actions_directory=corporate_actions_directory,
-        reference_directory=reference_directory,
-    )
-    readiness = UsEquityMomentumDiagnostics(args.lake_root).report(workspace=args.workspace, version=args.version)
-    return {
-        "workflow": "us-equity-momentum",
-        "scope": "bounded-configured-products",
-        "raw_datasets": list(args.raw_dataset),
-        "raw_source_directory": raw_source_directory,
-        "raw_releases": [to_primitive(item) for item in prepared_raw],
-        "corporate_actions": (
-            corporate_action_sync
-            if corporate_action_sync is not None
-            else {"directory": corporate_actions_directory, "synced": False}
-        ),
-        "reference": reference_evidence,
-        "features": features_manifest,
-        "readiness": readiness,
-        "ready_for_workspace": readiness["ready_for_workspace"],
-        "ready_for_backtest": readiness["ready_for_backtest"],
-        "limitations": [
-            "This command prepares configured Massive equity products, not a proven full-market active/inactive universe.",
-            "Full backtest readiness still requires complete reference, coverage, corporate action and delisting evidence.",
-        ],
-    }
 
 
 def _latest_us_equity_identity_reference(lake_root: str | Path) -> dict[str, object]:

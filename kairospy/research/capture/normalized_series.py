@@ -7,7 +7,7 @@ from typing import Callable, Protocol
 
 from kairospy import __version__
 from kairospy.market.snapshots import InstrumentLifecycleSnapshot, MarketReplayDataset, MarketSnapshot, SettlementType, build_manifest
-from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.data.snapshots.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairospy.reference.contracts import FutureSpec, ListedOptionSpec, is_option_spec
 from kairospy.reference.contracts import InstrumentDefinition
 from kairospy.reference.catalog import ReferenceCatalog

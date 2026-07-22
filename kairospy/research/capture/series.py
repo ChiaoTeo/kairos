@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from kairospy import __version__
 from kairospy.market.snapshots import InstrumentLifecycleSnapshot, MarketReplayDataset, MarketSnapshot, SettlementType, build_manifest
-from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.data.snapshots.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairospy.integrations.connectors.ibkr.option_chain_provider import SpxwOptionChainProvider
 from kairospy.market.events import UnderlyingPriceUpdated
 from kairospy.market.state import MarketState, apply_market_event

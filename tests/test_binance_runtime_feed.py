@@ -8,12 +8,9 @@ import tempfile
 import unittest
 
 from kairospy.integrations.connectors.binance import BinanceRuntimeFeedFactory
-from kairospy.data import (
-    DataCatalog,
-    DataSetContractArtifact,
-    LiveViewManifest,
+from kairospy.data.contracts import DataSetContractArtifact, LiveViewManifest
+from kairospy.data.quality.freshness import (
     PAPER_LIVE_FRESHNESS_POLICY,
-    register_live_capture_release,
     evaluate_live_view_freshness,
     live_view_manifest_path,
     load_live_view_manifest,
@@ -138,17 +135,7 @@ class BinanceRuntimeFeedFactoryTests(unittest.IsolatedAsyncioTestCase):
             raw_journal_symbol = json.loads(
                 journal_paths[0].read_text(encoding="utf-8").splitlines()[0],
             )["s"]
-            release = register_live_capture_release(
-                root,
-                dataset_id=dataset_id,
-                capture_manifest_path=capture_manifests[0],
-                run_id="run_fixture",
-                live_view_id=live_view_id,
-                provider="binance",
-            )
-            release_manifest_path = root / release.relative_path / "data_release_manifest.json"
-            release_manifest = json.loads(release_manifest_path.read_text(encoding="utf-8"))
-            catalog_release = DataCatalog(root).release(release.release_id)
+            capture_manifest = json.loads(capture_manifests[0].read_text(encoding="utf-8"))
 
         self.assertTrue(connector.urls[0].endswith("/btcusdt@bookTicker"))
         self.assertEqual(service.raw_messages, 1)
@@ -162,11 +149,8 @@ class BinanceRuntimeFeedFactoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(journal_paths), 1)
         self.assertEqual(raw_journal_symbol, "BTCUSDT")
         self.assertEqual(len(capture_manifests), 1)
-        self.assertEqual(catalog_release.content_hash, release.content_hash)
-        self.assertEqual(catalog_release.storage_kind.value, "market_events")
-        self.assertEqual(release_manifest["kind"], "data_release_manifest")
-        self.assertEqual(release_manifest["dataset_id"], dataset_id)
-        self.assertEqual(release_manifest["source"]["run_id"], "run_fixture")
+        self.assertIn("content_sha256", capture_manifest)
+        self.assertFalse((root / "releases").exists())
 
     def test_factory_rejects_non_binance_live_view_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

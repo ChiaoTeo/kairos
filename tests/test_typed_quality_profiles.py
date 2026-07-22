@@ -7,10 +7,12 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from kairospy.data import (
-    DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DataProductContract, DatasetQualityService,
+from kairospy.data.catalog import DataCatalog
+from kairospy.data.contracts import (
+    DatasetKey, DatasetLayer, DataProductDefinition, DataProductContract,
     DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel,
 )
+from kairospy.data.quality.services import DatasetQualityService
 from kairospy.infrastructure.storage.data_lake import write_daily_dataset, write_json
 
 

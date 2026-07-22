@@ -7,7 +7,7 @@ from pathlib import Path
 
 from kairospy import __version__
 from kairospy.market.snapshots import InstrumentLifecycleSnapshot, MarketReplayDataset, MarketSnapshot, SettlementType, build_manifest
-from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.data.snapshots.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairospy.reference import ReferenceCatalog, ReferenceCatalogRepository, ReferenceRole
 from kairospy.reference.access import contract_spec, product_type
 from kairospy.research.capture.snapshot import build_reference_evidence

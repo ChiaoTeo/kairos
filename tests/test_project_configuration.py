@@ -146,7 +146,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
         result = subprocess.run(
             [
                 sys.executable, "-c",
-                "from kairospy.data.bootstrap import register_default_products; "
+                "from kairospy.data.extensions.bootstrap import register_default_products; "
                 "from kairospy.integrations.connectors.binance import BinanceRuntimeFeedFactory; "
                 "from kairospy.workspace import Workspace; "
                 "print(register_default_products.__name__, BinanceRuntimeFeedFactory.__name__, Workspace.__name__)",
@@ -330,7 +330,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             self.assertEqual(config.get("credentials.binance_trading_testnet_spot.api_key"), "env:PIPE_BINANCE_KEY")
             self.assertEqual(config.get("credentials.binance_trading_testnet_spot.api_secret"), "env:PIPE_BINANCE_SECRET")
 
-    def test_cli_data_acquire_lists_products_and_accepts_interactive_dry_run(self) -> None:
+    def test_cli_data_acquire_reports_removed(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             initialize_project(root, name="Acquire Desk")
@@ -340,69 +340,14 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             listed = subprocess.run(
                 [sys.executable, "-m", "kairospy", "--format", "json", "data", "acquire", "--list-products"],
                 cwd=root,
-                check=True,
                 capture_output=True,
                 text=True,
                 env=env,
             )
-            self.assertIn("market.ohlcv.crypto.binance.usdm-perpetual.1h", listed.stdout)
-
-            dry_run = subprocess.run(
-                [sys.executable, "-m", "kairospy", "data", "acquire", "--dry-run"],
-                cwd=root,
-                input=(
-                    "market.ohlcv.crypto.binance.btc-usdt.1d\n"
-                    "2026-01-01T00:00:00+00:00\n"
-                    "2026-01-02T00:00:00+00:00\n"
-                    "full-market\n"
-                ),
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-            self.assertIn("Acquirable Data Products", dry_run.stdout)
-            self.assertIn("Kairos Acquisition Plan", dry_run.stdout)
-            self.assertIn("market.ohlcv.crypto.binance.btc-usdt.1d", dry_run.stdout)
-
-            (root / ".env").write_text("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY=test-key\n", encoding="utf-8")
-            massive_human_plan = subprocess.run(
-                [
-                    sys.executable, "-m", "kairospy", "data", "acquire",
-                    "--dataset", "market.ohlcv.equity.us.massive.1h.adjusted",
-                    "--start", "2026-01-02T14:30:00+00:00",
-                    "--end", "2026-01-02T16:30:00+00:00",
-                    "--provider", "massive", "--venue", "us-securities",
-                    "--instrument", "equity:us:AAPL", "--dry-run",
-                ],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-            self.assertIn("Provider Task Plan", massive_human_plan.stdout)
-            self.assertIn("rest-paginated-aggregate", massive_human_plan.stdout)
-            massive_plan = subprocess.run(
-                [
-                    sys.executable, "-m", "kairospy", "--format", "json", "data", "acquire",
-                    "--dataset", "market.ohlcv.equity.us.massive.1h.adjusted",
-                    "--start", "2026-01-02T14:30:00+00:00",
-                    "--end", "2026-01-02T16:30:00+00:00",
-                    "--provider", "massive", "--venue", "us-securities",
-                    "--instrument", "equity:us:AAPL", "--dry-run",
-                ],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-            payload = json.loads(massive_plan.stdout)
-            self.assertEqual(payload["estimate"]["requests"], 1)
-            self.assertEqual(payload["provider_tasks"]["task_type"], "rest-paginated-aggregate")
-            self.assertEqual(payload["provider_tasks"]["total_tasks"], 1)
-            self.assertEqual(payload["provider_tasks"]["uncached_tasks"], 1)
+            self.assertEqual(listed.returncode, 2)
+            payload = json.loads(listed.stdout)
+            self.assertEqual(payload["status"], "removed")
+            self.assertEqual(payload["operation"], "acquire")
 
             blocked = subprocess.run(
                 [
@@ -419,7 +364,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
                 env=env,
             )
             self.assertNotEqual(blocked.returncode, 0)
-            self.assertIn("acquisition estimates", blocked.stderr + blocked.stdout)
+            self.assertIn("removed", blocked.stderr + blocked.stdout)
 
     def test_cli_init_interactive_accepts_piped_answers(self) -> None:
         with TemporaryDirectory() as directory:
@@ -455,8 +400,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
                 env=env,
             )
             self.assertIn("Kairos Data Catalog", human.stdout)
-            self.assertIn("Binance BTC/USDT daily OHLCV", human.stdout)
-            self.assertIn("Primary Time", human.stdout)
+            self.assertIn("Operation", human.stdout)
 
             machine = subprocess.run(
                 [
@@ -469,7 +413,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
                 env=env,
             )
             payload = json.loads(machine.stdout)
-            self.assertIn("products", payload)
+            self.assertIn("datasets", payload)
             self.assertNotIn("Kairos Data Catalog", machine.stdout)
 
 

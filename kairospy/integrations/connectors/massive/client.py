@@ -60,6 +60,7 @@ class MassiveClient:
 
     def get(self, path_or_url: str, params: Mapping[str, object] | None = None) -> MassiveResponse:
         url = self._url(path_or_url, params)
+        response: MassiveResponse | None = None
         for attempt in range(self.config.max_retries):
             response = self.transport.request(
                 url,
@@ -73,7 +74,8 @@ class MassiveClient:
             if attempt + 1 < self.config.max_retries:
                 retry_after = response.headers.get("Retry-After")
                 self.wait(float(retry_after) if retry_after else 1.5 * (attempt + 1))
-        raise MassiveError(f"Massive request exhausted retries url={redact_url(url)}")
+        detail = _response_detail(response)
+        raise MassiveError(f"Massive request exhausted retries {detail} url={redact_url(url)}")
 
     def pages(self, path: str, params: Mapping[str, object] | None = None, *, max_pages: int = 100_000):
         next_url: str | None = path
@@ -120,3 +122,15 @@ def redact_url(url: str) -> str:
     parsed = urlparse(url)
     query = [(key, "***" if key.lower() in {"apikey", "api_key", "token"} else value) for key, value in parse_qsl(parsed.query)]
     return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def _response_detail(response: MassiveResponse | None) -> str:
+    if response is None:
+        return "status=unknown"
+    text = response.body.decode("utf-8", errors="replace").strip()
+    if len(text) > 300:
+        text = text[:300] + "..."
+    body = f" body={text!r}" if text else ""
+    retry_after = response.headers.get("Retry-After")
+    retry = f" retry_after={retry_after}" if retry_after else ""
+    return f"status={response.status}{retry}{body}"

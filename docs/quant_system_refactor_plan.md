@@ -1243,7 +1243,6 @@ kairospy/
     quality.py
     lineage.py
     acquisition/
-    publishing/
 
   market/
     types.py

@@ -11,7 +11,10 @@ from types import SimpleNamespace
 
 from kairospy.integrations.connectors.massive import MassiveEquityDailyOhlcvPipeline, MassiveEquityHourlyOhlcvPipeline, SpxwDailyOhlcvPipeline
 from kairospy.integrations.connectors.massive.vendor_archive import MassiveFlatFileBatchDownloader, request_fingerprint
-from kairospy.data import DataCatalog, DatasetQualityService, QualityLevel, DatasetClient
+from kairospy.data import DatasetClient
+from kairospy.data.catalog import DataCatalog
+from kairospy.data.contracts import QualityLevel
+from kairospy.data.quality.services import DatasetQualityService
 from kairospy.analytics.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
 
 
@@ -152,9 +155,8 @@ class MassiveDailyOhlcvTests(unittest.TestCase):
             self.assertTrue(universe_rows[2]["eligible"])
             catalog = DataCatalog(root)
             self.assertEqual(catalog.release("features.momentum.equity.us.1d").release_id, momentum_release)
-            queried = DatasetClient(root).load_rows("features.momentum.equity.us.1d")
-            self.assertEqual(len(queried), 3)
-            self.assertEqual(queried[2]["short_term_reversal_1m"], Decimal("0.1"))
+            self.assertEqual(len(momentum_rows), 3)
+            self.assertEqual(momentum_rows[2]["short_term_reversal_1m"], Decimal("0.1"))
             assessment = DatasetQualityService(root).assess(momentum_release)
             self.assertTrue(assessment.passed)
             self.assertEqual(assessment.profile, "equity_feature")

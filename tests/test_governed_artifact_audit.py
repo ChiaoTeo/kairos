@@ -8,10 +8,11 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from kairospy.surface.cli.main import main
-from kairospy.data import (
-    DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease, DatasetStatus, QualityLevel,
+from kairospy.data.catalog import DataCatalog
+from kairospy.data.contracts import (
+    DatasetKey, DatasetLayer, DataProductDefinition, DatasetRelease, DatasetStatus, QualityLevel,
 )
-from kairospy.data.artifact_audit import audit_governed_artifact
+from kairospy.data.quality.artifact_audit import audit_governed_artifact
 
 
 class GovernedArtifactAuditTests(unittest.TestCase):

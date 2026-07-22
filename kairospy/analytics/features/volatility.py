@@ -7,14 +7,10 @@ import statistics
 from pathlib import Path
 
 from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
-from kairospy.data.client import DatasetClient
-from kairospy.data.contracts import QualityLevel
+from kairospy.data.storage.client import DatasetClient
 from kairospy.data.products import (
-    BTC_DERIBIT_OPTION_TRADES, BTC_DERIBIT_TERM_SKEW_DAILY, BTC_DVOL_DAILY, BTC_IV_RV_DAILY,
-    BTC_OPTION_QUOTES_HOURLY, BTC_SPOT_DAILY, BTC_TERM_SKEW_HOURLY, capabilities_payload,
+    BTC_DERIBIT_OPTION_TRADES, BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY, BTC_SPOT_DAILY,
 )
-from kairospy.data.publishing import content_release_id, publish_release, release_path
-from kairospy.infrastructure.storage.data_lake import write_daily_dataset, write_intraday_dataset
 
 
 def _input(release):
@@ -45,32 +41,7 @@ class BtcIvRvFeatureBuilder:
         self.root, self.data = Path(root), DatasetClient(root)
 
     def build(self):
-        spot_release = self.data.catalog.release(BTC_SPOT_DAILY.key)
-        dvol_release = self.data.catalog.release(BTC_DVOL_DAILY.key)
-        spot = self.data.load_rows(spot_release.release_id)
-        dvol = self.data.load_rows(dvol_release.release_id)
-        rows = build_iv_rv_panel(spot, dvol)
-        inputs = [_input(item) for item in (spot_release, dvol_release)]
-        release_id = content_release_id(BTC_IV_RV_DAILY, {"inputs": inputs, "rows": rows, "transform_version": 2})
-        lineage = {"lineage_version": 2, "dataset_id": release_id,
-                   "producer": {"name": "kairospy.analytics.features.volatility", "transform": "btc_iv_rv_features", "version": 2},
-                   "inputs": inputs, "parameters": {"rv_lookback": "P30D", "annualization_days": 365},
-                   "point_in_time_safe": True, "contains_forward_labels": False}
-        schema = {"schema_id": BTC_IV_RV_DAILY.schema_id, "schema_version": 1, "time_boundary": "[period_start,period_end)",
-                  "primary_key": ["period_start"], "point_in_time_safe": True, "contains_forward_labels": False,
-                  "columns": {
-                      "period_start": {"type": "datetime", "timezone": "UTC"}, "period_end": {"type": "datetime", "timezone": "UTC"},
-                      "event_time": {"type": "datetime", "timezone": "UTC"}, "available_time": {"type": "datetime", "timezone": "UTC"},
-                      "spot_close": {"type": "number", "unit": "USDT_per_BTC"},
-                      "dvol_close": {"type": "number", "unit": "annualized_volatility_percent"},
-                      "rv30": {"type": "number", "unit": "annualized_volatility_percent", "lookback": "P30D"},
-                      "iv_rv_spread": {"type": "number", "unit": "volatility_points"}}}
-        manifest = write_daily_dataset(self.root / release_path(BTC_IV_RV_DAILY, release_id), rows,
-                                       dataset_id=release_id, schema=schema, lineage=lineage,
-                                       capabilities=capabilities_payload(BTC_IV_RV_DAILY, release_id))
-        return publish_release(self.root, BTC_IV_RV_DAILY, release_id, manifest, provider="internal", venue=None,
-                               transform_id="btc_iv_rv_features", transform_version="2",
-                               quality_level=QualityLevel.WORKSPACE)
+        raise RuntimeError("feature release publishing has been removed; write features through DatasetWriter")
 
 
 class BtcTermSkewFeatureBuilder:
@@ -80,33 +51,7 @@ class BtcTermSkewFeatureBuilder:
         self.root, self.data = Path(root), DatasetClient(root)
 
     def build(self):
-        source_release = self.data.catalog.release(BTC_OPTION_QUOTES_HOURLY.key)
-        quotes = self.data.load_rows(source_release.release_id)
-        rows = build_term_skew_panel(quotes, self.TARGETS)
-        inputs = [_input(source_release)]
-        release_id = content_release_id(BTC_TERM_SKEW_HOURLY, {"inputs": inputs, "rows": rows, "transform_version": 2})
-        lineage = {"lineage_version": 2, "dataset_id": release_id,
-                   "producer": {"name": "kairospy.analytics.features.volatility", "transform": "fixed_maturity_delta_skew", "version": 2},
-                   "inputs": inputs,
-                   "parameters": {"target_dte": list(self.TARGETS), "delta_nodes": [0.10, 0.25, 0.50],
-                                  "term_interpolation": "linear_total_variance", "extrapolation": "none",
-                                  "iv_source": "binance_mark_iv", "delta_source": "binance_vendor_delta"},
-                   "point_in_time_safe": True, "contains_forward_labels": False}
-        columns = {"period_start": {"type": "datetime", "timezone": "UTC"}, "period_end": {"type": "datetime", "timezone": "UTC"},
-                   "event_time": {"type": "datetime", "timezone": "UTC"}, "available_time": {"type": "datetime", "timezone": "UTC"},
-                   "quote_count": {"type": "integer"}, "expiry_count": {"type": "integer"}}
-        for dte in self.TARGETS:
-            for name in ("atm_iv", "put25_iv", "call25_iv", "put10_iv", "call10_iv", "put_skew25", "rr25", "bf25", "put_skew10", "rr10"):
-                columns[f"{name}_{dte}d"] = {"type": "nullable_number", "unit": "absolute_volatility"}
-        schema = {"schema_id": BTC_TERM_SKEW_HOURLY.schema_id, "schema_version": 1,
-                  "time_boundary": "[period_start,period_end)", "primary_key": ["period_start"],
-                  "point_in_time_safe": True, "contains_forward_labels": False, "columns": columns}
-        manifest = write_intraday_dataset(self.root / release_path(BTC_TERM_SKEW_HOURLY, release_id), rows,
-            dataset_id=release_id, schema=schema, lineage=lineage, interval=timedelta(hours=1),
-            capabilities=capabilities_payload(BTC_TERM_SKEW_HOURLY, release_id))
-        return publish_release(self.root, BTC_TERM_SKEW_HOURLY, release_id, manifest, provider="internal", venue=None,
-                               transform_id="fixed_maturity_delta_skew", transform_version="2",
-                               quality_level=QualityLevel.WORKSPACE)
+        raise RuntimeError("feature release publishing has been removed; write features through DatasetWriter")
 
 
 class BtcDeribitTradeSkewFeatureBuilder:
@@ -116,37 +61,7 @@ class BtcDeribitTradeSkewFeatureBuilder:
         self.root, self.data = Path(root), DatasetClient(root)
 
     def build(self):
-        source_release = self.data.catalog.release(BTC_DERIBIT_OPTION_TRADES.key)
-        stream = self.data.iter_rows(source_release.release_id)
-        rows = []
-        for _, daily_trades in groupby(stream, key=lambda row: row["event_time"][:10]):
-            rows.extend(build_deribit_trade_skew_panel(daily_trades, self.TARGETS))
-        inputs = [_input(source_release)]
-        release_id = content_release_id(BTC_DERIBIT_TERM_SKEW_DAILY, {"inputs": inputs, "rows": rows, "transform_version": 2})
-        lineage = {"lineage_version": 2, "dataset_id": release_id,
-            "producer": {"name": "kairospy.analytics.features.volatility", "transform": "deribit_trade_fixed_maturity_skew", "version": 2},
-            "inputs": inputs,
-            "parameters": {"target_dte": list(self.TARGETS), "delta_nodes": [0.10, 0.25, 0.50],
-                "delta_model": "Black-76, zero rate, trade index as forward proxy", "maximum_delta_distance": 0.12,
-                "minimum_trades_per_node": 2, "node_estimator": "amount-weighted median", "term_interpolation": "linear_total_variance",
-                "extrapolation": "none", "iv_source": "deribit_trade_iv"},
-            "point_in_time_safe": True, "contains_forward_labels": False,
-            "limitations": ["trade_sampled_smile", "not_a_complete_quote_chain", "index_price_used_as_forward_proxy"]}
-        columns = {"period_start": {"type": "datetime", "timezone": "UTC"}, "period_end": {"type": "datetime", "timezone": "UTC"},
-                   "event_time": {"type": "datetime", "timezone": "UTC"}, "available_time": {"type": "datetime", "timezone": "UTC"},
-                   "trade_count": {"type": "integer"}, "expiry_count": {"type": "integer"}}
-        for dte in self.TARGETS:
-            for name in ("atm_iv", "put25_iv", "call25_iv", "put10_iv", "call10_iv", "put_skew25", "rr25", "bf25", "put_skew10", "rr10"):
-                columns[f"{name}_{dte}d"] = {"type": "nullable_number", "unit": "absolute_volatility"}
-        schema = {"schema_id": BTC_DERIBIT_TERM_SKEW_DAILY.schema_id, "schema_version": 1,
-                  "time_boundary": "[period_start,period_end)", "primary_key": ["period_start"],
-                  "point_in_time_safe": True, "contains_forward_labels": False, "columns": columns}
-        manifest = write_daily_dataset(self.root / release_path(BTC_DERIBIT_TERM_SKEW_DAILY, release_id), rows,
-            dataset_id=release_id, schema=schema, lineage=lineage,
-            capabilities=capabilities_payload(BTC_DERIBIT_TERM_SKEW_DAILY, release_id))
-        return publish_release(self.root, BTC_DERIBIT_TERM_SKEW_DAILY, release_id, manifest,
-                               provider="internal", venue=None, transform_id="deribit_trade_fixed_maturity_skew",
-                               transform_version="2", quality_level=QualityLevel.WORKSPACE)
+        raise RuntimeError("feature release publishing has been removed; write features through DatasetWriter")
 
 
 def build_deribit_trade_skew_panel(trades, target_dtes=(7, 14, 30, 60, 90)):

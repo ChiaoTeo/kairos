@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kairospy.data import BuiltInDataProductRegistry
-from kairospy.data.bootstrap import configured_product_specs, default_provider_registry
+from kairospy.data.extensions.bootstrap import configured_product_specs, default_provider_registry
 
 
 def providers_list(root: str | Path) -> dict[str, object]:

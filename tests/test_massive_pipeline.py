@@ -9,11 +9,13 @@ import unittest
 
 from kairospy.integrations.connectors.massive import MassiveClient, MassiveConfig, MassiveMarketSnapshotBuilder, MassiveResponse
 from kairospy.integrations.connectors.massive.pipeline import MassiveOptionDataPipeline
-from kairospy.data.market_snapshot_storage import MarketSnapshotStorageDriver
+from kairospy.data.snapshots.market_snapshot_storage import MarketSnapshotStorageDriver
 from kairospy.analytics.pricing import OptionValuationService
 from kairospy.market.repository import ParquetMarketEventRepository
 from kairospy.integrations.connectors.massive.datasets import MassiveOptionEventsDatasetConnector, MassiveOptionProductConfig
-from kairospy.data import AcquisitionRequest, DataCatalog, DatasetKey, DatasetLayer, DataProductDefinition, SourceBinding, TimeRange
+from kairospy.data.acquisition import AcquisitionRequest, TimeRange
+from kairospy.data.catalog import DataCatalog
+from kairospy.data.contracts import DatasetKey, DatasetLayer, DataProductDefinition, SourceBinding
 from kairospy.identity import InstrumentId
 from kairospy.market.source_events import MarketEventEnvelope, MarketEventType
 
@@ -149,16 +151,10 @@ class MassivePipelineTests(unittest.TestCase):
             connector.config = MassiveOptionProductConfig(str(key), "TEST", ("O:TEST",))
             connector.pipeline = ContentPipeline(temporary)
             start = datetime(2026, 1, 1, tzinfo=timezone.utc); end = start + timedelta(minutes=1)
-            release = connector.acquire(AcquisitionRequest(
-                str(key), (TimeRange(start, end),), SourceBinding("massive", "opra", 100),
-            ))
-            self.assertTrue(release.release_id.startswith("ds_"))
-            directory = Path(temporary) / release.relative_path
-            self.assertTrue(directory.exists())
-            self.assertFalse(any((Path(temporary) / "canonical" / "market").glob("dataset=staging_*")))
-            self.assertEqual(DataCatalog(temporary).release(key).content_hash, release.content_hash)
-            for name in ("quality.json", "capabilities.json", "usage.json", "release.json"):
-                self.assertTrue((directory / name).exists())
+            with self.assertRaisesRegex(RuntimeError, "release publishing has been removed"):
+                connector.acquire(AcquisitionRequest(
+                    str(key), (TimeRange(start, end),), SourceBinding("massive", "opra", 100),
+                ))
 
 
 if __name__ == "__main__":

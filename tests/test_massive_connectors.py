@@ -73,6 +73,15 @@ class MassiveConnectorTests(unittest.TestCase):
         with self.assertRaises(MassiveError):
             list(client.pages("/v3/start"))
 
+    def test_retry_exhaustion_reports_last_status_and_body(self):
+        transport = StubTransport([
+            response({"error": "rate limited"}, status=429),
+            response({"error": "still limited"}, status=429),
+        ])
+        client = MassiveClient(MassiveConfig("secret", max_retries=2), transport, wait=lambda _: None)
+        with self.assertRaisesRegex(MassiveError, "status=429.*still limited"):
+            client.get("/v3/start")
+
     def test_source_archive_is_idempotent_and_does_not_persist_key(self):
         transport = StubTransport([response({"request_id": "one", "results": [{"ticker": "O:SPXW"}]})])
         client = MassiveClient(MassiveConfig("secret"), transport)
