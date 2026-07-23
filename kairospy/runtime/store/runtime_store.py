@@ -24,7 +24,7 @@ from kairospy.infrastructure.storage.codec import from_primitive, to_primitive
 from kairospy.runtime.testing.faults import RuntimeFaultInjector, RuntimeFaultPoint, inject
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +46,36 @@ class DurableExecutionRecord:
     client_order_id: str
     occurred_at: datetime
     order: DurableOrderRecord
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeIncidentRecord:
+    incident_id: str
+    run_id: str
+    severity: str
+    status: str
+    title: str
+    details: dict[str, object]
+    opened_at: datetime
+    updated_at: datetime
+    closed_at: datetime | None = None
+    closed_by: str | None = None
+    close_reason: str | None = None
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            "incident_id": self.incident_id,
+            "run_id": self.run_id,
+            "severity": self.severity,
+            "status": self.status,
+            "title": self.title,
+            "details": self.details,
+            "opened_at": self.opened_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "closed_at": self.closed_at.isoformat() if self.closed_at is not None else None,
+            "closed_by": self.closed_by,
+            "close_reason": self.close_reason,
+        }
 
 
 class SQLiteRuntimeStore:
@@ -744,6 +774,102 @@ class SQLiteRuntimeStore:
             row = connection.execute("SELECT value_json FROM runtime_state WHERE key = ?", (key,)).fetchone()
         return json.loads(row["value_json"]) if row is not None else None
 
+    def runtime_states(self, *, prefix: str | None = None) -> dict[str, object]:
+        query = "SELECT key, value_json FROM runtime_state"
+        parameters: tuple[object, ...] = ()
+        if prefix is not None:
+            query += " WHERE key LIKE ?"
+            parameters = (f"{prefix}%",)
+        query += " ORDER BY key"
+        with self.transaction() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return {row["key"]: json.loads(row["value_json"]) for row in rows}
+
+    def record_runtime_incident(
+        self,
+        *,
+        incident_id: str,
+        run_id: str,
+        severity: str,
+        title: str,
+        details: dict[str, object] | None,
+        at: datetime,
+    ) -> RuntimeIncidentRecord:
+        _aware(at)
+        incident_id = _required_text(incident_id, "runtime incident id")
+        run_id = _required_text(run_id, "runtime incident run_id")
+        severity = _required_text(severity, "runtime incident severity")
+        title = _required_text(title, "runtime incident title")
+        payload = dict(details or {})
+        with self.transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM runtime_incidents WHERE incident_id = ?", (incident_id,),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    """INSERT INTO runtime_incidents(
+                        incident_id, run_id, severity, status, title, details_json,
+                        opened_at, updated_at, closed_at, closed_by, close_reason
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)""",
+                    (
+                        incident_id, run_id, severity, "open", title, _encode(payload),
+                        at.isoformat(), at.isoformat(),
+                    ),
+                )
+            else:
+                connection.execute(
+                    """UPDATE runtime_incidents
+                       SET severity = ?, status = ?, title = ?, details_json = ?, updated_at = ?,
+                           closed_at = NULL, closed_by = NULL, close_reason = NULL
+                       WHERE incident_id = ?""",
+                    (severity, "open", title, _encode(payload), at.isoformat(), incident_id),
+                )
+            row = connection.execute("SELECT * FROM runtime_incidents WHERE incident_id = ?", (incident_id,)).fetchone()
+        assert row is not None
+        return _incident_record(row)
+
+    def runtime_incidents(
+        self,
+        run_id: str,
+        *,
+        status: str | None = "open",
+        limit: int | None = None,
+    ) -> tuple[RuntimeIncidentRecord, ...]:
+        run_id = _required_text(run_id, "runtime incident run_id")
+        query = "SELECT * FROM runtime_incidents WHERE run_id = ?"
+        parameters: list[object] = [run_id]
+        if status is not None:
+            query += " AND status = ?"
+            parameters.append(status)
+        query += " ORDER BY opened_at DESC, incident_id DESC"
+        if limit is not None:
+            if limit <= 0:
+                raise ValueError("runtime incident limit must be positive")
+            query += " LIMIT ?"
+            parameters.append(limit)
+        with self.transaction() as connection:
+            rows = connection.execute(query, tuple(parameters)).fetchall()
+        return tuple(_incident_record(row) for row in rows)
+
+    def close_runtime_incident(self, incident_id: str, *, actor: str, reason: str, at: datetime) -> RuntimeIncidentRecord:
+        _aware(at)
+        incident_id = _required_text(incident_id, "runtime incident id")
+        actor = _required_text(actor, "runtime incident close actor")
+        reason = _required_text(reason, "runtime incident close reason")
+        with self.transaction() as connection:
+            row = connection.execute("SELECT * FROM runtime_incidents WHERE incident_id = ?", (incident_id,)).fetchone()
+            if row is None:
+                raise LookupError(f"runtime incident not found: {incident_id}")
+            connection.execute(
+                """UPDATE runtime_incidents
+                   SET status = ?, updated_at = ?, closed_at = ?, closed_by = ?, close_reason = ?
+                   WHERE incident_id = ?""",
+                ("closed", at.isoformat(), at.isoformat(), actor, reason, incident_id),
+            )
+            updated = connection.execute("SELECT * FROM runtime_incidents WHERE incident_id = ?", (incident_id,)).fetchone()
+        assert updated is not None
+        return _incident_record(updated)
+
     def _migrate(self) -> None:
         with closing(sqlite3.connect(self.path)) as connection:
             connection.execute("PRAGMA journal_mode = WAL").close()
@@ -866,6 +992,21 @@ class SQLiteRuntimeStore:
                     desired_state TEXT NOT NULL,
                     state_json TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS runtime_incidents(
+                    incident_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    severity TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    details_json TEXT NOT NULL,
+                    opened_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    closed_at TEXT,
+                    closed_by TEXT,
+                    close_reason TEXT
+                );
+                CREATE INDEX IF NOT EXISTS runtime_incidents_run_status_idx
+                    ON runtime_incidents(run_id, status, opened_at);
                 """
             )
             order_columns = {row[1] for row in connection.execute("PRAGMA table_info(orders)").fetchall()}
@@ -878,7 +1019,7 @@ class SQLiteRuntimeStore:
             row = connection.execute("SELECT version FROM schema_info").fetchone()
             if row is None:
                 connection.execute("INSERT INTO schema_info(version) VALUES (?)", (SCHEMA_VERSION,))
-            elif int(row[0]) in {1, 2, 3, 4, 5, 6, 7, 8}:
+            elif int(row[0]) in {1, 2, 3, 4, 5, 6, 7, 8, 9}:
                 connection.execute("UPDATE schema_info SET version = ?", (SCHEMA_VERSION,))
             elif int(row[0]) != SCHEMA_VERSION:
                 raise RuntimeError(f"unsupported runtime store schema version: {row[0]}")
@@ -948,6 +1089,29 @@ def _outbox_record(row: sqlite3.Row) -> OutboxRecord:
         int(row["attempts"]),
         row["last_error"],
     )
+
+
+def _incident_record(row: sqlite3.Row) -> RuntimeIncidentRecord:
+    return RuntimeIncidentRecord(
+        row["incident_id"],
+        row["run_id"],
+        row["severity"],
+        row["status"],
+        row["title"],
+        json.loads(row["details_json"]),
+        datetime.fromisoformat(row["opened_at"]),
+        datetime.fromisoformat(row["updated_at"]),
+        datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None,
+        row["closed_by"],
+        row["close_reason"],
+    )
+
+
+def _required_text(value: str, label: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{label} cannot be empty")
+    return text
 
 
 def _aware(value: datetime) -> None:

@@ -104,6 +104,37 @@ class RuntimeStoreTests(unittest.TestCase):
             store.set_runtime_state("kill_switch", {"triggered": True, "reason": "drill"}, now)
             self.assertEqual(store.runtime_state("kill_switch"), {"reason": "drill", "triggered": True})
 
+    def test_runtime_incidents_are_durable_and_closeable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "runtime.sqlite3"
+            store = SQLiteRuntimeStore(path)
+            now = datetime(2026, 7, 17, tzinfo=timezone.utc)
+
+            incident = store.record_runtime_incident(
+                incident_id="runtime-health:run-1",
+                run_id="run-1",
+                severity="critical",
+                title="runtime health blocking",
+                details={"reasons": ("unresolved_orders",)},
+                at=now,
+            )
+            reopened = SQLiteRuntimeStore(path)
+            listed = reopened.runtime_incidents("run-1")
+            closed = reopened.close_runtime_incident(
+                "runtime-health:run-1",
+                actor="operator",
+                reason="reconciled",
+                at=now + timedelta(seconds=1),
+            )
+
+            self.assertEqual(incident.status, "open")
+            self.assertEqual(len(listed), 1)
+            self.assertEqual(listed[0].details["reasons"], ["unresolved_orders"])
+            self.assertEqual(closed.status, "closed")
+            self.assertEqual(closed.closed_by, "operator")
+            self.assertEqual(reopened.runtime_incidents("run-1"), ())
+            self.assertEqual(reopened.runtime_incidents("run-1", status=None)[0].status, "closed")
+
     def test_unresolved_order_manual_resolution_requires_audited_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteRuntimeStore(Path(directory) / "runtime.sqlite3")

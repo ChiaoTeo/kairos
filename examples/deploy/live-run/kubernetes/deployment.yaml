@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kairos-live-run
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: kairos-live-run
+  template:
+    metadata:
+      labels:
+        app: kairos-live-run
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: kairos-live-run
+          image: registry.example.com/kairos:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: kairos-live-run-config
+            - secretRef:
+                name: kairos-live-run-secrets
+          command:
+            - python
+            - -m
+            - kairospy
+            - run
+            - live
+            - start
+            - --foreground
+            - --config
+            - $(KAIROS_RUN_CONFIG)
+            - --run-id
+            - $(KAIROS_RUN_ID)
+            - --confirm-live
+          volumeMounts:
+            - name: kairos-state
+              mountPath: /opt/kairos/.kairos
+            - name: kairos-artifacts
+              mountPath: /var/lib/kairos
+          readinessProbe:
+            exec:
+              command:
+                - python
+                - -m
+                - kairospy
+                - run
+                - status
+                - --run-id
+                - $(KAIROS_RUN_ID)
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - python
+                  - -m
+                  - kairospy
+                  - run
+                  - stop
+                  - --run-id
+                  - $(KAIROS_RUN_ID)
+                  - --actor
+                  - kubernetes
+                  - --reason
+                  - pod termination
+                  - --timeout-seconds
+                  - "30"
+      volumes:
+        - name: kairos-state
+          persistentVolumeClaim:
+            claimName: kairos-live-run-state
+        - name: kairos-artifacts
+          persistentVolumeClaim:
+            claimName: kairos-live-run-artifacts

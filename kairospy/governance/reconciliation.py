@@ -37,6 +37,49 @@ class ReconciliationReport:
         return not self.differences
 
 
+def unknown_external_open_order_ids(report: ReconciliationReport | dict[str, object]) -> tuple[str, ...]:
+    """Return venue-open order ids that are absent from the local durable order book."""
+
+    if isinstance(report, ReconciliationReport):
+        differences = report.differences
+    else:
+        raw_report = report.get("report", report)
+        if not isinstance(raw_report, dict):
+            return ()
+        raw_differences = raw_report.get("differences", ())
+        if not isinstance(raw_differences, (tuple, list)):
+            return ()
+        differences = tuple(raw_differences)
+    ids = []
+    for difference in differences:
+        kind = getattr(difference, "kind", None)
+        key = getattr(difference, "key", None)
+        local = getattr(difference, "local", None)
+        venue = getattr(difference, "venue", None)
+        if isinstance(difference, dict):
+            kind = difference.get("kind")
+            key = difference.get("key")
+            local = difference.get("local")
+            venue = difference.get("venue")
+        if kind == "open_order" and _decimal(local) == Decimal("0") and _decimal(venue) == Decimal("1"):
+            ids.append(str(key))
+    return tuple(dict.fromkeys(ids))
+
+
+def reconciliation_payload(report: ReconciliationReport, run_id: str) -> dict[str, object]:
+    external_open_order_ids = unknown_external_open_order_ids(report)
+    return {
+        "run_id": run_id,
+        "phase": "matched" if report.matched else "mismatched",
+        "matched": report.matched,
+        "report": to_primitive(report),
+        "difference_kinds": tuple(dict.fromkeys(difference.kind for difference in report.differences)),
+        "unknown_external_open_order_ids": external_open_order_ids,
+        "unknown_external_open_order_count": len(external_open_order_ids),
+        "checked_at": report.checked_at.isoformat(),
+    }
+
+
 class ReconciliationService:
     def __init__(self, ledger: Ledger, account_gateway: AccountPort,
                  tolerance: Decimal = Decimal("0.00000001"), clock: Clock | None = None,
@@ -149,13 +192,7 @@ class ReconciliationMonitorService:
 
     def check_once(self) -> ReconciliationReport:
         report = self.service.reconcile(self.account)
-        payload = {
-            "run_id": self.run_id,
-            "phase": "matched" if report.matched else "mismatched",
-            "matched": report.matched,
-            "report": to_primitive(report),
-            "checked_at": report.checked_at.isoformat(),
-        }
+        payload = reconciliation_payload(report, self.run_id)
         self.store.set_runtime_state(self.state_key, payload, report.checked_at)
         self.store.set_runtime_state(f"{self.STATE_KEY_PREFIX}:last", payload, report.checked_at)
         if not report.matched and self.on_mismatch is not None:
@@ -175,3 +212,12 @@ class ReconciliationMonitorService:
             },
             at,
         )
+
+
+def _decimal(value: object) -> Decimal | None:
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return None

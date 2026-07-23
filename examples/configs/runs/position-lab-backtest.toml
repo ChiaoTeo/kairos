@@ -1,0 +1,19 @@
+schema_version = 1
+
+[run]
+name = "position-lab-backtest"
+mode = "backtest"
+
+[params]
+workspace_profile = "position-lab"
+instrument = "BTCUSDT"
+
+[backtest]
+start = "2026-01-01T00:00:00+00:00"
+end = "2026-01-02T00:00:00+00:00"
+initial_cash = "100000"
+base_currency = "USDT"
+
+[guards]
+freeze_workspace = true
+fail_on_missing_data = false

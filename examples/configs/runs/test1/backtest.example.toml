@@ -1,0 +1,22 @@
+schema_version = 1
+
+[run]
+name = "example-backtest"
+mode = "backtest"
+workspace = "examples.workspace.print_market:build_workspace"
+strategy = "examples.strategies.printer:build"
+
+[params]
+workspace_profile = "market-print"
+fast = 20
+slow = 50
+
+[backtest]
+start = "2025-01-01T00:00:00+00:00"
+end = "2026-01-01T00:00:00+00:00"
+initial_cash = "1000000"
+base_currency = "USD"
+
+[guards]
+freeze_workspace = true
+fail_on_missing_data = true

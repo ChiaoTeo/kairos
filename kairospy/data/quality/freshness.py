@@ -136,6 +136,8 @@ def live_view_freshness_evidence(
         "source": source,
         "stream_id": stream_id,
         "event_count": event_count,
+        "last_event_time": _optional_iso_datetime(getattr(service, "last_event_time", None)),
+        "last_available_time": _optional_iso_datetime(getattr(service, "last_available_time", None)),
         "raw_message_count": _optional_int(getattr(service, "raw_messages", None)) or event_count,
         "canonical_event_count": event_count,
         "ignored_message_count": ignored,
@@ -166,6 +168,8 @@ def update_live_view_manifest_freshness(
         "source": str(evidence.get("source") or ""),
         "stream_id": str(evidence.get("stream_id") or ""),
         "event_count": _optional_int(evidence.get("event_count")) or 0,
+        "last_event_time": str(evidence.get("last_event_time") or ""),
+        "last_available_time": str(evidence.get("last_available_time") or ""),
         "channel_failures": tuple(channel_failures),
     }
     payload["live_data_plane"] = live_data_plane
@@ -380,6 +384,14 @@ def _optional_float(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _optional_iso_datetime(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "isoformat"):
+        return str(value.isoformat())
+    return ""
 
 
 def _live_view_manifest_from_payload(payload: Mapping[str, object]) -> LiveViewManifest:

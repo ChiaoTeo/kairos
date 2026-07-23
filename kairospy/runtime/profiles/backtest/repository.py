@@ -41,7 +41,6 @@ class BacktestRepository:
         self._jsonl(directory / "orders.jsonl", result.orders)
         self._jsonl(directory / "fills.jsonl", result.fills)
         self._jsonl(directory / "settlements.jsonl", result.settlements)
-        self._jsonl(directory / "strategy_decisions.jsonl", result.strategy_decisions)
         self._positions_csv(directory / "positions.csv", result)
         self._equity_csv(directory / "equity.csv", result)
         self._trades_csv(directory / "trades.csv", result)

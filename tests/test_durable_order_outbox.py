@@ -90,6 +90,10 @@ class DurableOrderOutboxTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(order.status, DurableOrderStatus.ACKNOWLEDGED)
             self.assertEqual(order.ack.venue_order_id, "venue-1")  # type: ignore[union-attr]
             self.assertEqual(router.submissions, 1)
+            self.assertEqual(dispatcher.last_metrics["outbox_pending_count"], 0)
+            self.assertEqual(dispatcher.last_metrics["outbox_backlog_count"], 0)
+            self.assertEqual(dispatcher.last_metrics["order_submit_latency_last_ms"], 0.0)
+            self.assertEqual(dispatcher.last_metrics["order_ack_latency_last_ms"], 0.0)
 
     async def test_restart_before_dispatch_keeps_one_pending_command(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -194,6 +198,10 @@ class DurableOrderOutboxTests(unittest.IsolatedAsyncioTestCase):
             state = store.runtime_state(service.state_key)
             assert isinstance(state, dict)
             self.assertEqual(state["phase"], "stopped")
+            self.assertEqual(state["outbox_pending_count"], 0)
+            self.assertEqual(state["outbox_backlog_count"], 0)
+            self.assertEqual(state["order_submit_latency_last_ms"], 0.0)
+            self.assertEqual(state["order_ack_latency_last_ms"], 0.0)
 
     async def test_command_service_enforces_application_and_kill_switch_gates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

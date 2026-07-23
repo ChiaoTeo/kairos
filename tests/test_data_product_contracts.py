@@ -449,6 +449,8 @@ class DataProductContractTests(unittest.TestCase):
             ignored_messages = 0
             reconnects = 1
             canonical_capture = None
+            last_event_time = "2026-07-22T12:00:01+00:00"
+            last_available_time = "2026-07-22T12:00:02+00:00"
 
         evidence = live_view_freshness_evidence(
             Service(), Channel(), source="binance", stream_id="btcusdt@bookTicker",
@@ -459,6 +461,8 @@ class DataProductContractTests(unittest.TestCase):
         self.assertEqual(evidence["channel_capacity"], 64)
         self.assertEqual(evidence["peak_channel_depth"], 4)
         self.assertEqual(evidence["reconnect_count"], 1)
+        self.assertEqual(evidence["last_event_time"], "2026-07-22T12:00:01+00:00")
+        self.assertEqual(evidence["last_available_time"], "2026-07-22T12:00:02+00:00")
 
     def test_live_view_freshness_evidence_fails_on_ignored_or_dropped_events(self) -> None:
         class Metrics:

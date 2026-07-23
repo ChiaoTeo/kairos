@@ -84,6 +84,27 @@ class RepositoryHygieneTests(unittest.TestCase):
                     offenders.append(f"{path.relative_to(ROOT)} contains {marker}")
         self.assertEqual(offenders, [])
 
+    def test_live_run_deployment_examples_use_foreground_supervisor_mode(self):
+        root = ROOT / "examples" / "deploy" / "live-run"
+        files = {
+            "README.md",
+            "systemd/kairos-live-run.service",
+            "launchd/com.example.kairos.live-run.plist",
+            "docker/Dockerfile",
+            "docker/entrypoint.sh",
+            "kubernetes/configmap.yaml",
+            "kubernetes/deployment.yaml",
+        }
+        missing = [name for name in sorted(files) if not (root / name).exists()]
+        self.assertEqual(missing, [])
+        combined = "\n".join((root / name).read_text(encoding="utf-8") for name in sorted(files))
+        self.assertIn("run live start", combined)
+        self.assertIn("--foreground", combined)
+        self.assertIn("run stop", combined)
+        self.assertIn("run status", combined)
+        self.assertIn("KAIROS_RUN_ID", combined)
+        self.assertNotIn("--duration-seconds", combined)
+
     def test_project_state_has_no_legacy_workspace_data_roots(self):
         for name in ("studies", "strategies", "workspaces", "study-workspaces", "study-candidates"):
             self.assertFalse((ROOT / ".kairos" / "data" / name).exists())
@@ -199,7 +220,7 @@ class RepositoryHygieneTests(unittest.TestCase):
         self.assertFalse((ROOT / "kairospy" / "strategies").exists())
         self.assertTrue((ROOT / "kairospy" / "strategy").exists())
         source = (ROOT / "kairospy" / "strategy" / "__init__.py").read_text(encoding="utf-8")
-        for marker in ("Strategy", "Context", "StrategyDecision", "GovernedStrategyRuntime"):
+        for marker in ("Strategy", "Context", "Intent", "GovernedStrategyRuntime"):
             self.assertIn(marker, source)
 
     def test_core_code_does_not_import_deleted_strategies_package(self):

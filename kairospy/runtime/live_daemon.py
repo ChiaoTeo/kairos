@@ -24,8 +24,10 @@ from .kernel import (
     StrategyRunResult,
 )
 from .control import OperatorCommandBus, OperatorCommandRecord, OperatorCommandType
+from .live_lock import LiveRunFileLock
 from .live_registry import LiveRunProcessIdentity, LiveRunRegistry
 from .service_supervisor import AsyncServiceSupervisor, ManagedServiceSnapshot, ManagedServiceSpec, ServiceFault
+from .structured_log import StructuredRuntimeLog
 
 
 class LiveRunDaemonPhase(StrEnum):
@@ -85,6 +87,11 @@ class LiveRunDaemon:
         *,
         run_id: str,
         stop_handler: Callable[..., object] | None = None,
+        operator_command_handler: Callable[[OperatorCommandRecord], dict[str, object] | None] | None = None,
+        process_config_hash: str = "unknown",
+        process_version: str | None = None,
+        run_lock_path: str | None = None,
+        structured_log_path: str | None = None,
         clock: Clock | None = None,
     ) -> None:
         self.application = application
@@ -94,6 +101,11 @@ class LiveRunDaemon:
             raise ValueError("live run daemon requires run_id")
         self.clock = clock or getattr(application, "clock", SystemClock())
         self.stop_handler = stop_handler
+        self.operator_command_handler = operator_command_handler
+        self.process_config_hash = str(process_config_hash or "unknown")
+        self.process_version = process_version
+        self.run_lock = LiveRunFileLock(run_lock_path) if run_lock_path is not None else None
+        self.structured_log = StructuredRuntimeLog(structured_log_path) if structured_log_path is not None else None
         self._runtime: AsyncKairosRuntime | None = None
         self._process_identity: LiveRunProcessIdentity | None = None
 
@@ -116,7 +128,9 @@ class LiveRunDaemon:
             raise RuntimeError("live run daemon is already running")
         if not self.managed_services:
             raise ValueError("live run daemon start requires at least one managed service")
-        self._ensure_process_identity()
+        identity = self._ensure_process_identity()
+        self._acquire_run_lock(identity)
+        self._log("daemon_start_requested", {"phase": phase.value, "service_count": len(self.managed_services)})
         self._persist(phase, phase.value)
         runtime = AsyncKairosRuntime(
             self.application,
@@ -129,20 +143,37 @@ class LiveRunDaemon:
         except Exception as error:
             self._runtime = None
             self._persist(LiveRunDaemonPhase.FAILED, str(error))
+            self._release_run_lock()
+            self._log("daemon_start_failed", {"error_type": type(error).__name__, "message": str(error)}, level="error")
             raise
-        return self._persist(LiveRunDaemonPhase.RUNNING, success_reason)
+        snapshot = self._persist(LiveRunDaemonPhase.RUNNING, success_reason)
+        self._log("daemon_started", snapshot.manifest())
+        return snapshot
 
-    async def stop(self, *, timeout_seconds: float = 5.0, reason: str = "manual") -> LiveRunDaemonSnapshot:
+    async def stop(self, *, timeout_seconds: float = 5.0, reason: str = "manual", force: bool = False) -> LiveRunDaemonSnapshot:
+        self._log("daemon_stop_requested", {"reason": reason, "timeout_seconds": timeout_seconds, "force": force})
         self._persist(LiveRunDaemonPhase.STOPPING, "stopping", stop_requested=True)
         try:
             await self._run_stop_handler(reason)
         except Exception as error:
             self._persist(LiveRunDaemonPhase.FAILED, str(error), stop_requested=True)
+            self._log("daemon_stop_handler_failed", {"error_type": type(error).__name__, "message": str(error)}, level="error")
             raise
         runtime = self._runtime
         try:
             if runtime is not None and runtime.started:
-                await runtime.stop(timeout_seconds=timeout_seconds)
+                try:
+                    await runtime.stop(timeout_seconds=timeout_seconds)
+                except Exception as error:
+                    if not force:
+                        raise
+                    self._record_force_stop_incident(error, timeout_seconds, reason)
+                    snapshot = self._persist(
+                        LiveRunDaemonPhase.STOPPED,
+                        f"force-stopped after stop timeout: {type(error).__name__}: {error}",
+                    )
+                    self._log("daemon_force_stopped", snapshot.manifest(), level="critical")
+                    return snapshot
                 snapshot = self._persist(LiveRunDaemonPhase.STOPPED, "stopped")
             else:
                 if self.application.status is not RuntimeStatus.STOPPED:
@@ -150,20 +181,35 @@ class LiveRunDaemon:
                 snapshot = self._persist(LiveRunDaemonPhase.STOPPED, "stopped")
         finally:
             self._runtime = None
+            self._release_run_lock()
+        self._log("daemon_stopped", snapshot.manifest())
         return snapshot
 
-    def request_stop(self, reason: str = "operator stop requested", *, actor: str = "operator") -> LiveRunDaemonSnapshot:
+    def request_stop(
+        self,
+        reason: str = "operator stop requested",
+        *,
+        actor: str = "operator",
+        timeout_seconds: float | None = None,
+        force: bool = False,
+    ) -> LiveRunDaemonSnapshot:
         if not reason.strip():
             raise ValueError("live run daemon stop request requires reason")
+        payload: dict[str, object] = {"force": bool(force)}
+        if timeout_seconds is not None:
+            if timeout_seconds <= 0:
+                raise ValueError("live run daemon stop timeout must be positive")
+            payload["timeout_seconds"] = float(timeout_seconds)
         command = self.command_bus.submit(
             run_id=self.run_id,
             command_type=OperatorCommandType.STOP,
-            payload={},
+            payload=payload,
             actor=actor,
             reason=reason,
             idempotency_key=None,
             at=self.clock.now(),
         )
+        self._log("daemon_stop_command_submitted", command.manifest())
         return self._persist(
             LiveRunDaemonPhase.STOPPING,
             reason,
@@ -201,7 +247,16 @@ class LiveRunDaemon:
             RuntimeStatus.DEGRADED,
             RuntimeStatus.REDUCE_ONLY,
         }:
-            self.application.heartbeat()
+            try:
+                self.application.heartbeat()
+            except Exception as error:
+                self._log("daemon_heartbeat_failed", {"error_type": type(error).__name__, "message": str(error)}, level="error")
+                self._persist(
+                    LiveRunDaemonPhase.FAILED,
+                    f"runtime heartbeat failed: {type(error).__name__}: {error}",
+                    stop_requested=True,
+                )
+                raise
         observed = str(getattr(phase, "value", phase) or self.status().phase.value)
         state = self.status().manifest()
         if reason is not None:
@@ -213,13 +268,19 @@ class LiveRunDaemon:
             state=state,
             at=self.clock.now(),
         )
+        self._heartbeat_run_lock(heartbeat.heartbeat_at)
+        self._log("daemon_heartbeat", heartbeat.manifest())
         return heartbeat.manifest()
 
     def mark_reduce_only(self, reason: str) -> LiveRunDaemonSnapshot:
-        return self._persist(LiveRunDaemonPhase.REDUCE_ONLY, reason)
+        snapshot = self._persist(LiveRunDaemonPhase.REDUCE_ONLY, reason)
+        self._log("daemon_reduce_only", snapshot.manifest(), level="warning")
+        return snapshot
 
     def mark_running(self, reason: str) -> LiveRunDaemonSnapshot:
-        return self._persist(LiveRunDaemonPhase.RUNNING, reason)
+        snapshot = self._persist(LiveRunDaemonPhase.RUNNING, reason)
+        self._log("daemon_running", snapshot.manifest())
+        return snapshot
 
     def claim_stop_command(self) -> OperatorCommandRecord | None:
         return self.claim_operator_command(OperatorCommandType.STOP)
@@ -276,6 +337,25 @@ class LiveRunDaemon:
         )
         return fault, snapshot
 
+    async def fail_closed(self, reason: str, *, timeout_seconds: float = 5.0) -> LiveRunDaemonSnapshot:
+        self._log("daemon_fail_closed_requested", {"reason": reason, "timeout_seconds": timeout_seconds}, level="error")
+        snapshot = self._persist(LiveRunDaemonPhase.FAILED, reason, stop_requested=True)
+        runtime = self._runtime
+        try:
+            if runtime is not None and runtime.started:
+                await runtime.supervisor.stop(timeout_seconds=timeout_seconds)
+        finally:
+            try:
+                if self.application.status is not RuntimeStatus.STOPPED:
+                    self.application.stop()
+            except Exception as error:
+                reason = f"{reason}; stop cleanup failed: {type(error).__name__}: {error}"
+            self._runtime = None
+            self._release_run_lock()
+        snapshot = self._persist(LiveRunDaemonPhase.FAILED, reason, stop_requested=True)
+        self._log("daemon_failed_closed", snapshot.manifest(), level="error")
+        return snapshot
+
     def status(self) -> LiveRunDaemonSnapshot:
         state = self.application.store.runtime_state(self.state_key)
         phase = LiveRunDaemonPhase.CREATED
@@ -283,7 +363,7 @@ class LiveRunDaemon:
         if isinstance(state, dict):
             phase = LiveRunDaemonPhase(str(state.get("phase", phase.value)))
             reason = str(state.get("reason", reason))
-        if self.running:
+        if self.running and phase not in {LiveRunDaemonPhase.FAILED, LiveRunDaemonPhase.REDUCE_ONLY, LiveRunDaemonPhase.STOPPING}:
             phase = LiveRunDaemonPhase.RUNNING
         return self._snapshot(phase, reason)
 
@@ -314,6 +394,7 @@ class LiveRunDaemon:
             state=state,
             at=snapshot.updated_at,
         )
+        self._heartbeat_run_lock(snapshot.updated_at)
         return snapshot
 
     def _snapshot(self, phase: LiveRunDaemonPhase, reason: str) -> LiveRunDaemonSnapshot:
@@ -334,14 +415,63 @@ class LiveRunDaemon:
             return ()
         return self._runtime.service_snapshots()
 
+    def _record_force_stop_incident(self, error: Exception, timeout_seconds: float, reason: str) -> None:
+        store = getattr(self.application, "store", None)
+        if store is None or not hasattr(store, "record_runtime_incident"):
+            return
+        store.record_runtime_incident(
+            incident_id=f"runtime-force-stop:{self.run_id}",
+            run_id=self.run_id,
+            severity="critical",
+            title="runtime force stop after timeout",
+            details={
+                "error_type": type(error).__name__,
+                "message": str(error),
+                "timeout_seconds": timeout_seconds,
+                "reason": reason,
+            },
+            at=self.clock.now(),
+        )
+
+    def _log(self, event: str, payload: object, *, level: str = "info") -> None:
+        if self.structured_log is None:
+            return
+        try:
+            self.structured_log.append(
+                event,
+                run_id=self.run_id,
+                level=level,
+                payload=payload,
+                at=self.clock.now(),
+            )
+        except Exception:
+            return
+
     def _ensure_process_identity(self) -> LiveRunProcessIdentity:
         if self._process_identity is None:
             self._process_identity = LiveRunProcessIdentity.create(
                 run_id=self.run_id,
                 runtime_id=self.application.runtime_id,
                 started_at=self.clock.now(),
+                config_hash=self.process_config_hash,
+                **({"version": self.process_version} if self.process_version is not None else {}),
             )
         return self._process_identity
+
+    def _acquire_run_lock(self, identity: LiveRunProcessIdentity) -> None:
+        if self.run_lock is None:
+            return
+        self.run_lock.acquire(identity, at=self.clock.now())
+
+    def _heartbeat_run_lock(self, at: datetime) -> None:
+        if self.run_lock is None:
+            return
+        self.run_lock.heartbeat(at=at)
+
+    def _release_run_lock(self) -> None:
+        if self.run_lock is None:
+            return
+        self.run_lock.release()
 
 
 class LiveRunKernelService:

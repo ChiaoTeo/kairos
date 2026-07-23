@@ -18,7 +18,7 @@ class WorkspaceBinding:
     def __post_init__(self) -> None:
         if not self.name.strip():
             raise ValueError("workspace binding name is required")
-        if self.kind not in {"dataset", "live_view"}:
+        if self.kind not in {"dataset", "live_view", "attachment"}:
             raise ValueError(f"unsupported workspace binding kind: {self.kind!r}")
         if not self.dataset.strip():
             raise ValueError("workspace binding dataset is required")

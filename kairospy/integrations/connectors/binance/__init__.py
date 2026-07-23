@@ -11,6 +11,7 @@ from .order_recovery import BinanceRecoveryService, RecoverySnapshot
 from .user_data_stream import (
     BalanceUpdate,
     BinanceUserDataStreamService,
+    BinanceUserFillEventSource,
     BinanceUserStreamProcessor,
     UserFillUpdate,
     parse_user_stream_event,
@@ -44,6 +45,9 @@ __all__ = [
     "BinanceSpotReferenceDataClient",
     "BinanceTransport",
     "BinanceUserDataStreamService",
+    "BinanceUserFillEventSource",
+    "BinanceUserStreamProcessor",
+    "UserFillUpdate",
     "RateLimiter",
     "UrllibBinanceTransport",
     "WebSocketClientConnector",

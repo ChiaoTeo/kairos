@@ -231,7 +231,7 @@ def _parse_scalar(value: str) -> Any:
 def _redact(value: Any, *, key: str = "") -> Any:
     if isinstance(value, dict):
         return {item_key: _redact(item_value, key=item_key) for item_key, item_value in value.items()}
-    if key.lower() in {"api_key", "api_secret", "secret", "password", "token"}:
+    if key.lower() in {"api_key", "api_secret", "private_key", "secret", "password", "token"}:
         if isinstance(value, str) and value.startswith("env:"):
             return value
         return "***" if value else value
@@ -240,7 +240,7 @@ def _redact(value: Any, *, key: str = "") -> Any:
 
 def _credential_secret_refs(credentials: dict[str, Any]) -> list[tuple[str, Any]]:
     refs: list[tuple[str, Any]] = []
-    secret_fields = {"api_key", "api_secret", "secret", "password", "passphrase", "token"}
+    secret_fields = {"api_key", "api_secret", "private_key", "secret", "password", "passphrase", "token"}
     for credential_name, raw_credential in credentials.items():
         if not isinstance(raw_credential, dict):
             continue
@@ -267,7 +267,7 @@ def _legacy_provider_secret_paths(value: dict[str, Any], prefix: tuple[str, ...]
     offenders: list[str] = []
     for key, item in value.items():
         path = (*prefix, str(key))
-        if str(key).lower() in {"api_key", "api_secret", "passphrase", "secret", "password", "token"}:
+        if str(key).lower() in {"api_key", "api_secret", "private_key", "passphrase", "secret", "password", "token"}:
             offenders.append(".".join(path))
         elif isinstance(item, dict):
             offenders.extend(_legacy_provider_secret_paths(item, path))

@@ -37,6 +37,8 @@ class BinanceCanonicalStreamService:
         self.canonical_events = 0
         self.ignored_messages = 0
         self.reconnects = 0
+        self.last_event_time: datetime | None = None
+        self.last_available_time: datetime | None = None
 
     async def run(self, *, message_limit: int | None = None) -> None:
         loop = asyncio.get_running_loop()
@@ -77,6 +79,8 @@ class BinanceCanonicalStreamService:
                     self.canonical_capture.append(event)
                 asyncio.run_coroutine_threadsafe(self.output.publish(event), loop).result()
                 self.canonical_events += 1
+                self.last_event_time = event.event_time
+                self.last_available_time = event.available_time
 
         worker = asyncio.create_task(asyncio.to_thread(
             self.session.consume, consume, message_limit=message_limit, on_reconnect=reconnect,

@@ -13,7 +13,9 @@ import json
 import os
 from pathlib import Path
 import shlex
+import subprocess
 import sys
+from time import monotonic, sleep
 from types import SimpleNamespace
 from typing import Any, Iterable
 
@@ -458,15 +460,15 @@ class RunProductApi:
     def start(
         self,
         *,
-        workspace: str,
-        entrypoint: str,
+        workspace: str | None = None,
+        strategy: str | None = None,
         mode: str,
         params: dict[str, str] | None = None,
     ) -> dict[str, object]:
         return run_start(_args(
             self.root,
             workspace=workspace,
-            entrypoint=entrypoint,
+            strategy=strategy,
             mode=mode,
             param=[f"{key}={value}" for key, value in (params or {}).items()],
         ))
@@ -2612,29 +2614,47 @@ def run_exists(root: str | Path, run_id: str) -> bool:
 
 
 def _run_start_workspace_entrypoint(args) -> dict[str, object]:
-    if not getattr(args, "entrypoint", None):
-        raise ValueError("RunConfig run.entrypoint is required")
-
     from kairospy.infrastructure.configuration import KairosProjectConfig, PROJECT_STATE_DIR
     from kairospy.infrastructure.storage.codec import to_primitive
-    from kairospy.workspace import WorkspaceRepository
+    from kairospy.workspace import WorkspaceBuildContext
 
     config = KairosProjectConfig.discover(Path.cwd())
-    workspace = WorkspaceRepository(config.root).open(args.workspace)
     params = _parse_run_params(getattr(args, "param", ()))
     run_config = getattr(args, "_run_config", None)
     run_config_path = getattr(run_config, "path", None)
     run_config_hash = _file_sha256(run_config_path) if run_config_path is not None else None
     project_config_hash = _file_sha256(config.path)
-    workspace_snapshot = workspace.snapshot()
-    entrypoint_ref = str(args.entrypoint)
-    module, callable_name, entrypoint = _load_run_entrypoint(entrypoint_ref, config.root)
-    _validate_workspace_entrypoint_requirements(module, entrypoint, workspace_snapshot)
+    workspace_ref = str(getattr(args, "workspace", "") or "kairospy.workspace.defaults:empty_workspace")
+    strategy_ref = str(getattr(args, "strategy", "") or "kairospy.workspace.defaults:EmptyStrategy")
+    workspace_module, workspace_callable_name, workspace_entrypoint = _load_run_entrypoint(workspace_ref, config.root)
+    strategy_module, strategy_callable_name, strategy_entrypoint = _load_run_entrypoint(strategy_ref, config.root)
+    workspace_context = WorkspaceBuildContext(
+        project_root=config.root,
+        data_root=config.relative_path("paths.lake_root", ".kairos/data"),
+    )
+    projection = workspace_entrypoint(workspace_context, params)
+    if projection is None:
+        projection = workspace_context.project()
+    if not hasattr(projection, "to_dict"):
+        raise ValueError(f"workspace entrypoint must return WorkspaceProjection: {workspace_ref}")
+    projection_snapshot = projection.to_dict()
+    workspace_preflight = projection.preflight(str(args.mode)) if hasattr(projection, "preflight") else {
+        "mode": str(args.mode),
+        "passed": True,
+        "issues": [],
+    }
+    if not workspace_preflight.get("passed", True):
+        errors = [
+            str(item.get("message") or item.get("code") or item)
+            for item in workspace_preflight.get("issues", ())
+            if isinstance(item, dict) and item.get("severity") == "error"
+        ]
+        raise ValueError("workspace preflight failed: " + "; ".join(errors))
 
     material = {
-        "workspace": workspace.name,
+        "workspace": workspace_ref,
+        "strategy": strategy_ref,
         "mode": args.mode,
-        "entrypoint": entrypoint_ref,
         "params": params,
         "run_config": str(run_config_path) if run_config_path is not None else None,
         "run_config_hash": run_config_hash,
@@ -2642,23 +2662,15 @@ def _run_start_workspace_entrypoint(args) -> dict[str, object]:
     }
     run_id = f"run_{sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()[:16]}"
     directory = config.root / PROJECT_STATE_DIR / "run" / run_id
-    workspace_snapshot_hash = _stable_hash(_json_safe(workspace_snapshot))
-    strategy_hash = _stable_hash({"entrypoint": entrypoint_ref, "module": module.__name__, "callable": callable_name})
+    workspace_snapshot_hash = _stable_hash(_json_safe(projection_snapshot))
+    workspace_code_hash = _stable_hash({"entrypoint": workspace_ref, "module": workspace_module.__name__, "callable": workspace_callable_name})
+    strategy_hash = _stable_hash({"entrypoint": strategy_ref, "module": strategy_module.__name__, "callable": strategy_callable_name})
     params_hash = _stable_hash(params)
-    config_hash = _stable_hash({"params": params, "run_config_hash": run_config_hash})
-    context = SimpleNamespace(
-        run_id=run_id,
-        workspace=workspace.name,
-        mode=args.mode,
-        now=datetime.now(timezone.utc),
-        data=workspace.data,
-        params=params,
-        state={},
-    )
+    config_hash = _stable_hash({"params": params, "run_config_hash": run_config_hash, "workspace_code_hash": workspace_code_hash})
     execution_holder: dict[str, object] = {}
 
     def strategy_runner(_prepared: object):
-        execution = _execute_workspace_strategy_entrypoint(entrypoint, workspace, params, context)
+        execution = _execute_workspace_code_strategy(strategy_entrypoint, projection, params)
         execution_holder["execution"] = execution
         return _strategy_run_result_from_workspace_execution(execution)
 
@@ -2668,7 +2680,7 @@ def _run_start_workspace_entrypoint(args) -> dict[str, object]:
         runtime_launch, run_kernel_result = _launch_workspace_paper_run(
             directory,
             run_id,
-            workspace.name,
+            workspace_ref,
             workspace_snapshot_hash,
             strategy_hash,
             config_hash,
@@ -2680,14 +2692,14 @@ def _run_start_workspace_entrypoint(args) -> dict[str, object]:
             config,
             directory,
             run_id,
-            workspace.name,
+            workspace_ref,
             workspace_snapshot_hash,
             strategy_hash,
             config_hash,
             params,
             strategy_runner,
             run_config=run_config,
-            workspace_snapshot=workspace_snapshot,
+            workspace_snapshot=projection_snapshot,
             confirm_live=bool(getattr(args, "confirm_live", False)),
             supervise_live_services=bool(getattr(args, "supervise_live_services", False)),
         )
@@ -2703,12 +2715,16 @@ def _run_start_workspace_entrypoint(args) -> dict[str, object]:
     decision_artifact = directory / "artifacts" / "decisions.json"
     result_artifact = directory / "artifacts" / "result.json"
     snapshot_artifact = directory / "workspace_snapshot.json"
+    projection_artifact = directory / "projection.json"
+    workspace_preflight_artifact = directory / "workspace_preflight.json"
     artifacts = {
         "decisions": str(decision_artifact),
         "summary": str(directory / "reports" / "summary.json"),
     }
     if result is not None:
         artifacts["result"] = str(result_artifact)
+    artifacts["projection"] = str(projection_artifact)
+    artifacts["workspace_preflight"] = str(workspace_preflight_artifact)
     bindings_table = _run_config_table(run_config, "bindings") if run_config is not None else {}
     guards_table = _run_config_table(run_config, "guards") if run_config is not None else {}
     evidence_table = _run_config_table(run_config, "evidence") if run_config is not None else {}
@@ -2727,11 +2743,14 @@ def _run_start_workspace_entrypoint(args) -> dict[str, object]:
     }
     guards_manifest = {
         **dict(guards_table),
+        "workspace_preflight": workspace_preflight,
         "confirm_live": bool(getattr(args, "confirm_live", False)),
         "readiness_ref": evidence_table.get("readiness"),
         "promotion_ref": evidence_table.get("promotion"),
     }
-    _write_json(snapshot_artifact, workspace_snapshot)
+    _write_json(snapshot_artifact, projection_snapshot)
+    _write_json(projection_artifact, projection_snapshot)
+    _write_json(workspace_preflight_artifact, workspace_preflight)
     resolved_config_artifact = None
     if run_config_path is not None:
         resolved_config_artifact = directory / "resolved_config.toml"
@@ -2747,17 +2766,21 @@ def _run_start_workspace_entrypoint(args) -> dict[str, object]:
         project_config_hash=project_config_hash,
         run_config_path=run_config_path,
         run_config_hash=run_config_hash,
-        workspace_name=workspace.name,
-        workspace_root=workspace.root,
+        workspace_name=workspace_ref,
+        workspace_root=config.root,
         workspace_snapshot_artifact=snapshot_artifact,
         workspace_snapshot_hash=workspace_snapshot_hash,
         strategy={
-            "entrypoint": entrypoint_ref,
-            "module": module.__name__,
-            "callable": callable_name,
+            "entrypoint": strategy_ref,
+            "module": strategy_module.__name__,
+            "callable": strategy_callable_name,
             "entrypoint_kind": execution["entrypoint_kind"],
             "hash": strategy_hash,
             "params": params,
+            "workspace_entrypoint": workspace_ref,
+            "workspace_module": workspace_module.__name__,
+            "workspace_callable": workspace_callable_name,
+            "workspace_code_hash": workspace_code_hash,
         },
         params_hash=params_hash,
         config_hash=config_hash,
@@ -2775,19 +2798,23 @@ def _run_start_workspace_entrypoint(args) -> dict[str, object]:
     if result is not None:
         _write_json(result_artifact, result)
     _write_json(directory / "manifest.json", manifest)
+    decisions_count = len(decisions) if isinstance(decisions, list) else int(decisions is not None)
     _write_json(directory / "reports" / "summary.json", {
         "run_id": run_id,
-        "workspace": workspace.name,
+        "workspace": workspace_ref,
         "mode": args.mode,
-        "entrypoint": entrypoint_ref,
+        "strategy": strategy_ref,
+        "workspace_entrypoint": workspace_ref,
         "passed": True,
-        "decisions_count": len(decisions) if isinstance(decisions, list) else int(decisions is not None),
+        "decisions_count": decisions_count,
         "result_artifact": str(result_artifact) if result is not None else None,
         "runtime_launch": runtime_launch,
+        "workspace_preflight": workspace_preflight,
     })
     return {
         **manifest,
-        "workspace_root": str(workspace.root),
+        "decisions_count": decisions_count,
+        "workspace_root": str(config.root),
         "run_workspace": str(directory),
         "manifest": str(directory / "manifest.json"),
     }
@@ -2849,151 +2876,102 @@ def _drop_stale_project_module(module_name: str, project_root: Path) -> None:
             sys.modules.pop(candidate, None)
 
 
-def _validate_workspace_entrypoint_requirements(module: object, entrypoint: object, snapshot: dict[str, Any]) -> None:
-    requires = getattr(entrypoint, "REQUIRES", None) or getattr(module, "REQUIRES", None)
-    if not isinstance(requires, dict):
-        return
-    inputs = requires.get("inputs", {})
-    if not isinstance(inputs, dict):
-        return
-    bindings = snapshot.get("bindings", {})
-    missing = [name for name in inputs if name not in bindings]
-    if missing:
-        raise ValueError(f"workspace is missing strategy data bindings: {', '.join(sorted(missing))}")
-
-
-def _execute_workspace_strategy_entrypoint(entrypoint: object, workspace: object, params: dict[str, str], context: SimpleNamespace) -> dict[str, object]:
-    signature = inspect.signature(entrypoint)
-    positional = [
-        param
-        for param in signature.parameters.values()
-        if param.kind in {param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD}
-    ]
-    if len(positional) <= 1:
-        return {
-            "entrypoint_kind": "context_decide",
-            "decisions": _normalize_decisions(entrypoint(context)),
-            "result": None,
-        }
-
-    strategy = entrypoint(workspace, params)
-    if hasattr(strategy, "decide"):
-        return {
-            "entrypoint_kind": "workspace_strategy",
-            "decisions": _normalize_decisions(strategy.decide(context)),
-            "result": None,
-        }
-    if _looks_like_standard_strategy(strategy):
-        return _execute_workspace_standard_strategy(strategy, workspace, params)
-
-    decisions: list[object] = []
-    used_hooks = False
-    for hook, args in (
-        ("on_start", (context,)),
-        ("on_tick", (0, context)),
-        ("on_stop", (context,)),
-    ):
-        callback = getattr(strategy, hook, None)
-        if callable(callback):
-            used_hooks = True
-            decisions.extend(_normalize_decisions(callback(*args)))
-    if used_hooks:
-        return {
-            "entrypoint_kind": "workspace_lifecycle_strategy",
-            "decisions": decisions,
-            "result": None,
-        }
-    return {
-        "entrypoint_kind": "workspace_function",
-        "decisions": [],
-        "result": strategy,
-    }
-
-
-def _looks_like_standard_strategy(strategy: object) -> bool:
-    return all(callable(getattr(strategy, name, None)) for name in ("on_start", "on_market", "on_fill", "on_end"))
-
-
-def _execute_workspace_standard_strategy(strategy: object, workspace: object, params: dict[str, str]) -> dict[str, object]:
+def _execute_workspace_code_strategy(strategy_entrypoint: object, projection: object, params: dict[str, str]) -> dict[str, object]:
+    strategy = _instantiate_workspace_strategy(strategy_entrypoint, projection, params)
+    if not _looks_like_standard_strategy(strategy):
+        raise ValueError("run.strategy must resolve to a Strategy with on_start/on_market/on_fill/on_end")
     from kairospy.strategy.runtime import StrategyRuntime
 
+    context = _projection_context(projection, params)
     runtime = StrategyRuntime(strategy)
-    contexts = _workspace_market_contexts(workspace, params)
-    emitted_intents: list[object] = []
-    if contexts:
-        emitted_intents.extend(runtime.intents_on_start(contexts[0]))
-        for item in contexts:
-            emitted_intents.extend(runtime.intents_on_market(item))
-        emitted_intents.extend(runtime.intents_on_end(contexts[-1]))
-    decisions = tuple(getattr(strategy, "decisions", ()))
+    decisions: list[object] = []
+    decisions.extend(_normalize_decisions(runtime.intents_on_start(context)))
+    decisions.extend(_normalize_decisions(runtime.intents_on_market(context)))
+    decisions.extend(_normalize_decisions(runtime.intents_on_end(context)))
     return {
-        "entrypoint_kind": "workspace_strategy_protocol",
-        "decisions": list(decisions),
+        "entrypoint_kind": "workspace_code_strategy",
+        "decisions": decisions,
         "result": {
             "strategy_id": getattr(strategy, "strategy_id", ""),
-            "contexts": len(contexts),
-            "intents": _json_fallback(emitted_intents),
+            "projection_nodes": len(getattr(projection, "nodes", ())),
+            "features": [
+                node.name
+                for node in getattr(projection, "features", ())
+            ],
         },
     }
 
 
-def _workspace_market_contexts(workspace: object, params: dict[str, str]) -> list[object]:
+def _instantiate_workspace_strategy(strategy_entrypoint: object, projection: object, params: dict[str, str]) -> object:
+    if inspect.isclass(strategy_entrypoint):
+        try:
+            return strategy_entrypoint()
+        except TypeError:
+            return strategy_entrypoint(projection, params)
+    candidate = strategy_entrypoint
+    if _looks_like_standard_strategy(candidate):
+        return candidate
+    try:
+        value = strategy_entrypoint()
+    except TypeError:
+        value = strategy_entrypoint(projection, params)
+    return value
+
+
+def _projection_context(projection: object, params: dict[str, str]):
     from kairospy.identity import InstrumentId
     from kairospy.strategy.protocols import Context
-    from kairospy.strategy.views import MarketView, PortfolioView
+    from kairospy.strategy.views import (
+        BudgetView,
+        FeatureValue,
+        FeatureView,
+        MarketView,
+        OrderView,
+        PortfolioView,
+        ReferenceView,
+        IntentView,
+    )
 
-    binding_name = _workspace_market_binding_name(workspace, params)
-    rows = workspace.data.get(binding_name).collect("rows")
-    limit = int(params.get("limit", str(len(rows))))
-    contexts = []
-    for sequence, row in enumerate(rows[:limit], start=1):
-        timestamp = _row_timestamp(row)
-        instrument = InstrumentId(str(row.get("instrument_id") or row.get("instrument") or row.get("symbol") or "unknown"))
-        reference_price = _row_reference_price(row)
-        contexts.append(Context(
-            MarketView(
-                timestamp,
-                sequence,
-                (instrument,),
-                data_binding=binding_name,
-                available_instruments=(instrument,),
-                reference_prices=((instrument, reference_price),) if reference_price is not None else (),
-            ),
-            PortfolioView(timestamp=timestamp),
-        ))
-    return contexts
+    now = datetime.now(timezone.utc)
+    market_nodes = tuple(getattr(projection, "market", ()) or ())
+    feature_nodes = tuple(getattr(projection, "features", ()) or ())
+    instrument = InstrumentId(str(params.get("instrument") or params.get("instruments") or "workspace:unknown"))
+    market = MarketView(
+        now,
+        1,
+        (instrument,),
+        data_binding="workspace_projection",
+        available_instruments=(instrument,),
+        quality_codes=tuple(
+            f"{getattr(node, 'name', 'node')}:{getattr(node, 'kind', 'unknown')}"
+            for node in market_nodes
+        ),
+    )
+    features = tuple(
+        FeatureValue(
+            getattr(node, "name"),
+            now,
+            tuple(sorted((str(key), value) for key, value in dict(getattr(node, "params", {}) or {}).items())),
+            quality="projection",
+            input_identity=str(getattr(node, "source", "") or getattr(node, "dataset", "") or ""),
+            state_hash=_run_component_hash(getattr(node, "to_dict", lambda: str(node))()),
+            available_time=now,
+        )
+        for node in feature_nodes
+    )
+    return Context(
+        market,
+        PortfolioView(timestamp=now),
+        FeatureView(now if features else None, now if features else None, features, _run_component_hash([item.feature_id for item in features]) if features else "none"),
+        ReferenceView.empty(),
+        OrderView.empty(),
+        IntentView.empty(),
+        BudgetView.empty(),
+    )
 
 
-def _workspace_market_binding_name(workspace: object, params: dict[str, str]) -> str:
-    requested = str(params.get("data") or params.get("binding") or "").strip()
-    if requested:
-        return requested
-    bindings = getattr(getattr(workspace, "manifest", None), "bindings", {})
-    if "market" in bindings:
-        return "market"
-    for name, binding in bindings.items():
-        if getattr(binding, "kind", None) == "dataset":
-            return str(name)
-    raise ValueError("standard workspace Strategy requires a dataset binding; pass params.data or bind market")
-
-
-def _row_timestamp(row: dict[str, object]) -> datetime:
-    value = row.get("timestamp") or row.get("event_time") or row.get("period_start") or row.get("available_time")
-    if isinstance(value, datetime):
-        result = value
-    elif value is None:
-        result = datetime.now(timezone.utc)
-    else:
-        result = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    return result if result.tzinfo is not None else result.replace(tzinfo=timezone.utc)
-
-
-def _row_reference_price(row: dict[str, object]) -> Decimal | None:
-    for key in ("close", "price", "mid", "mark_price"):
-        value = row.get(key)
-        if value not in (None, ""):
-            return Decimal(str(value))
-    return None
+def _looks_like_standard_strategy(strategy: object) -> bool:
+    return all(callable(getattr(strategy, name, None)) for name in ("on_start", "on_market", "on_fill", "on_end"))
 
 
 def _normalize_decisions(value: object) -> list[object]:
@@ -3029,6 +3007,82 @@ def _strategy_run_result_from_workspace_execution(execution: dict[str, object]):
         "intent_hash": intent_hash,
     })
     return StrategyRunResult((), (), decisions, (), factor_hash, decision_hash, intent_hash, audit_hash)
+
+
+def _run_live_workspace_market_strategy(
+    profile: object,
+    prepared: object,
+    strategy_entrypoint: object,
+    projection: object,
+    params: dict[str, str],
+):
+    from kairospy.infrastructure.storage.codec import to_primitive
+    from kairospy.runtime import CanonicalMarketProjection, StrategyRunResult
+    from kairospy.strategy.protocols import Context
+    from kairospy.strategy.runtime import StrategyRuntime
+    from kairospy.strategy.views import (
+        BudgetView,
+        FeatureView,
+        IntentView,
+        MarketView,
+        OrderView,
+        PortfolioView,
+        ReferenceView,
+    )
+
+    strategy = _instantiate_workspace_strategy(strategy_entrypoint, projection, params)
+    if not _looks_like_standard_strategy(strategy):
+        raise ValueError("run.strategy must resolve to a Strategy with on_start/on_market/on_fill/on_end")
+    runtime = StrategyRuntime(strategy)
+    market_projection = CanonicalMarketProjection()
+    decisions: list[object] = []
+    event_ids: list[str] = []
+    last_context = None
+    started = False
+    for event in profile.market_events(prepared):
+        market = market_projection.apply(event)
+        if market is None:
+            continue
+        context = Context(
+            MarketView.from_snapshot(market),
+            PortfolioView(timestamp=market.timestamp),
+            FeatureView.empty(),
+            ReferenceView.empty(),
+            OrderView.empty(),
+            IntentView.empty(),
+            BudgetView.empty(),
+        )
+        if not started:
+            decisions.extend(_normalize_decisions(runtime.intents_on_start(context)))
+            started = True
+        decisions.extend(_normalize_decisions(runtime.intents_on_market(context)))
+        event_ids.append(str(getattr(event, "message_id", "")))
+        last_context = context
+    if last_context is not None:
+        decisions.extend(_normalize_decisions(runtime.intents_on_end(last_context)))
+    primitive_decisions = tuple(_normalize_decisions(to_primitive(decisions)))
+    factor_hash = _run_component_hash(())
+    decision_hash = _run_component_hash(to_primitive(primitive_decisions))
+    intent_hash = _run_component_hash(())
+    audit_hash = _run_component_hash({
+        "events": event_ids,
+        "factor_hash": factor_hash,
+        "decision_hash": decision_hash,
+        "intent_hash": intent_hash,
+        "context_hash": last_context.context_hash if last_context is not None else "",
+    })
+    return StrategyRunResult(
+        tuple(event_ids),
+        (),
+        primitive_decisions,
+        (),
+        factor_hash,
+        decision_hash,
+        intent_hash,
+        audit_hash,
+        dict(last_context.view_hashes) if last_context is not None else {},
+        last_context.context_hash if last_context is not None else "",
+    )
 
 
 def _launch_workspace_paper_run(
@@ -3120,7 +3174,7 @@ def _launch_workspace_live_run(
 ) -> tuple[dict[str, object], object]:
     if not confirm_live:
         raise ValueError("live RunConfig start requires --confirm-live")
-    if getattr(config, "get")("execution.live_trading_enabled", False) is not True:
+    if _run_config_requires_live_trading_enabled(run_config) and getattr(config, "get")("execution.live_trading_enabled", False) is not True:
         raise ValueError("live RunConfig start requires execution.live_trading_enabled = true")
 
     from kairospy.data.contracts import RunMode
@@ -3215,6 +3269,7 @@ def _launch_workspace_live_run(
             accounts=accounts,
             market_event_source=market_source.event_source if market_source is not None else provider_ports.market_event_source,
             order_recovery_gateway=provider_ports.order_recovery_gateway,
+            user_fill_event_source=getattr(provider_ports, "user_fill_event_source", None),
         )
         application.order_recovery = components.order_recovery_service()
         profile = bind_live_runtime_components(components)
@@ -3228,8 +3283,15 @@ def _launch_workspace_live_run(
     managed_service_list = []
     if market_services_supervised and market_source is not None:
         managed_service_list.extend(market_source.managed_services)
+        freshness_monitor = _market_freshness_runtime_monitor(store, run_id, market_source)
+        if freshness_monitor is not None:
+            managed_service_list.append(freshness_monitor.managed_service())
     if provider_ports is not None:
         managed_service_list.append(components.outbox_dispatcher_service(run_id).managed_service())
+        managed_service_list.append(components.risk_monitor_service(run_id).managed_service())
+        fill_ingestion = components.fill_ingestion_service(run_id)
+        if fill_ingestion is not None:
+            managed_service_list.append(fill_ingestion.managed_service())
         if supervise_market_services:
             managed_service_list.extend(
                 service.managed_service()
@@ -3349,15 +3411,30 @@ def _live_market_binding(config: object, run_config: object, workspace_snapshot:
     market_names = bindings.get("market", ())
     if not isinstance(market_names, list) or not market_names:
         return {}
-    name = str(market_names[0])
     live_views = bindings.get("live_views", {})
-    view = live_views.get(name) if isinstance(live_views, dict) else None
-    workspace_bindings = workspace_snapshot.get("bindings", {}) if isinstance(workspace_snapshot, dict) else {}
-    workspace_binding = workspace_bindings.get(name, {}) if isinstance(workspace_bindings, dict) else {}
-    if not isinstance(view, dict):
-        if not isinstance(workspace_binding, dict) or workspace_binding.get("kind") != "live_view":
-            return {}
-        view = {}
+    workspace_bindings = {}
+    if isinstance(workspace_snapshot, dict):
+        workspace_bindings = workspace_snapshot.get("bindings", {})
+        if not isinstance(workspace_bindings, dict) or not workspace_bindings:
+            workspace_bindings = workspace_snapshot.get("attachments", {})
+    selected = None
+    for raw_name in market_names:
+        name = str(raw_name)
+        view = live_views.get(name) if isinstance(live_views, dict) else None
+        workspace_binding = workspace_bindings.get(name, {}) if isinstance(workspace_bindings, dict) else {}
+        if isinstance(view, dict):
+            selected = (name, view, workspace_binding if isinstance(workspace_binding, dict) else {})
+            break
+        if isinstance(workspace_binding, dict) and workspace_binding.get("kind") == "live_view":
+            selected = (name, {}, workspace_binding)
+            break
+        default_view = _default_live_market_view(config, live, name, workspace_binding)
+        if default_view is not None:
+            selected = (name, default_view, workspace_binding if isinstance(workspace_binding, dict) else {})
+            break
+    if selected is None:
+        return {}
+    name, view, workspace_binding = selected
     dataset = str(view.get("dataset") or workspace_binding.get("dataset") or "")
     live_view_id = str(view.get("live_view_id") or workspace_binding.get("live_view_id") or "")
     if not live_view_id:
@@ -3371,6 +3448,41 @@ def _live_market_binding(config: object, run_config: object, workspace_snapshot:
         "lake_root": view.get("lake_root"),
         "journal_root": view.get("journal_root"),
         "supervise_services": bool(view.get("supervise_services", view.get("supervise", False))),
+    }
+
+
+def _default_live_market_view(
+    config: object,
+    live: dict[str, object],
+    name: str,
+    workspace_binding: object,
+) -> dict[str, object] | None:
+    if not isinstance(workspace_binding, dict):
+        return None
+    dataset = str(workspace_binding.get("dataset") or "")
+    if not dataset:
+        return None
+    try:
+        from kairospy.data.quality.freshness import live_view_manifest_path, load_live_view_manifest
+        from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
+
+        root = config.relative_path("paths.lake_root", DEFAULT_LAKE_ROOT)
+        path = live_view_manifest_path(root, dataset, "default")
+        if not path.exists():
+            return None
+        manifest = load_live_view_manifest(path)
+    except Exception:
+        return None
+    source = manifest.source if isinstance(manifest.source, dict) else {}
+    plane = manifest.live_data_plane if isinstance(manifest.live_data_plane, dict) else {}
+    provider = str(source.get("provider") or plane.get("provider") or live.get("provider") or "")
+    if provider and str(live.get("provider") or "") and provider != str(live.get("provider")):
+        return None
+    return {
+        "provider": provider,
+        "name": name,
+        "dataset": dataset,
+        "live_view_id": "default",
     }
 
 
@@ -3462,7 +3574,11 @@ class _SurfaceRunServiceEvidence:
 
 def run_live(args) -> dict[str, object]:
     action = str(getattr(args, "live_action", "status") or "status")
-    if action not in {"start", "recover", "status", "stop", "kill-switch", "reset-kill-switch", "reload-risk-limits"}:
+    if action not in {
+        "start", "recover", "status", "attach", "stop", "pause", "resume", "reduce-only", "clear-reduce-only",
+        "cancel-all", "reconcile", "commands", "kill-switch", "reset-kill-switch", "reload-risk-limits",
+        "target-position", "incidents", "close-incident", "metrics", "export", "force-stop",
+    }:
         raise ValueError(f"unsupported run live action: {action}")
 
     from kairospy.infrastructure.configuration import KairosProjectConfig, PROJECT_STATE_DIR
@@ -3482,41 +3598,141 @@ def run_live(args) -> dict[str, object]:
         raise ValueError("run live --run-id must be a single path segment")
     runtime_root = config.root / PROJECT_STATE_DIR / "runtime" / "live" / run_id
     paths = RuntimePaths.under(runtime_root)
-    if action == "status" and not paths.runtime_database.exists():
+    if action in {"status", "attach"} and not paths.runtime_database.exists():
         return _run_live_status_payload(action, run_id, paths.runtime_database, None)
+    if action == "metrics" and not paths.runtime_database.exists():
+        status_payload = _run_live_status_payload("status", run_id, paths.runtime_database, None)
+        payload = _run_live_metrics_payload(action, run_id, paths.runtime_database, status_payload)
+        return _attach_run_live_metrics_artifact(
+            payload,
+            output=getattr(args, "output", None),
+            prometheus=bool(getattr(args, "prometheus", False)),
+        )
+    if action == "export" and not paths.runtime_database.exists():
+        raise LookupError(f"runtime export requires an existing live runtime database for run_id: {run_id}")
+    if action == "incidents" and not paths.runtime_database.exists():
+        return _run_live_incidents_payload(action, run_id, paths.runtime_database, (), status="open")
+    if action == "close-incident" and not paths.runtime_database.exists():
+        raise LookupError(f"runtime incident store not found for run_id: {run_id}")
     store = SQLiteRuntimeStore(paths.runtime_database)
 
-    if action == "status":
+    if action in {"status", "attach"}:
+        bus = OperatorCommandBus(store)
+        fresh_command = None
+        if bool(getattr(args, "fresh", False)):
+            fresh_command = bus.submit(
+                run_id=run_id,
+                command_type=OperatorCommandType.REQUEST_STATUS_SNAPSHOT,
+                payload={},
+                actor=str(getattr(args, "actor", None) or "cli"),
+                reason=str(getattr(args, "reason", None) or "status snapshot requested"),
+                idempotency_key=getattr(args, "idempotency_key", None),
+                at=datetime.now(timezone.utc),
+            )
+            wait_seconds = float(getattr(args, "wait", 0.0) or 0.0)
+            if wait_seconds > 0:
+                fresh_command = _wait_for_operator_command(bus, run_id, fresh_command.command_id, wait_seconds)
         state = store.runtime_state(f"{LiveRunDaemon.STATE_KEY_PREFIX}:{run_id}")
         stop_report = store.runtime_state("runtime_stop:last")
         live_binding = store.runtime_state(f"live_run_config:{run_id}")
+        risk_state = store.runtime_state("risk_runtime:last")
+        cancel_all_state = store.runtime_state(f"cancel_all:{run_id}:last")
+        reconciliation_request = store.runtime_state(f"reconciliation_request:{run_id}:last")
+        outbox_state = store.runtime_state(f"order_outbox_dispatcher:{run_id}")
+        fill_ingestion_state = store.runtime_state(f"fill_ingestion:{run_id}:last")
+        market_freshness_state = store.runtime_state(f"market_freshness:{run_id}:last")
+        target_position_state = store.runtime_state(f"target_position:{run_id}:last")
+        recovery_state = _runtime_recovery_state(store)
         heartbeat = LiveRunRegistry(store).status(
             run_id,
             at=datetime.now(timezone.utc),
             stale_after_seconds=float(getattr(args, "stale_after_seconds", 5.0) or 5.0),
         )
-        return _run_live_status_payload(
+        payload = _run_live_status_payload(
             action,
             run_id,
             paths.runtime_database,
             state if isinstance(state, dict) else None,
             stop_report if isinstance(stop_report, dict) else None,
-            tuple(command.manifest() for command in OperatorCommandBus(store).commands(run_id, limit=5)),
+            tuple(command.manifest() for command in bus.commands(run_id, limit=5)),
             heartbeat,
             live_binding if isinstance(live_binding, dict) else None,
+            risk_state if isinstance(risk_state, dict) else None,
+            cancel_all_state if isinstance(cancel_all_state, dict) else None,
+            reconciliation_request if isinstance(reconciliation_request, dict) else None,
+            fresh_command.manifest() if fresh_command is not None else None,
+            recovery_state,
+            outbox_state if isinstance(outbox_state, dict) else None,
+            fill_ingestion_state if isinstance(fill_ingestion_state, dict) else None,
+            market_freshness_state if isinstance(market_freshness_state, dict) else None,
+            target_position_state if isinstance(target_position_state, dict) else None,
+        )
+        _sync_run_live_health_incident(store, run_id, payload, datetime.now(timezone.utc))
+        incidents = tuple(item.manifest() for item in store.runtime_incidents(run_id, status="open", limit=5))
+        if incidents:
+            payload["incidents"] = incidents
+            payload["open_incident_count"] = len(incidents)
+            payload["metrics"] = _run_live_metrics_summary(payload)
+        return payload
+
+    if action == "metrics":
+        status_payload = run_live(SimpleNamespace(
+            live_action="status",
+            run_id=run_id,
+            stale_after_seconds=float(getattr(args, "stale_after_seconds", 5.0) or 5.0),
+        ))
+        status_payload["operator_commands"] = tuple(command.manifest() for command in OperatorCommandBus(store).commands(run_id))
+        payload = _run_live_metrics_payload(action, run_id, paths.runtime_database, status_payload)
+        return _attach_run_live_metrics_artifact(
+            payload,
+            output=getattr(args, "output", None),
+            prometheus=bool(getattr(args, "prometheus", False)),
         )
 
-    if action == "stop":
+    if action == "export":
+        status_payload = run_live(SimpleNamespace(
+            live_action="status",
+            run_id=run_id,
+            stale_after_seconds=float(getattr(args, "stale_after_seconds", 5.0) or 5.0),
+        ))
+        commands = tuple(command.manifest() for command in OperatorCommandBus(store).commands(run_id))
+        incidents = tuple(item.manifest() for item in store.runtime_incidents(run_id, status=None))
+        status_payload["operator_commands"] = commands
+        status_payload["incidents"] = tuple(item for item in incidents if item.get("status") == "open")
+        status_payload["open_incident_count"] = len(status_payload["incidents"])
+        status_payload["metrics"] = _run_live_metrics_summary(status_payload)
+        output = getattr(args, "output", None)
+        export_dir = Path(output) if output is not None else paths.root / "exports" / _timestamp_slug(datetime.now(timezone.utc))
+        return _export_run_live_artifacts(
+            run_id,
+            paths.runtime_database,
+            export_dir,
+            status_payload=status_payload,
+            commands=commands,
+            incidents=incidents,
+            runtime_state=store.runtime_states(),
+        )
+
+    if action in {"stop", "force-stop"}:
+        timeout_seconds = getattr(args, "timeout_seconds", None)
+        force = bool(getattr(args, "force", False)) or action == "force-stop"
         application = KairosApplication(
             ApplicationConfig(Environment.LIVE, paths),
             store,
             runtime_id=run_id,
             probes=(FunctionProbe("live-run-config", lambda: (True, run_id)),),
         )
-        daemon = LiveRunDaemon(application, (), run_id=run_id)
+        daemon = LiveRunDaemon(
+            application,
+            (),
+            run_id=run_id,
+            structured_log_path=str(_run_live_structured_log_path(paths.root)),
+        )
         snapshot = daemon.request_stop(
             str(getattr(args, "reason", None) or "operator stop requested"),
             actor=str(getattr(args, "actor", None) or "cli"),
+            timeout_seconds=float(timeout_seconds) if timeout_seconds is not None else None,
+            force=force,
         )
         stop_report = store.runtime_state("runtime_stop:last")
         commands = tuple(command.manifest() for command in OperatorCommandBus(store).commands(run_id, limit=5))
@@ -3524,16 +3740,64 @@ def run_live(args) -> dict[str, object]:
             **_run_live_snapshot_payload(action, snapshot, paths.runtime_database),
             "status": "stop_requested",
             "stop_requested": True,
+            "force": force,
+            **({"timeout_seconds": float(timeout_seconds)} if timeout_seconds is not None else {}),
             **({"stop_report": stop_report} if isinstance(stop_report, dict) else {}),
             "operator_commands": commands,
             **({"operator_command": commands[-1]} if commands else {}),
         }
 
-    if action in {"kill-switch", "reset-kill-switch", "reload-risk-limits"}:
+    if action == "commands":
+        return _run_live_commands_payload(
+            action,
+            run_id,
+            paths.runtime_database,
+            OperatorCommandBus(store),
+            limit=int(getattr(args, "limit", 20) or 20),
+        )
+
+    if action == "incidents":
+        status_filter = str(getattr(args, "status", "open") or "open")
+        status = None if status_filter == "all" else status_filter
+        incidents = tuple(item.manifest() for item in store.runtime_incidents(
+            run_id,
+            status=status,
+            limit=int(getattr(args, "limit", 20) or 20),
+        ))
+        return _run_live_incidents_payload(action, run_id, paths.runtime_database, incidents, status=status_filter)
+
+    if action == "close-incident":
+        closed = store.close_runtime_incident(
+            str(getattr(args, "incident_id", None) or ""),
+            actor=str(getattr(args, "actor", None) or "cli"),
+            reason=str(getattr(args, "reason", None) or ""),
+            at=datetime.now(timezone.utc),
+        )
+        return {
+            "product": "run",
+            "operation": "live",
+            "live_action": action,
+            "run_id": run_id,
+            "status": "closed",
+            "runtime_database": str(paths.runtime_database),
+            "incident": closed.manifest(),
+        }
+
+    if action in {
+        "pause", "resume", "reduce-only", "clear-reduce-only", "cancel-all", "reconcile",
+        "kill-switch", "reset-kill-switch", "reload-risk-limits", "target-position",
+    }:
         command_type = {
+            "pause": OperatorCommandType.PAUSE_NEW_ORDERS,
+            "resume": OperatorCommandType.RESUME,
+            "reduce-only": OperatorCommandType.SET_REDUCE_ONLY,
+            "clear-reduce-only": OperatorCommandType.CLEAR_REDUCE_ONLY,
+            "cancel-all": OperatorCommandType.CANCEL_ALL,
+            "reconcile": OperatorCommandType.REQUEST_RECONCILIATION,
             "kill-switch": OperatorCommandType.KILL_SWITCH,
             "reset-kill-switch": OperatorCommandType.RESET_KILL_SWITCH,
             "reload-risk-limits": OperatorCommandType.RELOAD_RISK_LIMITS,
+            "target-position": OperatorCommandType.TARGET_POSITION,
         }[action]
         payload = {}
         if action == "reset-kill-switch":
@@ -3546,13 +3810,15 @@ def run_live(args) -> dict[str, object]:
             if not limits_hash.strip():
                 raise ValueError("run live reload-risk-limits requires --risk-limits-hash")
             payload["risk_limits_hash"] = limits_hash
+        if action == "target-position":
+            payload = _run_live_target_position_payload(args)
         command = OperatorCommandBus(store).submit(
             run_id=run_id,
             command_type=command_type,
             payload=payload,
             actor=str(getattr(args, "actor", None) or "cli"),
             reason=str(getattr(args, "reason", None) or action),
-            idempotency_key=None,
+            idempotency_key=getattr(args, "idempotency_key", None),
             at=datetime.now(timezone.utc),
         )
         return {
@@ -3567,8 +3833,22 @@ def run_live(args) -> dict[str, object]:
 
     if not bool(getattr(args, "confirm_live", False)):
         raise ValueError("run live start/recover requires --confirm-live")
-    if config.get("execution.live_trading_enabled", False) is not True:
+    if _run_live_start_requires_live_trading_enabled(config, args) and config.get("execution.live_trading_enabled", False) is not True:
         raise ValueError("run live start/recover requires execution.live_trading_enabled = true")
+    duration = getattr(args, "duration_seconds", None)
+    if _run_live_should_spawn(args, duration):
+        if getattr(args, "config", None) is None:
+            raise ValueError("background run live start/recover requires --config")
+        live_binding = _run_live_spawn_binding_from_run_config(config, args)
+        return _spawn_run_live_foreground_process(
+            action,
+            run_id,
+            getattr(args, "config", None),
+            paths.runtime_database,
+            paths.root,
+            args,
+            live_binding,
+        )
     live_binding = None
     if getattr(args, "config", None) is not None:
         daemon, live_binding = _run_live_daemon_from_run_config(config, args, paths, store, run_id)
@@ -3584,8 +3864,9 @@ def run_live(args) -> dict[str, object]:
             _run_live_managed_services(config, args, application, store, paths),
             run_id=run_id,
             stop_handler=_run_live_stop_handler(config, args, application, store, run_id),
+            run_lock_path=str(_run_live_lock_path(paths.root)),
+            structured_log_path=str(_run_live_structured_log_path(paths.root)),
         )
-    duration = getattr(args, "duration_seconds", None)
     poll = float(getattr(args, "poll_seconds", 0.25) or 0.25)
     result = asyncio.run(_run_live_foreground_daemon(
         daemon,
@@ -3600,6 +3881,452 @@ def run_live(args) -> dict[str, object]:
         "services": to_primitive(result.get("services", ())),
         **({"run_config": live_binding} if isinstance(live_binding, dict) else {}),
     }
+
+
+def run_status(args) -> dict[str, object]:
+    run_id = _validated_run_id(getattr(args, "run_id", None), "run status")
+    live_payload = run_live(SimpleNamespace(
+        live_action="status",
+        run_id=run_id,
+        stale_after_seconds=float(getattr(args, "stale_after_seconds", 5.0) or 5.0),
+        fresh=bool(getattr(args, "fresh", False)),
+        wait=float(getattr(args, "wait", 0.0) or 0.0),
+        actor=getattr(args, "actor", "cli"),
+        reason=getattr(args, "reason", None),
+    ))
+    if live_payload.get("status") != "not_started" or Path(str(live_payload.get("runtime_database", ""))).exists():
+        return {
+            **live_payload,
+            "operation": "status",
+            "control_surface": "run",
+            "runtime_kind": "live",
+        }
+    try:
+        manifest = _load_run_manifest(Path.cwd(), run_id)
+    except FileNotFoundError:
+        return {
+            "product": "run",
+            "operation": "status",
+            "run_id": run_id,
+            "status": "not_started",
+            "runtime_kind": "unknown",
+        }
+    return {
+        "product": "run",
+        "operation": "status",
+        "run_id": run_id,
+        "status": manifest.get("status", "unknown"),
+        "mode": manifest.get("mode"),
+        "runtime_kind": "artifact",
+        "manifest": str(_find_run_manifest(Path.cwd(), run_id)),
+    }
+
+
+def run_stop(args) -> dict[str, object]:
+    run_id = _validated_run_id(getattr(args, "run_id", None), "run stop")
+    payload = run_live(SimpleNamespace(
+        live_action="stop",
+        run_id=run_id,
+        reason=getattr(args, "reason", None),
+        actor=getattr(args, "actor", "cli"),
+        timeout_seconds=getattr(args, "timeout_seconds", None),
+        force=bool(getattr(args, "force", False)),
+    ))
+    return {
+        **payload,
+        "operation": "stop",
+        "control_surface": "run",
+        "runtime_kind": "live",
+    }
+
+
+def run_force_stop(args) -> dict[str, object]:
+    run_id = _validated_run_id(getattr(args, "run_id", None), "run force-stop")
+    payload = run_live(SimpleNamespace(
+        live_action="force-stop",
+        run_id=run_id,
+        reason=getattr(args, "reason", None),
+        actor=getattr(args, "actor", "cli"),
+        timeout_seconds=float(getattr(args, "timeout_seconds", 1.0) or 1.0),
+        force=True,
+    ))
+    return {
+        **payload,
+        "operation": "force-stop",
+        "control_surface": "run",
+        "runtime_kind": "live",
+    }
+
+
+def run_pause(args) -> dict[str, object]:
+    return _run_operator_action("pause", args)
+
+
+def run_resume(args) -> dict[str, object]:
+    return _run_operator_action("resume", args)
+
+
+def run_reduce_only(args) -> dict[str, object]:
+    return _run_operator_action("reduce-only", args)
+
+
+def run_clear_reduce_only(args) -> dict[str, object]:
+    return _run_operator_action("clear-reduce-only", args)
+
+
+def run_cancel_all(args) -> dict[str, object]:
+    return _run_operator_action("cancel-all", args)
+
+
+def run_reconcile(args) -> dict[str, object]:
+    return _run_operator_action("reconcile", args)
+
+
+def run_commands(args) -> dict[str, object]:
+    run_id = _validated_run_id(getattr(args, "run_id", None), "run commands")
+    payload = run_live(SimpleNamespace(
+        live_action="commands",
+        run_id=run_id,
+        limit=getattr(args, "limit", 20),
+    ))
+    return {
+        **payload,
+        "operation": "commands",
+        "control_surface": "run",
+        "runtime_kind": "live",
+    }
+
+
+def run_metrics(args) -> dict[str, object]:
+    run_id = _validated_run_id(getattr(args, "run_id", None), "run metrics")
+    payload = run_live(SimpleNamespace(
+        live_action="metrics",
+        run_id=run_id,
+        stale_after_seconds=float(getattr(args, "stale_after_seconds", 5.0) or 5.0),
+        output=getattr(args, "output", None),
+        prometheus=bool(getattr(args, "prometheus", False)),
+    ))
+    return {
+        **payload,
+        "operation": "metrics",
+        "control_surface": "run",
+        "runtime_kind": "live",
+    }
+
+
+def run_export(args) -> dict[str, object]:
+    run_id = _validated_run_id(getattr(args, "run_id", None), "run export")
+    payload = run_live(SimpleNamespace(
+        live_action="export",
+        run_id=run_id,
+        output=getattr(args, "output", None),
+        stale_after_seconds=float(getattr(args, "stale_after_seconds", 5.0) or 5.0),
+    ))
+    return {
+        **payload,
+        "operation": "export",
+        "control_surface": "run",
+        "runtime_kind": "live",
+    }
+
+
+def run_incidents(args) -> dict[str, object]:
+    run_id = _validated_run_id(getattr(args, "run_id", None), "run incidents")
+    payload = run_live(SimpleNamespace(
+        live_action="incidents",
+        run_id=run_id,
+        status=getattr(args, "status", "open"),
+        limit=getattr(args, "limit", 20),
+    ))
+    return {
+        **payload,
+        "operation": "incidents",
+        "control_surface": "run",
+        "runtime_kind": "live",
+    }
+
+
+def run_close_incident(args) -> dict[str, object]:
+    run_id = _validated_run_id(getattr(args, "run_id", None), "run close-incident")
+    payload = run_live(SimpleNamespace(
+        live_action="close-incident",
+        run_id=run_id,
+        incident_id=getattr(args, "incident_id", None),
+        actor=getattr(args, "actor", "cli"),
+        reason=getattr(args, "reason", None),
+    ))
+    return {
+        **payload,
+        "operation": "close-incident",
+        "control_surface": "run",
+        "runtime_kind": "live",
+    }
+
+
+def _run_operator_action(action: str, args: object) -> dict[str, object]:
+    run_id = _validated_run_id(getattr(args, "run_id", None), f"run {action}")
+    payload = run_live(SimpleNamespace(
+        live_action=action,
+        run_id=run_id,
+        reason=getattr(args, "reason", None),
+        actor=getattr(args, "actor", "cli"),
+        idempotency_key=getattr(args, "idempotency_key", None),
+    ))
+    return {
+        **payload,
+        "operation": action,
+        "control_surface": "run",
+        "runtime_kind": "live",
+    }
+
+
+def _validated_run_id(value: object, label: str) -> str:
+    raw = str(value or "")
+    run_id = raw.strip()
+    if not run_id:
+        raise ValueError(f"{label} requires --run-id")
+    if raw != run_id or run_id in {".", ".."} or "/" in run_id or "\\" in run_id:
+        raise ValueError(f"{label} --run-id must be a single path segment")
+    return run_id
+
+
+def _wait_for_operator_command(bus: object, run_id: str, command_id: str, wait_seconds: float):
+    if wait_seconds < 0:
+        raise ValueError("status --wait cannot be negative")
+    deadline = monotonic() + wait_seconds
+    while True:
+        for command in bus.commands(run_id, limit=50):
+            if command.command_id == command_id:
+                if command.terminal or monotonic() >= deadline:
+                    return command
+                break
+        if monotonic() >= deadline:
+            for command in bus.commands(run_id, limit=50):
+                if command.command_id == command_id:
+                    return command
+            raise LookupError(f"operator command not found: {command_id}")
+        sleep(min(0.05, max(0.0, deadline - monotonic())))
+
+
+def _runtime_recovery_state(store: object) -> dict[str, object] | None:
+    if not hasattr(store, "unresolved_orders") or not hasattr(store, "orders_requiring_venue_recovery"):
+        return None
+    unresolved = tuple(store.unresolved_orders())
+    requiring = tuple(store.orders_requiring_venue_recovery())
+    if not unresolved and not requiring:
+        return {
+            "unresolved_order_count": 0,
+            "orders_requiring_recovery_count": 0,
+            "unresolved_client_order_ids": (),
+            "orders_requiring_recovery_client_order_ids": (),
+        }
+    return {
+        "unresolved_order_count": len(unresolved),
+        "orders_requiring_recovery_count": len(requiring),
+        "unresolved_client_order_ids": tuple(item.request.client_order_id for item in unresolved),
+        "orders_requiring_recovery_client_order_ids": tuple(item.request.client_order_id for item in requiring),
+    }
+
+
+def _run_live_target_position_payload(args: object) -> dict[str, object]:
+    raw_legs = tuple(str(item) for item in (getattr(args, "leg", None) or ()))
+    if not raw_legs:
+        raise ValueError("run live target-position requires at least one --leg")
+    return {
+        "intent_id": str(getattr(args, "intent_id", None) or ""),
+        "legs": tuple(_parse_target_position_leg(item) for item in raw_legs),
+    }
+
+
+def _parse_target_position_leg(value: str) -> dict[str, object]:
+    parts = tuple(part.strip() for part in value.split(","))
+    if len(parts) != 5 or any(not part for part in parts):
+        raise ValueError("--leg must use venue,product,instrument,side,quantity")
+    venue, product, instrument, side, quantity_text = parts
+    side = side.lower()
+    if side not in {"long", "short", "flat"}:
+        raise ValueError("--leg side must be long, short or flat")
+    quantity = Decimal(quantity_text)
+    if quantity <= 0:
+        raise ValueError("--leg quantity must be positive")
+    return {
+        "venue": venue,
+        "product": product,
+        "instrument": instrument,
+        "side": side,
+        "quantity": str(quantity),
+    }
+
+
+def _run_live_start_requires_live_trading_enabled(config: object, args: object) -> bool:
+    config_path = getattr(args, "config", None)
+    if config_path is None:
+        return True
+    from kairospy.runtime.run_config import load_run_config
+
+    run_config = load_run_config(config_path, project_root=getattr(config, "root", Path.cwd()))
+    return _run_config_requires_live_trading_enabled(run_config)
+
+
+def _run_config_requires_live_trading_enabled(run_config: object) -> bool:
+    live = run_config.get("live", {}) if hasattr(run_config, "get") else {}
+    if not isinstance(live, dict):
+        return True
+    bind_ports = live.get("bind_ports", True)
+    execution_driver = str(live.get("execution_driver") or "").strip()
+    no_execution_drivers = {
+        "",
+        "none",
+        "manual",
+        "manual-target-position",
+        "manual-cross-venue",
+        "manual-cross-venue-preflight",
+    }
+    return not (bind_ports is False and execution_driver in no_execution_drivers)
+
+
+def _run_live_should_spawn(args: object, duration_seconds: object) -> bool:
+    if not hasattr(args, "foreground"):
+        return False
+    if bool(getattr(args, "foreground", False)):
+        return False
+    return duration_seconds is None
+
+
+def _run_live_spawn_binding_from_run_config(config: object, args: object) -> dict[str, object]:
+    from kairospy.runtime.run_config import load_run_config
+
+    run_config = load_run_config(getattr(args, "config"), project_root=getattr(config, "root", Path.cwd()))
+    start_args = run_config.to_start_args(
+        confirm_live=True,
+        supervise_live_services=bool(getattr(args, "supervise_live_services", False)),
+        param_overrides=tuple(getattr(args, "param", ()) or ()),
+    )
+    if start_args.mode != "live":
+        raise ValueError("run live start/recover --config requires run.mode = \"live\"")
+    run_config_hash = _file_sha256(run_config.path)
+    config_hash = _stable_hash({
+        "params": _parse_run_params(tuple(getattr(args, "param", ()) or ())),
+        "run_config_hash": run_config_hash,
+    })
+    return {
+        "path": str(run_config.path),
+        "mode": start_args.mode,
+        "workspace": start_args.workspace,
+        "strategy": str(start_args.strategy),
+        "hash": run_config_hash,
+        "run_config_hash": run_config_hash,
+        "config_hash": config_hash,
+    }
+
+
+def _spawn_run_live_foreground_process(
+    action: str,
+    run_id: str,
+    config_path: Path | None,
+    runtime_database: Path,
+    runtime_root: Path,
+    args: object,
+    live_binding: dict[str, object] | None,
+) -> dict[str, object]:
+    from kairospy.runtime import StructuredRuntimeLog
+
+    command = _run_live_foreground_command(action, run_id, config_path, args)
+    log_file = Path(getattr(args, "log_file", None) or runtime_root / "daemon.log")
+    structured_log_file = _run_live_structured_log_path(runtime_root)
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    at = datetime.now(timezone.utc)
+    store = getattr(args, "_runtime_store", None)
+    if store is None:
+        from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
+
+        store = SQLiteRuntimeStore(runtime_database)
+    state = {
+        "run_id": run_id,
+        "phase": "starting",
+        "application_status": "created",
+        "reason": "spawned foreground daemon process",
+        "services": [],
+        "stop_requested": False,
+        "spawn": {
+            "command": command,
+            "log_file": str(log_file),
+            "structured_log_file": str(structured_log_file),
+            "requested_at": at.isoformat(),
+        },
+    }
+    store.set_runtime_state(f"live_run_daemon:{run_id}", state, at)
+    structured_log = StructuredRuntimeLog(structured_log_file)
+    structured_log.append("daemon_spawn_requested", run_id=run_id, payload=state["spawn"], at=at)
+    try:
+        with log_file.open("ab") as handle:
+            process = subprocess.Popen(
+                command,
+                cwd=Path.cwd(),
+                stdin=subprocess.DEVNULL,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+    except Exception as error:
+        state["phase"] = "failed"
+        state["reason"] = str(error)
+        state["spawn"]["error_type"] = type(error).__name__
+        state["spawn"]["failed_at"] = datetime.now(timezone.utc).isoformat()
+        store.set_runtime_state(f"live_run_daemon:{run_id}", state, datetime.now(timezone.utc))
+        structured_log.append(
+            "daemon_spawn_failed",
+            run_id=run_id,
+            level="error",
+            payload=state["spawn"],
+            at=datetime.now(timezone.utc),
+        )
+        raise
+    state["spawn"]["pid"] = process.pid
+    store.set_runtime_state(f"live_run_daemon:{run_id}", state, datetime.now(timezone.utc))
+    structured_log.append("daemon_spawned", run_id=run_id, payload=state["spawn"], at=datetime.now(timezone.utc))
+    return {
+        "product": "run",
+        "operation": "live",
+        "live_action": action,
+        "run_id": run_id,
+        "status": "spawned",
+        "phase": "starting",
+        "foreground": False,
+        "pid": process.pid,
+        "runtime_database": str(runtime_database),
+        "state_key": f"live_run_daemon:{run_id}",
+        "log_file": str(log_file),
+        "structured_log_file": str(structured_log_file),
+        "command": command,
+        **({"run_config": live_binding} if isinstance(live_binding, dict) else {}),
+    }
+
+
+def _run_live_foreground_command(
+    action: str,
+    run_id: str,
+    config_path: Path | None,
+    args: object,
+) -> list[str]:
+    command = [sys.executable, "-m", "kairospy"]
+    output_format = getattr(args, "format", None)
+    if output_format:
+        command.extend(["--format", str(output_format)])
+    language = getattr(args, "lang", None)
+    if language:
+        command.extend(["--lang", str(language)])
+    command.extend(["run", "live", action, "--run-id", run_id, "--foreground"])
+    if config_path is not None:
+        command.extend(["--config", str(config_path)])
+    for item in tuple(getattr(args, "param", ()) or ()):
+        command.extend(["--param", str(item)])
+    if bool(getattr(args, "confirm_live", False)):
+        command.append("--confirm-live")
+    poll_seconds = getattr(args, "poll_seconds", None)
+    if poll_seconds is not None:
+        command.extend(["--poll-seconds", str(poll_seconds)])
+    return command
 
 
 def _run_live_managed_services(
@@ -3639,7 +4366,7 @@ def _run_live_daemon_from_run_config(
     from kairospy.runtime.config import ApplicationConfig
     from kairospy.runtime.live_config import live_runtime_binding_config_from_run_config
     from kairospy.runtime.run_config import load_run_config
-    from kairospy.workspace import WorkspaceRepository
+    from kairospy.workspace import WorkspaceBuildContext
 
     run_config = load_run_config(getattr(args, "config"), project_root=getattr(config, "root", Path.cwd()))
     start_args = run_config.to_start_args(
@@ -3650,18 +4377,45 @@ def _run_live_daemon_from_run_config(
     if start_args.mode != "live":
         raise ValueError("run live start/recover --config requires run.mode = \"live\"")
 
-    workspace = WorkspaceRepository(getattr(config, "root", Path.cwd())).open(start_args.workspace)
     params = _parse_run_params(getattr(start_args, "param", ()))
-    workspace_snapshot = workspace.snapshot()
-    entrypoint_ref = str(start_args.entrypoint)
-    module, callable_name, entrypoint = _load_run_entrypoint(entrypoint_ref, getattr(config, "root", Path.cwd()))
-    _validate_workspace_entrypoint_requirements(module, entrypoint, workspace_snapshot)
+    workspace_ref = str(start_args.workspace)
+    strategy_ref = str(start_args.strategy)
+    workspace_module, workspace_callable_name, workspace_entrypoint = _load_run_entrypoint(workspace_ref, getattr(config, "root", Path.cwd()))
+    strategy_module, strategy_callable_name, _strategy_entrypoint = _load_run_entrypoint(strategy_ref, getattr(config, "root", Path.cwd()))
+    workspace_context = WorkspaceBuildContext(
+        project_root=getattr(config, "root", Path.cwd()),
+        data_root=getattr(config, "relative_path")("paths.lake_root", ".kairos/data"),
+    )
+    projection = workspace_entrypoint(workspace_context, params)
+    if projection is None:
+        projection = workspace_context.project()
+    workspace_snapshot = projection.to_dict()
+    workspace_preflight = projection.preflight("live") if hasattr(projection, "preflight") else {
+        "mode": "live",
+        "passed": True,
+        "issues": [],
+    }
+    if not workspace_preflight.get("passed", True):
+        errors = [
+            str(item.get("message") or item.get("code") or item)
+            for item in workspace_preflight.get("issues", ())
+            if isinstance(item, dict) and item.get("severity") == "error"
+        ]
+        raise ValueError("workspace preflight failed: " + "; ".join(errors))
 
     run_id = str(getattr(args, "run_id"))
     workspace_snapshot_hash = _stable_hash(_json_safe(workspace_snapshot))
-    strategy_hash = _stable_hash({"entrypoint": entrypoint_ref, "module": module.__name__, "callable": callable_name})
+    strategy_hash = _stable_hash({"entrypoint": strategy_ref, "module": strategy_module.__name__, "callable": strategy_callable_name})
     run_config_hash = _file_sha256(run_config.path)
-    config_hash = _stable_hash({"params": params, "run_config_hash": run_config_hash})
+    config_hash = _stable_hash({
+        "params": params,
+        "run_config_hash": run_config_hash,
+        "workspace_code_hash": _stable_hash({
+            "entrypoint": workspace_ref,
+            "module": workspace_module.__name__,
+            "callable": workspace_callable_name,
+        }),
+    })
     live_config = live_runtime_binding_config_from_run_config(
         run_config,
         workspace_hash=workspace_snapshot_hash,
@@ -3711,7 +4465,7 @@ def _run_live_daemon_from_run_config(
         accounts=accounts,
         probes=(
             FunctionProbe("live-run-config", lambda: (True, str(run_config.path))),
-            FunctionProbe("workspace", lambda: (True, workspace.name)),
+            FunctionProbe("workspace", lambda: (True, workspace_ref)),
             FunctionProbe("live-runtime-profile", lambda: (True, live_config.profile_id)),
         ),
         recovery=recovery,
@@ -3742,28 +4496,27 @@ def _run_live_daemon_from_run_config(
             accounts=accounts,
             market_event_source=market_source.event_source if market_source is not None else provider_ports.market_event_source,
             order_recovery_gateway=provider_ports.order_recovery_gateway,
+            user_fill_event_source=getattr(provider_ports, "user_fill_event_source", None),
         )
         application.order_recovery = components.order_recovery_service()
         profile = bind_live_runtime_components(components)
-    context = SimpleNamespace(
-        run_id=run_id,
-        workspace=workspace.name,
-        mode="live",
-        now=datetime.now(timezone.utc),
-        data=workspace.data,
-        params=params,
-        state={},
-    )
-
-    def strategy_runner(_prepared: object):
-        execution = _execute_workspace_strategy_entrypoint(entrypoint, workspace, params, context)
+    def strategy_runner(prepared: object):
+        if market_source is not None:
+            return _run_live_workspace_market_strategy(
+                profile,
+                prepared,
+                _strategy_entrypoint,
+                projection,
+                params,
+            )
+        execution = _execute_workspace_code_strategy(_strategy_entrypoint, projection, params)
         return _strategy_run_result_from_workspace_execution(execution)
 
     stop_policy = _strategy_stop_policy_metadata(
         strategy_spec,
         controller_bound=components is not None and strategy_spec is not None,
     )
-    strategy_id = getattr(strategy_spec, "strategy_id", workspace.name)
+    strategy_id = getattr(strategy_spec, "strategy_id", workspace_ref)
     strategy_version = getattr(strategy_spec, "version", "workspace-entrypoint")
     request = RunRequest(
         run_id,
@@ -3791,13 +4544,23 @@ def _run_live_daemon_from_run_config(
         RunArtifactRepository(Path(getattr(paths, "artifacts")) / "governance-artifacts"),
         execution={"runtime_launch": {"run_id": run_id, "daemon": True}},
     )
-    service = LiveRunKernelService(
-        store,
-        RunKernel(profile),
-        request,
-        strategy_runner,
-        artifact_writer=artifact_writer,
-        clock=application.clock,
+    service = (
+        _live_workspace_market_strategy_service(
+            run_id,
+            market_source.event_source,
+            _strategy_entrypoint,
+            projection,
+            params,
+        )
+        if market_source is not None else
+        LiveRunKernelService(
+            store,
+            RunKernel(profile),
+            request,
+            strategy_runner,
+            artifact_writer=artifact_writer,
+            clock=application.clock,
+        ).managed_service()
     )
     stop_handler = _run_live_stop_handler(config, args, application, store, run_id)
     if stop_handler is None and components is not None and strategy_spec is not None:
@@ -3805,20 +4568,80 @@ def _run_live_daemon_from_run_config(
 
         def stop_handler(reason: str = "manual"):
             return stop_controller.execute(reason)
+    operator_command_handler = None
+    if components is not None:
+        coordinator = components.execution_coordinator()
 
+        def operator_command_handler(command: object):
+            from kairospy.runtime import OperatorCommandType
+            from kairospy.runtime.application import RuntimeStatus
+
+            command_type = OperatorCommandType(getattr(command, "command_type"))
+            if command_type is OperatorCommandType.REQUEST_RECONCILIATION:
+                return _run_live_apply_reconciliation_command(
+                    daemon,
+                    command,
+                    components.reconciliation_services(),
+                )
+            if command_type is not OperatorCommandType.CANCEL_ALL:
+                return None
+            if application.status in {
+                RuntimeStatus.READY,
+                RuntimeStatus.RUNNING,
+                RuntimeStatus.DEGRADED,
+                RuntimeStatus.REDUCE_ONLY,
+            } and application.status is not RuntimeStatus.REDUCE_ONLY:
+                application.degrade(str(getattr(command, "reason")), reduce_only=True)
+            result = coordinator.cancel_all_orders(
+                tuple(getattr(components, "accounts", ()) or application.accounts),
+                str(getattr(command, "reason")),
+            )
+            at = application.clock.now()
+            store.set_runtime_state(
+                f"cancel_all:{run_id}:last",
+                {
+                    "run_id": run_id,
+                    "status": "succeeded" if not result.failures else "partial_failure",
+                    "actor": str(getattr(command, "actor")),
+                    "reason": str(getattr(command, "reason")),
+                    "updated_at": at.isoformat(),
+                    "cancelled_client_order_ids": result.cancelled_client_order_ids,
+                    "failures": result.failures,
+                },
+                at,
+            )
+            snapshot = daemon.mark_reduce_only(str(getattr(command, "reason")))
+            return {
+                "phase": snapshot.phase.value,
+                "desired_state": "reduce_only",
+                "cancel_all_requested": True,
+                "cancelled_orders": result.cancelled_client_order_ids,
+                "failures": result.failures,
+            }
+
+    fill_ingestion_service = components.fill_ingestion_service(run_id) if components is not None else None
+    market_freshness_monitor = (
+        _market_freshness_runtime_monitor(store, run_id, market_source)
+        if market_source is not None else None
+    )
     managed_services = (
         *((market_source.managed_services if market_source is not None else ())),
+        *((market_freshness_monitor.managed_service(),) if market_freshness_monitor is not None else ()),
         *((components.outbox_dispatcher_service(run_id).managed_service(),) if components is not None else ()),
+        *((components.risk_monitor_service(run_id).managed_service(),) if components is not None else ()),
+        *((fill_ingestion_service.managed_service(),) if fill_ingestion_service is not None else ()),
         *(tuple(
             monitor.managed_service()
             for monitor in components.reconciliation_monitor_services(run_id)
         ) if components is not None else ()),
-        service.managed_service(),
+        service,
     )
     binding = {
         "path": str(run_config.path),
         "hash": run_config_hash,
-        "workspace": workspace.name,
+        "run_config_hash": run_config_hash,
+        "config_hash": config_hash,
+        "workspace": workspace_ref,
         "profile_id": profile.profile_id,
         "provider_binding": bool(provider_ports),
         "market_binding": bool(market_source),
@@ -3826,7 +4649,83 @@ def _run_live_daemon_from_run_config(
         **({"stop_policy": stop_policy} if stop_policy is not None else {}),
     }
     store.set_runtime_state(f"live_run_config:{run_id}", binding, datetime.now(timezone.utc))
-    return LiveRunDaemon(application, managed_services, run_id=run_id, stop_handler=stop_handler), binding
+    daemon = LiveRunDaemon(
+        application,
+        managed_services,
+        run_id=run_id,
+        stop_handler=stop_handler,
+        operator_command_handler=operator_command_handler,
+        process_config_hash=config_hash,
+        run_lock_path=str(_run_live_lock_path(paths.root)),
+        structured_log_path=str(_run_live_structured_log_path(paths.root)),
+    )
+    return daemon, binding
+
+
+def _run_live_structured_log_path(runtime_root: Path) -> Path:
+    return Path(runtime_root) / "runtime.jsonl"
+
+
+def _run_live_lock_path(runtime_root: Path) -> Path:
+    return Path(runtime_root) / "run.lock"
+
+
+def _live_workspace_market_strategy_service(
+    run_id: str,
+    event_source: object,
+    strategy_entrypoint: object,
+    projection: object,
+    params: dict[str, str],
+):
+    from kairospy.runtime import ManagedServiceSpec
+
+    async def run() -> None:
+        from kairospy.runtime import CanonicalMarketProjection
+        from kairospy.strategy.protocols import Context
+        from kairospy.strategy.runtime import StrategyRuntime
+        from kairospy.strategy.views import (
+            BudgetView,
+            FeatureView,
+            IntentView,
+            MarketView,
+            OrderView,
+            PortfolioView,
+            ReferenceView,
+        )
+
+        if not hasattr(event_source, "events") or not callable(event_source.events):
+            raise ValueError("live market strategy service requires event_source.events()")
+        strategy = _instantiate_workspace_strategy(strategy_entrypoint, projection, params)
+        if not _looks_like_standard_strategy(strategy):
+            raise ValueError("run.strategy must resolve to a Strategy with on_start/on_market/on_fill/on_end")
+        runtime = StrategyRuntime(strategy)
+        market_projection = CanonicalMarketProjection()
+        started = False
+        last_context = None
+        try:
+            async for event in event_source.events():
+                market = market_projection.apply(event)
+                if market is None:
+                    continue
+                context = Context(
+                    MarketView.from_snapshot(market),
+                    PortfolioView(timestamp=market.timestamp),
+                    FeatureView.empty(),
+                    ReferenceView.empty(),
+                    OrderView.empty(),
+                    IntentView.empty(),
+                    BudgetView.empty(),
+                )
+                if not started:
+                    runtime.intents_on_start(context)
+                    started = True
+                runtime.intents_on_market(context)
+                last_context = context
+        finally:
+            if last_context is not None:
+                runtime.intents_on_end(last_context)
+
+    return ManagedServiceSpec(f"strategy-run:{run_id}", run)
 
 
 def _run_live_stop_handler(config: object, args: object, application: object, store: object, run_id: str):
@@ -3837,6 +4736,22 @@ def _run_live_stop_handler(config: object, args: object, application: object, st
     if factory is not None:
         return factory(application, store, run_id)
     return None
+
+
+def _market_freshness_runtime_monitor(store: object, run_id: str, market_source: object):
+    from kairospy.runtime import MarketFreshnessRuntimeMonitorService
+
+    required = ("name", "dataset", "live_view_id", "manifest_path")
+    if not all(hasattr(market_source, name) for name in required):
+        return None
+    return MarketFreshnessRuntimeMonitorService(
+        store,
+        run_id=run_id,
+        name=str(getattr(market_source, "name")),
+        dataset=str(getattr(market_source, "dataset")),
+        live_view_id=str(getattr(market_source, "live_view_id")),
+        manifest_path=getattr(market_source, "manifest_path"),
+    )
 
 
 async def _run_live_foreground_daemon(
@@ -3870,8 +4785,12 @@ async def _run_live_foreground_daemon(
             if stop_command is not None:
                 stop_command = daemon.command_bus.start(stop_command.command_id, daemon.clock.now())
             if stop_command is not None or daemon.stop_requested():
+                stop_payload = getattr(stop_command, "payload", {}) if stop_command is not None else {}
+                stop_payload = stop_payload if isinstance(stop_payload, dict) else {}
+                timeout_seconds = float(stop_payload.get("timeout_seconds") or 5.0)
+                force_stop = bool(stop_payload.get("force", False))
                 try:
-                    stopped = await daemon.stop(reason="manual")
+                    stopped = await daemon.stop(reason="manual", timeout_seconds=timeout_seconds, force=force_stop)
                 except Exception as error:
                     if stop_command is not None:
                         daemon.fail_operator_command(stop_command, error)
@@ -3880,6 +4799,8 @@ async def _run_live_foreground_daemon(
                     daemon.complete_operator_command(stop_command, {
                         "phase": getattr(stopped.phase, "value", str(stopped.phase)),
                         "application_status": getattr(stopped.application_status, "value", str(stopped.application_status)),
+                        "timeout_seconds": timeout_seconds,
+                        "force": force_stop,
                     })
                     if stop_command is not None else None
                 )
@@ -3888,13 +4809,23 @@ async def _run_live_foreground_daemon(
                     **_run_live_stop_report_payload(daemon),
                     "status": "stopped",
                     "stop_requested": True,
+                    "force": force_stop,
+                    "timeout_seconds": timeout_seconds,
                     **({"operator_command": completed_command.manifest()} if completed_command is not None else {}),
                     "started": _run_live_snapshot_payload(action, snapshot, None),
                 }
             operator_command = daemon.claim_operator_command(
+                OperatorCommandType.PAUSE_NEW_ORDERS,
+                OperatorCommandType.RESUME,
+                OperatorCommandType.SET_REDUCE_ONLY,
+                OperatorCommandType.CLEAR_REDUCE_ONLY,
+                OperatorCommandType.CANCEL_ALL,
+                OperatorCommandType.REQUEST_STATUS_SNAPSHOT,
+                OperatorCommandType.REQUEST_RECONCILIATION,
                 OperatorCommandType.KILL_SWITCH,
                 OperatorCommandType.RESET_KILL_SWITCH,
                 OperatorCommandType.RELOAD_RISK_LIMITS,
+                OperatorCommandType.TARGET_POSITION,
             )
             if operator_command is not None:
                 running_command = daemon.command_bus.start(operator_command.command_id, daemon.clock.now())
@@ -3919,7 +4850,22 @@ async def _run_live_foreground_daemon(
                     "stop_requested": False,
                     "started": _run_live_snapshot_payload(action, snapshot, None),
                 }
-            daemon.heartbeat(phase="running", desired_state="running")
+            try:
+                daemon.heartbeat(phase="running", desired_state="running")
+            except Exception as error:
+                failed = await daemon.fail_closed(
+                    f"runtime heartbeat failed: {type(error).__name__}: {error}",
+                )
+                return {
+                    **_run_live_snapshot_payload(action, failed, None),
+                    **_run_live_stop_report_payload(daemon),
+                    "status": "failed",
+                    "fault": {
+                        "error_type": type(error).__name__,
+                        "message": str(error),
+                    },
+                    "started": _run_live_snapshot_payload(action, snapshot, None),
+                }
             wait_seconds = poll_seconds if deadline is None else min(poll_seconds, max(0.0, deadline - loop.time()))
             done, _pending = await asyncio.wait({fault_task}, timeout=wait_seconds)
             if done:
@@ -3948,7 +4894,158 @@ def _run_live_apply_operator_command(daemon: object, command: object) -> dict[st
     from kairospy.runtime.application import RuntimeStatus
 
     command_type = OperatorCommandType(getattr(command, "command_type"))
+    handler = getattr(daemon, "operator_command_handler", None)
+    if handler is not None:
+        handled = handler(command)
+        if handled is not None:
+            return handled
     switch = KillSwitch((), getattr(daemon, "clock", None), daemon.application.store)
+    if command_type is OperatorCommandType.PAUSE_NEW_ORDERS:
+        at = daemon.clock.now()
+        daemon.application.store.set_runtime_state(
+            "risk_runtime:last",
+            {
+                "run_id": daemon.run_id,
+                "status": "paused",
+                "actor": str(getattr(command, "actor")),
+                "reason": str(getattr(command, "reason")),
+                "updated_at": at.isoformat(),
+            },
+            at,
+        )
+        snapshot = daemon.status()
+        return {
+            "phase": snapshot.phase.value,
+            "desired_state": "paused",
+            "paused": True,
+        }
+    if command_type is OperatorCommandType.RESUME:
+        at = daemon.clock.now()
+        daemon.application.store.set_runtime_state(
+            "risk_runtime:last",
+            {
+                "run_id": daemon.run_id,
+                "status": "ok",
+                "actor": str(getattr(command, "actor")),
+                "reason": str(getattr(command, "reason")),
+                "updated_at": at.isoformat(),
+            },
+            at,
+        )
+        snapshot = daemon.mark_running(str(getattr(command, "reason")))
+        return {
+            "phase": snapshot.phase.value,
+            "desired_state": "running",
+            "paused": False,
+        }
+    if command_type is OperatorCommandType.SET_REDUCE_ONLY:
+        if daemon.application.status in {
+            RuntimeStatus.READY,
+            RuntimeStatus.RUNNING,
+            RuntimeStatus.DEGRADED,
+            RuntimeStatus.REDUCE_ONLY,
+        } and daemon.application.status is not RuntimeStatus.REDUCE_ONLY:
+            daemon.application.degrade(str(getattr(command, "reason")), reduce_only=True)
+        snapshot = daemon.mark_reduce_only(str(getattr(command, "reason")))
+        return {
+            "phase": snapshot.phase.value,
+            "desired_state": "reduce_only",
+            "reduce_only": True,
+        }
+    if command_type is OperatorCommandType.CLEAR_REDUCE_ONLY:
+        if daemon.application.status is RuntimeStatus.REDUCE_ONLY:
+            daemon.application.clear_reduce_only(str(getattr(command, "reason")))
+        snapshot = daemon.mark_running(str(getattr(command, "reason")))
+        return {
+            "phase": snapshot.phase.value,
+            "desired_state": "running",
+            "reduce_only": False,
+        }
+    if command_type is OperatorCommandType.CANCEL_ALL:
+        if daemon.application.status in {
+            RuntimeStatus.READY,
+            RuntimeStatus.RUNNING,
+            RuntimeStatus.DEGRADED,
+            RuntimeStatus.REDUCE_ONLY,
+        } and daemon.application.status is not RuntimeStatus.REDUCE_ONLY:
+            daemon.application.degrade(str(getattr(command, "reason")), reduce_only=True)
+        at = daemon.clock.now()
+        daemon.application.store.set_runtime_state(
+            f"cancel_all:{daemon.run_id}:last",
+            {
+                "run_id": daemon.run_id,
+                "status": "requested",
+                "actor": str(getattr(command, "actor")),
+                "reason": str(getattr(command, "reason")),
+                "updated_at": at.isoformat(),
+                "note": "global venue cancellation adapter not yet bound; runtime entered reduce-only",
+            },
+            at,
+        )
+        snapshot = daemon.mark_reduce_only(str(getattr(command, "reason")))
+        return {
+            "phase": snapshot.phase.value,
+            "desired_state": "reduce_only",
+            "cancel_all_requested": True,
+            "cancelled_orders": (),
+            "failures": (),
+        }
+    if command_type is OperatorCommandType.REQUEST_STATUS_SNAPSHOT:
+        snapshot = daemon.status()
+        at = daemon.clock.now()
+        state = snapshot.manifest()
+        daemon.application.store.set_runtime_state(f"status_snapshot:{daemon.run_id}:last", state, at)
+        return {
+            "phase": snapshot.phase.value,
+            "desired_state": snapshot.phase.value,
+            "snapshot_hash": snapshot.snapshot_hash,
+        }
+    if command_type is OperatorCommandType.REQUEST_RECONCILIATION:
+        at = daemon.clock.now()
+        daemon.application.store.set_runtime_state(
+            f"reconciliation_request:{daemon.run_id}:last",
+            {
+                "run_id": daemon.run_id,
+                "status": "requested",
+                "actor": str(getattr(command, "actor")),
+                "reason": str(getattr(command, "reason")),
+                "updated_at": at.isoformat(),
+            },
+            at,
+        )
+        snapshot = daemon.status()
+        return {
+            "phase": snapshot.phase.value,
+            "desired_state": snapshot.phase.value,
+            "reconciliation_requested": True,
+        }
+    if command_type is OperatorCommandType.TARGET_POSITION:
+        payload = dict(getattr(command, "payload", {}) or {})
+        legs = tuple(payload.get("legs") or ())
+        if not legs:
+            raise ValueError("target position command requires legs")
+        at = daemon.clock.now()
+        state = {
+            "run_id": daemon.run_id,
+            "status": "accepted",
+            "intent_id": str(payload.get("intent_id") or getattr(command, "command_id")),
+            "legs": legs,
+            "actor": str(getattr(command, "actor")),
+            "reason": str(getattr(command, "reason")),
+            "updated_at": at.isoformat(),
+            "execution_status": "not_submitted",
+            "note": "target position accepted by runtime control plane; strategy/execution translation is not enabled yet",
+        }
+        daemon.application.store.set_runtime_state(f"target_position:{daemon.run_id}:last", state, at)
+        snapshot = daemon.status()
+        return {
+            "phase": snapshot.phase.value,
+            "desired_state": snapshot.phase.value,
+            "target_position_accepted": True,
+            "intent_id": state["intent_id"],
+            "leg_count": len(legs),
+            "execution_status": "not_submitted",
+        }
     if command_type is OperatorCommandType.KILL_SWITCH:
         result = switch.trigger(tuple(daemon.application.accounts), str(getattr(command, "reason")))
         if daemon.application.status in {
@@ -4011,6 +5108,63 @@ def _run_live_apply_operator_command(daemon: object, command: object) -> dict[st
     raise ValueError(f"unsupported operator command: {command_type.value}")
 
 
+def _run_live_apply_reconciliation_command(
+    daemon: object,
+    command: object,
+    reconciliation_services: object,
+) -> dict[str, object]:
+    from kairospy.governance.reconciliation import reconciliation_payload
+    from kairospy.runtime.application import RuntimeStatus
+
+    services = dict(reconciliation_services)
+    reports = []
+    mismatches = []
+    unknown_external_open_order_ids = []
+    store = daemon.application.store
+    run_id = daemon.run_id
+    at = daemon.application.clock.now()
+    for account, service in services.items():
+        report = service.reconcile(account)
+        payload = reconciliation_payload(report, run_id)
+        store.set_runtime_state(f"reconciliation:{run_id}:{account.value}", payload, report.checked_at)
+        store.set_runtime_state("reconciliation:last", payload, report.checked_at)
+        reports.append(payload)
+        unknown_external_open_order_ids.extend(tuple(payload["unknown_external_open_order_ids"]))
+        if not report.matched:
+            mismatches.append(account.value)
+    if mismatches and daemon.application.status in {
+        RuntimeStatus.READY,
+        RuntimeStatus.RUNNING,
+        RuntimeStatus.DEGRADED,
+        RuntimeStatus.REDUCE_ONLY,
+    } and daemon.application.status is not RuntimeStatus.REDUCE_ONLY:
+        daemon.application.degrade(
+            "reconciliation mismatches: " + ",".join(mismatches),
+            reduce_only=True,
+        )
+    unique_unknown_external_open_order_ids = tuple(dict.fromkeys(unknown_external_open_order_ids))
+    state = {
+        "run_id": run_id,
+        "status": "matched" if not mismatches else "mismatched",
+        "actor": str(getattr(command, "actor")),
+        "reason": str(getattr(command, "reason")),
+        "updated_at": at.isoformat(),
+        "unknown_external_open_order_ids": unique_unknown_external_open_order_ids,
+        "unknown_external_open_order_count": len(unique_unknown_external_open_order_ids),
+        "reports": tuple(reports),
+    }
+    store.set_runtime_state(f"reconciliation_request:{run_id}:last", state, at)
+    snapshot = daemon.mark_reduce_only(str(getattr(command, "reason"))) if mismatches else daemon.status()
+    return {
+        "phase": snapshot.phase.value,
+        "desired_state": "reduce_only" if mismatches else snapshot.phase.value,
+        "reconciliation_requested": True,
+        "matched": not mismatches,
+        "mismatched_accounts": tuple(mismatches),
+        "unknown_external_open_order_ids": unique_unknown_external_open_order_ids,
+    }
+
+
 def _run_live_status_payload(
     action: str,
     run_id: str,
@@ -4020,8 +5174,18 @@ def _run_live_status_payload(
     operator_commands: tuple[dict[str, object], ...] = (),
     heartbeat: dict[str, object] | None = None,
     live_binding: dict[str, object] | None = None,
+    risk_state: dict[str, object] | None = None,
+    cancel_all_state: dict[str, object] | None = None,
+    reconciliation_request: dict[str, object] | None = None,
+    status_snapshot_command: dict[str, object] | None = None,
+    recovery_state: dict[str, object] | None = None,
+    outbox_state: dict[str, object] | None = None,
+    fill_ingestion_state: dict[str, object] | None = None,
+    market_freshness_state: dict[str, object] | None = None,
+    target_position_state: dict[str, object] | None = None,
 ) -> dict[str, object]:
     if state is None:
+        structured_log_file = _run_live_structured_log_path(runtime_database.parent.parent)
         payload = {
             "product": "run",
             "operation": "live",
@@ -4031,6 +5195,7 @@ def _run_live_status_payload(
             "phase": "created",
             "runtime_database": str(runtime_database),
             "state_key": f"live_run_daemon:{run_id}",
+            "structured_log_file": str(structured_log_file),
         }
         if stop_report is not None:
             payload["stop_report"] = stop_report
@@ -4041,10 +5206,38 @@ def _run_live_status_payload(
             payload["status"] = str(heartbeat.get("status", payload["status"]))
         if live_binding is not None:
             payload["run_config"] = live_binding
+        if risk_state is not None:
+            payload["risk_state"] = risk_state
+        if cancel_all_state is not None:
+            payload["cancel_all"] = cancel_all_state
+        if reconciliation_request is not None:
+            payload["reconciliation_request"] = reconciliation_request
+        if status_snapshot_command is not None:
+            payload["status_snapshot_command"] = status_snapshot_command
+        if recovery_state is not None:
+            payload["recovery_state"] = recovery_state
+        if outbox_state is not None:
+            payload["outbox_state"] = outbox_state
+        if fill_ingestion_state is not None:
+            payload["fill_ingestion_state"] = fill_ingestion_state
+        if market_freshness_state is not None:
+            payload["market_freshness_state"] = market_freshness_state
+        if target_position_state is not None:
+            payload["target_position"] = target_position_state
+        payload["health"] = _run_live_health_summary(
+            payload,
+            heartbeat=heartbeat,
+            risk_state=risk_state,
+            recovery_state=recovery_state,
+            reconciliation_request=reconciliation_request,
+        )
+        payload["metrics"] = _run_live_metrics_summary(payload)
         return payload
-    status = "unknown"
+    status = str(state.get("phase", "unknown"))
     if heartbeat is not None:
         status = str(heartbeat.get("status", status))
+    spawn = state.get("spawn") if isinstance(state.get("spawn"), dict) else {}
+    structured_log_file = str(spawn.get("structured_log_file") or _run_live_structured_log_path(runtime_database.parent.parent))
     payload = {
         "product": "run",
         "operation": "live",
@@ -4058,6 +5251,8 @@ def _run_live_status_payload(
         "snapshot_hash": state.get("snapshot_hash"),
         "runtime_database": str(runtime_database),
         "state_key": f"live_run_daemon:{run_id}",
+        "structured_log_file": structured_log_file,
+        **({"log_file": str(spawn.get("log_file"))} if spawn.get("log_file") else {}),
         "services": state.get("services", ()),
     }
     if stop_report is not None:
@@ -4072,7 +5267,498 @@ def _run_live_status_payload(
         payload["heartbeat"] = heartbeat
     if live_binding is not None:
         payload["run_config"] = live_binding
+    if risk_state is not None:
+        payload["risk_state"] = risk_state
+    if cancel_all_state is not None:
+        payload["cancel_all"] = cancel_all_state
+    if reconciliation_request is not None:
+        payload["reconciliation_request"] = reconciliation_request
+    if status_snapshot_command is not None:
+        payload["status_snapshot_command"] = status_snapshot_command
+    if recovery_state is not None:
+        payload["recovery_state"] = recovery_state
+    if outbox_state is not None:
+        payload["outbox_state"] = outbox_state
+    if fill_ingestion_state is not None:
+        payload["fill_ingestion_state"] = fill_ingestion_state
+    if market_freshness_state is not None:
+        payload["market_freshness_state"] = market_freshness_state
+    if target_position_state is not None:
+        payload["target_position"] = target_position_state
+    payload["health"] = _run_live_health_summary(
+        payload,
+        heartbeat=heartbeat,
+        risk_state=risk_state,
+        recovery_state=recovery_state,
+        reconciliation_request=reconciliation_request,
+    )
+    payload["metrics"] = _run_live_metrics_summary(payload)
     return payload
+
+
+def _run_live_metrics_payload(
+    action: str,
+    run_id: str,
+    runtime_database: Path,
+    status_payload: dict[str, object],
+) -> dict[str, object]:
+    return {
+        "product": "run",
+        "operation": "live",
+        "live_action": action,
+        "run_id": run_id,
+        "status": "ok",
+        "runtime_database": str(runtime_database),
+        "metrics": _run_live_metrics_summary(status_payload),
+        "health": status_payload.get("health"),
+    }
+
+
+def _attach_run_live_metrics_artifact(
+    payload: dict[str, object],
+    *,
+    output: str | Path | None,
+    prometheus: bool,
+) -> dict[str, object]:
+    if not prometheus and output is None:
+        return payload
+    rendered: str
+    metrics_format: str
+    if prometheus:
+        rendered = _run_live_prometheus_metrics(
+            str(payload.get("run_id") or ""),
+            payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {},
+        )
+        metrics_format = "prometheus"
+    else:
+        rendered = json.dumps(_json_safe(payload.get("metrics", {})), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        metrics_format = "json"
+    payload["metrics_format"] = metrics_format
+    if output is None:
+        payload["metrics_text"] = rendered
+        payload["artifact_hash"] = sha256(rendered.encode("utf-8")).hexdigest()
+        return payload
+    artifact = Path(output)
+    _write_text(artifact, rendered)
+    payload["artifact"] = str(artifact)
+    payload["artifact_hash"] = _file_sha256(artifact)
+    return payload
+
+
+def _run_live_prometheus_metrics(run_id: str, metrics: dict[str, object]) -> str:
+    labels = f'run_id="{_prometheus_label_escape(run_id)}"'
+    lines = [
+        "# HELP kairospy_run_info Runtime metrics export metadata.",
+        "# TYPE kairospy_run_info gauge",
+        f"kairospy_run_info{{{labels}}} 1",
+    ]
+    names = {
+        "heartbeat_age_seconds": "kairospy_run_heartbeat_age_seconds",
+        "heartbeat_stale": "kairospy_run_heartbeat_stale",
+        "operator_command_count": "kairospy_run_operator_command_count",
+        "operator_command_backlog": "kairospy_run_operator_command_backlog",
+        "service_count": "kairospy_run_service_count",
+        "service_restart_count": "kairospy_run_service_restart_count",
+        "failed_service_count": "kairospy_run_failed_service_count",
+        "risk_blocked": "kairospy_run_risk_blocked",
+        "risk_reason_count": "kairospy_run_risk_reason_count",
+        "unresolved_order_count": "kairospy_run_unresolved_order_count",
+        "orders_requiring_recovery_count": "kairospy_run_orders_requiring_recovery_count",
+        "open_incident_count": "kairospy_run_open_incident_count",
+        "outbox_pending_count": "kairospy_run_outbox_pending_count",
+        "outbox_dispatching_count": "kairospy_run_outbox_dispatching_count",
+        "outbox_unknown_count": "kairospy_run_outbox_unknown_count",
+        "outbox_backlog_count": "kairospy_run_outbox_backlog_count",
+        "order_submit_latency_last_ms": "kairospy_run_order_submit_latency_last_ms",
+        "order_submit_latency_max_ms": "kairospy_run_order_submit_latency_max_ms",
+        "order_ack_latency_last_ms": "kairospy_run_order_ack_latency_last_ms",
+        "order_ack_latency_max_ms": "kairospy_run_order_ack_latency_max_ms",
+        "fill_ingestion_latency_last_ms": "kairospy_run_fill_ingestion_latency_last_ms",
+        "fill_ingestion_latency_max_ms": "kairospy_run_fill_ingestion_latency_max_ms",
+        "market_freshness_passed": "kairospy_run_market_freshness_passed",
+        "market_freshness_max_age_seconds": "kairospy_run_market_freshness_max_age_seconds",
+        "market_freshness_updated_age_seconds": "kairospy_run_market_freshness_updated_age_seconds",
+        "market_event_age_seconds": "kairospy_run_market_event_age_seconds",
+        "market_freshness_channel_failure_count": "kairospy_run_market_freshness_channel_failure_count",
+    }
+    for key, metric_name in names.items():
+        value = metrics.get(key)
+        if value is None:
+            continue
+        lines.append(f"# TYPE {metric_name} gauge")
+        lines.append(f"{metric_name}{{{labels}}} {_prometheus_value(value)}")
+    health_status = str(metrics.get("health_status") or "unknown")
+    status_labels = f'{labels},status="{_prometheus_label_escape(health_status)}"'
+    lines.append("# TYPE kairospy_run_health_status gauge")
+    lines.append(f"kairospy_run_health_status{{{status_labels}}} 1")
+    market_freshness_status = str(metrics.get("market_freshness_status") or "unknown")
+    market_labels = f'{labels},status="{_prometheus_label_escape(market_freshness_status)}"'
+    lines.append("# TYPE kairospy_run_market_freshness_status gauge")
+    lines.append(f"kairospy_run_market_freshness_status{{{market_labels}}} 1")
+    run_status = str(metrics.get("run_status") or "unknown")
+    run_phase = str(metrics.get("run_phase") or "unknown")
+    run_labels = (
+        f'{labels},status="{_prometheus_label_escape(run_status)}",'
+        f'phase="{_prometheus_label_escape(run_phase)}"'
+    )
+    lines.append("# TYPE kairospy_run_status gauge")
+    lines.append(f"kairospy_run_status{{{run_labels}}} 1")
+    return "\n".join(lines) + "\n"
+
+
+def _prometheus_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    if isinstance(value, (int, float)):
+        return str(value)
+    try:
+        return str(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "0"
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+
+
+def _prometheus_label_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+
+def _run_live_metrics_summary(payload: dict[str, object]) -> dict[str, object]:
+    heartbeat = payload.get("heartbeat")
+    risk_state = payload.get("risk_state")
+    recovery_state = payload.get("recovery_state")
+    outbox_state = payload.get("outbox_state")
+    fill_ingestion_state = payload.get("fill_ingestion_state")
+    market_freshness_state = payload.get("market_freshness_state")
+    commands = payload.get("operator_commands", ())
+    services = payload.get("services", ())
+    incidents = payload.get("incidents", ())
+    metrics: dict[str, object] = {
+        "run_status": str(payload.get("status") or "unknown"),
+        "run_phase": str(payload.get("phase") or "unknown"),
+        "health_status": (
+            str(payload.get("health", {}).get("status"))
+            if isinstance(payload.get("health"), dict) else "unknown"
+        ),
+        "heartbeat_age_seconds": None,
+        "heartbeat_stale": False,
+        "operator_command_count": 0,
+        "operator_command_backlog": 0,
+        "service_count": 0,
+        "service_restart_count": 0,
+        "failed_service_count": 0,
+        "risk_blocked": False,
+        "risk_reason_count": 0,
+        "unresolved_order_count": 0,
+        "orders_requiring_recovery_count": 0,
+        "open_incident_count": int(payload.get("open_incident_count") or 0),
+        "outbox_pending_count": 0,
+        "outbox_dispatching_count": 0,
+        "outbox_unknown_count": 0,
+        "outbox_backlog_count": 0,
+        "order_submit_latency_last_ms": None,
+        "order_submit_latency_max_ms": None,
+        "order_ack_latency_last_ms": None,
+        "order_ack_latency_max_ms": None,
+        "fill_ingestion_latency_last_ms": None,
+        "fill_ingestion_latency_max_ms": None,
+        "market_freshness_status": "unknown",
+        "market_freshness_passed": False,
+        "market_freshness_max_age_seconds": None,
+        "market_freshness_updated_age_seconds": None,
+        "market_event_age_seconds": None,
+        "market_freshness_channel_failure_count": 0,
+    }
+    if isinstance(heartbeat, dict):
+        metrics["heartbeat_age_seconds"] = heartbeat.get("heartbeat_age_seconds")
+        metrics["heartbeat_stale"] = bool(heartbeat.get("stale"))
+    if isinstance(commands, (tuple, list)):
+        metrics["operator_command_count"] = len(commands)
+        metrics["operator_command_backlog"] = sum(
+            1 for command in commands
+            if isinstance(command, dict) and command.get("status") in {"pending", "claimed", "accepted", "running"}
+        )
+    if isinstance(services, (tuple, list)):
+        metrics["service_count"] = len(services)
+        restart_count = 0
+        failed_count = 0
+        for service in services:
+            if not isinstance(service, dict):
+                continue
+            restart_count += int(service.get("restart_count") or 0)
+            if str(service.get("status") or "").endswith("failed"):
+                failed_count += 1
+        metrics["service_restart_count"] = restart_count
+        metrics["failed_service_count"] = failed_count
+    if isinstance(risk_state, dict):
+        metrics["risk_blocked"] = str(risk_state.get("status") or risk_state.get("phase") or "") == "blocking"
+        reasons = risk_state.get("reasons", ())
+        metrics["risk_reason_count"] = len(reasons) if isinstance(reasons, (tuple, list)) else int(bool(reasons))
+    if isinstance(recovery_state, dict):
+        metrics["unresolved_order_count"] = int(recovery_state.get("unresolved_order_count") or 0)
+        metrics["orders_requiring_recovery_count"] = int(recovery_state.get("orders_requiring_recovery_count") or 0)
+    if isinstance(incidents, (tuple, list)):
+        metrics["open_incident_count"] = len(incidents)
+    if isinstance(outbox_state, dict):
+        for key in (
+            "outbox_pending_count",
+            "outbox_dispatching_count",
+            "outbox_unknown_count",
+            "outbox_backlog_count",
+        ):
+            metrics[key] = int(outbox_state.get(key) or 0)
+        for key in (
+            "order_submit_latency_last_ms",
+            "order_submit_latency_max_ms",
+            "order_ack_latency_last_ms",
+            "order_ack_latency_max_ms",
+        ):
+            metrics[key] = _optional_float(outbox_state.get(key))
+    if isinstance(fill_ingestion_state, dict):
+        for key in ("fill_ingestion_latency_last_ms", "fill_ingestion_latency_max_ms"):
+            metrics[key] = _optional_float(fill_ingestion_state.get(key))
+    if isinstance(market_freshness_state, dict):
+        metrics["market_freshness_status"] = str(market_freshness_state.get("freshness_status") or "unknown")
+        metrics["market_freshness_passed"] = bool(market_freshness_state.get("freshness_passed"))
+        metrics["market_freshness_max_age_seconds"] = _optional_float(market_freshness_state.get("freshness_max_age_seconds"))
+        metrics["market_freshness_updated_age_seconds"] = _optional_float(market_freshness_state.get("freshness_updated_age_seconds"))
+        metrics["market_event_age_seconds"] = _optional_float(market_freshness_state.get("market_event_age_seconds"))
+        metrics["market_freshness_channel_failure_count"] = int(market_freshness_state.get("channel_failure_count") or 0)
+    return metrics
+
+
+def _run_live_health_summary(
+    payload: dict[str, object],
+    *,
+    heartbeat: dict[str, object] | None = None,
+    risk_state: dict[str, object] | None = None,
+    recovery_state: dict[str, object] | None = None,
+    reconciliation_request: dict[str, object] | None = None,
+) -> dict[str, object]:
+    status = str(payload.get("status") or payload.get("phase") or "unknown")
+    reasons: list[str] = []
+    severity = "ok"
+    if status in {"not_started", "stopped"}:
+        severity = "inactive"
+    if status in {"stale", "failed", "reduce_only", "unknown_external_state", "failed_start"}:
+        severity = _max_health_severity(severity, status)
+        reasons.append(f"runtime_{status}")
+    if bool(payload.get("stop_requested")):
+        severity = _max_health_severity(severity, "stopping")
+        reasons.append("stop_requested")
+    if heartbeat is not None and bool(heartbeat.get("stale")):
+        severity = _max_health_severity(severity, "stale")
+        reasons.append("heartbeat_stale")
+    if risk_state is not None:
+        risk_status = str(risk_state.get("status") or risk_state.get("phase") or "")
+        if risk_status in {"blocking", "failed", "stale"}:
+            severity = _max_health_severity(severity, risk_status)
+            reasons.append(f"risk_{risk_status}")
+        raw_reasons = risk_state.get("reasons", ())
+        if isinstance(raw_reasons, (tuple, list)):
+            reasons.extend(str(item) for item in raw_reasons)
+        elif raw_reasons:
+            reasons.append(str(raw_reasons))
+    if recovery_state is not None:
+        unresolved_count = int(recovery_state.get("unresolved_order_count") or 0)
+        if unresolved_count:
+            severity = _max_health_severity(severity, "blocking")
+            reasons.append("unresolved_orders")
+        requiring_count = int(recovery_state.get("orders_requiring_recovery_count") or 0)
+        if requiring_count and unresolved_count:
+            reasons.append("orders_requiring_venue_recovery")
+    if reconciliation_request is not None and str(reconciliation_request.get("status")) == "mismatched":
+        severity = _max_health_severity(severity, "blocking")
+        reasons.append("reconciliation_mismatch")
+        if int(reconciliation_request.get("unknown_external_open_order_count") or 0):
+            reasons.append("unknown_external_open_orders")
+    services = payload.get("services", ())
+    failed_services = []
+    if isinstance(services, (tuple, list)):
+        for service in services:
+            if not isinstance(service, dict):
+                continue
+            service_status = str(service.get("status") or "")
+            if service_status.endswith("failed") or service_status == "failed":
+                failed_services.append(str(service.get("name") or "unknown"))
+    if failed_services:
+        severity = _max_health_severity(severity, "failed")
+        reasons.append("managed_service_failed")
+    unique_reasons = tuple(dict.fromkeys(reason for reason in reasons if reason))
+    return {
+        "status": severity,
+        "healthy": severity == "ok" and not unique_reasons,
+        "reasons": unique_reasons,
+        "failed_services": tuple(failed_services),
+    }
+
+
+def _max_health_severity(current: str, candidate: str) -> str:
+    order = {
+        "ok": 0,
+        "inactive": 1,
+        "stopping": 2,
+        "reduce_only": 3,
+        "stale": 4,
+        "blocking": 5,
+        "unknown_external_state": 5,
+        "failed_start": 5,
+        "failed": 6,
+    }
+    return candidate if order.get(candidate, 0) > order.get(current, 0) else current
+
+
+def _sync_run_live_health_incident(store: object, run_id: str, payload: dict[str, object], at: datetime) -> None:
+    if not all(hasattr(store, name) for name in ("record_runtime_incident", "runtime_incidents", "close_runtime_incident")):
+        return
+    health = payload.get("health")
+    if not isinstance(health, dict):
+        return
+    incident_id = f"runtime-health:{run_id}"
+    status = str(health.get("status") or "unknown")
+    healthy = bool(health.get("healthy"))
+    if healthy or status in {"ok", "inactive"}:
+        for incident in store.runtime_incidents(run_id, status="open", limit=25):
+            if getattr(incident, "incident_id", None) == incident_id:
+                store.close_runtime_incident(
+                    incident_id,
+                    actor="system",
+                    reason="runtime health recovered",
+                    at=at,
+                )
+                break
+        return
+    severity = "critical" if status in {"blocking", "failed"} else "warning"
+    store.record_runtime_incident(
+        incident_id=incident_id,
+        run_id=run_id,
+        severity=severity,
+        title=f"runtime health {status}",
+        details={
+            "health": health,
+            "status": payload.get("status"),
+            "phase": payload.get("phase"),
+            "reason": payload.get("reason"),
+            "snapshot_hash": payload.get("snapshot_hash"),
+        },
+        at=at,
+    )
+
+
+def _run_live_commands_payload(
+    action: str,
+    run_id: str,
+    runtime_database: Path,
+    bus: object,
+    *,
+    limit: int,
+) -> dict[str, object]:
+    if limit <= 0:
+        raise ValueError("run live commands --limit must be positive")
+    commands = tuple(command.manifest() for command in bus.commands(run_id, limit=limit))
+    return {
+        "product": "run",
+        "operation": "live",
+        "live_action": action,
+        "run_id": run_id,
+        "status": "ok",
+        "runtime_database": str(runtime_database),
+        "operator_commands": commands,
+        "commands_count": len(commands),
+    }
+
+
+def _run_live_incidents_payload(
+    action: str,
+    run_id: str,
+    runtime_database: Path,
+    incidents: tuple[dict[str, object], ...],
+    *,
+    status: str,
+) -> dict[str, object]:
+    return {
+        "product": "run",
+        "operation": "live",
+        "live_action": action,
+        "run_id": run_id,
+        "status": "ok",
+        "runtime_database": str(runtime_database),
+        "incident_status": status,
+        "incidents": incidents,
+        "incidents_count": len(incidents),
+    }
+
+
+def _export_run_live_artifacts(
+    run_id: str,
+    runtime_database: Path,
+    export_dir: Path,
+    *,
+    status_payload: dict[str, object],
+    commands: tuple[dict[str, object], ...],
+    incidents: tuple[dict[str, object], ...],
+    runtime_state: dict[str, object],
+) -> dict[str, object]:
+    export_dir.mkdir(parents=True, exist_ok=True)
+    files = {
+        "status": export_dir / "status.json",
+        "metrics": export_dir / "metrics.json",
+        "commands": export_dir / "commands.json",
+        "incidents": export_dir / "incidents.json",
+        "runtime_state": export_dir / "runtime_state.json",
+    }
+    runtime_log = _run_live_structured_log_path(runtime_database.parent.parent)
+    if runtime_log.exists():
+        files["runtime_log"] = export_dir / "runtime_log.jsonl"
+    _write_json(files["status"], status_payload)
+    _write_json(files["metrics"], status_payload.get("metrics", {}))
+    _write_json(files["commands"], {"run_id": run_id, "operator_commands": commands, "commands_count": len(commands)})
+    _write_json(files["incidents"], {"run_id": run_id, "incidents": incidents, "incidents_count": len(incidents)})
+    _write_json(files["runtime_state"], {"run_id": run_id, "runtime_state": runtime_state})
+    if "runtime_log" in files:
+        _write_text(files["runtime_log"], runtime_log.read_text(encoding="utf-8"))
+    artifact_hashes = {name: _file_sha256(path) for name, path in files.items()}
+    manifest = {
+        "schema_version": 1,
+        "product": "run",
+        "operation": "export",
+        "runtime_kind": "live",
+        "run_id": run_id,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "runtime_database": str(runtime_database),
+        "files": {name: str(path) for name, path in files.items()},
+        "artifact_hashes": artifact_hashes,
+        "status": status_payload.get("status"),
+        "health": status_payload.get("health"),
+        "metrics": status_payload.get("metrics"),
+    }
+    manifest["export_hash"] = _stable_hash(_json_safe({key: value for key, value in manifest.items() if key != "export_hash"}))
+    manifest_path = export_dir / "manifest.json"
+    _write_json(manifest_path, manifest)
+    return {
+        "product": "run",
+        "operation": "live",
+        "live_action": "export",
+        "run_id": run_id,
+        "status": "exported",
+        "runtime_database": str(runtime_database),
+        "artifact": str(export_dir),
+        "manifest": str(manifest_path),
+        "export_hash": manifest["export_hash"],
+        "artifact_hashes": artifact_hashes,
+        "files": manifest["files"],
+    }
+
+
+def _timestamp_slug(value: datetime) -> str:
+    return value.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _run_live_stop_report_payload(daemon: object) -> dict[str, object]:
@@ -4672,6 +6358,14 @@ def _write_json(path: str | Path, payload: object) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_suffix(target.suffix + ".tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(target)
+
+
+def _write_text(path: str | Path, payload: str) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    temporary.write_text(payload, encoding="utf-8")
     temporary.replace(target)
 
 

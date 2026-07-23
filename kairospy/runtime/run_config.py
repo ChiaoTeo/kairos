@@ -102,18 +102,18 @@ class RunConfig:
             return RunConfigValidationReport(self.path, False, ("[run] table is required",))
         name = _required_text(run, "name")
         mode = _required_text(run, "mode")
-        workspace = _required_text(run, "workspace")
-        entrypoint = _required_text(run, "entrypoint")
+        workspace = _optional_text(run, "workspace") or DEFAULT_WORKSPACE_ENTRYPOINT
+        strategy = _optional_text(run, "strategy") or DEFAULT_STRATEGY_ENTRYPOINT
+        if "entrypoint" in run:
+            issues.append("run.entrypoint has been removed; use run.strategy = \"module:Strategy\"")
         if not name:
             issues.append("run.name is required")
         if mode not in {"backtest", "historical-simulation", "paper", "live"}:
             issues.append("run.mode must be one of: backtest, historical-simulation, paper, live")
-        if not workspace:
-            issues.append("run.workspace is required")
-        if not entrypoint:
-            issues.append("run.entrypoint is required")
-        if entrypoint and ":" not in entrypoint:
-            issues.append("run.entrypoint must be module:callable")
+        if workspace and ":" not in workspace:
+            issues.append("run.workspace must be module:callable")
+        if strategy and ":" not in strategy:
+            issues.append("run.strategy must be module:callable")
         params = self.get("params", {})
         if params is not None and not isinstance(params, dict):
             issues.append("[params] must be a table")
@@ -165,8 +165,8 @@ class RunConfig:
         params.extend(param_overrides)
         return SimpleNamespace(
             config=self.path,
-            workspace=str(run["workspace"]),
-            entrypoint=str(run["entrypoint"]),
+            workspace=str(run.get("workspace") or DEFAULT_WORKSPACE_ENTRYPOINT),
+            strategy=str(run.get("strategy") or DEFAULT_STRATEGY_ENTRYPOINT),
             mode=str(run["mode"]),
             param=params,
             confirm_live=confirm_live,
@@ -215,6 +215,10 @@ class RunConfig:
 
 def load_run_config(path: str | Path, *, project_root: str | Path | None = None) -> RunConfig:
     return RunConfig.load(path, project_root=project_root)
+
+
+DEFAULT_WORKSPACE_ENTRYPOINT = "kairospy.workspace.defaults:empty_workspace"
+DEFAULT_STRATEGY_ENTRYPOINT = "kairospy.workspace.defaults:EmptyStrategy"
 
 
 def _required_text(table: dict[str, Any], key: str) -> str:

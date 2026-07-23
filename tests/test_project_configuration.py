@@ -13,6 +13,7 @@ from kairospy.infrastructure.configuration import KairosProjectConfig, set_confi
 from kairospy.integrations.config import (
     resolve_account_binding,
     resolve_binance_trading_credentials,
+    resolve_hyperliquid_trading_credentials,
     resolve_massive_marketdata_config,
     resolve_provider_service_config,
 )
@@ -39,9 +40,36 @@ class KairosProjectConfigurationTests(unittest.TestCase):
                     config.to_redacted_dict()["credentials"]["massive_marketdata_primary"]["api_key"],
                     "env:KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY",
                 )
+                set_config_value(config.path, "credentials.hyperliquid_trading_live_perp.private_key", "raw-private-key")
+                hyper_config = KairosProjectConfig.discover(root)
+                self.assertEqual(
+                    hyper_config.to_redacted_dict()["credentials"]["hyperliquid_trading_live_perp"]["private_key"],
+                    "***",
+                )
             finally:
                 os.environ.clear()
                 os.environ.update(old)
+
+    def test_project_config_resolves_hyperliquid_live_credential_and_account_binding(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Hyperliquid Config Desk")
+            old = os.environ.copy()
+            try:
+                os.environ["KAIROS_HYPERLIQUID_LIVE_PRIVATE_KEY"] = "test-private-key"
+                os.environ["KAIROS_HYPERLIQUID_LIVE_ACCOUNT_ADDRESS"] = "0xabc"
+                config = KairosProjectConfig.discover(root)
+                credentials = resolve_hyperliquid_trading_credentials(config)
+                account = resolve_account_binding(config, "hyperliquid_live_perp")
+            finally:
+                os.environ.clear()
+                os.environ.update(old)
+
+            self.assertEqual(credentials.private_key, "test-private-key")
+            self.assertEqual(credentials.account_address, "0xabc")
+            self.assertEqual(account.provider, "hyperliquid")
+            self.assertEqual(account.account_ref, "hyperliquid:derivatives:main")
+            self.assertEqual(account.allowed_products, ("perpetual",))
 
     def test_project_config_loads_dotenv_without_overriding_existing_environment(self) -> None:
         with TemporaryDirectory() as directory:
@@ -139,6 +167,40 @@ class KairosProjectConfigurationTests(unittest.TestCase):
             self.assertEqual(payload["provider"], "binance")
             self.assertEqual(payload["checks"]["account_query"], "not_run")
             self.assertEqual(payload["issues"], [])
+
+    def test_accounts_doctor_checks_hyperliquid_live_perp_without_exposing_private_key(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Hyperliquid Accounts Desk")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+            env["KAIROS_HYPERLIQUID_LIVE_PRIVATE_KEY"] = "test-private-key"
+            env["KAIROS_HYPERLIQUID_LIVE_ACCOUNT_ADDRESS"] = "0xabc"
+
+            doctor = subprocess.run(
+                [
+                    sys.executable, "-m", "kairospy", "--format", "json",
+                    "accounts", "doctor", "hyperliquid_live_perp",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            payload = json.loads(doctor.stdout)
+
+            self.assertEqual(payload["status"], "available")
+            self.assertEqual(payload["account"], "hyperliquid_live_perp")
+            self.assertEqual(payload["provider"], "hyperliquid")
+            self.assertEqual(payload["allowed_products"], ["perpetual"])
+            self.assertEqual(payload["checks"]["account_query"], "not_run")
+            self.assertEqual(payload["issues"], [])
+            self.assertNotIn("test-private-key", doctor.stdout)
+            self.assertEqual(
+                {(item["field"], item["provided"]) for item in payload["credential_refs"]},
+                {("private_key", True), ("account_address", True)},
+            )
 
     def test_data_bootstrap_import_is_safe_from_cold_process(self) -> None:
         env = dict(os.environ)

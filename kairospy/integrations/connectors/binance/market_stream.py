@@ -54,7 +54,14 @@ class WebSocketClientConnector:
 
 
 def websocket_url(environment: Environment, stream: str, *, futures: bool = False,
-                  public_only: bool = False) -> str:
+                  options: bool = False, public_only: bool = False) -> str:
+    if options and futures:
+        raise ValueError("Binance websocket URL cannot be both futures and options")
+    if options:
+        if environment is Environment.TESTNET:
+            raise ValueError("Binance options user streams do not expose a supported testnet websocket endpoint")
+        host = "wss://nbstream.binance.com/eoptions/ws"
+        return f"{host}/{stream}"
     if futures:
         host = "wss://stream.binancefuture.com/ws" if environment is Environment.TESTNET else "wss://fstream.binance.com/ws"
     else:

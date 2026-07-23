@@ -244,7 +244,7 @@ class BacktestEngine:
         return BacktestResult(
             run_id, self.strategy.strategy_id, self.dataset.manifest.dataset_id, self.config, status,
             tuple(dict.fromkeys(validity)), tuple(intents), tuple(decisions), tuple(orders.values()), tuple(fills),
-            tuple(settlements), tuple(snapshots), tuple(equity), self.strategy.decisions, metrics,
+            tuple(settlements), tuple(snapshots), tuple(equity), metrics,
         )
 
     def _validate_inputs(self) -> None:

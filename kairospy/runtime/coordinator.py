@@ -47,6 +47,12 @@ class StrategyCancellationResult:
     failures: tuple[tuple[str, str], ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeCancellationResult:
+    cancelled_client_order_ids: tuple[str, ...]
+    failures: tuple[tuple[str, str], ...] = ()
+
+
 class ExecutionCoordinator:
     def __init__(self, router: ExecutionRouter, reconciliation: dict[AccountRef, ReconciliationService],
                  kill_switch: KillSwitch, event_log: PersistentEventLog, clock: Clock | None = None,
@@ -284,6 +290,41 @@ class ExecutionCoordinator:
             else:
                 cancelled.append(record.request.client_order_id)
         return StrategyCancellationResult(strategy_id, tuple(cancelled), tuple(failures))
+
+    def cancel_all_orders(
+        self,
+        accounts: tuple[AccountRef, ...],
+        reason: str,
+    ) -> RuntimeCancellationResult:
+        self.application.require_operational()
+        if self.runtime_store is None:
+            raise RuntimeError("runtime-wide cancellation requires a runtime store")
+        if not accounts:
+            raise ValueError("runtime-wide cancellation requires at least one account")
+        if not reason.strip():
+            raise ValueError("runtime-wide cancellation requires reason")
+        cancelled: list[str] = []
+        failures: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for account in accounts:
+            for record in self.runtime_store.working_orders(account=account):
+                client_order_id = record.request.client_order_id
+                if client_order_id in seen:
+                    continue
+                seen.add(client_order_id)
+                intent = CancelIntent(
+                    uuid5(NAMESPACE_URL, f"kairospy:cancel-all-order:{account.value}:{client_order_id}"),
+                    record.request.strategy_id,
+                    client_order_id,
+                    reason,
+                )
+                try:
+                    self.cancel(intent, account)
+                except Exception as error:
+                    failures.append((client_order_id, str(error)))
+                else:
+                    cancelled.append(client_order_id)
+        return RuntimeCancellationResult(tuple(cancelled), tuple(failures))
 
     def _validate_combo_reduce_only(self, request: ComboOrderRequest) -> None:
         service = self.reconciliation.get(request.account)

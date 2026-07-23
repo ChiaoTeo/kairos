@@ -1,0 +1,18 @@
+[run]
+name = "funding-arb-paper"
+mode = "paper"
+workspace = "examples.workspace.funding_arb:build_workspace"
+strategy = "examples.strategies.funding_arb:FundingArbStrategy"
+
+[params]
+workspace_profile = "funding-arb"
+instrument = "BTC"
+target_notional = "10000"
+min_expected_carry_bps = "8"
+max_hedge_error_bps = "15"
+max_slippage_bps = "5"
+min_liquidation_buffer_bps = "500"
+carry_horizon = "8h"
+
+[bindings]
+account = "simulated"

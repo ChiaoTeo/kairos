@@ -1,0 +1,25 @@
+schema_version = 1
+
+[run]
+name = "example-paper"
+mode = "paper"
+workspace = "examples.workspace.print_market:build_workspace"
+strategy = "examples.strategies.printer:build"
+
+[params]
+workspace_profile = "alpha"
+risk_budget = "0.02"
+
+[bindings]
+account = "binance_testnet_spot"
+market = ["ticks"]
+
+[paper]
+environment = "testnet"
+execution_driver = "binance-testnet"
+recovery_policy = "recover-and-reconcile"
+
+[guards]
+require_live_view_freshness = true
+require_account_query = true
+require_reconciliation = true

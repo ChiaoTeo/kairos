@@ -30,23 +30,25 @@ def _write_run_config(
     filename: str,
     *,
     mode: str,
-    entrypoint: str,
+    strategy: str,
     params: dict[str, str] | None = None,
     bind_provider: bool = False,
     market: str = "bars",
     extra: str = "",
 ) -> Path:
+    _write_default_workspace_code(root)
     path = root / "configs" / "runs" / filename
     path.parent.mkdir(parents=True, exist_ok=True)
-    param_lines = "\n".join(f'{key} = "{value}"' for key, value in (params or {}).items())
+    merged_params = {"workspace_profile": "alpha", **(params or {})}
+    param_lines = "\n".join(f'{key} = "{value}"' for key, value in merged_params.items())
     sections = [
         "schema_version = 1",
         "",
         "[run]",
         f'name = "{Path(filename).stem}"',
         f'mode = "{mode}"',
-        'workspace = "alpha"',
-        f'entrypoint = "{entrypoint}"',
+        'workspace = "workspace_code:build_workspace"',
+        f'strategy = "{strategy}"',
     ]
     if param_lines:
         sections.extend(["", "[params]", param_lines])
@@ -80,6 +82,20 @@ def _write_run_config(
     return path
 
 
+def _write_default_workspace_code(root: Path) -> None:
+    (root / "workspace_code.py").write_text(
+        "\n".join([
+            "def build_workspace(ws, params):",
+            "    profile = params.get('workspace_profile', 'alpha')",
+            "    market = ws.attachments.use_profile(profile).as_ohlcv(params.get('market', 'bars'), required=False)",
+            "    feature = ws.features.momentum(name='momentum', source=market, window=int(params.get('window', '20')))",
+            "    return ws.project(market=(market,), features=(feature,))",
+        ])
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _file_sha256(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
 
@@ -91,7 +107,7 @@ class WorkspaceTests(unittest.TestCase):
             initialize_project(root, name="Workspace Desk")
 
             workspace = Workspace.open_or_create("alpha", start=root)
-            binding = workspace.data.bind("bars", dataset="bars.us.equity.1d")
+            binding = workspace.attach("bars", dataset="bars.us.equity.1d", view="both")
 
             self.assertEqual(binding.name, "bars")
             self.assertEqual(binding.dataset, "bars.us.equity.1d")
@@ -119,7 +135,7 @@ class WorkspaceTests(unittest.TestCase):
             )
             self.assertEqual(json.loads(create.stdout)["workspace"], "alpha")
 
-            bind = subprocess.run(
+            attached = subprocess.run(
                 [
                     sys.executable,
                     "-m",
@@ -127,12 +143,14 @@ class WorkspaceTests(unittest.TestCase):
                     "--format",
                     "json",
                     "workspace",
-                    "bind-data",
+                    "attach",
                     "alpha",
                     "--name",
                     "bars",
                     "--dataset",
                     "bars.us.equity.1d",
+                    "--view",
+                    "both",
                 ],
                 cwd=root,
                 check=True,
@@ -140,22 +158,30 @@ class WorkspaceTests(unittest.TestCase):
                 text=True,
                 env=env,
             )
-            payload = json.loads(bind.stdout)
-            self.assertEqual(payload["binding"]["name"], "bars")
-            self.assertEqual(payload["binding"]["dataset"], "bars.us.equity.1d")
+            payload = json.loads(attached.stdout)
+            self.assertEqual(payload["attachment"]["name"], "bars")
+            self.assertEqual(payload["attachment"]["dataset"], "bars.us.equity.1d")
+            self.assertEqual(payload["attachment"]["metadata"]["view"], "both")
 
-    def test_run_start_uses_workspace_and_strategy_entrypoint(self) -> None:
+    def test_run_start_combines_workspace_code_and_standard_strategy(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             initialize_project(root, name="Workspace Run")
-            Workspace.open_or_create("alpha", start=root).data.bind("bars", dataset="bars.us.equity.1d")
+            Workspace.open_or_create("alpha", start=root).attach("bars", dataset="bars.us.equity.1d", view="both")
             (root / "my_strategy.py").write_text(
                 "\n".join(
                     [
-                        "REQUIRES = {'inputs': {'bars': {'kind': 'dataset'}}}",
+                        "class Strategy:",
+                        "    strategy_id = 'context-only-strategy'",
+                        "    def on_start(self, context):",
+                        "        return ()",
+                        "    def on_market(self, context):",
+                        "        return ({'action': 'hold', 'binding': context.market.data_binding, 'features': len(context.features.values)},)",
+                        "    def on_fill(self, fill, context):",
+                        "        return ()",
+                        "    def on_end(self, context):",
+                        "        return ()",
                         "",
-                        "def decide(context):",
-                        "    return {'action': 'hold', 'workspace': context.workspace, 'fast': context.params['fast']}",
                     ]
                 )
                 + "\n",
@@ -167,7 +193,7 @@ class WorkspaceTests(unittest.TestCase):
                 root,
                 "workspace-run.toml",
                 mode="backtest",
-                entrypoint="my_strategy:decide",
+                strategy="my_strategy:Strategy",
                 params={"fast": "20"},
             )
 
@@ -192,12 +218,14 @@ class WorkspaceTests(unittest.TestCase):
 
             payload = json.loads(started.stdout)
             run_root = Path(payload["run_workspace"])
-            self.assertEqual(payload["workspace"]["name"], "alpha")
-            self.assertEqual(payload["strategy"]["entrypoint"], "my_strategy:decide")
+            self.assertEqual(payload["workspace"]["name"], "workspace_code:build_workspace")
+            self.assertEqual(payload["strategy"]["workspace_entrypoint"], "workspace_code:build_workspace")
+            self.assertEqual(payload["strategy"]["entrypoint"], "my_strategy:Strategy")
             self.assertEqual(payload["strategy"]["params"]["fast"], "20")
             self.assertEqual(run_root.parent.resolve(), (root / ".kairos" / "run").resolve())
             self.assertTrue((run_root / "manifest.json").exists())
             self.assertTrue((run_root / "workspace_snapshot.json").exists())
+            self.assertTrue((run_root / "projection.json").exists())
             self.assertTrue((run_root / "resolved_config.toml").exists())
             manifest = json.loads((run_root / "manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["project_config"]["hash"], _file_sha256(root / "kairos.toml"))
@@ -209,7 +237,8 @@ class WorkspaceTests(unittest.TestCase):
             self.assertIn("account_binding_hash", manifest["bindings"])
             self.assertIn("readiness_ref", manifest["guards"])
             decisions = json.loads((run_root / "artifacts" / "decisions.json").read_text(encoding="utf-8"))
-            self.assertEqual(decisions[0]["workspace"], "alpha")
+            self.assertEqual(decisions[0]["binding"], "workspace_projection")
+            self.assertEqual(decisions[0]["features"], 1)
 
             inspected = subprocess.run(
                 [
@@ -251,231 +280,19 @@ class WorkspaceTests(unittest.TestCase):
             )
             self.assertTrue(json.loads(replayed.stdout)["passed"])
 
-    def test_run_start_accepts_workspace_function_artifact(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            initialize_project(root, name="Workspace Function Run")
-            Workspace.open_or_create("alpha", start=root).data.bind("bars", dataset="bars.us.equity.1d")
-            (root / "research_report.py").write_text(
-                "\n".join(
-                    [
-                        "REQUIRES = {'inputs': {'bars': {'kind': 'dataset'}}}",
-                        "",
-                        "def run(workspace, params):",
-                        "    binding = workspace.binding('bars')",
-                        "    return {'artifact': 'momentum_report', 'dataset': binding.dataset, 'window': params['window']}",
-                    ]
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            env = dict(os.environ)
-            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
-            run_config = _write_run_config(
-                root,
-                "research-report.toml",
-                mode="backtest",
-                entrypoint="research_report:run",
-                params={"window": "30d"},
-            )
-
-            started = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "kairospy",
-                    "--format",
-                    "json",
-                    "run",
-                    "start",
-                    "--config",
-                    str(run_config),
-                ],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-
-            payload = json.loads(started.stdout)
-            run_root = Path(payload["run_workspace"])
-            self.assertEqual(payload["strategy"]["entrypoint_kind"], "workspace_function")
-            self.assertEqual(payload["artifacts"]["result"], str(run_root / "artifacts" / "result.json"))
-            self.assertEqual(json.loads((run_root / "artifacts" / "decisions.json").read_text(encoding="utf-8")), [])
-            result = json.loads((run_root / "artifacts" / "result.json").read_text(encoding="utf-8"))
-            self.assertEqual(result["artifact"], "momentum_report")
-            self.assertEqual(result["dataset"], "bars.us.equity.1d")
-            self.assertEqual(result["window"], "30d")
-
-    def test_run_start_accepts_workspace_strategy_builder(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            initialize_project(root, name="Workspace Strategy Builder")
-            Workspace.open_or_create("alpha", start=root).data.bind("bars", dataset="bars.us.equity.1d")
-            (root / "builder_strategy.py").write_text(
-                "\n".join(
-                    [
-                        "class Strategy:",
-                        "    def __init__(self, workspace, params):",
-                        "        self.workspace = workspace",
-                        "        self.params = params",
-                        "",
-                        "    def decide(self, context):",
-                        "        return {'action': 'hold', 'workspace': context.workspace, 'slow': self.params['slow']}",
-                        "",
-                        "def build(workspace, params):",
-                        "    return Strategy(workspace, params)",
-                    ]
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            env = dict(os.environ)
-            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
-            run_config = _write_run_config(
-                root,
-                "builder-strategy.toml",
-                mode="historical-simulation",
-                entrypoint="builder_strategy:build",
-                params={"slow": "50"},
-            )
-
-            started = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "kairospy",
-                    "--format",
-                    "json",
-                    "run",
-                    "start",
-                    "--config",
-                    str(run_config),
-                ],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-
-            payload = json.loads(started.stdout)
-            run_root = Path(payload["run_workspace"])
-            self.assertEqual(payload["strategy"]["entrypoint_kind"], "workspace_strategy")
-            self.assertNotIn("result", payload["artifacts"])
-            decisions = json.loads((run_root / "artifacts" / "decisions.json").read_text(encoding="utf-8"))
-            self.assertEqual(decisions[0]["workspace"], "alpha")
-            self.assertEqual(decisions[0]["slow"], "50")
-
-    def test_run_start_accepts_standard_strategy_protocol(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            initialize_project(root, name="Workspace Protocol Strategy")
-            csv_path = root / "ticks.csv"
-            csv_path.write_text(
-                "\n".join([
-                    "timestamp,instrument_id,close",
-                    "2026-01-02T14:30:00+00:00,equity:us:AAPL,187.42",
-                    "2026-01-02T14:31:00+00:00,equity:us:AAPL,187.76",
-                ]) + "\n",
-                encoding="utf-8",
-            )
-            env = dict(os.environ)
-            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
-            subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "kairospy",
-                    "--format",
-                    "json",
-                    "data",
-                    "add",
-                    str(csv_path),
-                    "--name",
-                    "local.ticks",
-                    "--time",
-                    "timestamp",
-                ],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-            Workspace.open_or_create("alpha", start=root).data.bind("market", dataset="local.ticks")
-            (root / "protocol_strategy.py").write_text(
-                "\n".join([
-                    "from kairospy.strategy.protocols import StrategyDecision",
-                    "",
-                    "class ProtocolStrategy:",
-                    "    strategy_id = 'protocol-print-v1'",
-                    "    def __init__(self, workspace, params):",
-                    "        self._decisions = []",
-                    "    @property",
-                    "    def decisions(self):",
-                    "        return tuple(self._decisions)",
-                    "    def on_start(self, context):",
-                    "        return ()",
-                    "    def on_market(self, context):",
-                    "        self._decisions.append(StrategyDecision(str(context.now), 'seen', 'market context', tuple(str(i) for i in context.market.instruments)))",
-                    "        print(f'market:{context.market.sequence}:{context.market.reference_prices[0][1]}')",
-                    "        return ()",
-                    "    def on_fill(self, fill, context):",
-                    "        return ()",
-                    "    def on_end(self, context):",
-                    "        return ()",
-                    "",
-                    "def build(workspace, params):",
-                    "    return ProtocolStrategy(workspace, params)",
-                ])
-                + "\n",
-                encoding="utf-8",
-            )
-            run_config = _write_run_config(
-                root,
-                "protocol-strategy.toml",
-                mode="backtest",
-                entrypoint="protocol_strategy:build",
-                params={"limit": "2"},
-            )
-
-            started = subprocess.run(
-                [
-                    sys.executable,
-                    "-m",
-                    "kairospy",
-                    "--format",
-                    "json",
-                    "run",
-                    "start",
-                    "--config",
-                    str(run_config),
-                ],
-                cwd=root,
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env,
-            )
-
-            payload = json.loads(started.stdout[started.stdout.rfind("\n{") + 1:])
-            run_root = Path(payload["run_workspace"])
-            self.assertEqual(payload["strategy"]["entrypoint_kind"], "workspace_strategy_protocol")
-            self.assertIn("market:1:187.42", started.stdout)
-            decisions = json.loads((run_root / "artifacts" / "decisions.json").read_text(encoding="utf-8"))
-            self.assertEqual([item["action"] for item in decisions], ["seen", "seen"])
-
     def test_run_start_paper_uses_runtime_launcher_and_governance_artifact(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             initialize_project(root, name="Workspace Paper Run")
-            Workspace.open_or_create("alpha", start=root).data.bind("bars", dataset="bars.us.equity.1d")
+            Workspace.open_or_create("alpha", start=root).attach("bars", dataset="bars.us.equity.1d", view="both")
             (root / "paper_strategy.py").write_text(
                 "\n".join([
-                    "def decide(context):",
-                    "    return {'action': 'hold', 'mode': context.mode, 'workspace': context.workspace}",
+                    "class Strategy:",
+                    "    strategy_id = 'paper-strategy'",
+                    "    def on_start(self, context): return ()",
+                    "    def on_market(self, context): return ({'action': 'hold', 'mode': 'paper'},)",
+                    "    def on_fill(self, fill, context): return ()",
+                    "    def on_end(self, context): return ()",
                 ]) + "\n",
                 encoding="utf-8",
             )
@@ -485,7 +302,7 @@ class WorkspaceTests(unittest.TestCase):
                 root,
                 "paper-run.toml",
                 mode="paper",
-                entrypoint="paper_strategy:decide",
+                strategy="paper_strategy:Strategy",
             )
 
             started = subprocess.run(
@@ -524,25 +341,29 @@ class WorkspaceTests(unittest.TestCase):
             root = Path(directory)
             initialize_project(root, name="Workspace Live Run")
             workspace = Workspace.open_or_create("alpha", start=root)
-            workspace.data.bind("bars", dataset="bars.us.equity.1d")
+            workspace.attach("bars", dataset="bars.us.equity.1d", view="both")
             (root / "live_strategy.py").write_text(
                 "\n".join([
-                    "def decide(context):",
-                    "    return {'action': 'hold', 'mode': context.mode, 'workspace': context.workspace}",
+                    "class Strategy:",
+                    "    strategy_id = 'live-strategy'",
+                    "    def on_start(self, context): return ()",
+                    "    def on_market(self, context): return ({'action': 'hold', 'mode': 'live'},)",
+                    "    def on_fill(self, fill, context): return ()",
+                    "    def on_end(self, context): return ()",
                 ]) + "\n",
                 encoding="utf-8",
             )
             workspace_hash = stable_artifact_hash(workspace.snapshot())
             strategy_hash = stable_artifact_hash({
-                "entrypoint": "live_strategy:decide",
+                "entrypoint": "live_strategy:Strategy",
                 "module": "live_strategy",
-                "callable": "decide",
+                "callable": "Strategy",
             })
             run_config = _write_run_config(
                 root,
                 "live-run.toml",
                 mode="live",
-                entrypoint="live_strategy:decide",
+                strategy="live_strategy:Strategy",
             )
             config_hash = stable_artifact_hash({"params": {}, "run_config_hash": _file_sha256(run_config)})
             config_path = root / "kairos.toml"
@@ -597,25 +418,29 @@ class WorkspaceTests(unittest.TestCase):
             reference_catalog_path = root / ".kairos" / "data" / "reference" / "catalog.json"
             _write_binance_reference_catalog(reference_catalog_path)
             workspace = Workspace.open_or_create("alpha", start=root)
-            workspace.data.bind("bars", dataset="bars.us.equity.1d")
+            workspace.attach("bars", dataset="bars.us.equity.1d", view="both")
             (root / "live_strategy.py").write_text(
                 "\n".join([
-                    "def decide(context):",
-                    "    return {'action': 'hold', 'mode': context.mode, 'workspace': context.workspace}",
+                    "class Strategy:",
+                    "    strategy_id = 'live-strategy'",
+                    "    def on_start(self, context): return ()",
+                    "    def on_market(self, context): return ({'action': 'hold', 'mode': 'live'},)",
+                    "    def on_fill(self, fill, context): return ()",
+                    "    def on_end(self, context): return ()",
                 ]) + "\n",
                 encoding="utf-8",
             )
             workspace_hash = stable_artifact_hash(workspace.snapshot())
             strategy_hash = stable_artifact_hash({
-                "entrypoint": "live_strategy:decide",
+                "entrypoint": "live_strategy:Strategy",
                 "module": "live_strategy",
-                "callable": "decide",
+                "callable": "Strategy",
             })
             run_config = _write_run_config(
                 root,
                 "live-provider.toml",
                 mode="live",
-                entrypoint="live_strategy:decide",
+                strategy="live_strategy:Strategy",
                 bind_provider=True,
             )
             config_hash = stable_artifact_hash({"params": {}, "run_config_hash": _file_sha256(run_config)})
@@ -675,25 +500,29 @@ class WorkspaceTests(unittest.TestCase):
             live_view_id = "live:binance:btcusdt-book"
             _write_binance_live_view(root / ".kairos" / "data", dataset_id, live_view_id)
             workspace = Workspace.open_or_create("alpha", start=root)
-            workspace.data.bind_live("ticks", dataset=dataset_id)
+            workspace.attach("ticks", dataset=dataset_id, view="live")
             (root / "live_strategy.py").write_text(
                 "\n".join([
-                    "def decide(context):",
-                    "    return {'action': 'hold', 'mode': context.mode, 'workspace': context.workspace}",
+                    "class Strategy:",
+                    "    strategy_id = 'live-strategy'",
+                    "    def on_start(self, context): return ()",
+                    "    def on_market(self, context): return ({'action': 'hold', 'mode': 'live'},)",
+                    "    def on_fill(self, fill, context): return ()",
+                    "    def on_end(self, context): return ()",
                 ]) + "\n",
                 encoding="utf-8",
             )
             workspace_hash = stable_artifact_hash(workspace.snapshot())
             strategy_hash = stable_artifact_hash({
-                "entrypoint": "live_strategy:decide",
+                "entrypoint": "live_strategy:Strategy",
                 "module": "live_strategy",
-                "callable": "decide",
+                "callable": "Strategy",
             })
             run_config = _write_run_config(
                 root,
                 "live-market.toml",
                 mode="live",
-                entrypoint="live_strategy:decide",
+                strategy="live_strategy:Strategy",
                 bind_provider=True,
                 market="ticks",
                 extra="\n".join([
@@ -745,9 +574,10 @@ class WorkspaceTests(unittest.TestCase):
             self.assertTrue(governance["config"]["run_request"]["metadata"]["market_binding"])
             self.assertFalse(governance["config"]["run_request"]["metadata"]["market_services_supervised"])
             services = payload["runtime_launch"]["services"]["services"]
-            self.assertEqual(len(services), 1)
-            self.assertTrue(services[0]["name"].startswith("outbox-dispatcher:"))
-            self.assertEqual(services[0]["status"], "stopped")
+            service_names = [item["name"] for item in services]
+            self.assertTrue(any(name.startswith("outbox-dispatcher:") for name in service_names))
+            self.assertTrue(any(name.startswith("risk-monitor:") for name in service_names))
+            self.assertTrue(all(item["status"] == "stopped" for item in services))
 
     def test_run_start_live_run_config_strategy_spec_binds_stop_controller_on_shutdown(self) -> None:
         with TemporaryDirectory() as directory:
@@ -761,8 +591,12 @@ class WorkspaceTests(unittest.TestCase):
                     "from kairospy.reference import ProductType",
                     "from kairospy.strategy import StrategyLifecycle, StrategySpec",
                     "",
-                    "def decide(context):",
-                    "    return {'action': 'hold', 'mode': context.mode}",
+                    "class Strategy:",
+                    "    strategy_id = 'live-stop-strategy'",
+                    "    def on_start(self, context): return ()",
+                    "    def on_market(self, context): return ({'action': 'hold', 'mode': 'live'},)",
+                    "    def on_fill(self, fill, context): return ()",
+                    "    def on_end(self, context): return ()",
                     "",
                     "def spec():",
                     "    return StrategySpec(",
@@ -777,15 +611,15 @@ class WorkspaceTests(unittest.TestCase):
             )
             workspace_hash = stable_artifact_hash(workspace.snapshot())
             strategy_hash = stable_artifact_hash({
-                "entrypoint": "live_strategy:decide",
+                "entrypoint": "live_strategy:Strategy",
                 "module": "live_strategy",
-                "callable": "decide",
+                "callable": "Strategy",
             })
             run_config = _write_run_config(
                 root,
                 "live-stop-policy.toml",
                 mode="live",
-                entrypoint="live_strategy:decide",
+                strategy="live_strategy:Strategy",
                 bind_provider=True,
                 extra="\n".join([
                     "[strategy]",
@@ -862,8 +696,12 @@ class WorkspaceTests(unittest.TestCase):
                     "from kairospy.reference import ProductType",
                     "from kairospy.strategy import StrategyLifecycle, StrategySpec",
                     "",
-                    "def decide(context):",
-                    "    return {'action': 'hold', 'mode': context.mode}",
+                    "class Strategy:",
+                    "    strategy_id = 'live-daemon-strategy'",
+                    "    def on_start(self, context): return ()",
+                    "    def on_market(self, context): return ({'action': 'hold', 'mode': 'live'},)",
+                    "    def on_fill(self, fill, context): return ()",
+                    "    def on_end(self, context): return ()",
                     "",
                     "def spec():",
                     "    return StrategySpec(",
@@ -880,7 +718,7 @@ class WorkspaceTests(unittest.TestCase):
                 root,
                 "live-daemon.toml",
                 mode="live",
-                entrypoint="live_strategy:decide",
+                strategy="live_strategy:Strategy",
                 bind_provider=True,
                 extra="\n".join([
                     "[strategy]",
@@ -957,18 +795,18 @@ class WorkspaceTests(unittest.TestCase):
             live_view_id = "live:binance:btcusdt-book"
             _write_binance_live_view(root / ".kairos" / "data", dataset_id, live_view_id)
             workspace = Workspace.open_or_create("alpha", start=root)
-            workspace.data.bind_live("ticks", dataset=dataset_id)
+            workspace.attach("ticks", dataset=dataset_id, view="live")
             workspace_hash = stable_artifact_hash(workspace.snapshot())
             strategy_hash = stable_artifact_hash({
-                "entrypoint": "live_strategy:decide",
+                "entrypoint": "live_strategy:Strategy",
                 "module": "live_strategy",
-                "callable": "decide",
+                "callable": "Strategy",
             })
             run_config = _write_run_config(
                 root,
                 "live-supervised.toml",
                 mode="live",
-                entrypoint="live_strategy:decide",
+                strategy="live_strategy:Strategy",
                 bind_provider=True,
                 market="ticks",
                 extra="\n".join([

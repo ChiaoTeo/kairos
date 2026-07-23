@@ -50,6 +50,7 @@ class MarketSnapshot:
     freshness_seconds: Decimal | None = None
     data_binding: str = "unknown"
     event_window: tuple[datetime, datetime] | None = None
+    top_of_book: tuple[tuple[InstrumentId, Decimal | None, Decimal | None, Decimal | None, Decimal | None], ...] = ()
 
     def __post_init__(self) -> None:
         if self.timestamp.tzinfo is None:

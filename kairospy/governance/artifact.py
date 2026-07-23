@@ -39,7 +39,7 @@ class RunArtifactRepository:
             "config": to_primitive(config),
             "event_message_ids": list(result.event_message_ids),
             "factor_snapshots": to_primitive(result.factor_snapshots),
-            "decisions": to_primitive(result.decisions),
+            "decisions": to_primitive(result.intents),
             "economic_intents": to_primitive(result.economic_intents),
             "factor_hash": result.factor_hash, "decision_hash": result.decision_hash,
             "intent_hash": result.intent_hash, "strategy_run_audit_hash": result.audit_hash,

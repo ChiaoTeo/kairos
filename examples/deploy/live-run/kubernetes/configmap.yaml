@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kairos-live-run-config
+data:
+  KAIROS_RUN_ID: binance-btc-live
+  KAIROS_RUN_CONFIG: /opt/kairos/configs/runs/binance-live.toml

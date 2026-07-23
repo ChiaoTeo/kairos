@@ -6,6 +6,7 @@ __all__ = [
     "BrokerConnected",
     "BrokerDisconnected",
     "IntegrationPayload",
+    "HyperliquidExecutionGatewayRequired",
     "LiveMarketEventSourceBinding",
     "LiveProviderPorts",
     "build_live_market_event_source",
@@ -14,6 +15,7 @@ __all__ = [
 ]
 
 _LIVE_PORT_EXPORTS = {
+    "HyperliquidExecutionGatewayRequired",
     "LiveMarketEventSourceBinding",
     "LiveProviderPorts",
     "build_live_market_event_source",

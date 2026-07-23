@@ -14,6 +14,12 @@ class BinanceTradingCredentials:
 
 
 @dataclass(frozen=True, slots=True)
+class HyperliquidTradingCredentials:
+    private_key: str
+    account_address: str
+
+
+@dataclass(frozen=True, slots=True)
 class IbkrConnectionSettings:
     host: str
     port: int
@@ -153,6 +159,31 @@ def resolve_binance_trading_credentials(
         f"or configure credentials.{credential}.api_key and credentials.{credential}.api_secret.",
     )
     return BinanceTradingCredentials(key, secret)
+
+
+def resolve_hyperliquid_trading_credentials(config: KairosProjectConfig) -> HyperliquidTradingCredentials:
+    credential = resolve_provider_service_config(
+        config,
+        "hyperliquid",
+        "execution_live",
+        default_credential="hyperliquid_trading_live_perp",
+    ).credential
+    resolver = CredentialResolver(config)
+    private_key = resolver.required_string(
+        credential,
+        "private_key",
+        "Hyperliquid live trading credential is missing. Set KAIROS_HYPERLIQUID_LIVE_PRIVATE_KEY/"
+        "KAIROS_HYPERLIQUID_LIVE_ACCOUNT_ADDRESS or configure credentials."
+        f"{credential}.private_key and credentials.{credential}.account_address.",
+    )
+    account_address = resolver.required_string(
+        credential,
+        "account_address",
+        "Hyperliquid live trading credential is missing. Set KAIROS_HYPERLIQUID_LIVE_PRIVATE_KEY/"
+        "KAIROS_HYPERLIQUID_LIVE_ACCOUNT_ADDRESS or configure credentials."
+        f"{credential}.private_key and credentials.{credential}.account_address.",
+    )
+    return HyperliquidTradingCredentials(private_key, account_address)
 
 
 def resolve_ibkr_trading_connection(

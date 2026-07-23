@@ -42,7 +42,7 @@ class RunAttribution:
 
 def build_run_attribution(result:StrategyRunResult,*,starting_equity:Decimal,ending_equity:Decimal,
                           orders:int,fills:int,fees:Decimal=Decimal("0"),slippage:Decimal=Decimal("0"))->RunAttribution:
-    active=sum(item.action not in {"hold","wait","warmup","skip"} for item in result.decisions)
-    return RunAttribution(SignalAttribution(len(result.decisions),len(result.economic_intents),active,result.factor_hash),
+    active=len(result.intents)
+    return RunAttribution(SignalAttribution(len(result.intents),len(result.economic_intents),active,result.factor_hash),
         PortfolioAttribution(starting_equity,ending_equity,ending_equity-starting_equity),
         ExecutionAttribution(orders,fills,fees,slippage))

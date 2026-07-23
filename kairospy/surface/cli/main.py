@@ -9,7 +9,10 @@ from hashlib import sha256
 import importlib
 import json
 import os
+import select
+import shlex
 import sys
+import time
 from pathlib import Path
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -53,7 +56,7 @@ from kairospy.execution.events import TradeSide
 from kairospy.identity import AccountRef, AccountType, AssetId, InstrumentId, VenueId
 from kairospy.portfolio.ledger import LedgerBook
 from kairospy.execution.orders import ExecutionInstructions, TimeInForce
-from kairospy.reference.contracts import OptionRight, ProductType
+from kairospy.reference.contracts import BrokerId, ExecutionRoute, OptionRight, ProductType, RouteId
 from kairospy.execution.router import ExecutionRouter
 from kairospy.runtime.coordinator import ExecutionCoordinator
 from kairospy.runtime.store.event_log import PersistentEventLog
@@ -136,18 +139,23 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--interactive", action="store_true", help="prompt for project target, name and overwrite behavior")
     workspace = commands.add_parser("workspace", help="manage project workspaces and data bindings")
     workspace_actions = workspace.add_subparsers(dest="action", required=True)
+    workspace_actions.add_parser("list", help="list project Workspaces")
     workspace_create = workspace_actions.add_parser("create", help="create or open one Workspace")
     workspace_create.add_argument("name")
-    workspace_bind_data = workspace_actions.add_parser("bind-data", help="bind a Dataset to a workspace-local name")
-    workspace_bind_data.add_argument("workspace")
-    workspace_bind_data.add_argument("--name", required=True, help="workspace-local data name")
-    workspace_bind_data.add_argument("--dataset", required=True, help="Dataset ID or alias")
-    workspace_bind_live = workspace_actions.add_parser("bind-live", help="bind a Live View to a workspace-local name")
-    workspace_bind_live.add_argument("workspace")
-    workspace_bind_live.add_argument("--name", required=True, help="workspace-local live data name")
-    workspace_bind_live.add_argument("--dataset", required=True, help="Live View dataset name")
+    workspace_attach = workspace_actions.add_parser("attach", help="attach a Dataset to a Workspace")
+    workspace_attach.add_argument("workspace")
+    workspace_attach.add_argument("--name", required=True, help="workspace-local attachment name")
+    workspace_attach.add_argument("--dataset", required=True, help="Dataset ID or alias")
+    workspace_attach.add_argument("--view", choices=("history", "live", "both"), default="both")
+    workspace_attach.add_argument("--instrument", action="append", default=[], help="instrument selector; repeatable")
+    workspace_attach.add_argument("--field", action="append", default=[], help="field selector; repeatable")
+    workspace_attach.add_argument("--freshness-seconds", type=float)
     workspace_inspect = workspace_actions.add_parser("inspect", help="inspect Workspace bindings")
     workspace_inspect.add_argument("name")
+    workspace_inspect_code = workspace_actions.add_parser("inspect-code", help="inspect a Workspace code entrypoint")
+    workspace_inspect_code.add_argument("entrypoint", help="module:callable returning a WorkspaceProjection")
+    workspace_inspect_code.add_argument("--param", action="append", default=[], help="workspace parameter key=value; repeatable")
+    workspace_inspect_code.add_argument("--mode", choices=("inspect", "backtest", "historical-simulation", "paper", "live"), default="inspect")
     data = commands.add_parser("data", help="manage Dataset Store data and built-in Data products")
     data_actions = data.add_subparsers(dest="action", required=True)
     data_apply = data_actions.add_parser("apply", help="apply a Data manifest such as kairos.data.toml")
@@ -797,7 +805,11 @@ def _parser() -> argparse.ArgumentParser:
     run_live = run_actions.add_parser("live", help="operate a named long-lived live run")
     run_live.add_argument(
         "live_action",
-        choices=("start", "recover", "status", "stop", "kill-switch", "reset-kill-switch", "reload-risk-limits"),
+        choices=(
+            "start", "recover", "status", "attach", "stop", "pause", "resume", "reduce-only", "clear-reduce-only",
+            "cancel-all", "reconcile", "commands", "kill-switch", "reset-kill-switch", "reload-risk-limits",
+            "target-position", "incidents", "close-incident", "metrics", "export", "force-stop",
+        ),
         nargs="?",
         default="status",
     )
@@ -805,13 +817,93 @@ def _parser() -> argparse.ArgumentParser:
     run_live.add_argument("--config", type=Path, help="RunConfig TOML path for start/recover")
     run_live.add_argument("--param", action="append", default=[], help="strategy parameter key=value; repeatable")
     run_live.add_argument("--confirm-live", action="store_true", help="required explicit confirmation for live start/recover")
-    run_live.add_argument("--duration-seconds", type=float, help="bounded foreground run duration; omit to run until stop/fault")
+    run_live.add_argument("--foreground", action="store_true", help="run the live daemon in this CLI process")
+    run_live.add_argument("--duration-seconds", type=float, help="bounded foreground run duration; implies --foreground")
     run_live.add_argument("--poll-seconds", type=float, default=0.25, help="foreground daemon stop-request poll interval")
+    run_live.add_argument("--log-file", type=Path, help="background daemon log file; defaults under .kairos/runtime/live/<run-id>")
     run_live.add_argument("--stale-after-seconds", type=float, default=5.0, help="heartbeat age before live status is stale")
+    run_live.add_argument("--fresh", action="store_true", help="request a fresh daemon status snapshot before reading status")
+    run_live.add_argument("--wait", type=float, default=0.0, help="seconds to wait for --fresh command acknowledgement")
+    run_live.add_argument("--interval-seconds", type=float, default=1.0, help="attach status/log poll interval")
+    run_live.add_argument("--tail-lines", type=int, default=80, help="attach log lines to show before following")
+    run_live.add_argument("--no-follow", action="store_true", help="attach once, print the current snapshot, and exit")
     run_live.add_argument("--reason", help="operator reason for stop requests")
     run_live.add_argument("--actor", default="cli", help="operator actor for control commands")
+    run_live.add_argument("--timeout-seconds", type=float, help="graceful stop timeout before force handling")
+    run_live.add_argument("--force", action="store_true", help="force stop after graceful stop timeout")
     run_live.add_argument("--reconciliation-evidence", help="required evidence reference for reset-kill-switch")
     run_live.add_argument("--risk-limits-hash", help="limits hash for reload-risk-limits")
+    run_live.add_argument(
+        "--leg",
+        action="append",
+        default=[],
+        help="target position leg as venue,product,instrument,side,quantity; repeat for paired trades",
+    )
+    run_live.add_argument("--intent-id", help="optional operator intent id for target-position")
+    run_live.add_argument("--idempotency-key", help="optional operator command idempotency key")
+    run_live.add_argument("--output", type=Path, help="metrics/export artifact path for metrics or export actions")
+    run_live.add_argument("--prometheus", action="store_true", help="render metrics as Prometheus text format")
+    run_status = run_actions.add_parser("status", help="inspect a run instance status")
+    run_status.add_argument("--run-id", required=True)
+    run_status.add_argument("--stale-after-seconds", type=float, default=5.0, help="heartbeat age before live status is stale")
+    run_status.add_argument("--fresh", action="store_true", help="request a fresh daemon status snapshot before reading status")
+    run_status.add_argument("--wait", type=float, default=0.0, help="seconds to wait for --fresh command acknowledgement")
+    run_stop = run_actions.add_parser("stop", help="request a run instance to stop")
+    run_stop.add_argument("--run-id", required=True)
+    run_stop.add_argument("--reason", help="operator reason for stop requests")
+    run_stop.add_argument("--actor", default="cli", help="operator actor for control commands")
+    run_stop.add_argument("--timeout-seconds", type=float)
+    run_stop.add_argument("--force", action="store_true")
+    run_force_stop = run_actions.add_parser("force-stop", help="force stop a run after a short graceful timeout")
+    run_force_stop.add_argument("--run-id", required=True)
+    run_force_stop.add_argument("--reason", required=True)
+    run_force_stop.add_argument("--actor", default="cli")
+    run_force_stop.add_argument("--timeout-seconds", type=float, default=1.0)
+    run_pause = run_actions.add_parser("pause", help="pause new non-reducing orders for a run")
+    run_pause.add_argument("--run-id", required=True)
+    run_pause.add_argument("--reason", required=True)
+    run_pause.add_argument("--actor", default="cli")
+    run_resume = run_actions.add_parser("resume", help="resume new orders for a paused run")
+    run_resume.add_argument("--run-id", required=True)
+    run_resume.add_argument("--reason", required=True)
+    run_resume.add_argument("--actor", default="cli")
+    run_reduce = run_actions.add_parser("reduce-only", help="put a run into reduce-only mode")
+    run_reduce.add_argument("--run-id", required=True)
+    run_reduce.add_argument("--reason", required=True)
+    run_reduce.add_argument("--actor", default="cli")
+    run_clear_reduce = run_actions.add_parser("clear-reduce-only", help="clear reduce-only mode for a run")
+    run_clear_reduce.add_argument("--run-id", required=True)
+    run_clear_reduce.add_argument("--reason", required=True)
+    run_clear_reduce.add_argument("--actor", default="cli")
+    run_cancel_all = run_actions.add_parser("cancel-all", help="request cancellation of all working orders for a run")
+    run_cancel_all.add_argument("--run-id", required=True)
+    run_cancel_all.add_argument("--reason", required=True)
+    run_cancel_all.add_argument("--actor", default="cli")
+    run_reconcile = run_actions.add_parser("reconcile", help="request a reconciliation snapshot for a run")
+    run_reconcile.add_argument("--run-id", required=True)
+    run_reconcile.add_argument("--reason", default="operator reconciliation requested")
+    run_reconcile.add_argument("--actor", default="cli")
+    run_commands = run_actions.add_parser("commands", help="list recent operator commands for a run")
+    run_commands.add_argument("--run-id", required=True)
+    run_commands.add_argument("--limit", type=int, default=20)
+    run_incidents = run_actions.add_parser("incidents", help="list runtime incidents for a run")
+    run_incidents.add_argument("--run-id", required=True)
+    run_incidents.add_argument("--status", choices=("open", "closed", "all"), default="open")
+    run_incidents.add_argument("--limit", type=int, default=20)
+    run_close_incident = run_actions.add_parser("close-incident", help="close a runtime incident")
+    run_close_incident.add_argument("--run-id", required=True)
+    run_close_incident.add_argument("--incident-id", required=True)
+    run_close_incident.add_argument("--reason", required=True)
+    run_close_incident.add_argument("--actor", default="cli")
+    run_metrics = run_actions.add_parser("metrics", help="show runtime metrics for a run")
+    run_metrics.add_argument("--run-id", required=True)
+    run_metrics.add_argument("--stale-after-seconds", type=float, default=5.0)
+    run_metrics.add_argument("--output", type=Path, help="write metrics artifact to this path")
+    run_metrics.add_argument("--prometheus", action="store_true", help="render metrics as Prometheus text format")
+    run_export = run_actions.add_parser("export", help="export runtime control-plane artifacts for a run")
+    run_export.add_argument("--run-id", required=True)
+    run_export.add_argument("--output", type=Path)
+    run_export.add_argument("--stale-after-seconds", type=float, default=5.0)
     run_inspect = run_actions.add_parser("inspect"); run_inspect.add_argument("--db", type=Path)
     run_inspect.add_argument("--artifact",type=Path);run_inspect.add_argument("--at")
     run_inspect.add_argument("--run-id")
@@ -1115,67 +1207,21 @@ def _prompt_configure_args(args: argparse.Namespace) -> argparse.Namespace:
 
 
 def _prompt_choice(label: str, choices: tuple[str, ...], *, default: str) -> str:
-    if not sys.stdin.isatty():
-        prompt = f"{label} [{'/'.join(choices)}] ({default}): "
-        value = input(prompt).strip()
-        return value if value in choices else default
-    try:
-        import questionary
-    except Exception:
-        prompt = f"{label} [{'/'.join(choices)}] ({default}): "
-        value = input(prompt).strip()
-        return value if value in choices else default
-    value = questionary.select(label, choices=list(choices), default=default).ask()
-    return str(value or default)
+    from kairospy.surface.cli.prompts import prompt_choice
+
+    return prompt_choice(label, choices, default=default)
 
 
 def _prompt_text(label: str, default: str) -> str:
-    if not sys.stdin.isatty():
-        value = input(f"{label} ({default}): ").strip()
-        return value or default
-    try:
-        import questionary
-    except Exception:
-        value = input(f"{label} ({default}): ").strip()
-        return value or default
-    value = questionary.text(label, default=default).ask()
-    return str(value or default)
+    from kairospy.surface.cli.prompts import prompt_text
+
+    return prompt_text(label, default)
 
 
 def _prompt_bool(label: str, default: bool) -> bool:
-    if not sys.stdin.isatty():
-        value = input(f"{label} ({'yes' if default else 'no'}): ").strip().lower()
-        if value in {"y", "yes", "true", "1"}:
-            return True
-        if value in {"n", "no", "false", "0"}:
-            return False
-        return default
-    try:
-        import questionary
-    except Exception:
-        value = input(f"{label} ({'yes' if default else 'no'}): ").strip().lower()
-        if value in {"y", "yes", "true", "1"}:
-            return True
-        if value in {"n", "no", "false", "0"}:
-            return False
-        return default
-    value = questionary.confirm(label, default=default).ask()
-    return bool(default if value is None else value)
+    from kairospy.surface.cli.prompts import prompt_bool
 
-
-def _massive_marketdata_config(args: argparse.Namespace | None = None) -> MassiveConfig:
-    from kairospy.infrastructure.configuration import ConfigError, load_dotenv_file, load_project_config_or_none
-    from kairospy.integrations.config import resolve_massive_marketdata_config
-
-    config = getattr(args, "_kairospy_project_config", None) if args is not None else None
-    config = config or load_project_config_or_none()
-    if config is not None:
-        try:
-            return resolve_massive_marketdata_config(config)
-        except ConfigError:
-            pass
-    load_dotenv_file()
-    return MassiveConfig.from_env()
+    return prompt_bool(label, default)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1185,6 +1231,8 @@ def main(argv: list[str] | None = None) -> int:
     raw_argv = sys.argv[1:] if argv is None else argv
     parser = _parser()
     if not raw_argv:
+        if sys.stdin.isatty() and sys.stdout.isatty():
+            return _interactive_shell()
         parser.print_help()
         return 0
     args = parser.parse_args(raw_argv)
@@ -1352,1554 +1400,118 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _product_command(args: argparse.Namespace) -> int:
-    import sys
-    from kairospy.surface.cli.output import render_error, render_product_result, resolve_language
-    from kairospy.surface import product as product_surface
-    from kairospy.integrations.connectors.binance.historical_archive import GracefulShutdown
+    from kairospy.surface.cli.product_commands import product_command
 
-    if args.group == "run" and args.action in {"start", "config", "live", "inspect", "replay", "compare"}:
-        handlers = {
-            ("run", "start"): product_surface.run_start,
-            ("run", "config"): product_surface.run_config,
-            ("run", "live"): product_surface.run_live,
-            ("run", "inspect"): product_surface.run_inspect,
-            ("run", "replay"): product_surface.run_replay,
-            ("run", "compare"): product_surface.run_compare,
-        }
-        try:
-            payload = handlers[(args.group, args.action)](args)
-        except GracefulShutdown as error:
-            print(f"Stopped cleanly: {error}", file=sys.stderr)
-            return 130
-        except (KeyError, LookupError, PermissionError, ValueError, FileNotFoundError) as error:
-            language = resolve_language(args.lang)
-            print(render_error(error, language, json_output=args.format == "json"), file=sys.stderr)
-            return 2
-        if args.quiet:
-            return 0
-        if args.format == "json":
-            print(json.dumps(to_primitive(payload), ensure_ascii=False, indent=2, sort_keys=True))
-        else:
-            print(render_product_result(args.group, args.action, payload, resolve_language(args.lang)))
-        if args.group == "run" and args.action == "config" and getattr(args, "config_action", None) == "validate":
-            if payload.get("issues") and getattr(args, "strict", False):
-                return 2
-        return 0
+    return product_command(args)
 
-    raise SystemExit(f"unsupported product command {args.group} {args.action}")
+
+def _run_live_attach_console(args: argparse.Namespace, product_surface: object, render_product_result: object, resolve_language: object) -> int:
+    from kairospy.surface.cli.product_commands import run_live_attach_console
+
+    return run_live_attach_console(args, product_surface, render_product_result, resolve_language)
+
+
+def _run_live_attach_prompt(run_id: str) -> str:
+    from kairospy.surface.cli.product_commands import run_live_attach_prompt
+
+    return run_live_attach_prompt(run_id)
+
+
+def _run_live_attach_log_path(payload: dict[str, object]) -> Path | None:
+    from kairospy.surface.cli.product_commands import run_live_attach_log_path
+
+    return run_live_attach_log_path(payload)
+
+
+def _run_live_attach_status_key(payload: dict[str, object]) -> tuple[object, ...]:
+    from kairospy.surface.cli.product_commands import run_live_attach_status_key
+
+    return run_live_attach_status_key(payload)
+
+
+def _run_live_attach_print_tail(path: Path | None, tail_lines: int) -> int:
+    from kairospy.surface.cli.product_commands import run_live_attach_print_tail
+
+    return run_live_attach_print_tail(path, tail_lines)
+
+
+def _run_live_attach_print_new_log(path: Path | None, offset: int) -> int:
+    from kairospy.surface.cli.product_commands import run_live_attach_print_new_log
+
+    return run_live_attach_print_new_log(path, offset)
+
+
+def _run_live_attach_normalize_command_parts(parts: list[str]) -> list[str]:
+    from kairospy.surface.cli.product_commands import run_live_attach_normalize_command_parts
+
+    return run_live_attach_normalize_command_parts(parts)
+
+
+def _run_live_attach_start_args(command: str, args: argparse.Namespace, parts: list[str]) -> argparse.Namespace:
+    from kairospy.surface.cli.product_commands import run_live_attach_start_args
+
+    return run_live_attach_start_args(command, args, parts)
+
+
+def _run_live_attach_reason(command: str, parts: list[str]) -> str:
+    from kairospy.surface.cli.product_commands import run_live_attach_reason
+
+    return run_live_attach_reason(command, parts)
 
 
 def _workspace(args: argparse.Namespace) -> int:
-    from kairospy.workspace import WorkspaceRepository
+    from kairospy.surface.cli.product_commands import workspace_command
 
-    repository = WorkspaceRepository.discover(Path.cwd())
-    if args.action == "create":
-        workspace = repository.open_or_create(args.name)
-        payload = {
-            "product": "workspace",
-            "operation": "create",
-            "workspace": workspace.name,
-            "root": str(workspace.root),
-            "bindings": workspace.snapshot()["bindings"],
-        }
-    elif args.action == "bind-data":
-        workspace = repository.open_or_create(args.workspace)
-        binding = workspace.bind_data(args.name, dataset=args.dataset)
-        payload = {
-            "product": "workspace",
-            "operation": "bind-data",
-            "workspace": workspace.name,
-            "binding": binding.to_dict(),
-            "root": str(workspace.root),
-        }
-    elif args.action == "bind-live":
-        workspace = repository.open_or_create(args.workspace)
-        binding = workspace.bind_live(args.name, dataset=args.dataset)
-        payload = {
-            "product": "workspace",
-            "operation": "bind-live",
-            "workspace": workspace.name,
-            "binding": binding.to_dict(),
-            "root": str(workspace.root),
-        }
-    elif args.action == "inspect":
-        workspace = repository.open(args.name)
-        payload = {
-            "product": "workspace",
-            "operation": "inspect",
-            "workspace": workspace.name,
-            "root": str(workspace.root),
-            **workspace.snapshot(),
-        }
-    else:
-        raise SystemExit(f"unsupported workspace action {args.action!r}")
-    if args.format == "json":
-        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    elif not args.quiet:
-        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    return 0
+    return workspace_command(args)
+
+
+def _workspace_inspect_code(entrypoint_ref: str, params_values: tuple[str, ...], *, mode: str = "inspect") -> dict[str, object]:
+    from kairospy.surface.cli.product_commands import workspace_inspect_code
+
+    return workspace_inspect_code(entrypoint_ref, params_values, mode=mode)
 
 
 def _providers(args: argparse.Namespace) -> int:
-    from kairospy.surface import providers as provider_surface
+    from kairospy.surface.cli.product_commands import providers_command
 
-    if args.action == "list":
-        payload = provider_surface.providers_list(args.lake_root)
-    else:
-        payload = provider_surface.provider_doctor(args.lake_root, args.provider)
-    _emit_provider_payload(args, "Kairos Providers" if args.action == "list" else "Kairos Provider Diagnostics", payload)
-    return 2 if payload.get("status") == "unknown_provider" else 0
+    return providers_command(args)
 
 
-def _emit_provider_payload(args: argparse.Namespace, title: str, payload: dict[str, object]) -> None:
-    from kairospy.surface.cli.output import render_generic_payload, render_key_value_panel, render_status_table
+def _interactive_shell() -> int:
+    from kairospy.surface.cli.interactive import interactive_shell
 
-    primitive = to_primitive(payload)
-    if args.format == "json":
-        print(json.dumps(primitive, ensure_ascii=False, indent=2, sort_keys=True))
-        return
-    if args.action == "list" and isinstance(primitive.get("providers"), list):
-        rows = [{
-            "provider": item.get("provider", ""),
-            "status": item.get("status", ""),
-            "data_products": item.get("data_products", ""),
-            "available": item.get("available_data_products", ""),
-            "venues": ", ".join(str(value) for value in item.get("venues", ())),
-        } for item in primitive["providers"] if isinstance(item, dict)]
-        print(render_status_table(title, rows, columns=("provider", "status", "data_products", "available", "venues")))
-        return
-    if args.action == "doctor":
-        rows = [
-            ("Provider", primitive.get("provider", "")),
-            ("Status", primitive.get("status", "")),
-            ("Venues", ", ".join(str(value) for value in primitive.get("venues", ()))),
-        ]
-        output = [render_key_value_panel(title, [(label, value) for label, value in rows if value not in ("", None)])]
-        products = primitive.get("data_products")
-        if isinstance(products, list):
-            product_rows = [{
-                "key": item.get("key", ""),
-                "status": item.get("status", ""),
-                "capability": item.get("capability", ""),
-                "dataset": item.get("dataset", ""),
-            } for item in products if isinstance(item, dict)]
-            output.append(render_status_table("Data Products", product_rows, columns=("key", "status", "capability", "dataset")))
-        issues = primitive.get("issues")
-        if isinstance(issues, list) and issues:
-            issue_rows = [{
-                "code": item.get("code", ""),
-                "message": item.get("message", ""),
-            } for item in issues if isinstance(item, dict)]
-            output.append(render_status_table("Issues", issue_rows, columns=("code", "message")))
-        print("\n\n".join(item for item in output if item))
-        return
-    print(render_generic_payload(title, primitive))
+    return interactive_shell(main, workspace_choices_func=_interactive_workspace_choices)
+
+
+class _InteractiveSession:
+    def __new__(cls, *args, **kwargs):
+        from kairospy.surface.cli.interactive import InteractiveSession
+
+        return InteractiveSession(main, workspace_choices_func=_interactive_workspace_choices)
+
+
+def _interactive_expand_number(parts: list[str], mapping: dict[str, str]) -> list[str]:
+    from kairospy.surface.cli.interactive import interactive_expand_number
+
+    return interactive_expand_number(parts, mapping)
+
+
+def _interactive_workspace_choices() -> tuple[str, ...]:
+    from kairospy.surface.cli.interactive import interactive_workspace_choices
+
+    return interactive_workspace_choices()
+
+
+def _interactive_workspace_choice_hint(choices: tuple[str, ...]) -> str:
+    from kairospy.surface.cli.interactive import interactive_workspace_choice_hint
+
+    return interactive_workspace_choice_hint(choices)
 
 
 def _data(args: argparse.Namespace) -> int:
-    if args.action == "apply":
-        from kairospy.surface import product as product_surface
-        payload = product_surface.data_apply(args)
-        _emit_data_payload(args, "Kairos Data Manifest", payload)
-        return 0
-    if args.action == "start":
-        from kairospy.surface import product as product_surface
-        payload = product_surface.data_start(args)
-        _emit_data_payload(args, "Kairos Data Start", payload)
-        return 0
-    if args.action == "add":
-        from kairospy.surface import product as product_surface
-        try:
-            payload = product_surface.data_add(args)
-        except Exception as error:
-            from kairospy.data.storage.metadata import DataNeedsTimeError
+    from kairospy.surface.cli.data_commands import data_command
 
-            if isinstance(error, DataNeedsTimeError):
-                payload = error.to_payload(dataset_id=str(args.name), source=args.source)
-                _emit_data_payload(args, "Kairos Dataset", payload)
-                return 2
-            if isinstance(error, product_surface.DataAddInputError):
-                payload = error.to_payload(dataset_id=str(args.name))
-                _emit_data_payload(args, "Kairos Dataset", payload)
-                return 2
-            raise
-        _emit_data_payload(args, "Kairos Dataset", payload)
-        return 0
-    if args.action == "use":
-        if not args.list_products and not args.key:
-            raise SystemExit("data use requires a built-in product key or --list-products")
-        from kairospy.surface import product as product_surface
-        try:
-            payload = product_surface.data_use(args)
-        except product_surface.DataProductNotFoundError as error:
-            payload = error.to_payload()
-            _emit_data_payload(args, "Kairos Built-In Data Product", payload)
-            return 2
-        _emit_data_payload(args, "Kairos Dataset", payload)
-        return 0
-    if args.action in {"product", "products"}:
-        from kairospy.surface import product as product_surface
-        if args.product_action == "list":
-            _emit_data_payload(args, "Kairos Dataset", product_surface.data_product_list(args))
-            return 0
-        if args.product_action == "doctor":
-            payload = product_surface.data_product_doctor(args)
-            _emit_data_payload(args, "Kairos Data Product", payload)
-            return 2 if payload.get("status") == "unknown_data_product" else 0
-        else:
-            raise SystemExit(f"unsupported data product action {args.product_action!r}")
-    if args.action == "protocol":
-        from kairospy.surface import product as product_surface
-        try:
-            payload = product_surface.data_protocol(args)
-        except (FileNotFoundError, ValueError) as error:
-            payload = product_surface.data_protocol_error(args, error)
-            _emit_data_payload(args, "Kairos Data Protocol", payload)
-            return 2
-        _emit_data_payload(args, "Kairos Data Protocol", payload)
-        return 0
-    if args.action == "connect":
-        from kairospy.surface import product as product_surface
-        try:
-            payload = product_surface.data_connect(args)
-        except product_surface.DataProductNotFoundError as error:
-            payload = error.to_payload()
-            _emit_data_payload(args, "Kairos Built-In Data Product", payload)
-            return 2
-        _emit_data_payload(args, "Kairos Dataset", payload)
-        return 0
-    if args.action == "sample":
-        from kairospy.surface import product as product_surface
-        try:
-            if args.format == "json":
-                payload = product_surface.data_sample(args)
-            else:
-                started = {"value": False}
-
-                def _print_sample_row(row):
-                    if not started["value"]:
-                        print("Kairos Data Sample")
-                        print("Rows")
-                        started["value"] = True
-                    print(json.dumps(to_primitive(row), ensure_ascii=False, sort_keys=True), flush=True)
-
-                payload = product_surface.data_sample(args, on_row=_print_sample_row)
-        except product_surface.DataProductNotFoundError as error:
-            payload = error.to_payload()
-            _emit_data_payload(args, "Kairos Built-In Data Product", payload)
-            return 2
-        _emit_data_payload(args, "Kairos Data Sample Summary" if args.format != "json" else "Kairos Data Sample", payload)
-        return 0
-    if args.action == "reconnect":
-        from kairospy.surface import product as product_surface
-        try:
-            payload = product_surface.data_reconnect(args)
-        except product_surface.DataLiveDatasetNotConfiguredError as error:
-            payload = error.to_payload()
-            _emit_data_payload(args, "Kairos Dataset", payload)
-            return 2
-        _emit_data_payload(args, "Kairos Dataset", payload)
-        return 0
-    if args.action in {"download", "register-download", "register-provider", "write"}:
-        from kairospy.surface import product as product_surface
-        handlers = {
-            "download": product_surface.data_download,
-            "register-download": product_surface.data_register_download,
-            "register-provider": product_surface.data_register_provider,
-            "write": product_surface.data_write,
-        }
-        payload = handlers[args.action](args)
-        print(json.dumps(to_primitive(payload), ensure_ascii=False, indent=2, sort_keys=True))
-        return 0
-    if args.action == "soak-binance":
-        if args.duration_seconds <= 0 or args.minimum_events <= 0 or args.maximum_silence_seconds <= 0:
-            raise SystemExit("soak duration, minimum events and maximum silence must be positive")
-        import asyncio
-        from kairospy.integrations.connectors.binance.market_stream import BinanceStreamSession, WebSocketClientConnector, websocket_url
-        from kairospy.integrations.connectors.binance.stream import BinanceCanonicalStreamService
-        from kairospy.market.capture import RotatingCanonicalCaptureWriter
-        from kairospy.market.soak import run_binance_market_restart_campaign, run_binance_market_soak
-        from kairospy.market.stream import BoundedEventChannel
-
-        symbol = args.symbol.upper()
-        stream = f"{symbol.lower()}@{args.channel}"
-        instrument = InstrumentId(args.instrument or f"crypto:binance:spot:{symbol}")
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        journal = args.journal or (
-            Path(args.lake_root) / "source" / "live" / "binance" / f"{symbol.lower()}-{args.channel}-{stamp}.jsonl"
-        )
-        artifact = args.artifact or journal.with_suffix(".soak.json")
-
-        async def soak():
-            def build(index: int, *, campaign: bool):
-                leg_journal = journal.with_name(
-                    f"{journal.stem}.leg-{index:03d}{journal.suffix}",
-                ) if campaign else journal
-                leg_canonical = leg_journal.with_suffix(".canonical.jsonl")
-                output = BoundedEventChannel(max(4096, args.minimum_events * 2))
-                service = BinanceCanonicalStreamService(
-                    BinanceStreamSession(
-                        WebSocketClientConnector(), websocket_url(
-                            Environment.LIVE, stream, public_only=True,
-                        ), journal=leg_journal,
-                    ),
-                    {symbol: instrument}, output, source_instance="kairospy-soak", stream_id=stream,
-                    canonical_capture=RotatingCanonicalCaptureWriter(
-                        leg_canonical, session_id=leg_journal.stem, source="binance",
-                        maximum_segment_events=args.capture_segment_events,
-                        maximum_segment_bytes=args.capture_segment_bytes,
-                        maximum_total_bytes=args.capture_total_bytes,
-                    ),
-                )
-                return service, output
-            if args.restart_interval_seconds:
-                return await run_binance_market_restart_campaign(
-                    lambda index: build(index, campaign=True), stream_id=stream,
-                    duration_seconds=args.duration_seconds,
-                    restart_interval_seconds=args.restart_interval_seconds,
-                    minimum_events=args.minimum_events,
-                    maximum_silence_seconds=args.maximum_silence_seconds,
-                    artifact_path=artifact,
-                    maximum_channel_utilization=args.maximum_channel_utilization,
-                )
-            service, output = build(1, campaign=False)
-            return await run_binance_market_soak(
-                service, output, duration_seconds=args.duration_seconds,
-                minimum_events=args.minimum_events,
-                maximum_silence_seconds=args.maximum_silence_seconds,
-                artifact_path=artifact,
-                maximum_channel_utilization=args.maximum_channel_utilization,
-            )
-
-        result = asyncio.run(soak())
-        payload = to_primitive(result)
-        if args.live_view_manifest is not None:
-            from kairospy.data.quality.freshness import update_live_view_manifest_freshness
-            manifest = update_live_view_manifest_freshness(args.live_view_manifest, payload)
-            payload["live_view_manifest"] = {
-                "artifact": str(args.live_view_manifest),
-                "live_view_id": manifest.live_view_id,
-                "freshness_status": manifest.freshness_status,
-                "manifest_hash": manifest.manifest_hash,
-            }
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-        return 0 if result.passed else 2
-    if args.action == "live-binance":
-        if args.messages <= 0:
-            raise SystemExit("--messages must be positive")
-        import asyncio
-        from kairospy.integrations.connectors.binance.market_stream import BinanceStreamSession, WebSocketClientConnector, websocket_url
-        from kairospy.integrations.connectors.binance.stream import BinanceCanonicalStreamService
-        from kairospy.market.stream import BoundedEventChannel
-        from kairospy.market.capture import CanonicalCaptureWriter
-
-        symbol = args.symbol.upper()
-        stream = f"{symbol.lower()}@{args.channel}"
-        instrument = InstrumentId(args.instrument or (
-            f"crypto:binance:{'futures' if args.futures else 'spot'}:{symbol}"
-        ))
-        journal = args.journal or (
-            Path(args.lake_root) / "source" / "live" / "binance"
-            / f"{symbol.lower()}-{args.channel}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.jsonl"
-        )
-        canonical_path = journal.with_suffix(".canonical.jsonl")
-
-        async def capture():
-            output = BoundedEventChannel(max(16, args.messages * 2))
-            service = BinanceCanonicalStreamService(
-                BinanceStreamSession(
-                    WebSocketClientConnector(), websocket_url(
-                        Environment.LIVE, stream, futures=args.futures, public_only=not args.futures,
-                    ),
-                    journal=journal,
-                ),
-                {symbol: instrument}, output,
-                source_instance="kairospy-cli", stream_id=stream,
-                canonical_capture=CanonicalCaptureWriter(
-                    canonical_path, session_id=journal.stem, source="binance",
-                ),
-            )
-            producer = asyncio.create_task(service.run(message_limit=args.messages))
-            events = [event async for event in output.events()]
-            await producer
-            return service, events
-
-        service, events = asyncio.run(capture())
-        print(json.dumps({
-            "provider": "binance", "stream": stream, "instrument_id": instrument.value,
-            "raw_messages": service.raw_messages, "canonical_events": service.canonical_events,
-            "reconnects": service.reconnects, "raw_journal": str(journal),
-            "canonical_journal": str(canonical_path),
-            "events": to_primitive(events),
-        }, ensure_ascii=False, indent=2))
-        return 0
-    if args.action == "list":
-        from kairospy.surface import product as product_surface
-        args.dimension = _dimension_filters(args.dimension)
-        payload = product_surface.data_list(args)
-        _emit_data_payload(args, "Kairos Datasets", payload)
-        return 0
-    if args.action == "releases":
-        payload = _removed_data_command_payload(
-            "releases",
-            "Data Store Datasets are unversioned directories; use `kairospy data list` or `kairospy data metadata <dataset>`.",
-        )
-        _emit_data_payload(args, "Kairos Data Releases", payload)
-        return 2
-    if args.action == "search":
-        from kairospy.surface import product as product_surface
-        args.dimension = _dimension_filters(args.dimension)
-        payload = product_surface.data_list(args)
-        payload["operation"] = "search"
-        _emit_data_payload(args, "Kairos Data Search", payload)
-        return 0
-    if args.action == "describe":
-        from kairospy.surface import product as product_surface
-        _emit_data_payload(args, "Kairos Dataset", product_surface.data_doctor(args))
-        return 0
-    if args.action == "audit":
-        from kairospy.surface import product as product_surface
-        _emit_data_payload(args, "Kairos Dataset Audit", product_surface.data_audit(args))
-        return 0
-    if args.action == "doctor":
-        from kairospy.surface import product as product_surface
-        _emit_data_payload(args, "Kairos Data Diagnostics", product_surface.data_doctor(args))
-        return 0
-    if args.action == "metadata":
-        from kairospy.surface import product as product_surface
-        try:
-            payload = product_surface.data_metadata(args)
-        except product_surface.DataDatasetInputError as error:
-            payload = error.to_payload()
-            _emit_data_payload(args, "Kairos Dataset Metadata", payload)
-            return 2
-        _emit_data_payload(args, "Kairos Dataset Metadata", payload)
-        return 0
-    if args.action == "diagnostics":
-        from kairospy.surface import product as product_surface
-
-        report = product_surface.data_list(args)
-        report["operation"] = "diagnostics"
-        report["healthy"] = all(item.get("status") == "ready" for item in report.get("datasets", ()))
-        _emit_data_payload(args, "Kairos Data Diagnostics", report)
-        return 2 if args.strict and not report["healthy"] else 0
-    if args.action == "repair-index":
-        from kairospy.data import DatasetStore
-
-        path = DatasetStore(args.lake_root).rebuild_index()
-        _emit_data_payload(args, "Kairos Dataset Index", {
-            "product": "data",
-            "operation": "repair-index",
-            "status": "rebuilt",
-            "index": str(path),
-        })
-        return 0
-    if args.action == "clean-tmp":
-        from kairospy.data import DatasetStore
-
-        removed = DatasetStore(args.lake_root).clean_tmp(getattr(args, "dataset", None))
-        _emit_data_payload(args, "Kairos Dataset Tmp", {
-            "product": "data",
-            "operation": "clean-tmp",
-            "status": "cleaned",
-            "removed": [str(path) for path in removed],
-            "count": len(removed),
-        })
-        return 0
-    if args.action == "us-equity-momentum-diagnostics":
-        from kairospy.analytics.features import UsEquityMomentumDiagnostics
-        report = UsEquityMomentumDiagnostics(args.lake_root).report(workspace=args.workspace, version=args.version)
-        print(json.dumps(report, ensure_ascii=False, indent=2))
-        return 2 if args.strict and report["summary"]["errors"] else 0
-    if args.action == "validate":
-        from kairospy.surface import product as product_surface
-        try:
-            payload = product_surface.data_validate(args)
-        except product_surface.DataDatasetInputError as error:
-            payload = error.to_payload()
-            _emit_data_payload(args, "Kairos Data Validation", payload)
-            return 2
-        _emit_data_payload(args, "Kairos Data Validation", payload)
-        return 0 if payload["status"] == "passed" else 2
-    if args.action == "prepare":
-        payload = _removed_data_command_payload(
-            "prepare",
-            "Dataset preparation no longer publishes releases or promotes quality levels; use built-in product ingestion commands.",
-        )
-        _emit_data_payload(args, "Kairos Data Preparation", payload)
-        return 2
-    if args.action == "prepare-us-equity-momentum":
-        payload = _removed_data_command_payload(
-            "prepare-us-equity-momentum",
-            "This workflow depended on release preparation and will be rebuilt on top of Dataset Store ingestion.",
-        )
-        _emit_data_payload(args, "Kairos US Equity Momentum Preparation", payload)
-        return 2
-    if args.action == "query":
-        if args.limit <= 0:
-            raise SystemExit("--limit must be positive")
-        dataset = _dataset_argument(args)
-        from kairospy.surface import product as product_surface
-        metadata = None
-        try:
-            metadata = product_surface.data_metadata(args)
-            rows = DatasetClient(args.lake_root).read(
-                dataset,
-                start=args.start,
-                end=args.end,
-                columns=tuple(args.field) or None,
-                output=OutputFormat.ROWS,
-                time_field=str(metadata.get("time") or "") or None,
-            )
-        except product_surface.DataDatasetInputError as error:
-            _emit_data_payload(args, "Kairos Data Query", error.to_payload())
-            return 2
-        except (FileNotFoundError, KeyError) as error:
-            if isinstance(metadata, dict) and metadata.get("live", {}).get("configured"):
-                payload = product_surface._historical_not_configured_error("query", dataset).to_payload()
-            else:
-                payload = product_surface._dataset_not_found_error("query", dataset).to_payload()
-            _emit_data_payload(args, "Kairos Data Query", payload)
-            return 2
-        payload = {
-            "product": "data", "operation": "query", "dataset": str(metadata.get("dataset") or dataset),
-            "returned_rows": min(len(rows), args.limit), "total_rows": len(rows),
-            "rows": to_primitive(rows[:args.limit]),
-        }
-        _emit_data_payload(args, "Kairos Data Query", payload); return 0
-    if args.action == "replay":
-        from kairospy.surface import product as product_surface
-        try:
-            payload = product_surface.data_replay(args)
-        except product_surface.DataDatasetInputError as error:
-            payload = error.to_payload()
-            _emit_data_payload(args, "Kairos Data Replay", payload)
-            return 2
-        _emit_data_payload(args, "Kairos Data Replay", payload)
-        return 0
-    if args.action == "freeze":
-        payload = _removed_data_command_payload(
-            "freeze",
-            "Dataset Store does not know workspaces or frozen release refs; strategy/runtime snapshots should own reproducibility.",
-        )
-        _emit_data_payload(args, "Kairos Data Freeze", payload)
-        return 2
-    if args.action == "catalog":
-        from kairospy.surface import product as product_surface
-
-        _emit_data_payload(args, "Kairos Data Catalog", product_surface.data_list(args))
-        return 0
-    if args.action == "copy":
-        payload = _removed_data_command_payload(
-            "copy",
-            "Dataset release copy has been removed from the Data product.",
-            "Copy Dataset Store directories directly or rebuild datasets through provider ingestion.",
-        )
-        _emit_data_payload(args, "Kairos Data Copy", payload)
-        return 2
-    if args.action == "compare":
-        payload = _removed_data_command_payload(
-            "compare",
-            "Data Store has no release identity to compare; compare Dataset tables explicitly in analysis code.",
-        )
-        _emit_data_payload(args, "Kairos Data Compare", payload)
-        return 2
-    if args.action == "audit-artifact":
-        payload = _removed_data_command_payload(
-            "audit-artifact",
-            "Release artifact audit has moved out of Dataset storage.",
-        )
-        _emit_data_payload(args, "Kairos Data Audit Artifact", payload)
-        return 2
-    if args.action == "alias":
-        from kairospy.data import DatasetStore
-
-        dataset = _dataset_argument(args)
-        store = DatasetStore(args.lake_root)
-        dataset_id = store.resolve(dataset)
-        if not store.dataset_path(dataset_id).exists():
-            from kairospy.surface import product as product_surface
-
-            _emit_data_payload(args, "Kairos Dataset Alias", product_surface._dataset_not_found_error("alias", dataset).to_payload())
-            return 2
-        path = store.alias(dataset_id, args.alias)
-        _emit_data_payload(args, "Kairos Dataset Alias", {
-            "product": "data",
-            "operation": "alias",
-            "dataset": str(dataset_id),
-            "alias": args.alias,
-            "path": str(path),
-            "status": "ready",
-        })
-        return 0
-    if args.action in {"plan", "acquire"}:
-        payload = _removed_data_command_payload(
-            args.action,
-            "Dataset Store no longer plans/acquires immutable releases; provider-specific product ingestion owns this workflow.",
-        )
-        _emit_data_payload(args, "Kairos Acquisition Plan", payload)
-        return 2
-    if args.action == "promote":
-        if getattr(args, "for_use", None):
-            if not args.dataset:
-                raise SystemExit("data promote requires a Dataset name with --for")
-            from kairospy.surface import product as product_surface
-            try:
-                payload = product_surface.data_promote(args)
-            except product_surface.DataDatasetInputError as error:
-                payload = error.to_payload()
-                _emit_data_payload(args, "Kairos Dataset Promotion", payload)
-                return 2
-            _emit_data_payload(args, "Kairos Dataset Promotion", payload)
-            return 0 if payload.get("status") in {"ready_for_workspace", "ready_for_backtest", "ready_for_production"} else 2
-        raise SystemExit("data promote requires --for workspace, --for backtest, or --for production")
-    if args.action == "quarantine-insecure-provider-cache":
-        moved = MassiveVendorArchiveClient.quarantine_non_https(args.lake_root)
-        print(json.dumps({"quarantined": len(moved), "paths": [str(item) for item in moved]}, ensure_ascii=False, indent=2)); return 0
-    if args.action == "sync-provider-reference":
-        pipeline = MassiveReferencePipeline(args.lake_root, MassiveClient(_massive_marketdata_config(args)))
-        result: dict[str, object] = {"code_tables": pipeline.sync_code_tables()}
-        if args.equity_tickers:
-            result["equity_tickers"] = pipeline.sync_equity_tickers(include_inactive=not args.active_only)
-        if args.ticker:
-            if not args.start or not args.end:
-                raise SystemExit("--start and --end are required with --ticker")
-            result["corporate_actions"] = pipeline.sync_corporate_actions(args.ticker, datetime.fromisoformat(args.start), datetime.fromisoformat(args.end))
-        print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
-    if args.action == "build-provider-equity-identity":
-        reference_rows = json.loads(args.reference_rows.read_text(encoding="utf-8"))
-        ticker_events = json.loads(args.ticker_events.read_text(encoding="utf-8")) if args.ticker_events else []
-        resolver = MassiveEquityIdentityResolver()
-        resolved = resolver.resolve(reference_rows, ticker_events)
-        manifest = resolver.save(resolved, args.lake_root)
-        print(json.dumps(manifest, ensure_ascii=False, indent=2))
-        return 0 if not resolved.quarantined else 2
-    if args.action == "build-provider-slices":
-        dataset = MassiveMarketSnapshotBuilder(args.lake_root, reference_catalog_path=args.reference_catalog_path, dataset_root=args.dataset_root).build(
-            args.source_dataset, args.output_dataset, datetime.fromisoformat(args.start), datetime.fromisoformat(args.end),
-            sampling_seconds=args.sampling_seconds, max_quote_age_seconds=args.max_quote_age_seconds,
-            split=args.split, risk_free_rate=args.risk_free_rate)
-        print(f"{dataset.manifest.dataset_id}: slices={dataset.manifest.slice_count} hash={dataset.manifest.content_hash}")
-        return 0
-    if args.action == "provider-entitlement-diagnostics":
-        report = MassiveEntitlementDiagnostics(MassiveClient(_massive_marketdata_config(args))).check(
-            underlying=args.underlying, option_ticker=args.option_ticker, date=args.date)
-        print(json.dumps({
-            "ready": report.ready,
-            "api_host": report.api_host,
-            "official_underlying_history": report.official_underlying_history,
-            "valuation_reference_mode": report.valuation_reference_mode,
-            "checks": report.checks,
-        }, ensure_ascii=False, indent=2))
-        return 0 if report.ready else 2
-    if args.action == "compact-market-events":
-        result = ParquetMarketEventRepository(Path(args.lake_root) / "canonical" / "market").compact(args.dataset)
-        print(json.dumps(result, ensure_ascii=False, indent=2)); return 0
-    if args.action == "provider-fetch":
-        client = MassiveClient(_massive_marketdata_config(args))
-        archive = MassiveVendorArchiveClient(args.lake_root, client)
-        resource, params = _massive_request(args)
-        result = archive.fetch_pages(resource, params, max_pages=args.max_pages)
-        print(json.dumps({"fingerprint": result.fingerprint, "directory": str(result.directory), "receipt": result.receipt}, ensure_ascii=False, indent=2))
-        return 0
-    if args.action == "provider-flat-file":
-        client = MassiveClient(_massive_marketdata_config(args))
-        flat = MassiveFlatFileClient(args.lake_root, client)
-        if args.operation == "usage":
-            print(json.dumps(flat.usage(), ensure_ascii=False, indent=2)); return 0
-        if not args.key:
-            raise SystemExit("--key is required for Massive Flat File status/download")
-        if args.operation == "status":
-            print(json.dumps(flat.cache_status(args.key), ensure_ascii=False, indent=2)); return 0
-        print(flat.download(args.key)); return 0
-    if args.action == "provider-flat-file-batch":
-        flat = MassiveFlatFileClient(args.lake_root, MassiveClient(_massive_marketdata_config(args)))
-        report = MassiveFlatFileBatchDownloader(flat).download_range(
-            date.fromisoformat(args.start), date.fromisoformat(args.end), max_files=args.max_files, dry_run=args.dry_run,
-        )
-        print(json.dumps(report, ensure_ascii=False, indent=2)); return 0
-    if args.action in {"prepare-spxw-daily-ohlcv", "prepare-spxw-day-aggs"}:
-        manifest = SpxwDailyOhlcvPipeline(args.lake_root).prepare(
-            args.dataset_id, date.fromisoformat(args.start), date.fromisoformat(args.end),
-        )
-        print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
-    if args.action in {"prepare-option-daily-ohlcv", "prepare-option-day-aggs"}:
-        manifest = OptionDailyOhlcvPipeline(args.lake_root, args.option_root).prepare(
-            args.dataset_id, date.fromisoformat(args.start), date.fromisoformat(args.end),
-        )
-        print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
-    if args.action in {"prepare-equity-daily-ohlcv", "prepare-equity-day-aggs"}:
-        manifest = MassiveEquityDailyOhlcvPipeline(
-            args.lake_root, MassiveClient(_massive_marketdata_config(args)),
-        ).prepare(
-            args.dataset_id, args.ticker, date.fromisoformat(args.start), date.fromisoformat(args.end),
-            view=args.view,
-        )
-        print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
-    if args.action in {"prepare-equity-hourly-ohlcv", "prepare-equity-hour-aggs"}:
-        manifest = MassiveEquityHourlyOhlcvPipeline(
-            args.lake_root, MassiveClient(_massive_marketdata_config(args)),
-        ).prepare(
-            args.dataset_id, args.ticker, date.fromisoformat(args.start), date.fromisoformat(args.end),
-            view=args.view,
-        )
-        print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
-    if args.action == "prepare-option-close-implied-volatility":
-        manifest = OptionCloseImpliedVolatilityPipeline(args.lake_root).prepare(
-            args.dataset_id, args.option_dataset, args.equity_dataset,
-            risk_free_rate=args.risk_free_rate, dividend_yield=args.dividend_yield,
-        )
-        print(json.dumps(manifest, ensure_ascii=False, indent=2)); return 0
-    metadata = DatasetClient(args.lake_root).metadata(args.dataset)
-    print(json.dumps(metadata, ensure_ascii=False, indent=2))
-    return 0
-
-
-def _removed_data_command_payload(operation: str, why: str) -> dict[str, object]:
-    return {
-        "product": "data",
-        "operation": operation,
-        "status": "removed",
-        "issues": [{
-            "code": f"{operation.replace('-', '_')}_removed",
-            "message": f"kairospy data {operation} has been removed.",
-            "why": why,
-        }],
-    }
-
-
-def _emit_data_payload(args: argparse.Namespace, title: str, payload: object) -> None:
-    from kairospy.surface.cli.output import (
-        render_builtin_data_products, render_data_catalog, render_dataset_detail, render_dataset_list,
-        render_dataset_releases, render_generic_payload, render_key_value_panel, render_status_table,
-    )
-
-    primitive = to_primitive(payload)
-    if getattr(args, "action", None) != "audit":
-        primitive = _hide_default_data_internals(primitive)
-    if args.format == "json":
-        print(json.dumps(primitive, ensure_ascii=False, indent=2, sort_keys=True))
-        return
-    if not isinstance(primitive, dict):
-        print(json.dumps(primitive, ensure_ascii=False, indent=2, sort_keys=True))
-        return
-    if args.action == "catalog" and isinstance(primitive.get("products"), list):
-        print(render_data_catalog(primitive["products"]))
-        return
-    if (
-        args.action in {"product", "products"}
-        and getattr(args, "product_action", None) == "list"
-        and isinstance(primitive.get("products"), list)
-    ):
-        print(render_builtin_data_products("Kairos Built-In Data Products", primitive["products"]))
-        return
-    if args.action in {"product", "products"} and getattr(args, "product_action", None) == "doctor":
-        print(_render_data_product_doctor_payload(title, primitive))
-        return
-    if args.action == "protocol":
-        print(_render_data_protocol_payload(title, primitive))
-        return
-    if args.action == "use" and getattr(args, "list_products", False) and isinstance(primitive.get("products"), list):
-        print(render_builtin_data_products("Kairos Built-In Data Products", primitive["products"]))
-        return
-    if args.action == "use" and primitive.get("operation") == "use":
-        print(_render_data_use_payload(title, primitive))
-        return
-    if args.action == "list" and isinstance(primitive.get("datasets"), list):
-        print(render_dataset_list(title, primitive["datasets"]))
-        return
-    if args.action == "releases" and isinstance(primitive.get("releases"), list):
-        print(render_dataset_releases(title, primitive["releases"]))
-        return
-    if args.action == "search" and isinstance(primitive.get("datasets"), list):
-        print(render_dataset_list(title, primitive["datasets"]))
-        return
-    if args.action == "acquire" and isinstance(primitive.get("products"), list):
-        print(render_dataset_list(title, primitive["products"]))
-        return
-    if args.action in {"describe", "doctor"}:
-        print(_render_data_doctor_payload(title, primitive))
-        return
-    if args.action == "diagnostics":
-        print(render_status_table(title, _diagnostic_rows(primitive)))
-        return
-    if args.action == "acquire" and primitive.get("operation") == "acquire":
-        print(_render_dataset_acquire_payload(title, primitive))
-        return
-    if args.action in {"plan", "acquire"}:
-        print(_render_acquisition_plan_payload(title, primitive))
-        return
-    if args.action == "query":
-        print(_render_query_payload(title, primitive))
-        return
-    if args.action == "replay":
-        print(_render_replay_payload(title, primitive))
-        return
-    if args.action == "sample":
-        print(_render_sample_payload(title, primitive))
-        return
-    print(render_generic_payload(title, primitive))
-
-
-def _hide_default_data_internals(value: object) -> object:
-    if isinstance(value, dict):
-        return {
-            key: _hide_default_data_internals(item)
-            for key, item in value.items()
-            if key != "source_kind"
-        }
-    if isinstance(value, list):
-        return [_hide_default_data_internals(item) for item in value]
-    return value
-
-
-def _dimension_filters(values: list[str]) -> dict[str, str]:
-    dimensions = {}
-    for item in values:
-        if "=" not in item:
-            raise SystemExit("--dimension must use key=value")
-        key, value = item.split("=", 1)
-        if not key.strip() or not value.strip():
-            raise SystemExit("--dimension key and value cannot be empty")
-        dimensions[key.strip()] = value.strip()
-    return dimensions
-
-
-def _render_data_use_payload(title: str, payload: dict[str, object]) -> str:
-    from kairospy.surface.cli.output import render_key_value_panel
-
-    historical = payload.get("historical") if isinstance(payload.get("historical"), dict) else {}
-    rows = [
-        ("Product", payload.get("product", "")),
-        ("Operation", payload.get("operation", "")),
-        ("Dataset", payload.get("dataset", "")),
-        ("Data Product", payload.get("data_product", "")),
-        ("Default Dataset", payload.get("default_dataset", "")),
-        ("Title", payload.get("title", "")),
-        ("Capability", payload.get("capability", "")),
-        ("Target Use", payload.get("target_use", "")),
-        ("Status", historical.get("status", "")),
-        ("Ready For", ", ".join(str(item) for item in historical.get("ready_for", ()))),
-        ("Blocked For", ", ".join(str(item) for item in historical.get("blocked_for", ()))),
-        ("Time", payload.get("time", "")),
-        ("Requires Account", payload.get("requires_account", "")),
-        ("Provider", payload.get("provider", "")),
-        ("Venue", payload.get("venue", "")),
-    ]
-    return render_key_value_panel(title, [(label, value) for label, value in rows if value not in ("", None)])
-
-
-def _dataset_argument(args: argparse.Namespace) -> str:
-    option = getattr(args, "dataset", None)
-    positional = getattr(args, "dataset_arg", None)
-    if option and positional and str(option) != str(positional):
-        raise SystemExit(f"conflicting Dataset values: {positional} and {option}")
-    dataset = option or positional
-    if not dataset:
-        raise SystemExit("Dataset is required")
-    return str(dataset)
-
-
-def _render_sample_payload(title: str, payload: dict[str, object]) -> str:
-    from kairospy.surface.cli.output import render_key_value_panel
-
-    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
-    rows = [
-        ("Product", payload.get("product", "")),
-        ("Operation", payload.get("operation", "")),
-        ("Source", payload.get("source", "")),
-        ("Dataset", payload.get("dataset", "")),
-        ("Provider", payload.get("provider", "")),
-        ("Venue", payload.get("venue", "")),
-        ("Market", runtime.get("market", "")),
-        ("Symbol", runtime.get("symbol", "")),
-        ("Channel", runtime.get("channel", "")),
-        ("Levels", runtime.get("levels", "")),
-        ("Interval", runtime.get("interval", "")),
-        ("Stream", runtime.get("stream", "")),
-        ("Limit", payload.get("limit", "")),
-        ("Row Count", payload.get("row_count", "")),
-    ]
-    return render_key_value_panel(title, [(label, value) for label, value in rows if value not in ("", None)])
-
-
-def _prompt_acquire_args(args: argparse.Namespace, client: DatasetClient, providers) -> None:
-    if args.dataset and args.start and args.end:
-        return
-    products = _acquirable_product_rows(client, providers)
-    if not products:
-        raise SystemExit("no acquirable data products are registered")
-    if args.dataset is None:
-        print("Acquirable Data Products")
-        for index, product in enumerate(products, start=1):
-            print(f"  {index}. {product['logical_key']}  {product['title']}")
-        selected = _prompt_text("Dataset number or logical key", "1").strip()
-        if selected.isdigit() and 1 <= int(selected) <= len(products):
-            args.dataset = str(products[int(selected) - 1]["logical_key"])
-        else:
-            args.dataset = selected
-    if args.start is None:
-        args.start = _prompt_text("Start [inclusive ISO-8601]", "")
-    if args.end is None:
-        args.end = _prompt_text("End [exclusive ISO-8601]", "")
-    if not args.instrument:
-        universe = _prompt_text("Universe [full-market or comma-separated instruments]", "full-market").strip()
-        if universe and universe != "full-market":
-            args.instrument = tuple(item.strip() for item in universe.split(",") if item.strip())
-
-
-def _acquirable_product_rows(client: DatasetClient, providers) -> list[dict[str, object]]:
-    rows = []
-    specs = getattr(providers, "_specs", {})
-    for key, spec in sorted(specs.items()):
-        product = spec.product
-        rows.append({
-            "logical_key": str(key),
-            "title": product.title,
-            "layer": product.layer.value,
-            "dimensions": dict(product.dimensions),
-            "primary_time": product.primary_time,
-            "sources": to_primitive(product.sources),
-            "releases": [to_primitive(release) for release in client.catalog.releases(product)],
-        })
-    return rows
-
-
-def _plan_with_cli_instruments(plan, providers, instruments: tuple[str, ...]):
-    if not instruments or plan.selected is None or not plan.connector_available:
-        return plan
-    from dataclasses import replace
-    from kairospy.data.acquisition import AcquisitionRequest
-
-    connector = providers.get(plan.selected.provider, plan.logical_key)
-    request = AcquisitionRequest(
-        plan.logical_key, plan.missing, plan.selected, instruments,
-        base_release_id=plan.local_release_id,
-    )
-    estimate = connector.estimate(request) if hasattr(connector, "estimate") else plan.estimate
-    return replace(plan, estimate=estimate)
-
-
-def _acquisition_plan_payload(plan, providers, instruments: tuple[str, ...]) -> dict[str, object]:
-    payload = to_primitive(plan)
-    if plan.selected is None or not plan.connector_available:
-        return payload
-    connector = providers.get(plan.selected.provider, plan.logical_key)
-    task_plan = getattr(connector, "task_plan", None)
-    if task_plan is None:
-        return payload
-    from kairospy.data.acquisition import AcquisitionRequest
-
-    request = AcquisitionRequest(
-        plan.logical_key, plan.missing, plan.selected, instruments,
-        base_release_id=plan.local_release_id,
-    )
-    try:
-        payload["provider_tasks"] = task_plan(request)
-    except Exception as error:
-        payload["provider_tasks"] = {"status": "unavailable", "error": f"{type(error).__name__}: {error}"}
-    return payload
-
-
-def _acquisition_limits(args: argparse.Namespace) -> AcquisitionLimits:
-    max_requests = int(getattr(args, "max_requests", 10_000))
-    max_instruments = int(getattr(args, "max_instruments", 10_000))
-    max_bytes = getattr(args, "max_bytes", None)
-    if max_requests <= 0 or max_instruments <= 0 or max_bytes is not None and int(max_bytes) <= 0:
-        raise SystemExit("acquisition limits must be positive")
-    return AcquisitionLimits(maximum_requests=max_requests, maximum_instruments=max_instruments, maximum_bytes=max_bytes)
-
-
-def _diagnostic_rows(payload: dict[str, object]) -> list[dict[str, object]]:
-    if isinstance(payload.get("checks"), list):
-        return [
-            {
-                "name": item.get("name", item.get("check", "check")),
-                "status": "ok" if item.get("passed", item.get("healthy", False)) else "warn",
-                "detail": item.get("detail", item.get("message", "")),
-            }
-            for item in payload["checks"] if isinstance(item, dict)
-        ]
-    summary = payload.get("summary")
-    if isinstance(summary, dict):
-        return [{"name": key, "status": "ok" if not value else "warn", "detail": value} for key, value in summary.items()]
-    healthy = payload.get("healthy", payload.get("passed", True))
-    return [{"name": "data", "status": "ok" if healthy else "warn", "detail": "healthy" if healthy else "needs attention"}]
-
-
-def _render_data_doctor_payload(title: str, payload: dict[str, object]) -> str:
-    from kairospy.surface.cli.output import render_key_value_panel
-
-    def join_values(key: str) -> str:
-        values = payload.get(key)
-        if isinstance(values, list):
-            return ", ".join(str(item) for item in values) if values else "-"
-        return "-"
-
-    rows = (
-        ("Dataset", payload.get("dataset", "-")),
-        ("Status", payload.get("status", "-")),
-        ("Time", payload.get("time", "-")),
-        ("Ready For", join_values("ready_for")),
-        ("Blocked For", join_values("blocked_for")),
-        ("Issues", join_values("issues")),
-    )
-    return render_key_value_panel(title, rows)
-
-
-def _dataset_acquire_payload(release: DatasetRelease) -> dict[str, object]:
-    ready_for = _ready_for_dataset_status(release.status)
-    all_uses = ("workspace", "backtest", "production")
-    return {
-        "product": "data",
-        "operation": "acquire",
-        "dataset": str(release.product_key),
-        "status": _dataset_ready_status(release.status),
-        "ready_for": ready_for,
-        "blocked_for": [value for value in all_uses if value not in ready_for],
-        "provider": release.provider,
-        "venue": release.venue,
-        "quality_level": release.quality_level.value,
-        "format": release.format,
-    }
-
-
-def _dataset_ready_status(status: DatasetStatus) -> str:
-    if status is DatasetStatus.APPROVED_FOR_PRODUCTION:
-        return "ready_for_production"
-    if status is DatasetStatus.APPROVED_FOR_BACKTEST:
-        return "ready_for_backtest"
-    if status is DatasetStatus.APPROVED_FOR_WORKSPACE:
-        return "ready_for_workspace"
-    return status.value
-
-
-def _ready_for_dataset_status(status: DatasetStatus) -> list[str]:
-    if status is DatasetStatus.APPROVED_FOR_PRODUCTION:
-        return ["workspace", "backtest", "production"]
-    if status is DatasetStatus.APPROVED_FOR_BACKTEST:
-        return ["workspace", "backtest"]
-    if status is DatasetStatus.APPROVED_FOR_WORKSPACE:
-        return ["workspace"]
-    return []
-
-
-def _render_dataset_acquire_payload(title: str, payload: dict[str, object]) -> str:
-    from kairospy.surface.cli.output import render_key_value_panel
-
-    def join_values(key: str) -> str:
-        values = payload.get(key)
-        if isinstance(values, list):
-            return ", ".join(str(item) for item in values) if values else "-"
-        return "-"
-
-    rows = (
-        ("Dataset", payload.get("dataset", "-")),
-        ("Status", payload.get("status", "-")),
-        ("Ready For", join_values("ready_for")),
-        ("Blocked For", join_values("blocked_for")),
-        ("Provider", payload.get("provider", "-")),
-        ("Venue", payload.get("venue", "-")),
-        ("Quality Level", payload.get("quality_level", "-")),
-        ("Format", payload.get("format", "-")),
-    )
-    return render_key_value_panel(title, rows)
-
-
-def _render_data_product_doctor_payload(title: str, payload: dict[str, object]) -> str:
-    from kairospy.surface.cli.output import render_key_value_panel, render_status_table
-
-    aliases = payload.get("aliases")
-    alias_text = ", ".join(str(alias) for alias in aliases) if isinstance(aliases, list) and aliases else "-"
-    rows = (
-        ("Data Product", payload.get("key") or payload.get("requested_key", "-")),
-        ("Requested", payload.get("requested_key", "-")),
-        ("Status", payload.get("status", "-")),
-        ("Available", "yes" if payload.get("available") else "no"),
-        ("Provider", payload.get("provider", "-")),
-        ("Venue", payload.get("venue", "-")),
-        ("Dataset", payload.get("dataset", "-")),
-        ("Capability", payload.get("capability", "-")),
-        ("Aliases", alias_text),
-    )
-    output = [render_key_value_panel(title, rows)]
-    issues = payload.get("issues")
-    if isinstance(issues, list) and issues:
-        output.append(render_status_table(
-            "Issues",
-            [{"code": item.get("code", ""), "message": item.get("message", "")}
-             for item in issues if isinstance(item, dict)],
-            columns=("code", "message"),
-        ))
-    commands = payload.get("next_commands")
-    if isinstance(commands, list) and commands:
-        output.append(render_status_table(
-            "Next Commands",
-            [{"command": command} for command in commands],
-            columns=("command",),
-        ))
-    return "\n\n".join(item for item in output if item)
-
-
-def _render_query_payload(title: str, payload: dict[str, object]) -> str:
-    from kairospy.surface.cli.output import render_key_value_panel, render_status_table
-
-    if payload.get("status") and "returned_rows" not in payload:
-        issues = payload.get("issues")
-        issue_codes = []
-        if isinstance(issues, list):
-            for issue in issues:
-                if isinstance(issue, dict):
-                    issue_codes.append(str(issue.get("code") or issue.get("message") or issue))
-                else:
-                    issue_codes.append(str(issue))
-        return render_key_value_panel(title, (
-            ("Dataset", payload.get("dataset", "-")),
-            ("Status", payload.get("status", "-")),
-            ("Issues", ", ".join(issue_codes) if issue_codes else "-"),
-            ("Next Command", payload.get("next_command", "-")),
-        ))
-
-    output = [render_key_value_panel(title, (
-        ("Dataset", payload.get("dataset", "-")),
-        ("Returned Rows", payload.get("returned_rows", "-")),
-        ("Total Rows", payload.get("total_rows", "-")),
-    ))]
-    rows = payload.get("rows")
-    if isinstance(rows, list) and rows:
-        fields = tuple(str(key) for key in rows[0].keys()) if isinstance(rows[0], dict) else ("row",)
-        table_rows = []
-        for row in rows:
-            table_rows.append({field: row.get(field, "") for field in fields} if isinstance(row, dict) else {"row": row})
-        output.append(render_status_table("Rows", table_rows, columns=fields))
-    return "\n\n".join(output)
-
-
-def _render_replay_payload(title: str, payload: dict[str, object]) -> str:
-    from kairospy.surface.cli.output import render_key_value_panel
-
-    if payload.get("status") and "returned_rows" not in payload:
-        issues = payload.get("issues")
-        issue_codes = []
-        if isinstance(issues, list):
-            for issue in issues:
-                if isinstance(issue, dict):
-                    issue_codes.append(str(issue.get("code") or issue.get("message") or issue))
-                else:
-                    issue_codes.append(str(issue))
-        return render_key_value_panel(title, (
-            ("Dataset", payload.get("dataset", "-")),
-            ("Status", payload.get("status", "-")),
-            ("Issues", ", ".join(issue_codes) if issue_codes else "-"),
-            ("Next Command", payload.get("next_command", "-")),
-        ))
-
-    output = [render_key_value_panel(title, (
-        ("Dataset", payload.get("dataset", "-")),
-        ("Returned Rows", payload.get("returned_rows", "-")),
-        ("Total Rows", payload.get("total_rows", "-")),
-    ))]
-    rows = payload.get("rows")
-    if isinstance(rows, list) and rows:
-        output.append("Rows")
-        output.extend(json.dumps(to_primitive(row), ensure_ascii=False, sort_keys=True) for row in rows)
-    return "\n".join(output)
-
-
-def _render_data_protocol_payload(title: str, payload: dict[str, object]) -> str:
-    from kairospy.surface.cli.output import render_key_value_panel, render_status_table
-
-    protocols = payload.get("protocols")
-    if isinstance(protocols, list):
-        rows = [
-            {
-                "kind": item.get("kind", ""),
-                "interface": item.get("interface", ""),
-                "used_by": item.get("used_by", ""),
-            }
-            for item in protocols
-            if isinstance(item, dict)
-        ]
-        return render_status_table(title, rows, columns=("kind", "interface", "used_by"))
-
-    output = [render_key_value_panel(title, (
-        ("Kind", payload.get("kind", "-")),
-        ("Status", payload.get("status", "-")),
-        ("Source", payload.get("source", payload.get("file", "-"))),
-        ("Rows", payload.get("row_count", "-")),
-        ("Next Command", payload.get("next_command", "-")),
-    ))]
-    checks = payload.get("checks")
-    if isinstance(checks, list) and checks:
-        rows = []
-        for item in checks:
-            if isinstance(item, dict):
-                rows.append({
-                    "name": item.get("name", ""),
-                    "passed": item.get("passed", ""),
-                    "value": item.get("value", ""),
-                })
-        output.append(render_status_table("Checks", rows, columns=("name", "passed", "value")))
-    template = payload.get("template")
-    if isinstance(template, str) and template:
-        output.append(template.rstrip())
-    issues = payload.get("issues")
-    if isinstance(issues, list) and issues:
-        rows = []
-        for item in issues:
-            if isinstance(item, dict):
-                rows.append({
-                    "code": item.get("code", ""),
-                    "message": item.get("message", ""),
-                })
-        output.append(render_status_table("Issues", rows, columns=("code", "message")))
-    return "\n\n".join(output)
-
-
-def _render_acquisition_plan_payload(title: str, payload: dict[str, object]) -> str:
-    from kairospy.surface.cli.output import render_key_value_panel, render_status_table
-
-    estimate = payload.get("estimate") if isinstance(payload.get("estimate"), dict) else {}
-    selected = payload.get("selected") if isinstance(payload.get("selected"), dict) else {}
-    requested = payload.get("requested") if isinstance(payload.get("requested"), dict) else {}
-    missing = payload.get("missing") if isinstance(payload.get("missing"), list) else []
-    rows = (
-        ("Dataset", payload.get("logical_key", "-")),
-        ("Provider", selected.get("provider", "-") if selected else "-"),
-        ("Venue", selected.get("venue", "-") if selected else "-"),
-        ("Provider Access", "available" if payload.get("connector_available") else "unavailable"),
-        ("Complete", payload.get("complete", False)),
-        ("Missing Ranges", len(missing)),
-        ("Estimated Requests", estimate.get("requests", "-") if estimate else "-"),
-        ("Estimated Instruments", estimate.get("instruments", "-") if estimate else "-"),
-        ("Cost Class", estimate.get("cost_class", "-") if estimate else "-"),
-    )
-    output = [render_key_value_panel(title, rows)]
-    tasks = payload.get("provider_tasks")
-    if isinstance(tasks, dict) and tasks:
-        task_rows = (
-            ("Provider", tasks.get("provider", "-")),
-            ("Task Type", tasks.get("task_type", "-")),
-            ("Universe", tasks.get("universe", "-")),
-            ("Symbols", tasks.get("symbols", "-")),
-            ("Total Tasks", tasks.get("total_tasks", "-")),
-            ("Cached Tasks", tasks.get("cached_tasks", "-")),
-            ("Uncached Tasks", tasks.get("uncached_tasks", "-")),
-            ("Resume Supported", tasks.get("resume_supported", "-")),
-        )
-        output.append(render_key_value_panel("Provider Task Plan", task_rows))
-        ranges = tasks.get("ranges")
-        if isinstance(ranges, list) and ranges:
-            output.append(render_status_table(
-                "Task Ranges",
-                [item for item in ranges if isinstance(item, dict)],
-                columns=("start", "end", "tasks", "cached", "uncached"),
-            ))
-        matrix = tasks.get("matrix")
-        if isinstance(matrix, list) and matrix:
-            output.append(render_status_table(
-                "Task Matrix",
-                [item for item in matrix if isinstance(item, dict)],
-                columns=("year", "month", "tasks", "cached_monthly", "cached_daily_files"),
-            ))
-    elif isinstance(requested, dict):
-        output.append(render_key_value_panel("Requested Window", (
-            ("Start", requested.get("start", "-")),
-            ("End", requested.get("end", "-")),
-        )))
-    return "\n\n".join(item for item in output if item)
-
-
-def _massive_request(args: argparse.Namespace) -> tuple[str, dict[str, object]]:
-    if args.resource == "option-contracts":
-        if not args.underlying:
-            raise SystemExit("--underlying is required for option-contracts")
-        return "/v3/reference/options/contracts", {"underlying_ticker": args.underlying, "as_of": args.start, "limit": args.limit, "sort": "ticker", "order": "asc"}
-    if args.resource in {"option-quotes", "option-trades"}:
-        if not args.ticker or not args.start or not args.end:
-            raise SystemExit("--ticker, --start and --end are required for historical option quotes/trades")
-        kind = "quotes" if args.resource == "option-quotes" else "trades"
-        return f"/v3/{kind}/{args.ticker}", {"timestamp.gte": args.start, "timestamp.lt": args.end, "limit": args.limit, "sort": "timestamp", "order": "asc"}
-    if args.resource == "aggregates":
-        if not args.ticker or not args.start or not args.end:
-            raise SystemExit("--ticker, --start and --end are required for aggregates")
-        return f"/v2/aggs/ticker/{args.ticker}/range/{args.multiplier}/{args.timespan}/{args.start}/{args.end}", {"adjusted": True, "sort": "asc", "limit": args.limit}
-    if not args.underlying:
-        raise SystemExit("--underlying is required for option-chain")
-    return f"/v3/snapshot/options/{args.underlying}", {"limit": args.limit}
-
-
-def _prepare_us_equity_momentum(args: argparse.Namespace) -> dict[str, object]:
-    return _removed_data_command_payload(
-        "prepare-us-equity-momentum",
-        "This workflow depended on release preparation and will be rebuilt on top of Dataset Store ingestion.",
-        "Use Data Product ingestion and Dataset Store reads directly.",
-    )
-
-
-def _latest_us_equity_identity_reference(lake_root: str | Path) -> dict[str, object]:
-    root = Path(lake_root)
-    manifests = sorted((root / "reference/provider=massive/equity_identity").glob("version=*/manifest.json"))
-    if not manifests:
-        return {"directory": None, "auto_detected": False, "reason": "missing"}
-    candidates = []
-    for path in manifests:
-        try:
-            manifest = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if int(manifest.get("quarantine_count", 0) or 0) != 0:
-            continue
-        if not (path.parent / "instruments.json").exists() or not (path.parent / "mappings.json").exists():
-            continue
-        candidates.append((path, manifest))
-    if not candidates:
-        return {"directory": None, "auto_detected": False, "reason": "no clean equity_identity manifest"}
-    path, manifest = candidates[-1]
-    release = _ensure_us_equity_identity_release(root, path.parent, manifest)
-    return {
-        "directory": str(path.parent.relative_to(root)),
-        "auto_detected": True,
-        "content_sha256": manifest.get("sha256"),
-        "release_id": release.release_id,
-        "quality_level": release.quality_level.value,
-        "instrument_count": manifest.get("instrument_count"),
-        "mapping_count": manifest.get("mapping_count"),
-    }
-
-
-def _ensure_us_equity_identity_release(root: Path, directory: Path, manifest: dict[str, object]) -> DatasetRelease:
-    digest = str(manifest.get("sha256") or "")
-    if not digest:
-        raise ValueError(f"equity identity manifest is missing sha256: {directory}")
-    register_default_products(root)
-    catalog = DataCatalog(root)
-    release_id = f"identity_{digest[:24]}"
-    try:
-        return catalog.release(release_id)
-    except KeyError:
-        pass
-    product = catalog.product("reference.identity.equity.us.massive")
-    catalog.register_release(DatasetRelease(
-        release_id,
-        product.key,
-        f"content.{digest[:16]}",
-        "reference.identity.equity.us.massive.v1",
-        "1",
-        "massive.equity_identity",
-        "1",
-        str(directory.relative_to(root)),
-        "json",
-        digest,
-        "massive",
-        "us-securities",
-        ("reference.identity.equity.us.massive@latest-workspace",),
-        DatasetStatus.APPROVED_FOR_WORKSPACE,
-        QualityLevel.WORKSPACE,
-        datetime.now(timezone.utc).isoformat(),
-        DatasetStorageKind.REFERENCE,
-        "1",
-    ))
-    catalog.save()
-    assessment = DatasetQualityService(root).assess(release_id)
-    return DataCatalog(root).release(release_id)
-
-
-def _sync_us_equity_momentum_corporate_actions(
-    lake_root: str | Path,
-    raw_release_paths: list[str],
-    start: datetime,
-    end: datetime,
-    *,
-    dataset_id: str,
-) -> dict[str, object]:
-    if start.tzinfo is None or end.tzinfo is None or start >= end:
-        raise ValueError("corporate action sync requires timezone-aware increasing [start,end) timestamps")
-    ticker_map = _raw_equity_ticker_map(lake_root, raw_release_paths)
-    if not ticker_map:
-        raise ValueError("cannot sync corporate actions because prepared raw releases contain no ticker/instrument rows")
-
-    archive = MassiveVendorArchiveClient(lake_root, MassiveClient(_massive_marketdata_config()))
-    events: list[dict[str, object]] = []
-    receipts: list[str] = []
-    per_ticker: dict[str, dict[str, int]] = {}
-    for ticker, instrument_id in sorted(ticker_map.items()):
-        split_archive = archive.fetch_pages("/v3/reference/splits", {
-            "ticker": ticker,
-            "execution_date.gte": start.date(),
-            "execution_date.lt": end.date(),
-            "limit": 1000,
-        })
-        dividend_archive = archive.fetch_pages("/v3/reference/dividends", {
-            "ticker": ticker,
-            "ex_dividend_date.gte": start.date(),
-            "ex_dividend_date.lt": end.date(),
-            "limit": 1000,
-        })
-        receipts.extend([
-            str((split_archive.directory / "receipt.json").relative_to(Path(lake_root))),
-            str((dividend_archive.directory / "receipt.json").relative_to(Path(lake_root))),
-        ])
-        split_count = 0
-        dividend_count = 0
-        for row in archive.iter_results(split_archive):
-            ratio = Decimal(str(row["split_to"])) / Decimal(str(row["split_from"]))
-            if ratio <= 0:
-                raise ValueError(f"Massive split ratio must be positive for {ticker}")
-            events.append({
-                "source": "massive.splits",
-                "source_id": str(row.get("id") or f"{ticker}:{row.get('execution_date') or row.get('ex_date')}:{ratio}"),
-                "ticker": ticker,
-                "instrument_id": instrument_id,
-                "effective_at": {"$datetime": _corporate_action_date(row.get("execution_date") or row.get("ex_date")).isoformat()},
-                "ratio": {"$decimal": str(ratio)},
-            })
-            split_count += 1
-        for row in archive.iter_results(dividend_archive):
-            amount = Decimal(str(row["cash_amount"]))
-            if amount < 0:
-                raise ValueError(f"Massive dividend amount cannot be negative for {ticker}")
-            events.append({
-                "source": "massive.dividends",
-                "source_id": str(row.get("id") or f"{ticker}:{row.get('ex_dividend_date')}:{amount}"),
-                "ticker": ticker,
-                "instrument_id": instrument_id,
-                "ex_date": {"$datetime": _corporate_action_date(row.get("ex_dividend_date")).isoformat()},
-                "pay_date": {"$datetime": _corporate_action_date(row.get("pay_date") or row.get("ex_dividend_date")).isoformat()},
-                "currency": str(row.get("currency") or "USD"),
-                "amount_per_share": {"$decimal": str(amount)},
-            })
-            dividend_count += 1
-        per_ticker[ticker] = {"splits": split_count, "dividends": dividend_count}
-
-    digest = sha256(json.dumps(events, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    directory = (
-        Path(lake_root)
-        / "reference/provider=massive/corporate_actions/scope=us_equity_momentum_bounded"
-        / f"dataset={_safe_dataset_component(dataset_id)}"
-        / f"version={digest}"
-    )
-    write_json(directory / "events.json", events)
-    write_json(directory / "manifest.json", {
-        "manifest_version": 1,
-        "provider": "massive",
-        "scope": "us_equity_momentum_bounded",
-        "dataset_id": dataset_id,
-        "identity_source": "prepared raw release instrument_id",
-        "boundary": "[start,end)",
-        "start": start.isoformat(),
-        "end": end.isoformat(),
-        "ticker_count": len(ticker_map),
-        "event_count": len(events),
-        "sha256": digest,
-        "source_receipts": receipts,
-        "per_ticker": per_ticker,
-        "known_limitations": [
-            "bounded ticker corporate action sync; requires full point-in-time identity mapping before full-market backtest readiness",
-        ],
-    })
-    catalog = DataCatalog(lake_root)
-    product = catalog.product("reference.corporate_actions.equity.us.massive")
-    release_id = f"corpact_{digest[:24]}"
-    relative = str(directory.relative_to(Path(lake_root)))
-    catalog.register_release(DatasetRelease(
-        release_id,
-        product.key,
-        f"content.{digest[:16]}",
-        "reference.corporate_actions.equity.us.massive.v1",
-        "1",
-        "massive.corporate_actions",
-        "1",
-        relative,
-        "json",
-        digest,
-        "massive",
-        "us-securities",
-        ("reference.corporate_actions.equity.us.massive@latest-workspace",),
-        DatasetStatus.APPROVED_FOR_WORKSPACE,
-        QualityLevel.WORKSPACE,
-        datetime.now(timezone.utc).isoformat(),
-        DatasetStorageKind.REFERENCE,
-        "1",
-    ))
-    catalog.save()
-    assessment = DatasetQualityService(lake_root).assess(release_id)
-    return {
-        "synced": True,
-        "directory": str(directory.relative_to(Path(lake_root))),
-        "release_id": release_id,
-        "content_sha256": digest,
-        "quality_level": assessment.level.value,
-        "quality_passed": assessment.passed,
-        "event_count": len(events),
-        "ticker_count": len(ticker_map),
-        "per_ticker": per_ticker,
-    }
-
-
-def _raw_equity_ticker_map(lake_root: str | Path, relative_paths: list[str]) -> dict[str, str]:
-    try:
-        import pyarrow.parquet as pq
-    except ImportError as error:
-        raise RuntimeError("US equity momentum corporate action sync requires the 'data' optional dependency") from error
-    root = Path(lake_root)
-    mapping: dict[str, str] = {}
-    for relative in relative_paths:
-        source = root / relative
-        for path in _parquet_files(source):
-            for row in pq.read_table(path, columns=["ticker", "instrument_id"]).to_pylist():
-                ticker = str(row.get("ticker") or "").strip().upper()
-                instrument_id = str(row.get("instrument_id") or "").strip()
-                if not ticker or not instrument_id:
-                    continue
-                previous = mapping.get(ticker)
-                if previous is not None and previous != instrument_id:
-                    raise ValueError(f"ticker {ticker} maps to multiple instrument IDs in prepared raw data")
-                mapping[ticker] = instrument_id
-    return mapping
-
-
-def _parquet_files(source: Path) -> list[Path]:
-    manifest_path = source / "manifest.json"
-    declared: list[Path] = []
-    if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        for key in ("file", "files"):
-            value = manifest.get(key)
-            if isinstance(value, str):
-                declared.append(source / value)
-            elif isinstance(value, list):
-                for item in value:
-                    if isinstance(item, str):
-                        declared.append(source / item)
-                    elif isinstance(item, dict) and item.get("path"):
-                        declared.append(source / str(item["path"]))
-    existing = sorted({path for path in declared if path.suffix == ".parquet" and path.exists()})
-    return existing or sorted(source.glob("**/part-*.parquet")) or sorted(source.glob("*.parquet"))
-
-
-def _corporate_action_date(value: object) -> datetime:
-    if value is None:
-        raise ValueError("Massive corporate action is missing a date")
-    if isinstance(value, datetime):
-        return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
-    return datetime.combine(date.fromisoformat(str(value)), datetime.min.time(), timezone.utc)
-
-
-def _safe_dataset_component(value: str) -> str:
-    return "".join(item if item.isalnum() or item in {"-", "_", "."} else "_" for item in value)
-
-
-def _common_lake_directory(lake_root: str | Path, relative_paths: list[str]) -> str:
-    if not relative_paths:
-        raise ValueError("at least one raw release path is required")
-    if len(relative_paths) == 1:
-        return relative_paths[0]
-    root = Path(lake_root)
-    paths = [root / item for item in relative_paths]
-    common = Path(os.path.commonpath([str(item) for item in paths]))
-    return str(common.relative_to(root)) if common.is_relative_to(root) else str(common)
-
+    return data_command(args)
 
 def _features(args: argparse.Namespace) -> int:
     if args.feature_set == "us-equity-momentum-v1":
@@ -3107,516 +1719,94 @@ def _catalog(args: argparse.Namespace) -> int:
 
 
 def _authoritative_runtime_store(args: argparse.Namespace):
-    from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
+    from kairospy.surface.cli.execution_commands import _authoritative_runtime_store as command
 
-    runtime_path = Path(args.runtime_db) if args.runtime_db else Path(args.event_log_path).parent / "runtime.sqlite3"
-    store = SQLiteRuntimeStore(runtime_path)
-    return store, runtime_path
+    return command(args)
 
 
 def _account(args: argparse.Namespace) -> int:
-    environment = Environment(args.environment)
-    if args.venue == "binance" and args.product == "options" and environment is not Environment.LIVE:
-        raise SystemExit("Binance options account is live-only; no equivalent options testnet is available")
-    runtime_store, _ = _authoritative_runtime_store(args)
-    ledger = runtime_store.load_ledger()
-    catalog_repository = ReferenceCatalogRepository(args.reference_catalog_path)
-    catalog = catalog_repository.load() if catalog_repository.path.exists() else ReferenceCatalog()
-    account = _account_key(args.venue, args.account_id, args.product)
-    account_gateway = _account_gateway(args.venue, environment, account, ledger, args.product, catalog, args.inverse)
-    report = ReconciliationService(ledger, account_gateway).reconcile(account)
-    print(f"Environment: {environment.value.upper()}")
-    print(f"Account: {account.value}")
-    print(f"Matched: {report.matched}")
-    for difference in report.differences:
-        print(f"{difference.kind} {difference.key}: local={difference.local} venue={difference.venue}")
-    return 0 if report.matched else 2
+    from kairospy.surface.cli.execution_commands import _account as command
+
+    return command(args)
 
 
 def _accounts(args: argparse.Namespace) -> int:
-    from kairospy.infrastructure.configuration import ConfigError, KairosProjectConfig
-    from kairospy.integrations.config import CredentialResolver, resolve_account_binding
+    from kairospy.surface.cli.execution_commands import _accounts as command
 
-    try:
-        config = KairosProjectConfig.discover(Path.cwd())
-        binding = resolve_account_binding(config, args.account)
-    except ConfigError as error:
-        payload = {
-            "product": "accounts",
-            "operation": "doctor",
-            "account": args.account,
-            "status": "unknown_account",
-            "issues": [{"code": "unknown_account", "message": str(error)}],
-        }
-        _emit_accounts_payload(args, payload)
-        return 2
-    resolver = CredentialResolver(config)
-    credential_fields = _account_credential_fields(binding.credential, config.get(f"credentials.{binding.credential}", {}))
-    credential_refs = []
-    issues = []
-    for field in credential_fields:
-        ref = resolver.field(binding.credential, field)
-        provided = ref.resolved not in (None, "")
-        credential_refs.append({
-            "credential": binding.credential,
-            "field": field,
-            "source": ref.source,
-            "provided": provided,
-        })
-        if not provided:
-            issues.append({
-                "code": "missing_credential",
-                "field": field,
-                "source": ref.source,
-            })
-    if not binding.account_ref:
-        issues.append({"code": "missing_account_ref"})
-    if not binding.provider:
-        issues.append({"code": "missing_provider"})
-    if not binding.environment:
-        issues.append({"code": "missing_environment"})
-    if not binding.permissions:
-        issues.append({"code": "missing_permissions"})
-    payload = {
-        "product": "accounts",
-        "operation": "doctor",
-        "account": binding.name,
-        "status": "available" if not issues else "needs_configuration",
-        "account_ref": binding.account_ref,
-        "provider": binding.provider,
-        "environment": binding.environment,
-        "permissions": list(binding.permissions),
-        "allowed_products": list(binding.allowed_products),
-        "capital_scope": binding.capital_scope,
-        "credential": binding.credential,
-        "credential_refs": credential_refs,
-        "checks": {
-            "account_binding": bool(binding.account_ref and binding.provider and binding.environment),
-            "credentials": not any(item["code"] == "missing_credential" for item in issues),
-            "permissions": bool(binding.permissions),
-            "account_query": "not_run",
-        },
-        "issues": issues,
-    }
-    _emit_accounts_payload(args, payload)
-    return 0 if not issues else 2
-
-
-def _account_credential_fields(name: str, raw: object) -> tuple[str, ...]:
-    if isinstance(raw, dict):
-        explicit = tuple(
-            field for field in ("api_key", "api_secret", "passphrase", "host", "port", "client_id")
-            if field in raw
-        )
-        if explicit:
-            return explicit
-        kind = str(raw.get("kind") or "")
-        if kind == "api_key_secret_passphrase":
-            return ("api_key", "api_secret", "passphrase")
-        if kind == "api_key_secret":
-            return ("api_key", "api_secret")
-    if name.startswith("ibkr_"):
-        return ("host", "port", "client_id")
-    return ("api_key", "api_secret")
-
-
-def _emit_accounts_payload(args: argparse.Namespace, payload: dict[str, object]) -> None:
-    if args.format == "json":
-        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-        return
-    print(f"Account: {payload.get('account')}")
-    print(f"Status: {payload.get('status')}")
-    if payload.get("account_ref"):
-        print(f"Account Ref: {payload.get('account_ref')}")
-    if payload.get("provider"):
-        print(f"Provider: {payload.get('provider')}")
-    for issue in payload.get("issues", ()):
-        if isinstance(issue, dict):
-            print(f"Issue: {issue.get('code')}")
+    return command(args)
 
 
 def _runtime_l4_preflight(args: argparse.Namespace) -> dict[str, object]:
-    import socket
-    environment = Environment(args.environment)
-    compatible_environment = (
-        args.venue == "binance" and environment is Environment.TESTNET
-        or args.venue == "ibkr" and environment is Environment.PAPER
-    )
-    strategy_id = str(args.strategy)
-    instrument_ready = False
-    instrument_reason = "instrument catalog is missing"
-    catalog_path = Path(args.reference_catalog_path)
-    if catalog_path.exists():
-        try:
-            catalog = ReferenceCatalogRepository(catalog_path).load()
-            definition = catalog.instruments.get(InstrumentId(args.instrument), datetime.now(timezone.utc))
-            if not catalog.active_listings(definition.instrument_id, datetime.now(timezone.utc)):
-                raise LookupError("no active listing")
-            instrument_ready = True
-            instrument_reason = "active Venue listing found"
-        except (LookupError, ValueError) as error:
-            instrument_reason = str(error)
-    if args.venue == "binance":
-        try:
-            _credentials(Environment.TESTNET)
-            external_ready = True
-            external_reason = "Binance testnet credential resolved from Kairos project config"
-        except SystemExit as error:
-            external_ready = False
-            external_reason = str(error)
-    else:
-        host, port, _client_id = _ibkr_connection_settings()
-        connection = socket.socket(); connection.settimeout(0.25)
-        try:
-            connection.connect((host, port)); external_ready = True
-            external_reason = f"IBKR Paper Gateway reachable at {host}:{port}"
-        except OSError:
-            external_ready = False
-            external_reason = f"IBKR Paper Gateway unreachable at {host}:{port}"
-        finally:
-            connection.close()
-    checks = {
-        "environment_compatible": compatible_environment,
-        "external_connection_ready": external_ready,
-        "instrument_listing_ready": instrument_ready,
-    }
-    payload = {
-        "schema_version": 1,
-        "kind": "runtime_l4_preflight",
-        "ready": all(checks.values()),
-        "venue": args.venue,
-        "environment": args.environment,
-        "strategy": strategy_id,
-        "instrument": args.instrument,
-        "checks": checks,
-        "reasons": {
-            "external": external_reason,
-            "instrument": instrument_reason,
-        },
-    }
-    if getattr(args, "evidence_artifact", None):
-        payload["artifact"] = str(_write_l4_preflight_artifact(args.evidence_artifact, payload))
-    return payload
+    from kairospy.surface.cli.execution_commands import _runtime_l4_preflight as command
 
-
-def _write_l4_preflight_artifact(target: str | Path, payload: dict[str, object]) -> Path:
-    path = Path(target)
-    material = {key: value for key, value in payload.items() if key not in {"artifact", "audit_hash"}}
-    audit_hash = sha256(json.dumps(
-        to_primitive(material), ensure_ascii=True, sort_keys=True, separators=(",", ":"),
-    ).encode()).hexdigest()
-    artifact_payload = {**material, "audit_hash": audit_hash}
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and json.loads(path.read_text(encoding="utf-8")) != artifact_payload:
-        raise ValueError("l4 preflight evidence artifact path already contains different content")
-    if not path.exists():
-        temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(json.dumps(artifact_payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-                             encoding="utf-8")
-        temporary.replace(path)
-    return path
+    return command(args)
 
 
 def _submit_order_or_runtime_soak(args: argparse.Namespace) -> int:
-    environment = Environment(args.environment)
-    if environment is Environment.LIVE and not args.confirm_live:
-        raise SystemExit("live trading requires --confirm-live")
-    if args.venue == "ibkr" and environment is Environment.TESTNET:
-        raise SystemExit("IBKR uses paper rather than testnet")
-    if args.venue == "binance" and environment is Environment.PAPER:
-        raise SystemExit("Binance uses testnet rather than paper")
-    if args.venue == "binance" and args.product == "options" and environment is not Environment.LIVE:
-        raise SystemExit("Binance options execution is live-only; no equivalent options testnet is available")
-    manual_order=bool(getattr(args,"manual_order",False))
-    strategy_id = "manual-operations-v1" if manual_order else str(args.strategy)
-    if manual_order:
-        print(f"Manual operations intent: actor={args.actor} reason={args.reason}")
-    catalog_repository = ReferenceCatalogRepository(args.reference_catalog_path)
-    if not catalog_repository.path.exists():
-        raise SystemExit("catalog is missing; run 'kairospy catalog sync' first")
-    catalog = catalog_repository.load()
-    definition = catalog.instruments.get(InstrumentId(args.instrument), datetime.now(timezone.utc))
-    runtime_store, runtime_path = _authoritative_runtime_store(args)
-    ledger = runtime_store.load_ledger()
-    listings = catalog.active_listings(definition.instrument_id, datetime.now(timezone.utc))
-    venue = listings[0].venue_id if args.venue == "simulated" else VenueId(args.venue)
-    account = AccountRef(InstitutionId(args.venue), args.account_id, _account_type(args.product))
-    if args.venue == "simulated":
-        balances, positions = _local_state(ledger, account)
-        execution_gateway = SimulatedExecutionAccountGateway(venue, account, balances, positions, environment)
-        market_ready = True
-    else:
-        execution_gateway = _execution_account_gateway(args.venue, environment, args.product, definition, catalog, args.inverse)
-        market_ready = args.market_data_ready
-    reconciliation = ReconciliationService(ledger, execution_gateway, runtime_store=runtime_store)
-    event_log = PersistentEventLog(args.event_log_path)
-    from kairospy.execution.ingestion import DurableExecutionIngestionService
-    from kairospy.execution.recovery import VenueOrderRecoveryService
-    order_recovery = None
-    if callable(getattr(execution_gateway, "recover_order", None)):
-        order_recovery = VenueOrderRecoveryService(
-            runtime_store,
-            {account: execution_gateway},
-            DurableExecutionIngestionService(
-                LedgerService(ledger, catalog),
-                runtime_store,
-            ),
-        )
-    kill_switch = KillSwitch((execution_gateway,), runtime_store=runtime_store)
-    from kairospy.runtime.application import FunctionProbe, KairosApplication
-    from kairospy.runtime.config import ApplicationConfig, RuntimePaths
-    from kairospy.runtime.recovery import RuntimeRecoveryService
-    runtime_root = runtime_path.parent
-    paths = RuntimePaths(runtime_root, Path(args.reference_catalog_path), Path(args.lake_root), runtime_path, runtime_root / "artifacts")
-    application = KairosApplication(
-        ApplicationConfig(environment, paths), runtime_store, runtime_id=f"cli-{uuid4()}", accounts=(account,),
-        order_recovery=order_recovery,
-        recovery=RuntimeRecoveryService(
-            runtime_store,
-            catalog,
-            settlement_asset(catalog, definition, datetime.now(timezone.utc)),
-            {account: execution_gateway},
-            marks={definition.instrument_id: args.limit_price} if args.limit_price is not None else {},
-        ),
-        probes=(
-            FunctionProbe("instrument_catalog", lambda: (True, f"loaded {definition.instrument_id}")),
-            FunctionProbe("market_data", lambda: (market_ready, "ready" if market_ready else "not confirmed")),
-            FunctionProbe("account", lambda: (execution_gateway.account_state(account).account == account, "account query passed")),
-            FunctionProbe("reconciliation", lambda: (
-                (report := reconciliation.reconcile(account)).matched,
-                "matched" if report.matched else f"{len(report.differences)} differences",
-            )),
-        ),
-    )
-    coordinator = ExecutionCoordinator(
-        ExecutionRouter(catalog, (execution_gateway,)), {account: reconciliation}, kill_switch, event_log,
-        runtime_store=runtime_store, application=application,
-    )
-    print(f"Environment: {environment.value.upper()}")
-    if args.soak_seconds < 0 or args.cycle_seconds <= 0:
-        raise SystemExit("--soak-seconds cannot be negative and --cycle-seconds must be positive")
-    supervisor = None
-    soak_started = None
-    if args.soak_seconds:
-        from kairospy.runtime.supervisor import RecoveryBackgroundService, RuntimeSupervisor
-        from kairospy.governance.observability import OperationalMonitor
-        background_services = [RecoveryBackgroundService(order_recovery)] if order_recovery is not None else []
-        if args.venue == "ibkr" and order_recovery is not None:
-            from kairospy.integrations.connectors.ibkr.ingestion import IbkrDurableFillIngestion
-            execution = getattr(execution_gateway, "execution", None)
-            session = getattr(execution, "session", None)
-            if session is not None:
-                background_services = [IbkrDurableFillIngestion(session, order_recovery)]
-        if args.venue == "binance" and args.product == "futures":
-            from kairospy.integrations.connectors.binance.funding_settlement import BinanceFundingSettlementClient
-            from kairospy.integrations.connectors.binance.funding_ingestion import BinanceDurableFundingBackfill
-            from kairospy.execution.ingestion import DurableAccountingIngestionService
-            execution = getattr(execution_gateway, "execution", None)
-            if execution is not None:
-                symbols = getattr(execution, "instrument_symbols", {})
-                funding_client = BinanceFundingSettlementClient(
-                    execution.transport, execution.signer, environment,
-                    inverse=bool(getattr(execution, "inverse", False)),
-                    instrument_lookup={symbol: instrument for instrument, symbol in symbols.items()},
-                )
-                background_services.append(BinanceDurableFundingBackfill(
-                    account, funding_client,
-                    DurableAccountingIngestionService(LedgerService(ledger, catalog), runtime_store),
-                ))
-        supervisor = RuntimeSupervisor(
-            application, {account: reconciliation}, kill_switch,
-            OperationalMonitor(application.config.maximum_clock_skew_ms),
-            background_services=tuple(background_services), activate=coordinator.activate,
-        )
-        soak_started = datetime.now(timezone.utc)
-        supervisor.start()
-    else:
-        application.start()
-    try:
-        if supervisor is None:
-            coordinator.activate()
-            application.run()
-        order_type = OrderType(args.order_type)
-        if order_type is OrderType.LIMIT and args.limit_price is None:
-            raise SystemExit("limit orders require --limit-price")
-        correlation = str(uuid5(NAMESPACE_URL, f"cli:{strategy_id}:{args.instrument}:{datetime.now(timezone.utc).date()}"))
-        if manual_order:
-            event_log.append(f"manual-intent:{correlation}","manual_order_intent",{
-                "actor":args.actor,"reason":args.reason,"strategy_id":strategy_id,
-                "instrument_id":args.instrument,"side":args.side,"quantity":str(args.quantity),
-                "environment":environment.value,"created_at":datetime.now(timezone.utc).isoformat(),
-            })
-        request = OrderRequest(
-            f"internal-{correlation}", f"client-{correlation}", strategy_id, f"intent-{correlation}", correlation,
-            account, definition.instrument_id, TradeSide(args.side), args.quantity,
-            ExecutionInstructions(order_type, TimeInForce.DAY, args.limit_price, post_only=args.post_only, reduce_only=args.reduce_only),
-        )
-        ack = coordinator.submit(request, datetime.now(timezone.utc))
-        print(f"Accepted: client={ack.client_order_id} venue_order={ack.venue_order_id} intent={ack.intent_id}")
-        if supervisor is not None:
-            supervisor.run_for(args.soak_seconds, interval_seconds=args.cycle_seconds)
-        if args.kill_switch_drill:
-            result = kill_switch.trigger((account,), "CLI drill")
-            application.degrade("CLI kill-switch drill")
-            print(f"Kill switch: cancelled={len(result.cancelled_orders)} failures={len(result.failures)} reduce_only={kill_switch.reduce_only}")
-        if supervisor is not None:
-            supervisor.stop()
-            restart_passed = False
-            if args.restart_drill:
-                application.start()
-                restart_passed = application.status.value == "ready"
-                application.stop()
-            from kairospy.runtime.supervisor import write_soak_artifact
-            ended = datetime.now(timezone.utc)
-            target = args.soak_artifact or (
-                paths.artifacts / "soak" / f"{environment.value}-{account.account_id}-{int(soak_started.timestamp())}.json"
-            )
-            soak = write_soak_artifact(
-                supervisor, target, started_at=soak_started, ended_at=ended,
-                target_duration_seconds=args.soak_seconds, environment=environment.value,
-                restart_drill_passed=restart_passed,
-                kill_switch_drill_passed=args.kill_switch_drill and kill_switch.triggered,
-            )
-            print(json.dumps(soak, ensure_ascii=False, indent=2))
-            return 0 if soak["passed"] else 2
-        return 0
-    finally:
-        if supervisor is not None and supervisor.started:
-            supervisor.stop()
-        elif application.status.value != "stopped":
-            application.stop()
+    from kairospy.surface.cli.execution_commands import _submit_order_or_runtime_soak as command
+
+    return command(args)
+
+
+def _ensure_simulated_execution_route(catalog: ReferenceCatalog, account: AccountRef, listings, at: datetime) -> None:
+    from kairospy.surface.cli.execution_commands import _ensure_simulated_execution_route as command
+
+    return command(catalog, account, listings, at)
 
 
 def _ibkr_session(*, readonly: bool) -> IbkrSession:
-    host, port, client_id = _ibkr_connection_settings()
-    return IbkrSession(host, port, client_id, readonly)
+    from kairospy.surface.cli.execution_commands import _ibkr_session as command
+
+    return command(readonly=readonly)
 
 
 def _ibkr_connection_settings() -> tuple[str, int, int]:
-    from kairospy.infrastructure.configuration import load_project_config_or_none
-    from kairospy.integrations.config import resolve_ibkr_trading_connection
+    from kairospy.surface.cli.execution_commands import _ibkr_connection_settings as command
 
-    config = load_project_config_or_none()
-    settings = resolve_ibkr_trading_connection(config)
-    return settings.host, settings.port, settings.client_id
+    return command()
 
 
 def _credentials(environment: Environment) -> tuple[str, str]:
-    from kairospy.infrastructure.configuration import ConfigError, load_project_config_or_none
-    from kairospy.integrations.config import resolve_binance_trading_credentials
+    from kairospy.surface.cli.execution_commands import _credentials as command
 
-    config = load_project_config_or_none()
-    config_environment = "testnet" if environment is Environment.TESTNET else "live"
-    if config is None:
-        raise SystemExit("missing Kairos project config for Binance trading credentials")
-    try:
-        credentials = resolve_binance_trading_credentials(config, config_environment)
-    except ConfigError as error:
-        raise SystemExit(str(error)) from error
-    return credentials.api_key, credentials.api_secret
+    return command(environment)
 
 
 def _account_gateway(venue: str, environment: Environment, account: AccountRef, ledger, product: str, catalog, inverse: bool):
-    if venue == "simulated":
-        balances, positions = _local_state(ledger, account)
-        return SimulatedExecutionAccountGateway(VenueId("simulated"), account, balances, positions, environment)
-    if venue == "ibkr":
-        session = _ibkr_session(readonly=True)
-        reference = IbkrReferenceDataClient(session)
-        for definition in catalog.instruments.values(datetime.now(timezone.utc)):
-            if definition.instrument_type.value in {"equity", "etf", "listed_option"}:
-                reference.bind_definition(definition, catalog)
-        return IbkrAccountGateway(session, environment)
-    key, secret = _credentials(environment)
-    if product == "options":
-        lookup = {
-            listing.trading_symbol: listing.instrument_id
-            for listing in catalog.listings.values(datetime.now(timezone.utc)) if listing.venue_id == VenueId("binance")
-        }
-        return BinanceOptionsAccountGateway(
-            UrllibBinanceTransport("https://eapi.binance.com"), BinanceSigner(key, secret),
-            environment, instrument_lookup=lookup,
-        )
-    base = "https://testnet.binancefuture.com" if product == "futures" and environment is Environment.TESTNET else "https://dapi.binance.com" if product == "futures" and inverse else "https://fapi.binance.com" if product == "futures" else "https://testnet.binance.vision" if environment is Environment.TESTNET else "https://api.binance.com"
-    lookup = {
-        listing.trading_symbol: listing.instrument_id
-        for listing in catalog.listings.values(datetime.now(timezone.utc)) if listing.venue_id == VenueId("binance")
-    }
-    return BinanceAccountGateway(UrllibBinanceTransport(base), BinanceSigner(key, secret), environment, futures=product == "futures", inverse=inverse, instrument_lookup=lookup)
+    from kairospy.surface.cli.execution_commands import _account_gateway as command
+
+    return command(venue, environment, account, ledger, product, catalog, inverse)
 
 
 def _execution_account_gateway(venue: str, environment: Environment, product: str, definition, catalog, inverse: bool):
-    if venue == "ibkr":
-        session = _ibkr_session(readonly=False)
-        IbkrReferenceDataClient(session).bind_definition(definition, catalog)
-        return _CombinedExecutionAccount(IbkrExecutionGateway(session, environment), IbkrAccountGateway(session, environment))
-    key, secret = _credentials(environment)
-    if product == "options":
-        transport, signer = UrllibBinanceTransport("https://eapi.binance.com"), BinanceSigner(key, secret)
-        lookup = {
-            listing.trading_symbol: listing.instrument_id
-            for listing in catalog.listings.values(datetime.now(timezone.utc)) if listing.venue_id == VenueId("binance")
-        }
-        symbol = next(item.trading_symbol for item in catalog.active_listings(definition.instrument_id, datetime.now(timezone.utc)) if item.venue_id == VenueId("binance"))
-        return _CombinedExecutionAccount(
-            BinanceOptionsExecutionGateway(transport, signer, environment, instrument_symbols={definition.instrument_id: symbol}),
-            BinanceOptionsAccountGateway(transport, signer, environment, instrument_lookup=lookup),
-        )
-    base = "https://testnet.binancefuture.com" if product == "futures" and environment is Environment.TESTNET else "https://dapi.binance.com" if product == "futures" and inverse else "https://fapi.binance.com" if product == "futures" else "https://testnet.binance.vision" if environment is Environment.TESTNET else "https://api.binance.com"
-    transport, signer = UrllibBinanceTransport(base), BinanceSigner(key, secret)
-    symbol = next(item.trading_symbol for item in catalog.active_listings(definition.instrument_id, datetime.now(timezone.utc)) if item.venue_id == VenueId("binance"))
-    execution = BinanceExecutionGateway(
-        transport, signer, environment, futures=product == "futures", inverse=inverse,
-        instrument_symbols={definition.instrument_id: symbol},
-    )
-    lookup = {
-        listing.trading_symbol: listing.instrument_id
-        for listing in catalog.listings.values(datetime.now(timezone.utc)) if listing.venue_id == VenueId("binance")
-    }
-    account = BinanceAccountGateway(transport, signer, environment, futures=product == "futures", inverse=inverse, instrument_lookup=lookup)
-    return _CombinedExecutionAccount(execution, account)
+    from kairospy.surface.cli.execution_commands import _execution_account_gateway as command
+
+    return command(venue, environment, product, definition, catalog, inverse)
 
 
 class _CombinedExecutionAccount:
-    def __init__(self, execution, account) -> None:
-        self.execution, self.account = execution, account
-        self.institution_id = execution.institution_id
-        self.venue_id, self.environment, self.capabilities = execution.venue_id, execution.environment, execution.capabilities
-    def place_order(self, request): return self.execution.place_order(request)
-    def cancel_order(self, account, venue_order_id): return self.execution.cancel_order(account, venue_order_id)
-    def open_orders(self, account): return self.execution.open_orders(account)
-    def account_state(self, account): return self.account.account_state(account)
-    def recover_order(self, account, request, venue_order_id=None):
-        recovery = getattr(self.execution, "recover_order", None)
-        if not callable(recovery):
-            raise NotImplementedError(f"{self.venue_id} execution gateway does not support order recovery")
-        return recovery(account, request, venue_order_id)
+    def __new__(cls, execution, account):
+        from kairospy.surface.cli.execution_commands import _CombinedExecutionAccount as command
+
+        return command(execution, account)
 
 
 def _account_key(venue: str, account_id: str, product: str) -> AccountRef:
-    return AccountRef(InstitutionId(venue), account_id, _account_type(product))
+    from kairospy.surface.cli.execution_commands import _account_key as command
+
+    return command(venue, account_id, product)
 
 
 def _account_type(product: str) -> AccountType:
-    return {
-        "securities": AccountType.SECURITIES_MARGIN,
-        "spot": AccountType.CRYPTO_SPOT,
-        "futures": AccountType.DERIVATIVES,
-        "options": AccountType.DERIVATIVES,
-    }[product]
+    from kairospy.surface.cli.execution_commands import _account_type as command
+
+    return command(product)
 
 
 def _local_state(ledger, account):
-    balances, positions = {}, {}
-    owned = {LedgerBook.CASH, LedgerBook.AVAILABLE, LedgerBook.LOCKED, LedgerBook.MARGIN, LedgerBook.COLLATERAL, LedgerBook.BORROWED}
-    for entry in ledger.entries:
-        if entry.account != account:
-            continue
-        if entry.book in owned:
-            balances[entry.asset] = balances.get(entry.asset, Decimal("0")) + entry.amount
-        elif entry.book is LedgerBook.POSITION and entry.instrument_id is not None:
-            positions[entry.instrument_id] = positions.get(entry.instrument_id, Decimal("0")) + entry.amount
-    return tuple(balances.items()), tuple(positions.items())
+    from kairospy.surface.cli.execution_commands import _local_state as command
+
+    return command(ledger, account)
 
 
 def _coerce_decimal_fields(values: dict[str, Any], cls) -> dict[str, Any]:

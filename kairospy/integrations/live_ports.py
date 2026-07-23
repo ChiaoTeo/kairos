@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from kairospy.identity import AccountRef, AccountType, InstitutionId, InstrumentId, VenueId
-from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT, KairosProjectConfig
+from kairospy.infrastructure.configuration import ConfigError, DEFAULT_LAKE_ROOT, KairosProjectConfig
 from kairospy.environment import Environment
 from kairospy.execution.ports import ExecutionPort, OrderRecoveryPort
 from kairospy.integrations.config import resolve_binance_trading_credentials
@@ -25,6 +25,7 @@ class LiveProviderPorts:
     account_gateway: AccountPort
     order_recovery_gateway: OrderRecoveryPort | None = None
     market_event_source: object | None = None
+    user_fill_event_source: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +44,10 @@ class LiveMarketEventSourceBinding:
     manifest_path: Path
 
 
+class HyperliquidExecutionGatewayRequired(RuntimeError):
+    """Raised before any live Hyperliquid order path exists or has been manually verified."""
+
+
 def build_live_provider_ports(
     config: KairosProjectConfig,
     *,
@@ -53,18 +58,71 @@ def build_live_provider_ports(
     product: str | None = None,
     inverse: bool = False,
     transport_factory: Callable[[str], object] | None = None,
+    websocket_connector: object | None = None,
+    hyperliquid_exchange: object | None = None,
+    hyperliquid_info: object | None = None,
+    hyperliquid_account_address: str | None = None,
 ) -> LiveProviderPorts:
     provider_id = provider.strip().lower()
+    if provider_id == "hyperliquid":
+        if hyperliquid_exchange is None and hyperliquid_info is None and not str(hyperliquid_account_address or "").strip():
+            try:
+                from kairospy.integrations.connectors.hyperliquid.sdk_loader import (
+                    HyperliquidSdkUnavailable,
+                    load_hyperliquid_sdk_binding,
+                )
+
+                sdk_binding = load_hyperliquid_sdk_binding(config)
+            except (ConfigError, HyperliquidSdkUnavailable) as error:
+                raise HyperliquidExecutionGatewayRequired(
+                    "live Hyperliquid execution requires official SDK credentials and manual key/order verification "
+                    f"before provider ports can bind: {error}"
+                ) from error
+            hyperliquid_exchange = sdk_binding.exchange
+            hyperliquid_info = sdk_binding.info
+            hyperliquid_account_address = sdk_binding.account_address
+        if hyperliquid_exchange is None or hyperliquid_info is None or not str(hyperliquid_account_address or "").strip():
+            raise HyperliquidExecutionGatewayRequired(
+                "live Hyperliquid execution requires an injected official SDK exchange/info adapter, "
+                "account readiness evidence, and a manual key/order verification run before provider ports can bind"
+            )
+        account_ref = parse_account_ref(account)
+        from kairospy.integrations.connectors.hyperliquid import (
+            HyperliquidSdkAccountGateway,
+            HyperliquidSdkExecutionGateway,
+        )
+
+        execution_gateway = HyperliquidSdkExecutionGateway(
+            hyperliquid_exchange,
+            hyperliquid_info,
+            account_address=str(hyperliquid_account_address),
+            environment=Environment.LIVE,
+        )
+        account_gateway = HyperliquidSdkAccountGateway(
+            hyperliquid_info,
+            account_address=str(hyperliquid_account_address),
+            environment=Environment.LIVE,
+        )
+        return LiveProviderPorts(
+            provider_id,
+            execution_driver,
+            account_ref,
+            execution_gateway,
+            account_gateway,
+            execution_gateway,
+        )
     if provider_id != "binance":
         raise ValueError(f"unsupported live provider binding: {provider!r}")
     account_ref = parse_account_ref(account)
     product_id = _product_from_driver(execution_driver, product)
-    execution_gateway, account_gateway = _binance_live_ports(
+    execution_gateway, account_gateway, user_fill_event_source = _binance_live_ports(
         config,
+        account=account_ref,
         product=product_id,
         inverse=inverse,
         reference_catalog=reference_catalog,
         transport_factory=transport_factory,
+        websocket_connector=websocket_connector,
     )
     return LiveProviderPorts(
         provider_id,
@@ -73,6 +131,7 @@ def build_live_provider_ports(
         execution_gateway,
         account_gateway,
         execution_gateway if hasattr(execution_gateway, "recover_order") else None,
+        user_fill_event_source=user_fill_event_source,
     )
 
 
@@ -150,17 +209,22 @@ def parse_account_ref(value: AccountRef | str) -> AccountRef:
 def _binance_live_ports(
     config: KairosProjectConfig,
     *,
+    account: AccountRef,
     product: str,
     inverse: bool,
     reference_catalog: ReferenceCatalog,
     transport_factory: Callable[[str], object] | None,
-) -> tuple[ExecutionPort, AccountPort]:
+    websocket_connector: object | None = None,
+) -> tuple[ExecutionPort, AccountPort, object | None]:
     from kairospy.integrations.connectors.binance import (
         BinanceAccountGateway,
         BinanceExecutionGateway,
         BinanceOptionsAccountGateway,
         BinanceOptionsExecutionGateway,
         BinanceSigner,
+        BinanceUserDataStreamService,
+        BinanceUserFillEventSource,
+        BinanceUserStreamProcessor,
         UrllibBinanceTransport,
     )
 
@@ -171,6 +235,17 @@ def _binance_live_ports(
     instrument_symbols, instrument_lookup = _binance_symbol_maps(reference_catalog, at)
     if product == "options":
         transport = build_transport("https://eapi.binance.com")
+        user_fill_source = BinanceUserFillEventSource(
+            BinanceUserDataStreamService(
+                transport,
+                credentials.api_key,
+                options=True,
+            ),
+            BinanceUserStreamProcessor(account, instrument_lookup),
+            environment=Environment.LIVE,
+            connector=websocket_connector,
+            options=True,
+        )
         return (
             BinanceOptionsExecutionGateway(
                 transport, signer, Environment.LIVE, instrument_symbols=instrument_symbols,
@@ -178,6 +253,7 @@ def _binance_live_ports(
             BinanceOptionsAccountGateway(
                 transport, signer, Environment.LIVE, instrument_lookup=instrument_lookup,
             ),
+            user_fill_source,
         )
     futures = product == "futures"
     base_url = (
@@ -188,23 +264,39 @@ def _binance_live_ports(
         else "https://api.binance.com"
     )
     transport = build_transport(base_url)
+    execution = BinanceExecutionGateway(
+        transport,
+        signer,
+        Environment.LIVE,
+        futures=futures,
+        inverse=inverse,
+        instrument_symbols=instrument_symbols,
+    )
+    account_gateway = BinanceAccountGateway(
+        transport,
+        signer,
+        Environment.LIVE,
+        futures=futures,
+        inverse=inverse,
+        instrument_lookup=instrument_lookup,
+    )
+    user_fill_source = BinanceUserFillEventSource(
+        BinanceUserDataStreamService(
+            transport,
+            credentials.api_key,
+            futures=futures,
+            inverse=inverse,
+        ),
+        BinanceUserStreamProcessor(account, instrument_lookup),
+        environment=Environment.LIVE,
+        connector=websocket_connector,
+        futures=futures,
+        inverse=inverse,
+    )
     return (
-        BinanceExecutionGateway(
-            transport,
-            signer,
-            Environment.LIVE,
-            futures=futures,
-            inverse=inverse,
-            instrument_symbols=instrument_symbols,
-        ),
-        BinanceAccountGateway(
-            transport,
-            signer,
-            Environment.LIVE,
-            futures=futures,
-            inverse=inverse,
-            instrument_lookup=instrument_lookup,
-        ),
+        execution,
+        account_gateway,
+        user_fill_source,
     )
 
 
@@ -240,6 +332,7 @@ def _product_from_driver(execution_driver: str, product: str | None) -> str:
 
 
 __all__ = [
+    "HyperliquidExecutionGatewayRequired",
     "LiveMarketEventSourceBinding",
     "LiveProviderPorts",
     "build_live_market_event_source",

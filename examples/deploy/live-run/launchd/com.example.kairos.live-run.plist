@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.example.kairos.live-run</string>
+
+  <key>WorkingDirectory</key>
+  <string>/opt/kairos</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
+    <key>KAIROS_RUN_ID</key>
+    <string>binance-btc-live</string>
+  </dict>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/kairos/pyenv/bin/python</string>
+    <string>-m</string>
+    <string>kairospy</string>
+    <string>run</string>
+    <string>live</string>
+    <string>start</string>
+    <string>--foreground</string>
+    <string>--config</string>
+    <string>/opt/kairos/configs/runs/binance-live.toml</string>
+    <string>--run-id</string>
+    <string>binance-btc-live</string>
+    <string>--confirm-live</string>
+  </array>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/var/log/kairos-live-run.log</string>
+  <key>StandardErrorPath</key>
+  <string>/var/log/kairos-live-run.err.log</string>
+</dict>
+</plist>

@@ -197,6 +197,29 @@ class DurableCoordinatorTests(unittest.TestCase):
             self.assertEqual(store.order("other-client").status, DurableOrderStatus.ACKNOWLEDGED)  # type: ignore[union-attr]
             self.assertEqual(router.cancellations, ["venue-1"])
 
+    def test_runtime_wide_cancellation_cancels_all_working_orders_for_accounts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = SQLiteRuntimeStore(root / "runtime.sqlite3")
+            router = RecordingRouter()
+            coordinator = ExecutionCoordinator(
+                router, {}, KillSwitch(()), PersistentEventLog(root / "events.jsonl"),
+                FixedClock(NOW), store,
+                application=operational_application(root, store, clock=FixedClock(NOW)),
+            )
+            first = order_request(client_id="first-client", strategy_id="strategy-v1")
+            second = order_request(client_id="second-client", strategy_id="strategy-v2")
+            coordinator.submit(first, NOW)
+            coordinator.submit(second, NOW)
+
+            result = coordinator.cancel_all_orders((first.account,), "venue incident")
+
+            self.assertEqual(result.cancelled_client_order_ids, ("first-client", "second-client"))
+            self.assertEqual(result.failures, ())
+            self.assertEqual(store.order("first-client").status, DurableOrderStatus.CANCELLED)  # type: ignore[union-attr]
+            self.assertEqual(store.order("second-client").status, DurableOrderStatus.CANCELLED)  # type: ignore[union-attr]
+            self.assertEqual(router.cancellations, ["venue-1", "venue-1"])
+
     def test_runtime_stop_controller_applies_reduce_only_cancels_and_persists_report(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

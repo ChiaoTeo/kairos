@@ -104,6 +104,7 @@ def _files(project_name: str) -> tuple[tuple[Path, str], ...]:
     return (
         (Path("kairos.toml"), _kairospy_toml(project_name)),
         (Path(".env.example"), _env_example()),
+        (Path("workspace") / "example.py", _workspace_example_py()),
         (Path("configs") / "runs" / "backtest.example.toml", _run_config_backtest_example()),
         (Path("configs") / "runs" / "paper.example.toml", _run_config_paper_example()),
         (Path("configs") / "runs" / "live.example.toml", _run_config_live_example()),
@@ -199,6 +200,12 @@ kind = "api_key_secret"
 api_key = "env:KAIROS_BINANCE_TRADING_LIVE_SPOT_API_KEY"
 api_secret = "env:KAIROS_BINANCE_TRADING_LIVE_SPOT_API_SECRET"
 
+[credentials.hyperliquid_trading_live_perp]
+purpose = "trading"
+kind = "private_key"
+private_key = "env:KAIROS_HYPERLIQUID_LIVE_PRIVATE_KEY"
+account_address = "env:KAIROS_HYPERLIQUID_LIVE_ACCOUNT_ADDRESS"
+
 [providers.massive]
 type = "data_vendor"
 enabled = true
@@ -225,6 +232,19 @@ credential = "binance_trading_testnet_spot"
 environment = "live"
 credential = "binance_trading_live_spot"
 
+[providers.hyperliquid]
+type = "exchange"
+enabled = true
+
+[providers.hyperliquid.services.market_data]
+environment = "live"
+credential = ""
+public = true
+
+[providers.hyperliquid.services.execution_live]
+environment = "live"
+credential = "hyperliquid_trading_live_perp"
+
 [accounts.binance_testnet_spot]
 account_ref = "binance:crypto_spot:testnet"
 provider = "binance"
@@ -242,6 +262,15 @@ credential = "binance_trading_live_spot"
 permissions = ["account:read", "order:write", "order:cancel"]
 allowed_products = ["spot"]
 capital_scope = "main-live"
+
+[accounts.hyperliquid_live_perp]
+account_ref = "hyperliquid:derivatives:main"
+provider = "hyperliquid"
+environment = "live"
+credential = "hyperliquid_trading_live_perp"
+permissions = ["account:read", "order:write", "order:cancel"]
+allowed_products = ["perpetual"]
+capital_scope = "main-live"
 """
 
 
@@ -257,6 +286,9 @@ KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_SECRET=
 KAIROS_BINANCE_TRADING_LIVE_SPOT_API_KEY=
 KAIROS_BINANCE_TRADING_LIVE_SPOT_API_SECRET=
 
+KAIROS_HYPERLIQUID_LIVE_PRIVATE_KEY=
+KAIROS_HYPERLIQUID_LIVE_ACCOUNT_ADDRESS=
+
 # Optional runtime overrides.
 KAIROSPY_LAKE_ROOT={DEFAULT_LAKE_ROOT}
 """
@@ -268,10 +300,11 @@ def _run_config_backtest_example() -> str:
 [run]
 name = "example-backtest"
 mode = "backtest"
-workspace = "alpha"
-entrypoint = "strategies.example:build"
+workspace = "workspace.example:build_workspace"
+strategy = "kairospy.workspace.defaults:EmptyStrategy"
 
 [params]
+workspace_profile = "alpha"
 fast = 20
 slow = 50
 
@@ -293,10 +326,11 @@ def _run_config_paper_example() -> str:
 [run]
 name = "example-paper"
 mode = "paper"
-workspace = "alpha"
-entrypoint = "strategies.example:build"
+workspace = "workspace.example:build_workspace"
+strategy = "kairospy.workspace.defaults:EmptyStrategy"
 
 [params]
+workspace_profile = "alpha"
 risk_budget = "0.02"
 
 [bindings]
@@ -321,13 +355,11 @@ def _run_config_live_example() -> str:
 [run]
 name = "example-live"
 mode = "live"
-workspace = "alpha"
-entrypoint = "strategies.example:build"
-
-[strategy]
-spec = "strategies.example:spec"
+workspace = "workspace.example:build_workspace"
+strategy = "kairospy.workspace.defaults:EmptyStrategy"
 
 [params]
+workspace_profile = "alpha"
 max_gross_exposure = "50000"
 max_order_notional = "1000"
 
@@ -368,6 +400,24 @@ config = "kairos.toml"
 """
 
 
+def _workspace_example_py() -> str:
+    return '''from __future__ import annotations
+
+
+def build_workspace(ws, params):
+    profile = str(params.get("workspace_profile") or "alpha")
+    attachments = ws.attachments.use_profile(profile)
+    market = attachments.as_ohlcv("market", required=False)
+    momentum = ws.features.momentum(name="momentum", source=market, window=int(params.get("fast", "20")))
+    volatility = ws.features.realized_volatility(name="realized_volatility", source=market, window=int(params.get("slow", "50")))
+    return ws.project(
+        market=(market,),
+        features=(momentum, volatility),
+        portfolio={"cash": "simulated"},
+    )
+'''
+
+
 def _gitignore() -> str:
     return """__pycache__/
 *.py[cod]
@@ -392,6 +442,7 @@ export KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY=...
 kairospy config validate
 kairospy data start
 kairospy workspace create alpha
+kairospy workspace attach alpha --name market --dataset your.dataset --view both
 kairospy run config validate configs/runs/backtest.example.toml
 ```
 

@@ -1,0 +1,42 @@
+[run]
+name = "funding-arb-live-preflight"
+mode = "live"
+workspace = "examples.workspace.funding_arb:build_workspace"
+strategy = "examples.strategies.funding_arb:FundingArbStrategy"
+
+[params]
+workspace_profile = "funding-arb"
+instrument = "BTC"
+target_notional = "10000"
+min_expected_carry_bps = "8"
+max_hedge_error_bps = "15"
+max_slippage_bps = "5"
+min_liquidation_buffer_bps = "500"
+carry_horizon = "8h"
+
+[bindings]
+account = "binance_live_spot"
+market = ["hl_orderbook", "binance_spot_book"]
+execution = "manual-cross-venue"
+
+[live]
+provider = "binance"
+execution_driver = "manual-cross-venue-preflight"
+recovery_policy = "recover-and-reconcile"
+bind_provider = false
+bind_ports = false
+
+[guards]
+confirm_live_required = true
+require_readiness = true
+require_promotion = true
+require_account_lock = true
+require_order_recovery = true
+require_reconciliation = true
+start_reduce_only = true
+manual_hyperliquid_execution_required = true
+manual_treasury_transfer_required = true
+
+[evidence]
+readiness = "governance:readiness/funding-arb-live.json"
+promotion = "governance:promotion/funding-arb-live.json"

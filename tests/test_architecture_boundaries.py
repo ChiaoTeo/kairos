@@ -1247,7 +1247,6 @@ class ArchitectureBoundaryTests(unittest.TestCase):
             ProtectivePutIntent,
             ReferenceView,
             Strategy,
-            StrategyDecision,
             StrategyLifecycle,
             StrategyRuntime,
             StrategySpec,
@@ -1330,7 +1329,6 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertIn("DataClient", view_schema("MarketView").forbidden_dependencies)
         self.assertIn("submit method", view_schema("OrderView").forbidden_dependencies)
         self.assertEqual(Strategy.__module__, "kairospy.strategy.protocols")
-        self.assertEqual(StrategyDecision.__module__, "kairospy.strategy.protocols")
         self.assertEqual(StrategyRuntime.__module__, "kairospy.strategy.runtime")
         timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
         context = Context(
@@ -1345,8 +1343,6 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertEqual(context.budget.remaining_capital, Decimal("100"))
         self.assertEqual(set(context.view_hashes), {"market", "portfolio", "features", "reference", "orders", "intents", "budget"})
         self.assertEqual(len(context.context_hash), 64)
-        decision = StrategyDecision.none(timestamp=timestamp, reason="runtime unavailable")
-        self.assertEqual(decision.action, "none")
 
     def test_deleted_strategies_package_does_not_return(self) -> None:
         self.assertFalse((ROOT / "kairospy" / "strategies").exists())

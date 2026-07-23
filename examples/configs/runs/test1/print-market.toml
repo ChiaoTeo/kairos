@@ -1,0 +1,15 @@
+schema_version = 1
+
+[run]
+name = "print-market"
+mode = "backtest"
+workspace = "examples.workspace.print_market:build_workspace"
+strategy = "examples.strategies.printer:build"
+
+[params]
+workspace_profile = "market-print"
+limit = 100
+
+[guards]
+freeze_workspace = true
+fail_on_missing_data = true

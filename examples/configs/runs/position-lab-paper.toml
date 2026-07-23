@@ -1,0 +1,29 @@
+schema_version = 1
+
+[run]
+name = "position-lab-paper"
+mode = "paper"
+
+[params]
+workspace_profile = "position-lab"
+instrument = "BTCUSDT"
+
+[bindings]
+account = "binance_testnet_spot"
+market = ["binance_spot_book"]
+execution = "simulated"
+
+[live]
+provider = "binance"
+execution_driver = "simulated"
+bind_provider = false
+bind_ports = false
+
+[guards]
+confirm_live_required = false
+require_readiness = false
+require_promotion = false
+require_account_lock = false
+require_order_recovery = false
+require_reconciliation = false
+start_reduce_only = false

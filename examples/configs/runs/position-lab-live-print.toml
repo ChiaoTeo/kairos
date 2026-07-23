@@ -1,0 +1,35 @@
+schema_version = 1
+
+[run]
+name = "position-lab-live-print"
+mode = "live"
+workspace = "examples.workspace.position_lab:build_workspace"
+strategy = "examples.strategies.printer:build"
+
+[params]
+workspace_profile = "position-lab"
+instrument = "BTC"
+
+[bindings]
+account = "binance_live_spot"
+market = ["hl_orderbook", "hl_funding", "binance_spot_book"]
+execution = "manual-target-position"
+
+[live]
+provider = "binance"
+execution_driver = "manual-target-position"
+bind_provider = false
+bind_ports = false
+
+[guards]
+confirm_live_required = true
+require_readiness = false
+require_promotion = false
+require_account_lock = false
+require_order_recovery = false
+require_reconciliation = false
+start_reduce_only = true
+
+[evidence]
+readiness = "governance:readiness/position-lab-live-print.json"
+promotion = "governance:promotion/position-lab-live-print.json"

@@ -3,9 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
-from kairospy.execution.ingestion import DurableExecutionIngestionService
 from kairospy.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher, DurableOrderDispatcherService
-from kairospy.execution.recovery import VenueOrderRecoveryService
 from kairospy.execution.router import ExecutionRouter
 from kairospy.execution.ports import ComboOrderRequest, Environment, ExecutionPort, OrderRecoveryPort, OrderRequest
 from kairospy.governance.reconciliation import ReconciliationMonitorService, ReconciliationService
@@ -25,6 +23,7 @@ from kairospy.runtime.clock import Clock
 from kairospy.runtime.coordinator import ExecutionCoordinator
 from kairospy.runtime.kernel import BoundRunProfile
 from kairospy.runtime.live_config import LiveRuntimeBindingConfig
+from kairospy.runtime.risk_monitor import RiskRuntimeMonitorService
 from kairospy.runtime.stop_controller import RuntimeStopController
 from kairospy.runtime.store.event_log import PersistentEventLog
 from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
@@ -47,6 +46,7 @@ class LiveRuntimeComponents:
     accounts: tuple[AccountRef, ...] = ()
     market_event_source: object | None = None
     order_recovery_gateway: OrderRecoveryPort | None = None
+    user_fill_event_source: object | None = None
     ledger: Ledger | None = None
     clock: Clock | None = None
     kill_switch: KillSwitch | None = None
@@ -72,6 +72,9 @@ class LiveRuntimeComponents:
     def order_recovery_service(self) -> VenueOrderRecoveryService | None:
         if self.order_recovery_gateway is None:
             return None
+        from kairospy.execution.ingestion import DurableExecutionIngestionService
+        from kairospy.execution.recovery import VenueOrderRecoveryService
+
         return VenueOrderRecoveryService(
             self.store,
             {account: self.order_recovery_gateway for account in self._accounts},
@@ -149,6 +152,41 @@ class LiveRuntimeComponents:
             DurableOrderDispatcher(self.store, self.execution_router(), clock=self.clock),
             run_id=run_id,
             idle_wait_seconds=idle_wait_seconds,
+            clock=self.clock,
+        )
+
+    def risk_monitor_service(
+        self,
+        run_id: str,
+        *,
+        interval_seconds: float = 5.0,
+    ) -> RiskRuntimeMonitorService:
+        return RiskRuntimeMonitorService(
+            self.application,
+            self.store,
+            run_id=run_id,
+            interval_seconds=interval_seconds,
+            clock=self.clock,
+        )
+
+    def fill_ingestion_service(
+        self,
+        run_id: str,
+        *,
+        product: str = "spot",
+    ):
+        if self.user_fill_event_source is None:
+            return None
+        from kairospy.execution.ingestion import DurableExecutionIngestionService, DurableFillIngestionService
+
+        return DurableFillIngestionService(
+            DurableExecutionIngestionService(
+                LedgerService(self.ledger or self.store.load_ledger(), self.reference_catalog),
+                self.store,
+            ),
+            self.user_fill_event_source,
+            run_id=run_id,
+            product=product,
             clock=self.clock,
         )
 

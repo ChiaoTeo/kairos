@@ -1,0 +1,25 @@
+[Unit]
+Description=Kairos live run daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kairos
+Group=kairos
+WorkingDirectory=/opt/kairos
+Environment=PYTHONUNBUFFERED=1
+Environment=KAIROS_RUN_ID=binance-btc-live
+ExecStart=/opt/kairos/pyenv/bin/python -m kairospy run live start --foreground --config /opt/kairos/configs/runs/binance-live.toml --run-id ${KAIROS_RUN_ID} --confirm-live
+ExecStop=/opt/kairos/pyenv/bin/python -m kairospy run stop --run-id ${KAIROS_RUN_ID} --actor systemd --reason "systemd stop" --timeout-seconds 30
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/kairos/.kairos /var/lib/kairos
+
+[Install]
+WantedBy=multi-user.target

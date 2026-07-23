@@ -21,6 +21,7 @@ from .composition import (
 )
 from .kernel import (
     BoundRunProfile,
+    CanonicalMarketProjection,
     IterableRunEventProvider,
     PreparedRun,
     ProfileResult,
@@ -69,10 +70,14 @@ from .live_registry import (
     LiveRunProcessIdentity,
     LiveRunRegistry,
 )
+from .live_lock import LiveRunFileLock, LiveRunLockOwner
 from .live_binding import (
     LiveRuntimeComponents,
     bind_live_runtime_components,
 )
+from .risk_monitor import RiskRuntimeMonitorService
+from .market_freshness import MarketFreshnessRuntimeMonitorService
+from .structured_log import StructuredRuntimeLog
 from .live_daemon import (
     LiveRunDaemon,
     LiveRunDaemonPhase,
@@ -92,6 +97,7 @@ from .stop_controller import RuntimeStopController, StopExecutionReport
 __all__ = [
     "AsyncServiceSupervisor",
     "BoundRunProfile",
+    "CanonicalMarketProjection",
     "ComponentBinding",
     "CompositeRecoveryBinding",
     "DurableOutboxCommandSubmitter",
@@ -104,6 +110,8 @@ __all__ = [
     "LiveRuntimeComponents",
     "LiveRunDaemon",
     "LiveRunHeartbeat",
+    "LiveRunFileLock",
+    "LiveRunLockOwner",
     "LiveRunDaemonPhase",
     "LiveRunDaemonSnapshot",
     "LiveRunKernelService",
@@ -113,6 +121,7 @@ __all__ = [
     "ManagedServiceEvidenceProvider",
     "ManagedServiceSpec",
     "ManagedServiceStatus",
+    "MarketFreshnessRuntimeMonitorService",
     "OperatorCommandBus",
     "OperatorCommandRecord",
     "OperatorCommandStatus",
@@ -139,10 +148,12 @@ __all__ = [
     "RuntimeExecutionServicePlan",
     "RuntimeFeedPlan",
     "RuntimeFeedServiceBundle",
+    "RiskRuntimeMonitorService",
     "RuntimeFeedServicePlan",
     "RuntimeLaunchResult",
     "RuntimeRunLauncher",
     "RuntimeStopController",
+    "StructuredRuntimeLog",
     "RuntimeStrategyPlan",
     "RuntimeStrategyServicePlan",
     "ServiceCriticality",

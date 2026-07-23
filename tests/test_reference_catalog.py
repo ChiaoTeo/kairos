@@ -98,6 +98,18 @@ class ReferenceCatalogTests(unittest.TestCase):
         self.catalog.routes.add(route)
         self.assertEqual(self.catalog.resolve_execution_route(account, self.instrument.instrument_id, NOW), route)
 
+    def test_simulated_cli_order_can_create_transient_execution_route(self) -> None:
+        from kairospy.surface.cli.main import _ensure_simulated_execution_route
+
+        account = AccountRef(InstitutionId("simulated"), "position-lab-sim", AccountType.CRYPTO_SPOT)
+
+        _ensure_simulated_execution_route(self.catalog, account, (self.listing,), NOW)
+
+        route = self.catalog.resolve_execution_route(account, self.instrument.instrument_id, NOW)
+        self.assertEqual(route.broker_id, BrokerId("simulated"))
+        self.assertEqual(route.account_key, account)
+        self.assertEqual(route.listing_id, self.listing.listing_id)
+
     def test_settlement_terms_reject_ambiguous_contracts(self) -> None:
         benchmark = BenchmarkId("benchmark:spx:settlement")
         cash = SettlementTerms(SettlementMethod.CASH, SettlementSession.AM, AssetId("USD"), benchmark)

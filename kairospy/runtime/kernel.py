@@ -13,7 +13,8 @@ from kairospy.strategy.contracts import EconomicIntent
 from kairospy.execution.intent_coordinator import IntentCoordinator
 from kairospy.execution.intent_status import IntentExecutionTracker
 from kairospy.infrastructure.storage.codec import to_primitive
-from kairospy.strategy.protocols import Context, StrategyDecision
+from kairospy.strategy.intents import Intent
+from kairospy.strategy.protocols import Context
 from kairospy.strategy.runtime import GovernedStrategyRuntime
 from kairospy.strategy.views import BudgetView, FeatureView
 
@@ -515,7 +516,7 @@ class RunKernel:
 class StrategyRunResult:
     event_message_ids: tuple[str, ...]
     factor_snapshots: tuple[FactorSnapshot, ...]
-    decisions: tuple[StrategyDecision, ...]
+    intents: tuple[Intent, ...]
     economic_intents: tuple[EconomicIntent, ...]
     factor_hash: str
     decision_hash: str
@@ -538,18 +539,76 @@ class StrategyRunHooks(Protocol):
     def on_end(self, context: Context) -> None: ...
 
 
-class CanonicalBarMarketProjection:
+class CanonicalMarketProjection:
     def __init__(self) -> None:
-        from kairospy.market.projections import CanonicalBarSeriesProjection
+        from kairospy.market.projections import CanonicalBarSeriesProjection, CanonicalOrderBookProjection, CanonicalQuoteProjection
 
         self._bars = CanonicalBarSeriesProjection()
+        self._books = CanonicalOrderBookProjection()
+        self._quotes = CanonicalQuoteProjection()
         self._sequence = 0
 
     def apply(self, event: CanonicalEventEnvelope) -> MarketSnapshot | None:
+        from kairospy.market.canonical import MarketEventKind
+        from kairospy.market.snapshots import MarketSnapshot
+
+        if event.kind is MarketEventKind.ORDER_BOOK_SNAPSHOT or event.kind is MarketEventKind.ORDER_BOOK_DELTA:
+            book = self._books.apply(event)
+            if book is None or not book.valid:
+                return None
+            self._sequence += 1
+            bid = book.bids[0] if book.bids else None
+            ask = book.asks[0] if book.asks else None
+            reference_prices = ()
+            if bid is not None and ask is not None:
+                reference_prices = ((event.instrument_id, (bid.price + ask.price) / Decimal("2")),)
+            return MarketSnapshot(
+                book.event_time,
+                (),
+                reference_prices,
+                sequence=self._sequence,
+                available_instruments=(event.instrument_id,),
+                available_time=book.available_time,
+                freshness_seconds=Decimal(str((event.receive_time - event.event_time).total_seconds())),
+                data_binding=event.source_instance,
+                event_window=(book.event_time, book.event_time),
+                top_of_book=((
+                    event.instrument_id,
+                    bid.price if bid is not None else None,
+                    bid.quantity if bid is not None else None,
+                    ask.price if ask is not None else None,
+                    ask.quantity if ask is not None else None,
+                ),),
+            )
+        if event.kind is MarketEventKind.QUOTE:
+            quote = self._quotes.apply(event)
+            if quote is None:
+                return None
+            self._sequence += 1
+            reference_prices = ()
+            if quote.midpoint is not None:
+                reference_prices = ((event.instrument_id, quote.midpoint),)
+            return MarketSnapshot(
+                quote.event_time,
+                (),
+                reference_prices,
+                sequence=self._sequence,
+                available_instruments=(event.instrument_id,),
+                available_time=quote.available_time,
+                freshness_seconds=Decimal(str((event.receive_time - event.event_time).total_seconds())),
+                data_binding=event.source_instance,
+                event_window=(quote.event_time, quote.event_time),
+                top_of_book=((
+                    event.instrument_id,
+                    quote.bid,
+                    quote.bid_size,
+                    quote.ask,
+                    quote.ask_size,
+                ),),
+            )
         bar = self._bars.apply(event)
         if bar is None:
             return None
-        from kairospy.market.snapshots import MarketSnapshot
 
         self._sequence += 1
         return MarketSnapshot(
@@ -560,6 +619,9 @@ class CanonicalBarMarketProjection:
             data_binding=event.source_instance,
             event_window=(bar.start, bar.end),
         )
+
+
+CanonicalBarMarketProjection = CanonicalMarketProjection
 
 
 class GovernedStrategyRunLoop:
@@ -590,7 +652,7 @@ class GovernedStrategyRunLoop:
         )
 
     async def run(self) -> StrategyRunResult:
-        market_projection = CanonicalBarMarketProjection()
+        market_projection = CanonicalMarketProjection()
         event_ids: list[str] = []
         factors: list[FactorSnapshot] = []
         intents: list[EconomicIntent] = []
@@ -643,9 +705,9 @@ class GovernedStrategyRunLoop:
                 intents.append(intent)
             if self.hooks is not None:
                 self.hooks.on_end(last_context)
-        decisions = tuple(self.strategy_runtime.strategy.decisions)
+        strategy_intents = tuple(intent for economic_intent in intents for intent in economic_intent.intents)
         factor_hash = _hash(factors)
-        decision_hash = _hash(decisions)
+        decision_hash = _hash(strategy_intents)
         intent_hash = _hash(intents)
         audit_hash = _hash({
             "events": event_ids,
@@ -655,7 +717,7 @@ class GovernedStrategyRunLoop:
             "context_hash": last_context.context_hash if last_context is not None else "",
         })
         return StrategyRunResult(
-            tuple(event_ids), tuple(factors), decisions, tuple(intents), factor_hash,
+            tuple(event_ids), tuple(factors), strategy_intents, tuple(intents), factor_hash,
             decision_hash, intent_hash, audit_hash,
             dict(last_context.view_hashes) if last_context is not None else {},
             last_context.context_hash if last_context is not None else "",

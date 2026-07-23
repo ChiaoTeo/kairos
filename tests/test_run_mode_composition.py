@@ -24,7 +24,7 @@ from kairospy.runtime import (
     ManagedServiceSnapshot, ManagedServiceSpec, ManagedServiceStatus, PreparedRun, ProfileResult,
     RecoveryResult, RunArtifactLink, RunCommandSubmitterBinding, RunKernel,
     LiveRuntimeBindingConfig, LiveRuntimeComponents,
-    RunModeComposition, RunRequest, RunResult, RunStatus, RuntimeFeedServiceBundle,
+    MarketFreshnessRuntimeMonitorService, RunModeComposition, RunRequest, RunResult, RunStatus, RuntimeFeedServiceBundle,
     RuntimeRunLauncher, ServiceCriticality, StrategyRunResult,
     SubmitResult, RuntimeRecoveryBinding, backtest_composition, historical_simulation_composition,
     live_composition, paper_trading_composition,
@@ -35,6 +35,7 @@ from kairospy.runtime import (
 from kairospy.infrastructure.configuration import KairosProjectConfig
 from kairospy.runtime.run_config import RunConfig, RunConfigResolver, RunConfigValidationReport
 from kairospy.integrations import (
+    HyperliquidExecutionGatewayRequired,
     LiveMarketEventSourceBinding,
     LiveProviderPorts,
     build_live_market_event_source,
@@ -61,6 +62,7 @@ from kairospy.governance import (
 )
 from kairospy.identity import AccountRef, AccountType, AssetId, InstitutionId, InstrumentId, VenueId
 from kairospy.integrations.connectors.simulated import SimulatedExecutionAccountGateway
+from kairospy.integrations.connectors.binance.user_data_stream import UserFillUpdate
 from kairospy.integrations.ports import ComboLegRequest, ComboOrderRequest, Environment, OrderAck, OrderRequest
 from kairospy.data.contracts import DataSetContractArtifact, LiveViewManifest
 from kairospy.data.quality.freshness import (
@@ -84,7 +86,10 @@ from kairospy.execution.command import OutboxStatus
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.execution.outbox import DurableOrderCommandService, DurableOrderDispatcher
 from kairospy.governance.kill_switch import KillSwitch
-from kairospy.reference import BrokerId, CryptoSpotSpec, ExecutionRoute, ProductType, ReferenceCatalog, RouteId
+from kairospy.reference import (
+    BrokerId, CryptoOptionSpec, CryptoSpotSpec, ExecutionRoute, ExerciseStyle, OptionRight,
+    ProductType, ReferenceCatalog, RouteId,
+)
 from tests.reference_support import publish_test_instrument
 
 
@@ -963,7 +968,7 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
                     'name = "live-runtime-config"',
                     'mode = "live"',
                     'workspace = "alpha"',
-                    'entrypoint = "strategy:build"',
+                    'strategy = "strategy:build"',
                     "",
                     "[bindings]",
                     'account = "binance_live_spot"',
@@ -1043,7 +1048,7 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
                     'name = "live-runtime-config"',
                     'mode = "live"',
                     'workspace = "alpha"',
-                    'entrypoint = "strategy_defs:spec"',
+                    'strategy = "strategy_defs:spec"',
                     "",
                     "[strategy]",
                     'spec = "strategy_defs:spec"',
@@ -1086,8 +1091,8 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
                     "[run]",
                     'name = "backtest"',
                     'mode = "backtest"',
-                    'workspace = "alpha"',
-                    'entrypoint = "strategy:build"',
+                    'workspace = "workspace_code:build_workspace"',
+                    'strategy = "strategy:Strategy"',
                 ]) + "\n",
                 encoding="utf-8",
             )
@@ -1100,7 +1105,8 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(report.valid)
             self.assertEqual(report.issues, ())
             self.assertEqual(report.path, config_path.resolve())
-            self.assertEqual(args.workspace, "alpha")
+            self.assertEqual(args.workspace, "workspace_code:build_workspace")
+            self.assertEqual(args.strategy, "strategy:Strategy")
             self.assertEqual(resolver.explain(config_path)["run"]["mode"], "backtest")
 
     def test_live_runtime_components_bind_provider_ports_to_market_outbox_and_recovery(self) -> None:
@@ -1277,6 +1283,254 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(scoped["run_id"], "run-1")
             self.assertEqual(last["report"]["account"]["account_id"], account.account_id)
 
+    async def test_live_runtime_components_publish_risk_monitor_state_without_overwriting_pause(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            at = datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
+            root = Path(directory)
+            paths = RuntimePaths.under(root)
+            store = SQLiteRuntimeStore(paths.runtime_database)
+            account = _account()
+            application = KairosApplication(
+                ApplicationConfig(Environment.LIVE, paths),
+                store,
+                runtime_id="live-components-risk-monitor",
+                accounts=(account,),
+                recovery=_ReadyRuntimeRecovery(),
+                clock=FixedClock(at),
+            )
+            application.start()
+            application.run()
+            gateway = SimulatedExecutionAccountGateway(
+                VenueId("simulated"),
+                account,
+                environment=Environment.LIVE,
+                clock=FixedClock(at),
+            )
+            components = LiveRuntimeComponents(
+                _live_runtime_config(),
+                application,
+                store,
+                _live_catalog(account),
+                gateway,
+                gateway,
+                accounts=(account,),
+                order_recovery_gateway=gateway,
+                clock=FixedClock(at),
+            )
+            monitor = components.risk_monitor_service("run-1", interval_seconds=0.001)
+            order = _order_request("risk-monitor-working-order")
+            store.create_order(order, at)
+            store.transition_order(order.client_order_id, DurableOrderStatus.APPROVED, at)
+            store.transition_order(order.client_order_id, DurableOrderStatus.SUBMITTING, at)
+            store.transition_order(order.client_order_id, DurableOrderStatus.ACKNOWLEDGED, at, ack=OrderAck(
+                order.internal_order_id,
+                order.client_order_id,
+                order.strategy_id,
+                order.intent_id,
+                order.correlation_id,
+                "venue-risk-monitor-working-order",
+                at,
+            ))
+
+            ok = monitor.check_once()
+            scoped = store.runtime_state(monitor.state_key)
+            risk_state = store.runtime_state("risk_runtime:last")
+            store.set_runtime_state("risk_runtime:last", {"run_id": "run-1", "status": "paused"}, at)
+            still_ok = monitor.check_once()
+            paused = store.runtime_state("risk_runtime:last")
+
+            assert isinstance(scoped, dict)
+            assert isinstance(risk_state, dict)
+            assert isinstance(paused, dict)
+            self.assertEqual(ok["status"], "ok")
+            self.assertEqual(ok["orders_requiring_recovery_count"], 1)
+            self.assertEqual(still_ok["status"], "ok")
+            self.assertEqual(scoped["phase"], "ok")
+            self.assertEqual(risk_state["status"], "ok")
+            self.assertEqual(paused["status"], "paused")
+
+    async def test_live_runtime_risk_monitor_blocks_on_reconciliation_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            at = datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
+            root = Path(directory)
+            paths = RuntimePaths.under(root)
+            store = SQLiteRuntimeStore(paths.runtime_database)
+            account = _account()
+            application = KairosApplication(
+                ApplicationConfig(Environment.LIVE, paths),
+                store,
+                runtime_id="live-components-risk-mismatch",
+                accounts=(account,),
+                recovery=_ReadyRuntimeRecovery(),
+                clock=FixedClock(at),
+            )
+            application.start()
+            application.run()
+            gateway = SimulatedExecutionAccountGateway(
+                VenueId("simulated"),
+                account,
+                environment=Environment.LIVE,
+                clock=FixedClock(at),
+            )
+            components = LiveRuntimeComponents(
+                _live_runtime_config(),
+                application,
+                store,
+                _live_catalog(account),
+                gateway,
+                gateway,
+                accounts=(account,),
+                order_recovery_gateway=gateway,
+                clock=FixedClock(at),
+            )
+            store.set_runtime_state("reconciliation:last", {
+                "run_id": "run-1",
+                "matched": False,
+            }, at)
+
+            state = components.risk_monitor_service("run-1", interval_seconds=0.001).check_once()
+            risk_state = store.runtime_state("risk_runtime:last")
+
+            assert isinstance(risk_state, dict)
+            self.assertEqual(state["status"], "blocking")
+            self.assertIn("reconciliation_mismatch", state["reasons"])
+            self.assertEqual(risk_state["status"], "blocking")
+            self.assertEqual(application.status, RuntimeStatus.REDUCE_ONLY)
+
+    async def test_live_runtime_risk_monitor_surfaces_unknown_external_open_orders(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            at = datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
+            root = Path(directory)
+            paths = RuntimePaths.under(root)
+            store = SQLiteRuntimeStore(paths.runtime_database)
+            account = _account()
+            application = KairosApplication(
+                ApplicationConfig(Environment.LIVE, paths),
+                store,
+                runtime_id="live-components-risk-external-open-order",
+                accounts=(account,),
+                recovery=_ReadyRuntimeRecovery(),
+                clock=FixedClock(at),
+            )
+            application.start()
+            application.run()
+            gateway = SimulatedExecutionAccountGateway(
+                VenueId("simulated"),
+                account,
+                environment=Environment.LIVE,
+                clock=FixedClock(at),
+            )
+            components = LiveRuntimeComponents(
+                _live_runtime_config(),
+                application,
+                store,
+                _live_catalog(account),
+                gateway,
+                gateway,
+                accounts=(account,),
+                order_recovery_gateway=gateway,
+                clock=FixedClock(at),
+            )
+            store.set_runtime_state("reconciliation:last", {
+                "run_id": "run-1",
+                "matched": False,
+                "report": {
+                    "differences": (
+                        {"kind": "open_order", "key": "venue-order-external-1", "local": "0", "venue": "1"},
+                    ),
+                },
+            }, at)
+
+            state = components.risk_monitor_service("run-1", interval_seconds=0.001).check_once()
+            risk_state = store.runtime_state("risk_runtime:last")
+
+            assert isinstance(risk_state, dict)
+            self.assertEqual(state["status"], "blocking")
+            self.assertIn("reconciliation_mismatch", state["reasons"])
+            self.assertIn("unknown_external_open_orders", state["reasons"])
+            self.assertEqual(state["unknown_external_open_order_ids"], ("venue-order-external-1",))
+            self.assertEqual(risk_state["unknown_external_open_order_count"], 1)
+            self.assertEqual(application.status, RuntimeStatus.REDUCE_ONLY)
+
+    async def test_live_runtime_fill_ingestion_service_consumes_user_fill_updates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            at = datetime(2026, 7, 22, 12, tzinfo=timezone.utc)
+            root = Path(directory)
+            paths = RuntimePaths.under(root)
+            store = SQLiteRuntimeStore(paths.runtime_database)
+            account = _account()
+            application = KairosApplication(
+                ApplicationConfig(Environment.LIVE, paths),
+                store,
+                runtime_id="live-components-fill-ingestion",
+                accounts=(account,),
+                recovery=_ReadyRuntimeRecovery(),
+                clock=FixedClock(at),
+            )
+            application.start()
+            application.run()
+            gateway = SimulatedExecutionAccountGateway(
+                VenueId("simulated"),
+                account,
+                environment=Environment.LIVE,
+                clock=FixedClock(at),
+            )
+            order = _order_request("fill-ingestion-client")
+            store.create_order(order, at)
+            store.transition_order(order.client_order_id, DurableOrderStatus.APPROVED, at)
+            store.transition_order(order.client_order_id, DurableOrderStatus.SUBMITTING, at)
+            store.transition_order(order.client_order_id, DurableOrderStatus.ACKNOWLEDGED, at, ack=OrderAck(
+                order.internal_order_id,
+                order.client_order_id,
+                order.strategy_id,
+                order.intent_id,
+                order.correlation_id,
+                "venue-fill-ingestion",
+                at,
+            ))
+            fill = UserFillUpdate(
+                "fill-1",
+                "venue-fill-ingestion",
+                order.client_order_id,
+                account,
+                order.instrument_id,
+                "buy",
+                Decimal("1"),
+                Decimal("100"),
+                Decimal("0.1"),
+                AssetId("USDT"),
+                at,
+                True,
+            )
+            components = LiveRuntimeComponents(
+                _live_runtime_config(),
+                application,
+                store,
+                _live_catalog(account),
+                gateway,
+                gateway,
+                accounts=(account,),
+                order_recovery_gateway=gateway,
+                user_fill_event_source=_AsyncEventSource((fill,)),
+                clock=FixedClock(at),
+            )
+            service = components.fill_ingestion_service("run-1")
+            assert service is not None
+
+            result = service.ingest_event(fill)
+            state = store.runtime_state(service.state_key)
+            stored = store.order(order.client_order_id)
+
+            assert isinstance(state, dict)
+            assert stored is not None
+            self.assertIsNotNone(result)
+            self.assertEqual(stored.status, DurableOrderStatus.FILLED)
+            self.assertEqual(state["phase"], "running")
+            self.assertEqual(state["ingested_count"], 1)
+            self.assertEqual(state["fill_ingestion_latency_last_ms"], 0.0)
+            self.assertEqual(state["fill_ingestion_latency_max_ms"], 0.0)
+            self.assertEqual(store.cursor(f"binance:spot:fills:{account.value}"), f"{int(at.timestamp() * 1000)}:fill-1")
+
     def test_live_provider_ports_factory_builds_binance_live_ports_without_capability_model(self) -> None:
         account = AccountRef(InstitutionId("binance"), "main", AccountType.CRYPTO_SPOT)
         config = KairosProjectConfig(
@@ -1308,7 +1562,85 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(ports.execution_gateway.environment, Environment.LIVE)
         self.assertIs(ports.account_gateway.environment, Environment.LIVE)
         self.assertIs(ports.order_recovery_gateway, ports.execution_gateway)
+        self.assertIsNotNone(ports.user_fill_event_source)
         self.assertEqual(ports.execution_gateway.instrument_symbols[InstrumentId("BTC-USDT")], "BTCUSDT")
+
+    def test_live_provider_ports_factory_builds_binance_options_fill_source(self) -> None:
+        account = AccountRef(InstitutionId("binance"), "main", AccountType.DERIVATIVES)
+        config = KairosProjectConfig(
+            Path("/tmp/kairospy-live-options-test"),
+            Path("/tmp/kairospy-live-options-test/kairos.toml"),
+            {
+                "credentials": {
+                    "binance_trading_live_spot": {
+                        "api_key": "test-key",
+                        "api_secret": "test-secret",
+                    },
+                },
+            },
+        )
+
+        ports = build_live_provider_ports(
+            config,
+            provider="binance",
+            execution_driver="binance-options-live",
+            account=account.value,
+            reference_catalog=_binance_options_live_catalog(),
+            transport_factory=lambda base_url: SimpleNamespace(base_url=base_url),
+        )
+
+        self.assertIsInstance(ports, LiveProviderPorts)
+        self.assertEqual(ports.provider, "binance")
+        self.assertIsNotNone(ports.user_fill_event_source)
+        self.assertTrue(ports.user_fill_event_source.options)
+        self.assertEqual(ports.user_fill_event_source.stream_service.path, "/eapi/v1/listenKey")
+        self.assertEqual(
+            ports.execution_gateway.instrument_symbols[InstrumentId("crypto:binance:option:BTC-200730-9000-C")],
+            "BTC-200730-9000-C",
+        )
+
+    def test_live_provider_ports_factory_requires_manual_hyperliquid_execution_gateway(self) -> None:
+        account = AccountRef(InstitutionId("hyperliquid"), "main", AccountType.DERIVATIVES)
+        config = KairosProjectConfig(
+            Path("/tmp/kairospy-live-hyperliquid-test"),
+            Path("/tmp/kairospy-live-hyperliquid-test/kairos.toml"),
+            {},
+        )
+
+        with self.assertRaisesRegex(HyperliquidExecutionGatewayRequired, "manual key/order verification"):
+            build_live_provider_ports(
+                config,
+                provider="hyperliquid",
+                execution_driver="hyperliquid-live",
+                account=account.value,
+                reference_catalog=_binance_live_catalog(),
+            )
+
+    def test_live_provider_ports_factory_binds_injected_hyperliquid_sdk_ports(self) -> None:
+        account = AccountRef(InstitutionId("hyperliquid"), "main", AccountType.DERIVATIVES)
+        config = KairosProjectConfig(
+            Path("/tmp/kairospy-live-hyperliquid-sdk-test"),
+            Path("/tmp/kairospy-live-hyperliquid-sdk-test/kairos.toml"),
+            {},
+        )
+
+        ports = build_live_provider_ports(
+            config,
+            provider="hyperliquid",
+            execution_driver="hyperliquid-live",
+            account=account.value,
+            reference_catalog=_binance_live_catalog(),
+            hyperliquid_exchange=SimpleNamespace(),
+            hyperliquid_info=SimpleNamespace(open_orders=lambda address: [], user_state=lambda address: {}),
+            hyperliquid_account_address="0xabc",
+        )
+
+        self.assertIsInstance(ports, LiveProviderPorts)
+        self.assertEqual(ports.provider, "hyperliquid")
+        self.assertEqual(ports.account, account)
+        self.assertIs(ports.execution_gateway.environment, Environment.LIVE)
+        self.assertIs(ports.account_gateway.environment, Environment.LIVE)
+        self.assertIs(ports.order_recovery_gateway, ports.execution_gateway)
 
     def test_live_market_event_source_factory_builds_feed_channel_from_live_view(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1702,6 +2034,53 @@ class RunModeCompositionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(updated.passed)
         self.assertEqual(write_manifest.freshness_status, "healthy")
 
+    def test_market_freshness_runtime_monitor_writes_runtime_metrics_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset_id = str(BTC_SPOT_DAILY.key)
+            contract_hash = DataSetContractArtifact.from_product_contract(BTC_SPOT_DAILY).contract_hash
+            path = live_view_manifest_path(root, dataset_id, "live:monitor")
+            write_live_view_manifest(path, LiveViewManifest(
+                dataset_id,
+                "live:monitor",
+                contract_hash,
+                "connector-hash",
+                "available_time",
+                ("available_time", "close"),
+                {
+                    "channel_contract": "BoundedEventChannel",
+                    "freshness": {"max_age_seconds": 60},
+                    "channel_diagnostics": {"dropped": 0, "overflow": 0, "sequence_gaps": 0},
+                    "freshness_evidence": {"last_available_time": "2026-07-22T11:59:55+00:00"},
+                },
+                {"kind": "live_connector"},
+                "healthy",
+                "2026-07-20T00:00:00+00:00",
+            ))
+            store = SQLiteRuntimeStore(root / "runtime.sqlite3")
+            monitor = MarketFreshnessRuntimeMonitorService(
+                store,
+                run_id="run-1",
+                name="bars",
+                dataset=dataset_id,
+                live_view_id="live:monitor",
+                manifest_path=path,
+                clock=FixedClock(datetime(2026, 7, 22, 12, tzinfo=timezone.utc)),
+            )
+
+            result = monitor.poll_once()
+            state = store.runtime_state(monitor.state_key)
+
+        assert isinstance(state, dict)
+        self.assertTrue(result["freshness_passed"])
+        self.assertEqual(state["phase"], "running")
+        self.assertEqual(state["freshness_status"], "healthy")
+        self.assertEqual(state["freshness_max_age_seconds"], 60)
+        self.assertEqual(state["channel_failure_count"], 0)
+        self.assertIn("freshness_updated_age_seconds", state)
+        self.assertEqual(state["market_event_time"], "2026-07-22T11:59:55+00:00")
+        self.assertEqual(state["market_event_age_seconds"], 5.0)
+
     def test_runtime_feed_service_bundle_requires_monitor_factory(self) -> None:
         plan = runtime_feed_plan("paper", ({
             "name": "bars",
@@ -1997,6 +2376,36 @@ def _binance_live_catalog() -> ReferenceCatalog:
         at,
         quantity_increment=Decimal("0.001"),
         minimum_quantity=Decimal("0.001"),
+    )
+    return catalog
+
+
+def _binance_options_live_catalog() -> ReferenceCatalog:
+    at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    catalog = ReferenceCatalog()
+    publish_test_instrument(
+        catalog,
+        InstrumentId("crypto:binance:option:BTC-200730-9000-C"),
+        ProductType.CRYPTO_OPTION,
+        "BTC-200730-9000-C",
+        CryptoOptionSpec(
+            AssetId("BTC"),
+            AssetId("USDT"),
+            AssetId("USDT"),
+            AssetId("USDT"),
+            datetime(2030, 7, 30, tzinfo=timezone.utc),
+            Decimal("9000"),
+            OptionRight.CALL,
+            ExerciseStyle.EUROPEAN,
+            Decimal("1"),
+            "BTCUSDT",
+        ),
+        AssetId("USDT"),
+        VenueId("binance"),
+        "BTC-200730-9000-C",
+        at,
+        quantity_increment=Decimal("0.01"),
+        minimum_quantity=Decimal("0.01"),
     )
     return catalog
 

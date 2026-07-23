@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Mapping, Protocol, Sequence, TYPE_CHECKING
 
 from .intents import Intent
@@ -22,18 +21,6 @@ from .views import (
 
 if TYPE_CHECKING:
     from kairospy.execution.fills import Fill
-
-
-@dataclass(frozen=True, slots=True)
-class StrategyDecision:
-    timestamp: str
-    action: str
-    reason: str
-    candidates: tuple[str, ...] = ()
-
-    @classmethod
-    def none(cls, *, timestamp: datetime | str, reason: str) -> "StrategyDecision":
-        return cls(str(timestamp), "none", reason)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,16 +70,13 @@ class Context:
 class Strategy(Protocol):
     """User strategy contract: read Context, emit strategy intents.
 
-    StrategyDecision is retained as an audit/explanation trail. It is not the
-    primary output contract; executable work flows through Intent and is wrapped
-    into EconomicIntent by the governed runtime.
+    Intent is the single strategy output contract. Executable work and audit
+    reasons both flow through Intent and are wrapped into EconomicIntent by the
+    governed runtime.
     """
 
     @property
     def strategy_id(self) -> str: ...
-
-    @property
-    def decisions(self) -> tuple[StrategyDecision, ...]: ...
 
     def on_start(self, context: Context) -> Sequence[Intent]: ...
 

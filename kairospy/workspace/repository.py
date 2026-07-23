@@ -49,6 +49,18 @@ class WorkspaceRepository:
     def open_or_create(self, name: str) -> "Workspace":
         return self.open(name) if self.manifest_path(name).exists() else self.create(name)
 
+    def list(self) -> tuple["Workspace", ...]:
+        if not self.root.exists():
+            return ()
+        workspaces = []
+        for manifest_path in sorted(self.root.glob("*/workspace.json")):
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+                workspaces.append(Workspace(self, WorkspaceManifest.from_dict(payload)))
+            except (OSError, json.JSONDecodeError, KeyError, ValueError):
+                continue
+        return tuple(workspaces)
+
     def save(self, manifest: WorkspaceManifest) -> WorkspaceManifest:
         updated = replace(manifest, updated_at=datetime.now(timezone.utc).isoformat())
         self._write(updated)
@@ -74,15 +86,9 @@ class WorkspaceData:
     def __init__(self, workspace: "Workspace") -> None:
         self.workspace = workspace
 
-    def bind(self, name: str, *, dataset: str) -> WorkspaceBinding:
-        return self.workspace.bind_data(name, dataset=dataset)
-
-    def bind_live(self, name: str, *, dataset: str) -> WorkspaceBinding:
-        return self.workspace.bind_live(name, dataset=dataset)
-
     def get(self, name: str):
         binding = self.workspace.binding(name)
-        if binding.kind != "dataset":
+        if binding.metadata.get("view") not in {"history", "both"} and binding.kind != "dataset":
             raise ValueError(f"workspace binding {name!r} is not a historical dataset")
         from kairospy.data import DatasetClient
 
@@ -90,7 +96,7 @@ class WorkspaceData:
 
     def live(self, name: str) -> WorkspaceBinding:
         binding = self.workspace.binding(name)
-        if binding.kind != "live_view":
+        if binding.metadata.get("view") not in {"live", "both"} and binding.kind != "live_view":
             raise ValueError(f"workspace binding {name!r} is not a live view")
         return binding
 
@@ -121,12 +127,30 @@ class Workspace:
         except Exception:
             return self.repository.project_root / PROJECT_STATE_DIR / "data"
 
-    def bind_data(self, name: str, *, dataset: str) -> WorkspaceBinding:
-        binding = self._binding(name, "dataset", dataset)
-        return self._save_binding(binding)
-
-    def bind_live(self, name: str, *, dataset: str) -> WorkspaceBinding:
-        binding = self._binding(name, "live_view", dataset)
+    def attach(
+        self,
+        name: str,
+        *,
+        dataset: str,
+        view: str = "both",
+        instruments: tuple[str, ...] = (),
+        fields: tuple[str, ...] = (),
+        freshness_seconds: float | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> WorkspaceBinding:
+        if view not in {"history", "live", "both"}:
+            raise ValueError("workspace attachment view must be history, live, or both")
+        current = self.manifest.bindings.get(name)
+        if current is not None and current.dataset != dataset:
+            raise ValueError(f"workspace attachment {name!r} already points to {current.dataset!r}")
+        payload = {
+            "view": _merge_view(str(current.metadata.get("view") or view), view) if current is not None else view,
+            **({"instruments": list(instruments)} if instruments else {}),
+            **({"fields": list(fields)} if fields else {}),
+            **({"freshness_seconds": freshness_seconds} if freshness_seconds is not None else {}),
+            **(metadata or {}),
+        }
+        binding = WorkspaceBinding(name=name, kind="attachment", dataset=dataset, metadata=payload)
         return self._save_binding(binding)
 
     def binding(self, name: str) -> WorkspaceBinding:
@@ -153,9 +177,6 @@ class Workspace:
             "params": self.manifest.params,
         }
 
-    def _binding(self, name: str, kind: str, dataset: str) -> WorkspaceBinding:
-        return WorkspaceBinding(name=name, kind=kind, dataset=dataset, release_id=None, content_hash=None)
-
     def _save_binding(self, binding: WorkspaceBinding) -> WorkspaceBinding:
         bindings = dict(self.manifest.bindings)
         bindings[binding.name] = binding
@@ -168,3 +189,12 @@ def _validate_name(name: str) -> None:
         raise ValueError("workspace name is required")
     if "/" in name or "\\" in name or name in {".", ".."}:
         raise ValueError("workspace name must be a simple directory name")
+
+
+def _merge_view(first: str, second: str) -> str:
+    values = {first, second}
+    if "both" in values or values == {"history", "live"}:
+        return "both"
+    if "live" in values:
+        return "live"
+    return "history"

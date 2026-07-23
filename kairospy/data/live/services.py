@@ -102,6 +102,13 @@ class LiveDataService:
             "venue": venue,
         } | dict(runtime_config)
         store = DatasetStore(self.root)
+        contract = {
+            "dataset_id": dataset_id,
+            "primary_time": primary_time,
+            "fields": list(fields),
+            "source": source_name,
+            "live_data_plane": live_data_plane,
+        }
         store.ensure_dataset(dataset_id, metadata={
             "primary_time": primary_time,
             "fields": list(fields),
@@ -130,6 +137,23 @@ class LiveDataService:
             json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
             encoding="utf-8",
         )
+        from kairospy.data.contracts import LiveViewManifest, stable_artifact_hash
+        from kairospy.data.quality.freshness import live_view_manifest_path, write_live_view_manifest
+
+        manifest = LiveViewManifest(
+            dataset_id,
+            "default",
+            stable_artifact_hash(contract),
+            connector_hash,
+            primary_time,
+            tuple(fields),
+            live_data_plane,
+            state["source"],
+            "configured",
+            state["configured_at"],
+        )
+        manifest_path = live_view_manifest_path(self.root, dataset_id, "default")
+        write_live_view_manifest(manifest_path, manifest)
         return {
             "product": "data",
             "operation": "connect",
@@ -150,6 +174,8 @@ class LiveDataService:
                 "ready_for": ["live"],
                 "blocked_for": [],
                 "issues": [],
+                "view": "default",
+                "manifest": str(manifest_path),
             },
         }
 

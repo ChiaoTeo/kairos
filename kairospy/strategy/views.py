@@ -48,6 +48,21 @@ class _ViewContract:
 
 
 @dataclass(frozen=True, slots=True)
+class TopOfBookView:
+    instrument_id: InstrumentId
+    bid: Decimal | None
+    bid_size: Decimal | None
+    ask: Decimal | None
+    ask_size: Decimal | None
+
+    @property
+    def spread(self) -> Decimal | None:
+        if self.bid is None or self.ask is None:
+            return None
+        return self.ask - self.bid
+
+
+@dataclass(frozen=True, slots=True)
 class MarketView(_ViewContract):
     timestamp: datetime
     sequence: int
@@ -57,11 +72,13 @@ class MarketView(_ViewContract):
     available_instruments: tuple[InstrumentId, ...] = ()
     reference_prices: tuple[tuple[InstrumentId, Decimal], ...] = ()
     quality_codes: tuple[str, ...] = ()
+    top_of_book: tuple[TopOfBookView, ...] = ()
     snapshot_span_seconds: Decimal = Decimal("0")
     available_time: datetime | None = None
     freshness_seconds: Decimal | None = None
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "top_of_book", tuple(_top_of_book_view(item) for item in self.top_of_book))
         if self.available_time is None:
             object.__setattr__(self, "available_time", self.timestamp)
         if self.event_window is None:
@@ -84,6 +101,7 @@ class MarketView(_ViewContract):
             available,
             tuple(getattr(snapshot, "reference_prices", ())),
             quality_codes,
+            tuple(_top_of_book_view(item) for item in getattr(snapshot, "top_of_book", ())),
             getattr(snapshot, "snapshot_span_seconds", Decimal("0")),
             getattr(snapshot, "available_time", getattr(snapshot, "timestamp")),
             getattr(snapshot, "freshness_seconds", None),
@@ -630,6 +648,7 @@ MARKET_VIEW_SCHEMA = ViewSchema(
         ViewFieldSchema("available_instruments", "策略可交易/可见 universe", "visible at available_time", "universe binding"),
         ViewFieldSchema("reference_prices", "当前可见参考价", "available at timestamp", "canonical market inputs"),
         ViewFieldSchema("quality_codes", "行情质量和缺口信号", "measured at available_time", "market quality evidence"),
+        ViewFieldSchema("top_of_book", "当前最优买卖盘口", "available at timestamp", "canonical order book projection"),
         ViewFieldSchema("snapshot_span_seconds", "快照覆盖窗口", "event window", "market projection window"),
         ViewFieldSchema("available_time", "策略实际可见时间", "available_time", "data binding availability"),
         ViewFieldSchema("freshness_seconds", "视图新鲜度", "receive_time - event_time", "freshness evidence"),
@@ -817,6 +836,20 @@ def _factor_value(snapshot: Any) -> FeatureValue:
 
 def _identity_value(value: Any) -> str:
     return str(getattr(value, "value", value))
+
+
+def _top_of_book_view(value: Any) -> TopOfBookView:
+    if isinstance(value, TopOfBookView):
+        return value
+    if isinstance(value, dict):
+        return TopOfBookView(
+            value["instrument_id"],
+            value.get("bid"),
+            value.get("bid_size"),
+            value.get("ask"),
+            value.get("ask_size"),
+        )
+    return TopOfBookView(*value)
 
 
 def _optional_identity_value(value: Any | None) -> str | None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +14,7 @@ from kairospy.reference.contracts import ProductType
 from kairospy.runtime import (
     LiveRunDaemon,
     LiveRunDaemonPhase,
+    LiveRunRegistry,
     LiveRunKernelService,
     ManagedServiceSpec,
     ManagedServiceStatus,
@@ -29,12 +30,15 @@ from kairospy.runtime import (
     RunStatus,
     StrategyRunResult,
     SubmitResult,
+    StructuredRuntimeLog,
 )
 from kairospy.runtime.application import FunctionProbe, KairosApplication, RuntimeStatus
 from kairospy.runtime.clock import FixedClock
 from kairospy.runtime.config import ApplicationConfig, RuntimePaths
 from kairospy.runtime.stop_controller import RuntimeStopController
 from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
+from kairospy.governance.reconciliation import ReconciliationDifference, ReconciliationReport
+from kairospy.identity import AccountRef, AccountType, InstitutionId
 from kairospy.strategy.contracts import StrategyLifecycle, StrategySpec
 from kairospy.strategy.stop_policy import StopReason
 from kairospy.surface import product as product_surface
@@ -53,10 +57,12 @@ class LiveRunDaemonTests(unittest.IsolatedAsyncioTestCase):
                     lifecycle.append("stopped")
 
             app = _application(Path(directory), runtime_id="live-daemon")
+            structured_log_path = Path(directory) / "runtime.jsonl"
             daemon = LiveRunDaemon(
                 app,
                 (ManagedServiceSpec("feed:live", feed_service),),
                 run_id="live-run-a",
+                structured_log_path=str(structured_log_path),
                 clock=app.clock,
             )
 
@@ -81,6 +87,40 @@ class LiveRunDaemonTests(unittest.IsolatedAsyncioTestCase):
             assert isinstance(persisted, dict)
             self.assertEqual(persisted["phase"], LiveRunDaemonPhase.STOPPED.value)
             self.assertEqual(persisted["application_status"], RuntimeStatus.STOPPED.value)
+            records = StructuredRuntimeLog(structured_log_path).read()
+            self.assertEqual(records[0]["event"], "daemon_start_requested")
+            self.assertIn("daemon_started", [item["event"] for item in records])
+            self.assertEqual(records[-1]["event"], "daemon_stopped")
+            self.assertEqual(records[-1]["run_id"], "live-run-a")
+            self.assertEqual(len(records[-1]["record_hash"]), 64)
+
+    async def test_live_run_daemon_lock_rejects_duplicate_run_id_until_stopped(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            async def feed_service() -> None:
+                await asyncio.Future()
+
+            root = Path(directory)
+            lock_path = root / "run.lock"
+            first = LiveRunDaemon(
+                _application(root / "first", runtime_id="live-run-lock"),
+                (ManagedServiceSpec("feed:live:first", feed_service),),
+                run_id="live-run-lock",
+                run_lock_path=str(lock_path),
+            )
+            duplicate = LiveRunDaemon(
+                _application(root / "duplicate", runtime_id="live-run-lock"),
+                (ManagedServiceSpec("feed:live:duplicate", feed_service),),
+                run_id="live-run-lock",
+                run_lock_path=str(lock_path),
+            )
+
+            await first.start()
+            with self.assertRaisesRegex(RuntimeError, "already locked"):
+                await duplicate.start()
+
+            await first.stop()
+            await duplicate.start()
+            await duplicate.stop()
 
     async def test_live_run_daemon_runs_stop_handler_before_services_stop(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -204,6 +244,54 @@ class LiveRunDaemonTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result["operator_command"]["command_id"], submitted.command_id)
             self.assertEqual(commands[-1].status, OperatorCommandStatus.SUCCEEDED)
             self.assertEqual(commands[-1].result["phase"], LiveRunDaemonPhase.STOPPED.value)
+            self.assertEqual(commands[-1].result["timeout_seconds"], 5.0)
+            self.assertEqual(commands[-1].result["force"], False)
+
+    async def test_live_run_foreground_daemon_force_stops_after_timeout_and_records_incident(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            async def stubborn_service() -> None:
+                try:
+                    await asyncio.Future()
+                except asyncio.CancelledError:
+                    await asyncio.Future()
+
+            app = _application(Path(directory), runtime_id="live-command-force-stop")
+            daemon = LiveRunDaemon(
+                app,
+                (ManagedServiceSpec("feed:stubborn", stubborn_service),),
+                run_id="live-run-command-force-stop",
+                clock=app.clock,
+            )
+            task = asyncio.create_task(product_surface._run_live_foreground_daemon(
+                daemon,
+                "start",
+                duration_seconds=None,
+                poll_seconds=0.01,
+            ))
+            await _wait_for_runtime_state(app.store, daemon.state_key, LiveRunDaemonPhase.RUNNING.value)
+            submitted = OperatorCommandBus(app.store).submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.STOP,
+                payload={"timeout_seconds": 0.01, "force": True},
+                actor="cli",
+                reason="operator emergency force stop",
+                idempotency_key="stop:force",
+                at=app.clock.now(),
+            )
+
+            result = await asyncio.wait_for(task, timeout=2)
+            command = await _wait_for_operator_command_status(
+                app.store, daemon.run_id, submitted.command_id, OperatorCommandStatus.SUCCEEDED,
+            )
+            incidents = app.store.runtime_incidents(daemon.run_id)
+
+            self.assertEqual(result["status"], "stopped")
+            self.assertEqual(result["force"], True)
+            self.assertEqual(result["timeout_seconds"], 0.01)
+            self.assertEqual(command.result["force"], True)
+            self.assertEqual(len(incidents), 1)
+            self.assertEqual(incidents[0].incident_id, f"runtime-force-stop:{daemon.run_id}")
+            self.assertEqual(incidents[0].severity, "critical")
 
     async def test_live_run_foreground_daemon_consumes_kill_switch_and_reset_commands(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -268,7 +356,188 @@ class LiveRunDaemonTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(reset_state["reset_evidence"]["reconciliation_evidence"], "reconciliation:matched")
             self.assertEqual(daemon_state["phase"], LiveRunDaemonPhase.RUNNING.value)
             self.assertEqual(app_state["status"], "running")
-            self.assertEqual(reset.result["desired_state"], "running")
+
+            stop = bus.submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.STOP,
+                payload={},
+                actor="cli",
+                reason="done",
+                idempotency_key="stop:done",
+                at=app.clock.now(),
+            )
+            result = await asyncio.wait_for(task, timeout=2)
+            stop = await _wait_for_operator_command_status(app.store, daemon.run_id, stop.command_id, OperatorCommandStatus.SUCCEEDED)
+            self.assertEqual(result["status"], "stopped")
+            self.assertEqual(stop.result["phase"], LiveRunDaemonPhase.STOPPED.value)
+
+    async def test_live_run_foreground_daemon_consumes_operational_commands(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            async def feed_service() -> None:
+                await asyncio.Future()
+
+            app = _application(Path(directory), runtime_id="live-command-ops")
+            daemon = LiveRunDaemon(
+                app,
+                (ManagedServiceSpec("feed:live", feed_service),),
+                run_id="live-run-command-ops",
+                clock=app.clock,
+            )
+            task = asyncio.create_task(product_surface._run_live_foreground_daemon(
+                daemon,
+                "start",
+                duration_seconds=None,
+                poll_seconds=0.01,
+            ))
+            await _wait_for_runtime_state(app.store, daemon.state_key, LiveRunDaemonPhase.RUNNING.value)
+            bus = OperatorCommandBus(app.store)
+
+            status_snapshot = bus.submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.REQUEST_STATUS_SNAPSHOT,
+                payload={},
+                actor="cli",
+                reason="fresh status",
+                idempotency_key="status:fresh",
+                at=app.clock.now(),
+            )
+            status_snapshot = await _wait_for_operator_command_status(
+                app.store, daemon.run_id, status_snapshot.command_id, OperatorCommandStatus.SUCCEEDED,
+            )
+            snapshot_state = app.store.runtime_state(f"status_snapshot:{daemon.run_id}:last")
+            assert isinstance(snapshot_state, dict)
+            self.assertEqual(snapshot_state["phase"], LiveRunDaemonPhase.RUNNING.value)
+            self.assertEqual(status_snapshot.result["phase"], LiveRunDaemonPhase.RUNNING.value)
+
+            pause = bus.submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.PAUSE_NEW_ORDERS,
+                payload={},
+                actor="cli",
+                reason="feed stale",
+                idempotency_key="pause:feed-stale",
+                at=app.clock.now(),
+            )
+            pause = await _wait_for_operator_command_status(app.store, daemon.run_id, pause.command_id, OperatorCommandStatus.SUCCEEDED)
+            risk_state = app.store.runtime_state("risk_runtime:last")
+            assert isinstance(risk_state, dict)
+            self.assertEqual(risk_state["status"], "paused")
+            self.assertEqual(pause.result["desired_state"], "paused")
+
+            resume = bus.submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.RESUME,
+                payload={},
+                actor="cli",
+                reason="feed recovered",
+                idempotency_key="resume:feed-recovered",
+                at=app.clock.now(),
+            )
+            resume = await _wait_for_operator_command_status(app.store, daemon.run_id, resume.command_id, OperatorCommandStatus.SUCCEEDED)
+            risk_state = app.store.runtime_state("risk_runtime:last")
+            assert isinstance(risk_state, dict)
+            self.assertEqual(risk_state["status"], "ok")
+            self.assertEqual(resume.result["desired_state"], "running")
+
+            reduce_only = bus.submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.SET_REDUCE_ONLY,
+                payload={},
+                actor="cli",
+                reason="risk review",
+                idempotency_key="reduce:risk-review",
+                at=app.clock.now(),
+            )
+            reduce_only = await _wait_for_operator_command_status(app.store, daemon.run_id, reduce_only.command_id, OperatorCommandStatus.SUCCEEDED)
+            app_state = app.store.runtime_state("kairospy_application")
+            assert isinstance(app_state, dict)
+            self.assertEqual(app_state["status"], "reduce_only")
+            self.assertEqual(reduce_only.result["desired_state"], "reduce_only")
+
+            clear = bus.submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.CLEAR_REDUCE_ONLY,
+                payload={},
+                actor="cli",
+                reason="approved",
+                idempotency_key="clear-reduce:approved",
+                at=app.clock.now(),
+            )
+            clear = await _wait_for_operator_command_status(app.store, daemon.run_id, clear.command_id, OperatorCommandStatus.SUCCEEDED)
+            app_state = app.store.runtime_state("kairospy_application")
+            assert isinstance(app_state, dict)
+            self.assertEqual(app_state["status"], "running")
+            self.assertEqual(clear.result["desired_state"], "running")
+
+            cancel_all = bus.submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.CANCEL_ALL,
+                payload={},
+                actor="cli",
+                reason="venue incident",
+                idempotency_key="cancel-all:incident",
+                at=app.clock.now(),
+            )
+            cancel_all = await _wait_for_operator_command_status(app.store, daemon.run_id, cancel_all.command_id, OperatorCommandStatus.SUCCEEDED)
+            cancel_state = app.store.runtime_state(f"cancel_all:{daemon.run_id}:last")
+            assert isinstance(cancel_state, dict)
+            self.assertEqual(cancel_state["status"], "requested")
+            self.assertEqual(cancel_all.result["desired_state"], "reduce_only")
+
+            reconciliation = bus.submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.REQUEST_RECONCILIATION,
+                payload={},
+                actor="cli",
+                reason="fresh reconcile",
+                idempotency_key="reconcile:fresh",
+                at=app.clock.now(),
+            )
+            reconciliation = await _wait_for_operator_command_status(app.store, daemon.run_id, reconciliation.command_id, OperatorCommandStatus.SUCCEEDED)
+            reconciliation_state = app.store.runtime_state(f"reconciliation_request:{daemon.run_id}:last")
+            assert isinstance(reconciliation_state, dict)
+            self.assertEqual(reconciliation_state["status"], "requested")
+            self.assertTrue(reconciliation.result["reconciliation_requested"])
+
+            target = bus.submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.TARGET_POSITION,
+                payload={
+                    "intent_id": "manual-pair-1",
+                    "legs": (
+                        {
+                            "venue": "binance",
+                            "product": "spot",
+                            "instrument": "BTCUSDT",
+                            "side": "long",
+                            "quantity": "0.001",
+                        },
+                        {
+                            "venue": "hyperliquid",
+                            "product": "perpetual",
+                            "instrument": "BTC",
+                            "side": "short",
+                            "quantity": "0.001",
+                        },
+                    ),
+                },
+                actor="cli",
+                reason="manual pair target",
+                idempotency_key="target-position:manual-pair-1",
+                at=app.clock.now(),
+            )
+            target = await _wait_for_operator_command_status(
+                app.store,
+                daemon.run_id,
+                target.command_id,
+                OperatorCommandStatus.SUCCEEDED,
+            )
+            target_state = app.store.runtime_state(f"target_position:{daemon.run_id}:last")
+            assert isinstance(target_state, dict)
+            self.assertEqual(target_state["status"], "accepted")
+            self.assertEqual(target_state["intent_id"], "manual-pair-1")
+            self.assertEqual(len(target_state["legs"]), 2)
+            self.assertEqual(target.result["execution_status"], "not_submitted")
 
             reload_risk = bus.submit(
                 run_id=daemon.run_id,
@@ -292,17 +561,182 @@ class LiveRunDaemonTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(risk_state["limits_hash"], "risk-limits-hash")
             self.assertEqual(reload_risk.result["risk_limits_hash"], "risk-limits-hash")
 
+            stop = bus.submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.STOP,
+                payload={},
+                actor="cli",
+                reason="done",
+                idempotency_key="stop:ops-done",
+                at=app.clock.now(),
+            )
+            result = await asyncio.wait_for(task, timeout=2)
+            stop = await _wait_for_operator_command_status(app.store, daemon.run_id, stop.command_id, OperatorCommandStatus.SUCCEEDED)
+            self.assertEqual(result["status"], "stopped")
+            self.assertEqual(stop.result["phase"], LiveRunDaemonPhase.STOPPED.value)
+
+    async def test_live_run_foreground_daemon_uses_operator_handler_for_cancel_all(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            async def feed_service() -> None:
+                await asyncio.Future()
+
+            app = _application(Path(directory), runtime_id="live-command-cancel-handler")
+
+            def operator_handler(command):
+                if OperatorCommandType(command.command_type) is not OperatorCommandType.CANCEL_ALL:
+                    return None
+                app.store.set_runtime_state(
+                    "cancel_all:live-run-command-cancel-handler:last",
+                    {
+                        "run_id": "live-run-command-cancel-handler",
+                        "status": "succeeded",
+                        "cancelled_client_order_ids": ("client-1", "client-2"),
+                        "failures": (),
+                    },
+                    app.clock.now(),
+                )
+                snapshot = daemon.mark_reduce_only(str(command.reason))
+                return {
+                    "phase": snapshot.phase.value,
+                    "desired_state": "reduce_only",
+                    "cancel_all_requested": True,
+                    "cancelled_orders": ("client-1", "client-2"),
+                    "failures": (),
+                }
+
+            daemon = LiveRunDaemon(
+                app,
+                (ManagedServiceSpec("feed:live", feed_service),),
+                run_id="live-run-command-cancel-handler",
+                operator_command_handler=operator_handler,
+                clock=app.clock,
+            )
+            task = asyncio.create_task(product_surface._run_live_foreground_daemon(
+                daemon,
+                "start",
+                duration_seconds=None,
+                poll_seconds=0.01,
+            ))
+            await _wait_for_runtime_state(app.store, daemon.state_key, LiveRunDaemonPhase.RUNNING.value)
+            bus = OperatorCommandBus(app.store)
+            cancel_all = bus.submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.CANCEL_ALL,
+                payload={},
+                actor="cli",
+                reason="venue incident",
+                idempotency_key="cancel-all:handler",
+                at=app.clock.now(),
+            )
+
+            cancel_all = await _wait_for_operator_command_status(
+                app.store, daemon.run_id, cancel_all.command_id, OperatorCommandStatus.SUCCEEDED,
+            )
+            cancel_state = app.store.runtime_state(f"cancel_all:{daemon.run_id}:last")
+            assert isinstance(cancel_state, dict)
+            self.assertEqual(cancel_state["status"], "succeeded")
+            self.assertEqual(cancel_all.result["cancelled_orders"], ["client-1", "client-2"])
+
             bus.submit(
                 run_id=daemon.run_id,
                 command_type=OperatorCommandType.STOP,
                 payload={},
                 actor="cli",
                 reason="done",
-                idempotency_key="stop:done",
+                idempotency_key="stop:cancel-handler",
                 at=app.clock.now(),
             )
             result = await asyncio.wait_for(task, timeout=2)
             self.assertEqual(result["status"], "stopped")
+
+    async def test_live_run_reconciliation_command_persists_mismatch_and_enters_reduce_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            async def feed_service() -> None:
+                await asyncio.Future()
+
+            account = AccountRef(InstitutionId("binance"), "spot-main", AccountType.CRYPTO_SPOT)
+            app = _application(Path(directory), runtime_id="live-command-reconcile-handler")
+            daemon = LiveRunDaemon(
+                app,
+                (ManagedServiceSpec("feed:live", feed_service),),
+                run_id="live-run-command-reconcile-handler",
+                clock=app.clock,
+            )
+            await daemon.start()
+            command = OperatorCommandBus(app.store).submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.REQUEST_RECONCILIATION,
+                payload={},
+                actor="cli",
+                reason="operator fresh reconcile",
+                idempotency_key="reconcile:handler",
+                at=app.clock.now(),
+            )
+
+            result = product_surface._run_live_apply_reconciliation_command(
+                daemon,
+                command,
+                {account: _MismatchedReconciliationService(app.clock.now())},
+            )
+
+            request_state = app.store.runtime_state(f"reconciliation_request:{daemon.run_id}:last")
+            account_state = app.store.runtime_state(f"reconciliation:{daemon.run_id}:{account.value}")
+            app_state = app.store.runtime_state("kairospy_application")
+            daemon_state = app.store.runtime_state(daemon.state_key)
+            assert isinstance(request_state, dict)
+            assert isinstance(account_state, dict)
+            assert isinstance(app_state, dict)
+            assert isinstance(daemon_state, dict)
+            self.assertEqual(result["desired_state"], "reduce_only")
+            self.assertEqual(result["matched"], False)
+            self.assertEqual(result["mismatched_accounts"], (account.value,))
+            self.assertEqual(request_state["status"], "mismatched")
+            self.assertEqual(account_state["phase"], "mismatched")
+            self.assertEqual(app_state["status"], "reduce_only")
+            self.assertEqual(daemon_state["phase"], LiveRunDaemonPhase.REDUCE_ONLY.value)
+
+            await daemon.stop()
+
+    async def test_live_run_reconciliation_command_surfaces_unknown_external_open_orders(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            async def feed_service() -> None:
+                await asyncio.Future()
+
+            account = AccountRef(InstitutionId("binance"), "spot-main", AccountType.CRYPTO_SPOT)
+            app = _application(Path(directory), runtime_id="live-command-external-open-order")
+            daemon = LiveRunDaemon(
+                app,
+                (ManagedServiceSpec("feed:live", feed_service),),
+                run_id="live-run-command-external-open-order",
+                clock=app.clock,
+            )
+            await daemon.start()
+            command = OperatorCommandBus(app.store).submit(
+                run_id=daemon.run_id,
+                command_type=OperatorCommandType.REQUEST_RECONCILIATION,
+                payload={},
+                actor="cli",
+                reason="operator fresh reconcile",
+                idempotency_key="reconcile:external-open-order",
+                at=app.clock.now(),
+            )
+
+            result = product_surface._run_live_apply_reconciliation_command(
+                daemon,
+                command,
+                {account: _ExternalOpenOrderReconciliationService(app.clock.now())},
+            )
+
+            request_state = app.store.runtime_state(f"reconciliation_request:{daemon.run_id}:last")
+            account_state = app.store.runtime_state(f"reconciliation:{daemon.run_id}:{account.value}")
+            assert isinstance(request_state, dict)
+            assert isinstance(account_state, dict)
+            self.assertEqual(result["desired_state"], "reduce_only")
+            self.assertEqual(result["unknown_external_open_order_ids"], ("venue-order-external-1",))
+            self.assertEqual(request_state["unknown_external_open_order_count"], 1)
+            self.assertEqual(tuple(account_state["unknown_external_open_order_ids"]), ("venue-order-external-1",))
+
+            await daemon.stop()
 
     async def test_live_run_daemon_records_critical_fault_as_reduce_only_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -333,6 +767,58 @@ class LiveRunDaemonTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(persisted["phase"], LiveRunDaemonPhase.REDUCE_ONLY.value)
             self.assertIn("feed disconnected", persisted["reason"])
             await daemon.stop()
+
+    async def test_live_run_foreground_daemon_fails_closed_when_account_lock_is_lost(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            async def feed_service() -> None:
+                await asyncio.Future()
+
+            root = Path(directory)
+            paths = RuntimePaths.under(root)
+            store = SQLiteRuntimeStore(paths.runtime_database)
+            clock = FixedClock(datetime(2026, 7, 22, 12, tzinfo=timezone.utc))
+            account = AccountRef(InstitutionId("binance"), "spot-main", AccountType.CRYPTO_SPOT)
+            app = KairosApplication(
+                ApplicationConfig(Environment.LIVE, paths, account_lock_lease_seconds=1),
+                store,
+                runtime_id="runtime-a",
+                accounts=(account,),
+                probes=(FunctionProbe("live-profile", lambda: (True, "ready")),),
+                recovery=_ReadyRecovery(),
+                clock=clock,
+            )
+            daemon = LiveRunDaemon(
+                app,
+                (ManagedServiceSpec("feed:live", feed_service),),
+                run_id="live-run-lock-conflict",
+                clock=clock,
+            )
+            task = asyncio.create_task(product_surface._run_live_foreground_daemon(
+                daemon,
+                "start",
+                duration_seconds=None,
+                poll_seconds=0.01,
+            ))
+            await _wait_for_runtime_state(store, daemon.state_key, LiveRunDaemonPhase.RUNNING.value)
+            clock.set(clock.now() + timedelta(seconds=2))
+            store.acquire_account_lock(account, "runtime-b", clock.now(), lease_seconds=30)
+
+            result = await asyncio.wait_for(task, timeout=2)
+            persisted = store.runtime_state(daemon.state_key)
+            heartbeat = LiveRunRegistry(store).status(
+                daemon.run_id,
+                at=clock.now(),
+                stale_after_seconds=5.0,
+            )
+
+            assert isinstance(persisted, dict)
+            assert heartbeat is not None
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["phase"], LiveRunDaemonPhase.FAILED.value)
+            self.assertEqual(persisted["phase"], LiveRunDaemonPhase.FAILED.value)
+            self.assertIn("account lock", persisted["reason"])
+            self.assertEqual(heartbeat["status"], LiveRunDaemonPhase.FAILED.value)
+            self.assertEqual(heartbeat["desired_state"], "stopping")
 
     async def test_live_run_daemon_keeps_multiple_live_runs_in_distinct_state_keys(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -455,14 +941,32 @@ class LiveRunSurfaceTests(unittest.TestCase):
             _write_live_project_config(root)
             (root / "strategies.py").write_text(
                 "\n".join([
-                    "def build(context):",
-                    "    return []",
+                    "def workspace(context, params=None):",
+                    "    return context.project()",
+                    "",
+                    "class Strategy:",
+                    "    strategy_id = 'noop-live-kernel-test'",
+                    "",
+                    "    def on_start(self, context):",
+                    "        return ()",
+                    "",
+                    "    def on_market(self, context):",
+                    "        return ()",
+                    "",
+                    "    def on_fill(self, fill, context):",
+                    "        return ()",
+                    "",
+                    "    def on_end(self, context):",
+                    "        return ()",
+                    "",
+                    "def build(context, params=None):",
+                    "    return Strategy()",
                 ]) + "\n",
                 encoding="utf-8",
             )
             from kairospy.workspace import WorkspaceRepository
 
-            WorkspaceRepository(root).create("alpha")
+            WorkspaceRepository(root).create("strategies:workspace")
             config_path = root / "configs" / "runs" / "live.toml"
             config_path.parent.mkdir(parents=True, exist_ok=True)
             config_path.write_text(
@@ -472,8 +976,8 @@ class LiveRunSurfaceTests(unittest.TestCase):
                     "[run]",
                     'name = "configured-live-daemon"',
                     'mode = "live"',
-                    'workspace = "alpha"',
-                    'entrypoint = "strategies:build"',
+                    'workspace = "strategies:workspace"',
+                    'strategy = "strategies:build"',
                     "",
                     "[params]",
                     'symbol = "BTC-USDT"',
@@ -505,10 +1009,18 @@ class LiveRunSurfaceTests(unittest.TestCase):
             runtime_db = RuntimePaths.under(root / ".kairos" / "runtime" / "live" / "live-config").runtime_database
             store = SQLiteRuntimeStore(runtime_db)
             kernel_state = store.runtime_state("live_run_kernel:live-config")
+            registry_status = LiveRunRegistry(store).status(
+                "live-config",
+                at=datetime(2026, 7, 22, 12, tzinfo=timezone.utc),
+                stale_after_seconds=5.0,
+            )
             assert isinstance(kernel_state, dict)
+            assert registry_status is not None
 
             self.assertEqual(result["status"], "stopped")
             self.assertEqual(result["run_id"], "live-config")
+            self.assertNotEqual(result["run_config"]["config_hash"], "unknown")
+            self.assertEqual(registry_status["config_hash"], result["run_config"]["config_hash"])
             self.assertEqual(result["started"]["services"][0]["name"], "strategy-run:live-config")
             self.assertEqual(kernel_state["phase"], "stopped")
             self.assertEqual(kernel_state["run_result"]["run_id"], "live-config")
@@ -520,14 +1032,32 @@ class LiveRunSurfaceTests(unittest.TestCase):
             _write_live_project_config(root)
             (root / "strategies.py").write_text(
                 "\n".join([
-                    "def build(context):",
-                    "    return []",
+                    "def workspace(context, params=None):",
+                    "    return context.project()",
+                    "",
+                    "class Strategy:",
+                    "    strategy_id = 'noop-live-market-test'",
+                    "",
+                    "    def on_start(self, context):",
+                    "        return ()",
+                    "",
+                    "    def on_market(self, context):",
+                    "        return ()",
+                    "",
+                    "    def on_fill(self, fill, context):",
+                    "        return ()",
+                    "",
+                    "    def on_end(self, context):",
+                    "        return ()",
+                    "",
+                    "def build(context, params=None):",
+                    "    return Strategy()",
                 ]) + "\n",
                 encoding="utf-8",
             )
             from kairospy.workspace import WorkspaceRepository
 
-            WorkspaceRepository(root).create("alpha")
+            WorkspaceRepository(root).create("strategies:workspace")
             config_path = root / "configs" / "runs" / "live.toml"
             config_path.parent.mkdir(parents=True, exist_ok=True)
             config_path.write_text(
@@ -537,8 +1067,8 @@ class LiveRunSurfaceTests(unittest.TestCase):
                     "[run]",
                     'name = "configured-live-market-daemon"',
                     'mode = "live"',
-                    'workspace = "alpha"',
-                    'entrypoint = "strategies:build"',
+                    'workspace = "strategies:workspace"',
+                    'strategy = "strategies:build"',
                     "",
                     "[bindings]",
                     'account = "binance_live_spot"',
@@ -592,6 +1122,117 @@ class LiveRunSurfaceTests(unittest.TestCase):
                 "feed-monitor:ticks:live:binance:btcusdt-book",
                 "strategy-run:live-market-config",
             ])
+
+    def test_run_live_surface_supervises_provider_risk_monitor_service(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            from unittest.mock import patch
+
+            from kairospy.identity import VenueId
+            from kairospy.integrations.connectors.simulated import SimulatedExecutionAccountGateway
+
+            root = Path(directory)
+            _write_live_project_config(root)
+            config_toml = root / "kairos.toml"
+            config_toml.write_text(
+                config_toml.read_text(encoding="utf-8")
+                + "\n[accounts.binance_live_spot]\n"
+                + 'provider = "binance"\n'
+                + 'account_ref = "binance:crypto_spot:main"\n'
+                + 'allowed_products = ["crypto_spot"]\n',
+                encoding="utf-8",
+            )
+            (root / "strategies.py").write_text(
+                "\n".join([
+                    "def workspace(context, params=None):",
+                    "    return context.project()",
+                    "",
+                    "class Strategy:",
+                    "    strategy_id = 'noop-live-provider-test'",
+                    "",
+                    "    def on_start(self, context):",
+                    "        return ()",
+                    "",
+                    "    def on_market(self, context):",
+                    "        return ()",
+                    "",
+                    "    def on_fill(self, fill, context):",
+                    "        return ()",
+                    "",
+                    "    def on_end(self, context):",
+                    "        return ()",
+                    "",
+                    "def build(context, params=None):",
+                    "    return Strategy()",
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            from kairospy.workspace import WorkspaceRepository
+
+            WorkspaceRepository(root).create("strategies:workspace")
+            config_path = root / "configs" / "runs" / "live.toml"
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                "\n".join([
+                    "schema_version = 1",
+                    "",
+                    "[run]",
+                    'name = "configured-live-provider-daemon"',
+                    'mode = "live"',
+                    'workspace = "strategies:workspace"',
+                    'strategy = "strategies:build"',
+                    "",
+                    "[bindings]",
+                    'account = "binance_live_spot"',
+                    "",
+                    "[live]",
+                    'provider = "binance"',
+                    'bind_provider = true',
+                    'execution_driver = "binance-live"',
+                    "",
+                    "[evidence]",
+                    'readiness = "readiness:live"',
+                    'promotion = "promotion:live"',
+                ]) + "\n",
+                encoding="utf-8",
+            )
+            account = AccountRef(InstitutionId("binance"), "main", AccountType.CRYPTO_SPOT)
+            gateway = SimulatedExecutionAccountGateway(
+                VenueId("binance"),
+                account,
+                environment=Environment.LIVE,
+                clock=FixedClock(datetime(2026, 7, 22, 12, tzinfo=timezone.utc)),
+            )
+            ports = SimpleNamespace(
+                provider="binance",
+                execution_driver="binance-live",
+                account=account,
+                execution_gateway=gateway,
+                account_gateway=gateway,
+                order_recovery_gateway=gateway,
+                market_event_source=None,
+                user_fill_event_source=_NeverEventSource(),
+            )
+
+            with patch("kairospy.surface.product._live_reference_catalog", return_value=object()):
+                with patch("kairospy.integrations.live_ports.build_live_provider_ports", return_value=ports):
+                    with _cwd(root):
+                        result = product_surface.run_live(SimpleNamespace(
+                            live_action="start",
+                            run_id="live-provider-config",
+                            config=config_path,
+                            param=(),
+                            confirm_live=True,
+                            duration_seconds=0.05,
+                            poll_seconds=0.01,
+                        ))
+
+            service_names = [item["name"] for item in result["started"]["services"]]
+
+            self.assertEqual(result["status"], "stopped")
+            self.assertIn("outbox-dispatcher:live-provider-config", service_names)
+            self.assertIn("risk-monitor:live-provider-config", service_names)
+            self.assertIn("fill-ingestion:live-provider-config", service_names)
+            self.assertIn("account-reconciliation:binance:crypto_spot:main", service_names)
 
     def test_run_live_surface_uses_run_id_for_independent_runtime_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -741,6 +1382,13 @@ class _EmptyEventSource:
             yield None
 
 
+class _NeverEventSource:
+    async def events(self):
+        await asyncio.Future()
+        if False:
+            yield None
+
+
 def _surface_strategy_spec() -> StrategySpec:
     return StrategySpec(
         "surface-live-strategy",
@@ -799,6 +1447,30 @@ def _live_run_request(run_id: str, profile_id: str) -> RunRequest:
 
 def _empty_strategy_result() -> StrategyRunResult:
     return StrategyRunResult((), (), (), (), "factor-hash", "decision-hash", "intent-hash", "audit-hash")
+
+
+class _MismatchedReconciliationService:
+    def __init__(self, checked_at: datetime) -> None:
+        self.checked_at = checked_at
+
+    def reconcile(self, account: AccountRef) -> ReconciliationReport:
+        return ReconciliationReport(
+            account,
+            self.checked_at,
+            (ReconciliationDifference("balance", "USDT", Decimal("1"), Decimal("2")),),
+        )
+
+
+class _ExternalOpenOrderReconciliationService:
+    def __init__(self, checked_at: datetime) -> None:
+        self.checked_at = checked_at
+
+    def reconcile(self, account: AccountRef) -> ReconciliationReport:
+        return ReconciliationReport(
+            account,
+            self.checked_at,
+            (ReconciliationDifference("open_order", "venue-order-external-1", Decimal("0"), Decimal("1")),),
+        )
 
 
 async def _wait_for_runtime_state(store: object, key: str, phase: str) -> dict[str, object]:

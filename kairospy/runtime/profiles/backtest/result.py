@@ -9,7 +9,6 @@ from uuid import UUID
 from kairospy.strategy.intents import Intent
 from kairospy.execution.fills import Fill, Settlement
 from kairospy.execution.orders import Order
-from kairospy.strategy.protocols import StrategyDecision
 from kairospy.runtime.profiles.backtest.portfolio import PortfolioSnapshot
 from kairospy.risk.engine import RiskDecision
 
@@ -62,5 +61,4 @@ class BacktestResult:
     settlements: tuple[Settlement, ...]
     portfolio_snapshots: tuple[PortfolioSnapshot, ...]
     equity: tuple[EquityPoint, ...]
-    strategy_decisions: tuple[StrategyDecision, ...]
     metrics: dict[str, object]

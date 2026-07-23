@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timezone
+from typing import Protocol
 from uuid import NAMESPACE_URL, uuid5
 
 from kairospy.portfolio.accounting.ledger import LedgerService
@@ -8,6 +11,15 @@ from kairospy.execution.events import TradeExecution, TradeSide
 from kairospy.portfolio.ledger_events import DividendPayment, FundingPayment
 from kairospy.execution.order_state import DurableOrderStatus
 from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
+
+
+class _Clock(Protocol):
+    def now(self) -> datetime: ...
+
+
+class _SystemClock:
+    def now(self) -> datetime:
+        return datetime.now(timezone.utc)
 
 
 class ExecutionIngestionService:
@@ -87,6 +99,105 @@ class DurableExecutionIngestionService:
             cursor_name=f"binance:{product}:fills:{update.account.value}",
             cursor_value=f"{int(update.event_time.timestamp() * 1000)}:{update.execution_id}",
         )
+
+
+class DurableFillIngestionService:
+    """Managed service that consumes live fill events into durable execution facts."""
+
+    STATE_KEY_PREFIX = "fill_ingestion"
+
+    def __init__(
+        self,
+        ingestion: DurableExecutionIngestionService,
+        source: object,
+        *,
+        run_id: str,
+        product: str = "spot",
+        clock: _Clock | None = None,
+    ) -> None:
+        if not str(run_id).strip():
+            raise ValueError("fill ingestion service requires run_id")
+        if not hasattr(source, "events"):
+            raise ValueError("fill ingestion service requires source.events()")
+        self.ingestion = ingestion
+        self.source = source
+        self.run_id = str(run_id)
+        self.product = product
+        self.clock = clock or _SystemClock()
+        self.ingested = 0
+        self.duplicates = 0
+        self.fill_ingestion_latency_last_ms: float | None = None
+        self.fill_ingestion_latency_max_ms: float | None = None
+
+    @property
+    def state_key(self) -> str:
+        return f"{self.STATE_KEY_PREFIX}:{self.run_id}:last"
+
+    def managed_service(self, name: str | None = None):
+        from kairospy.runtime.service_supervisor import ManagedServiceSpec
+
+        return ManagedServiceSpec(name or f"fill-ingestion:{self.run_id}", self.run)
+
+    async def run(self) -> None:
+        self._persist("running", {"reason": "started"})
+        try:
+            async for event in self.source.events():
+                self.ingest_event(event)
+        except asyncio.CancelledError:
+            self._persist("stopped", {"reason": "service stopped"})
+            raise
+        except Exception as error:
+            self._persist("failed", {
+                "error_type": type(error).__name__,
+                "message": str(error),
+            })
+            raise
+
+    def ingest_event(self, event: object):
+        update, fully_filled = _fill_update_and_status(event)
+        transaction = self.ingestion.ingest_binance(
+            update,
+            fully_filled=fully_filled,
+            product=self.product,
+        )
+        if transaction is None:
+            self.duplicates += 1
+        else:
+            self.ingested += 1
+        observed_at = self.clock.now()
+        self.fill_ingestion_latency_last_ms = max(0.0, (observed_at - update.event_time).total_seconds() * 1000.0)
+        self.fill_ingestion_latency_max_ms = max(
+            self.fill_ingestion_latency_max_ms or 0.0,
+            self.fill_ingestion_latency_last_ms,
+        )
+        self._persist("running", {
+            "last_execution_id": update.execution_id,
+            "last_client_order_id": update.client_order_id,
+            "last_event_time": update.event_time.isoformat(),
+            "fill_ingestion_latency_last_ms": self.fill_ingestion_latency_last_ms,
+            "fill_ingestion_latency_max_ms": self.fill_ingestion_latency_max_ms,
+        })
+        return transaction
+
+    def _persist(self, phase: str, evidence: dict[str, object]) -> None:
+        at = self.clock.now()
+        self.ingestion.runtime_store.set_runtime_state(self.state_key, {
+            "run_id": self.run_id,
+            "phase": phase,
+            "product": self.product,
+            "ingested_count": self.ingested,
+            "duplicate_count": self.duplicates,
+            "updated_at": at.isoformat(),
+            **evidence,
+        }, at)
+
+
+def _fill_update_and_status(event: object) -> tuple[UserFillUpdate, bool]:
+    if isinstance(event, tuple) and len(event) == 2 and isinstance(event[0], UserFillUpdate):
+        return event[0], bool(event[1])
+    if isinstance(event, UserFillUpdate):
+        return event, bool(event.fully_filled)
+    raise TypeError(f"unsupported fill ingestion event: {type(event).__name__}")
 
 
 class DurableAccountingIngestionService:

@@ -33,16 +33,16 @@ Venue events / fills / account state
 - `kairospy/execution/outbox.py`：`DurableOrderCommandService` 和 `DurableOrderDispatcher` 已具备 durable command 雏形。
 - `kairospy/governance/kill_switch.py`：kill switch 状态已经可写入 runtime store。
 - `kairospy/runtime/service_supervisor.py`：`AsyncServiceSupervisor` 管理异步服务生命周期、故障和重启。
-- `kairospy/surface/product.py`：`run live <start|recover|status|stop> --run-id` 已经按 `run_id` 隔离 runtime root/database/state key。
+- `kairospy/surface/product.py`：`run live <start|recover|status|stop|pause|resume|reduce-only|clear-reduce-only|cancel-all|reconcile|commands> --run-id` 已经按 `run_id` 隔离 runtime root/database/state key；顶层 `run status/stop/pause/resume/reduce-only/clear-reduce-only/cancel-all/reconcile/commands` 作为 mode-neutral 用户入口复用同一控制面。
 
-但距离专业实盘系统仍有关键缺口：
+当前实盘长驻运行控制闭环状态：
 
-- `run live stop` 已进入 durable operator command bus，但 pause/resume/reduce-only 等命令还未产品化。
-- daemon heartbeat、PID、host、lease 和 stale status 已具备雏形，进程版本和 config hash 上报还需要继续收紧。
+- stop、pause/resume、reduce-only、cancel-all、reconcile、kill-switch、reload-risk-limits 和 status snapshot 已进入 durable operator command bus，并由 daemon 写回 ack。
+- daemon heartbeat、PID、host、进程版本、config hash、stale status 和 account-lock lease 冲突 fail-closed 已接入 status。
 - `run live start/recover --config` 已能从 RunConfig 装配 strategy-run、market feed 和 outbox dispatcher，测试注入只保留给单元测试。
-- live fill ingestion、周期 reconciliation、risk monitor 等后台服务尚未统一纳入长驻 daemon。
-- CLI 无法可靠表达 `pause_new_orders`、`resume`、`reduce_only`、`cancel_all`、`reload_limits`、`status_snapshot` 等专业运维命令。
-- 启动恢复、外部订单确认、reconciliation、kill switch 和风控还没有形成完整控制闭环。
+- 周期 reconciliation、outbox dispatcher、risk monitor 和 optional fill ingestion service 已统一纳入 provider-bound 长驻 daemon；Binance spot/futures/inverse/options listen-key user stream 已作为 provider fill source 接入。
+- `cancel_all` 对 provider-bound runtime 会进入 reduce-only，并通过 `ExecutionCoordinator.cancel_all_orders(...)` 取消 runtime store 中本地已知 working orders；reconciliation 已能把 venue 侧未知 open order 明确标记为 `unknown_external_open_order_ids` 并纳入 risk monitor blocking。
+- 启动恢复、外部订单确认、reconciliation、kill switch 和风控已经通过 runtime store、daemon managed services、operator command ack 和 status/metrics 控制面串联；tick-level market event age 已通过 Live View freshness evidence 纳入 runtime metrics。
 
 ## 2. 设计原则
 
@@ -279,11 +279,13 @@ CREATE TABLE runtime_incidents(
     incident_id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
     severity TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    message TEXT NOT NULL,
-    evidence_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    title TEXT NOT NULL,
+    details_json TEXT NOT NULL,
     opened_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
     closed_at TEXT,
+    closed_by TEXT,
     close_reason TEXT
 );
 ```
@@ -405,7 +407,7 @@ running -> failed
 
 - graceful timeout 内未完成，写 incident。
 - 如果仍有外部未知订单，进入 `unknown_external_state`，禁止下次 start 直接运行。
-- 是否允许强杀由进程管理器处理，不由 CLI 直接 `kill -9`。
+- `force-stop` 通过 durable STOP command payload 表达，daemon 在 graceful timeout 后写 `runtime-force-stop:<run_id>` incident 并完成控制面停止；仍不由 CLI 直接 `kill -9`。
 
 ### 6.2 `pause_new_orders`
 
@@ -867,6 +869,9 @@ execution-sensitive strategies:
 - command backlog。
 - service restart count。
 - risk blocked count。
+- run health status：`ok | inactive | stopping | reduce_only | stale | blocking | failed`。
+
+当前已完成 `run metrics` / `run live metrics` 的控制面指标汇总、独立 artifact 导出和一组服务内部时序指标：heartbeat age/stale、operator command backlog、service count/restart/failure、risk blocked/reason count、unresolved orders、orders requiring recovery、open incidents、health status、outbox pending/dispatching/unknown/backlog、order submit/ack latency、fill ingestion latency、market freshness gate/status、Live View monitor update age、tick-level market event age 和 channel failure count。metrics 可以写成 JSON 文件，也可以通过 `--prometheus` 写成 Prometheus text format。
 
 ### 14.3 CLI status 输出
 
@@ -965,28 +970,39 @@ kairospy run live start \
 
 - `--run-id` 仍必填。
 - `--config` 用于装配服务。
-- `--foreground` 可选；默认可以先只支持 foreground，后续接 systemd/launchd。
+- 默认 spawn 一个独立 daemon 进程，父 CLI 返回 `run_id`、pid、runtime database 和 log file。
+- `--foreground` 用于调试或受外部 supervisor 托管时在当前 CLI 进程内运行 daemon。
+- `--duration-seconds` 是 bounded foreground run，用于测试和演练。
 
 ### 16.2 Status
 
 ```bash
+kairospy run status --run-id binance-btc-live
 kairospy run live status --run-id binance-btc-live
 kairospy run live status --run-id binance-btc-live --fresh --wait 5
 ```
+
+`run status` 是 mode-neutral 用户入口：优先读取 live daemon runtime state/heartbeat，找不到 live runtime 时退回 `.kairos/run/<run_id>/manifest.json`。`run live status` 保留为 live runtime 的直接控制入口。
 
 `--fresh` 会写 `request_status_snapshot` 并等待 command ack。
 
 ### 16.3 Stop
 
 ```bash
+kairospy run stop --run-id binance-btc-live --actor alice --reason "scheduled maintenance" --timeout-seconds 30
+kairospy run force-stop --run-id binance-btc-live --actor alice --reason "emergency stop" --timeout-seconds 1
 kairospy run live stop \
   --run-id binance-btc-live \
   --reason "scheduled maintenance"
 ```
 
+`run stop` 是用户主入口，当前对 live runtime 提交 durable `STOP` operator command；`run live stop` 是等价的 live-specific surface。`--timeout-seconds` 和 `--force` 会进入 STOP payload，由 daemon 消费并写回 command result。
+
 ### 16.4 Pause / Resume
 
 ```bash
+kairospy run pause --run-id binance-btc-live --reason "market data stale"
+kairospy run resume --run-id binance-btc-live --reason "feed recovered"
 kairospy run live pause --run-id binance-btc-live --reason "market data stale"
 kairospy run live resume --run-id binance-btc-live --reason "feed recovered"
 ```
@@ -994,7 +1010,10 @@ kairospy run live resume --run-id binance-btc-live --reason "feed recovered"
 ### 16.5 Reduce-only / Kill switch
 
 ```bash
+kairospy run reduce-only --run-id binance-btc-live --reason "risk review"
+kairospy run clear-reduce-only --run-id binance-btc-live --reason "approved"
 kairospy run live reduce-only --run-id binance-btc-live --reason "risk review"
+kairospy run live clear-reduce-only --run-id binance-btc-live --reason "approved"
 kairospy run live kill-switch --run-id binance-btc-live --reason "unexpected exposure"
 kairospy run live reset-kill-switch --run-id binance-btc-live --actor alice --reason "reconciled"
 ```
@@ -1002,9 +1021,55 @@ kairospy run live reset-kill-switch --run-id binance-btc-live --actor alice --re
 ### 16.6 Commands
 
 ```bash
+kairospy run commands --run-id binance-btc-live
 kairospy run live commands --run-id binance-btc-live
-kairospy run live command --run-id binance-btc-live --command-id <id>
 ```
+
+### 16.7 Metrics / Incidents
+
+```bash
+kairospy run metrics --run-id binance-btc-live
+kairospy run live metrics --run-id binance-btc-live
+kairospy run metrics --run-id binance-btc-live --output .kairos/metrics/binance-btc-live.json
+kairospy run live metrics --run-id binance-btc-live --prometheus --output .kairos/metrics/binance-btc-live.prom
+kairospy run incidents --run-id binance-btc-live
+kairospy run close-incident --run-id binance-btc-live --incident-id runtime-health:binance-btc-live --reason "recovered"
+```
+
+### 16.8 Export
+
+```bash
+kairospy run export --run-id binance-btc-live
+kairospy run live export --run-id binance-btc-live --output .kairos/exports/binance-btc-live
+```
+
+export 写出 `manifest.json`、`status.json`、`metrics.json`、`commands.json`、`incidents.json` 和 `runtime_state.json`，manifest 记录每个文件的 hash。
+如果 live runtime root 下存在 `runtime.jsonl`，export 也会复制为 `runtime_log.jsonl` 并纳入 manifest/hash。
+
+### 16.9 Structured Runtime Log
+
+live daemon 默认在 `.kairos/runtime/live/<run-id>/runtime.jsonl` 写 append-only JSONL 运维日志。每行包含：
+
+- `schema_version`
+- `timestamp`
+- `run_id`
+- `level`
+- `event`
+- `payload`
+- `record_hash`
+
+已接入的事件包括 spawn requested/spawned/failed、daemon start requested/started/failed、stop requested/stopped/force-stopped、heartbeat、reduce-only 和 fail-closed。
+
+### 16.10 Deployment Examples
+
+`examples/deploy/live-run/` 提供长期运行部署模板：
+
+- systemd：`systemd/kairos-live-run.service`
+- launchd：`launchd/com.example.kairos.live-run.plist`
+- Docker：`docker/Dockerfile` 和 `docker/entrypoint.sh`
+- Kubernetes：`kubernetes/configmap.yaml` 和 `kubernetes/deployment.yaml`
+
+这些模板均使用 `run live start --foreground`，让外部 supervisor 管进程生命周期和重启策略；另一个 CLI 进程继续通过 `run status`、`run stop`、`run metrics` 和 `run export` 管理同一个 `run_id`。
 
 ## 17. Python API 设计
 
@@ -1092,7 +1157,7 @@ status = registry.status("binance-btc-live")
 
 验收：
 
-- 一个 CLI 进程能让另一个 foreground daemon 停止。
+- 一个 CLI 进程能让另一个 daemon 进程停止。
 - stop command 有 terminal ack。
 - 不同 `run_id` 命令隔离。
 
@@ -1107,7 +1172,8 @@ status = registry.status("binance-btc-live")
 3. daemon start 注册 process identity。
 4. daemon 周期 heartbeat。
 5. status 使用 heartbeat freshness 判定。
-6. account lock heartbeat 与 daemon heartbeat 对齐。
+6. 已完成：status heartbeat 暴露 config hash/version/pid/host。
+7. 已完成：account lock heartbeat 与 daemon heartbeat 对齐；续租失败时 daemon fail-closed，status 保留 failed 原因。
 
 验收：
 
@@ -1126,7 +1192,7 @@ status = registry.status("binance-btc-live")
 3. 已完成：构造 `LiveRunKernelService`。
 4. 已完成：构造 market feed managed services。
 5. 已完成：构造 outbox dispatcher service。
-6. 已完成：构造 reconciliation monitor services；fill ingestion 通过 provider-bound `LiveRuntimeComponents.order_recovery_service()` 接入。
+6. 已完成：构造 reconciliation monitor services；fill ingestion 通过 provider-bound `LiveRuntimeComponents.fill_ingestion_service()` 接入。
 7. 已完成产品路径的 RunConfig 装配；`_managed_services` 仅保留为测试注入口。
 
 验收：
@@ -1162,7 +1228,7 @@ status = registry.status("binance-btc-live")
 1. 已完成：`OrderRecoveryPort` 已由 provider-bound `LiveRuntimeComponents` 使用。
 2. 已完成：`KairosApplication.start()` 启动时恢复 unresolved orders，未恢复进入 `unknown_external_state`。
 3. 已完成：`ReconciliationMonitorService` 周期写入 `reconciliation:<run_id>:<account>` 与 `reconciliation:last`。
-4. 已完成：`run live kill-switch/reset-kill-switch` 写入 operator command，由 foreground daemon ack。
+4. 已完成：`run live kill-switch/reset-kill-switch` 写入 operator command，由 daemon ack。
 5. 已完成：当前每个 live run 使用独立 runtime DB，kill switch state 对 `run_id` 天然隔离。
 6. 已完成：reset 必须提供 actor/reason/reconciliation evidence。
 
@@ -1181,21 +1247,27 @@ status = registry.status("binance-btc-live")
 1. 已完成基础门禁：`reconciliation:last.matched = false` 阻止非 reduce-only order 入 outbox。
 2. 已完成基础门禁：kill switch active 或 application reduce-only 阻止非 reduce-only order。
 3. 已完成基础行情门禁：RunConfig live market view 启动前必须通过 Live View freshness gate。
-4. 已完成状态接入：daemon heartbeat/status 返回 heartbeat、operator command、run config binding。
+4. 已完成状态接入：daemon heartbeat/status 返回 heartbeat、operator command、run config binding 和聚合 `health` 摘要。
 5. 已完成基础 risk reload：`run live reload-risk-limits` 写入 `risk_runtime:last` 并带 command ack。
+6. 已完成 runtime risk monitor service：provider-bound daemon 周期写 `risk_monitor:<run_id>:last` / `risk_runtime:last`，对 kill switch、reconciliation mismatch、未知外部 open orders、unresolved orders、account-lock heartbeat failure 进入 blocking/reduce-only；不会覆盖 operator pause。
+7. 已完成 optional fill ingestion service：`DurableFillIngestionService` 可消费 provider user-fill event source 的 `UserFillUpdate`，写入 durable execution/ledger/cursor，并作为 `fill-ingestion:<run_id>` managed service 受 daemon 监督；Binance spot/futures/inverse/options provider ports 已提供 listen-key websocket fill source。
 
 验收：
 
 - Live View freshness gate 不通过时拒绝启动配置化 market feed。
-- reconciliation mismatch、kill switch active、reduce-only 均禁止新开仓。
+- reconciliation mismatch、未知外部 open order、kill switch active、reduce-only 均禁止新开仓。
 - reload risk limits 有 command ack，并刷新 `risk_runtime:last.limits_hash`。
+- provider-bound daemon 的 service snapshot 包含 `risk-monitor:<run_id>`，status 能读取其 durable risk state。
+- provider 提供 user-fill event source 时，daemon service snapshot 包含 `fill-ingestion:<run_id>`，fill 会以 durable execution fact 写入 runtime store。
+- `run live status` / `run status` 输出 `health` 摘要，能把 stale heartbeat、risk blocking、unresolved orders、reconciliation mismatch 和未知外部 open order 聚合成单一控制面判断。
 
 ### 当前 CLI
 
 ```bash
 kairospy run live start --config configs/runs/live.toml --run-id binance-btc-live --confirm-live
 kairospy run live status --run-id binance-btc-live
-kairospy run live stop --run-id binance-btc-live --actor alice --reason "maintenance"
+kairospy run live stop --run-id binance-btc-live --actor alice --reason "maintenance" --timeout-seconds 30
+kairospy run live force-stop --run-id binance-btc-live --actor alice --reason "emergency stop" --timeout-seconds 1
 kairospy run live kill-switch --run-id binance-btc-live --actor alice --reason "risk breach"
 kairospy run live reset-kill-switch --run-id binance-btc-live --actor alice --reason "reconciled" --reconciliation-evidence "reconciliation:matched"
 kairospy run live reload-risk-limits --run-id binance-btc-live --actor alice --reason "approved limits" --risk-limits-hash "sha256:..."
@@ -1207,12 +1279,12 @@ kairospy run live reload-risk-limits --run-id binance-btc-live --actor alice --r
 
 工作：
 
-1. 结构化日志和 metrics。
-2. status snapshot command。
-3. incidents list/close。
-4. systemd/launchd/Docker/Kubernetes 部署示例。
-5. graceful stop timeout 和 force-stop 指南。
-6. artifacts/export。
+1. 已完成基础 metrics control surface、外部 metrics artifact export、结构化 runtime JSONL 日志、outbox pending 指标、order submit/ack latency、fill ingestion latency、runtime market freshness 指标与 tick-level market event age。
+2. 已完成 status snapshot command 与 status health summary。
+3. 已完成 runtime incident store、status 自动 open/close health incident、`run incidents` / `run close-incident` 与 `run live incidents` / `run live close-incident`。
+4. 已完成 systemd/launchd/Docker/Kubernetes 部署示例：`examples/deploy/live-run/` 覆盖 foreground supervisor 模式、stop hook、status/readiness、metrics/export 操作入口。
+5. 已完成 graceful stop timeout 和 force-stop 控制面：STOP command payload 支持 `timeout_seconds`/`force`，daemon 超时 force stop 会写 runtime incident。
+6. 已完成 runtime control-plane artifacts/export：`run export` / `run live export` 写出 status、metrics、commands、incidents、runtime_state、可选 runtime_log 与 hashed manifest。
 
 验收：
 
@@ -1257,7 +1329,7 @@ kairospy run live reload-risk-limits --run-id binance-btc-live --actor alice --r
 ```text
 RunConfig 描述可重复启动的运行意图。
 run_id 标识一次实际执行或一个长驻 live 实例。
-run live start 启动一个 live daemon。
+run live start 默认 spawn 一个 live daemon process。
 run live status 读取 daemon 观察状态和审计事实。
 run live stop/pause/resume/kill-switch 写入 operator command。
 daemon 负责消费命令并写回 ack。

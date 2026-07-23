@@ -22,6 +22,7 @@ class OperatorCommandType(StrEnum):
     RELOAD_RISK_LIMITS = "reload_risk_limits"
     REQUEST_STATUS_SNAPSHOT = "request_status_snapshot"
     REQUEST_RECONCILIATION = "request_reconciliation"
+    TARGET_POSITION = "target_position"
 
 
 class OperatorCommandStatus(StrEnum):

@@ -177,7 +177,7 @@ class UsEquityMomentumDiagnostics:
                 "warning",
                 "missing",
                 "Workspace pins all derived input releases",
-                "Run kairospy workspace bind-data us-equity-momentum --dataset features.momentum.equity.us.1d",
+                "Run kairospy workspace attach us-equity-momentum --name momentum --dataset features.momentum.equity.us.1d --view both",
             )
         values = json.loads(path.read_text(encoding="utf-8"))
         keys = {str(item.get("logical_key")) for item in values if isinstance(item, dict)}

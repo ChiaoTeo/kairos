@@ -17,7 +17,6 @@ from .intents import (
 from .protocols import (
     Context,
     Strategy,
-    StrategyDecision,
 )
 from .runtime import GovernedStrategyRuntime, StrategyRuntime
 from .stop_policy import StopAction, StopPolicy, StopReason, StopRule
@@ -57,7 +56,6 @@ __all__ = [
     "ProtectivePutIntent",
     "ReferenceView",
     "Strategy",
-    "StrategyDecision",
     "StrategyLifecycle",
     "StrategyRuntime",
     "StrategySpec",

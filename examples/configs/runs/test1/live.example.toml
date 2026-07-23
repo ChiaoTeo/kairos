@@ -1,0 +1,35 @@
+schema_version = 1
+
+[run]
+name = "example-live"
+mode = "live"
+workspace = "examples.workspace.print_market:build_workspace"
+strategy = "examples.strategies.printer:build"
+
+[params]
+workspace_profile = "alpha"
+max_gross_exposure = "50000"
+max_order_notional = "1000"
+
+[bindings]
+account = "binance_live_spot"
+market = ["ticks"]
+execution = "binance_live_spot"
+
+[live]
+provider = "binance"
+execution_driver = "binance-live"
+recovery_policy = "recover-and-reconcile"
+
+[guards]
+confirm_live_required = true
+require_readiness = true
+require_promotion = true
+require_account_lock = true
+require_order_recovery = true
+require_reconciliation = true
+start_reduce_only = true
+
+[evidence]
+readiness = "governance:readiness/example-live.json"
+promotion = "governance:promotion/example-live.json"
