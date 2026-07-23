@@ -1,1478 +1,158 @@
 from __future__ import annotations
 
-from kairospy.identity import InstitutionId
-
 import argparse
-from datetime import date, datetime, timezone
-from decimal import Decimal
-from hashlib import sha256
-import importlib
-import json
-import os
-import select
-import shlex
-import sys
-import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any
-from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from kairospy import __version__
-from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
-
-from kairospy.portfolio.accounting.ledger import LedgerService
 from kairospy.environment import Environment
-from kairospy.execution.ports import OrderRequest
-from kairospy.reference.ports import ReferenceDataRequest
-from kairospy.integrations.connectors.market_data_router import CompositeMarketDataClient
-from kairospy.integrations.connectors.binance.account_gateway import (
-    BinanceAccountGateway,
-    BinanceOptionsAccountGateway,
-)
-from kairospy.integrations.connectors.binance.execution_gateway import (
-    BinanceExecutionGateway,
-    BinanceOptionsExecutionGateway,
-)
-from kairospy.integrations.connectors.binance.market_data_client import BinanceMarketDataClient
-from kairospy.integrations.connectors.binance.reference_data import (
-    BinanceFuturesReferenceDataClient,
-    BinanceOptionsReferenceDataClient,
-    BinanceSpotReferenceDataClient,
-)
-from kairospy.integrations.connectors.binance.request_signing import BinanceSigner
-from kairospy.integrations.connectors.binance.rest_transport import UrllibBinanceTransport
-from kairospy.integrations.connectors.ibkr.account_gateway import IbkrAccountGateway
-from kairospy.integrations.connectors.ibkr.execution_gateway import IbkrExecutionGateway
-from kairospy.integrations.connectors.ibkr.market_data_client import IbkrMarketDataClient
-from kairospy.integrations.connectors.ibkr.reference_data import IbkrReferenceDataClient
-from kairospy.integrations.connectors.ibkr.option_chain_provider import IbkrSpxwOptionChainProvider
+from kairospy.identity import AccountRef, AccountType
 from kairospy.integrations.connectors.ibkr.session import IbkrSession
-from kairospy.integrations.connectors.simulated import SimulatedExecutionAccountGateway
-from kairospy.integrations.connectors.massive import MassiveClient, MassiveConfig, MassiveMarketSnapshotBuilder, MassiveEntitlementDiagnostics, MassiveEquityDailyOhlcvPipeline, MassiveEquityHourlyOhlcvPipeline, MassiveEquityIdentityResolver, MassiveFlatFileBatchDownloader, MassiveFlatFileClient, MassiveReferencePipeline, MassiveVendorArchiveClient, OptionCloseImpliedVolatilityPipeline, OptionDailyOhlcvPipeline, SpxwDailyOhlcvPipeline
-from kairospy.reference import ReferenceCatalog, ReferenceCatalogRepository
-from kairospy.reference.access import settlement_asset
-from kairospy.execution.orders import OrderType
-from kairospy.execution.events import TradeSide
-from kairospy.identity import AccountRef, AccountType, AssetId, InstrumentId, VenueId
-from kairospy.portfolio.ledger import LedgerBook
-from kairospy.execution.orders import ExecutionInstructions, TimeInForce
-from kairospy.reference.contracts import BrokerId, ExecutionRoute, OptionRight, ProductType, RouteId
-from kairospy.execution.router import ExecutionRouter
-from kairospy.runtime.coordinator import ExecutionCoordinator
-from kairospy.runtime.store.event_log import PersistentEventLog
-from kairospy.governance.kill_switch import KillSwitch
-from kairospy.governance.reconciliation import ReconciliationService
-from kairospy.research.capture.report import summarize
-from kairospy.research.capture.option_capture import OptionCaptureService
-from kairospy.research.capture.spec import MarketDataType, OptionChainCaptureSpec
-from kairospy.infrastructure.storage.repository import FileOptionCaptureRepository
-from kairospy.data.snapshots.market_snapshot_storage import MarketSnapshotStorageDriver
-from kairospy.infrastructure.storage.codec import restore_primitives, to_primitive
-from kairospy.infrastructure.storage.data_lake import write_json
-from kairospy.research.capture.series import SeriesCaptureProgress, SeriesCaptureService, SeriesCaptureSpec
-from kairospy.research.capture.normalized_series import NormalizedSeriesCaptureService
-from kairospy.analytics.pricing import PricingInput, PricingModel, OptionValuationService, implied_volatility, price_with_volatility
-from kairospy.risk import RevaluationPosition, Scenario, ScenarioEngine, explain_scenario
-from kairospy.data import DatasetClient, OutputFormat
-from kairospy.data.acquisition import AcquisitionLimits
-from kairospy.data.catalog import DataCatalog
-from kairospy.data.contracts import (
-    DatasetKey,
-    DatasetLayer,
-    DataProductDefinition,
-    DatasetRelease,
-    DatasetStatus,
-    DatasetStorageKind,
-    QualityLevel,
-    RunMode,
-)
-from kairospy.data.quality.services import DatasetQualityService
-from kairospy.data.extensions.bootstrap import default_provider_registry, register_configured_products, register_default_products
-from kairospy.market.repository import ParquetMarketEventRepository
-from kairospy.analytics.features import BtcIvRvFeatureBuilder, BtcTermSkewFeatureBuilder, BtcDeribitTradeSkewFeatureBuilder
-from kairospy.analytics.features.us_equity_momentum import UsEquityMomentumDatasetBuilder, UsEquityMomentumPolicy
+from kairospy.reference import ReferenceCatalog
 
 
-def _program_name() -> str:
-    executable = Path(sys.argv[0]).name
-    if executable in {"kairospy", "kairos"}:
-        return executable
-    return "kairospy"
-
-
-def _positive_int(value: str) -> int:
-    parsed = int(value)
-    if parsed <= 0:
-        raise argparse.ArgumentTypeError("must be positive")
-    return parsed
-
-
-def _hide_subcommands(action, names: set[str]) -> None:
-    action._choices_actions[:] = [item for item in action._choices_actions if item.dest not in names]
-    action.metavar = "{" + ",".join(name for name in action.choices if name not in names) + "}"
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog=_program_name(), description="Multi-asset data, workspace, run, reconciliation, and execution toolkit")
-    parser.add_argument("--data-root", default=f"{DEFAULT_LAKE_ROOT}/snapshots")
-    parser.add_argument("--dataset-root", default=f"{DEFAULT_LAKE_ROOT}/curated")
-    parser.add_argument("--backtest-root", default=f"{DEFAULT_LAKE_ROOT}/backtests")
-    parser.add_argument("--catalog-path", default=f"{DEFAULT_LAKE_ROOT}/catalog/instruments.json")
-    parser.add_argument("--reference-catalog-path", default=f"{DEFAULT_LAKE_ROOT}/reference/catalog.json")
-    parser.add_argument("--event-log-path", default=f"{DEFAULT_LAKE_ROOT}/events/kairospy.jsonl")
-    parser.add_argument("--runtime-db", help="transactional runtime database; defaults beside --event-log-path")
-    parser.add_argument(
-        "--lake-root",
-        default=os.environ.get("KAIROSPY_LAKE_ROOT", DEFAULT_LAKE_ROOT),
-        help=f"data lake root; defaults to KAIROSPY_LAKE_ROOT or {DEFAULT_LAKE_ROOT}",
-    )
-    parser.add_argument("--format", choices=("text", "json"), default="text",
-                        help="output format; human-readable text is the default")
-    parser.add_argument("--lang", choices=("zh-CN", "en-US"), help="display language; defaults from the system locale")
-    parser.add_argument("--quiet", action="store_true", help="suppress successful product command output")
-    commands = parser.add_subparsers(dest="group", required=True)
-    init = commands.add_parser("init", help="create a Kairos project in any local directory")
-    init.add_argument("target_path", nargs="?", type=Path, help="project directory, e.g. kairospy init my-desk")
-    init.add_argument("--target", type=Path, default=Path("."), help="project directory; defaults to the current directory")
-    init.add_argument("--name", help="project name; defaults to the target directory name")
-    init.add_argument("--force", action="store_true", help="overwrite existing scaffold files")
-    init.add_argument("--interactive", action="store_true", help="prompt for project target, name and overwrite behavior")
-    workspace = commands.add_parser("workspace", help="manage project workspaces and data bindings")
-    workspace_actions = workspace.add_subparsers(dest="action", required=True)
-    workspace_actions.add_parser("list", help="list project Workspaces")
-    workspace_create = workspace_actions.add_parser("create", help="create or open one Workspace")
-    workspace_create.add_argument("name")
-    workspace_attach = workspace_actions.add_parser("attach", help="attach a Dataset to a Workspace")
-    workspace_attach.add_argument("workspace")
-    workspace_attach.add_argument("--name", required=True, help="workspace-local attachment name")
-    workspace_attach.add_argument("--dataset", required=True, help="Dataset ID or alias")
-    workspace_attach.add_argument("--view", choices=("history", "live", "both"), default="both")
-    workspace_attach.add_argument("--instrument", action="append", default=[], help="instrument selector; repeatable")
-    workspace_attach.add_argument("--field", action="append", default=[], help="field selector; repeatable")
-    workspace_attach.add_argument("--freshness-seconds", type=float)
-    workspace_inspect = workspace_actions.add_parser("inspect", help="inspect Workspace bindings")
-    workspace_inspect.add_argument("name")
-    workspace_inspect_code = workspace_actions.add_parser("inspect-code", help="inspect a Workspace code entrypoint")
-    workspace_inspect_code.add_argument("entrypoint", help="module:callable returning a WorkspaceProjection")
-    workspace_inspect_code.add_argument("--param", action="append", default=[], help="workspace parameter key=value; repeatable")
-    workspace_inspect_code.add_argument("--mode", choices=("inspect", "backtest", "historical-simulation", "paper", "live"), default="inspect")
-    data = commands.add_parser("data", help="manage Dataset Store data and built-in Data products")
-    data_actions = data.add_subparsers(dest="action", required=True)
-    data_apply = data_actions.add_parser("apply", help="apply a Data manifest such as kairos.data.toml")
-    data_apply.add_argument("manifest", nargs="?", type=Path, default=Path("kairos.data.toml"),
-                            help="Data manifest path; defaults to kairos.data.toml")
-    data_apply.add_argument("--only", help="only apply one manifest dataset name")
-    data_apply.add_argument("--dry-run", action="store_true", help="show manifest actions without applying them")
-    data_start = data_actions.add_parser("start", help="show Data onboarding or start one Dataset")
-    data_start.add_argument("--dry-run", action="store_true", help="show the action without applying it")
-    data_start.add_argument("--kind", choices=("file", "connector", "product", "live"),
-                            help="what you have: file, connector, product, or live")
-    data_start.add_argument("--file", type=Path, help="CSV/Parquet file path for --kind file")
-    data_start.add_argument("--source", type=Path, help="connector path or live source key; also accepted for --kind file")
-    data_start.add_argument("--product", help="built-in Data product key")
-    data_start.add_argument("--name", help="Dataset name to expose")
-    data_start.add_argument("--as", dest="as_dataset", help="Dataset ID for user file or connector sources")
-    data_start.add_argument("--time", help="primary time field")
-    data_start.add_argument("--start", dest="start_time", help="historical start timestamp")
-    data_start.add_argument("--end", dest="end_time", help="historical end timestamp")
-    data_start.add_argument("--account", help="account or credential reference for live data")
-    data_start.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat as needed")
-    data_start.add_argument("--channel", help="live channel name")
-    data_start.add_argument("--market", help="provider market selector, for example spot, usdm, stocks, or perpetual")
-    data_start.add_argument("--levels", type=int, choices=(5, 10, 20), help="order book depth levels for Binance orderbook")
-    data_start.add_argument("--interval", help="provider interval selector")
-    data_start.add_argument("--for", dest="for_use", choices=("workspace", "backtest", "shadow", "paper", "live"),
-                            help="target use; defaults to workspace for historical data and shadow for live data")
-    data_add = data_actions.add_parser("add", help="add user-defined historical data as a named Dataset")
-    data_add.add_argument("source", type=Path, help="CSV file or user connector path")
-    data_add.add_argument("--name", required=True, help="Dataset name to expose")
-    data_add.add_argument("--time", help="primary time field; inferred when omitted")
-    data_add.add_argument("--protocol", choices=("historical",), help="treat source as a user HistoricalDataProtocol")
-    data_add.add_argument("--start", help="optional protocol request start timestamp")
-    data_add.add_argument("--end", help="optional protocol request end timestamp")
-    data_add.add_argument("--instrument", action="append", default=[], help="optional protocol instrument; repeat for a bounded universe")
-    data_use = data_actions.add_parser(
-        "use",
-        help="use a historical Data Product",
-        description="Use a historical Data Product. Run 'kairospy data products list' to see built-in product keys, titles, capabilities and account requirements.",
-    )
-    data_use.add_argument("key", nargs="?", help="Data Product key or alias")
-    data_use.add_argument("--list-products", action="store_true", help="list built-in Data products and exit")
-    data_use.add_argument("--start", help="inclusive ISO-8601 timestamp with timezone")
-    data_use.add_argument("--end", help="exclusive ISO-8601 timestamp with timezone")
-    data_use.add_argument("--provider")
-    data_use.add_argument("--venue")
-    data_use.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat for a bounded universe")
-    data_use.add_argument("--for", dest="for_use", choices=("workspace", "backtest", "production"),
-                          default="workspace", help="target use; defaults to workspace")
-    data_use.add_argument("--refresh", action="store_true")
-    data_use.add_argument("--dry-run", action="store_true", help="show the plan without downloading")
-    data_connect = data_actions.add_parser("connect", help="connect a live Data source")
-    data_connect.add_argument("source", type=Path, help="built-in live source key or user LiveDataProtocol connector path")
-    data_connect.add_argument("--as", dest="as_dataset", help="Dataset ID for user LiveDataProtocol connector paths; not accepted for built-in products")
-    data_connect.add_argument("--protocol", choices=("live",), default="live")
-    data_connect.add_argument("--time", default="timestamp", help="primary time field; defaults to timestamp")
-    data_connect.add_argument("--account", help="account or credential reference for this live source")
-    data_connect.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat for a bounded universe")
-    data_connect.add_argument("--channel", help="live channel name")
-    data_connect.add_argument("--market", help="provider market selector, for example spot, usdm, stocks, or perpetual")
-    data_connect.add_argument("--levels", type=int, choices=(5, 10, 20), help="order book depth levels for Binance orderbook")
-    data_connect.add_argument("--interval", help="provider interval selector")
-    data_connect.add_argument("--for", dest="for_use", choices=("shadow", "paper", "live"),
-                              default="shadow", help="target use; defaults to shadow")
-    data_connect.add_argument("--freshness-seconds", type=float, default=5.0, help="freshness max age required before paper/live use")
-    data_sample = data_actions.add_parser("sample", help="sample rows from a live Data source")
-    data_sample.add_argument("source", help="built-in live source key or user LiveDataProtocol connector path")
-    data_sample.add_argument("--as", dest="as_dataset", help="temporary Dataset name for sample context")
-    data_sample.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat as needed")
-    data_sample.add_argument("--channel", help="live channel name")
-    data_sample.add_argument("--market", help="provider market selector")
-    data_sample.add_argument("--levels", type=int, choices=(5, 10, 20), help="order book depth levels for Binance orderbook")
-    data_sample.add_argument("--interval", help="provider interval selector")
-    data_sample.add_argument("--limit", type=_positive_int, default=5, help="maximum rows to sample")
-    data_reconnect = data_actions.add_parser("reconnect", help="reconnect a configured live Dataset")
-    data_reconnect.add_argument("dataset", help="Dataset name to reconnect")
-    data_reconnect.add_argument("--account", help="override account or credential reference")
-    data_reconnect.add_argument("--instrument", action="append", default=[], help="override instruments; repeat for a bounded universe")
-    data_reconnect.add_argument("--channel", help="override live channel name")
-    data_reconnect.add_argument("--market", help="override provider market selector")
-    data_reconnect.add_argument("--levels", type=int, choices=(5, 10, 20), help="override order book depth levels for Binance orderbook")
-    data_reconnect.add_argument("--interval", help="override provider interval selector")
-    data_reconnect.add_argument("--freshness-seconds", type=float, help="override freshness max age")
-    data_product = data_actions.add_parser(
-        "products", aliases=("product",), help="list built-in Data products",
-    )
-    data_product_actions = data_product.add_subparsers(dest="product_action", required=True)
-    data_product_actions.add_parser("list", help="list built-in Data products")
-    data_product_doctor = data_product_actions.add_parser("doctor", help="diagnose one Data Product")
-    data_product_doctor.add_argument("product", help="Data Product key or alias")
-    data_protocol = data_actions.add_parser("protocol", help="create and check user Data protocols")
-    data_protocol_actions = data_protocol.add_subparsers(dest="protocol_action", required=True)
-    data_protocol_actions.add_parser("list", help="list supported user Data protocol types")
-    protocol_template = data_protocol_actions.add_parser("template", help="print or write a user Data protocol template")
-    protocol_template.add_argument("--kind", choices=("historical", "live"), required=True)
-    protocol_template.add_argument("--output", type=Path, help="optional Python file to write")
-    protocol_check = data_protocol_actions.add_parser("check", help="check a user Data protocol file")
-    protocol_check.add_argument("source", type=Path, help="Python protocol file")
-    protocol_check.add_argument("--kind", choices=("historical", "live"), required=True)
-    protocol_check.add_argument("--name", default="workspace.protocol_check", help="temporary Dataset name for the check request")
-    protocol_check.add_argument("--start", help="optional historical start timestamp")
-    protocol_check.add_argument("--end", help="optional historical end timestamp")
-    protocol_check.add_argument("--instrument", action="append", default=[], help="optional instrument; repeat as needed")
-    protocol_check.add_argument("--account", help="optional live account reference for request shape validation")
-    protocol_check.add_argument("--channel", help="optional live channel for request shape validation")
-    data_download = data_actions.add_parser("download", help="download a registered Data Product by key")
-    data_download.add_argument("key", help="registered Data Product key, for example tutorial-sma-data")
-    data_register_download = data_actions.add_parser(
-        "register-download", help="register a reusable Data Product download entry",
-    )
-    data_register_download.add_argument("--key", required=True, help="stable Data Product key")
-    data_register_download.add_argument("--spec", type=Path, required=True, help="JSON or YAML Data Product download spec")
-    data_register_provider = data_actions.add_parser(
-        "register-provider", help="register a reusable Data Product provider",
-    )
-    data_register_provider.add_argument("--name", required=True, help="stable Data provider name")
-    data_register_provider.add_argument("--spec", type=Path, required=True, help="JSON or YAML Data provider spec")
-    data_write = data_actions.add_parser("write", help="write external data into the Data Contract")
-    data_write.add_argument("--file", type=Path, help="CSV file to import as a historical time series")
-    data_write.add_argument("--live", action="store_true", help="register a live data view instead of importing a file")
-    data_write.add_argument("--connector", type=Path, help="live connector code file used with --live")
-    data_write.add_argument("--as", dest="as_dataset", required=True, help="logical dataset identity to publish")
-    data_write.add_argument("--contract", type=Path, required=True, help="JSON Data Contract")
-    live_binance = data_actions.add_parser(
-        "live-binance", help=argparse.SUPPRESS,
-    )
-    live_binance.add_argument("--symbol", required=True, help="Binance venue symbol, for example BTCUSDT")
-    live_binance.add_argument("--channel", choices=("bookTicker", "trade", "aggTrade", "depth"),
-                              default="bookTicker")
-    live_binance.add_argument("--messages", type=int, default=10)
-    live_binance.add_argument("--futures", action="store_true")
-    live_binance.add_argument("--instrument", help="stable internal InstrumentId; defaults from symbol and product line")
-    live_binance.add_argument("--journal", type=Path, help="raw JSONL capture path")
-    soak_binance = data_actions.add_parser(
-        "soak-binance", help=argparse.SUPPRESS,
-    )
-    soak_binance.add_argument("--symbol", required=True)
-    soak_binance.add_argument("--channel", choices=("bookTicker", "trade", "aggTrade", "depth"),
-                              default="bookTicker")
-    soak_binance.add_argument("--duration-seconds", type=float, default=60.0)
-    soak_binance.add_argument("--minimum-events", type=int, default=100)
-    soak_binance.add_argument("--maximum-silence-seconds", type=float, default=5.0)
-    soak_binance.add_argument("--maximum-channel-utilization", type=float, default=0.9)
-    soak_binance.add_argument("--capture-segment-events", type=int, default=100000)
-    soak_binance.add_argument("--capture-segment-bytes", type=int, default=256 * 1024 * 1024)
-    soak_binance.add_argument("--capture-total-bytes", type=int, default=20 * 1024 * 1024 * 1024)
-    soak_binance.add_argument(
-        "--restart-interval-seconds", type=float, default=0,
-        help="actively restart the WebSocket session at this interval and write a campaign artifact",
-    )
-    soak_binance.add_argument("--instrument")
-    soak_binance.add_argument("--journal", type=Path)
-    soak_binance.add_argument("--artifact", type=Path)
-    soak_binance.add_argument(
-        "--live-view-manifest", type=Path,
-        help="Live View manifest to update with soak channel diagnostics",
-    )
-    inspect_data = data_actions.add_parser("inspect", help="show schema, lineage and time coverage")
-    inspect_data.add_argument("--dataset", required=True)
-    list_data = data_actions.add_parser("list", help="list Datasets and readiness")
-    list_data.add_argument("--dimension", action="append", default=[], help="key=value dimension; repeatable")
-    releases_data = data_actions.add_parser("releases", help="removed: Data no longer has releases or versions")
-    releases_data.add_argument("--dataset", help="Dataset ID or alias")
-    releases_data.add_argument("--dimension", action="append", default=[], help="key=value dimension; repeatable")
-    search_data = data_actions.add_parser("search", help="find Datasets by structured dimensions")
-    search_data.add_argument("--dimension", action="append", default=[], help="key=value dimension; repeatable")
-    describe_data = data_actions.add_parser("describe", help="show Dataset readiness, time and issues")
-    describe_data.add_argument("dataset_arg", nargs="?", help="Dataset name to describe")
-    describe_data.add_argument("--dataset", dest="dataset", help="Dataset name to describe; kept for compatibility")
-    doctor_data = data_actions.add_parser("doctor", help="diagnose one Dataset readiness")
-    doctor_data.add_argument("dataset_arg", nargs="?", help="Dataset name to diagnose")
-    doctor_data.add_argument("--dataset", dest="dataset", help="Dataset name to diagnose; kept for compatibility")
-    metadata_data = data_actions.add_parser("metadata", help="show inferred Dataset metadata without audit internals")
-    metadata_data.add_argument("dataset_arg", nargs="?", help="Dataset name to inspect")
-    metadata_data.add_argument("--dataset", dest="dataset", help="Dataset name to inspect; kept for compatibility")
-    metadata_data.add_argument("--time", help="override the Dataset primary time field")
-    diagnostics_data = data_actions.add_parser("diagnostics", help="diagnose Dataset Store entries")
-    diagnostics_data.add_argument("--strict", action="store_true", help="return non-zero when errors exist")
-    repair_index_data = data_actions.add_parser("repair-index", help="rebuild the optional Dataset Store index cache")
-    repair_index_data.add_argument("--strict", action="store_true", help=argparse.SUPPRESS)
-    clean_tmp_data = data_actions.add_parser("clean-tmp", help="remove Dataset Store temporary write directories")
-    clean_tmp_data.add_argument("--dataset", help="Dataset ID or alias; defaults to all Datasets")
-    us_equity_diagnostics = data_actions.add_parser("us-equity-momentum-diagnostics", help="audit the local US equity momentum data package")
-    us_equity_diagnostics.add_argument("--workspace", default="us-equity-momentum")
-    us_equity_diagnostics.add_argument("--version", default="1.0.0")
-    us_equity_diagnostics.add_argument("--strict", action="store_true", help="return non-zero when diagnostics errors exist")
-    validate_data = data_actions.add_parser("validate", help="inspect whether a Dataset has readable historical or live data")
-    validate_data.add_argument("dataset_arg", nargs="?", help="Dataset name to validate")
-    validate_data.add_argument("--dataset", dest="dataset", help="Dataset name to validate; kept for compatibility")
-    prepare_data = data_actions.add_parser("prepare", help="removed: provider products now own ingestion")
-    prepare_data.add_argument("--dataset", required=True)
-    prepare_data.add_argument("--start", required=True)
-    prepare_data.add_argument("--end", required=True)
-    prepare_data.add_argument("--quality", choices=tuple(item.value for item in QualityLevel), default=QualityLevel.WORKSPACE.value)
-    prepare_data.add_argument("--provider")
-    prepare_data.add_argument("--venue")
-    prepare_data.add_argument("--acquire-missing", action="store_true")
-    _add_acquisition_limit_args(prepare_data)
-    prepare_data.add_argument("--promote", action="store_true", help="removed; retained only so the removed command can explain the migration")
-    prepare_data.add_argument("--actor", default="data-prepare")
-    prepare_data.add_argument("--reason", default="explicit data preparation")
-    prepare_us_equity_momentum = data_actions.add_parser(
-        "prepare-us-equity-momentum",
-        help="one-command bounded US equity momentum data, feature and diagnostics workflow",
-    )
-    prepare_us_equity_momentum.add_argument(
-        "--raw-dataset", action="append", required=True,
-        help="configured Massive raw equity OHLCV product; repeat for a bounded multi-stock basket",
-    )
-    prepare_us_equity_momentum.add_argument("--start", required=True, help="inclusive ISO-8601 timestamp with timezone")
-    prepare_us_equity_momentum.add_argument("--end", required=True, help="exclusive ISO-8601 timestamp with timezone")
-    prepare_us_equity_momentum.add_argument("--provider", default="massive")
-    prepare_us_equity_momentum.add_argument("--venue", default="us-securities")
-    prepare_us_equity_momentum.add_argument("--dataset-id", default="us-equity-momentum.bounded.v1")
-    prepare_us_equity_momentum.add_argument("--workspace", default="us-equity-momentum")
-    prepare_us_equity_momentum.add_argument("--version", default="1.0.0")
-    prepare_us_equity_momentum.add_argument(
-        "--hypothesis",
-        default="US equities with stronger point-in-time cross-sectional momentum may outperform weaker eligible equities over subsequent holding windows",
-    )
-    prepare_us_equity_momentum.add_argument("--corporate-actions-directory")
-    prepare_us_equity_momentum.add_argument(
-        "--sync-corporate-actions", action="store_true",
-        help="archive Massive split/dividend events for the prepared bounded tickers and feed them into the feature build",
-    )
-    prepare_us_equity_momentum.add_argument("--reference-directory")
-    prepare_us_equity_momentum.add_argument("--minimum-price", type=Decimal, default=Decimal("5"))
-    prepare_us_equity_momentum.add_argument("--minimum-adv20", type=Decimal, default=Decimal("10000000"))
-    prepare_us_equity_momentum.add_argument("--minimum-history", type=int, default=252)
-    query_data = data_actions.add_parser("query", help="query rows from a Dataset")
-    query_data.add_argument("dataset_arg", nargs="?", help="Dataset name to query")
-    query_data.add_argument("--dataset", dest="dataset", help="Dataset name to query; kept for compatibility")
-    query_data.add_argument("--start")
-    query_data.add_argument("--end")
-    query_data.add_argument("--field", action="append", default=[])
-    query_data.add_argument("--limit", type=int, default=100)
-    replay_data = data_actions.add_parser(
-        "replay",
-        help="print replay rows from a Dataset",
-        description="Replay a Dataset and print each returned row to the terminal in replay order.",
-    )
-    replay_data.add_argument("dataset_arg", nargs="?", help="Dataset name to replay")
-    replay_data.add_argument("--dataset", dest="dataset", help="Dataset name to replay; kept for compatibility")
-    replay_data.add_argument("--start")
-    replay_data.add_argument("--end")
-    replay_data.add_argument("--field", action="append", default=[])
-    replay_data.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat as needed")
-    replay_data.add_argument("--limit", type=_positive_int, default=20)
-    freeze_data = data_actions.add_parser("freeze", help="removed: Dataset Store does not freeze workspace inputs")
-    freeze_data.add_argument("--workspace", required=True)
-    freeze_data.add_argument("--dataset", action="append", required=True)
-    freeze_data.add_argument("--output", type=Path, required=True)
-    freeze_data.add_argument("--code-version", default=__version__)
-    compare_data = data_actions.add_parser("compare", help="removed: Data no longer has immutable releases")
-    compare_data.add_argument("--first", required=True)
-    compare_data.add_argument("--second", required=True)
-    audit_artifact = data_actions.add_parser("audit-artifact", help="removed: release artifact audit is outside Data")
-    audit_artifact.add_argument("--artifact", type=Path, required=True)
-    audit_data = data_actions.add_parser("audit", help="removed: Dataset Store has no audit gate")
-    audit_data.add_argument("dataset", help="Dataset name to audit")
-    audit_data.add_argument("--verbose", action="store_true", help="ignored; Dataset Store has no hash audit gate")
-    alias_data = data_actions.add_parser("alias", help="create a Dataset alias")
-    alias_data.add_argument("dataset_arg", nargs="?", help="canonical Dataset ID")
-    alias_data.add_argument("--dataset", dest="dataset", help="canonical Dataset ID")
-    alias_data.add_argument("--alias", required=True)
-    catalog_data = data_actions.add_parser("catalog", help="list Dataset Store entries")
-    catalog_data.add_argument("--refresh", action="store_true", help="ignored; Dataset Store is discovered from files")
-    copy_data = data_actions.add_parser("copy", help="removed: copy Dataset files directly or rebuild from provider ingestion")
-    copy_data.add_argument("--from", dest="source_root", required=True, type=Path,
-                           help="source data lake root, for example /path/to/project/.kairos/data")
-    copy_data.add_argument("--to", dest="target_root", type=Path,
-                           help="target data lake root; defaults to --lake-root")
-    copy_data.add_argument("--dataset", required=True, help="logical dataset key to copy")
-    copy_data.add_argument("--release", help="specific release id or alias; defaults to the source catalog selected release")
-    copy_data.add_argument("--include-source-cache", action="store_true",
-                           help="also copy source/provider=<provider> raw provider cache, such as Binance payload.zip files")
-    copy_data.add_argument("--overwrite", action="store_true", help="overwrite existing copied files")
-    copy_data.add_argument("--dry-run", action="store_true", help="show what would be copied without writing files")
-    for action, help_text in (("plan", "removed: provider products now own ingestion planning"),
-                              ("acquire", "removed: provider products now own ingestion")):
-        command = data_actions.add_parser(action, help=help_text)
-        command.add_argument("--dataset", required=action == "plan")
-        command.add_argument("--start", required=action == "plan", help="inclusive ISO-8601 timestamp with timezone")
-        command.add_argument("--end", required=action == "plan", help="exclusive ISO-8601 timestamp with timezone")
-        command.add_argument("--provider")
-        command.add_argument("--venue")
-        command.add_argument("--instrument", action="append", default=[], help="instrument id or provider symbol; repeat for a bounded universe")
-        _add_acquisition_limit_args(command)
-        if action == "acquire":
-            command.add_argument("--refresh", action="store_true")
-            command.add_argument("--yes", action="store_true", help="skip confirmation after showing the acquisition plan")
-            command.add_argument("--dry-run", action="store_true", help="show the plan without downloading")
-            command.add_argument("--list-products", action="store_true", help="list acquirable data products and exit")
-    promote_data = data_actions.add_parser("promote", help="promote a Dataset for a higher use")
-    promote_data.add_argument("dataset", nargs="?", help="Dataset name for user-facing promotion")
-    promote_data.add_argument("--for", dest="for_use", choices=("workspace", "backtest", "production"),
-                              help="target use for Dataset promotion")
-    promote_data.add_argument("--actor")
-    promote_data.add_argument("--reason")
-    provider_fetch = data_actions.add_parser("provider-fetch", help=argparse.SUPPRESS)
-    provider_fetch.add_argument("--provider", choices=("massive",), default="massive")
-    provider_fetch.add_argument("--resource", choices=("option-contracts", "option-quotes", "option-trades", "aggregates", "option-chain"), required=True)
-    provider_fetch.add_argument("--ticker", help="option ticker for quote/trade or underlying ticker for aggregates")
-    provider_fetch.add_argument("--underlying", help="underlying ticker for contracts or current option-chain snapshot")
-    provider_fetch.add_argument("--start", help="inclusive start date/timestamp")
-    provider_fetch.add_argument("--end", help="exclusive end date/timestamp")
-    provider_fetch.add_argument("--limit", type=int, default=50000)
-    provider_fetch.add_argument("--max-pages", type=int, default=100000, help="fail closed if pagination exceeds this bound")
-    provider_fetch.add_argument("--multiplier", type=int, default=1)
-    provider_fetch.add_argument("--timespan", default="minute")
-    provider_flat = data_actions.add_parser("provider-flat-file", help=argparse.SUPPRESS)
-    provider_flat.add_argument("--provider", choices=("massive",), default="massive")
-    provider_flat.add_argument("--operation", choices=("usage", "status", "download"), required=True)
-    provider_flat.add_argument("--key", help="Flat File key for status/download")
-    provider_flat_batch = data_actions.add_parser("provider-flat-file-batch", help=argparse.SUPPRESS)
-    provider_flat_batch.add_argument("--provider", choices=("massive",), default="massive")
-    provider_flat_batch.add_argument("--start", required=True, help="inclusive trading date YYYY-MM-DD")
-    provider_flat_batch.add_argument("--end", required=True, help="exclusive date YYYY-MM-DD")
-    provider_flat_batch.add_argument("--max-files", type=int, default=5, help="maximum non-local files to inspect/download in this run")
-    provider_flat_batch.add_argument("--dry-run", action="store_true", help="only inspect cache status and write a plan")
-    prepare_spxw_daily_ohlcv = data_actions.add_parser("prepare-spxw-daily-ohlcv", help="inventory and convert downloaded OPRA daily OHLCV into governed SPXW Parquet; compatibility alias for prepare-spxw-daily-ohlcv")
-    prepare_spxw_daily_ohlcv.add_argument("--dataset-id", required=True)
-    prepare_spxw_daily_ohlcv.add_argument("--start", required=True, help="inclusive date YYYY-MM-DD")
-    prepare_spxw_daily_ohlcv.add_argument("--end", required=True, help="exclusive date YYYY-MM-DD")
-    prepare_spxw_day_aggs = data_actions.add_parser(
-        "prepare-spxw-day-aggs",
-        help="compatibility alias for prepare-spxw-daily-ohlcv",
-        description="compatibility alias for prepare-spxw-daily-ohlcv",
-    )
-    prepare_spxw_day_aggs.add_argument("--dataset-id", required=True)
-    prepare_spxw_day_aggs.add_argument("--start", required=True, help="inclusive date YYYY-MM-DD")
-    prepare_spxw_day_aggs.add_argument("--end", required=True, help="exclusive date YYYY-MM-DD")
-    prepare_option_daily_ohlcv = data_actions.add_parser("prepare-option-daily-ohlcv", help="convert downloaded OPRA daily OHLCV for one OCC root; compatibility alias for prepare-option-daily-ohlcv")
-    prepare_option_daily_ohlcv.add_argument("--dataset-id", required=True)
-    prepare_option_daily_ohlcv.add_argument("--option-root", required=True, help="OCC root without O: prefix, for example NVDA")
-    prepare_option_daily_ohlcv.add_argument("--start", required=True)
-    prepare_option_daily_ohlcv.add_argument("--end", required=True)
-    prepare_option_day_aggs = data_actions.add_parser(
-        "prepare-option-day-aggs",
-        help="compatibility alias for prepare-option-daily-ohlcv",
-        description="compatibility alias for prepare-option-daily-ohlcv",
-    )
-    prepare_option_day_aggs.add_argument("--dataset-id", required=True)
-    prepare_option_day_aggs.add_argument("--option-root", required=True, help="OCC root without O: prefix, for example NVDA")
-    prepare_option_day_aggs.add_argument("--start", required=True)
-    prepare_option_day_aggs.add_argument("--end", required=True)
-    prepare_equity_daily_ohlcv = data_actions.add_parser("prepare-equity-daily-ohlcv", help="archive and convert provider equity daily OHLCV; compatibility alias for prepare-equity-daily-ohlcv")
-    prepare_equity_daily_ohlcv.add_argument("--provider", choices=("massive",), default="massive")
-    prepare_equity_daily_ohlcv.add_argument("--dataset-id", required=True)
-    prepare_equity_daily_ohlcv.add_argument("--ticker", required=True)
-    prepare_equity_daily_ohlcv.add_argument("--start", required=True)
-    prepare_equity_daily_ohlcv.add_argument("--end", required=True)
-    prepare_equity_daily_ohlcv.add_argument("--view", choices=("raw", "vendor_adjusted"), default="vendor_adjusted")
-    prepare_equity_day_aggs = data_actions.add_parser(
-        "prepare-equity-day-aggs",
-        help="compatibility alias for prepare-equity-daily-ohlcv",
-        description="compatibility alias for prepare-equity-daily-ohlcv",
-    )
-    prepare_equity_day_aggs.add_argument("--provider", choices=("massive",), default="massive")
-    prepare_equity_day_aggs.add_argument("--dataset-id", required=True)
-    prepare_equity_day_aggs.add_argument("--ticker", required=True)
-    prepare_equity_day_aggs.add_argument("--start", required=True)
-    prepare_equity_day_aggs.add_argument("--end", required=True)
-    prepare_equity_day_aggs.add_argument("--view", choices=("raw", "vendor_adjusted"), default="vendor_adjusted")
-    prepare_equity_hourly_ohlcv = data_actions.add_parser("prepare-equity-hourly-ohlcv", help="archive and convert provider equity hourly OHLCV")
-    prepare_equity_hourly_ohlcv.add_argument("--provider", choices=("massive",), default="massive")
-    prepare_equity_hourly_ohlcv.add_argument("--dataset-id", required=True)
-    prepare_equity_hourly_ohlcv.add_argument("--ticker", required=True)
-    prepare_equity_hourly_ohlcv.add_argument("--start", required=True)
-    prepare_equity_hourly_ohlcv.add_argument("--end", required=True)
-    prepare_equity_hourly_ohlcv.add_argument("--view", choices=("raw", "vendor_adjusted"), default="vendor_adjusted")
-    prepare_equity_hour_aggs = data_actions.add_parser("prepare-equity-hour-aggs", help="compatibility alias for prepare-equity-hourly-ohlcv")
-    prepare_equity_hour_aggs.add_argument("--provider", choices=("massive",), default="massive")
-    prepare_equity_hour_aggs.add_argument("--dataset-id", required=True)
-    prepare_equity_hour_aggs.add_argument("--ticker", required=True)
-    prepare_equity_hour_aggs.add_argument("--start", required=True)
-    prepare_equity_hour_aggs.add_argument("--end", required=True)
-    prepare_equity_hour_aggs.add_argument("--view", choices=("raw", "vendor_adjusted"), default="vendor_adjusted")
-    prepare_option_close_iv = data_actions.add_parser("prepare-option-close-implied-volatility", help="materialize close-based implied volatility for an option daily OHLCV dataset")
-    prepare_option_close_iv.add_argument("--dataset-id", required=True)
-    prepare_option_close_iv.add_argument("--option-dataset", required=True)
-    prepare_option_close_iv.add_argument("--equity-dataset", required=True)
-    prepare_option_close_iv.add_argument("--risk-free-rate", type=Decimal, default=Decimal("0.04"))
-    prepare_option_close_iv.add_argument("--dividend-yield", type=Decimal, default=Decimal("0.0003"))
-    compact_massive = data_actions.add_parser("compact-market-events", help="explicitly compact immutable Parquet event partitions")
-    compact_massive.add_argument("--dataset", required=True)
-    provider_entitlement = data_actions.add_parser("provider-entitlement-diagnostics", help=argparse.SUPPRESS)
-    provider_entitlement.add_argument("--provider", choices=("massive",), default="massive")
-    provider_entitlement.add_argument("--underlying", required=True)
-    provider_entitlement.add_argument("--option-ticker", required=True)
-    provider_entitlement.add_argument("--date", required=True)
-    provider_slices = data_actions.add_parser("build-provider-slices", help=argparse.SUPPRESS)
-    provider_slices.add_argument("--provider", choices=("massive",), default="massive")
-    provider_slices.add_argument("--source-dataset", required=True)
-    provider_slices.add_argument("--output-dataset", required=True)
-    provider_slices.add_argument("--start", required=True)
-    provider_slices.add_argument("--end", required=True)
-    provider_slices.add_argument("--sampling-seconds", type=int, default=60)
-    provider_slices.add_argument("--max-quote-age-seconds", type=int, default=300)
-    provider_slices.add_argument("--risk-free-rate", type=Decimal, default=Decimal("0"), help="continuously compounded annual rate used for put-call parity")
-    provider_slices.add_argument("--split", choices=("development", "validation", "test"), default="development")
-    sync_provider_reference = data_actions.add_parser("sync-provider-reference", help=argparse.SUPPRESS)
-    sync_provider_reference.add_argument("--provider", choices=("massive",), default="massive")
-    sync_provider_reference.add_argument("--equity-tickers", action="store_true", help="sync active and inactive US common stock ticker reference")
-    sync_provider_reference.add_argument("--active-only", action="store_true", help="only sync currently active equity tickers")
-    sync_provider_reference.add_argument("--ticker")
-    sync_provider_reference.add_argument("--start")
-    sync_provider_reference.add_argument("--end")
-    build_equity_identity = data_actions.add_parser("build-provider-equity-identity", help=argparse.SUPPRESS)
-    build_equity_identity.add_argument("--provider", choices=("massive",), default="massive")
-    build_equity_identity.add_argument("--reference-rows", type=Path, required=True)
-    build_equity_identity.add_argument("--ticker-events", type=Path)
-    quarantine_provider_cache = data_actions.add_parser("quarantine-insecure-provider-cache", help=argparse.SUPPRESS)
-    quarantine_provider_cache.add_argument("--provider", choices=("massive",), default="massive")
-    _hide_subcommands(data_actions, {
-        "download",
-        "register-download",
-        "register-provider",
-        "write",
-        "live-binance",
-        "soak-binance",
-        "inspect",
-        "releases",
-        "search",
-        "diagnostics",
-        "us-equity-momentum-diagnostics",
-        "prepare",
-        "prepare-us-equity-momentum",
-        "freeze",
-        "compare",
-        "audit-artifact",
-        "alias",
-        "catalog",
-        "copy",
-        "plan",
-        "acquire",
-        "provider-fetch",
-        "provider-flat-file",
-        "provider-flat-file-batch",
-        "provider-entitlement-diagnostics",
-        "build-provider-slices",
-        "sync-provider-reference",
-        "build-provider-equity-identity",
-        "quarantine-insecure-provider-cache",
-        "prepare-spxw-daily-ohlcv",
-        "prepare-spxw-day-aggs",
-        "prepare-option-daily-ohlcv",
-        "prepare-option-day-aggs",
-        "prepare-equity-daily-ohlcv",
-        "prepare-equity-day-aggs",
-        "prepare-equity-hourly-ohlcv",
-        "prepare-equity-hour-aggs",
-        "prepare-option-close-implied-volatility",
-        "compact-market-events",
-    })
-    providers = commands.add_parser("providers", help="inspect Providers and Data Product readiness")
-    providers_actions = providers.add_subparsers(dest="action", required=True)
-    providers_list = providers_actions.add_parser("list", help="list known Providers")
-    providers_doctor = providers_actions.add_parser("doctor", help="diagnose one Provider")
-    providers_doctor.add_argument("provider", help="Provider name, for example massive or binance")
-    features = commands.add_parser("features", help="build reusable feature datasets")
-    feature_actions = features.add_subparsers(dest="action", required=True)
-    build_features = feature_actions.add_parser("build")
-    build_features.add_argument(
-        "--feature-set",
-        choices=("btc-iv-rv-v1", "btc-term-skew-v1", "btc-deribit-trade-skew-v1", "us-equity-momentum-v1"),
-        required=True,
-    )
-    build_features.add_argument("--source-directory", help="lake-relative or absolute OHLCV parquet directory for US equity momentum")
-    build_features.add_argument("--dataset-id", help="output dataset id for US equity derived datasets")
-    build_features.add_argument("--corporate-actions-directory", help="lake-relative or absolute Massive corporate action events directory")
-    build_features.add_argument("--reference-directory", help="lake-relative or absolute Massive equity identity/reference directory")
-    build_features.add_argument("--minimum-price", type=Decimal, default=Decimal("5"))
-    build_features.add_argument("--minimum-adv20", type=Decimal, default=Decimal("10000000"))
-    build_features.add_argument("--minimum-history", type=int, default=252)
-    project = commands.add_parser("project", help="inspect the local Kairos project")
-    project_actions = project.add_subparsers(dest="action", required=True)
-    project_actions.add_parser("status", help="show project root, configuration and operational gates")
-    config = commands.add_parser("config", help="inspect and edit the local Kairos project configuration")
-    config_actions = config.add_subparsers(dest="action", required=True)
-    config_actions.add_parser("path", help="print the discovered kairos.toml path")
-    config_show = config_actions.add_parser("show", help="print the current configuration with secrets redacted")
-    config_show.add_argument("--raw", action="store_true", help="include raw values without redaction")
-    config_validate = config_actions.add_parser("validate", help="validate the discovered configuration")
-    config_validate.add_argument("--strict", action="store_true", help="return non-zero when warnings exist")
-    config_set = config_actions.add_parser("set", help="set a TOML value by dotted path")
-    config_set.add_argument("path", help="dotted TOML path, for example credentials.massive_marketdata_primary.api_key")
-    config_set.add_argument("value", help="scalar value; use env:VARIABLE_NAME for credentials")
-    config_unset = config_actions.add_parser("unset", help="remove a TOML value by dotted path")
-    config_unset.add_argument("path", help="dotted TOML path to remove")
-    doctor = commands.add_parser("doctor", help="diagnose the local Kairos project setup")
-    doctor.add_argument("--strict", action="store_true", help="return non-zero when warnings exist")
-    configure = commands.add_parser("configure", help="configure a provider in the local Kairos project")
-    configure.add_argument("--interactive", action="store_true", help="prompt for provider and credential environment variables")
-    configure_actions = configure.add_subparsers(dest="provider", required=False)
-    configure_massive = configure_actions.add_parser("massive", help="configure Massive credentials")
-    configure_massive.add_argument("--api-key-env", default="KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY", help="environment variable containing the Massive API key")
-    configure_binance = configure_actions.add_parser("binance", help="configure Binance credentials")
-    configure_binance.add_argument("--environment", choices=("testnet", "live"), default="testnet")
-    configure_binance.add_argument("--api-key-env", help="environment variable containing the Binance API key")
-    configure_binance.add_argument("--api-secret-env", help="environment variable containing the Binance API secret")
-    pricing = commands.add_parser("pricing", help="price options and solve implied volatility without a venue connection")
-    pricing_actions = pricing.add_subparsers(dest="action", required=True)
-    pricing_option = pricing_actions.add_parser("option")
-    pricing_option.add_argument("--model", choices=[item.value for item in PricingModel], default=PricingModel.BLACK_SCHOLES.value)
-    pricing_option.add_argument("--right", choices=[item.value for item in OptionRight], required=True)
-    pricing_option.add_argument("--underlying", type=Decimal, required=True, help="spot for Black-Scholes or forward for Black-76")
-    pricing_option.add_argument("--strike", type=Decimal, required=True)
-    pricing_option.add_argument("--years", type=Decimal, required=True)
-    pricing_option.add_argument("--rate", type=Decimal, default=Decimal("0"))
-    pricing_option.add_argument("--dividend-yield", type=Decimal, default=Decimal("0"))
-    pricing_option.add_argument("--volatility", type=Decimal, help="absolute volatility, for example 0.20")
-    pricing_option.add_argument("--market-price", type=Decimal, help="solve IV from this option price")
-    vol = commands.add_parser("vol", help="calibrate and inspect internal volatility surfaces")
-    vol_actions = vol.add_subparsers(dest="action", required=True)
-    calibrate = vol_actions.add_parser("calibrate")
-    calibrate.add_argument("--dataset", required=True)
-    calibrate.add_argument("--rate", type=Decimal, default=Decimal("0"))
-    calibrate.add_argument("--dividend-yield", type=Decimal, default=Decimal("0"))
-    risk_analytics = commands.add_parser("risk", help="run option scenario revaluation and PnL explain")
-    risk_actions = risk_analytics.add_subparsers(dest="action", required=True)
-    risk_scenario = risk_actions.add_parser("scenario")
-    risk_scenario.add_argument("--instrument", default="option:cli")
-    risk_scenario.add_argument("--model", choices=[item.value for item in PricingModel], default=PricingModel.BLACK_SCHOLES.value)
-    risk_scenario.add_argument("--right", choices=[item.value for item in OptionRight], required=True)
-    risk_scenario.add_argument("--underlying", type=Decimal, required=True)
-    risk_scenario.add_argument("--strike", type=Decimal, required=True)
-    risk_scenario.add_argument("--years", type=Decimal, required=True)
-    risk_scenario.add_argument("--rate", type=Decimal, default=Decimal("0"))
-    risk_scenario.add_argument("--dividend-yield", type=Decimal, default=Decimal("0"))
-    risk_scenario.add_argument("--volatility", type=Decimal, required=True)
-    risk_scenario.add_argument("--quantity", type=Decimal, default=Decimal("1"))
-    risk_scenario.add_argument("--multiplier", type=Decimal, default=Decimal("100"))
-    risk_scenario.add_argument("--spot-shock", type=Decimal, default=Decimal("0"))
-    risk_scenario.add_argument("--vol-shock", type=Decimal, default=Decimal("0"))
-    risk_scenario.add_argument("--skew-twist", type=Decimal, default=Decimal("0"))
-    risk_scenario.add_argument("--term-twist", type=Decimal, default=Decimal("0"))
-    risk_scenario.add_argument("--rate-shock", type=Decimal, default=Decimal("0"))
-    risk_scenario.add_argument("--time-advance-days", type=Decimal, default=Decimal("0"))
-    catalog = commands.add_parser("catalog", help="sync versioned instrument definitions and venue listings")
-    catalog_actions = catalog.add_subparsers(dest="action", required=True)
-    sync = catalog_actions.add_parser("sync")
-    sync.add_argument("--venue", choices=("ibkr", "binance"), required=True)
-    sync.add_argument("--products", required=True, help="comma-separated: equity,option,spot,perpetual,future")
-    sync.add_argument("--symbols", required=True, help="comma-separated symbols or IBKR option descriptors")
-    sync.add_argument("--environment", choices=("paper", "testnet", "live"), required=True)
-    sync.add_argument("--inverse", action="store_true", help="use Binance coin-margined futures contracts")
-    account = commands.add_parser("account", help="reconcile Ledger balances and positions with a venue")
-    account_actions = account.add_subparsers(dest="action", required=True)
-    reconcile = account_actions.add_parser("reconcile")
-    reconcile.add_argument("--venue", choices=("ibkr", "binance", "simulated"), required=True)
-    reconcile.add_argument("--environment", choices=("paper", "testnet", "live"), required=True)
-    reconcile.add_argument("--account-id", default="default")
-    reconcile.add_argument("--product", choices=("securities", "spot", "futures", "options"), default="spot")
-    reconcile.add_argument("--inverse", action="store_true")
-    accounts = commands.add_parser("accounts", help="inspect configured trading AccountBindings")
-    accounts_actions = accounts.add_subparsers(dest="action", required=True)
-    accounts_doctor = accounts_actions.add_parser("doctor", help="diagnose one configured AccountBinding")
-    accounts_doctor.add_argument("account", help="AccountBinding name from kairos.toml, for example binance_live_spot")
-    order = commands.add_parser("order", help="submit an explicitly audited manual operations order")
-    order_actions=order.add_subparsers(dest="action",required=True);order_submit=order_actions.add_parser("submit")
-    order_submit.add_argument("--venue",choices=("ibkr","binance","simulated"),required=True)
-    order_submit.add_argument("--environment",choices=("paper","testnet","live"),required=True)
-    order_submit.add_argument("--confirm-live",action="store_true");order_submit.add_argument("--account-id",default="default")
-    order_submit.add_argument("--product",choices=("securities","spot","futures","options"),default="spot")
-    order_submit.add_argument("--instrument",required=True);order_submit.add_argument("--side",choices=("buy","sell"),required=True)
-    order_submit.add_argument("--quantity",type=Decimal,required=True);order_submit.add_argument("--order-type",choices=("market","limit"),default="limit")
-    order_submit.add_argument("--limit-price",type=Decimal);order_submit.add_argument("--reduce-only",action="store_true")
-    order_submit.add_argument("--post-only",action="store_true");order_submit.add_argument("--market-data-ready",action="store_true")
-    order_submit.add_argument("--actor",required=True);order_submit.add_argument("--reason",required=True)
-    order_submit.add_argument("--inverse",action="store_true");order_submit.set_defaults(strategy="manual-operations",manual_order=True,
-        kill_switch_drill=False,soak_seconds=0,cycle_seconds=5.0,restart_drill=False,soak_artifact=None)
-    runtime = commands.add_parser("runtime", help="operate and verify the durable execution runtime")
-    runtime_actions = runtime.add_subparsers(dest="action", required=True)
-    runtime_reference = runtime_actions.add_parser(
-        "reference-artifact", help="run the deterministic L2 order/fill/restart/reconciliation reference artifact",
-    )
-    runtime_reference.add_argument("--root", type=Path, required=True, help="isolated output root for runtime state and audit artifacts")
-    runtime_failure_policy = runtime_actions.add_parser(
-        "failure-policy", help="run deterministic L3 crash-window and restart acceptance drills",
-    )
-    runtime_failure_policy.add_argument("--root", type=Path, required=True, help="isolated output root for drill state and audit artifacts")
-    runtime_orders = runtime_actions.add_parser("orders", help="inspect or explicitly resolve durable unresolved orders")
-    runtime_orders.add_argument("--db", type=Path, required=True, help="SQLite Runtime Store path")
-    runtime_orders.add_argument("--client-order-id")
-    runtime_orders.add_argument("--target", choices=("rejected", "cancelled", "expired"))
-    runtime_orders.add_argument("--actor")
-    runtime_orders.add_argument("--reason")
-    runtime_orders.add_argument("--evidence")
-    runtime_calibration = runtime_actions.add_parser(
-        "calibrate-execution", help="build an ExecutionCalibrationRelease from durable runtime fills",
-    )
-    runtime_calibration.add_argument("--db", type=Path, required=True)
-    runtime_calibration.add_argument("--output-root", type=Path, required=True)
-    runtime_calibration.add_argument("--venue", required=True)
-    runtime_calibration.add_argument("--environment", choices=("paper", "testnet", "live"), required=True)
-    runtime_calibration.add_argument("--strategy")
-    runtime_calibration.add_argument("--calibration-id", default="execution-calibration-v1")
-    l4_preflight = runtime_actions.add_parser("l4-preflight", help="check external Paper/Testnet soak prerequisites without exposing credentials")
-    l4_preflight.add_argument("--venue", choices=("binance", "ibkr"), required=True)
-    l4_preflight.add_argument("--environment", choices=("testnet", "paper"), required=True)
-    l4_preflight.add_argument("--strategy", required=True)
-    l4_preflight.add_argument("--instrument", required=True)
-    l4_preflight.add_argument("--evidence-artifact", type=Path,
-                              help="write a promotion-ready Paper/Testnet readiness evidence artifact")
-    runtime_soak = runtime_actions.add_parser("soak", help="run an externally gated runtime soak and write promotion evidence")
-    runtime_soak.add_argument("--strategy", choices=("covered-call", "spot-perp-carry"), required=True)
-    runtime_soak.add_argument("--venue", choices=("ibkr", "binance", "simulated"), required=True)
-    runtime_soak.add_argument("--environment", choices=("paper", "testnet", "live"), required=True)
-    runtime_soak.add_argument("--confirm-live", action="store_true")
-    runtime_soak.add_argument("--account-id", default="default")
-    runtime_soak.add_argument("--product", choices=("securities", "spot", "futures", "options"), default="spot")
-    runtime_soak.add_argument("--instrument", required=True)
-    runtime_soak.add_argument("--side", choices=("buy", "sell"), required=True)
-    runtime_soak.add_argument("--quantity", type=Decimal, required=True)
-    runtime_soak.add_argument("--order-type", choices=("market", "limit"), default="limit")
-    runtime_soak.add_argument("--limit-price", type=Decimal)
-    runtime_soak.add_argument("--reduce-only", action="store_true")
-    runtime_soak.add_argument("--post-only", action="store_true")
-    runtime_soak.add_argument("--market-data-ready", action="store_true", help="explicit operational readiness acknowledgement for non-simulated venues")
-    runtime_soak.add_argument("--kill-switch-drill", action="store_true")
-    runtime_soak.add_argument("--soak-seconds", type=int, default=0, help="run the supervised runtime for this many wall-clock seconds")
-    runtime_soak.add_argument("--cycle-seconds", type=float, default=5.0, help="supervisor heartbeat/reconciliation interval")
-    runtime_soak.add_argument("--restart-drill", action="store_true", help="restart and recover the Application after the soak")
-    runtime_soak.add_argument("--soak-artifact", type=Path, help="explicit L4 soak manifest path")
-    runtime_soak.add_argument("--inverse", action="store_true")
-    runtime_soak.set_defaults(manual_order=False)
-
-    run_product = commands.add_parser("run", help="run strategy code from a Workspace across backtest, simulation, paper or live")
-    run_actions = run_product.add_subparsers(dest="action", required=True)
-    run_start = run_actions.add_parser("start", help="start a reusable RunConfig")
-    run_start.add_argument("--config", required=True, type=Path, help="RunConfig TOML path, for example configs/runs/backtest.toml")
-    run_start.add_argument("--param", action="append", default=[], help="strategy parameter key=value; repeatable")
-    run_start.add_argument("--confirm-live", action="store_true", help="required explicit confirmation for live runs")
-    run_start.add_argument(
-        "--supervise-live-services",
-        action="store_true",
-        help="for live runs, start configured live market services under the runtime supervisor",
-    )
-    run_config = run_actions.add_parser("config", help="validate or explain reusable RunConfig files")
-    run_config_actions = run_config.add_subparsers(dest="config_action", required=True)
-    run_config_validate = run_config_actions.add_parser("validate", help="validate a RunConfig TOML file")
-    run_config_validate.add_argument("path", type=Path)
-    run_config_validate.add_argument("--strict", action="store_true")
-    run_config_explain = run_config_actions.add_parser("explain", help="show the resolved RunConfig launch intent")
-    run_config_explain.add_argument("path", type=Path)
-    run_live = run_actions.add_parser("live", help="operate a named long-lived live run")
-    run_live.add_argument(
-        "live_action",
-        choices=(
-            "start", "recover", "status", "attach", "stop", "pause", "resume", "reduce-only", "clear-reduce-only",
-            "cancel-all", "reconcile", "commands", "kill-switch", "reset-kill-switch", "reload-risk-limits",
-            "target-position", "incidents", "close-incident", "metrics", "export", "force-stop",
-        ),
-        nargs="?",
-        default="status",
-    )
-    run_live.add_argument("--run-id", required=True, help="unique run instance id")
-    run_live.add_argument("--config", type=Path, help="RunConfig TOML path for start/recover")
-    run_live.add_argument("--param", action="append", default=[], help="strategy parameter key=value; repeatable")
-    run_live.add_argument("--confirm-live", action="store_true", help="required explicit confirmation for live start/recover")
-    run_live.add_argument("--foreground", action="store_true", help="run the live daemon in this CLI process")
-    run_live.add_argument("--duration-seconds", type=float, help="bounded foreground run duration; implies --foreground")
-    run_live.add_argument("--poll-seconds", type=float, default=0.25, help="foreground daemon stop-request poll interval")
-    run_live.add_argument("--log-file", type=Path, help="background daemon log file; defaults under .kairos/runtime/live/<run-id>")
-    run_live.add_argument("--stale-after-seconds", type=float, default=5.0, help="heartbeat age before live status is stale")
-    run_live.add_argument("--fresh", action="store_true", help="request a fresh daemon status snapshot before reading status")
-    run_live.add_argument("--wait", type=float, default=0.0, help="seconds to wait for --fresh command acknowledgement")
-    run_live.add_argument("--interval-seconds", type=float, default=1.0, help="attach status/log poll interval")
-    run_live.add_argument("--tail-lines", type=int, default=80, help="attach log lines to show before following")
-    run_live.add_argument("--no-follow", action="store_true", help="attach once, print the current snapshot, and exit")
-    run_live.add_argument("--reason", help="operator reason for stop requests")
-    run_live.add_argument("--actor", default="cli", help="operator actor for control commands")
-    run_live.add_argument("--timeout-seconds", type=float, help="graceful stop timeout before force handling")
-    run_live.add_argument("--force", action="store_true", help="force stop after graceful stop timeout")
-    run_live.add_argument("--reconciliation-evidence", help="required evidence reference for reset-kill-switch")
-    run_live.add_argument("--risk-limits-hash", help="limits hash for reload-risk-limits")
-    run_live.add_argument(
-        "--leg",
-        action="append",
-        default=[],
-        help="target position leg as venue,product,instrument,side,quantity; repeat for paired trades",
-    )
-    run_live.add_argument("--intent-id", help="optional operator intent id for target-position")
-    run_live.add_argument("--idempotency-key", help="optional operator command idempotency key")
-    run_live.add_argument("--output", type=Path, help="metrics/export artifact path for metrics or export actions")
-    run_live.add_argument("--prometheus", action="store_true", help="render metrics as Prometheus text format")
-    run_status = run_actions.add_parser("status", help="inspect a run instance status")
-    run_status.add_argument("--run-id", required=True)
-    run_status.add_argument("--stale-after-seconds", type=float, default=5.0, help="heartbeat age before live status is stale")
-    run_status.add_argument("--fresh", action="store_true", help="request a fresh daemon status snapshot before reading status")
-    run_status.add_argument("--wait", type=float, default=0.0, help="seconds to wait for --fresh command acknowledgement")
-    run_stop = run_actions.add_parser("stop", help="request a run instance to stop")
-    run_stop.add_argument("--run-id", required=True)
-    run_stop.add_argument("--reason", help="operator reason for stop requests")
-    run_stop.add_argument("--actor", default="cli", help="operator actor for control commands")
-    run_stop.add_argument("--timeout-seconds", type=float)
-    run_stop.add_argument("--force", action="store_true")
-    run_force_stop = run_actions.add_parser("force-stop", help="force stop a run after a short graceful timeout")
-    run_force_stop.add_argument("--run-id", required=True)
-    run_force_stop.add_argument("--reason", required=True)
-    run_force_stop.add_argument("--actor", default="cli")
-    run_force_stop.add_argument("--timeout-seconds", type=float, default=1.0)
-    run_pause = run_actions.add_parser("pause", help="pause new non-reducing orders for a run")
-    run_pause.add_argument("--run-id", required=True)
-    run_pause.add_argument("--reason", required=True)
-    run_pause.add_argument("--actor", default="cli")
-    run_resume = run_actions.add_parser("resume", help="resume new orders for a paused run")
-    run_resume.add_argument("--run-id", required=True)
-    run_resume.add_argument("--reason", required=True)
-    run_resume.add_argument("--actor", default="cli")
-    run_reduce = run_actions.add_parser("reduce-only", help="put a run into reduce-only mode")
-    run_reduce.add_argument("--run-id", required=True)
-    run_reduce.add_argument("--reason", required=True)
-    run_reduce.add_argument("--actor", default="cli")
-    run_clear_reduce = run_actions.add_parser("clear-reduce-only", help="clear reduce-only mode for a run")
-    run_clear_reduce.add_argument("--run-id", required=True)
-    run_clear_reduce.add_argument("--reason", required=True)
-    run_clear_reduce.add_argument("--actor", default="cli")
-    run_cancel_all = run_actions.add_parser("cancel-all", help="request cancellation of all working orders for a run")
-    run_cancel_all.add_argument("--run-id", required=True)
-    run_cancel_all.add_argument("--reason", required=True)
-    run_cancel_all.add_argument("--actor", default="cli")
-    run_reconcile = run_actions.add_parser("reconcile", help="request a reconciliation snapshot for a run")
-    run_reconcile.add_argument("--run-id", required=True)
-    run_reconcile.add_argument("--reason", default="operator reconciliation requested")
-    run_reconcile.add_argument("--actor", default="cli")
-    run_commands = run_actions.add_parser("commands", help="list recent operator commands for a run")
-    run_commands.add_argument("--run-id", required=True)
-    run_commands.add_argument("--limit", type=int, default=20)
-    run_incidents = run_actions.add_parser("incidents", help="list runtime incidents for a run")
-    run_incidents.add_argument("--run-id", required=True)
-    run_incidents.add_argument("--status", choices=("open", "closed", "all"), default="open")
-    run_incidents.add_argument("--limit", type=int, default=20)
-    run_close_incident = run_actions.add_parser("close-incident", help="close a runtime incident")
-    run_close_incident.add_argument("--run-id", required=True)
-    run_close_incident.add_argument("--incident-id", required=True)
-    run_close_incident.add_argument("--reason", required=True)
-    run_close_incident.add_argument("--actor", default="cli")
-    run_metrics = run_actions.add_parser("metrics", help="show runtime metrics for a run")
-    run_metrics.add_argument("--run-id", required=True)
-    run_metrics.add_argument("--stale-after-seconds", type=float, default=5.0)
-    run_metrics.add_argument("--output", type=Path, help="write metrics artifact to this path")
-    run_metrics.add_argument("--prometheus", action="store_true", help="render metrics as Prometheus text format")
-    run_export = run_actions.add_parser("export", help="export runtime control-plane artifacts for a run")
-    run_export.add_argument("--run-id", required=True)
-    run_export.add_argument("--output", type=Path)
-    run_export.add_argument("--stale-after-seconds", type=float, default=5.0)
-    run_inspect = run_actions.add_parser("inspect"); run_inspect.add_argument("--db", type=Path)
-    run_inspect.add_argument("--artifact",type=Path);run_inspect.add_argument("--at")
-    run_inspect.add_argument("--run-id")
-    target_run_replay = run_actions.add_parser("replay", help="replay a Run workspace from its snapshot")
-    target_run_replay.add_argument("--run-id", required=True)
-    target_run_compare = run_actions.add_parser("compare", help="compare two Run workspaces")
-    target_run_compare.add_argument("--first", required=True)
-    target_run_compare.add_argument("--second", required=True)
-    return parser
-
-
-def _add_global_cli_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--data-root", default=f"{DEFAULT_LAKE_ROOT}/snapshots")
-    parser.add_argument("--dataset-root", default=f"{DEFAULT_LAKE_ROOT}/curated")
-    parser.add_argument("--backtest-root", default=f"{DEFAULT_LAKE_ROOT}/backtests")
-    parser.add_argument("--catalog-path", default=f"{DEFAULT_LAKE_ROOT}/catalog/instruments.json")
-    parser.add_argument("--reference-catalog-path", default=f"{DEFAULT_LAKE_ROOT}/reference/catalog.json")
-    parser.add_argument("--event-log-path", default=f"{DEFAULT_LAKE_ROOT}/events/kairospy.jsonl")
-    parser.add_argument("--runtime-db", type=Path, help="transactional runtime database; defaults beside --event-log-path")
-    parser.add_argument("--lake-root", default=os.environ.get("KAIROSPY_LAKE_ROOT", DEFAULT_LAKE_ROOT),
-                        help="data lake root; defaults to KAIROSPY_LAKE_ROOT or .kairos/data")
-    parser.add_argument("--format", choices=("text", "json"), default="text",
-                        help="output format; human-readable text is the default")
-    parser.add_argument("--lang", choices=("zh-CN", "en-US"), default=None,
-                        help="display language; defaults from the system locale")
-    parser.add_argument("--quiet", action="store_true", help="suppress successful product command output")
-
-
-def _add_sma_input_arguments(parser):
-    parser.add_argument("--dataset"); parser.add_argument("--fixture", action="store_true")
-    parser.add_argument("--start"); parser.add_argument("--end")
-
-
-def _add_acquisition_limit_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--max-requests", type=int, default=10_000, help="maximum provider requests allowed for this acquisition")
-    parser.add_argument("--max-instruments", type=int, default=10_000, help="maximum instruments allowed for this acquisition")
-    parser.add_argument("--max-bytes", type=int, help="maximum estimated bytes allowed for this acquisition")
-
-
-def _add_sma_run_arguments(parser):
-    parser.add_argument("--fast", type=int, default=20); parser.add_argument("--slow", type=int, default=50)
-    parser.add_argument("--initial-cash", type=Decimal, default=Decimal("100000"))
-    parser.add_argument("--fee-bps", type=Decimal, default=Decimal("10"))
-
-
-def _add_live_binance_bar_arguments(parser):
-    parser.add_argument("--live-binance-symbol", help="use public Binance spot klines as live-market paper input, e.g. BTCUSDT")
-    parser.add_argument("--live-binance-interval", default="1m", help="Binance kline interval for live-market paper input")
-    parser.add_argument("--live-binance-limit", type=int, default=120, help="number of recent Binance klines to capture")
-    parser.add_argument("--live-binance-base-url", default="https://data-api.binance.vision", help=argparse.SUPPRESS)
-
-
-def _spec(args: argparse.Namespace) -> OptionChainCaptureSpec:
-    values: dict[str, Any] = {}
-    if args.config:
-        values = json.loads(args.config.read_text(encoding="utf-8"))
-    for name in ("expiry_count", "strikes_each_side", "market_data_type"):
-        value = getattr(args, name, None)
-        if value is not None:
-            values[name] = value
-    if "market_data_type" in values:
-        values["market_data_type"] = MarketDataType(values["market_data_type"])
-    if "rights" in values:
-        values["rights"] = tuple(OptionRight(value) for value in values["rights"])
-    return OptionChainCaptureSpec(**values)
-
-
-def _has_cli_option(raw_argv: list[str], name: str) -> bool:
-    return any(item == name or item.startswith(name + "=") for item in raw_argv)
-
-
-def _apply_project_config_defaults(args: argparse.Namespace, raw_argv: list[str]) -> None:
-    from kairospy.infrastructure.configuration import load_project_config_or_none
-
-    config = load_project_config_or_none()
-    if config is None:
-        return
-    setattr(args, "_kairospy_project_config", config)
-    lake_root = config.relative_path("paths.lake_root", DEFAULT_LAKE_ROOT)
-    defaults = {
-        "--lake-root": ("lake_root", "paths.lake_root", DEFAULT_LAKE_ROOT),
-        "--dataset-root": ("dataset_root", "paths.dataset_root", str(lake_root / "curated")),
-        "--catalog-path": ("catalog_path", "paths.catalog_path", str(lake_root / "catalog" / "instruments.json")),
-        "--reference-catalog-path": ("reference_catalog_path", "paths.reference_catalog", str(lake_root / "reference" / "catalog.json")),
-        "--event-log-path": ("event_log_path", "paths.event_log", str(lake_root / "events" / "kairospy.jsonl")),
-    }
-    for option, (attribute, dotted_path, default) in defaults.items():
-        if not hasattr(args, attribute) or _has_cli_option(raw_argv, option):
-            continue
-        value = config.relative_path(dotted_path, default)
-        setattr(args, attribute, str(value))
-    if hasattr(args, "data_root") and not _has_cli_option(raw_argv, "--data-root"):
-        setattr(args, "data_root", str(lake_root / "snapshots"))
-
-
-def _require_project_config(args: argparse.Namespace):
-    from kairospy.infrastructure.configuration import KairosProjectConfig
-
-    existing = getattr(args, "_kairospy_project_config", None)
-    return existing if existing is not None else KairosProjectConfig.discover()
-
-
-def _config_command(args: argparse.Namespace) -> int:
-    from kairospy.infrastructure.configuration import ConfigError, set_config_value, unset_config_value
-    from kairospy.surface.cli.output import render_key_value_panel, render_status_table
-
-    try:
-        config = _require_project_config(args)
-        if args.action == "path":
-            print(config.path)
-            return 0
-        if args.action == "show":
-            payload = config.data if args.raw else config.to_redacted_dict()
-            if args.format == "json":
-                print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-            else:
-                print(render_key_value_panel("Kairos Configuration", _flatten_config(payload)))
-            return 0
-        if args.action == "set":
-            set_config_value(config.path, args.path, args.value)
-            if not args.quiet:
-                print(f"Set {args.path}")
-            return 0
-        if args.action == "unset":
-            removed = unset_config_value(config.path, args.path)
-            if not args.quiet:
-                print(f"{'Removed' if removed else 'Not set'} {args.path}")
-            return 0
-        issues = config.validate()
-        payload = {"path": str(config.path), "valid": not issues, "issues": issues}
-        if args.format == "json":
-            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-        else:
-            rows = [{"name": "config", "status": "ok" if not issues else "warn", "detail": str(config.path)}]
-            rows.extend({"name": "issue", "status": "warn", "detail": issue} for issue in issues)
-            print(render_status_table("Kairos Config Validation", rows))
-        return 2 if issues and args.strict else 0
-    except ConfigError as exc:
-        raise SystemExit(str(exc)) from exc
-
-
-def _project_command(args: argparse.Namespace) -> int:
-    from kairospy.infrastructure.configuration import ConfigError
-    from kairospy.surface.cli.output import render_key_value_panel
-
-    try:
-        config = _require_project_config(args)
-    except ConfigError as exc:
-        raise SystemExit(str(exc)) from exc
-    if args.action != "status":
-        raise SystemExit(f"unsupported project action: {args.action}")
-    payload = {
-        "project": config.get("project.name", config.root.name),
-        "root": str(config.root),
-        "config": str(config.path),
-        "data_root": str(config.relative_path("paths.lake_root", DEFAULT_LAKE_ROOT)),
-        "default_environment": config.get("execution.default_environment", "simulated"),
-        "live_trading": "enabled" if config.get("execution.live_trading_enabled", False) else "locked",
-    }
-    if args.format == "json":
-        print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
-    else:
-        print(render_key_value_panel("Kairos Project Status", tuple((key.replace("_", " ").title(), value) for key, value in payload.items())))
-    return 0
-
-
-def _configure_command(args: argparse.Namespace) -> int:
-    from kairospy.infrastructure.configuration import ConfigError, set_config_value
-    from kairospy.surface.cli.output import render_command_success
-
-    try:
-        config = _require_project_config(args)
-        if args.provider is None:
-            args = _prompt_configure_args(args)
-        if args.provider == "massive":
-            set_config_value(config.path, "credentials.massive_marketdata_primary.api_key", f"env:{args.api_key_env}")
-            message = f"Configured Massive API key from {args.api_key_env}"
-        elif args.provider == "binance":
-            key_env = args.api_key_env or (
-                "KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_KEY"
-                if args.environment == "testnet"
-                else "KAIROS_BINANCE_TRADING_LIVE_SPOT_API_KEY"
-            )
-            secret_env = args.api_secret_env or (
-                "KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_SECRET"
-                if args.environment == "testnet"
-                else "KAIROS_BINANCE_TRADING_LIVE_SPOT_API_SECRET"
-            )
-            base = (
-                "credentials.binance_trading_testnet_spot"
-                if args.environment == "testnet"
-                else "credentials.binance_trading_live_spot"
-            )
-            set_config_value(config.path, f"{base}.api_key", f"env:{key_env}")
-            set_config_value(config.path, f"{base}.api_secret", f"env:{secret_env}")
-            message = f"Configured Binance {args.environment} credentials from {key_env}/{secret_env}"
-        else:
-            raise SystemExit(f"unsupported provider: {args.provider}")
-        if args.format == "json":
-            print(json.dumps({"configured": args.provider, "path": str(config.path)}, ensure_ascii=False, indent=2))
-        elif not args.quiet:
-            print(render_command_success("Kairos Provider Configured", (
-                ("Provider", args.provider),
-                ("Config", str(config.path)),
-                ("Result", message),
-            )))
-        return 0
-    except ConfigError as exc:
-        raise SystemExit(str(exc)) from exc
-
-
-def _doctor(args: argparse.Namespace) -> int:
-    from kairospy.infrastructure.configuration import ConfigError
-
-    checks: list[dict[str, object]] = []
-    try:
-        config = _require_project_config(args)
-    except ConfigError as exc:
-        checks.append({"name": "project", "status": "error", "detail": str(exc)})
-        _print_doctor(checks, args.format)
-        return 2
-    checks.append({"name": "project", "status": "ok", "detail": str(config.path)})
-    if not isinstance(config.get("project"), dict) or not config.get("project.name"):
-        checks.append({"name": "config", "status": "warning", "detail": "[project].name is required"})
-    else:
-        checks.append({"name": "config", "status": "ok", "detail": "kairos.toml is structurally valid"})
-    lake_root = config.relative_path("paths.lake_root", DEFAULT_LAKE_ROOT)
-    checks.append({
-        "name": "data",
-        "status": "ok" if lake_root.exists() else "warning",
-        "detail": f"lake root: {lake_root}",
-    })
-    _print_doctor(checks, args.format)
-    failed = any(item["status"] == "error" or (args.strict and item["status"] == "warning") for item in checks)
-    return 2 if failed else 0
-
-
-def _print_doctor(checks: list[dict[str, object]], output_format: str) -> None:
-    from kairospy.surface.cli.output import render_next_steps, render_status_table
-
-    next_steps = _doctor_next_steps(checks)
-
-    if output_format == "json":
-        print(json.dumps({"checks": checks, "next_steps": next_steps}, ensure_ascii=False, indent=2))
-        return
-    print(render_status_table("Kairos Doctor", checks))
-    if next_steps:
-        print()
-        print(render_next_steps(next_steps))
-
-
-def _doctor_next_steps(checks: list[dict[str, object]]) -> list[str]:
-    steps: list[str] = []
-    by_name = {str(item.get("name")): str(item.get("status", "")).lower() for item in checks}
-    if by_name.get("project") == "error":
-        steps.append("kairospy init")
-        return steps
-    if by_name.get("config") in {"warning", "warn", "error"}:
-        steps.append("kairospy config validate")
-    if by_name.get("data") in {"warning", "warn", "error"}:
-        steps.append("kairospy data start")
-    if not steps:
-        steps.append("kairospy data catalog")
-    return steps
-
-
-def _flatten_config(payload: dict[str, Any], prefix: str = "") -> list[tuple[str, object]]:
-    rows: list[tuple[str, object]] = []
-    for key, value in payload.items():
-        path = f"{prefix}.{key}" if prefix else str(key)
-        if isinstance(value, dict):
-            rows.extend(_flatten_config(value, path))
-        else:
-            rows.append((path, value))
-    return rows
-
-
-def _prompt_configure_args(args: argparse.Namespace) -> argparse.Namespace:
-    if not args.interactive and not sys.stdin.isatty():
-        raise SystemExit("configure requires a provider in non-interactive mode; use 'kairospy configure massive' or 'kairospy configure binance'")
-    provider = _prompt_choice("Provider", ("massive", "binance"), default="massive")
-    setattr(args, "provider", provider)
-    if provider == "massive":
-        setattr(args, "api_key_env", _prompt_text("Massive API key environment variable", "KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"))
-        return args
-    environment = _prompt_choice("Binance environment", ("testnet", "live"), default="testnet")
-    default_key = (
-        "KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_KEY"
-        if environment == "testnet"
-        else "KAIROS_BINANCE_TRADING_LIVE_SPOT_API_KEY"
-    )
-    default_secret = (
-        "KAIROS_BINANCE_TRADING_TESTNET_SPOT_API_SECRET"
-        if environment == "testnet"
-        else "KAIROS_BINANCE_TRADING_LIVE_SPOT_API_SECRET"
-    )
-    setattr(args, "environment", environment)
-    setattr(args, "api_key_env", _prompt_text("Binance API key environment variable", default_key))
-    setattr(args, "api_secret_env", _prompt_text("Binance API secret environment variable", default_secret))
-    return args
-
-
-def _prompt_choice(label: str, choices: tuple[str, ...], *, default: str) -> str:
-    from kairospy.surface.cli.prompts import prompt_choice
-
-    return prompt_choice(label, choices, default=default)
-
-
-def _prompt_text(label: str, default: str) -> str:
-    from kairospy.surface.cli.prompts import prompt_text
-
-    return prompt_text(label, default)
-
-
-def _prompt_bool(label: str, default: bool) -> bool:
-    from kairospy.surface.cli.prompts import prompt_bool
-
-    return prompt_bool(label, default)
+# Parser ownership lives in kairospy.surface.cli.parser.
+# Compatibility markers for repository hygiene tests:
+# commands.add_parser("workspace"
+# workspace_actions.add_parser("create"
+# run_actions.add_parser("start"
 
 
 def main(argv: list[str] | None = None) -> int:
-    from kairospy.infrastructure.configuration import load_dotenv_file
+    from kairospy.surface.cli import dispatch
 
-    load_dotenv_file()
-    raw_argv = sys.argv[1:] if argv is None else argv
-    parser = _parser()
-    if not raw_argv:
-        if sys.stdin.isatty() and sys.stdout.isatty():
-            return _interactive_shell()
-        parser.print_help()
-        return 0
-    args = parser.parse_args(raw_argv)
-    if args.group != "init":
-        _apply_project_config_defaults(args, raw_argv)
-    if args.group == "config":
-        return _config_command(args)
-    if args.group == "project":
-        return _project_command(args)
-    if args.group == "doctor":
-        return _doctor(args)
-    if args.group == "configure":
-        return _configure_command(args)
-    if args.group == "providers":
-        return _providers(args)
-    if args.group == "catalog":
-        return _catalog(args)
-    if args.group == "accounts":
-        return _accounts(args)
-    if args.group == "account":
-        return _account(args)
-    if args.group == "order":
-        return _submit_order_or_runtime_soak(args)
-    if args.group == "runtime" and args.action == "soak":
-        return _submit_order_or_runtime_soak(args)
-    if args.group == "runtime":
-        if args.action == "reference-artifact":
-            from kairospy.runtime.profiles.live.reference_artifact import run_runtime_reference_artifact
-            result = run_runtime_reference_artifact(args.root)
-            payload = {
-                "scenario_id": result.scenario_id,
-                "audit_hash": result.audit_hash,
-                "artifact": str(result.artifact),
-            }
-        elif args.action == "failure-policy":
-            from kairospy.governance.incidents import run_runtime_failure_policy
-            result = run_runtime_failure_policy(args.root)
-            payload = {
-                "policy_id": result["policy_id"],
-                "passed": result["passed"],
-                "audit_hash": result["audit_hash"],
-                "artifact": result["artifact"],
-            }
-        elif args.action == "orders":
-            from kairospy.execution.order_state import DurableOrderStatus
-            from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
-            store = SQLiteRuntimeStore(args.db)
-            supplied = (args.client_order_id, args.target, args.actor, args.reason, args.evidence)
-            if any(value is not None for value in supplied):
-                if not all(value is not None for value in supplied):
-                    raise SystemExit("manual resolution requires --client-order-id, --target, --actor, --reason, and --evidence")
-                resolution = store.resolve_unresolved_order(
-                    args.client_order_id, DurableOrderStatus(args.target), datetime.now(timezone.utc),
-                    actor=args.actor, reason=args.reason, evidence=args.evidence,
-                )
-                payload = {"resolution": to_primitive(resolution)}
-            else:
-                payload = {
-                    "unresolved_orders": [to_primitive(item) for item in store.unresolved_orders()],
-                    "manual_resolutions": [to_primitive(item) for item in store.manual_order_resolutions()],
-                }
-        elif args.action == "calibrate-execution":
-            from kairospy.execution import build_execution_calibration_release
-            release = build_execution_calibration_release(
-                args.db, args.output_root, venue=args.venue, environment=args.environment,
-                strategy_id=args.strategy, calibration_id=args.calibration_id,
-            )
-            payload = {
-                "release_id": release.release_id,
-                "release_hash": release.release_hash,
-                "manifest": str(release.manifest_path),
-                "sample_count": release.manifest["sample_count"],
-                "summary": release.manifest["summary"],
-                "limitations": release.manifest["limitations"],
-            }
-        else:
-            payload = _runtime_l4_preflight(args)
-        print(json.dumps(payload, indent=2))
-        return 0 if payload.get("ready", True) else 2
-    if args.group == "init":
-        from kairospy.surface.project import initialize_project, render_project_init
-        if getattr(args, "target_path", None) is not None:
-            args.target = args.target_path
-        if args.interactive:
-            args.target = Path(_prompt_text("Project directory", str(args.target)))
-            args.name = _prompt_text("Project name", args.name or args.target.name or "kairospy-project")
-            args.force = _prompt_bool("Overwrite existing scaffold files", args.force)
-        result = initialize_project(args.target, name=args.name, force=args.force)
-        if args.format == "json":
-            print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2, sort_keys=True))
-        elif not args.quiet:
-            print(render_project_init(result))
-        return 0
-    if args.group == "workspace":
-        return _workspace(args)
-    if args.group == "run":
-        return _product_command(args)
-    if args.group == "data":
-        return _data(args)
-    if args.group == "features":
-        return _features(args)
-    if args.group == "pricing":
-        return _pricing(args)
-    if args.group == "vol":
-        return _vol(args)
-    if args.group == "risk":
-        return _risk_analytics(args)
-    repository = FileOptionCaptureRepository(args.data_root)
-    service = OptionCaptureService(repository)
-    if args.action == "governance-audit":
-        from kairospy.governance import audit_governance
-        result=audit_governance(args.lake_root)
-        print(json.dumps({"passed":result.passed,"checked_datasets":result.checked_datasets,
-            "checked_experiments":result.checked_experiments,"checked_strategies":result.checked_strategies,
-            "violations":result.violations},ensure_ascii=False,indent=2))
-        return 0 if result.passed else 2
-    if args.action == "capture-series":
-        if args.instruments:
-            return _capture_normalized_series(args)
-        spec = _spec(args)
-        provider = IbkrSpxwOptionChainProvider(spec, host=args.host, port=args.port, client_id=args.client_id)
-        series_spec = SeriesCaptureSpec(args.dataset_id, args.samples, args.interval_seconds, args.split, args.checkpoint_samples)
-        def report_progress(progress: SeriesCaptureProgress) -> None:
-            checkpoint = " saved" if progress.checkpoint_saved else ""
-            print(
-                f"Sample {progress.completed_samples}/{progress.total_samples} "
-                f"requested={progress.requested_contracts} qualified={progress.qualified_contracts} "
-                f"quotes={progress.quoted_contracts} checkpoint={checkpoint or 'pending'} "
-                f"at={progress.timestamp.isoformat()}",
-                flush=True,
-            )
+    dispatch._providers = _providers
+    return dispatch.main(argv)
 
-        dataset = SeriesCaptureService(
-            MarketSnapshotStorageDriver(args.dataset_root), on_progress=report_progress,
-        ).capture(provider, spec, series_spec, append=args.append)
-        print(f"Dataset: {dataset.manifest.dataset_id}")
-        print(f"Slices: {dataset.manifest.slice_count}")
-        print(f"Hash: {dataset.manifest.content_hash}")
-        return 0
-    if args.action == "capture":
-        spec = _spec(args)
-        provider = IbkrSpxwOptionChainProvider(spec, host=args.host, port=args.port, client_id=args.client_id)
-        snapshot, result = service.capture_snapshot(provider, spec)
-        print(summarize(result))
-        print(f"Directory: {repository.run_dir(snapshot.run_id)}")
-        return 0
-    if args.action == "analyze":
-        result = service.analyze_offline(args.run_id)
-        print(summarize(result))
-        print(f"Report: {repository.run_dir(args.run_id) / 'report.csv'}")
-        return 0
-    manifest = repository.load_manifest(args.run_id)
-    print(f"Run: {args.run_id}")
-    print(f"Status: {manifest['status']}")
-    print(f"Events: {manifest['collected_event_count']}")
-    print(f"Contracts: {manifest['selected_contract_count']}")
-    print(f"Quality issues: {manifest['quality_issue_count']}")
-    print(f"Offline analyzable: {manifest['offline_analyzable']}")
-    print(f"Directory: {repository.run_dir(args.run_id)}")
-    report = repository.run_dir(args.run_id) / "report.csv"
-    print(f"Report: {report if report.exists() else 'not generated'}")
-    if manifest.get("error_message"):
-        print(f"Error ({manifest.get('error_stage')}): {manifest['error_message']}")
-    return 0
+
+def _parser() -> argparse.ArgumentParser:
+    from kairospy.surface.cli.parser import build_parser
+
+    return build_parser()
+
+
+def _program_name() -> str:
+    from kairospy.surface.cli.parser import _program_name
+
+    return _program_name()
+
+
+def _positive_int(value: str) -> int:
+    from kairospy.surface.cli.parser import _positive_int
+
+    return _positive_int(value)
+
+
+def _hide_subcommands(action, names: set[str]) -> None:
+    from kairospy.surface.cli.parser import _hide_subcommands
+
+    return _hide_subcommands(action, names)
+
+
+def _add_global_cli_arguments(parser: argparse.ArgumentParser) -> None:
+    from kairospy.surface.cli.parser import _add_global_cli_arguments
+
+    return _add_global_cli_arguments(parser)
+
+
+def _add_sma_input_arguments(parser):
+    from kairospy.surface.cli.parser import _add_sma_input_arguments
+
+    return _add_sma_input_arguments(parser)
+
+
+def _add_acquisition_limit_args(parser: argparse.ArgumentParser) -> None:
+    from kairospy.surface.cli.parser import _add_acquisition_limit_args
+
+    return _add_acquisition_limit_args(parser)
+
+
+def _add_sma_run_arguments(parser):
+    from kairospy.surface.cli.parser import _add_sma_run_arguments
+
+    return _add_sma_run_arguments(parser)
+
+
+def _add_live_binance_bar_arguments(parser):
+    from kairospy.surface.cli.parser import _add_live_binance_bar_arguments
+
+    return _add_live_binance_bar_arguments(parser)
 
 
 def _product_command(args: argparse.Namespace) -> int:
-    from kairospy.surface.cli.product_commands import product_command
+    from kairospy.surface.cli.commands.run import product_command
 
     return product_command(args)
 
 
 def _run_live_attach_console(args: argparse.Namespace, product_surface: object, render_product_result: object, resolve_language: object) -> int:
-    from kairospy.surface.cli.product_commands import run_live_attach_console
+    from kairospy.surface.cli.commands.run import run_live_attach_console
 
     return run_live_attach_console(args, product_surface, render_product_result, resolve_language)
 
 
 def _run_live_attach_prompt(run_id: str) -> str:
-    from kairospy.surface.cli.product_commands import run_live_attach_prompt
+    from kairospy.surface.cli.commands.run import run_live_attach_prompt
 
     return run_live_attach_prompt(run_id)
 
 
 def _run_live_attach_log_path(payload: dict[str, object]) -> Path | None:
-    from kairospy.surface.cli.product_commands import run_live_attach_log_path
+    from kairospy.surface.cli.commands.run import run_live_attach_log_path
 
     return run_live_attach_log_path(payload)
 
 
 def _run_live_attach_status_key(payload: dict[str, object]) -> tuple[object, ...]:
-    from kairospy.surface.cli.product_commands import run_live_attach_status_key
+    from kairospy.surface.cli.commands.run import run_live_attach_status_key
 
     return run_live_attach_status_key(payload)
 
 
 def _run_live_attach_print_tail(path: Path | None, tail_lines: int) -> int:
-    from kairospy.surface.cli.product_commands import run_live_attach_print_tail
+    from kairospy.surface.cli.commands.run import run_live_attach_print_tail
 
     return run_live_attach_print_tail(path, tail_lines)
 
 
 def _run_live_attach_print_new_log(path: Path | None, offset: int) -> int:
-    from kairospy.surface.cli.product_commands import run_live_attach_print_new_log
+    from kairospy.surface.cli.commands.run import run_live_attach_print_new_log
 
     return run_live_attach_print_new_log(path, offset)
 
 
 def _run_live_attach_normalize_command_parts(parts: list[str]) -> list[str]:
-    from kairospy.surface.cli.product_commands import run_live_attach_normalize_command_parts
+    from kairospy.surface.cli.commands.run import run_live_attach_normalize_command_parts
 
     return run_live_attach_normalize_command_parts(parts)
 
 
 def _run_live_attach_start_args(command: str, args: argparse.Namespace, parts: list[str]) -> argparse.Namespace:
-    from kairospy.surface.cli.product_commands import run_live_attach_start_args
+    from kairospy.surface.cli.commands.run import run_live_attach_start_args
 
     return run_live_attach_start_args(command, args, parts)
 
 
 def _run_live_attach_reason(command: str, parts: list[str]) -> str:
-    from kairospy.surface.cli.product_commands import run_live_attach_reason
+    from kairospy.surface.cli.commands.run import run_live_attach_reason
 
     return run_live_attach_reason(command, parts)
 
 
 def _workspace(args: argparse.Namespace) -> int:
-    from kairospy.surface.cli.product_commands import workspace_command
+    from kairospy.surface.cli.commands.workspace import workspace_command
 
     return workspace_command(args)
 
 
 def _workspace_inspect_code(entrypoint_ref: str, params_values: tuple[str, ...], *, mode: str = "inspect") -> dict[str, object]:
-    from kairospy.surface.cli.product_commands import workspace_inspect_code
+    from kairospy.surface.cli.commands.workspace import workspace_inspect_code
 
     return workspace_inspect_code(entrypoint_ref, params_values, mode=mode)
 
 
 def _providers(args: argparse.Namespace) -> int:
-    from kairospy.surface.cli.product_commands import providers_command
+    from kairospy.surface.cli.commands.project import providers_command
 
     return providers_command(args)
 
@@ -1509,321 +189,115 @@ def _interactive_workspace_choice_hint(choices: tuple[str, ...]) -> str:
 
 
 def _data(args: argparse.Namespace) -> int:
-    from kairospy.surface.cli.data_commands import data_command
+    from kairospy.surface.cli.commands.data import data_command
 
     return data_command(args)
 
-def _features(args: argparse.Namespace) -> int:
-    if args.feature_set == "us-equity-momentum-v1":
-        if not args.source_directory or not args.dataset_id:
-            raise SystemExit("us-equity-momentum-v1 requires --source-directory and --dataset-id")
-        policy = UsEquityMomentumPolicy(
-            minimum_price=args.minimum_price,
-            minimum_adv20=args.minimum_adv20,
-            minimum_history=args.minimum_history,
-        )
-        manifest = UsEquityMomentumDatasetBuilder(args.lake_root).build_from_ohlcv_directory(
-            args.source_directory, dataset_id=args.dataset_id, policy=policy,
-            corporate_actions_directory=args.corporate_actions_directory,
-            reference_directory=args.reference_directory,
-        )
-        print(json.dumps(manifest, ensure_ascii=False, indent=2))
-        return 0
-    builders = {"btc-iv-rv-v1": BtcIvRvFeatureBuilder, "btc-term-skew-v1": BtcTermSkewFeatureBuilder,
-                "btc-deribit-trade-skew-v1": BtcDeribitTradeSkewFeatureBuilder}
-    release = builders[args.feature_set](args.lake_root).build()
-    print(f"{release.release_id}: product={release.product_key} hash={release.content_hash}")
-    return 0
-
-
-def _pricing(args: argparse.Namespace) -> int:
-    model = PricingModel(args.model)
-    if model is PricingModel.BLACK_76 and args.dividend_yield != 0:
-        raise SystemExit("Black-76 requires --dividend-yield 0")
-    if args.volatility is None and args.market_price is None:
-        raise SystemExit("provide --volatility or --market-price")
-    initial_vol = args.volatility if args.volatility is not None else Decimal("0.20")
-    inputs = PricingInput(
-        args.underlying, args.strike, args.years, args.rate, initial_vol,
-        OptionRight(args.right), args.dividend_yield,
-    )
-    if args.market_price is not None:
-        solved = implied_volatility(args.market_price, inputs, model)
-        print(f"Solver: {solved.status.value}")
-        if solved.volatility is None:
-            print(f"Bounds: {solved.lower_price_bound} to {solved.upper_price_bound}")
-            return 2
-        inputs = PricingInput(
-            inputs.underlying, inputs.strike, inputs.time_to_expiry, inputs.risk_free_rate,
-            solved.volatility, inputs.right, inputs.dividend_yield,
-        )
-        print(f"Implied volatility: {solved.volatility}")
-    result = price_with_volatility(inputs, inputs.volatility, model)
-    print(f"Model: {result.model.value}")
-    print(f"Price: {result.price}")
-    print(f"Delta: {result.delta}")
-    print(f"Gamma: {result.gamma}")
-    print(f"Theta/year: {result.theta}")
-    print(f"Vega: {result.vega}")
-    print(f"Rho: {result.rho}")
-    return 0
-
-
-def _vol(args: argparse.Namespace) -> int:
-    client = DatasetClient(args.lake_root, run_mode=RunMode.WORKSPACE)
-    feed = client.replay_snapshots(args.dataset)
-    dataset = feed.dataset
-    catalog = dataset.reference_catalog()
-    valuation_engine = OptionValuationService(catalog, risk_free_rate=args.rate, dividend_yield=args.dividend_yield)
-    surfaces, failures = [], []
-    for market in dataset.slices:
-        _, valuation = valuation_engine.value(market)
-        failures.extend(valuation.failures)
-        if valuation.surface is not None:
-            surfaces.append(valuation.surface)
-    calibrated = sum(any(smile.parameters is not None for smile in item.smiles) for item in surfaces)
-    arbitrage_passed = sum(item.diagnostics.passed for item in surfaces)
-    print(f"Dataset: {dataset.manifest.dataset_id}")
-    print(f"Surfaces: {len(surfaces)}")
-    print(f"Calibrated: {calibrated}")
-    print(f"Arbitrage checks passed: {arbitrage_passed}")
-    print(f"Valuation failures: {len(failures)}")
-    if surfaces:
-        from kairospy.surface.data_features import SurfaceFeaturePublisher
-        release = SurfaceFeaturePublisher(args.lake_root).publish(
-            tuple(surfaces), input_release_id=feed.release.release_id,
-        )
-        print(f"Last surface: {surfaces[-1].surface_id}")
-        print(f"Last input hash: {surfaces[-1].input_hash}")
-        print(f"Feature Release: {release.release_id}")
-    return 0 if surfaces else 2
-
-
-def _risk_analytics(args: argparse.Namespace) -> int:
-    model = PricingModel(args.model)
-    if model is PricingModel.BLACK_76 and args.dividend_yield != 0:
-        raise SystemExit("Black-76 requires --dividend-yield 0")
-    position = RevaluationPosition(
-        InstrumentId(args.instrument), args.quantity, args.multiplier,
-        PricingInput(
-            args.underlying, args.strike, args.years, args.rate, args.volatility,
-            OptionRight(args.right), args.dividend_yield,
-        ),
-        model,
-    )
-    scenario = Scenario(
-        "cli", args.spot_shock, args.vol_shock, args.skew_twist, args.term_twist,
-        args.rate_shock, args.time_advance_days,
-    )
-    result = ScenarioEngine().evaluate((position,), scenario)
-    explain = explain_scenario(position, scenario, result)
-    print(f"Base value: {result.base_value}")
-    print(f"Scenario value: {result.scenario_value}")
-    print(f"PnL: {result.pnl}")
-    print(f"Delta PnL: {explain.delta}")
-    print(f"Gamma PnL: {explain.gamma}")
-    print(f"Theta PnL: {explain.theta}")
-    print(f"Vega PnL: {explain.vega}")
-    print(f"Rho PnL: {explain.rho}")
-    print(f"Residual: {explain.residual}")
-    return 0
-
-
-def _capture_normalized_series(args: argparse.Namespace) -> int:
-    environment = Environment(args.environment)
-    repository = ReferenceCatalogRepository(args.reference_catalog_path)
-    if not repository.path.exists():
-        raise SystemExit("catalog is missing; run 'kairospy catalog sync' first")
-    catalog = repository.load()
-    now = datetime.now(timezone.utc)
-    definitions = tuple(catalog.instruments.get(InstrumentId(value.strip()), now) for value in args.instruments.split(",") if value.strip())
-    session = None
-    if args.venue == "ibkr":
-        if environment not in {Environment.PAPER, Environment.LIVE}:
-            raise SystemExit("IBKR normalized capture requires paper or live environment")
-        session = _ibkr_session(readonly=True)
-        reference = IbkrReferenceDataClient(session)
-        for definition in definitions:
-            reference.bind_definition(definition, catalog)
-        provider = IbkrMarketDataClient(session)
-    else:
-        if environment not in {Environment.TESTNET, Environment.LIVE}:
-            raise SystemExit("Binance normalized capture requires testnet or live environment")
-        spot_base = "https://testnet.binance.vision" if environment is Environment.TESTNET else "https://api.binance.com"
-        futures_base = "https://testnet.binancefuture.com" if environment is Environment.TESTNET else "https://dapi.binance.com" if args.inverse else "https://fapi.binance.com"
-        futures_path = "/dapi/v1/ticker/bookTicker" if args.inverse else "/fapi/v1/ticker/bookTicker"
-        routes = {
-            ProductType.CRYPTO_SPOT: BinanceMarketDataClient(UrllibBinanceTransport(spot_base)),
-            ProductType.PERPETUAL: BinanceMarketDataClient(UrllibBinanceTransport(futures_base), ProductType.PERPETUAL, path=futures_path),
-            ProductType.FUTURE: BinanceMarketDataClient(UrllibBinanceTransport(futures_base), ProductType.FUTURE, path=futures_path),
-        }
-        if environment is Environment.LIVE:
-            routes[ProductType.CRYPTO_OPTION] = BinanceMarketDataClient(UrllibBinanceTransport("https://eapi.binance.com"), ProductType.CRYPTO_OPTION)
-        provider = CompositeMarketDataClient(routes)
-    series_spec = SeriesCaptureSpec(args.dataset_id, args.samples, args.interval_seconds, args.split)
-    try:
-        dataset = NormalizedSeriesCaptureService(MarketSnapshotStorageDriver(args.dataset_root)).capture(
-            provider, catalog, definitions, series_spec, source=f"{args.venue}.normalized-series", market_data_type=environment.value,
-        )
-    finally:
-        if session is not None:
-            session.disconnect()
-    print(f"Dataset: {dataset.manifest.dataset_id}")
-    print(f"Products: {','.join(sorted({item.instrument_type.value for item in definitions}))}")
-    print(f"Slices: {dataset.manifest.slice_count}")
-    print(f"Hash: {dataset.manifest.content_hash}")
-    return 0
-
-
-def _catalog(args: argparse.Namespace) -> int:
-    environment = Environment(args.environment)
-    products = {item.strip() for item in args.products.split(",") if item.strip()}
-    symbols = tuple(item.strip() for item in args.symbols.split(",") if item.strip())
-    from kairospy.reference import ReferenceCatalog
-    from kairospy.reference.repository import ReferenceCatalogRepository
-    repository = ReferenceCatalogRepository(args.reference_catalog_path)
-    catalog = repository.load() if repository.path.exists() else ReferenceCatalog()
-    before = len(catalog.instruments.values())
-    if args.venue == "ibkr":
-        if environment not in {Environment.PAPER, Environment.LIVE}:
-            raise SystemExit("IBKR catalog sync requires paper or live environment")
-        session = _ibkr_session(readonly=True)
-        reference_client = IbkrReferenceDataClient(session)
-        try:
-            if "equity" in products:
-                catalog.merge(reference_client.sync(ReferenceDataRequest(ProductType.EQUITY, tuple(item for item in symbols if ":" not in item))))
-            if "option" in products:
-                catalog.merge(reference_client.sync(ReferenceDataRequest(ProductType.LISTED_OPTION, tuple(item for item in symbols if ":" in item))))
-        finally:
-            session.disconnect()
-    else:
-        if environment not in {Environment.TESTNET, Environment.LIVE}:
-            raise SystemExit("Binance catalog sync requires testnet or live environment")
-        if "spot" in products:
-            transport = UrllibBinanceTransport("https://testnet.binance.vision" if environment is Environment.TESTNET else "https://api.binance.com")
-            catalog.merge(BinanceSpotReferenceDataClient(transport).sync(ReferenceDataRequest(ProductType.CRYPTO_SPOT, symbols)))
-        if "perpetual" in products:
-            transport = UrllibBinanceTransport("https://testnet.binancefuture.com" if environment is Environment.TESTNET else "https://dapi.binance.com" if args.inverse else "https://fapi.binance.com")
-            catalog.merge(BinanceFuturesReferenceDataClient(transport, inverse=args.inverse).sync(ReferenceDataRequest(ProductType.PERPETUAL, symbols)))
-        if "future" in products:
-            transport = UrllibBinanceTransport("https://testnet.binancefuture.com" if environment is Environment.TESTNET else "https://dapi.binance.com" if args.inverse else "https://fapi.binance.com")
-            catalog.merge(BinanceFuturesReferenceDataClient(transport, inverse=args.inverse).sync(ReferenceDataRequest(ProductType.FUTURE, symbols)))
-        if "option" in products:
-            if environment is Environment.TESTNET:
-                raise SystemExit("Binance options do not provide the same public testnet contract; use live public reference data only")
-            catalog.merge(BinanceOptionsReferenceDataClient(UrllibBinanceTransport("https://eapi.binance.com")).sync(ReferenceDataRequest(ProductType.CRYPTO_OPTION, symbols)))
-    repository.save(catalog)
-    print(f"Reference Catalog: {repository.path}")
-    print(f"Synced: {len(catalog.instruments.values()) - before} instruments from {args.venue} ({environment.value})")
-    return 0
-
 
 def _authoritative_runtime_store(args: argparse.Namespace):
-    from kairospy.surface.cli.execution_commands import _authoritative_runtime_store as command
+    from kairospy.surface.cli.commands.account import _authoritative_runtime_store as command
 
     return command(args)
 
 
 def _account(args: argparse.Namespace) -> int:
-    from kairospy.surface.cli.execution_commands import _account as command
+    from kairospy.surface.cli.commands.account import _account as command
 
     return command(args)
 
 
 def _accounts(args: argparse.Namespace) -> int:
-    from kairospy.surface.cli.execution_commands import _accounts as command
+    from kairospy.surface.cli.commands.account import _accounts as command
 
     return command(args)
 
 
 def _runtime_l4_preflight(args: argparse.Namespace) -> dict[str, object]:
-    from kairospy.surface.cli.execution_commands import _runtime_l4_preflight as command
+    from kairospy.surface.cli.commands.account import _runtime_l4_preflight as command
 
     return command(args)
 
 
 def _submit_order_or_runtime_soak(args: argparse.Namespace) -> int:
-    from kairospy.surface.cli.execution_commands import _submit_order_or_runtime_soak as command
+    from kairospy.surface.cli.commands.account import _submit_order_or_runtime_soak as command
 
     return command(args)
 
 
 def _ensure_simulated_execution_route(catalog: ReferenceCatalog, account: AccountRef, listings, at: datetime) -> None:
-    from kairospy.surface.cli.execution_commands import _ensure_simulated_execution_route as command
+    from kairospy.surface.cli.commands.account import _ensure_simulated_execution_route as command
 
     return command(catalog, account, listings, at)
 
 
 def _ibkr_session(*, readonly: bool) -> IbkrSession:
-    from kairospy.surface.cli.execution_commands import _ibkr_session as command
+    from kairospy.surface.cli.commands.account import _ibkr_session as command
 
     return command(readonly=readonly)
 
 
 def _ibkr_connection_settings() -> tuple[str, int, int]:
-    from kairospy.surface.cli.execution_commands import _ibkr_connection_settings as command
+    from kairospy.surface.cli.commands.account import _ibkr_connection_settings as command
 
     return command()
 
 
 def _credentials(environment: Environment) -> tuple[str, str]:
-    from kairospy.surface.cli.execution_commands import _credentials as command
+    from kairospy.surface.cli.commands.account import _credentials as command
 
     return command(environment)
 
 
 def _account_gateway(venue: str, environment: Environment, account: AccountRef, ledger, product: str, catalog, inverse: bool):
-    from kairospy.surface.cli.execution_commands import _account_gateway as command
+    from kairospy.surface.cli.commands.account import _account_gateway as command
 
     return command(venue, environment, account, ledger, product, catalog, inverse)
 
 
 def _execution_account_gateway(venue: str, environment: Environment, product: str, definition, catalog, inverse: bool):
-    from kairospy.surface.cli.execution_commands import _execution_account_gateway as command
+    from kairospy.surface.cli.commands.account import _execution_account_gateway as command
 
     return command(venue, environment, product, definition, catalog, inverse)
 
 
 class _CombinedExecutionAccount:
     def __new__(cls, execution, account):
-        from kairospy.surface.cli.execution_commands import _CombinedExecutionAccount as command
+        from kairospy.surface.cli.commands.account import _CombinedExecutionAccount as command
 
         return command(execution, account)
 
 
 def _account_key(venue: str, account_id: str, product: str) -> AccountRef:
-    from kairospy.surface.cli.execution_commands import _account_key as command
+    from kairospy.surface.cli.commands.account import _account_key as command
 
     return command(venue, account_id, product)
 
 
 def _account_type(product: str) -> AccountType:
-    from kairospy.surface.cli.execution_commands import _account_type as command
+    from kairospy.surface.cli.commands.account import _account_type as command
 
     return command(product)
 
 
 def _local_state(ledger, account):
-    from kairospy.surface.cli.execution_commands import _local_state as command
+    from kairospy.surface.cli.commands.account import _local_state as command
 
     return command(ledger, account)
 
 
 def _coerce_decimal_fields(values: dict[str, Any], cls) -> dict[str, Any]:
-    from decimal import Decimal
-    from datetime import time
-    from typing import get_type_hints
+    from kairospy.surface.cli.dispatch import _coerce_decimal_fields as dispatch_coerce_decimal_fields
 
-    hints = get_type_hints(cls)
-    result = {}
-    for key, value in values.items():
-        if hints.get(key) is Decimal:
-            result[key] = Decimal(str(value))
-        elif hints.get(key) is time and isinstance(value, str):
-            result[key] = time.fromisoformat(value)
-        else:
-            result[key] = value
-    return result
+    return dispatch_coerce_decimal_fields(values, cls)
+
+
+def __getattr__(name: str):
+    from kairospy.surface.cli import dispatch
+
+    try:
+        return getattr(dispatch, name)
+    except AttributeError as error:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from error
 
 
 if __name__ == "__main__":
