@@ -11,6 +11,7 @@ class WorkspaceGraphNode:
     kind: str
     source: str | None = None
     dataset: str | None = None
+    stream: str | None = None
     view: str = "both"
     params: dict[str, Any] = field(default_factory=dict)
 
@@ -101,19 +102,27 @@ class WorkspaceBuildContext:
         self,
         *,
         name: str,
-        dataset: str,
+        dataset: str | None = None,
+        stream: str | None = None,
         view: str = "both",
         instruments: Iterable[str] = (),
         fields: Iterable[str] = (),
         freshness_seconds: float | None = None,
         **metadata: Any,
     ) -> WorkspaceGraphNode:
+        if stream is None and dataset is None:
+            raise ValueError("workspace attachment requires a Data Stream or Dataset")
+        stream_id = str(stream or dataset)
+        dataset_id = str(dataset or stream_id)
+        template = "{space}" in stream_id
         node = WorkspaceGraphNode(
             name=name,
             kind="attachment",
-            dataset=dataset,
+            dataset=dataset_id,
+            stream=stream_id,
             view=view,
             params={
+                **({"template": True} if template else {}),
                 **({"instruments": list(instruments)} if tuple(instruments) else {}),
                 **({"fields": list(fields)} if tuple(fields) else {}),
                 **({"freshness_seconds": freshness_seconds} if freshness_seconds is not None else {}),
@@ -167,6 +176,7 @@ class WorkspaceAttachmentRegistry:
                 name=binding_name,
                 kind="attachment",
                 dataset=binding.dataset,
+                stream=getattr(binding, "stream", None) or binding.dataset,
                 view=view,
                 params=dict(binding.metadata),
             ))
@@ -244,6 +254,7 @@ class WorkspaceAttachmentUse:
             kind=kind,
             source=f"attachment:{self.attachment_name}",
             dataset=attachment.dataset,
+            stream=attachment.stream,
             view=view or attachment.view,
             params=params,
         )
@@ -317,6 +328,7 @@ class WorkspaceFeatureBuilder:
             kind=f"feature:{kind}",
             source=source.name,
             dataset=source.dataset,
+            stream=source.stream,
             view=source.view,
             params={"lookback": lookback, **params},
         )

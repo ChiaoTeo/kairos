@@ -282,6 +282,29 @@ class LiveRunDaemon:
         self._log("daemon_running", snapshot.manifest())
         return snapshot
 
+    def reconcile_feed_services(self, reconciliation: dict[str, object]) -> dict[str, object]:
+        runtime = self._runtime
+        if runtime is None or not runtime.started:
+            return {
+                "status": "not_running",
+                "reason": "live run daemon is not running",
+                "services": [item.name for item in self.status().services],
+            }
+        targets = reconciliation.get("targets") if isinstance(reconciliation, dict) else ()
+        specs = tuple(_dynamic_feed_service_spec(item) for item in targets if _dynamic_feed_target_active(item))
+        snapshots = runtime.supervisor.reconcile_now((*self.managed_services, *specs))
+        at = self.clock.now()
+        payload = {
+            "run_id": self.run_id,
+            "status": "applied",
+            "service_names": [item.name for item in snapshots],
+            "dynamic_feed_services": [spec.name for spec in specs],
+            "updated_at": at.isoformat(),
+        }
+        self.application.store.set_runtime_state(f"runtime_feed_services:{self.run_id}:last", payload, at)
+        self._log("daemon_feed_services_reconciled", payload)
+        return payload
+
     def claim_stop_command(self) -> OperatorCommandRecord | None:
         return self.claim_operator_command(OperatorCommandType.STOP)
 
@@ -571,6 +594,27 @@ def _order_recovery_complete(value: object | None) -> bool | None:
     if value is None:
         return None
     return bool(getattr(value, "complete", False))
+
+
+def _dynamic_feed_target_active(value: object) -> bool:
+    return isinstance(value, dict) and str(value.get("action") or "") in {"start", "keep"} and bool(value.get("stream"))
+
+
+def _dynamic_feed_service_spec(target: object) -> ManagedServiceSpec:
+    assert isinstance(target, dict)
+    name = "feed:dynamic:" + _service_name_segment(str(target.get("stream") or "unknown"))
+
+    async def run() -> None:
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            raise
+
+    return ManagedServiceSpec(name, run, restart_limit=0, allow_completion=False)
+
+
+def _service_name_segment(value: str) -> str:
+    return "".join(character if character.isalnum() or character in {"-", "_", "."} else "_" for character in value)
 
 
 def _hash(value: object) -> str:

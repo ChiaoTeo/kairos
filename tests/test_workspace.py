@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 from kairospy.data.contracts import DataSetContractArtifact, LiveViewManifest, stable_artifact_hash
 from kairospy.data.quality.freshness import live_view_manifest_path, write_live_view_manifest
-from kairospy.data.products import BTC_SPOT_DAILY
+from kairospy.integrations.data_products import BTC_SPOT_DAILY
 from kairospy.identity import AssetId, InstrumentId, VenueId
 from kairospy import Workspace, initialize_project
 from kairospy.reference import ProductType, ReferenceCatalog
@@ -162,6 +162,131 @@ class WorkspaceTests(unittest.TestCase):
             self.assertEqual(payload["attachment"]["name"], "bars")
             self.assertEqual(payload["attachment"]["dataset"], "bars.us.equity.1d")
             self.assertEqual(payload["attachment"]["metadata"]["view"], "both")
+
+    def test_workspace_cli_adds_stream_with_dataset_compatibility(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Workspace Stream")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+
+            subprocess.run(
+                [sys.executable, "-m", "kairospy", "--format", "json", "workspace", "create", "alpha"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            attached = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "kairospy",
+                    "--format",
+                    "json",
+                    "workspace",
+                    "add",
+                    "alpha",
+                    "binance_swap_btcusdt.orderbook",
+                    "--view",
+                    "live",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            payload = json.loads(attached.stdout)
+            self.assertEqual(payload["attachment"]["name"], "binance_swap_btcusdt.orderbook")
+            self.assertEqual(payload["attachment"]["stream"], "binance_swap_btcusdt.orderbook")
+            self.assertEqual(payload["attachment"]["dataset"], "market.orderbook.crypto.binance.usdm-perpetual.btc-usdt")
+            self.assertEqual(payload["attachment"]["metadata"]["view"], "live")
+
+            aliases = json.loads(
+                (root / ".kairos" / "workspace" / "alpha" / "data" / "aliases.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                aliases["bindings"]["binance_swap_btcusdt.orderbook"]["stream"],
+                "binance_swap_btcusdt.orderbook",
+            )
+
+    def test_workspace_cli_adds_stream_template_without_product_resolution(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Workspace Template")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = os.getcwd() + os.pathsep + env.get("PYTHONPATH", "")
+
+            attached = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "kairospy",
+                    "--format",
+                    "json",
+                    "workspace",
+                    "add",
+                    "alpha",
+                    "{space}.orderbook",
+                    "--name",
+                    "book_template",
+                    "--view",
+                    "live",
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+
+            payload = json.loads(attached.stdout)
+            self.assertEqual(payload["attachment"]["stream"], "{space}.orderbook")
+            self.assertEqual(payload["attachment"]["dataset"], "{space}.orderbook")
+            self.assertTrue(payload["attachment"]["metadata"]["template"])
+
+    def test_live_market_binding_auto_configures_default_view_from_workspace_stream(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Workspace Stream Live")
+            workspace = Workspace.open_or_create("alpha", start=root)
+            workspace.attach(
+                "ticks",
+                dataset="market.orderbook.crypto.binance.usdm-perpetual.btc-usdt",
+                stream="binance_swap_btcusdt.orderbook",
+                view="live",
+            )
+            run_config_path = _write_run_config(
+                root,
+                "stream-live.toml",
+                mode="live",
+                strategy="live_strategy:Strategy",
+                bind_provider=True,
+                market="ticks",
+            )
+
+            from kairospy.data.quality.freshness import load_live_view_manifest
+            from kairospy.infrastructure.configuration import KairosProjectConfig
+            from kairospy.runtime.run_config import load_run_config
+            from kairospy.surface.product import _live_market_binding
+
+            config = KairosProjectConfig.load(root / "kairos.toml")
+            binding = _live_market_binding(config, load_run_config(run_config_path), workspace.snapshot())
+
+            self.assertEqual(binding["provider"], "binance")
+            self.assertEqual(binding["name"], "ticks")
+            self.assertEqual(binding["stream"], "binance_swap_btcusdt.orderbook")
+            self.assertEqual(binding["live_view_id"], "default")
+            self.assertEqual(binding["dataset"], "market.orderbook.crypto.binance.usdm.btc-usdt")
+            self.assertEqual(binding["source_plan"]["product_key"], "binance.orderbook")
+            self.assertTrue(binding["auto_configured"])
+            manifest_path = live_view_manifest_path(root / ".kairos" / "data", binding["dataset"], "default")
+            self.assertTrue(manifest_path.exists())
+            manifest = load_live_view_manifest(manifest_path)
+            self.assertEqual(manifest.source["provider"], "binance")
+            self.assertEqual(manifest.live_data_plane["stream"], "btcusdt@depth")
 
     def test_run_start_combines_workspace_code_and_standard_strategy(self) -> None:
         with TemporaryDirectory() as directory:

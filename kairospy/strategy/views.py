@@ -76,6 +76,13 @@ class MarketView(_ViewContract):
     snapshot_span_seconds: Decimal = Decimal("0")
     available_time: datetime | None = None
     freshness_seconds: Decimal | None = None
+    subscription_set: dict[str, Any] | None = None
+    workspace_session: dict[str, Any] | None = None
+    subscription_changed_event: dict[str, Any] | None = None
+    subscription_removal_safety: dict[str, Any] | None = None
+    runtime_feed_reconciliation: dict[str, Any] | None = None
+    runtime_feed_services: dict[str, Any] | None = None
+    market_freshness: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "top_of_book", tuple(_top_of_book_view(item) for item in self.top_of_book))
@@ -105,6 +112,13 @@ class MarketView(_ViewContract):
             getattr(snapshot, "snapshot_span_seconds", Decimal("0")),
             getattr(snapshot, "available_time", getattr(snapshot, "timestamp")),
             getattr(snapshot, "freshness_seconds", None),
+            _optional_dict(getattr(snapshot, "subscription_set", None)),
+            _optional_dict(getattr(snapshot, "workspace_session", None)),
+            _optional_dict(getattr(snapshot, "subscription_changed_event", None)),
+            _optional_dict(getattr(snapshot, "subscription_removal_safety", None)),
+            _optional_dict(getattr(snapshot, "runtime_feed_reconciliation", None)),
+            _optional_dict(getattr(snapshot, "runtime_feed_services", None)),
+            _optional_dict(getattr(snapshot, "market_freshness", None)),
         )
 
 
@@ -652,6 +666,13 @@ MARKET_VIEW_SCHEMA = ViewSchema(
         ViewFieldSchema("snapshot_span_seconds", "快照覆盖窗口", "event window", "market projection window"),
         ViewFieldSchema("available_time", "策略实际可见时间", "available_time", "data binding availability"),
         ViewFieldSchema("freshness_seconds", "视图新鲜度", "receive_time - event_time", "freshness evidence"),
+        ViewFieldSchema("subscription_set", "当前运行期订阅集合", "runtime state time", "Run Workspace Session subscription set"),
+        ViewFieldSchema("workspace_session", "当前 Run Workspace Session", "runtime state time", "runtime subscription manager state"),
+        ViewFieldSchema("subscription_changed_event", "最近一次订阅变更事件", "runtime event time", "subscription changed runtime event"),
+        ViewFieldSchema("subscription_removal_safety", "最近一次移除订阅安全过渡", "runtime event time", "subscription removal safety state"),
+        ViewFieldSchema("runtime_feed_reconciliation", "最近一次 feed 目标调和结果", "runtime event time", "runtime feed manager target state"),
+        ViewFieldSchema("runtime_feed_services", "当前运行期 feed service 状态", "runtime state time", "managed feed service state"),
+        ViewFieldSchema("market_freshness", "当前行情新鲜度监控状态", "runtime state time", "market freshness runtime state"),
     ),
     ("DataClient", "DatasetRelease", "connector payload"),
 )
@@ -850,6 +871,10 @@ def _top_of_book_view(value: Any) -> TopOfBookView:
             value.get("ask_size"),
         )
     return TopOfBookView(*value)
+
+
+def _optional_dict(value: Any) -> dict[str, Any] | None:
+    return dict(value) if isinstance(value, dict) else None
 
 
 def _optional_identity_value(value: Any | None) -> str | None:

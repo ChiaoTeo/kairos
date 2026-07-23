@@ -1313,6 +1313,9 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         self.assertIn("freshness_seconds", view_schema("MarketView").field_names)
         self.assertIn("data_binding", view_schema("MarketView").field_names)
         self.assertIn("event_window", view_schema("MarketView").field_names)
+        self.assertIn("subscription_changed_event", view_schema("MarketView").field_names)
+        self.assertIn("runtime_feed_services", view_schema("MarketView").field_names)
+        self.assertIn("market_freshness", view_schema("MarketView").field_names)
         self.assertIn("available_time", view_schema("FeatureView").field_names)
         self.assertIn("balances", view_schema("PortfolioView").field_names)
         self.assertIn("ledger_hash", view_schema("PortfolioView").field_names)
@@ -1388,6 +1391,68 @@ class ArchitectureBoundaryTests(unittest.TestCase):
                     violations.append(f"{path.relative_to(ROOT)}: {name}")
         self.assertEqual(violations, [], "removed data repositories remain:\n" + "\n".join(violations))
         self.assertFalse((ROOT / "kairospy" / "volatility" / "repository.py").exists())
+
+    def test_data_package_does_not_depend_on_integrations(self) -> None:
+        violations = []
+        for path in sorted((ROOT / "kairospy" / "data").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                names: tuple[str, ...] = ()
+                if isinstance(node, ast.Import):
+                    names = tuple(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    names = (node.module,)
+                for name in names:
+                    if name == "kairospy.integrations" or name.startswith("kairospy.integrations."):
+                        violations.append(f"{path.relative_to(ROOT)}:{name}")
+        self.assertEqual(violations, [], "data -> integrations imports are not allowed:\n" + "\n".join(violations))
+        self.assertNotIn(
+            "kairospy.integrations.live_market_data",
+            "\n".join(violations),
+            "live market data driver dispatch must stay in surface/runtime orchestration, not data",
+        )
+
+    def test_integrations_package_does_not_depend_on_surface(self) -> None:
+        violations = []
+        for path in sorted((ROOT / "kairospy" / "integrations").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                names: tuple[str, ...] = ()
+                if isinstance(node, ast.Import):
+                    names = tuple(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    names = (node.module,)
+                for name in names:
+                    if name == "kairospy.surface" or name.startswith("kairospy.surface."):
+                        violations.append(f"{path.relative_to(ROOT)}:{name}")
+        self.assertEqual(violations, [], "integrations -> surface imports are not allowed:\n" + "\n".join(violations))
+
+    def test_removed_data_product_acquisition_extension_packages_do_not_return(self) -> None:
+        removed_paths = (
+            ROOT / "kairospy" / "data" / "products",
+            ROOT / "kairospy" / "data" / "acquisition",
+            ROOT / "kairospy" / "data" / "extensions",
+        )
+        self.assertEqual([str(path.relative_to(ROOT)) for path in removed_paths if path.exists()], [])
+
+        forbidden_imports = (
+            "kairospy.data.products",
+            "kairospy.data.acquisition",
+            "kairospy.data.extensions",
+        )
+        violations = []
+        for path in sorted((ROOT / "kairospy").rglob("*.py")) + sorted((ROOT / "tests").rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                names: tuple[str, ...] = ()
+                if isinstance(node, ast.Import):
+                    names = tuple(alias.name for alias in node.names)
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    names = (node.module,)
+                for name in names:
+                    if any(name == forbidden or name.startswith(f"{forbidden}.") for forbidden in forbidden_imports):
+                        violations.append(f"{path.relative_to(ROOT)}:{name}")
+        self.assertEqual(violations, [], "removed data product/acquisition/extension imports remain:\n" + "\n".join(violations))
 
 
 if __name__ == "__main__":

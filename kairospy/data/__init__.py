@@ -1,37 +1,21 @@
-from .api import DataApi
-from .products.registry import (
-    BuiltInDataProduct,
-    BuiltInDataProductRegistry,
-    BuiltInHistoricalDataProtocol,
-    BuiltInLiveDataProtocol,
-    built_in_dataset_id,
-    default_builtin_protocol_registry,
-)
+from .api import DataApi, HistoricalDataService
 from .catalog import DataCatalog
 from .storage.client import DataQuery, DataUnavailableError, DatasetClient
 from .contracts import AcquirePolicy, DataView, OutputFormat, RunMode
-from .acquisition.historical_service import HistoricalDataService
 from .ids import DatasetId, normalize_alias, normalize_dataset_id
 from .layout import DatasetLayout
 from .live import LiveDataService
 from .catalog.manifest import DEFAULT_DATA_MANIFEST, DataManifest, DataManifestDataset, DataManifestError
-from .products.curated import ConsolidatedTradeBuilder, ConsolidatedTradeInput, ConsolidatedTradePolicy
 from .storage.metadata import DatasetMetadata, DatasetMetadataInference, FieldMetadata
 from .protocols import DataProtocolRegistry, HistoricalDataProtocol, HistoricalDataRequest, LiveDataProtocol, LiveDataRequest
 from .storage.reader import DatasetReader
 from .storage.store import DatasetStore
 from .storage.writer import DatasetWriter
+from .streams import DataSpaceId, DataStreamId, DataStreamRef, DataStreamResolver, normalize_stream_id
 
 __all__ = [
     "DEFAULT_DATA_MANIFEST",
     "AcquirePolicy",
-    "BuiltInDataProduct",
-    "BuiltInDataProductRegistry",
-    "BuiltInHistoricalDataProtocol",
-    "BuiltInLiveDataProtocol",
-    "ConsolidatedTradeBuilder",
-    "ConsolidatedTradeInput",
-    "ConsolidatedTradePolicy",
     "DataApi",
     "DataCatalog",
     "DataManifest",
@@ -39,6 +23,10 @@ __all__ = [
     "DataManifestError",
     "DataProtocolRegistry",
     "DataQuery",
+    "DataSpaceId",
+    "DataStreamId",
+    "DataStreamRef",
+    "DataStreamResolver",
     "DataView",
     "DataUnavailableError",
     "DatasetClient",
@@ -58,8 +46,7 @@ __all__ = [
     "LiveDataService",
     "OutputFormat",
     "RunMode",
-    "built_in_dataset_id",
-    "default_builtin_protocol_registry",
     "normalize_alias",
     "normalize_dataset_id",
+    "normalize_stream_id",
 ]

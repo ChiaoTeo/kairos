@@ -3,8 +3,12 @@ from __future__ import annotations
 from math import ceil
 from pathlib import Path
 
-from kairospy.data.acquisition import AcquisitionEstimate, AcquisitionRequest
-from kairospy.data.products import BTC_DERIBIT_OPTION_QUOTES, BTC_DERIBIT_OPTION_TRADES, BTC_DVOL_DAILY
+from kairospy.integrations.acquisition import AcquisitionEstimate, AcquisitionRequest
+from kairospy.integrations.data_products.deribit import (
+    BTC_DERIBIT_OPTION_QUOTES,
+    BTC_DERIBIT_OPTION_TRADES,
+    BTC_DVOL_DAILY,
+)
 
 from .historical import DeribitDvolProvider
 from .option_chain import DeribitOptionChainProvider
@@ -16,7 +20,7 @@ class _RemovedDatasetAcquireMixin:
 
     def acquire(self, request: AcquisitionRequest):
         raise RuntimeError(
-            "release publishing has been removed; use built-in Data Product ingestion backed by DatasetWriter"
+            "release publishing has been removed; use integration-provided Data Product ingestion backed by DatasetWriter"
         )
 
     def estimate(self, request: AcquisitionRequest) -> AcquisitionEstimate:

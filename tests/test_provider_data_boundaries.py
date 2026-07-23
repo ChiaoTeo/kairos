@@ -8,16 +8,16 @@ from kairospy.integrations.connectors import (
     ProviderResource, ProviderResourceSpec, ProviderService, ProviderServiceSpec, ProviderTransport,
     SourceArtifact, TransportRequest, TransportResponse,
 )
-from kairospy.data.acquisition import ProviderRegistry
-from kairospy.data.acquisition.planning import DataProductTaskPlan, TaskRangePlan, UniversePlan
-from kairospy.data.acquisition.product_builders import (
+from kairospy.integrations.acquisition import ProviderRegistry
+from kairospy.integrations.acquisition.planning import DataProductTaskPlan, TaskRangePlan, UniversePlan
+from kairospy.integrations.acquisition.product_builders import (
     DataProductBuilderRegistry, DatasetBuildResult, ProductSourceBinding,
 )
-from kairospy.data.products.market_ohlcv import (
+from kairospy.integrations.data_products.market_ohlcv import (
     EquityOhlcvDataProductBuilder, EquityOhlcvSourceBinding,
     equity_hourly_ohlcv_rows, equity_ohlcv_schema, equity_symbol,
 )
-from kairospy.data.products import US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY
+from kairospy.integrations.data_products import US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY
 from kairospy.integrations.connectors.binance.execution_gateway import (
     BinanceExecutionGateway, BinanceOptionsExecutionGateway,
 )

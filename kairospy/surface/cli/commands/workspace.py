@@ -32,11 +32,27 @@ def workspace_command(args: argparse.Namespace) -> int:
         }
         emit_workspace_payload(args, payload)
         return 0
-    if args.action == "attach":
+    if args.action in {"attach", "add"}:
         workspace = Workspace.open_or_create(args.workspace, start=Path.cwd())
+        stream = getattr(args, "stream", None) or getattr(args, "stream_arg", None)
+        dataset = getattr(args, "dataset", None)
+        if stream is None and dataset is None:
+            raise SystemExit("workspace attach requires a Data Stream or --dataset")
+        name = args.name or str(stream or dataset)
+        if stream is not None and dataset is None:
+            if "{space}" in str(stream):
+                dataset = str(stream)
+            else:
+                from kairospy.data import DataStreamResolver
+                from kairospy.integrations.data_products.resolver import DataProductResolver
+
+                stream_ref = DataStreamResolver(workspace.data_root).resolve(stream)
+                plan = DataProductResolver().resolve(stream)
+                dataset = str(plan.dataset_id if plan.source != "stream" else stream_ref.dataset_id)
         attachment = workspace.attach(
-            args.name,
-            dataset=args.dataset,
+            name,
+            dataset=dataset,
+            stream=stream,
             view=args.view,
             instruments=tuple(args.instrument),
             fields=tuple(args.field),

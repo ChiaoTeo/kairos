@@ -90,6 +90,29 @@ class AsyncServiceSupervisor:
             state.task = asyncio.create_task(self._run(state), name=f"kairospy:{spec.name}")
         await asyncio.sleep(0)
 
+    def reconcile_now(self, specs: tuple[ManagedServiceSpec, ...]) -> tuple[ManagedServiceSnapshot, ...]:
+        if not self._states:
+            raise RuntimeError("service supervisor must be started before service reconciliation")
+        names = [item.name for item in specs]
+        if len(names) != len(set(names)):
+            raise ValueError("managed service names must be unique")
+        desired = {spec.name: spec for spec in specs}
+        for name, state in tuple(self._states.items()):
+            if name in desired:
+                continue
+            if state.task is not None and not state.task.done():
+                state.status = ManagedServiceStatus.STOPPING
+                state.task.cancel()
+            state.status = ManagedServiceStatus.STOPPED
+            self._states.pop(name, None)
+        for name, spec in desired.items():
+            if name in self._states:
+                continue
+            state = _ManagedServiceState(spec)
+            self._states[name] = state
+            state.task = asyncio.create_task(self._run(state), name=f"kairospy:{spec.name}")
+        return self.snapshots()
+
     async def _run(self, state: _ManagedServiceState) -> None:
         while not self._stopping:
             state.attempts += 1

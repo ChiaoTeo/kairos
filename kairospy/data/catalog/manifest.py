@@ -147,8 +147,7 @@ class DataManifest:
         )
 
     def apply(self, root: str | Path, *, only: str | None = None, dry_run: bool = False) -> dict[str, object]:
-        from kairospy.data.acquisition.historical_service import HistoricalDataService
-        from kairospy.data.live.services import LiveDataService
+        from kairospy.data import HistoricalDataService
 
         selected = [item for item in self.datasets if only is None or item.name == only or item.dataset == only]
         if only is not None and not selected:
@@ -159,12 +158,10 @@ class DataManifest:
             if dry_run:
                 results.append(item.plan_payload())
                 continue
-            if item.kind == "live":
-                results.append(LiveDataService(root).connect(args))
-            elif item.kind in {"file", "historical"}:
+            if item.kind in {"file", "historical"}:
                 results.append(HistoricalDataService(root).add(args))
-            elif item.kind in {"product", "built_in"}:
-                results.append(HistoricalDataService(root).use_builtin(args))
+            elif item.kind in {"product", "built_in", "live"}:
+                raise DataManifestError("Data Product and live manifest execution is owned by surface/integrations")
             else:
                 raise DataManifestError(
                     f"datasets.{item.name}.kind must be file, historical, product, built_in, or live"

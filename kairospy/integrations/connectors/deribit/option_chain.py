@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from kairospy.data.extensions.http import download_json
+from kairospy.integrations.extensions.http import download_json
 
 
 class DeribitOptionChainProvider:

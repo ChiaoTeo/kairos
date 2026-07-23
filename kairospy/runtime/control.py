@@ -23,6 +23,7 @@ class OperatorCommandType(StrEnum):
     REQUEST_STATUS_SNAPSHOT = "request_status_snapshot"
     REQUEST_RECONCILIATION = "request_reconciliation"
     TARGET_POSITION = "target_position"
+    UPDATE_SUBSCRIPTIONS = "update_subscriptions"
 
 
 class OperatorCommandStatus(StrEnum):

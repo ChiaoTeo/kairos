@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
-from kairospy.data.extensions.bootstrap import register_default_products
+from kairospy.integrations.data_products.bootstrap import register_default_products
 from kairospy.data.catalog import DataCatalog
 from kairospy.data.storage.client import DatasetClient
 from kairospy.data.contracts import DatasetStatus, QualityLevel

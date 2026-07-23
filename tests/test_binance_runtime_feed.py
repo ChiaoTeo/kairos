@@ -16,7 +16,7 @@ from kairospy.data.quality.freshness import (
     load_live_view_manifest,
     write_live_view_manifest,
 )
-from kairospy.data.products import BTC_SPOT_DAILY
+from kairospy.integrations.data_products import BTC_SPOT_DAILY
 from kairospy.integrations.ports import Environment
 from kairospy.runtime.application import KairosApplication
 from kairospy.runtime.async_runtime import AsyncKairosRuntime

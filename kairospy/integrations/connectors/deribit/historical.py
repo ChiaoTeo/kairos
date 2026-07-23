@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 import json
 from pathlib import Path
 
-from kairospy.data.extensions.http import download_json
+from kairospy.integrations.extensions.http import download_json
 from kairospy.infrastructure.storage.data_lake import sha256_bytes, utc_midnight, write_json
 
 

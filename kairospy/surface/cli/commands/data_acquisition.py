@@ -4,7 +4,7 @@ import argparse
 from dataclasses import replace
 
 from kairospy.data import DatasetClient
-from kairospy.data.acquisition import AcquisitionLimits, AcquisitionRequest
+from kairospy.integrations.acquisition import AcquisitionLimits, AcquisitionRequest
 from kairospy.infrastructure.storage.codec import to_primitive
 from kairospy.surface.cli.prompts import prompt_text as _prompt_text
 

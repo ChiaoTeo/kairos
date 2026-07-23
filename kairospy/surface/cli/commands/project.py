@@ -38,7 +38,7 @@ def project_command(args: argparse.Namespace) -> int:
 
 
 def providers_command(args: argparse.Namespace) -> int:
-    from kairospy.data.extensions.bootstrap import default_provider_registry, register_configured_products
+    from kairospy.integrations.data_products.bootstrap import default_provider_registry, register_configured_products
 
     providers = default_provider_registry(args.lake_root)
     register_configured_products(providers, args.lake_root)

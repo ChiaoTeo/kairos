@@ -21,7 +21,7 @@ from kairospy.infrastructure.storage.codec import to_primitive
 from kairospy.runtime import PreparedRun, ProfileResult, RunRequest, RunStatus, StrategyRunResult
 from kairospy.infrastructure.storage.data_lake import write_daily_dataset
 from kairospy.data.contracts import DatasetRelease, RunMode
-from kairospy.data.products import BTC_SPOT_DAILY
+from kairospy.integrations.data_products import BTC_SPOT_DAILY
 from kairospy.strategy.contracts import StrategyLifecycle
 
 

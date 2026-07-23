@@ -116,7 +116,7 @@ class DataProductNotFoundError(KeyError):
         self.operation = operation
         self.known_keys = known_keys
         self.aliases = aliases or {}
-        super().__init__(f"unknown built-in data product: {key}")
+        super().__init__(f"unknown integration-provided data product: {key}")
 
     def to_payload(self) -> dict[str, object]:
         return {
@@ -126,8 +126,8 @@ class DataProductNotFoundError(KeyError):
             "key": self.key,
             "issues": [{
                 "code": "unknown_built_in_product",
-                "message": f"Unknown built-in Data product: {self.key}",
-                "why": "This command requires one of the registered built-in Data product keys or aliases.",
+                "message": f"Unknown integration-provided Data Product: {self.key}",
+                "why": "This command requires one of the registered integration-provided Data Product keys or aliases.",
             }],
             "known_keys": list(self.known_keys),
             "aliases": dict(sorted(self.aliases.items())),
@@ -519,13 +519,46 @@ def data_download(args) -> dict[str, object]:
 
 
 def data_apply(args) -> dict[str, object]:
-    from kairospy.data import DataManifest
+    from kairospy.data import DataManifest, HistoricalDataService
+    from kairospy.integrations.data_products.historical_service import HistoricalDataService as HistoricalDataProductService
+    from kairospy.integrations.data_products.live_service import LiveDataService
 
-    return DataManifest.load(getattr(args, "manifest")).apply(
-        args.lake_root,
-        only=getattr(args, "only", None),
-        dry_run=bool(getattr(args, "dry_run", False)),
-    )
+    manifest = DataManifest.load(getattr(args, "manifest"))
+    only = getattr(args, "only", None)
+    dry_run = bool(getattr(args, "dry_run", False))
+    selected = [item for item in manifest.datasets if only is None or item.name == only or item.dataset == only]
+    if only is not None and not selected:
+        from kairospy.data import DataManifestError
+
+        raise DataManifestError(f"data manifest has no dataset named {only!r}")
+    results: list[dict[str, object]] = []
+    for item in selected:
+        dataset_args = item.to_args(args.lake_root)
+        if dry_run:
+            results.append(item.plan_payload())
+            continue
+        if item.kind == "live":
+            results.append(LiveDataService(args.lake_root).connect(dataset_args))
+        elif item.kind in {"file", "historical"}:
+            results.append(HistoricalDataService(args.lake_root).add(dataset_args))
+        elif item.kind in {"product", "built_in"}:
+            results.append(HistoricalDataProductService(args.lake_root).use_builtin(dataset_args))
+        else:
+            from kairospy.data import DataManifestError
+
+            raise DataManifestError(
+                f"datasets.{item.name}.kind must be file, historical, product, built_in, or live"
+            )
+    status = "ready" if all(str(item.get("status") or "ready") != "error" for item in results) else "needs_fix"
+    return {
+        "product": "data",
+        "operation": "apply",
+        "status": status,
+        "manifest": str(manifest.path),
+        "datasets": results,
+        "count": len(results),
+        "will_run": not dry_run,
+    }
 
 
 def data_start(args) -> dict[str, object]:
@@ -603,7 +636,7 @@ def _data_start_live_requires_account(source: Path | str | None) -> bool:
     if path.exists():
         return False
     try:
-        from kairospy.data import BuiltInDataProductRegistry
+        from kairospy.integrations.data_products.catalog import BuiltInDataProductRegistry
 
         product = BuiltInDataProductRegistry.from_default_products().resolve(str(source))
     except KeyError:
@@ -701,7 +734,7 @@ def data_add(args) -> dict[str, object]:
 
 
 def _data_add_impl(args) -> dict[str, object]:
-    from kairospy.data.acquisition.historical_service import HistoricalDataService
+    from kairospy.data import HistoricalDataService
 
     return HistoricalDataService(args.lake_root).add(args)
 
@@ -838,19 +871,29 @@ def _optional_datetime(value: str | None) -> datetime | None:
 
 
 def data_use(args) -> dict[str, object]:
-    from kairospy.data import HistoricalDataService
+    from kairospy.integrations.data_products.historical_service import HistoricalDataService
 
-    return HistoricalDataService(args.lake_root).use_builtin(args)
+    try:
+        return HistoricalDataService(args.lake_root).use_builtin(args)
+    except KeyError as error:
+        if hasattr(error, "known_keys"):
+            raise DataProductNotFoundError(
+                str(getattr(args, "key", error.args[0] if error.args else "")),
+                operation=str(getattr(error, "operation", "use")),
+                known_keys=tuple(getattr(error, "known_keys", ())),
+                aliases=dict(getattr(error, "aliases", {})),
+            ) from error
+        raise
 
 
 def _data_use_impl(args) -> dict[str, object]:
-    from kairospy.data.acquisition.historical_service import HistoricalDataService
+    from kairospy.integrations.data_products.historical_service import HistoricalDataService
 
-    return HistoricalDataService(args.lake_root).use_builtin(args)
+    return data_use(args)
 
 
 def data_product_list(args) -> dict[str, object]:
-    from kairospy.data import BuiltInDataProductRegistry
+    from kairospy.integrations.data_products.catalog import BuiltInDataProductRegistry
 
     registry = BuiltInDataProductRegistry.from_default_products()
     aliases = registry.aliases()
@@ -1082,18 +1125,34 @@ def _time_range_payload(value) -> dict[str, str]:
 
 
 def data_connect(args) -> dict[str, object]:
-    from kairospy.data import LiveDataService
+    from kairospy.integrations.data_products.live_service import LiveDataService
 
-    return LiveDataService(args.lake_root).connect(args)
+    try:
+        return LiveDataService(args.lake_root).connect(args)
+    except KeyError as error:
+        if hasattr(error, "known_keys"):
+            raise DataProductNotFoundError(
+                str(getattr(args, "source", error.args[0] if error.args else "")),
+                operation=str(getattr(error, "operation", "connect")),
+                known_keys=tuple(getattr(error, "known_keys", ())),
+                aliases=dict(getattr(error, "aliases", {})),
+            ) from error
+        raise
 
 
 def _data_connect_impl(args) -> dict[str, object]:
-    from kairospy.data.live.services import LiveDataService
+    from kairospy.integrations.data_products.live_service import LiveDataService
 
-    return LiveDataService(args.lake_root).connect(args)
+    return data_connect(args)
 
 
 def _live_runtime_config(protocol, request) -> dict[str, object]:
+    configured = _configured_live_runtime_config(protocol, request)
+    if configured is not None:
+        return configured
+    integration_runtime = _integration_live_runtime_config(protocol, request)
+    if integration_runtime is not None:
+        return integration_runtime
     runtime_config = getattr(protocol, "runtime_config", None)
     if not callable(runtime_config):
         return {}
@@ -1105,10 +1164,84 @@ def _live_runtime_config(protocol, request) -> dict[str, object]:
     return value
 
 
+def _integration_live_runtime_config(protocol, request) -> dict[str, object] | None:
+    product = getattr(protocol, "product", None)
+    if product is None:
+        return None
+    from kairospy.integrations.data_products.live_runtime import provider_live_runtime_config
+
+    value = provider_live_runtime_config(product, request)
+    if value is None:
+        return None
+    return dict(value)
+
+
+def _configured_live_runtime_config(protocol, request) -> dict[str, object] | None:
+    product = getattr(protocol, "product", None)
+    provider = getattr(product, "provider", None)
+    root = getattr(protocol, "root", None)
+    if root is None or not provider:
+        return None
+    try:
+        from kairospy.infrastructure.configuration import ConfigError, KairosProjectConfig
+        from kairospy.integrations.live_market_data import (
+            LiveMarketDataRequest,
+            resolve_live_market_data_source_config,
+        )
+
+        config = KairosProjectConfig.discover(root)
+        source_config = resolve_live_market_data_source_config(
+            config,
+            LiveMarketDataRequest(
+                request.dataset_id,
+                str(getattr(product, "key", "")),
+                str(provider),
+                tuple(request.instruments),
+                request.channel,
+                request.params,
+            ),
+        )
+    except ConfigError:
+        return None
+    if source_config is None:
+        return None
+    return source_config.runtime_config
+
+
+async def _configured_live_stream(runtime_config: dict[str, object]):
+    from kairospy.infrastructure.storage.codec import to_primitive
+    from kairospy.integrations.live_market_data import (
+        LiveMarketDataSourceConfig,
+        build_live_market_data_event_source,
+    )
+
+    source_config = LiveMarketDataSourceConfig(
+        str(runtime_config["provider"]),
+        str(runtime_config.get("service") or "live_market_data"),
+        str(runtime_config["driver"]),
+        dict(runtime_config),
+    )
+    source = build_live_market_data_event_source(source_config)
+    async for event in source.events():
+        yield to_primitive(event)
+
+
+async def _integration_live_stream(request, runtime_config: dict[str, object]):
+    from kairospy.integrations.data_products.live_stream import provider_live_stream
+
+    async for event in provider_live_stream(request, runtime_config):
+        yield event
+
+
 def data_sample(args, *, on_row=None) -> dict[str, object]:
     import asyncio
 
-    from kairospy.data import BuiltInDataProductRegistry, LiveDataRequest, built_in_dataset_id, default_builtin_protocol_registry
+    from kairospy.data import LiveDataRequest
+    from kairospy.integrations.data_products.catalog import (
+        BuiltInDataProductRegistry,
+        built_in_dataset_id,
+        default_builtin_protocol_registry,
+    )
 
     raw_limit = getattr(args, "limit", 5)
     limit = 5 if raw_limit is None else int(raw_limit)
@@ -1127,7 +1260,7 @@ def data_sample(args, *, on_row=None) -> dict[str, object]:
             aliases=registry.aliases(),
         ) from error
     if built_in.capability not in {"live", "both"}:
-        raise ValueError(f"built-in data product {built_in.key!r} is not a live source")
+        raise ValueError(f"integration-provided data product {built_in.key!r} is not a live source")
     protocols = default_builtin_protocol_registry(args.lake_root, registry.list())
     protocol = protocols.live(built_in.protocol_name)
     dataset_id = built_in_dataset_id(
@@ -1137,7 +1270,7 @@ def data_sample(args, *, on_row=None) -> dict[str, object]:
     )
     requested_dataset = str(getattr(args, "as_dataset", None) or "").strip()
     if requested_dataset and requested_dataset != dataset_id:
-        raise ValueError("built-in data products use canonical Dataset IDs; create an alias after sampling instead")
+        raise ValueError("integration-provided data products use canonical Dataset IDs; create an alias after sampling instead")
     request = LiveDataRequest(
         dataset_id,
         instruments=tuple(getattr(args, "instrument", ()) or ()),
@@ -1153,7 +1286,13 @@ def data_sample(args, *, on_row=None) -> dict[str, object]:
 
     async def collect() -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
-        async for row in protocol.stream(request):
+        if runtime_config.get("driver"):
+            source = _configured_live_stream(runtime_config)
+        elif runtime_config.get("provider"):
+            source = _integration_live_stream(request, runtime_config)
+        else:
+            source = protocol.stream(request)
+        async for row in source:
             item = dict(row)
             rows.append(item)
             if on_row is not None:
@@ -1837,15 +1976,20 @@ def _live_protocol_object(module):
 
 
 def data_reconnect(args) -> dict[str, object]:
-    from kairospy.data import LiveDataService
+    from kairospy.integrations.data_products.live_service import LiveDataService
 
-    return LiveDataService(args.lake_root).reconnect(args)
+    try:
+        return LiveDataService(args.lake_root).reconnect(args)
+    except KeyError as error:
+        if getattr(error, "dataset_not_configured", False):
+            raise DataLiveDatasetNotConfiguredError(str(getattr(args, "dataset", error.args[0] if error.args else ""))) from error
+        raise
 
 
 def _data_reconnect_impl(args) -> dict[str, object]:
-    from kairospy.data.live.services import LiveDataService
+    from kairospy.integrations.data_products.live_service import LiveDataService
 
-    return LiveDataService(args.lake_root).reconnect(args)
+    return data_reconnect(args)
 
 
 def _latest_live_view_manifest(root: Path, dataset: str):
@@ -2918,7 +3062,12 @@ def _instantiate_workspace_strategy(strategy_entrypoint: object, projection: obj
     return value
 
 
-def _projection_context(projection: object, params: dict[str, str]):
+def _projection_context(
+    projection: object,
+    params: dict[str, str],
+    *,
+    runtime_state: dict[str, object] | None = None,
+):
     from kairospy.identity import InstrumentId
     from kairospy.strategy.protocols import Context
     from kairospy.strategy.views import (
@@ -2946,6 +3095,7 @@ def _projection_context(projection: object, params: dict[str, str]):
             f"{getattr(node, 'name', 'node')}:{getattr(node, 'kind', 'unknown')}"
             for node in market_nodes
         ),
+        **_market_subscription_view(runtime_state),
     )
     features = tuple(
         FeatureValue(
@@ -2968,6 +3118,25 @@ def _projection_context(projection: object, params: dict[str, str]):
         IntentView.empty(),
         BudgetView.empty(),
     )
+
+
+def _market_subscription_view(runtime_state: dict[str, object] | None) -> dict[str, object]:
+    if not isinstance(runtime_state, dict):
+        return {}
+    payload: dict[str, object] = {}
+    for field in (
+        "subscription_set",
+        "workspace_session",
+        "subscription_changed_event",
+        "subscription_removal_safety",
+        "runtime_feed_reconciliation",
+        "runtime_feed_services",
+        "market_freshness",
+    ):
+        value = runtime_state.get(field)
+        if isinstance(value, dict):
+            payload[field] = value
+    return payload
 
 
 def _looks_like_standard_strategy(strategy: object) -> bool:
@@ -3323,6 +3492,8 @@ def _launch_workspace_live_run(
         "market_binding": bool(market_source),
         "market_services_supervised": market_services_supervised,
     }
+    if market_source is not None:
+        metadata.update(_live_market_binding_metadata(market_binding))
     if stop_policy is not None:
         metadata["stop_policy"] = stop_policy
     request = RunRequest(
@@ -3439,6 +3610,8 @@ def _live_market_binding(config: object, run_config: object, workspace_snapshot:
     live_view_id = str(view.get("live_view_id") or workspace_binding.get("live_view_id") or "")
     if not live_view_id:
         return {}
+    stream = str(view.get("stream") or workspace_binding.get("stream") or "")
+    source_plan = view.get("source_plan")
     return {
         "enabled": True,
         "provider": str(view.get("provider") or live.get("provider") or ""),
@@ -3448,7 +3621,26 @@ def _live_market_binding(config: object, run_config: object, workspace_snapshot:
         "lake_root": view.get("lake_root"),
         "journal_root": view.get("journal_root"),
         "supervise_services": bool(view.get("supervise_services", view.get("supervise", False))),
+        **({"stream": stream} if stream else {}),
+        **({"source_plan": source_plan} if isinstance(source_plan, dict) else {}),
+        **({"auto_configured": True} if view.get("auto_configured") is True else {}),
     }
+
+
+def _live_market_binding_metadata(binding: dict[str, object]) -> dict[str, object]:
+    metadata: dict[str, object] = {
+        "market_dataset": str(binding.get("dataset") or ""),
+        "market_live_view_id": str(binding.get("live_view_id") or ""),
+    }
+    stream = str(binding.get("stream") or "")
+    if stream:
+        metadata["market_stream"] = stream
+    if binding.get("auto_configured") is True:
+        metadata["market_auto_configured"] = True
+    source_plan = binding.get("source_plan")
+    if isinstance(source_plan, dict):
+        metadata["market_source_plan"] = source_plan
+    return metadata
 
 
 def _default_live_market_view(
@@ -3469,6 +3661,10 @@ def _default_live_market_view(
         root = config.relative_path("paths.lake_root", DEFAULT_LAKE_ROOT)
         path = live_view_manifest_path(root, dataset, "default")
         if not path.exists():
+            generated = _ensure_default_live_market_view_from_stream(config, live, name, workspace_binding)
+            if generated is not None:
+                return generated
+        if not path.exists():
             return None
         manifest = load_live_view_manifest(path)
     except Exception:
@@ -3484,6 +3680,66 @@ def _default_live_market_view(
         "dataset": dataset,
         "live_view_id": "default",
     }
+
+
+def _ensure_default_live_market_view_from_stream(
+    config: object,
+    live: dict[str, object],
+    name: str,
+    workspace_binding: dict[str, object],
+) -> dict[str, object] | None:
+    stream = str(workspace_binding.get("stream") or "")
+    if not stream:
+        return None
+    view = str((workspace_binding.get("metadata") if isinstance(workspace_binding.get("metadata"), dict) else {}).get("view") or "both")
+    if view not in {"live", "both"}:
+        return None
+    try:
+        from argparse import Namespace
+        from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
+        from kairospy.integrations.data_products.live_service import LiveDataService
+        from kairospy.integrations.data_products.resolver import DataProductResolver
+
+        plan = DataProductResolver().resolve(stream)
+        if plan.capability not in {"live", "both"}:
+            return None
+        source_plan = dict(plan.source_plan or {})
+        product_key = str(source_plan.get("product_key") or plan.product_key or "")
+        if not product_key:
+            return None
+        provider = str(plan.provider or "")
+        if provider and str(live.get("provider") or "") and provider != str(live.get("provider")):
+            return None
+        root = config.relative_path("paths.lake_root", DEFAULT_LAKE_ROOT)
+        result = LiveDataService(root).connect(Namespace(
+            lake_root=root,
+            source=product_key,
+            as_dataset=None,
+            protocol="live",
+            time="timestamp",
+            account=None,
+            instrument=([str(source_plan["instrument"])] if source_plan.get("instrument") else []),
+            channel=source_plan.get("channel"),
+            market=source_plan.get("market"),
+            levels=source_plan.get("levels"),
+            interval=source_plan.get("interval"),
+            for_use="live",
+            freshness_seconds=5.0,
+        ))
+        dataset = str(result.get("dataset") or "")
+        if not dataset:
+            return None
+        return {
+            "provider": str(result.get("provider") or provider or live.get("provider") or ""),
+            "name": name,
+            "dataset": dataset,
+            "stream": stream,
+            "live_view_id": "default",
+            "source_plan": source_plan,
+            "auto_configured": True,
+        }
+    except Exception:
+        return None
 
 
 def _live_market_service_supervision_enabled(binding: dict[str, object]) -> bool:
@@ -3577,7 +3833,7 @@ def run_live(args) -> dict[str, object]:
     if action not in {
         "start", "recover", "status", "attach", "stop", "pause", "resume", "reduce-only", "clear-reduce-only",
         "cancel-all", "reconcile", "commands", "kill-switch", "reset-kill-switch", "reload-risk-limits",
-        "target-position", "incidents", "close-incident", "metrics", "export", "force-stop",
+        "target-position", "streams", "spaces", "incidents", "close-incident", "metrics", "export", "force-stop",
     }:
         raise ValueError(f"unsupported run live action: {action}")
 
@@ -3585,6 +3841,7 @@ def run_live(args) -> dict[str, object]:
     from kairospy.infrastructure.storage.codec import to_primitive
     from kairospy.environment import Environment
     from kairospy.runtime import LiveRunDaemon, LiveRunRegistry, OperatorCommandBus, OperatorCommandType
+    from kairospy.runtime.subscriptions import RunSubscriptionSet, RunWorkspaceSession
     from kairospy.runtime.application import FunctionProbe, KairosApplication
     from kairospy.runtime.config import ApplicationConfig, RuntimePaths
     from kairospy.runtime.store.runtime_store import SQLiteRuntimeStore
@@ -3616,6 +3873,78 @@ def run_live(args) -> dict[str, object]:
         raise LookupError(f"runtime incident store not found for run_id: {run_id}")
     store = SQLiteRuntimeStore(paths.runtime_database)
 
+    if action in {"streams", "spaces"}:
+        scope = action
+        subscription_action = str(getattr(args, "subscription_action", None) or "show")
+        current = RunSubscriptionSet.from_payload(
+            store.runtime_state(f"subscription_set:{run_id}"),
+            run_id=run_id,
+        )
+        current_session_state = store.runtime_state(f"workspace_session:{run_id}")
+        subscription_changed_state = store.runtime_state(f"subscription_changed:{run_id}:last")
+        subscription_removal_safety_state = store.runtime_state(f"subscription_removal_safety:{run_id}:last")
+        runtime_feed_reconciliation_state = store.runtime_state(f"runtime_feed_reconciliation:{run_id}:last")
+        runtime_feed_services_state = store.runtime_state(f"runtime_feed_services:{run_id}:last")
+        live_binding_state = store.runtime_state(f"live_run_config:{run_id}")
+        workspace_snapshot = (
+            live_binding_state.get("workspace_snapshot")
+            if isinstance(live_binding_state, dict) and isinstance(live_binding_state.get("workspace_snapshot"), dict)
+            else None
+        )
+        current_session = (
+            RunWorkspaceSession.from_payload(current_session_state, run_id=run_id)
+            if isinstance(current_session_state, dict) and current_session_state.get("workspace_snapshot")
+            else RunWorkspaceSession.from_subscription_set(current, workspace_snapshot=workspace_snapshot)
+        )
+        if subscription_action == "show":
+            return {
+                "product": "run",
+                "operation": "live",
+                "live_action": action,
+                "subscription_action": "show",
+                "run_id": run_id,
+                "status": "ok",
+                "runtime_database": str(paths.runtime_database),
+                "subscription_set": current.to_payload(),
+                "workspace_session": current_session.to_payload(),
+                **({"subscription_changed_event": subscription_changed_state} if isinstance(subscription_changed_state, dict) else {}),
+                **({"subscription_removal_safety": subscription_removal_safety_state} if isinstance(subscription_removal_safety_state, dict) else {}),
+                **({"runtime_feed_reconciliation": runtime_feed_reconciliation_state} if isinstance(runtime_feed_reconciliation_state, dict) else {}),
+                **({"runtime_feed_services": runtime_feed_services_state} if isinstance(runtime_feed_services_state, dict) else {}),
+            }
+        values = tuple(str(item) for item in (getattr(args, "subscription_values", ()) or ()))
+        if not values and subscription_action in {"add", "remove", "set"}:
+            raise ValueError(f"run live {scope} {subscription_action} requires at least one {scope[:-1]} id")
+        command = OperatorCommandBus(store).submit(
+            run_id=run_id,
+            command_type=OperatorCommandType.UPDATE_SUBSCRIPTIONS,
+            payload={
+                "scope": scope,
+                "operation": subscription_action,
+                "values": values,
+            },
+            actor=str(getattr(args, "actor", None) or "cli"),
+            reason=str(getattr(args, "reason", None) or f"operator requested {scope} {subscription_action}"),
+            idempotency_key=getattr(args, "idempotency_key", None),
+            at=datetime.now(timezone.utc),
+        )
+        return {
+            "product": "run",
+            "operation": "live",
+            "live_action": action,
+            "subscription_action": subscription_action,
+            "run_id": run_id,
+            "status": "command_submitted",
+            "runtime_database": str(paths.runtime_database),
+            "subscription_set": current.to_payload(),
+            "workspace_session": current_session.to_payload(),
+            **({"subscription_changed_event": subscription_changed_state} if isinstance(subscription_changed_state, dict) else {}),
+            **({"subscription_removal_safety": subscription_removal_safety_state} if isinstance(subscription_removal_safety_state, dict) else {}),
+            **({"runtime_feed_reconciliation": runtime_feed_reconciliation_state} if isinstance(runtime_feed_reconciliation_state, dict) else {}),
+            **({"runtime_feed_services": runtime_feed_services_state} if isinstance(runtime_feed_services_state, dict) else {}),
+            "operator_command": command.manifest(),
+        }
+
     if action in {"status", "attach"}:
         bus = OperatorCommandBus(store)
         fresh_command = None
@@ -3642,6 +3971,17 @@ def run_live(args) -> dict[str, object]:
         fill_ingestion_state = store.runtime_state(f"fill_ingestion:{run_id}:last")
         market_freshness_state = store.runtime_state(f"market_freshness:{run_id}:last")
         target_position_state = store.runtime_state(f"target_position:{run_id}:last")
+        subscription_set_state = store.runtime_state(f"subscription_set:{run_id}")
+        workspace_session_state = store.runtime_state(f"workspace_session:{run_id}")
+        subscription_changed_state = store.runtime_state(f"subscription_changed:{run_id}:last")
+        subscription_removal_safety_state = store.runtime_state(f"subscription_removal_safety:{run_id}:last")
+        runtime_feed_reconciliation_state = store.runtime_state(f"runtime_feed_reconciliation:{run_id}:last")
+        runtime_feed_services_state = store.runtime_state(f"runtime_feed_services:{run_id}:last")
+        workspace_snapshot = (
+            live_binding.get("workspace_snapshot")
+            if isinstance(live_binding, dict) and isinstance(live_binding.get("workspace_snapshot"), dict)
+            else None
+        )
         recovery_state = _runtime_recovery_state(store)
         heartbeat = LiveRunRegistry(store).status(
             run_id,
@@ -3673,6 +4013,21 @@ def run_live(args) -> dict[str, object]:
             payload["incidents"] = incidents
             payload["open_incident_count"] = len(incidents)
             payload["metrics"] = _run_live_metrics_summary(payload)
+        subscription_set = RunSubscriptionSet.from_payload(subscription_set_state, run_id=run_id)
+        payload["subscription_set"] = subscription_set.to_payload()
+        payload["workspace_session"] = (
+            RunWorkspaceSession.from_payload(workspace_session_state, run_id=run_id)
+            if isinstance(workspace_session_state, dict) and workspace_session_state.get("workspace_snapshot")
+            else RunWorkspaceSession.from_subscription_set(subscription_set, workspace_snapshot=workspace_snapshot)
+        ).to_payload()
+        if isinstance(subscription_changed_state, dict):
+            payload["subscription_changed_event"] = subscription_changed_state
+        if isinstance(subscription_removal_safety_state, dict):
+            payload["subscription_removal_safety"] = subscription_removal_safety_state
+        if isinstance(runtime_feed_reconciliation_state, dict):
+            payload["runtime_feed_reconciliation"] = runtime_feed_reconciliation_state
+        if isinstance(runtime_feed_services_state, dict):
+            payload["runtime_feed_services"] = runtime_feed_services_state
         return payload
 
     if action == "metrics":
@@ -4537,6 +4892,7 @@ def _run_live_daemon_from_run_config(
             "provider_binding": bool(provider_ports),
             "market_binding": bool(market_source),
             "market_services_supervised": bool(market_source is not None and market_source.managed_services),
+            **(_live_market_binding_metadata(market_binding) if market_source is not None else {}),
             **({"stop_policy": stop_policy} if stop_policy is not None else {}),
         },
     )
@@ -4551,6 +4907,7 @@ def _run_live_daemon_from_run_config(
             _strategy_entrypoint,
             projection,
             params,
+            store=store,
         )
         if market_source is not None else
         LiveRunKernelService(
@@ -4645,7 +5002,10 @@ def _run_live_daemon_from_run_config(
         "profile_id": profile.profile_id,
         "provider_binding": bool(provider_ports),
         "market_binding": bool(market_source),
+        "lake_root": str(config.relative_path("paths.lake_root", ".kairos/data")),
         "managed_service_names": tuple(getattr(item, "name", str(item)) for item in managed_services),
+        "workspace_snapshot": workspace_snapshot,
+        **(_live_market_binding_metadata(market_binding) if market_source is not None else {}),
         **({"stop_policy": stop_policy} if stop_policy is not None else {}),
     }
     store.set_runtime_state(f"live_run_config:{run_id}", binding, datetime.now(timezone.utc))
@@ -4676,6 +5036,8 @@ def _live_workspace_market_strategy_service(
     strategy_entrypoint: object,
     projection: object,
     params: dict[str, str],
+    *,
+    store: object | None = None,
 ):
     from kairospy.runtime import ManagedServiceSpec
 
@@ -4708,7 +5070,10 @@ def _live_workspace_market_strategy_service(
                 if market is None:
                     continue
                 context = Context(
-                    MarketView.from_snapshot(market),
+                    _market_view_from_snapshot_with_runtime_state(
+                        MarketView.from_snapshot(market),
+                        _runtime_subscription_state(store, run_id),
+                    ),
                     PortfolioView(timestamp=market.timestamp),
                     FeatureView.empty(),
                     ReferenceView.empty(),
@@ -4725,7 +5090,35 @@ def _live_workspace_market_strategy_service(
             if last_context is not None:
                 runtime.intents_on_end(last_context)
 
-    return ManagedServiceSpec(f"strategy-run:{run_id}", run)
+    return ManagedServiceSpec(f"strategy-run:{run_id}", run, allow_completion=True)
+
+
+def _runtime_subscription_state(store: object | None, run_id: str) -> dict[str, object]:
+    if store is None or not hasattr(store, "runtime_state"):
+        return {}
+    state: dict[str, object] = {}
+    keys = {
+        "subscription_set": f"subscription_set:{run_id}",
+        "workspace_session": f"workspace_session:{run_id}",
+        "subscription_changed_event": f"subscription_changed:{run_id}:last",
+        "subscription_removal_safety": f"subscription_removal_safety:{run_id}:last",
+        "runtime_feed_reconciliation": f"runtime_feed_reconciliation:{run_id}:last",
+        "runtime_feed_services": f"runtime_feed_services:{run_id}:last",
+        "market_freshness": f"market_freshness:{run_id}:last",
+    }
+    for field, key in keys.items():
+        value = store.runtime_state(key)
+        if isinstance(value, dict):
+            state[field] = value
+    return state
+
+
+def _market_view_from_snapshot_with_runtime_state(market: object, runtime_state: dict[str, object]) -> object:
+    if not runtime_state:
+        return market
+    from dataclasses import replace
+
+    return replace(market, **_market_subscription_view(runtime_state))
 
 
 def _run_live_stop_handler(config: object, args: object, application: object, store: object, run_id: str):
@@ -4826,6 +5219,7 @@ async def _run_live_foreground_daemon(
                 OperatorCommandType.RESET_KILL_SWITCH,
                 OperatorCommandType.RELOAD_RISK_LIMITS,
                 OperatorCommandType.TARGET_POSITION,
+                OperatorCommandType.UPDATE_SUBSCRIPTIONS,
             )
             if operator_command is not None:
                 running_command = daemon.command_bus.start(operator_command.command_id, daemon.clock.now())
@@ -5045,6 +5439,100 @@ def _run_live_apply_operator_command(daemon: object, command: object) -> dict[st
             "intent_id": state["intent_id"],
             "leg_count": len(legs),
             "execution_status": "not_submitted",
+        }
+    if command_type is OperatorCommandType.UPDATE_SUBSCRIPTIONS:
+        from kairospy.runtime.subscriptions import RunSubscriptionSet, RunWorkspaceSession
+
+        payload = dict(getattr(command, "payload", {}) or {})
+        scope = str(payload.get("scope") or "")
+        operation = str(payload.get("operation") or "")
+        values = tuple(str(item) for item in (payload.get("values") or ()))
+        at = daemon.clock.now()
+        current = RunSubscriptionSet.from_payload(
+            daemon.application.store.runtime_state(f"subscription_set:{daemon.run_id}"),
+            run_id=daemon.run_id,
+        )
+        updated = current.apply(scope=scope, operation=operation, values=values, at=at)
+        live_binding_state = daemon.application.store.runtime_state(f"live_run_config:{daemon.run_id}")
+        workspace_snapshot = (
+            live_binding_state.get("workspace_snapshot")
+            if isinstance(live_binding_state, dict) and isinstance(live_binding_state.get("workspace_snapshot"), dict)
+            else None
+        )
+        previous_session = RunWorkspaceSession.from_subscription_set(current, workspace_snapshot=workspace_snapshot)
+        session = RunWorkspaceSession.from_subscription_set(updated, workspace_snapshot=workspace_snapshot)
+        from kairospy.runtime.subscriptions import (
+            RuntimeFeedReconciliation,
+            SubscriptionChangedEvent,
+            SubscriptionRemovalSafetyTransition,
+        )
+
+        changed_event = SubscriptionChangedEvent.from_update(
+            previous=current,
+            current=updated,
+            previous_session=previous_session,
+            current_session=session,
+            command=command,
+            at=at,
+        )
+        lake_root = (
+            live_binding_state.get("lake_root")
+            if isinstance(live_binding_state, dict) and live_binding_state.get("lake_root")
+            else payload.get("lake_root")
+        )
+        feed_reconciliation = RuntimeFeedReconciliation.from_sessions(
+            previous=previous_session,
+            current=session,
+            lake_root=str(lake_root) if lake_root else None,
+            at=at,
+        )
+        feed_services = (
+            daemon.reconcile_feed_services(feed_reconciliation.to_payload())
+            if hasattr(daemon, "reconcile_feed_services")
+            else {"status": "not_bound", "reason": "daemon has no dynamic feed manager"}
+        )
+        safety_transition = SubscriptionRemovalSafetyTransition.from_changed_event(
+            changed_event,
+            command=command,
+            at=at,
+        )
+        if safety_transition is not None:
+            daemon.application.store.set_runtime_state(
+                "risk_runtime:last",
+                {
+                    "run_id": daemon.run_id,
+                    "status": "paused",
+                    "actor": str(getattr(command, "actor", "")),
+                    "reason": str(getattr(command, "reason", "")),
+                    "updated_at": at.isoformat(),
+                    "source": "subscription_removal",
+                },
+                at,
+            )
+            daemon.application.store.set_runtime_state(
+                f"subscription_removal_safety:{daemon.run_id}:last",
+                safety_transition.to_payload(),
+                at,
+            )
+        daemon.application.store.set_runtime_state(f"subscription_set:{daemon.run_id}", updated.to_payload(), at)
+        daemon.application.store.set_runtime_state(f"workspace_session:{daemon.run_id}", session.to_payload(), at)
+        daemon.application.store.set_runtime_state(f"subscription_changed:{daemon.run_id}:last", changed_event.to_payload(), at)
+        daemon.application.store.set_runtime_state(f"runtime_feed_reconciliation:{daemon.run_id}:last", feed_reconciliation.to_payload(), at)
+        snapshot = daemon.status()
+        return {
+            "phase": snapshot.phase.value,
+            "desired_state": snapshot.phase.value,
+            "subscription_set": updated.to_payload(),
+            "workspace_session": session.to_payload(),
+            "subscription_changed_event": changed_event.to_payload(),
+            "runtime_feed_reconciliation": feed_reconciliation.to_payload(),
+            "runtime_feed_services": feed_services,
+            **({"subscription_removal_safety": safety_transition.to_payload()} if safety_transition is not None else {}),
+            "subscription_update": {
+                "scope": scope,
+                "operation": operation,
+                "values": values,
+            },
         }
     if command_type is OperatorCommandType.KILL_SWITCH:
         result = switch.trigger(tuple(daemon.application.accounts), str(getattr(command, "reason")))

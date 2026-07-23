@@ -72,7 +72,7 @@ from kairospy.data.quality.freshness import (
 )
 from kairospy.market.stream import IterableEventSource as AsyncIterableEventSource
 from kairospy.data.contracts import RunMode
-from kairospy.data.products import BTC_SPOT_DAILY
+from kairospy.integrations.data_products import BTC_SPOT_DAILY
 from kairospy.market.subscriptions import CapturePolicy
 from kairospy.runtime.application import FunctionProbe, RuntimeStatus, KairosApplication
 from kairospy.runtime.async_runtime import AsyncKairosRuntime

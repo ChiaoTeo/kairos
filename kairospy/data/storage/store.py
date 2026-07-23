@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shutil
@@ -104,6 +105,104 @@ class DatasetStore:
                 removed.append(path)
         return tuple(removed)
 
+    def delete_data(
+        self,
+        dataset: object,
+        *,
+        start: datetime | str | None = None,
+        end: datetime | str | None = None,
+        time_field: str | None = None,
+        all_data: bool = False,
+    ) -> dict[str, object]:
+        if not all_data and (start is None or end is None):
+            raise ValueError("delete_data requires --start and --end unless all_data=True")
+        dataset_id = self.resolve(dataset)
+        data_root = self.data_path(dataset_id)
+        if not data_root.exists():
+            return {"dataset": str(dataset_id), "deleted_rows": 0, "remaining_rows": 0, "removed_path": None}
+        if all_data:
+            shutil.rmtree(data_root)
+            return {"dataset": str(dataset_id), "deleted_rows": None, "remaining_rows": 0, "removed_path": str(data_root)}
+
+        from .reader import DatasetReader
+        from .writer import DatasetWriter
+
+        rows = DatasetReader(self).read(dataset_id, output="rows")
+        kept, deleted = [], 0
+        lower, upper = _datetime(start), _datetime(end)
+        assert lower is not None and upper is not None
+        for row in rows:
+            value = _row_time(row, time_field)
+            if value is not None and lower <= value < upper:
+                deleted += 1
+            else:
+                kept.append(row)
+        shutil.rmtree(data_root)
+        written = ()
+        if kept:
+            written = DatasetWriter(self).append(
+                dataset_id,
+                kept,
+                partition_by=("event_day",),
+                time_field=time_field,
+            )
+        return {
+            "dataset": str(dataset_id),
+            "deleted_rows": deleted,
+            "remaining_rows": len(kept),
+            "removed_path": str(data_root) if not kept else None,
+            "written": [str(path) for path in written],
+        }
+
+    def replace_window(
+        self,
+        dataset: object,
+        frame: object,
+        *,
+        start: datetime | str,
+        end: datetime | str,
+        time_field: str | None = None,
+        partition_by: Iterable[str] | None = None,
+    ) -> dict[str, object]:
+        dataset_id = self.resolve(dataset)
+        lower, upper = _datetime(start), _datetime(end)
+        assert lower is not None and upper is not None
+        from .reader import DatasetReader
+        from .writer import DatasetWriter, _to_table
+
+        table = _to_table(frame)
+        replacement = table.to_pylist()
+        for row in replacement:
+            value = _row_time(row, time_field)
+            if value is None or not lower <= value < upper:
+                raise ValueError("replacement rows must all fall inside the replace window")
+        data_root = self.data_path(dataset_id)
+        existing = DatasetReader(self).read(dataset_id, output="rows") if data_root.exists() else []
+        kept = [
+            row for row in existing
+            if (value := _row_time(row, time_field)) is None or not lower <= value < upper
+        ]
+        replaced_rows = len(existing) - len(kept)
+        if data_root.exists():
+            shutil.rmtree(data_root)
+        combined = sorted([*kept, *replacement], key=lambda row: _row_time(row, time_field) or lower)
+        written = ()
+        self.ensure_dataset(dataset_id)
+        if combined:
+            written = DatasetWriter(self).append(
+                dataset_id,
+                combined,
+                partition_by=partition_by or ("event_day",),
+                time_field=time_field,
+            )
+        return {
+            "dataset": str(dataset_id),
+            "replaced_rows": replaced_rows,
+            "inserted_rows": len(replacement),
+            "remaining_rows": len(combined),
+            "written": [str(path) for path in written],
+        }
+
     def rebuild_index(self) -> Path:
         """Recreate the optional SQLite discovery cache from the file tree."""
         path = self.layout.index_root / "cache.sqlite3"
@@ -145,3 +244,22 @@ class DatasetStore:
         from .writer import DatasetWriter
 
         return DatasetWriter(self).upsert(dataset, frame, key=key, **kwargs)
+
+
+def _row_time(row: dict[str, object], time_field: str | None) -> datetime | None:
+    field = time_field or next((name for name in ("event_time", "timestamp", "period_start", "available_time") if name in row), None)
+    if field is None:
+        return None
+    return _datetime(row.get(field))
+
+
+def _datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        result = value
+    else:
+        result = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if result.tzinfo is None:
+        raise ValueError("dataset time filters must be timezone-aware")
+    return result.astimezone(timezone.utc)

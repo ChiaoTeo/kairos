@@ -28,11 +28,13 @@ def add_run_commands(commands) -> None:
         choices=(
             "start", "recover", "status", "attach", "stop", "pause", "resume", "reduce-only", "clear-reduce-only",
             "cancel-all", "reconcile", "commands", "kill-switch", "reset-kill-switch", "reload-risk-limits",
-            "target-position", "incidents", "close-incident", "metrics", "export", "force-stop",
+            "target-position", "streams", "spaces", "incidents", "close-incident", "metrics", "export", "force-stop",
         ),
         nargs="?",
         default="status",
     )
+    run_live.add_argument("subscription_action", nargs="?", choices=("show", "add", "remove", "set"))
+    run_live.add_argument("subscription_values", nargs="*", help="stream or space IDs for run live streams/spaces add/remove/set")
     run_live.add_argument("--run-id", required=True, help="unique run instance id")
     run_live.add_argument("--config", type=Path, help="RunConfig TOML path for start/recover")
     run_live.add_argument("--param", action="append", default=[], help="strategy parameter key=value; repeatable")

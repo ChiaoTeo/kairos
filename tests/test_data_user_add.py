@@ -9,8 +9,9 @@ import unittest
 
 from kairospy.surface.cli.main import main
 from kairospy.surface.product import Data
-from kairospy.data import BuiltInDataProductRegistry, DatasetClient, DatasetStore
+from kairospy.data import DatasetClient, DatasetStore
 from kairospy.data.catalog.manifest import DataManifestError
+from kairospy.integrations.data_products.catalog import BuiltInDataProductRegistry
 
 
 def _json_cli(args: list[str]) -> tuple[int, dict[str, object]]:

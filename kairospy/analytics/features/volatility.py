@@ -8,7 +8,7 @@ from pathlib import Path
 
 from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
 from kairospy.data.storage.client import DatasetClient
-from kairospy.data.products import (
+from kairospy.integrations.data_products import (
     BTC_DERIBIT_OPTION_TRADES, BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY, BTC_SPOT_DAILY,
 )
 

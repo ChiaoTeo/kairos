@@ -13,7 +13,7 @@ from urllib.error import HTTPError
 from xml.etree import ElementTree
 from zipfile import BadZipFile, ZipFile
 
-from kairospy.data.extensions.http import download, download_json
+from kairospy.integrations.extensions.http import download, download_json
 from kairospy.infrastructure.storage.data_lake import sha256_bytes, utc_midnight, write_json
 
 

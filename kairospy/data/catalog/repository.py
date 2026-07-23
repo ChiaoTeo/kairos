@@ -399,8 +399,7 @@ class DataCatalog:
             if dataset_id in self._releases:
                 continue
             market_type = str(manifest.get("market_data_type") or "market_snapshots")
-            underlying = dataset_id.lower().split(".")[0]
-            logical = f"curated.market_snapshots.options.us.{underlying}" if "massive" in dataset_id.lower() else f"curated.{market_type}"
+            logical = _curated_logical_name(dataset_id, market_type)
             product = _discovered_product(logical, DatasetLayer.CURATED, "")
             self.register_product(product, enrich=True)
             status = _status(_discovered_status(pointer.parent))
@@ -650,9 +649,16 @@ def _spec_from_metadata(root: Path, directory: Path, product: DataProductDefinit
 
 def _event_logical_name(dataset_id: str, provider: str) -> str:
     parts = dataset_id.lower().split(".")
-    if provider == "massive" and len(parts) > 3 and parts[:3] == ["options", "us", "massive"]:
+    if len(parts) > 3 and parts[:2] == ["options", "us"]:
         return f"market.events.options.us.{parts[3]}"
     return "market.events"
+
+
+def _curated_logical_name(dataset_id: str, market_type: str) -> str:
+    parts = dataset_id.lower().split(".")
+    if parts and market_type in {"historical_quotes", "market_snapshots"}:
+        return f"curated.market_snapshots.options.us.{parts[0]}"
+    return f"curated.{market_type}"
 
 
 def _manifest_version(value: object, fallback: str) -> str:

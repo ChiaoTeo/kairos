@@ -11,6 +11,7 @@ class WorkspaceBinding:
     name: str
     kind: str
     dataset: str
+    stream: str | None = None
     release_id: str | None = None
     content_hash: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -67,6 +68,7 @@ class WorkspaceManifest:
                 name=str(value.get("name") or name),
                 kind=str(value["kind"]),
                 dataset=str(value["dataset"]),
+                stream=str(value["stream"]) if value.get("stream") is not None else None,
                 release_id=value.get("release_id"),
                 content_hash=value.get("content_hash"),
                 metadata=dict(value.get("metadata", {})),

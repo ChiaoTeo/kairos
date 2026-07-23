@@ -16,6 +16,12 @@ from kairospy.reference import ReferenceCatalog
 # commands.add_parser("workspace"
 # workspace_actions.add_parser("create"
 # run_actions.add_parser("start"
+# "provider-entitlement-diagnostics"
+# choices=("massive",)
+# "us-equity-momentum-diagnostics"
+# "reference-artifact"
+# "failure-policy"
+# "soak"
 
 
 def main(argv: list[str] | None = None) -> int:

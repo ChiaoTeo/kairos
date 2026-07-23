@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from kairospy.data.acquisition import AcquisitionEstimate, AcquisitionRequest
-from kairospy.data.products import (
+from kairospy.integrations.acquisition import AcquisitionEstimate, AcquisitionRequest
+from kairospy.integrations.data_products.massive import (
     US_EQUITY_MASSIVE_RAW_DAILY,
     US_EQUITY_MASSIVE_RAW_HOURLY,
     US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
@@ -50,7 +50,7 @@ class _RemovedDatasetAcquireMixin:
 
     def acquire(self, request: AcquisitionRequest):
         raise RuntimeError(
-            "release publishing has been removed; use built-in Data Product ingestion backed by DatasetWriter"
+            "release publishing has been removed; use integration-provided Data Product ingestion backed by DatasetWriter"
         )
 
 

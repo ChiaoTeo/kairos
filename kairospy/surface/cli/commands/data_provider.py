@@ -10,7 +10,7 @@ from pathlib import Path
 
 from kairospy.data.catalog import DataCatalog
 from kairospy.data.contracts import DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel
-from kairospy.data.extensions.bootstrap import register_default_products
+from kairospy.integrations.data_products.bootstrap import register_default_products
 from kairospy.data.quality.services import DatasetQualityService
 from kairospy.infrastructure.storage.data_lake import write_json
 from kairospy.integrations.connectors.massive import MassiveClient, MassiveConfig, MassiveVendorArchiveClient

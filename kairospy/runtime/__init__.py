@@ -93,6 +93,14 @@ from .service_supervisor import (
     ServiceFault,
 )
 from .stop_controller import RuntimeStopController, StopExecutionReport
+from .subscriptions import (
+    MarketDataSubscriptionRequest,
+    RunSubscriptionSet,
+    RunWorkspaceSession,
+    RuntimeFeedReconciliation,
+    SubscriptionChangedEvent,
+    SubscriptionRemovalSafetyTransition,
+)
 
 __all__ = [
     "AsyncServiceSupervisor",
@@ -121,6 +129,7 @@ __all__ = [
     "ManagedServiceEvidenceProvider",
     "ManagedServiceSpec",
     "ManagedServiceStatus",
+    "MarketDataSubscriptionRequest",
     "MarketFreshnessRuntimeMonitorService",
     "OperatorCommandBus",
     "OperatorCommandRecord",
@@ -142,10 +151,15 @@ __all__ = [
     "RunProfile",
     "RunRequest",
     "RunResult",
+    "RunSubscriptionSet",
+    "RunWorkspaceSession",
+    "SubscriptionChangedEvent",
+    "SubscriptionRemovalSafetyTransition",
     "RunStatus",
     "RuntimeRecoveryBinding",
     "RuntimeExecutionPlan",
     "RuntimeExecutionServicePlan",
+    "RuntimeFeedReconciliation",
     "RuntimeFeedPlan",
     "RuntimeFeedServiceBundle",
     "RiskRuntimeMonitorService",

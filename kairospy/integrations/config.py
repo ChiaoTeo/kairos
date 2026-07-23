@@ -27,6 +27,19 @@ class IbkrConnectionSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class CcxtExchangeSettings:
+    exchange_id: str
+    api_key: str | None = None
+    api_secret: str | None = None
+    password: str | None = None
+    uid: str | None = None
+    sandbox: bool = False
+    enable_rate_limit: bool = True
+    timeout_ms: int | None = None
+    options: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderServiceConfig:
     provider: str
     service: str
@@ -184,6 +197,52 @@ def resolve_hyperliquid_trading_credentials(config: KairosProjectConfig) -> Hype
         f"{credential}.private_key and credentials.{credential}.account_address.",
     )
     return HyperliquidTradingCredentials(private_key, account_address)
+
+
+def resolve_ccxt_exchange_settings(
+    config: KairosProjectConfig,
+    provider: str,
+    service: str = "execution_live",
+    *,
+    default_credential: str = "",
+) -> CcxtExchangeSettings:
+    service_config = resolve_provider_service_config(
+        config,
+        provider,
+        service,
+        default_credential=default_credential,
+    )
+    values = service_config.values or {}
+    exchange_id = str(values.get("exchange_id") or provider).strip().lower()
+    if not exchange_id:
+        raise ConfigError(f"providers.{provider}.services.{service}.exchange_id is required")
+    resolver = CredentialResolver(config)
+    credential = service_config.credential
+    api_key = _optional_credential_string(resolver, credential, "api_key") if credential else None
+    api_secret = _optional_credential_string(resolver, credential, "api_secret") if credential else None
+    password = _optional_credential_string(resolver, credential, "password") if credential else None
+    uid = _optional_credential_string(resolver, credential, "uid") if credential else None
+    raw_options = values.get("options", {})
+    if raw_options is None:
+        raw_options = {}
+    if not isinstance(raw_options, dict):
+        raise ConfigError(f"providers.{provider}.services.{service}.options must be a table")
+    return CcxtExchangeSettings(
+        exchange_id,
+        api_key,
+        api_secret,
+        password,
+        uid,
+        sandbox=bool(values.get("sandbox", service_config.environment == "testnet")),
+        enable_rate_limit=bool(values.get("enable_rate_limit", True)),
+        timeout_ms=int(values["timeout_ms"]) if values.get("timeout_ms") is not None else None,
+        options=dict(raw_options),
+    )
+
+
+def _optional_credential_string(resolver: CredentialResolver, credential: str, field: str) -> str | None:
+    value = resolver.field(credential, field).resolved
+    return None if value in (None, "") else str(value)
 
 
 def resolve_ibkr_trading_connection(

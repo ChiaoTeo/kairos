@@ -8,12 +8,12 @@ import sys
 import tempfile
 import unittest
 
-from kairospy.data.extensions.bootstrap import (
+from kairospy.integrations.data_products.bootstrap import (
     configured_product_specs, default_provider_registry, register_configured_products,
     register_default_products,
 )
 from kairospy.data import DatasetClient
-from kairospy.data.acquisition import AcquisitionRequest, TimeRange
+from kairospy.integrations.acquisition import AcquisitionRequest, TimeRange
 from kairospy.data.catalog import DataCatalog
 from kairospy.data.contracts import (
     DataProductContract, DataReleaseManifest, DataSetContractArtifact, DatasetStorageKind, LiveViewManifest,
@@ -24,7 +24,7 @@ from kairospy.data.quality.freshness import (
     find_live_view_manifest, live_view_freshness_evidence, live_view_manifest_path, update_live_view_manifest_freshness,
     resolve_live_view_subscription, write_live_view_manifest,
 )
-from kairospy.data.products import (
+from kairospy.integrations.data_products import (
     BTC_SPOT_DAILY, US_EQUITY_LIQUIDITY_DAILY, US_EQUITY_MASSIVE_CORPORATE_ACTIONS,
     US_EQUITY_MASSIVE_IDENTITY,
     US_EQUITY_MASSIVE_RAW_DAILY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
@@ -42,6 +42,7 @@ class DataProductContractTests(unittest.TestCase):
             "ids.py",
             "layout.py",
             "protocols.py",
+            "streams.py",
         }
         modules = {
             path.name
@@ -69,9 +70,9 @@ class DataProductContractTests(unittest.TestCase):
             self.assertGreaterEqual(len(registry["product_specs"]), 8)
 
     def test_builtin_product_contracts_live_in_explicit_python_modules(self) -> None:
-        from kairospy.data.products.builtin import KNOWN_PRODUCTS
-        from kairospy.data.products.builtin import binance, massive
-        from kairospy.data.products.builtin.market_ohlcv import (
+        from kairospy.integrations.data_products import KNOWN_PRODUCTS
+        from kairospy.integrations.data_products import binance, massive
+        from kairospy.integrations.data_products.market_ohlcv import (
             OHLCV_BUCKET_PARTITIONING,
             OHLCV_INCREMENTAL_CONTRACT,
             OHLCV_PRIMARY_KEY,
@@ -172,7 +173,7 @@ class DataProductContractTests(unittest.TestCase):
             extension = root / "demo_provider.py"
             extension.write_text(
                 "\n".join([
-                    "from kairospy.data.acquisition import AcquisitionEstimate",
+                    "from kairospy.integrations.acquisition import AcquisitionEstimate",
                     "from kairospy.data.contracts import (",
                     "    DataProductContract, DataProductDefinition, DatasetKey, DatasetLayer,",
                     "    DatasetStorageKind, QualityLevel, SourceBinding,",

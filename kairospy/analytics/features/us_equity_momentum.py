@@ -11,7 +11,7 @@ from typing import Iterable
 
 from kairospy.products.common import TradingCalendar
 from kairospy.infrastructure.configuration import DEFAULT_LAKE_ROOT
-from kairospy.data.extensions.bootstrap import register_default_products
+from kairospy.integrations.data_products.bootstrap import register_default_products
 from kairospy.data.catalog import DataCatalog
 from kairospy.data.contracts import DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel
 from kairospy.infrastructure.storage.data_lake import write_json

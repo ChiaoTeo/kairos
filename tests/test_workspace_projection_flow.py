@@ -51,6 +51,45 @@ class WorkspaceProjectionFlowTests(unittest.TestCase):
             self.assertEqual([item["name"] for item in inspected["nodes"]], ["bars", "momentum_1d"])
             self.assertTrue(inspected["preflight"]["passed"])
 
+    def test_workspace_projection_preserves_stream_from_profile(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            initialize_project(root, name="Projection Stream")
+            _write_workspace_code(root)
+            env = _env()
+
+            _run_cli(root, env, "workspace", "create", "alpha")
+            _run_cli(
+                root,
+                env,
+                "workspace",
+                "add",
+                "alpha",
+                "binance_swap_btcusdt.ohlcv_1h",
+                "--name",
+                "bars_raw",
+                "--view",
+                "both",
+            )
+
+            inspected = _run_cli(
+                root,
+                env,
+                "workspace",
+                "inspect-code",
+                "my_workspace:build_workspace",
+                "--param",
+                "workspace_profile=alpha",
+                "--param",
+                "market=binance_swap_btcusdt.ohlcv_1h",
+            )
+
+            attachment = inspected["projection"]["attachments"]["bars_raw"]
+            self.assertEqual(attachment["stream"], "binance_swap_btcusdt.ohlcv_1h")
+            self.assertEqual(attachment["dataset"], "market.ohlcv.crypto.binance.usdm-perpetual.btc-usdt.1h")
+            self.assertEqual(inspected["nodes"][0]["stream"], "binance_swap_btcusdt.ohlcv_1h")
+            self.assertTrue(inspected["preflight"]["passed"])
+
     def test_workspace_preflight_reports_missing_optional_and_mode_mismatch(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

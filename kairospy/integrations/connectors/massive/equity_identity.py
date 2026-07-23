@@ -118,7 +118,7 @@ class MassiveEquityIdentityResolver:
         }
         write_json(directory / "manifest.json", manifest)
         if name == "equity_identity":
-            from kairospy.data.extensions.bootstrap import register_default_products
+            from kairospy.integrations.data_products.bootstrap import register_default_products
             from kairospy.data.catalog import DataCatalog
             from kairospy.data.contracts import DatasetRelease, DatasetStatus, DatasetStorageKind, QualityLevel
             from kairospy.data.quality.services import DatasetQualityService

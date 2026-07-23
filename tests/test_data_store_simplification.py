@@ -5,7 +5,16 @@ import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 
-from kairospy.data import DataApi, DatasetClient, DatasetId, DatasetReader, DatasetStore, DatasetWriter
+from kairospy.data import (
+    DataApi,
+    DataStreamId,
+    DataStreamResolver,
+    DatasetClient,
+    DatasetId,
+    DatasetReader,
+    DatasetStore,
+    DatasetWriter,
+)
 
 
 def _require_pyarrow(test: unittest.TestCase) -> None:
@@ -106,7 +115,9 @@ class DataStoreSimplificationTests(unittest.TestCase):
 
     def test_data_api_exposes_builtin_use_and_connect_with_canonical_dataset_ids(self) -> None:
         with TemporaryDirectory() as temporary:
-            data = DataApi(temporary)
+            from kairospy.surface.product import Data
+
+            data = Data(temporary)
 
             planned = data.use(
                 "hyperliquid.perpetual.ohlcv.1h",
@@ -128,6 +139,112 @@ class DataStoreSimplificationTests(unittest.TestCase):
                     market="spot",
                     as_dataset="market.orderbook.crypto.binance.btc-usdt",
                 )
+
+    def test_stream_id_is_user_facing_facade_over_dataset_store(self) -> None:
+        _require_pyarrow(self)
+        with TemporaryDirectory() as temporary:
+            data = DataApi(temporary)
+            data.append("my_research.momentum_1h", [
+                {"event_time": "2026-07-22T00:00:00+00:00", "signal": 1},
+            ])
+
+            ref = data.resolve_stream("my_research.momentum_1h")
+            self.assertIsInstance(ref.stream_id, DataStreamId)
+            self.assertEqual(ref.to_payload(), {
+                "stream": "my_research.momentum_1h",
+                "space": "my_research",
+                "name": "momentum_1h",
+                "dataset": "my_research.momentum_1h",
+                "source": "stream",
+            })
+            self.assertTrue(
+                (Path(temporary) / "datasets" / "my_research" / "momentum_1h" / "data").exists(),
+            )
+            self.assertEqual(data.read("my_research.momentum_1h", output="rows")[0]["signal"], 1)
+
+    def test_stream_resolver_preserves_alias_to_canonical_dataset_asset(self) -> None:
+        _require_pyarrow(self)
+        canonical = "market.orderbook.crypto.binance.spot.btc-usdt"
+        with TemporaryDirectory() as temporary:
+            store = DatasetStore(temporary)
+            DatasetWriter(store).append(canonical, [
+                {"event_time": "2026-07-22T00:00:00+00:00", "instrument_id": "BTCUSDT", "bid": 100},
+            ])
+            store.alias(canonical, "binance_spot_btcusdt.orderbook")
+
+            ref = DataStreamResolver(store).resolve("binance_spot_btcusdt.orderbook")
+            self.assertEqual(str(ref.stream_id), "binance_spot_btcusdt.orderbook")
+            self.assertEqual(str(ref.dataset_id), canonical)
+            self.assertEqual(ref.source, "alias")
+            self.assertEqual(DataApi(temporary).read("binance_spot_btcusdt.orderbook", output="rows")[0]["bid"], 100)
+
+    def test_data_api_reads_many_and_pattern_from_current_dataset_tree(self) -> None:
+        _require_pyarrow(self)
+        with TemporaryDirectory() as temporary:
+            data = DataApi(temporary)
+            data.append("binance_swap_btcusdt.ohlcv_1h", [
+                {"period_start": "2026-07-22T00:00:00+00:00", "close": 100},
+            ])
+            data.append("binance_swap_ethusdt.ohlcv_1h", [
+                {"period_start": "2026-07-22T00:00:00+00:00", "close": 200},
+            ])
+
+            many = data.read_many([
+                "binance_swap_btcusdt.ohlcv_1h",
+                "binance_swap_ethusdt.ohlcv_1h",
+            ], output="rows")
+            self.assertEqual(many["binance_swap_btcusdt.ohlcv_1h"][0]["close"], 100)
+            self.assertEqual(many["binance_swap_ethusdt.ohlcv_1h"][0]["close"], 200)
+
+            matched = data.read_pattern("binance_swap_*.ohlcv_1h", output="rows")
+            self.assertEqual(sorted(matched), [
+                "binance_swap_btcusdt.ohlcv_1h",
+                "binance_swap_ethusdt.ohlcv_1h",
+            ])
+
+    def test_data_api_deletes_stream_data_window_through_dataset_store(self) -> None:
+        _require_pyarrow(self)
+        with TemporaryDirectory() as temporary:
+            data = DataApi(temporary)
+            data.append("binance_swap_btcusdt.ohlcv_1h", [
+                {"period_start": "2026-07-22T00:00:00+00:00", "close": 100},
+                {"period_start": "2026-07-22T01:00:00+00:00", "close": 101},
+                {"period_start": "2026-07-22T02:00:00+00:00", "close": 102},
+            ], partition_by=("event_day",), time_field="period_start")
+
+            deleted = data.delete_data(
+                "binance_swap_btcusdt.ohlcv_1h",
+                start="2026-07-22T01:00:00+00:00",
+                end="2026-07-22T02:00:00+00:00",
+                time_field="period_start",
+            )
+
+            self.assertEqual(deleted["deleted_rows"], 1)
+            rows = data.read("binance_swap_btcusdt.ohlcv_1h", output="rows")
+            self.assertEqual([row["close"] for row in rows], [100, 102])
+
+    def test_data_api_replaces_stream_window_through_dataset_store(self) -> None:
+        _require_pyarrow(self)
+        with TemporaryDirectory() as temporary:
+            data = DataApi(temporary)
+            data.append("binance_swap_btcusdt.ohlcv_1h", [
+                {"period_start": "2026-07-22T00:00:00+00:00", "close": 100},
+                {"period_start": "2026-07-22T01:00:00+00:00", "close": 101},
+                {"period_start": "2026-07-22T02:00:00+00:00", "close": 102},
+            ], partition_by=("event_day",), time_field="period_start")
+
+            replaced = data.replace_window(
+                "binance_swap_btcusdt.ohlcv_1h",
+                [{"period_start": "2026-07-22T01:00:00+00:00", "close": 201}],
+                start="2026-07-22T01:00:00+00:00",
+                end="2026-07-22T02:00:00+00:00",
+                time_field="period_start",
+            )
+
+            self.assertEqual(replaced["replaced_rows"], 1)
+            self.assertEqual(replaced["inserted_rows"], 1)
+            rows = data.read("binance_swap_btcusdt.ohlcv_1h", output="rows")
+            self.assertEqual([row["close"] for row in rows], [100, 201, 102])
 
     def test_index_cache_is_optional_and_rebuildable_from_file_tree(self) -> None:
         _require_pyarrow(self)

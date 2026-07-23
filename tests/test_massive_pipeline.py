@@ -13,7 +13,7 @@ from kairospy.data.snapshots.market_snapshot_storage import MarketSnapshotStorag
 from kairospy.analytics.pricing import OptionValuationService
 from kairospy.market.repository import ParquetMarketEventRepository
 from kairospy.integrations.connectors.massive.datasets import MassiveOptionEventsDatasetConnector, MassiveOptionProductConfig
-from kairospy.data.acquisition import AcquisitionRequest, TimeRange
+from kairospy.integrations.acquisition import AcquisitionRequest, TimeRange
 from kairospy.data.catalog import DataCatalog
 from kairospy.data.contracts import DatasetKey, DatasetLayer, DataProductDefinition, SourceBinding
 from kairospy.identity import InstrumentId

@@ -208,7 +208,7 @@ class KairosProjectConfigurationTests(unittest.TestCase):
         result = subprocess.run(
             [
                 sys.executable, "-c",
-                "from kairospy.data.extensions.bootstrap import register_default_products; "
+                "from kairospy.integrations.data_products.bootstrap import register_default_products; "
                 "from kairospy.integrations.connectors.binance import BinanceRuntimeFeedFactory; "
                 "from kairospy.workspace import Workspace; "
                 "print(register_default_products.__name__, BinanceRuntimeFeedFactory.__name__, Workspace.__name__)",

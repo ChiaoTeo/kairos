@@ -7,7 +7,7 @@ from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from zipfile import ZipFile
 
-from kairospy.data.extensions.http import download
+from kairospy.integrations.extensions.http import download
 from kairospy.infrastructure.storage.data_lake import sha256_bytes, utc_midnight, write_json
 
 

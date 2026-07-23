@@ -7,10 +7,16 @@ import unittest
 from unittest.mock import patch
 
 from kairospy.data import (
-    BuiltInDataProductRegistry, DataProtocolRegistry, DatasetClient, HistoricalDataRequest,
-    HistoricalDataService, LiveDataRequest, LiveDataService, built_in_dataset_id,
+    DataProtocolRegistry, DatasetClient, HistoricalDataRequest,
+    HistoricalDataService, LiveDataRequest,
+)
+from kairospy.integrations.data_products.catalog import (
+    BuiltInDataProductRegistry,
+    built_in_dataset_id,
     default_builtin_protocol_registry,
 )
+from kairospy.integrations.data_products.historical_service import HistoricalDataService as HistoricalDataProductService
+from kairospy.integrations.data_products.live_service import LiveDataService
 from kairospy.surface.product import _args
 
 
@@ -21,8 +27,7 @@ class DataProtocolRegistryTests(unittest.TestCase):
             source = root / "signals.csv"
             source.write_text("date,symbol,value\n2026-01-01,AAPL,1.2\n", encoding="utf-8")
 
-            historical = HistoricalDataService(root)
-            added = historical.add(_args(
+            added = HistoricalDataService(root).add(_args(
                 root,
                 source=source,
                 name="research.service_signal",
@@ -32,7 +37,7 @@ class DataProtocolRegistryTests(unittest.TestCase):
                 end=None,
                 instrument=[],
             ))
-            used = historical.use_builtin(_args(
+            used = HistoricalDataProductService(root).use_builtin(_args(
                 root,
                 key="market.ohlcv.crypto.binance.btc-usdt.1d",
                 as_dataset=None,
@@ -103,7 +108,7 @@ class DataProtocolRegistryTests(unittest.TestCase):
                 raise AssertionError("HistoricalDataService.use_builtin must own the built-in pipeline")
 
             with patch("kairospy.surface.product._data_use_impl", fail_if_delegated):
-                payload = HistoricalDataService(root).use_builtin(_args(
+                payload = HistoricalDataProductService(root).use_builtin(_args(
                     root,
                     key="market.ohlcv.crypto.binance.btc-usdt.1d",
                     as_dataset=None,
@@ -346,7 +351,7 @@ class DataProtocolRegistryTests(unittest.TestCase):
 
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
-            payload = HistoricalDataService(root).use_builtin(_args(
+            payload = HistoricalDataProductService(root).use_builtin(_args(
                 root,
                 key="hyperliquid.perpetual.ohlcv.1h",
                 as_dataset=None,

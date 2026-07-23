@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime, timezone
 from hashlib import sha256
+import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 
 class LiveDataService:
@@ -17,74 +20,27 @@ class LiveDataService:
         self.root = Path(root)
 
     def connect(self, args) -> dict[str, object]:
-        from kairospy.surface import product as product_surface
-        from kairospy.data import (
-            BuiltInDataProductRegistry, DatasetStore, LiveDataRequest,
-            default_builtin_protocol_registry,
-        )
+        from kairospy.data import DatasetStore
 
         request_args = _with_lake_root(args, self.root)
         source = Path(request_args.source)
         target_use = str(getattr(request_args, "for_use", None) or "shadow")
-        built_in = None
         protocol_name = None
         provider = None
         venue = None
         source_kind = "user_defined"
-        if source.exists():
-            dataset_id = str(getattr(request_args, "as_dataset", None) or "").strip()
-            if not dataset_id:
-                raise ValueError("user-defined live data sources require --as")
-            connector_hash = sha256(source.read_bytes()).hexdigest()
-            module = product_surface._load_user_module(source, f"kairospy_user_live_data_{connector_hash[:12]}")
-            product_surface._live_protocol_object(module)
-            source_name = source.name
-            source_path = str(source.resolve())
-            primary_time = str(getattr(request_args, "time", None) or "timestamp")
-            runtime_config = {}
-        else:
-            registry = BuiltInDataProductRegistry.from_default_products()
-            try:
-                built_in = registry.resolve(str(request_args.source))
-            except KeyError as error:
-                raise product_surface.DataProductNotFoundError(
-                    str(request_args.source),
-                    operation="connect",
-                    known_keys=tuple(item.key for item in registry.list()),
-                    aliases=registry.aliases(),
-                ) from error
-            if built_in.capability not in {"live", "both"}:
-                raise ValueError(f"built-in data product {built_in.key!r} is not a live source")
-            protocols = default_builtin_protocol_registry(self.root, registry.list())
-            protocol = protocols.live(built_in.protocol_name)
-            from kairospy.data import built_in_dataset_id
-
-            dataset_id = built_in_dataset_id(
-                built_in,
-                instruments=tuple(getattr(request_args, "instrument", ()) or ()),
-                params=product_surface._live_source_params(request_args),
-            )
-            requested_dataset = str(getattr(request_args, "as_dataset", None) or "").strip()
-            if requested_dataset and requested_dataset != dataset_id:
-                raise ValueError(
-                    "built-in data products use canonical Dataset IDs; create an alias after connecting instead"
-                )
-            connector_hash = sha256(built_in.protocol_name.encode("utf-8")).hexdigest()
-            protocol_name = built_in.protocol_name
-            provider = built_in.provider
-            venue = built_in.venue
-            source_kind = built_in.source_kind
-            source_name = built_in.key
-            source_path = None
-            requested_time = str(getattr(request_args, "time", None) or "")
-            primary_time = built_in.primary_time if requested_time in {"", "timestamp"} else requested_time
-            runtime_config = product_surface._live_runtime_config(protocol, LiveDataRequest(
-                dataset_id,
-                account=getattr(request_args, "account", None),
-                instruments=tuple(getattr(request_args, "instrument", ()) or ()),
-                channel=getattr(request_args, "channel", None),
-                params=product_surface._live_source_params(request_args),
-            ))
+        if not source.exists():
+            raise ValueError("Data live service only accepts user-defined live source files; Data Products are handled by integrations")
+        dataset_id = str(getattr(request_args, "as_dataset", None) or "").strip()
+        if not dataset_id:
+            raise ValueError("user-defined live data sources require --as")
+        connector_hash = sha256(source.read_bytes()).hexdigest()
+        module = _load_user_module(source, f"kairospy_user_live_data_{connector_hash[:12]}")
+        _live_protocol_object(module)
+        source_name = source.name
+        source_path = str(source.resolve())
+        primary_time = str(getattr(request_args, "time", None) or "timestamp")
+        runtime_config = {}
         freshness_seconds = float(getattr(request_args, "freshness_seconds", 5.0))
         if freshness_seconds <= 0:
             raise ValueError("data connect freshness-seconds must be positive")
@@ -112,7 +68,6 @@ class LiveDataService:
         store.ensure_dataset(dataset_id, metadata={
             "primary_time": primary_time,
             "fields": list(fields),
-            "data_product": built_in.key if built_in is not None else None,
             "provider": provider,
             "venue": venue,
         })
@@ -125,13 +80,9 @@ class LiveDataService:
             "fields": list(fields),
             "source": {"kind": "live_protocol", "name": source_name, "source_kind": source_kind}
             | ({"path": source_path} if source_path is not None else {})
-            | (
-                {"provider": provider, "venue": venue, "protocol_name": protocol_name}
-                | product_surface._runtime_source_fields(runtime_config)
-                if built_in is not None else {}
-            ),
+            | {},
             "live_data_plane": live_data_plane,
-            "configured_at": product_surface._now(),
+            "configured_at": _now(),
         }
         (live_path / "state.json").write_text(
             json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
@@ -160,8 +111,6 @@ class LiveDataService:
             "dataset": dataset_id,
             "target_use": target_use,
             "source_kind": source_kind,
-            **({"provider": provider, "venue": venue} if built_in is not None else {}),
-            **({"runtime": product_surface._runtime_summary(runtime_config)} if runtime_config else {}),
             "time": primary_time,
             "historical": {
                 "status": "not_configured",
@@ -180,14 +129,12 @@ class LiveDataService:
         }
 
     def reconnect(self, args) -> dict[str, object]:
-        from kairospy.surface import product as product_surface
-
         request_args = _with_lake_root(args, self.root)
         from kairospy.data import DatasetStore
 
         state_path = DatasetStore(self.root).live_path(str(request_args.dataset)) / "default" / "state.json"
         if not state_path.exists():
-            raise product_surface.DataLiveDatasetNotConfiguredError(str(request_args.dataset))
+            raise RuntimeError(f"Dataset {request_args.dataset!r} has no configured live view")
         state = json.loads(state_path.read_text(encoding="utf-8"))
         source = dict(state.get("source") or {})
         plane = dict(state.get("live_data_plane") or {})
@@ -205,7 +152,7 @@ class LiveDataService:
             or tuple(str(item) for item in plane.get("instruments", ()) or ())
         )
         freshness = plane.get("freshness") if isinstance(plane.get("freshness"), dict) else {}
-        reconnect_args = product_surface._args(
+        reconnect_args = _args(
             self.root,
             source=Path(source_value),
             as_dataset=str(request_args.dataset),
@@ -265,3 +212,46 @@ def _with_lake_root(args, root: Path):
     except TypeError:
         setattr(args, "lake_root", root)
         return args
+
+
+def _args(root: Path, **values: object) -> SimpleNamespace:
+    values.setdefault("lake_root", root)
+    return SimpleNamespace(**values)
+
+
+def _load_user_module(path: Path, module_name: str):
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load Python module from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _live_protocol_object(module):
+    for name in ("PROTOCOL", "protocol", "SOURCE", "source", "ADAPTER", "adapter"):
+        protocol = getattr(module, name, None)
+        if protocol is not None and hasattr(protocol, "stream") and callable(protocol.stream):
+            return protocol
+    factory = getattr(module, "get_protocol", None)
+    if callable(factory):
+        protocol = factory()
+        if hasattr(protocol, "stream") and callable(protocol.stream):
+            return protocol
+    legacy_factory = getattr(module, "get_adapter", None)
+    if callable(legacy_factory):
+        protocol = legacy_factory()
+        if hasattr(protocol, "stream") and callable(protocol.stream):
+            return protocol
+    stream = getattr(module, "stream", None)
+    if callable(stream):
+        class _FunctionProtocol:
+            async def stream(self, request):
+                async for item in stream(request):
+                    yield item
+        return _FunctionProtocol()
+    raise ValueError("live protocol module must define stream(request), PROTOCOL.stream(request), or get_protocol().stream(request)")
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()

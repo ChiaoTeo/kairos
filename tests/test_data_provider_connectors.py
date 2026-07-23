@@ -27,15 +27,15 @@ from kairospy.integrations.connectors.massive.config import MassiveConfig
 from kairospy.integrations.connectors.massive.market_data import MassiveAggregateBarsRequest, MassiveHistoricalMarketDataService
 from kairospy.integrations.connectors.massive.vendor_archive import request_fingerprint
 from kairospy.data import DatasetClient, OutputFormat
-from kairospy.data.acquisition import AcquisitionLimits, AcquisitionRequest, ProviderRegistry, TimeRange
+from kairospy.integrations.acquisition import AcquisitionLimits, AcquisitionRequest, ProviderRegistry, TimeRange
 from kairospy.data.contracts import AcquirePolicy, SourceBinding
-from kairospy.data.products.market_ohlcv import equity_ohlcv_schema, write_equity_ohlcv_dataset
-from kairospy.data.products import (
+from kairospy.integrations.data_products.market_ohlcv import equity_ohlcv_schema, write_equity_ohlcv_dataset
+from kairospy.integrations.data_products import (
     BINANCE_USDM_PERPETUAL_HOURLY, BTC_DERIBIT_OPTION_QUOTES, BTC_DERIBIT_OPTION_TRADES,
     BTC_DVOL_DAILY, BTC_OPTION_QUOTES_HOURLY, US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY,
     US_EQUITY_MASSIVE_VENDOR_ADJUSTED_HOURLY, US_OPTION_MASSIVE_RAW_HOURLY,
 )
-from kairospy.data.extensions.bootstrap import default_provider_registry, register_configured_products, register_default_products
+from kairospy.integrations.data_products.bootstrap import default_provider_registry, register_configured_products, register_default_products
 
 
 START = datetime(2026, 1, 2, tzinfo=timezone.utc)
@@ -417,7 +417,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
             register_default_products(root)
-            with patch("kairospy.data.extensions.bootstrap._massive_config_for_project", return_value=MassiveConfig("test-key")):
+            with patch("kairospy.integrations.data_products.bootstrap.massive_config_for_project", return_value=MassiveConfig("test-key")):
                 providers = default_provider_registry(root)
             self.assertTrue(providers.available("massive", str(US_EQUITY_MASSIVE_VENDOR_ADJUSTED_DAILY.key)))
             self.assertTrue(providers.available("massive", str(US_OPTION_MASSIVE_RAW_HOURLY.key)))
@@ -703,7 +703,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
             self.assertTrue(plan.connector_available)
             self.assertEqual(plan.estimate.cost_class, "entitled")
             with patch(
-                "kairospy.data.extensions.bootstrap._massive_config_for_project",
+                "kairospy.integrations.data_products.bootstrap.massive_config_for_project",
                 side_effect=RuntimeError("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY is required"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"):
@@ -731,7 +731,7 @@ class ProviderConnectorContractTests(unittest.TestCase):
             self.assertTrue(plan.connector_available)
             self.assertEqual(plan.estimate.cost_class, "entitled-rest-bounded-ticker")
             with patch(
-                "kairospy.data.extensions.bootstrap._massive_config_for_project",
+                "kairospy.integrations.data_products.bootstrap.massive_config_for_project",
                 side_effect=RuntimeError("KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY is required"),
             ):
                 with self.assertRaisesRegex(RuntimeError, "KAIROS_MASSIVE_MARKETDATA_PRIMARY_API_KEY"):

@@ -29,12 +29,12 @@ def test_global_connector_capability_model_is_not_reintroduced() -> None:
 
 
 def test_capability_like_support_models_stay_with_their_product_owners() -> None:
-    from kairospy.data.products import capabilities_payload
+    from kairospy.integrations.data_products.capabilities import capabilities_payload
     from kairospy.execution.orders import ExecutionCapabilities
     from kairospy.market.subscriptions import MarketDataCapabilities
     from kairospy.reference.contracts import ReferenceCapabilities
 
-    assert capabilities_payload.__module__ == "kairospy.data.products"
+    assert capabilities_payload.__module__ == "kairospy.integrations.data_products.capabilities"
     assert ExecutionCapabilities.__module__ == "kairospy.execution.orders"
     assert MarketDataCapabilities.__module__ == "kairospy.market.subscriptions"
     assert ReferenceCapabilities.__module__ == "kairospy.reference.contracts"

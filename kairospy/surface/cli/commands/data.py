@@ -75,6 +75,217 @@ def data_command(args: argparse.Namespace) -> int:
         payload = product_surface.data_start(args)
         _emit_data_payload(args, "Kairos Data Start", payload)
         return 0
+    if args.action == "resolve":
+        from kairospy.data import DataStreamResolver
+        from kairospy.integrations.data_products.resolver import DataProductResolver
+
+        stream_ref = DataStreamResolver(args.lake_root).resolve(args.stream)
+        product_plan = DataProductResolver().resolve(args.stream)
+        storage_dataset = str(stream_ref.dataset_id)
+        product_payload = product_plan.to_payload()
+        payload = {
+            "product": "data",
+            "operation": "resolve",
+            "stream": str(stream_ref.stream_id),
+            "space": str(stream_ref.space),
+            "name": stream_ref.stream,
+            "dataset": storage_dataset,
+            "storage": {
+                "dataset": storage_dataset,
+                "data": str(DatasetClient(args.lake_root).store.data_path(stream_ref.dataset_id)),
+                "live": str(DatasetClient(args.lake_root).store.live_path(stream_ref.dataset_id)),
+                "source": stream_ref.source,
+            },
+            "plan": product_payload,
+            "status": "resolved",
+        }
+        if product_payload.get("dataset") != storage_dataset:
+            payload["compatible_dataset"] = product_payload.get("dataset")
+        _emit_data_payload(args, "Kairos Data Resolve", payload)
+        return 0
+    if args.action == "import":
+        from kairospy.surface import product as product_surface
+
+        args.name = args.stream
+        try:
+            payload = product_surface.data_add(args)
+        except Exception as error:
+            from kairospy.data.storage.metadata import DataNeedsTimeError
+
+            if isinstance(error, DataNeedsTimeError):
+                payload = error.to_payload(dataset_id=str(args.stream), source=args.source)
+                _emit_data_payload(args, "Kairos Data Import", payload)
+                return 2
+            if isinstance(error, product_surface.DataAddInputError):
+                payload = error.to_payload(dataset_id=str(args.stream))
+                _emit_data_payload(args, "Kairos Data Import", payload)
+                return 2
+            raise
+        payload["operation"] = "import"
+        payload["stream"] = str(args.stream)
+        _emit_data_payload(args, "Kairos Data Import", payload)
+        return 0
+    if args.action == "read":
+        from kairospy.data import DataApi
+
+        data = DataApi(args.lake_root)
+        query = {
+            "start": args.start,
+            "end": args.end,
+            "columns": tuple(args.field) or None,
+            "output": OutputFormat.ROWS,
+            "time_field": args.time_field,
+        }
+        if any(character in args.stream for character in "*?[]"):
+            rows_by_stream = data.read_pattern(args.stream, **query)
+            payload = {
+                "product": "data",
+                "operation": "read",
+                "pattern": args.stream,
+                "streams": {
+                    stream: {
+                        "returned_rows": min(len(rows), args.limit),
+                        "total_rows": len(rows),
+                        "rows": to_primitive(rows[:args.limit]),
+                    }
+                    for stream, rows in rows_by_stream.items()
+                },
+                "status": "ready",
+            }
+        else:
+            rows = data.read(args.stream, **query)
+            ref = data.resolve_stream(args.stream)
+            payload = {
+                "product": "data",
+                "operation": "read",
+                "stream": str(ref.stream_id),
+                "dataset": str(ref.dataset_id),
+                "returned_rows": min(len(rows), args.limit),
+                "total_rows": len(rows),
+                "rows": to_primitive(rows[:args.limit]),
+                "status": "ready",
+            }
+        _emit_data_payload(args, "Kairos Data Read", payload)
+        return 0
+    if args.action == "replace-window":
+        from kairospy.data import DataApi
+
+        result = DataApi(args.lake_root).replace_window(
+            args.stream,
+            args.source,
+            start=args.start,
+            end=args.end,
+            time_field=getattr(args, "time_field", None),
+        )
+        _emit_data_payload(args, "Kairos Data Replace Window", {
+            "product": "data",
+            "operation": "replace-window",
+            **result,
+            "status": "replaced",
+        })
+        return 0
+    if args.action == "get":
+        from kairospy.integrations.data_products.resolver import DataProductResolver
+        from kairospy.surface import product as product_surface
+
+        plan = DataProductResolver().resolve(args.stream)
+        source_plan = dict(plan.source_plan or {})
+        product_key = str(source_plan.get("product_key") or plan.product_key or "")
+        if not product_key:
+            raise SystemExit(f"data get cannot resolve a historical Data Product for stream {args.stream!r}")
+        if plan.capability not in {"historical", "both"}:
+            raise SystemExit(f"data get requires a historical stream; {args.stream!r} resolved to {plan.capability}")
+        request = argparse.Namespace(
+            lake_root=args.lake_root,
+            key=product_key,
+            list_products=False,
+            start=args.start,
+            end=args.end,
+            provider=plan.provider,
+            venue=plan.venue,
+            instrument=([str(source_plan["instrument"])] if source_plan.get("instrument") else []),
+            for_use="workspace",
+            refresh=bool(getattr(args, "refresh", False)),
+            dry_run=bool(getattr(args, "dry_run", False)),
+            as_dataset=None,
+        )
+        payload = product_surface.data_use(request)
+        payload["operation"] = "get"
+        payload["stream"] = str(plan.target_stream)
+        payload["target_dataset"] = str(plan.dataset_id)
+        payload["source_plan"] = source_plan
+        compatible_dataset = payload.get("dataset")
+        if not bool(getattr(args, "dry_run", False)):
+            materialized = _materialize_stream_dataset(
+                args.lake_root,
+                source_dataset=str(payload.get("dataset") or ""),
+                target_dataset=str(plan.dataset_id),
+                source_plan=source_plan,
+                primary_time=plan.primary_time,
+                data_product=product_key,
+                provider=plan.provider,
+                venue=plan.venue,
+            )
+            if materialized is not None:
+                payload["dataset"] = materialized["dataset"]
+                payload["stream_materialization"] = materialized
+        dataset = str(payload.get("dataset") or "")
+        if dataset and not bool(getattr(args, "dry_run", False)):
+            from kairospy.data import DatasetStore
+
+            DatasetStore(args.lake_root).alias(dataset, str(plan.target_stream))
+            payload["stream_alias"] = {
+                "stream": str(plan.target_stream),
+                "dataset": dataset,
+            }
+        if str(compatible_dataset or payload.get("dataset")) != str(plan.dataset_id):
+            payload["compatible_dataset"] = compatible_dataset or payload.get("dataset")
+        _emit_data_payload(args, "Kairos Data Get", payload)
+        return 0
+    if args.action == "probe":
+        from kairospy.integrations.data_products.resolver import DataProductResolver
+        from kairospy.surface import product as product_surface
+
+        plan = DataProductResolver().resolve(args.stream)
+        source_plan = dict(plan.source_plan or {})
+        product_key = str(source_plan.get("product_key") or plan.product_key or "")
+        if not product_key:
+            raise SystemExit(f"data probe cannot resolve a live Data Product for stream {args.stream!r}")
+        if plan.capability not in {"live", "both"}:
+            raise SystemExit(f"data probe requires a live stream; {args.stream!r} resolved to {plan.capability}")
+        request = argparse.Namespace(
+            lake_root=args.lake_root,
+            source=product_key,
+            as_dataset=None,
+            instrument=([str(source_plan["instrument"])] if source_plan.get("instrument") else []),
+            channel=source_plan.get("channel"),
+            market=source_plan.get("market"),
+            levels=source_plan.get("levels"),
+            interval=source_plan.get("interval"),
+            limit=args.limit,
+            format=args.format,
+        )
+        if bool(getattr(args, "dry_run", False)):
+            payload = {
+                "product": "data",
+                "operation": "probe",
+                "status": "planned",
+                "stream": str(plan.target_stream),
+                "target_dataset": str(plan.dataset_id),
+                "source": product_key,
+                "provider": plan.provider,
+                "venue": plan.venue,
+                "limit": args.limit,
+                "source_plan": source_plan,
+            }
+        else:
+            payload = product_surface.data_sample(request)
+            payload["operation"] = "probe"
+            payload["stream"] = str(plan.target_stream)
+            payload["target_dataset"] = str(plan.dataset_id)
+            payload["source_plan"] = source_plan
+        _emit_data_payload(args, "Kairos Data Probe", payload)
+        return 0
     if args.action == "add":
         from kairospy.surface import product as product_surface
         try:
@@ -365,13 +576,36 @@ def data_command(args: argparse.Namespace) -> int:
     if args.action == "clean-tmp":
         from kairospy.data import DatasetStore
 
-        removed = DatasetStore(args.lake_root).clean_tmp(getattr(args, "dataset", None))
+        target = _stream_or_dataset_option(args)
+        removed = DatasetStore(args.lake_root).clean_tmp(target)
         _emit_data_payload(args, "Kairos Dataset Tmp", {
             "product": "data",
             "operation": "clean-tmp",
             "status": "cleaned",
+            **({"stream": str(target)} if target is not None else {}),
             "removed": [str(path) for path in removed],
             "count": len(removed),
+        })
+        return 0
+    if args.action == "delete-stream-data":
+        from kairospy.data import DataStreamResolver, DatasetStore
+
+        ref = DataStreamResolver(args.lake_root).resolve(args.stream)
+        result = DatasetStore(args.lake_root).delete_data(
+            ref.dataset_id,
+            start=args.start,
+            end=args.end,
+            time_field=getattr(args, "time_field", None),
+            all_data=bool(getattr(args, "all_data", False)),
+        )
+        _emit_data_payload(args, "Kairos Data Delete Stream Data", {
+            "product": "data",
+            "operation": "delete-stream-data",
+            "stream": str(ref.stream_id),
+            "dataset": str(ref.dataset_id),
+            "source": ref.source,
+            **result,
+            "status": "deleted",
         })
         return 0
     if args.action == "us-equity-momentum-diagnostics":
@@ -648,6 +882,73 @@ def _dimension_filters(values: list[str]) -> dict[str, str]:
     return dimensions
 
 
+def _materialize_stream_dataset(
+    root: object,
+    *,
+    source_dataset: str,
+    target_dataset: str,
+    source_plan: dict[str, object],
+    primary_time: str | None,
+    data_product: str,
+    provider: str | None,
+    venue: str | None,
+) -> dict[str, object] | None:
+    if not source_dataset or not target_dataset or source_dataset == target_dataset:
+        return None
+    instrument = str(source_plan.get("instrument") or "")
+    if not instrument:
+        return None
+    from kairospy.data import DatasetStore, DatasetWriter
+    from kairospy.data.storage.reader import DatasetReader
+
+    store = DatasetStore(root)
+    rows = DatasetReader(store).read(source_dataset, output="rows")
+    selected = [row for row in rows if _row_matches_stream_instrument(row, instrument)]
+    if not selected:
+        return None
+    fields = list(selected[0].keys())
+    store.ensure_dataset(target_dataset, metadata={
+        "primary_time": primary_time,
+        "fields": fields,
+        "data_product": data_product,
+        "provider": provider,
+        "venue": venue,
+        "source": {
+            "source_kind": "stream_materialization",
+            "dataset": source_dataset,
+            "instrument": instrument,
+        },
+    })
+    DatasetWriter(store).append(
+        target_dataset,
+        selected,
+        partition_by=("event_day",),
+        time_field=primary_time,
+    )
+    return {
+        "dataset": target_dataset,
+        "source_dataset": source_dataset,
+        "row_count": len(selected),
+        "instrument": instrument,
+    }
+
+
+def _row_matches_stream_instrument(row: dict[str, object], instrument: str) -> bool:
+    normalized = _normalize_instrument_token(instrument)
+    candidates = (
+        row.get("symbol"),
+        row.get("coin"),
+        row.get("instrument"),
+        row.get("instrument_id"),
+        row.get("source_instrument_id"),
+    )
+    return any(normalized and normalized in _normalize_instrument_token(value) for value in candidates if value is not None)
+
+
+def _normalize_instrument_token(value: object) -> str:
+    return "".join(character for character in str(value).upper() if character.isalnum())
+
+
 def _dataset_argument(args: argparse.Namespace) -> str:
     option = getattr(args, "dataset", None)
     positional = getattr(args, "dataset_arg", None)
@@ -658,3 +959,11 @@ def _dataset_argument(args: argparse.Namespace) -> str:
         raise SystemExit("Dataset is required")
     return str(dataset)
 
+
+def _stream_or_dataset_option(args: argparse.Namespace) -> str | None:
+    stream = getattr(args, "stream", None)
+    dataset = getattr(args, "dataset", None)
+    if stream and dataset and str(stream) != str(dataset):
+        raise SystemExit(f"conflicting Stream/Dataset values: {stream} and {dataset}")
+    value = stream or dataset
+    return str(value) if value else None

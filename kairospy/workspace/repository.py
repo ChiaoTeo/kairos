@@ -131,7 +131,8 @@ class Workspace:
         self,
         name: str,
         *,
-        dataset: str,
+        dataset: str | None = None,
+        stream: str | None = None,
         view: str = "both",
         instruments: tuple[str, ...] = (),
         fields: tuple[str, ...] = (),
@@ -140,17 +141,23 @@ class Workspace:
     ) -> WorkspaceBinding:
         if view not in {"history", "live", "both"}:
             raise ValueError("workspace attachment view must be history, live, or both")
+        if stream is None and dataset is None:
+            raise ValueError("workspace attachment requires a Data Stream or Dataset")
+        stream_id = str(stream or dataset)
+        dataset_id = str(dataset or stream_id)
+        template = "{space}" in stream_id
         current = self.manifest.bindings.get(name)
-        if current is not None and current.dataset != dataset:
+        if current is not None and current.dataset != dataset_id:
             raise ValueError(f"workspace attachment {name!r} already points to {current.dataset!r}")
         payload = {
             "view": _merge_view(str(current.metadata.get("view") or view), view) if current is not None else view,
+            **({"template": True} if template else {}),
             **({"instruments": list(instruments)} if instruments else {}),
             **({"fields": list(fields)} if fields else {}),
             **({"freshness_seconds": freshness_seconds} if freshness_seconds is not None else {}),
             **(metadata or {}),
         }
-        binding = WorkspaceBinding(name=name, kind="attachment", dataset=dataset, metadata=payload)
+        binding = WorkspaceBinding(name=name, kind="attachment", dataset=dataset_id, stream=stream_id, metadata=payload)
         return self._save_binding(binding)
 
     def binding(self, name: str) -> WorkspaceBinding:
