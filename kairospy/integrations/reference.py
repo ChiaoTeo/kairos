@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Mapping
 
-from kairospy.reference import ReferenceRefreshResult, ReferenceRefreshService
+from kairospy.core.reference import ReferenceRefreshResult, ReferenceRefreshService
 
 from .equities import catalog_from_equity_rows
 from .instruments import catalog_from_market_rows

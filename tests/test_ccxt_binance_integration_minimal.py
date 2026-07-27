@@ -307,6 +307,19 @@ def test_binance_exchange_prefers_ccxt_pro_watch_methods_for_live_streams() -> N
     asyncio.run(scenario())
 
 
+def test_ccxt_driver_can_require_websocket_live_streams() -> None:
+    async def scenario() -> None:
+        driver = CcxtDriver(async_exchange_factory=lambda exchange_id: FakeAsyncExchange(), require_websocket=True)
+        try:
+            _ = [event async for event in Binance(driver).watch_ticker("BTC/USDT", params={"max_events": 1, "poll_seconds": 0})]
+        except Exception as error:
+            assert error.__class__.__name__ == "_WsUnavailable"
+        else:
+            raise AssertionError("required websocket stream should not fall back to REST polling")
+
+    asyncio.run(scenario())
+
+
 def test_binance_broker_uses_same_ccxt_driver_for_trading_and_account() -> None:
     broker = BinanceBroker(_driver())
 

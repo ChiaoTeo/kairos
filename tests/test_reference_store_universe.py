@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 from kairospy.integrations.instruments import catalog_from_market_rows
-from kairospy.reference import (
+from kairospy.core.reference import (
     AssetId,
     InstrumentType,
     LifecycleEventType,

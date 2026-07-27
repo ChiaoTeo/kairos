@@ -1,0 +1,28 @@
+[run]
+id = "hyperliquid-sma-backtest"
+mode = "backtest"
+strategy = "examples.strategies.sma:SmaCrossBacktest"
+
+[strategy.params]
+symbol = "BTC/USDC:USDC"
+quantity = "0.01"
+fast_window = 3
+slow_window = 5
+
+[backtest]
+dataset = "market.ohlcv.hyperliquid_swap_btc_usdc_usdc.1m"
+data_root = "../.kairos/data"
+runs_root = "../.kairos/runs"
+storage_format = "jsonl"
+venue = "hyperliquid"
+market = "swap"
+stream = "market.ohlcv.hyperliquid_swap_btc_usdc_usdc.1m"
+price_field = "close"
+
+[account]
+cash = "10000"
+currency = "USDC"
+fee_rate = "0.0004"
+
+[execution]
+slippage_bps = "1"

@@ -1,24 +1,17 @@
 # Migration Audit
 
-This migration intentionally collapses the previous broad package layout into the current explicit runtime, execution, account, integration, reference, and mode boundaries.
+This migration intentionally replaces the previous flat package layout with a strategy-runtime axis: strategy API, runtime orchestration, core domains, run modes, integrations, data, and surface.
 
 ## Current Package Set
 
 The intended top-level `kairospy` packages are:
 
-- `accounts`
-- `backtest`
 - `context`
+- `core`
 - `data`
-- `execution`
 - `integrations`
-- `intents`
-- `live`
-- `orders`
-- `reference`
+- `modes`
 - `runtime`
-- `paper`
-- `schema`
 - `strategy`
 - `surface`
 
@@ -26,31 +19,46 @@ The intended top-level `kairospy` packages are:
 
 ## Deleted Legacy Domains
 
-The deleted tracked files are concentrated in these old domains:
+Old top-level domain and mode packages are removed:
+
+- `accounts`
+- `backtest`
+- `execution`
+- `intents`
+- `live`
+- `market`
+- `orders`
+- `paper`
+- `reference`
+
+The deleted or relocated tracked files are concentrated in these old domains:
 
 - `integrations`: old connectors, acquisition, data products, ports, and extension trees are replaced by smaller driver/exchange/broker/payload-adapter modules.
 - `runtime`: old kernel, daemon, live registry, recovery, store, and profile trees are replaced by `StrategyRuntime`, `ModeRunner`, `RunProfile`, and mode engines.
 - `surface`: old CLI command tree is replaced by focused product modules under `kairospy.surface.products`.
 - `data`: old catalog/storage/live/replay/quality split is replaced by compact `DataStore`, stream, ingest, query, and id modules.
-- `execution`: old command/outbox/router/policy/fill/order trees are replaced by `ExecutionCoordinator`, execution state, simulation adapter, and live execution adapter.
-- `reference`: old access/contracts/factory/repository/sync modules are replaced by provider-neutral catalog, model, serde, store, refresh, universe, and corporate-action modules.
-- `strategy`: old protocols/runtime/intents naming is replaced by `strategy.protocol`, `strategy.control`, and `strategy.views`.
+- `execution`: old command/outbox/router/policy/fill/order trees are replaced by `kairospy.core.execution` coordination, execution state, simulation adapter, and live execution adapter.
+- `reference`: old access/contracts/factory/repository/sync modules are replaced by `kairospy.core.reference` catalog, model, serde, store, refresh, universe, and corporate-action modules.
+- `strategy`: old protocols/runtime/intents naming is replaced by `strategy.protocol`, `strategy.events`, and strategy-facing re-exports over `context.control` and `core.views`.
+- `schema`: ambiguous market schema modules are replaced by `kairospy.core.market` models, subscriptions, row encoders, runtime market projections, and `kairospy.core.views` shared view schemas.
 - `analytics`, `governance`, `identity`, `infrastructure`, `market`, `portfolio`, `products`, `research`, `risk`, and `workspace`: these were broad cross-cutting or product-specific domains in the previous architecture. They are not part of the current core package set.
 
 ## Preserved Capabilities
 
 The current tree keeps the capabilities needed for the core architecture:
 
-- Strategy event loop and runtime views: `kairospy.runtime`
+- Strategy event loop, runtime projections, and runtime views: `kairospy.runtime`
+- Market observations, quote/book/bar/trade/rate models, row encoders, and subscriptions: `kairospy.core.market`
 - Strategy-facing protocol and controls: `kairospy.strategy`
-- Intent journal and intent states: `kairospy.intents`
-- Order model and order journal: `kairospy.orders`
-- Account snapshots, projections, reservations, and ledger: `kairospy.accounts`
-- Intent-to-order/fill coordination and state: `kairospy.execution`
-- Simulated account/backtest result/metrics: `kairospy.backtest`
-- Paper composition over backtest/runtime primitives: `kairospy.paper`
-- Live gateway, reconciliation, private stream collection, and runtime state: `kairospy.live`
-- Provider-neutral reference model/store/refresh/universe: `kairospy.reference`
+- Intent journal and intent states: `kairospy.core.intent`
+- Order model and order journal: `kairospy.core.order`
+- Account snapshots, projections, reservations, and ledger: `kairospy.core.account`
+- Intent-to-order/fill coordination, state, and execution-current runtime projection: `kairospy.core.execution`
+- Shared view schema, registry, store, and hashing primitives: `kairospy.core.views`
+- Simulated account/backtest result/metrics: `kairospy.modes.backtest`
+- Paper composition over backtest/runtime primitives: `kairospy.modes.paper`
+- Live gateway, reconciliation, private stream collection, and runtime state: `kairospy.modes.live`
+- Provider-neutral reference model/store/refresh/universe: `kairospy.core.reference`
 - Provider drivers, exchanges, brokers, and payload adapters: `kairospy.integrations`
 - Data store/query/stream primitives: `kairospy.data`
 - CLI product surface: `kairospy.surface`
@@ -82,8 +90,11 @@ Current validation commands:
 Current architecture guards verify:
 
 - The deprecated trading package path is absent.
+- The deprecated schema package path is absent.
+- Old top-level domain and mode packages are absent.
 - The deprecated trading coordinator name is absent from runtime/product/docs code.
-- Execution names live in `kairospy.execution`.
+- Execution names live in `kairospy.core.execution`.
+- Shared view primitives live in `kairospy.core.views`, and core packages do not import `kairospy.strategy`.
 - Accounts do not import provider payload code.
 - Live orchestration uses payload adapters instead of provider imports.
 - Reference does not import runtime/provider layers.

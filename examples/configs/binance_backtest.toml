@@ -1,0 +1,28 @@
+[run]
+id = "binance-btc-sma-backtest"
+mode = "backtest"
+strategy = "examples.strategies.sma:SmaCrossBacktest"
+
+[strategy.params]
+symbol = "BTC/USDT"
+quantity = "0.01"
+fast_window = 20
+slow_window = 50
+
+[backtest]
+dataset = "market.ohlcv.binance_spot_btc_usdt.1m"
+data_root = "../.kairos/data"
+runs_root = "../.kairos/runs"
+storage_format = "jsonl"
+venue = "binance"
+market = "spot"
+stream = "market.ohlcv.binance_spot_btc_usdt.1m"
+price_field = "close"
+
+[account]
+cash = "10000"
+currency = "USDT"
+fee_rate = "0.001"
+
+[execution]
+slippage_bps = "1"

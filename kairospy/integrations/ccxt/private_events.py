@@ -4,11 +4,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Mapping
 
-from kairospy.reference import MarketRef, MarketResolver
-from kairospy.accounts import AccountContext
-from kairospy.orders import OrderEvent, OrderEventKind, OrderSide, OrderState, OrderStatus, OrderType
+from kairospy.core.reference import MarketRef, MarketResolver
+from kairospy.core.account import AccountContext
+from kairospy.core.order import OrderEvent, OrderEventKind, OrderSide, OrderState, OrderStatus, OrderType
 
-from kairospy.execution import FillReport, ExecutionCoordinator
+from kairospy.core.execution import FillReport, ExecutionCoordinator
 
 from .parsing import ccxt_decimal, ccxt_optional_decimal, ccxt_order_quantity, ccxt_order_type, ccxt_required_text
 

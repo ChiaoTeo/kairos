@@ -5,13 +5,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable, Iterable, Mapping
 
-from kairospy.schema.records import (
-    ohlcv_record,
-    orderbook_record,
-    ticker_record,
-    trade_record,
-)
-
 
 SyncExchangeFactory = Callable[[str], Any]
 AsyncExchangeFactory = Callable[[str], Any]
@@ -21,6 +14,7 @@ AsyncExchangeFactory = Callable[[str], Any]
 class CcxtDriver:
     exchange_factory: SyncExchangeFactory | None = None
     async_exchange_factory: AsyncExchangeFactory | None = None
+    require_websocket: bool = False
 
     def fetch_markets(
         self,
@@ -63,7 +57,6 @@ class CcxtDriver:
     ) -> Iterable[Mapping[str, object]]:
         options = dict(params or {})
         max_pages = int(options.pop("max_pages", 1 if until is None else 1000))
-        market = _market_type(exchange_id, options)
         since_ms = _optional_millis(since)
         until_ms = _optional_millis(until)
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
@@ -81,7 +74,7 @@ class CcxtDriver:
                     last_time = event_time
                     if until_ms is not None and event_time >= until_ms:
                         return
-                    yield ohlcv_record(venue=exchange_id, market=market, instrument=symbol, timeframe=timeframe, values=item)
+                    yield tuple(item)
                     yielded += 1
                 if until_ms is None or yielded == 0 or last_time is None:
                     break
@@ -101,11 +94,9 @@ class CcxtDriver:
         params: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
         options = dict(params or {})
-        market = _market_type(exchange_id, options)
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
-            ticker = exchange.fetch_ticker(symbol, params=_exchange_params(options))
-            return ticker_record(venue=exchange_id, market=market, instrument=symbol, ticker=ticker)
+            return dict(exchange.fetch_ticker(symbol, params=_exchange_params(options)))
         finally:
             close = getattr(exchange, "close", None)
             if callable(close):
@@ -268,7 +259,14 @@ class CcxtDriver:
         try:
             exchange = (self.async_exchange_factory or _default_async_exchange)(exchange_id)
             while remaining is None or remaining > 0:
-                async for event in _fetch_live(exchange_id, source, exchange, symbol, params):
+                async for event in _fetch_live(
+                    exchange_id,
+                    source,
+                    exchange,
+                    symbol,
+                    params,
+                    require_websocket=self.require_websocket or bool(params.get("require_ws")),
+                ):
                     yield event
                     if remaining is not None:
                         remaining -= 1
@@ -326,35 +324,40 @@ async def _fetch_live(
     exchange: Any,
     symbol: str,
     params: Mapping[str, object],
+    *,
+    require_websocket: bool = False,
 ) -> AsyncIterator[dict[str, object]]:
     if source == "ticker":
-        market = _market_type(exchange_id, params)
         try:
             ticker = await _watch_ticker(exchange, symbol, params)
         except _WsUnavailable:
+            if require_websocket:
+                raise
             ticker = await exchange.fetch_ticker(symbol)
-        yield ticker_record(venue=exchange_id, market=market, instrument=symbol, ticker=ticker)
+        yield dict(ticker)
         return
     if source == "orderbook":
-        market = _market_type(exchange_id, params)
         limit = params.get("limit")
         book_limit = int(limit) if limit is not None else None
         try:
             book = await _watch_order_book(exchange, symbol, book_limit, params)
         except _WsUnavailable:
+            if require_websocket:
+                raise
             book = await exchange.fetch_order_book(symbol, limit=book_limit)
-        yield orderbook_record(venue=exchange_id, market=market, instrument=symbol, book=book)
+        yield dict(book)
         return
     if source == "trades":
-        market = _market_type(exchange_id, params)
         limit = int(params.get("limit", 50))
         since = _optional_millis(params.get("since"))
         try:
             trades = await _watch_trades(exchange, symbol, since, limit, params)
         except _WsUnavailable:
+            if require_websocket:
+                raise
             trades = await exchange.fetch_trades(symbol, since=since, limit=limit)
         for trade in trades:
-            yield trade_record(venue=exchange_id, market=market, instrument=symbol, trade=trade)
+            yield dict(trade)
         return
     raise KeyError(f"ccxt live source is not supported: {source}")
 
@@ -588,7 +591,7 @@ def _exchange_params(params: Mapping[str, object]) -> dict[str, object]:
     return {
         key: value
         for key, value in params.items()
-        if key not in {"poll_seconds", "max_events", "since", "limit"}
+        if key not in {"poll_seconds", "max_events", "since", "limit", "require_ws"}
     }
 
 

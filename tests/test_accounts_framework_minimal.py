@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from kairospy.accounts import (
+from kairospy.core.account import (
     AccountBalance,
     AccountContext,
     AccountEvent,
@@ -28,7 +28,7 @@ from kairospy.accounts import (
     project_account,
     reserve_cash_order,
 )
-from kairospy.orders import OrderEvent, OrderEventKind, OrderJournal, OrderRequest, OrderSide
+from kairospy.core.order import OrderEvent, OrderEventKind, OrderJournal, OrderRequest, OrderSide
 
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.integrations import EquityReferenceSnapshotProvider, catalog_from_equity_rows, massive_corporate_action_events
-from kairospy.reference import (
+from kairospy.core.reference import (
     CorporateActionService,
     LifecycleEventType,
     ReferenceRefreshService,

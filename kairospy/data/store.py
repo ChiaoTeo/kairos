@@ -6,6 +6,7 @@ from fnmatch import fnmatchcase
 import json
 from pathlib import Path
 from typing import Iterable, Literal, Mapping
+from pandas import DataFrame
 
 from .ids import DataId, normalize_alias, normalize_data_id
 from .query import DataQuery, OutputFormat

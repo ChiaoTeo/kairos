@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from kairospy.integrations import CcxtDriver, Hyperliquid
-from kairospy.reference import MarketRef
+from kairospy.core.reference import MarketRef
 from kairospy.surface.runtime import DriverName, ExchangeName, exchange
 
 

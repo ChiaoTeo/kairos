@@ -1,0 +1,9 @@
+[run]
+mode = "paper"
+strategy = "examples.strategies.hyperliquid:OneShotLong"
+
+[accounts.hyperliquid_main]
+index = 0
+venue = "hyperliquid"
+cash = "10000"
+currency = "USDC"

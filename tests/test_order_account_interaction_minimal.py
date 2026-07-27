@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from kairospy.accounts import (
+from kairospy.core.account import (
     AccountBalance,
     AccountContext,
     AccountRef,
@@ -18,11 +18,11 @@ from kairospy.accounts import (
     bootstrap_account,
     project_account,
 )
-from kairospy.execution import FillReport, ExecutionCoordinator, JsonExecutionStateStore
+from kairospy.core.execution import FillReport, ExecutionCoordinator, JsonExecutionStateStore
 from kairospy.integrations.ccxt import CcxtAccountBootstrapParser
-from kairospy.reference import MarketResolver
+from kairospy.core.reference import MarketResolver
 from kairospy.integrations.ccxt.private_events import ingest_ccxt_order_update
-from kairospy.orders import OrderEvent, OrderEventKind, OrderOrigin, OrderRequest, OrderSide, OrderStatus
+from kairospy.core.order import OrderEvent, OrderEventKind, OrderOrigin, OrderRequest, OrderSide, OrderStatus
 
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)

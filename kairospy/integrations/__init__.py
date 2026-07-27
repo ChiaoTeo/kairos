@@ -12,6 +12,14 @@ from .massive_lifecycle import (
     massive_split_events,
     massive_ticker_change_events,
 )
+from .model import (
+    INTEGRATION_DOMAIN_ACCOUNT,
+    INTEGRATION_DOMAIN_ORDER,
+    INTEGRATION_DOMAIN_REFERENCE,
+    IntegrationAccountUpdate,
+    IntegrationOrderUpdate,
+    IntegrationReferenceUpdate,
+)
 from .protocols import Broker, HistoricalMarketData, InstrumentProvider, Integration, LiveMarketData
 from .reference import EquityProviderRefreshService, InstrumentProviderRefreshService
 from .providers import Massive
@@ -28,11 +36,17 @@ __all__ = [
     "Hyperliquid",
     "HistoricalMarketData",
     "IBKR",
+    "INTEGRATION_DOMAIN_ACCOUNT",
+    "INTEGRATION_DOMAIN_ORDER",
+    "INTEGRATION_DOMAIN_REFERENCE",
     "InstrumentProvider",
     "InstrumentReferenceSnapshotProvider",
     "InstrumentProviderRefreshService",
     "Integration",
+    "IntegrationAccountUpdate",
+    "IntegrationOrderUpdate",
     "IntegrationRegistry",
+    "IntegrationReferenceUpdate",
     "LiveMarketData",
     "Massive",
     "MassiveDriver",

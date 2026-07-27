@@ -8,7 +8,7 @@ import typer
 from kairospy.config import load_config
 from kairospy.data import DataStore
 from kairospy.integrations import Binance, CcxtDriver, Hyperliquid, Massive, MassiveDriver
-from kairospy.reference import ReferenceStore
+from kairospy.core.reference import ReferenceStore
 
 
 class StorageFormat(str, Enum):

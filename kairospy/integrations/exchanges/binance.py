@@ -7,9 +7,17 @@ from typing import AsyncIterator, Iterable, Mapping
 from kairospy.data import DataSink
 
 from kairospy.integrations.binance_lifecycle import delist_schedule_events
+from kairospy.integrations.ccxt.market_data import (
+    ccxt_market_type,
+    ccxt_ohlcv_record,
+    ccxt_order_book_record,
+    ccxt_ticker_record,
+    ccxt_trade_record,
+    ephemeral_market_ref,
+)
 from kairospy.integrations.instruments import catalog_from_market_rows, market_definitions_from_rows
 from kairospy.integrations.drivers import BinanceReferenceDriver, CcxtDriver
-from kairospy.reference import LifecycleEvent, MarketDefinition, ReferenceCatalog
+from kairospy.core.reference import LifecycleEvent, MarketDefinition, MarketRef, ReferenceCatalog
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,7 +83,8 @@ class Binance:
         limit: int = 1000,
         params: Mapping[str, object] | None = None,
     ) -> Iterable[Mapping[str, object]]:
-        return self.driver.fetch_ohlcv(
+        market_ref = _market_ref(self.exchange_id, symbol, params)
+        rows = self.driver.fetch_ohlcv(
             self.exchange_id,
             symbol,
             timeframe=timeframe,
@@ -84,6 +93,7 @@ class Binance:
             limit=limit,
             params=params,
         )
+        return (ccxt_ohlcv_record(row, market=market_ref, timeframe=timeframe) for row in rows)
 
     def watch_ticker(
         self,
@@ -91,7 +101,10 @@ class Binance:
         *,
         params: Mapping[str, object] | None = None,
     ) -> AsyncIterator[Mapping[str, object]]:
-        return self.driver.watch_ticker(self.exchange_id, symbol, params=params)
+        return _ticker_records(
+            self.driver.watch_ticker(self.exchange_id, symbol, params=params),
+            _market_ref(self.exchange_id, symbol, params),
+        )
 
     def watch_order_book(
         self,
@@ -100,7 +113,10 @@ class Binance:
         limit: int | None = None,
         params: Mapping[str, object] | None = None,
     ) -> AsyncIterator[Mapping[str, object]]:
-        return self.driver.watch_order_book(self.exchange_id, symbol, limit=limit, params=params)
+        return _order_book_records(
+            self.driver.watch_order_book(self.exchange_id, symbol, limit=limit, params=params),
+            _market_ref(self.exchange_id, symbol, params),
+        )
 
     def watch_trades(
         self,
@@ -110,7 +126,10 @@ class Binance:
         limit: int = 50,
         params: Mapping[str, object] | None = None,
     ) -> AsyncIterator[Mapping[str, object]]:
-        return self.driver.watch_trades(self.exchange_id, symbol, since=since, limit=limit, params=params)
+        return _trade_records(
+            self.driver.watch_trades(self.exchange_id, symbol, since=since, limit=limit, params=params),
+            _market_ref(self.exchange_id, symbol, params),
+        )
 
     async def persist_ticker(
         self,
@@ -147,6 +166,25 @@ class Binance:
             self.watch_trades(symbol, since=since, limit=trade_limit, params=params),
             limit=limit,
         )
+
+
+def _market_ref(exchange_id: str, symbol: str, params: Mapping[str, object] | None) -> MarketRef:
+    return ephemeral_market_ref(venue=exchange_id, market=ccxt_market_type(exchange_id, params), source_symbol=symbol)
+
+
+async def _ticker_records(events, market):
+    async for event in events:
+        yield ccxt_ticker_record(event, market=market)
+
+
+async def _order_book_records(events, market):
+    async for event in events:
+        yield ccxt_order_book_record(event, market=market)
+
+
+async def _trade_records(events, market):
+    async for event in events:
+        yield ccxt_trade_record(event, market=market)
 
 
 __all__ = ["Binance"]

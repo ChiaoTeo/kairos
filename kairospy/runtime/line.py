@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Iterable
 
-from .events import AccountRuntimeEvent, ClockEvent, MarketEvent, RuntimeEvent, SystemRuntimeEvent
+from .data import RuntimeDataEnvelope
 
 
 class RuntimeMode(StrEnum):
@@ -16,13 +16,13 @@ class RuntimeMode(StrEnum):
 @dataclass(frozen=True, slots=True)
 class RuntimeLine:
     mode: RuntimeMode
-    items: tuple[RuntimeEvent, ...]
+    items: tuple[RuntimeDataEnvelope, ...]
     preserve_order: bool = False
 
     def __init__(
         self,
         mode: RuntimeMode | str,
-        items: Iterable[RuntimeEvent],
+        items: Iterable[RuntimeDataEnvelope],
         *,
         preserve_order: bool = False,
     ) -> None:
@@ -35,32 +35,32 @@ class RuntimeLine:
         object.__setattr__(self, "items", values)
         object.__setattr__(self, "preserve_order", preserve_order)
 
-    def events(self) -> Iterable[RuntimeEvent]:
+    def events(self) -> Iterable[RuntimeDataEnvelope]:
         return iter(self.items)
 
 
 def runtime_line(
     mode: RuntimeMode | str,
-    items: Iterable[RuntimeEvent],
+    items: Iterable[RuntimeDataEnvelope],
     *,
     preserve_order: bool = False,
 ) -> RuntimeLine:
     return RuntimeLine(mode, items, preserve_order=preserve_order)
 
 
-def _event_sort_key(item: tuple[int, RuntimeEvent]) -> tuple[object, int, int]:
+def _event_sort_key(item: tuple[int, RuntimeDataEnvelope]) -> tuple[object, int, int]:
     index, event = item
     return (event.time, _event_priority(event), index)
 
 
-def _event_priority(event: RuntimeEvent) -> int:
-    if isinstance(event, SystemRuntimeEvent):
+def _event_priority(event: RuntimeDataEnvelope) -> int:
+    if event.domain == "system":
         return 0
-    if isinstance(event, ClockEvent):
+    if event.domain == "clock":
         return 5
-    if isinstance(event, AccountRuntimeEvent):
+    if event.domain == "account":
         return 10
-    if isinstance(event, MarketEvent):
+    if event.domain == "market":
         return 20
     return 30
 

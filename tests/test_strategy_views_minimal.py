@@ -3,11 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from tempfile import TemporaryDirectory
 
-from kairospy.context import DataContext
+from kairospy.context import Context, DataContext, StrategyContext
 from kairospy.data import DataStore
 from kairospy.runtime import DataViewEventSource, StrategyRuntime
-from kairospy.reference import MarketResolver
-from kairospy.strategy import Context, ControlRequestKind, StrategyBase, StrategyContext, StrategyRunView, ViewSchema, ViewStore
+from kairospy.core.reference import MarketResolver
+from kairospy.strategy import ControlRequestKind, StrategyBase, StrategyRunView, ViewSchema, ViewStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,14 +61,15 @@ def test_strategy_views_support_project_and_strategy_maintained_views() -> None:
                 {"time": "2026-01-01T00:01:00+00:00", "close": 101},
             ],
         )
-        data = DataContext(store, markets=MarketResolver(default_venue="simulated", default_market="spot"))
+        resolver = MarketResolver(default_venue="simulated", default_market="spot")
+        data = DataContext(store)
         bars = data.attach("bars", dataset="market.ohlcv.btc_usdt.1m")
         views = ViewStore()
         views.register(ViewSchema("project.regime", "project", mutability="runtime_writable", persistence="checkpointed"))
         views.register(ViewSchema("strategy.counter", "strategy", mutability="strategy_writable", persistence="checkpointed"))
         views.put_runtime("project.regime", ProjectRegimeView("risk-on"))
 
-        result = StrategyRuntime(ViewMaintainingStrategy(), data, views=views).run(DataViewEventSource(bars))
+        result = StrategyRuntime(ViewMaintainingStrategy(), data, views=views, market_resolver=resolver).run(DataViewEventSource(bars))
 
         counter = views.require("strategy.counter")
         strategy_run = views.require("system.strategy")
@@ -86,9 +87,10 @@ def test_strategy_context_control_records_audited_runtime_requests() -> None:
     with TemporaryDirectory() as temporary:
         store = DataStore(temporary, storage_format="jsonl")
         store.write("market.ohlcv.btc_usdt.1m", [{"time": "2026-01-01T00:00:00+00:00", "close": 100}])
-        data = DataContext(store, markets=MarketResolver(default_venue="simulated", default_market="spot"))
+        resolver = MarketResolver(default_venue="simulated", default_market="spot")
+        data = DataContext(store)
         bars = data.attach("bars", dataset="market.ohlcv.btc_usdt.1m")
-        runtime = StrategyRuntime(ControlRequestingStrategy(), data)
+        runtime = StrategyRuntime(ControlRequestingStrategy(), data, market_resolver=resolver)
 
         result = runtime.run(DataViewEventSource(bars))
 
@@ -105,7 +107,8 @@ def test_runtime_publishes_intent_state_view() -> None:
     with TemporaryDirectory() as temporary:
         store = DataStore(temporary, storage_format="jsonl")
         store.write("market.ohlcv.btc_usdt.1m", [{"time": "2026-01-01T00:00:00+00:00", "close": 100}])
-        data = DataContext(store, markets=MarketResolver(default_venue="simulated", default_market="spot"))
+        resolver = MarketResolver(default_venue="simulated", default_market="spot")
+        data = DataContext(store)
         bars = data.attach("bars", dataset="market.ohlcv.btc_usdt.1m")
 
         class IntentStrategy(StrategyBase):
@@ -114,7 +117,7 @@ def test_runtime_publishes_intent_state_view() -> None:
             def on_market(self, context: Context, event):
                 context.target_position("btc_usdt", 1, intent_id="intent-1")
 
-        runtime = StrategyRuntime(IntentStrategy(), data)
+        runtime = StrategyRuntime(IntentStrategy(), data, market_resolver=resolver)
         runtime.run(DataViewEventSource(bars))
 
         intent_view = runtime.views.require("system.intents")

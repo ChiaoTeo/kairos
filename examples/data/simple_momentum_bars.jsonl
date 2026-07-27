@@ -1,6 +1,0 @@
-{"time":"2026-01-01T00:00:00+00:00","market_id":"market:simulated:spot:btc_usdt","instrument_id":"instrument:spot:btc:usdt","market_key":"simulated_spot_btc_usdt","open":"100","high":"101","low":"99","close":"100","volume":"10"}
-{"time":"2026-01-01T00:01:00+00:00","market_id":"market:simulated:spot:btc_usdt","instrument_id":"instrument:spot:btc:usdt","market_key":"simulated_spot_btc_usdt","open":"100","high":"104","low":"100","close":"103","volume":"10"}
-{"time":"2026-01-01T00:02:00+00:00","market_id":"market:simulated:spot:btc_usdt","instrument_id":"instrument:spot:btc:usdt","market_key":"simulated_spot_btc_usdt","open":"103","high":"104","low":"97","close":"98","volume":"10"}
-{"time":"2026-01-01T00:03:00+00:00","market_id":"market:simulated:spot:btc_usdt","instrument_id":"instrument:spot:btc:usdt","market_key":"simulated_spot_btc_usdt","open":"98","high":"102","low":"98","close":"101","volume":"10"}
-{"time":"2026-01-01T00:04:00+00:00","market_id":"market:simulated:spot:btc_usdt","instrument_id":"instrument:spot:btc:usdt","market_key":"simulated_spot_btc_usdt","open":"101","high":"107","low":"101","close":"106","volume":"10"}
-{"time":"2026-01-01T00:05:00+00:00","market_id":"market:simulated:spot:btc_usdt","instrument_id":"instrument:spot:btc:usdt","market_key":"simulated_spot_btc_usdt","open":"106","high":"107","low":"103","close":"104","volume":"10"}

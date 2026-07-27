@@ -1,29 +1,60 @@
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 from decimal import Decimal
-import json
 from tempfile import TemporaryDirectory
-import runpy
 
 import pytest
 
-from kairospy.accounts import AccountBalance, AccountContext, AccountRef, AccountSnapshot, AccountSource, Environment
-from kairospy.context import DataContext
-from kairospy.data import DataStore
-from kairospy.runtime import (
+from kairospy.core.account import (
+    AccountBalance,
+    AccountContext,
     AccountCurrentProjection,
-    AccountRuntimeEvent,
-    ClockEvent,
-    DataViewEventSource,
-    IterableEventSource,
+    AccountRef,
+    AccountSnapshot,
+    AccountSource,
+    Environment,
+)
+from kairospy.context import DataContext, StrategyContext
+from kairospy.data import DataStore
+from kairospy.core.execution import ExecutionCoordinator, ExecutionCurrentProjection, cash_order_request
+from kairospy.core.market import MarketUpdate
+from kairospy.core.market import (
+    FIELD_BAR_CLOSE,
+    FIELD_BAR_OPEN,
+    FIELD_BOOK_ASK1,
+    FIELD_BOOK_BID1,
+    FIELD_FUNDING_RATE,
+    FIELD_INTEREST_RATE,
+    FIELD_QUOTE_ASK,
+    FIELD_QUOTE_BID,
+    FIELD_TRADE_PRICE,
+    FIELD_TRADE_SIZE,
     MarketCurrentProjection,
+    MarketDataField,
+    STREAM_BAR,
+    STREAM_MARKET_CONTEXT,
+    STREAM_ORDERBOOK,
+    STREAM_RATE,
+    STREAM_TICKER,
+    STREAM_TRADE,
+    SUBSCRIPTION_KIND_FIELDS,
+)
+from kairospy.core.order import OrderSide
+from kairospy.core.order import OrderEvent, OrderEventKind
+from kairospy.runtime import (
+    DataViewEventSource,
+    ExecutionRuntimePayload,
+    IterableEventSource,
+    RuntimeDataEnvelope,
+    RuntimeDataPipeline,
+    MarketState,
     StrategyRuntime,
     SystemEventProjection,
-    SystemRuntimeEvent,
+    account_data_envelope,
+    system_data_envelope,
 )
-from kairospy.strategy import StrategyBase, StrategyContext
+from kairospy.strategy import StrategyBase
 
 
 class RecordingStrategy(StrategyBase):
@@ -37,14 +68,36 @@ class RecordingStrategy(StrategyBase):
         return ({"kind": "started"},)
 
     def on_market(self, context: StrategyContext, event):
-        self.calls.append(("market", event.payload["close"]))
+        close = _latest_market_field(context, FIELD_BAR_CLOSE)
+        self.calls.append(("market", close))
         assert context.now == event.time
         assert context.stream == "bars"
-        return ({"kind": "seen", "close": event.payload["close"]},)
+        return ({"kind": "seen", "close": close},)
 
     def on_end(self, context: StrategyContext):
         self.calls.append(("end", context.now))
         return ({"kind": "ended"},)
+
+
+class RuntimeMessageStrategy(StrategyBase):
+    strategy_id = "runtime-messages"
+
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, str | None, str, object]] = []
+
+    def on_account(self, context: StrategyContext, event):
+        account_event = context.latest_data(domain="account")
+        self.messages.append(("account", context.stream, context.phase, account_event.payload.context.account.account_id))
+        return ({"kind": "account_seen", "sequence": event.sequence},)
+
+    def on_order(self, context: StrategyContext, event):
+        order_event = context.latest_data(domain="execution")
+        self.messages.append(("order", context.stream, context.phase, order_event.payload.order_event.client_order_id))
+        return ({"kind": "order_seen", "sequence": event.sequence},)
+
+    def on_system(self, context: StrategyContext, event):
+        self.messages.append(("system", context.stream, context.phase, context.system_event.kind))
+        return ({"kind": "system_seen", "sequence": event.sequence},)
 
 
 class ViewReadingStrategy(StrategyBase):
@@ -67,7 +120,12 @@ class QuoteReadingStrategy(StrategyBase):
         self.seen = []
 
     def on_start(self, context: StrategyContext):
-        self.subscription = context.subscribe_quote("BTC/USDT", venue="binance", market="spot")
+        self.subscription = context.subscribe_market_fields(
+            "BTC/USDT",
+            fields=(FIELD_QUOTE_BID, FIELD_QUOTE_ASK),
+            venue="binance",
+            market="spot",
+        )
         return ()
 
     def on_market(self, context: StrategyContext, event):
@@ -75,6 +133,53 @@ class QuoteReadingStrategy(StrategyBase):
         self.seen.append(None if quote is None else (quote.bid, quote.ask, quote.midpoint))
         return ()
 
+
+class MarketSubscriptionStrategy(StrategyBase):
+    strategy_id = "market-subscriptions"
+
+    def __init__(self) -> None:
+        self.subscriptions = []
+        self.latest_rate = None
+        self.latest_funding = None
+
+    def on_start(self, context: StrategyContext):
+        self.subscriptions.append(context.subscribe_market_fields(
+            "BTC/USDT",
+            fields=(FIELD_QUOTE_BID, FIELD_QUOTE_ASK),
+            venue="binance",
+            market="spot",
+        ))
+        self.subscriptions.append(context.subscribe_market_fields(
+            "BTC/USDT",
+            fields=(MarketDataField(FIELD_BOOK_BID1, depth=10), MarketDataField(FIELD_BOOK_ASK1, depth=10)),
+            venue="binance",
+            market="spot",
+        ))
+        self.subscriptions.append(context.subscribe_market_fields(
+            "BTC/USDT",
+            fields=(MarketDataField(FIELD_BAR_OPEN, interval="1m"), MarketDataField(FIELD_BAR_CLOSE, interval="1m")),
+            venue="binance",
+            market="spot",
+        ))
+        self.subscriptions.append(context.subscribe_market_fields(
+            "BTC/USDT",
+            fields=(FIELD_TRADE_PRICE, FIELD_TRADE_SIZE),
+            venue="binance",
+            market="spot",
+        ))
+        self.subscriptions.append(context.subscribe_subject_fields("rate", "USD.SOFR", fields=(FIELD_INTEREST_RATE,)))
+        self.subscriptions.append(context.subscribe_market_fields(
+            "BTC/USDT",
+            fields=(FIELD_FUNDING_RATE,),
+            venue="binance",
+            market="perp",
+        ))
+        return ()
+
+    def on_market(self, context: StrategyContext, event):
+        self.latest_rate = context.market.latest_rate("USD.SOFR")
+        self.latest_funding = context.market.latest_funding("BTC/USDT", venue="binance", market="perp")
+        return ()
 
 class RequestGuardStrategy(StrategyBase):
     strategy_id = "request-guard"
@@ -108,6 +213,19 @@ class StaticQuoteProvider:
         }
 
 
+class DataflowReadingStrategy(StrategyBase):
+    strategy_id = "dataflow-reader"
+
+    def __init__(self) -> None:
+        self.latest = None
+        self.counts: list[int] = []
+
+    def on_market(self, context: StrategyContext, event):
+        self.latest = context.latest_data(domain="market")
+        self.counts.append(len(context.data_records(domain="market")))
+        return ()
+
+
 class MixedEventSource:
     def __init__(self, events):
         self._events = tuple(events)
@@ -116,12 +234,32 @@ class MixedEventSource:
         return iter(self._events)
 
 
+def _latest_market_field(context: StrategyContext, field: str) -> object:
+    view = context.views.require("market.fields")
+    for item in reversed(tuple(view.fields)):
+        if item.field == field:
+            return item.value
+    raise AssertionError(f"missing market field: {field}")
+
+
 def test_strategy_runtime_runs_start_market_end_callbacks_from_data_view() -> None:
     with TemporaryDirectory() as temporary:
         store = DataStore(temporary, storage_format="jsonl")
         store.write("market.ohlcv.btc_usdt.1m", [
-            {"time": "2026-01-01T00:00:00+00:00", "close": 100},
-            {"time": "2026-01-01T00:01:00+00:00", "close": 101},
+            {
+                "time": "2026-01-01T00:00:00+00:00",
+                "market_id": "market:binance:spot:btc_usdt",
+                "instrument_id": "instrument:spot:btc:usdt",
+                "market_key": "binance_spot_btc_usdt",
+                "close": 100,
+            },
+            {
+                "time": "2026-01-01T00:01:00+00:00",
+                "market_id": "market:binance:spot:btc_usdt",
+                "instrument_id": "instrument:spot:btc:usdt",
+                "market_key": "binance_spot_btc_usdt",
+                "close": 101,
+            },
         ])
         data = DataContext(store)
         bars = data.attach("bars", dataset="market.ohlcv.btc_usdt.1m")
@@ -171,17 +309,16 @@ def test_strategy_runtime_publishes_component_views_before_strategy_callback() -
         assert runtime.views.snapshot()["views"]["market.current"]["owner"] == "system"
 
 
-def test_runtime_account_and_system_events_share_event_line_without_market_callback() -> None:
+def test_runtime_account_and_system_events_share_event_line_with_domain_callbacks() -> None:
     data = DataContext(DataStore(":unused:", storage_format="jsonl"))
     strategy = RecordingStrategy()
     account = AccountContext(AccountRef("simulated", "strategy-a"), Environment.SIMULATION)
     account_key = "account.current.simulation.simulated.strategy_a"
     source = MixedEventSource((
-        AccountRuntimeEvent(
+        account_data_envelope(
             account,
-            1,
-            datetime.fromisoformat("2026-01-01T00:00:00+00:00"),
-            payload={"equity": "1000", "source": "simulated"},
+            sequence=1,
+            time=datetime.fromisoformat("2026-01-01T00:00:00+00:00"),
             snapshot=AccountSnapshot(
                 account,
                 balances=(
@@ -195,15 +332,23 @@ def test_runtime_account_and_system_events_share_event_line_without_market_callb
                 observed_at=datetime.fromisoformat("2026-01-01T00:00:00+00:00"),
                 source=AccountSource.SIMULATED,
             ),
+            equity=Decimal("1000"),
+            source=AccountSource.SIMULATED,
+            stream="account",
         ),
         next(IterableEventSource("bars", [
-            {"time": "2026-01-01T00:01:00+00:00", "close": 101},
+            {
+                "time": "2026-01-01T00:01:00+00:00",
+                "market_id": "market:binance:spot:btc_usdt",
+                "instrument_id": "instrument:spot:btc:usdt",
+                "market_key": "binance_spot_btc_usdt",
+                "close": 101,
+            },
         ]).events()),
-        AccountRuntimeEvent(
+        account_data_envelope(
             account,
-            2,
-            datetime.fromisoformat("2026-01-01T00:02:00+00:00"),
-            payload={"equity": "1015", "source": "simulated"},
+            sequence=2,
+            time=datetime.fromisoformat("2026-01-01T00:02:00+00:00"),
             snapshot=AccountSnapshot(
                 account,
                 balances=(
@@ -217,11 +362,14 @@ def test_runtime_account_and_system_events_share_event_line_without_market_callb
                 observed_at=datetime.fromisoformat("2026-01-01T00:02:00+00:00"),
                 source=AccountSource.SIMULATED,
             ),
+            equity=Decimal("1015"),
+            source=AccountSource.SIMULATED,
+            stream="account",
         ),
-        SystemRuntimeEvent(
+        system_data_envelope(
             "risk.limit.updated",
-            1,
-            datetime.fromisoformat("2026-01-01T00:03:00+00:00"),
+            sequence=1,
+            time=datetime.fromisoformat("2026-01-01T00:03:00+00:00"),
             payload={"limit": "reduce-only"},
         ),
     ))
@@ -238,7 +386,7 @@ def test_runtime_account_and_system_events_share_event_line_without_market_callb
     system_strategy = runtime.views.require("system.strategy")
     assert result.event_count == 1
     assert result.runtime_event_count == 4
-    assert [record.hook for record in result.callbacks] == ["on_start", "on_market", "on_end"]
+    assert [record.hook for record in result.callbacks] == ["on_start", "on_account", "on_market", "on_account", "on_system", "on_end"]
     assert account_view.event_count == 2
     assert account_view.equity == Decimal("1015")
     assert account_view.initial_equity == Decimal("1000")
@@ -249,6 +397,66 @@ def test_runtime_account_and_system_events_share_event_line_without_market_callb
     assert system_strategy.event_count == 1
     assert system_strategy.runtime_event_count == 4
     assert system_strategy.last_runtime_stream == "system"
+
+
+def test_strategy_runtime_dispatches_account_order_and_system_messages_to_strategy_hooks() -> None:
+    data = DataContext(DataStore(":unused:", storage_format="jsonl"))
+    account = AccountContext(AccountRef("simulated", "strategy-a"), Environment.SIMULATION)
+    strategy = RuntimeMessageStrategy()
+    account_time = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
+    order_time = datetime.fromisoformat("2026-01-01T00:01:00+00:00")
+    system_time = datetime.fromisoformat("2026-01-01T00:02:00+00:00")
+    source = MixedEventSource((
+        account_data_envelope(
+            account,
+            sequence=1,
+            time=account_time,
+            snapshot=AccountSnapshot(
+                account,
+                balances=(
+                    AccountBalance.from_total_locked(
+                        "USD",
+                        Decimal("1000"),
+                        Decimal("0"),
+                        source=AccountSource.SIMULATED,
+                    ),
+                ),
+                observed_at=account_time,
+                source=AccountSource.SIMULATED,
+            ),
+            equity=Decimal("1000"),
+            source=AccountSource.SIMULATED,
+            stream="account",
+        ),
+        RuntimeDataEnvelope(
+            "execution",
+            "order",
+            order_time,
+            1,
+            ExecutionRuntimePayload(order_event=OrderEvent("client-1", OrderEventKind.ACKNOWLEDGED, order_time, venue_order_id="venue-1")),
+            stream="order",
+            metadata={"adapter": "unit-test"},
+        ),
+        system_data_envelope("risk.limit.updated", sequence=1, time=system_time, payload={"limit": "reduce-only"}),
+    ))
+
+    result = StrategyRuntime(strategy, data).run(source)
+
+    assert result.event_count == 0
+    assert result.runtime_event_count == 3
+    assert [record.hook for record in result.callbacks] == [
+        "on_start",
+        "on_account",
+        "on_order",
+        "on_system",
+        "on_end",
+    ]
+    assert strategy.messages == [
+        ("account", "account", "account", "strategy-a"),
+        ("order", "order", "order", "client-1"),
+        ("system", "system", "system", "risk.limit.updated"),
+    ]
+    assert [item["kind"] for item in result.intents] == ["account_seen", "order_seen", "system_seen"]
 
 
 def test_strategy_context_account_accessor_requires_key_when_multiple_accounts_exist() -> None:
@@ -287,7 +495,9 @@ def test_context_subscribe_quote_and_market_latest_quote_are_runtime_owned() -> 
     result = runtime.run(source)
 
     assert result.event_count == 1
-    assert strategy.subscription.key == "market.quote.binance_spot_btc_usdt"
+    assert strategy.subscription.key.startswith("market.fields.binance_spot_btc_usdt.")
+    assert tuple(field.path for field in strategy.subscription.spec.fields) == (FIELD_QUOTE_BID, FIELD_QUOTE_ASK)
+    assert [plan.channel for plan in strategy.subscription.stream_plans] == [STREAM_TICKER]
     assert len(runtime.subscriptions.list()) == 1
     assert str(strategy.seen[0][0]) == "100"
     assert str(strategy.seen[0][1]) == "101"
@@ -299,6 +509,281 @@ def test_context_subscribe_quote_and_market_latest_quote_are_runtime_owned() -> 
     assert market_view.quotes[0].market_key == "binance_spot_btc_usdt"
     assert str(market_view.quotes[0].bid) == "100"
     assert str(market_view.quotes[0].ask) == "101"
+    subscriptions = runtime.views.require("market.subscriptions")
+    assert subscriptions.total_count == 1
+    assert subscriptions.active_count == 1
+    assert subscriptions.subscriptions[0].subject_type == "instrument"
+    assert subscriptions.subscriptions[0].kind == SUBSCRIPTION_KIND_FIELDS
+    assert subscriptions.subscriptions[0].fields == (FIELD_QUOTE_BID, FIELD_QUOTE_ASK)
+    assert subscriptions.subscriptions[0].last_event_time == datetime.fromisoformat("2026-01-01T00:00:00+00:00")
+
+
+def test_market_subscriptions_cover_rates_and_funding_views() -> None:
+    data = DataContext(DataStore(":unused:", storage_format="jsonl"))
+    strategy = MarketSubscriptionStrategy()
+    source = MixedEventSource((
+        next(IterableEventSource("rates.usd.sofr", [
+            {
+                "time": "2026-01-01T00:00:00+00:00",
+                "kind": "interest_rate",
+                "subject_type": "rate",
+                "subject_id": "USD.SOFR",
+                "rate_id": "USD.SOFR",
+                "rate": "0.0525",
+                "basis": "ACT/360",
+            }
+        ]).events()),
+        next(IterableEventSource("binance.funding.BTC/USDT", [
+            {
+                "time": "2026-01-01T00:01:00+00:00",
+                "kind": "funding_rate",
+                "market_id": "market:binance:perp:btc_usdt",
+                "instrument_id": "instrument:perp:btc:usdt",
+                "market_key": "binance_perp_btc_usdt",
+                "rate": "0.0001",
+            }
+        ]).events()),
+    ))
+
+    runtime = StrategyRuntime(strategy, data)
+    runtime.run(source)
+
+    assert [item.kind for item in strategy.subscriptions] == [SUBSCRIPTION_KIND_FIELDS] * 6
+    assert [item.stream_plans[0].channel for item in strategy.subscriptions] == [
+        STREAM_TICKER,
+        STREAM_ORDERBOOK,
+        STREAM_BAR,
+        STREAM_TRADE,
+        STREAM_RATE,
+        STREAM_MARKET_CONTEXT,
+    ]
+    assert strategy.latest_rate.rate == Decimal("0.0525")
+    assert strategy.latest_funding.rate == Decimal("0.0001")
+    rates = runtime.views.require("market.rates")
+    subscriptions = runtime.views.require("market.subscriptions")
+    assert rates.event_count == 2
+    assert {item.rate_id for item in rates.rates} == {"USD.SOFR", "market:binance:perp:btc_usdt"}
+    assert subscriptions.total_count == 6
+    assert sum(1 for item in subscriptions.subscriptions if item.last_event_time is not None) == 2
+
+
+def test_market_state_projects_books_bars_trades_and_best_quote() -> None:
+    data = DataContext(DataStore(":unused:", storage_format="jsonl"))
+    market_fields = {
+        "market_id": "market:binance:spot:btc_usdt",
+        "instrument_id": "instrument:spot:btc:usdt",
+        "market_key": "binance_spot_btc_usdt",
+    }
+    source = MixedEventSource((
+        next(IterableEventSource("binance.book.BTC/USDT", [
+            {
+                "time": "2026-01-01T00:00:00+00:00",
+                "kind": "orderbook",
+                **market_fields,
+                "bids": [["100", "1.2"]],
+                "asks": [["101", "0.8"]],
+            }
+        ]).events()),
+        next(IterableEventSource("binance.bar.BTC/USDT", [
+            {
+                "time": "2026-01-01T00:01:00+00:00",
+                "kind": "bar",
+                **market_fields,
+                "timeframe": "1m",
+                "open": "100",
+                "high": "102",
+                "low": "99",
+                "close": "101",
+                "volume": "10",
+            }
+        ]).events()),
+        next(IterableEventSource("binance.trade.BTC/USDT", [
+            {
+                "time": "2026-01-01T00:01:30+00:00",
+                "kind": "trade",
+                **market_fields,
+                "id": "trade-1",
+                "side": "buy",
+                "price": "101",
+                "size": "0.5",
+                "cost": "50.5",
+            }
+        ]).events()),
+    ))
+
+    runtime = StrategyRuntime(StrategyBase(), data)
+    runtime.run(source)
+
+    quotes = runtime.views.require("market.quotes")
+    books = runtime.views.require("market.books")
+    bars = runtime.views.require("market.bars")
+    trades = runtime.views.require("market.trades")
+    fields = runtime.views.require("market.fields")
+    assert quotes.event_count == 1
+    assert str(quotes.quotes[0].bid) == "100"
+    assert books.event_count == 1
+    assert books.books[0].bid_depth == 1
+    assert str(books.books[0].asks[0][0]) == "101"
+    assert bars.event_count == 1
+    assert bars.bars[0].timeframe == "1m"
+    assert str(bars.bars[0].close) == "101"
+    assert trades.event_count == 1
+    assert trades.trades[0].trade_id == "trade-1"
+    assert str(trades.trades[0].size) == "0.5"
+    field_values = {(item.field, item.interval): item.value for item in fields.fields}
+    assert str(field_values[(FIELD_BOOK_BID1, None)]) == "100"
+    assert str(field_values[(FIELD_BAR_OPEN, "1m")]) == "100"
+    assert str(field_values[(FIELD_TRADE_PRICE, None)]) == "101"
+
+
+def test_market_field_subscription_can_target_hourly_open_without_subscribing_to_bar_type() -> None:
+    class HourlyOpenStrategy(StrategyBase):
+        def __init__(self) -> None:
+            self.subscription = None
+
+        def on_start(self, context: StrategyContext):
+            self.subscription = context.subscribe_market_fields(
+                "BTC/USDT",
+                fields=(MarketDataField(FIELD_BAR_OPEN, interval="1h"),),
+                venue="binance",
+                market="spot",
+            )
+            return ()
+
+    data = DataContext(DataStore(":unused:", storage_format="jsonl"))
+    strategy = HourlyOpenStrategy()
+    source = IterableEventSource("binance.bar.BTC/USDT", [
+        {
+            "time": "2026-01-01T01:00:00+00:00",
+            "kind": "bar",
+            "market_id": "market:binance:spot:btc_usdt",
+            "instrument_id": "instrument:spot:btc:usdt",
+            "market_key": "binance_spot_btc_usdt",
+            "timeframe": "1h",
+            "open": "100",
+            "close": "101",
+        }
+    ])
+
+    runtime = StrategyRuntime(strategy, data)
+    runtime.run(source)
+
+    assert strategy.subscription.spec.fields[0].key == f"{FIELD_BAR_OPEN}|interval=1h"
+    assert strategy.subscription.stream_plans[0].channel == STREAM_BAR
+    fields = runtime.views.require("market.fields")
+    assert fields.event_count == 2
+    assert [(item.field, item.interval, str(item.value)) for item in fields.fields] == [
+        (FIELD_BAR_CLOSE, "1h", "101"),
+        (FIELD_BAR_OPEN, "1h", "100"),
+    ]
+
+
+def test_market_domain_applies_integration_market_update_into_views() -> None:
+    state = MarketState()
+    update = MarketUpdate(
+        "instrument",
+        "instrument:spot:btc:usdt",
+        datetime.fromisoformat("2026-01-01T01:00:00+00:00"),
+        {
+            FIELD_BAR_OPEN: Decimal("100"),
+            FIELD_BAR_CLOSE: Decimal("101"),
+        },
+        source="binance",
+        kind="bar",
+        market_id="market:binance:spot:btc_usdt",
+        market_key="binance_spot_btc_usdt",
+        interval="1h",
+    )
+
+    summaries = state.apply_market_update(update)
+
+    assert [(item.field, item.interval, str(item.value)) for item in summaries] == [
+        (FIELD_BAR_OPEN, "1h", "100"),
+        (FIELD_BAR_CLOSE, "1h", "101"),
+    ]
+    fields = state.fields_view()
+    observations = state.observations_view()
+    assert fields.event_count == 2
+    assert observations.event_count == 1
+    assert observations.observations[0].kind == "bar"
+    assert [(item.field, item.interval, str(item.value)) for item in fields.fields] == [
+        (FIELD_BAR_CLOSE, "1h", "101"),
+        (FIELD_BAR_OPEN, "1h", "100"),
+    ]
+
+
+def test_market_observations_view_covers_generic_curve_and_index_subjects() -> None:
+    data = DataContext(DataStore(":unused:", storage_format="jsonl"))
+    source = MixedEventSource((
+        next(IterableEventSource("curves.usd.ois", [
+            {
+                "time": "2026-01-01T00:00:00+00:00",
+                "kind": "curve_point",
+                "subject_type": "curve",
+                "subject_id": "USD.OIS",
+                "tenor": "1M",
+                "rate": "0.05",
+            }
+        ]).events()),
+        next(IterableEventSource("index.spx", [
+            {
+                "time": "2026-01-01T00:01:00+00:00",
+                "kind": "index_value",
+                "subject_type": "index",
+                "subject_id": "SPX",
+                "value": "5000",
+            }
+        ]).events()),
+    ))
+
+    runtime = StrategyRuntime(StrategyBase(), data)
+    runtime.run(source)
+
+    observations = runtime.views.require("market.observations")
+    assert observations.event_count == 2
+    assert {(item.subject_type, item.subject_id, item.kind) for item in observations.observations} == {
+        ("curve", "USD.OIS", "curve_point"),
+        ("index", "SPX", "index_value"),
+    }
+
+
+def test_execution_current_projection_publishes_coordinator_state() -> None:
+    account = AccountContext(AccountRef("simulated", "strategy-a"), Environment.SIMULATION)
+    coordinator = ExecutionCoordinator()
+    at = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
+    request = cash_order_request(
+        client_order_id="order-1",
+        context=account,
+        instrument_id="instrument:spot:btc:usdt",
+        side=OrderSide.BUY,
+        quantity=Decimal("2"),
+    )
+    coordinator.plan_order(
+        request,
+        reserve_currency="USD",
+        reserve_amount=Decimal("100"),
+        venue_snapshot=AccountSnapshot(
+            account,
+            balances=(AccountBalance.from_total_locked("USD", Decimal("1000"), Decimal("0"), source=AccountSource.SIMULATED),),
+            observed_at=at,
+            source=AccountSource.SIMULATED,
+        ),
+        at=at,
+    )
+
+    runtime = StrategyRuntime(
+        RecordingStrategy(),
+        DataContext(DataStore(":unused:", storage_format="jsonl")),
+        components=(ExecutionCurrentProjection(coordinator),),
+    )
+    runtime.run(IterableEventSource("empty", ()))
+
+    view = runtime.views.require("execution.current")
+    assert view.total_orders == 1
+    assert view.active_orders == 1
+    assert view.pending_reservations == 1
+    assert view.latest_order.client_order_id == "order-1"
+    assert view.orders[0].remaining_quantity == Decimal("2")
 
 
 def test_request_quote_is_only_allowed_during_on_clock_and_updates_market_view() -> None:
@@ -314,7 +799,14 @@ def test_request_quote_is_only_allowed_during_on_clock_and_updates_market_view()
                 "ask": "101",
             }
         ]).events()),
-        ClockEvent(time=datetime.fromisoformat("2026-01-01T00:05:00+00:00")),
+        RuntimeDataEnvelope(
+            "clock",
+            "clock",
+            datetime.fromisoformat("2026-01-01T00:05:00+00:00"),
+            1,
+            {},
+            stream="clock",
+        ),
     ))
 
     runtime = StrategyRuntime(strategy, data, quote_provider=StaticQuoteProvider())
@@ -341,6 +833,85 @@ def test_strategy_runtime_still_calls_start_and_end_without_events() -> None:
     assert strategy.calls == [("start", None), ("end", None)]
 
 
+def test_runtime_data_pipeline_normalizes_runtime_events() -> None:
+    event = next(IterableEventSource("binance.quote.BTC/USDT", [
+        {
+            "time": "2026-01-01T00:00:00+00:00",
+            "kind": "quote",
+            "market_id": "market:binance:spot:btc_usdt",
+            "instrument_id": "instrument:spot:btc:usdt",
+            "market_key": "binance_spot_btc_usdt",
+            "bid": "100",
+            "ask": "101",
+        }
+    ]).events())
+    pipeline = RuntimeDataPipeline()
+
+    envelope = pipeline.ingest(event)
+
+    assert envelope.domain == "market"
+    assert envelope.kind == "quote"
+    assert envelope.stream == "binance.quote.BTC/USDT"
+    assert pipeline.view().domain_counts == (("market", 1),)
+    assert pipeline.latest(domain="market") is envelope
+
+
+def test_strategy_runtime_applies_typed_market_data_envelope_without_legacy_event() -> None:
+    observed_at = datetime.fromisoformat("2026-01-01T00:00:00+00:00")
+    update = MarketUpdate(
+        "instrument",
+        "instrument:spot:btc:usdt",
+        observed_at,
+        {FIELD_BAR_CLOSE: Decimal("101")},
+        source="binance",
+        kind="bar",
+        market_id="market:binance:spot:btc_usdt",
+        market_key="binance_spot_btc_usdt",
+        interval="1m",
+    )
+    source = MixedEventSource((
+        RuntimeDataEnvelope("market", "bar", observed_at, 1, update, stream="binance.bar.BTC/USDT", source="binance"),
+    ))
+
+    runtime = StrategyRuntime(StrategyBase(), DataContext(DataStore(":unused:", storage_format="jsonl")))
+    result = runtime.run(source)
+
+    fields = runtime.views.require("market.fields")
+    dataflow = runtime.views.require("system.dataflow")
+    assert result.event_count == 1
+    assert fields.event_count == 1
+    assert fields.fields[0].field == FIELD_BAR_CLOSE
+    assert dataflow.total_count == 1
+    assert dataflow.latest.payload_type == "MarketUpdate"
+
+
+def test_strategy_context_reads_runtime_data_pipeline() -> None:
+    data = DataContext(DataStore(":unused:", storage_format="jsonl"))
+    strategy = DataflowReadingStrategy()
+    source = IterableEventSource("binance.quote.BTC/USDT", [
+        {
+            "time": "2026-01-01T00:00:00+00:00",
+            "kind": "quote",
+            "market_id": "market:binance:spot:btc_usdt",
+            "instrument_id": "instrument:spot:btc:usdt",
+            "market_key": "binance_spot_btc_usdt",
+            "bid": "100",
+            "ask": "101",
+        }
+    ])
+
+    runtime = StrategyRuntime(strategy, data)
+    runtime.run(source)
+
+    assert strategy.latest.domain == "market"
+    assert strategy.latest.kind == "quote"
+    assert strategy.counts == [1]
+    view = runtime.views.require("system.dataflow")
+    assert view.total_count == 1
+    assert view.latest.domain == "market"
+    assert view.latest.payload_type == "MarketUpdate"
+
+
 def test_iterable_event_source_requires_timezone_aware_time() -> None:
     source = IterableEventSource("bad", [{"time": "2026-01-01T00:00:00", "close": 100}])
 
@@ -350,104 +921,3 @@ def test_iterable_event_source_requires_timezone_aware_time() -> None:
         assert "timezone-aware" in str(error)
     else:
         raise AssertionError("expected timezone-aware validation")
-
-
-def test_strategy_runtime_example_runs(capsys) -> None:
-    runpy.run_path("examples/strategy_runtime.py", run_name="__main__")
-
-    captured = capsys.readouterr()
-    assert '"strategy_id": "momentum-printer"' in captured.out
-    assert '"signal": "up"' in captured.out
-    assert '"signal": "down"' in captured.out
-
-
-def test_hyperliquid_clock_quote_example_runs_with_fixture(capsys, monkeypatch) -> None:
-    monkeypatch.setattr("sys.argv", ["examples/hyperliquid_clock_quote.py"])
-
-    runpy.run_path("examples/hyperliquid_clock_quote.py", run_name="__main__")
-
-    output = json.loads(capsys.readouterr().out)
-    assert output["strategy_id"] == "hyperliquid-clock-quote"
-    assert output["callbacks"] == ["on_start", "on_market", "on_clock", "on_end"]
-    assert output["intents"][0]["type"] == "subscribed"
-    assert output["intents"][1]["type"] == "stream_quote"
-    assert output["intents"][2]["type"] == "clock_quote"
-    assert output["intents"][2]["latest_matches_request"] is True
-
-
-def test_strategy_views_example_runs(capsys) -> None:
-    runpy.run_path("examples/strategy_views.py", run_name="__main__")
-
-    output = json.loads(capsys.readouterr().out)
-    assert output["strategy_id"] == "view-demo"
-    assert output["event_count"] == 2
-    assert output["project_regime"]["name"] == "risk-on"
-    assert output["strategy_counter"]["event_count"] == 2
-    assert output["market_current"]["event_count"] == 2
-    assert output["system_control"]["total_count"] == 1
-    assert output["system_intents"]["total_count"] == 1
-    assert output["system_strategy"]["status"] == "finished"
-    assert output["view_keys"] == [
-        "market.current",
-        "market.quotes",
-        "project.regime",
-        "strategy.counter",
-        "system.control",
-        "system.data",
-        "system.intents",
-        "system.strategy",
-    ]
-
-
-def test_runtime_modes_backtest_paper_example_runs_on_same_line(capsys) -> None:
-    runpy.run_path("examples/runtime_modes_backtest_paper.py", run_name="__main__")
-
-    output = json.loads(capsys.readouterr().out)
-    assert output["backtest"]["mode"] == "backtest"
-    assert output["paper"]["mode"] == "paper"
-    assert output["backtest"]["event_count"] == 2
-    assert output["paper"]["event_count"] == 2
-    assert output["backtest"]["final_equity"] == "1010"
-    assert output["paper"]["final_equity"] == "1010"
-    assert output["backtest"]["account_view"]["net_profit"] == "10"
-    assert output["paper"]["account_view"]["net_profit"] == "10"
-
-
-def test_hyperliquid_stream_strategy_example_consumes_async_rows(capsys) -> None:
-    module = runpy.run_path("examples/hyperliquid_stream_strategy.py")
-
-    async def rows():
-        yield {
-            "time": "2026-01-01T00:00:00+00:00",
-            "kind": "orderbook",
-            "bid1": "100",
-            "ask1": "101",
-        }
-        yield {
-            "time": "2026-01-01T00:00:01+00:00",
-            "kind": "orderbook",
-            "bid1": "100.5",
-            "ask1": "101.5",
-        }
-
-    async def run() -> int:
-        data = DataContext(DataStore(":unused:", storage_format="jsonl"))
-        return await module["run_stream_strategy"](
-            rows(),
-            stream="hyperliquid.orderbook.BTC/USDC:USDC",
-            data=data,
-            strategy=module["StreamMarketPrinter"](),
-            limit=2,
-        )
-
-    assert asyncio.run(run()) == 2
-    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
-    assert [line["type"] for line in lines] == [
-        "strategy_started",
-        "market_data_seen",
-        "market_data_seen",
-        "strategy_finished",
-    ]
-    assert lines[1]["sequence"] == 1
-    assert lines[1]["payload"]["bid1"] == "100"
-    assert lines[-1]["last_time"] == "2026-01-01T00:00:01+00:00"

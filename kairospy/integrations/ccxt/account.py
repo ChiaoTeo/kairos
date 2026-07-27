@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Mapping
 
-from kairospy.accounts import (
+from kairospy.core.account import (
     AccountBalance,
     AccountContext,
     AccountSnapshot,
@@ -13,8 +13,8 @@ from kairospy.accounts import (
     MarginState,
     OpenOrderSnapshot,
 )
-from kairospy.reference import MarketRef, MarketResolver
-from kairospy.orders import OrderOrigin, OrderSide, OrderState, OrderStatus, OrderType
+from kairospy.core.reference import MarketRef, MarketResolver
+from kairospy.core.order import OrderOrigin, OrderSide, OrderState, OrderStatus, OrderType
 
 from .parsing import ccxt_decimal, ccxt_optional_decimal, ccxt_order_quantity, ccxt_order_type, ccxt_required_text
 from .private_events import ingest_ccxt_my_trade, ingest_ccxt_order_update

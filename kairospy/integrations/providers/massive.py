@@ -6,8 +6,8 @@ from typing import AsyncIterator, Iterable, Mapping
 
 from kairospy.integrations.massive_lifecycle import massive_corporate_action_events
 from kairospy.integrations.drivers import MassiveDriver
-from kairospy.reference import ReferenceCatalog
-from kairospy.reference.model import LifecycleEvent
+from kairospy.core.reference import ReferenceCatalog
+from kairospy.core.reference.model import LifecycleEvent
 
 
 @dataclass(frozen=True, slots=True)

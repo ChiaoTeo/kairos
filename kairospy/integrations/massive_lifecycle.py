@@ -4,8 +4,8 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, time, timezone
 from decimal import Decimal
 
-from kairospy.reference import ReferenceCatalog
-from kairospy.reference.model import LifecycleEvent, LifecycleEventType, MarketDefinition
+from kairospy.core.reference import ReferenceCatalog
+from kairospy.core.reference.model import LifecycleEvent, LifecycleEventType, MarketDefinition
 
 
 def massive_split_events(

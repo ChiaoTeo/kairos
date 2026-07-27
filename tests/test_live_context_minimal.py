@@ -7,15 +7,15 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-from kairospy.accounts import AccountContext, AccountEventKind, AccountRef, AccountSnapshot, AccountSource, Environment, MarginScope, MarginState
-from kairospy.context import DataContext
+from kairospy.core.account import AccountContext, AccountEventKind, AccountRef, AccountSnapshot, AccountSource, Environment, MarginScope, MarginState
+from kairospy.context import DataContext, StrategyContext
 from kairospy.data import DataSink, DataStore, InMemoryStreamFeed
 from kairospy.integrations.ccxt import CcxtAccountPayloadAdapter
-from kairospy.live import JsonLiveRuntimeStateStore, LiveEngine, LiveStopToken
-from kairospy.live.private_stream import classify_balance_delta
+from kairospy.modes.live import JsonLiveRuntimeStateStore, LiveEngine, LiveStopToken
+from kairospy.modes.live.private_stream import classify_balance_delta
 from kairospy.runtime import IterableEventSource
-from kairospy.reference import MarketResolver
-from kairospy.strategy import StrategyBase, StrategyContext
+from kairospy.core.reference import MarketResolver
+from kairospy.strategy import StrategyBase
 
 
 class AccountReadingStrategy(StrategyBase):
@@ -40,6 +40,26 @@ class LiveOrderingStrategy(StrategyBase):
             Decimal("1"),
             limit_price=Decimal("99"),
             intent_id="enter-live",
+        )
+        return ()
+
+
+class StopDrainOrderingStrategy(StrategyBase):
+    strategy_id = "stop-drain-ordering"
+
+    def __init__(self) -> None:
+        self.stop_messages: list[str] = []
+
+    def on_system(self, context: StrategyContext, event):
+        if event.kind != "live.stop_requested":
+            return ()
+        stop_event = context.latest_data(domain="system", kind="live.stop_requested")
+        self.stop_messages.append(str(stop_event.payload["reason"]))
+        context.target_position(
+            "BTC/USDT",
+            Decimal("1"),
+            limit_price=Decimal("98"),
+            intent_id="stop-exit",
         )
         return ()
 
@@ -354,7 +374,7 @@ def test_live_strategy_runner_bootstraps_account_and_applies_order_ws_updates() 
         ("open_order.present", "venue-existing-1", Decimal("1"), Decimal("0")),
         ("pending_order.venue_present", "venue-existing-1", Decimal("1"), Decimal("0")),
     ]
-    assert reconciliation.event.projection.balance("USDT").free == Decimal("875")
+    assert reconciliation.event.payload.projection.balance("USDT").free == Decimal("875")
 
 
 def test_live_strategy_runner_applies_private_trade_updates_to_ledger() -> None:
@@ -668,7 +688,7 @@ def test_live_loop_reports_iteration_failure_and_continues_with_backoff_disabled
     )
 
     assert [iteration.succeeded for iteration in result.iterations] == [False, True]
-    assert [incident.name for incident in result.incidents] == ["live.loop.error"]
+    assert [incident.kind for incident in result.incidents] == ["live.loop.error"]
     assert result.latest.runtime.event_count == 1
     assert state_store.load() is not None
     assert [(event.status, event.iteration, event.consecutive_failures) for event in monitor.events] == [
@@ -735,10 +755,12 @@ def test_live_loop_stop_token_can_prevent_starting_iterations() -> None:
         retry_backoff_seconds=0,
     )
 
-    assert result.iterations == ()
+    assert len(result.iterations) == 1
+    assert result.iterations[0].succeeded
     assert token.reason == "shutdown"
     assert [(event.status, event.iteration, event.stop_reason) for event in monitor.events] == [
-        ("stopped", 0, "shutdown"),
+        ("draining", 1, "shutdown"),
+        ("stopped", 1, "shutdown"),
     ]
 
 
@@ -779,14 +801,97 @@ def test_live_loop_stop_token_can_stop_after_current_iteration() -> None:
         retry_backoff_seconds=0,
     )
 
-    assert len(result.iterations) == 1
-    assert result.latest.runtime.event_count == 1
+    assert len(result.iterations) == 2
+    assert result.iterations[0].result.runtime.event_count == 1
+    assert result.latest.runtime.event_count == 0
     assert token.reason == "single iteration"
     assert [(event.status, event.iteration, event.stop_reason) for event in monitor.events] == [
         ("starting", 1, ""),
         ("succeeded", 1, ""),
-        ("stopped", 1, "single iteration"),
+        ("draining", 2, "single iteration"),
+        ("stopped", 2, "single iteration"),
     ]
+
+
+def test_live_loop_stop_token_drains_strategy_intents_before_stopping() -> None:
+    account = AccountContext(AccountRef("binance", "main", "spot"), Environment.LIVE)
+    token = LiveStopToken()
+    token.request_stop("operator shutdown")
+    monitor = RecordingMonitor()
+    gateway = FakeLiveAccountGateway()
+    gateway.include_existing_order = False
+    strategy = StopDrainOrderingStrategy()
+    resolver = MarketResolver(default_venue="binance", default_market="spot")
+    runner = LiveEngine(
+        strategy,
+        DataContext(DataStore(":unused:", storage_format="jsonl")),
+        account,
+        gateway,
+        account_payload_adapter=CcxtAccountPayloadAdapter(),
+        equity_currency="USDT",
+        market_resolver=resolver,
+    )
+
+    result = runner.run_loop(
+        lambda iteration: FailingEventSource(),
+        symbol="BTC/USDT",
+        stop_token=token,
+        monitor=monitor,
+        retry_backoff_seconds=0,
+    )
+
+    assert len(result.iterations) == 1
+    assert strategy.stop_messages == ["operator shutdown"]
+    assert gateway.created_orders == [
+        {
+            "id": "venue-created-1",
+            "symbol": "BTC/USDT",
+            "side": "buy",
+            "type": "limit",
+            "amount": "1",
+            "price": "98",
+            "params": {},
+        }
+    ]
+    assert any(record.hook == "on_system" and record.intents for record in result.latest.runtime.callbacks)
+    assert result.latest.coordinator.orders.states[0].venue_order_id == "venue-created-1"
+    assert [(event.status, event.iteration, event.stop_reason) for event in monitor.events] == [
+        ("draining", 1, "operator shutdown"),
+        ("stopped", 1, "operator shutdown"),
+    ]
+
+
+def test_live_loop_stop_drain_timeout_skips_unsettled_strategy_intents() -> None:
+    account = AccountContext(AccountRef("binance", "main", "spot"), Environment.LIVE)
+    token = LiveStopToken()
+    token.request_stop("operator shutdown")
+    gateway = FakeLiveAccountGateway()
+    gateway.include_existing_order = False
+    strategy = StopDrainOrderingStrategy()
+    resolver = MarketResolver(default_venue="binance", default_market="spot")
+    runner = LiveEngine(
+        strategy,
+        DataContext(DataStore(":unused:", storage_format="jsonl")),
+        account,
+        gateway,
+        account_payload_adapter=CcxtAccountPayloadAdapter(),
+        equity_currency="USDT",
+        market_resolver=resolver,
+    )
+
+    result = runner.run_loop(
+        lambda iteration: FailingEventSource(),
+        symbol="BTC/USDT",
+        stop_token=token,
+        retry_backoff_seconds=0,
+        stop_drain_timeout_seconds=0,
+    )
+
+    assert len(result.iterations) == 1
+    assert strategy.stop_messages == ["operator shutdown"]
+    assert gateway.created_orders == []
+    assert [state.status.value for state in result.latest.runtime.intent_states] == ["created"]
+    assert result.latest.account_view.pending_orders == ()
 
 
 def test_live_strategy_runner_ignores_stale_private_order_replay() -> None:
@@ -858,7 +963,7 @@ def test_live_engine_reports_bad_private_stream_event_as_incident_and_continues(
 
     assert result.runtime.event_count == 1
     assert strategy.pending_counts == [1]
-    assert [incident.name for incident in result.incidents] == ["live.account.order.error"]
+    assert [incident.kind for incident in result.incidents] == ["live.account.order.error"]
     assert result.incidents[0].payload["error_type"] == "ValueError"
 
 
@@ -866,16 +971,15 @@ def test_live_engine_submits_strategy_target_position_to_broker_and_updates_acco
     account = AccountContext(AccountRef("binance", "main", "spot"), Environment.LIVE)
     gateway = FakeLiveAccountGateway()
     gateway.include_existing_order = False
+    resolver = MarketResolver(default_venue="binance", default_market="spot")
     runner = LiveEngine(
         LiveOrderingStrategy(),
-        DataContext(
-            DataStore(":unused:", storage_format="jsonl"),
-            markets=MarketResolver(default_venue="binance", default_market="spot"),
-        ),
+        DataContext(DataStore(":unused:", storage_format="jsonl")),
         account,
         gateway,
         account_payload_adapter=CcxtAccountPayloadAdapter(),
         equity_currency="USDT",
+        market_resolver=resolver,
     )
 
     result = runner.run(
@@ -915,16 +1019,15 @@ def test_live_engine_applies_margin_check_before_submitting_strategy_order() -> 
     account = AccountContext(AccountRef("binance", "main", "um_futures"), Environment.LIVE)
     gateway = FakeLiveAccountGateway()
     gateway.include_existing_order = False
+    resolver = MarketResolver(default_venue="binance", default_market="spot")
     runner = LiveEngine(
         LiveOrderingStrategy(),
-        DataContext(
-            DataStore(":unused:", storage_format="jsonl"),
-            markets=MarketResolver(default_venue="binance", default_market="spot"),
-        ),
+        DataContext(DataStore(":unused:", storage_format="jsonl")),
         account,
         gateway,
         account_payload_adapter=MarginPayloadAdapter("10"),
         equity_currency="USDT",
+        market_resolver=resolver,
     )
 
     result = runner.run(
@@ -958,16 +1061,15 @@ def test_live_engine_filters_local_margin_params_after_margin_check_accepts() ->
     account = AccountContext(AccountRef("binance", "main", "um_futures"), Environment.LIVE)
     gateway = FakeLiveAccountGateway()
     gateway.include_existing_order = False
+    resolver = MarketResolver(default_venue="binance", default_market="spot")
     runner = LiveEngine(
         LiveOrderingStrategy(),
-        DataContext(
-            DataStore(":unused:", storage_format="jsonl"),
-            markets=MarketResolver(default_venue="binance", default_market="spot"),
-        ),
+        DataContext(DataStore(":unused:", storage_format="jsonl")),
         account,
         gateway,
         account_payload_adapter=MarginPayloadAdapter("50"),
         equity_currency="USDT",
+        market_resolver=resolver,
     )
 
     result = runner.run(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from kairospy.integrations import Binance, BinanceReferenceDriver, CcxtDriver
-from kairospy.reference import LifecycleEventType
+from kairospy.core.reference import LifecycleEventType
 
 
 UTC = timezone.utc

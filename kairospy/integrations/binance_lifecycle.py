@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 
-from kairospy.reference import LifecycleEvent, LifecycleEventType, ReferenceCatalog
+from kairospy.core.reference import LifecycleEvent, LifecycleEventType, ReferenceCatalog
 
 
 def delist_schedule_events(

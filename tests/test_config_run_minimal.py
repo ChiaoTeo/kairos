@@ -25,20 +25,31 @@ def test_backtest_run_config_does_not_require_account() -> None:
 def test_paper_run_config_does_not_require_account() -> None:
     config = RunConfig.from_values({
         "run": {
-            "id": "momentum-paper",
             "mode": "paper",
             "strategy": "strategies.momentum:MomentumStrategy",
         },
-        "account": {
-            "environment": "paper",
-        },
-        "execution": {
-            "dry_run": True,
+        "accounts": {
+            "binance_main": {
+                "index": 1,
+                "venue": "binance",
+                "cash": "10000",
+                "currency": "USDC",
+            },
+            "binance_hedge": {
+                "index": 0,
+                "venue": "binance",
+                "cash": "10000",
+                "currency": "USDC",
+            },
         },
     })
 
     assert config.validation_report().valid is True
     assert config.mode == "paper"
+    assert config.run_id == "kairos-run"
+    assert tuple(config.accounts) == ("binance_hedge", "binance_main")
+    assert config.accounts["binance_hedge"].index == 0
+    assert config.accounts["binance_hedge"].credential is None
 
 
 def test_legacy_sandbox_mode_is_rejected() -> None:
@@ -84,13 +95,7 @@ def test_live_run_config_requires_explicit_execution_boundary() -> None:
         }
     })
 
-    assert config.validation_report().issues == (
-        "[account] table is required for paper/live runs",
-        "[broker] table is required for live runs",
-        "account.id is required for live runs",
-        "[execution] table is required for live runs",
-        "[credentials] table is required for live runs",
-    )
+    assert config.validation_report().issues == ("[accounts] table is required for paper/live runs",)
 
 
 def test_live_run_config_accepts_explicit_execution_boundary() -> None:
@@ -100,23 +105,11 @@ def test_live_run_config_accepts_explicit_execution_boundary() -> None:
             "mode": "live",
             "strategy": "strategies.momentum:MomentumStrategy",
         },
-        "broker": {
-            "provider": "binance",
-        },
-        "account": {
-            "id": "main",
-            "environment": "live",
-        },
-        "execution": {
-            "driver": "ccxt",
-            "dry_run": False,
-        },
-        "credentials": {
-            "binance": {
-                "main": {
-                    "api_key": "env:BINANCE_API_KEY",
-                    "api_secret": "env:BINANCE_API_SECRET",
-                },
+        "accounts": {
+            "binance_main": {
+                "index": 0,
+                "venue": "binance",
+                "credential": "binance-main",
             },
         },
     })
@@ -124,11 +117,49 @@ def test_live_run_config_accepts_explicit_execution_boundary() -> None:
     assert config.validation_report().valid is True
 
 
+def test_live_run_config_requires_account_credentials() -> None:
+    config = RunConfig.from_values({
+        "run": {
+            "mode": "live",
+            "strategy": "strategies.momentum:MomentumStrategy",
+        },
+        "accounts": {
+            "binance_main": {
+                "venue": "binance",
+            },
+        },
+    })
+
+    assert config.validation_report().issues == ("accounts.binance_main.credential is required for live runs",)
+
+
+def test_run_config_rejects_duplicate_account_indexes() -> None:
+    config = RunConfig.from_values({
+        "run": {
+            "mode": "paper",
+            "strategy": "strategies.momentum:MomentumStrategy",
+        },
+        "accounts": {
+            "binance_main": {
+                "index": 0,
+                "venue": "binance",
+            },
+            "binance_hedge": {
+                "index": 0,
+                "venue": "binance",
+            },
+        },
+    })
+
+    assert config.validation_report().issues == (
+        "accounts.binance_hedge.index duplicates accounts.binance_main.index",
+    )
+
+
 def test_run_config_requires_mode_and_id() -> None:
     config = RunConfig.from_values({"run": {"strategy": "strategies.momentum:MomentumStrategy"}})
 
     assert config.validation_report().issues == (
-        "run.id is required",
         "run.mode must be a non-empty string",
         "run.mode must be one of: backtest, paper, live",
     )

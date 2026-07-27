@@ -11,6 +11,7 @@ massive = []
 data = []
 query = ["duckdb>=1.3,<2", "polars>=1.30,<2"]
 crypto = ["ccxt>=4,<5"]
+tui = ["rich>=13,<15"]
 
 [dependency-groups]
 dev = ["pytest>=8,<9"]

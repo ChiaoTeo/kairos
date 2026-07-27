@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Iterable, Mapping
 
 from kairospy.integrations import InstrumentProviderRefreshService
-from kairospy.reference import LifecycleEventType, MarketStatus, ReferenceRefreshService, ReferenceStore
+from kairospy.core.reference import LifecycleEventType, MarketStatus, ReferenceRefreshService, ReferenceStore
 
 
 UTC = timezone.utc

@@ -4,20 +4,20 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Iterable, Mapping
 
-from kairospy.accounts import (
+from kairospy.core.account import (
     AccountBalance,
     AccountContext,
     AccountSnapshot,
     AccountSource,
 )
 
-from .events import AccountRuntimeEvent, RuntimeEvent, SystemRuntimeEvent
+from .data import RuntimeDataEnvelope, account_data_envelope, system_data_envelope
 from .line import RuntimeLine, RuntimeMode
 
 
 def mode_runtime_line(
     mode: RuntimeMode | str,
-    events: Iterable[RuntimeEvent],
+    events: Iterable[RuntimeDataEnvelope],
     *,
     started_at: datetime | None = None,
     payload: Mapping[str, object] | None = None,
@@ -26,13 +26,13 @@ def mode_runtime_line(
     runtime_mode = mode if isinstance(mode, RuntimeMode) else RuntimeMode(str(mode))
     if started_at is None and values:
         started_at = values[0].time
-    prefix: tuple[RuntimeEvent, ...] = ()
+    prefix: tuple[RuntimeDataEnvelope, ...] = ()
     if started_at is not None:
         prefix = (
-            SystemRuntimeEvent(
+            system_data_envelope(
                 f"runtime.mode.{runtime_mode.value}.started",
-                1,
-                started_at,
+                sequence=1,
+                time=started_at,
                 payload={"mode": runtime_mode.value, **dict(payload or {})},
                 stream="system.runtime",
             ),
@@ -48,8 +48,8 @@ def account_baseline_event(
     currency: str,
     equity: Decimal | str | int | float,
     source: AccountSource = AccountSource.SIMULATED,
-    payload: Mapping[str, object] | None = None,
-) -> AccountRuntimeEvent:
+    metadata: Mapping[str, object] | None = None,
+) -> RuntimeDataEnvelope:
     value = Decimal(str(equity))
     snapshot = AccountSnapshot(
         context,
@@ -64,12 +64,14 @@ def account_baseline_event(
         observed_at=at,
         source=source,
     )
-    return AccountRuntimeEvent(
+    return account_data_envelope(
         context,
-        sequence,
-        at,
-        payload={"equity": str(value), "source": source.value, **dict(payload or {})},
+        sequence=sequence,
+        time=at,
         snapshot=snapshot,
+        equity=value,
+        source=source,
+        metadata=metadata,
         stream=f"account.{context.environment.value}.{context.account.broker}.{context.account.account_id}",
     )
 

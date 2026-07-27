@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 from kairospy.integrations import Binance, CcxtDriver
-from kairospy.reference import (
+from kairospy.core.reference import (
     Asset,
     AssetId,
     AssetType,

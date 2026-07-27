@@ -3,19 +3,20 @@ from __future__ import annotations
 from decimal import Decimal
 from tempfile import TemporaryDirectory
 
-from kairospy.backtest import (
+from kairospy.modes.backtest import (
     BacktestEngine,
     BasisPointSlippageModel,
     ImmediateFillModel,
     PercentageCommissionModel,
     SimulatedAccount,
 )
-from kairospy.context import DataContext
+from kairospy.context import DataContext, StrategyContext
 from kairospy.data import DataStore
+from kairospy.core.market import bind_market_data
 from kairospy.runtime import DataViewEventSource
-from kairospy.paper import PaperEngine
-from kairospy.reference import MarketResolver
-from kairospy.strategy import StrategyBase, StrategyContext
+from kairospy.modes.paper import PaperEngine
+from kairospy.core.reference import MarketResolver
+from kairospy.strategy import StrategyBase
 
 
 class RoundTripStrategy(StrategyBase):
@@ -96,15 +97,14 @@ def test_backtest_runs_strategy_against_simulated_account_without_strategy_mode_
                 },
             ],
         )
-        data = DataContext(
-            store,
-            markets=MarketResolver(default_venue="binance", default_market="spot"),
-        )
-        bars = data.for_market("BTC/USDT").ohlcv("1m")
+        resolver = MarketResolver(default_venue="binance", default_market="spot")
+        data = DataContext(store)
+        bars = bind_market_data(data, resolver, "BTC/USDT").ohlcv("1m")
         engine = BacktestEngine(
             RoundTripStrategy(),
             data,
             SimulatedAccount("strategy-a", Decimal("1000"), cash_currency="USDT"),
+            market_resolver=resolver,
         )
 
         result = engine.run(DataViewEventSource(bars))
@@ -125,7 +125,7 @@ def test_backtest_runs_strategy_against_simulated_account_without_strategy_mode_
 
 def test_strategy_context_account_accessor_is_shared_by_backtest_and_paper() -> None:
     with TemporaryDirectory() as temporary:
-        data, bars = _bars(
+        data, bars, resolver = _bars(
             temporary,
             [
                 ("2026-01-01T00:00:00+00:00", 100),
@@ -139,11 +139,13 @@ def test_strategy_context_account_accessor_is_shared_by_backtest_and_paper() -> 
             backtest_strategy,
             data,
             SimulatedAccount("strategy-a", Decimal("1000"), cash_currency="USDT"),
+            market_resolver=resolver,
         )
         paper = PaperEngine(
             paper_strategy,
             data,
             SimulatedAccount("strategy-a", Decimal("1000"), cash_currency="USDT"),
+            market_resolver=resolver,
         )
 
         backtest.run(DataViewEventSource(bars))
@@ -155,7 +157,7 @@ def test_strategy_context_account_accessor_is_shared_by_backtest_and_paper() -> 
 
 def test_backtest_applies_slippage_and_commission_to_fills_and_closed_trades() -> None:
     with TemporaryDirectory() as temporary:
-        data, bars = _bars(
+        data, bars, resolver = _bars(
             temporary,
             [
                 ("2026-01-01T00:00:00+00:00", 100),
@@ -168,6 +170,7 @@ def test_backtest_applies_slippage_and_commission_to_fills_and_closed_trades() -
             SimulatedAccount("strategy-a", Decimal("1000"), cash_currency="USDT"),
             slippage_model=BasisPointSlippageModel(Decimal("100")),
             commission_model=PercentageCommissionModel(Decimal("0.01")),
+            market_resolver=resolver,
         )
 
         result = engine.run(DataViewEventSource(bars))
@@ -187,7 +190,7 @@ def test_backtest_applies_slippage_and_commission_to_fills_and_closed_trades() -
 
 def test_backtest_metrics_include_drawdown_and_sharpe_from_equity_curve() -> None:
     with TemporaryDirectory() as temporary:
-        data, bars = _bars(
+        data, bars, resolver = _bars(
             temporary,
             [
                 ("2026-01-01T00:00:00+00:00", 100),
@@ -199,6 +202,7 @@ def test_backtest_metrics_include_drawdown_and_sharpe_from_equity_curve() -> Non
             ThreeBarRoundTripStrategy(),
             data,
             SimulatedAccount("strategy-a", Decimal("1000"), cash_currency="USDT"),
+            market_resolver=resolver,
         )
 
         result = engine.run(DataViewEventSource(bars))
@@ -216,11 +220,12 @@ def test_backtest_metrics_include_drawdown_and_sharpe_from_equity_curve() -> Non
 
 def test_backtest_fill_model_rejects_uncrossed_limit_order() -> None:
     with TemporaryDirectory() as temporary:
-        data, bars = _bars(temporary, [("2026-01-01T00:00:00+00:00", 100)])
+        data, bars, resolver = _bars(temporary, [("2026-01-01T00:00:00+00:00", 100)])
         engine = BacktestEngine(
             RestingLimitStrategy(),
             data,
             SimulatedAccount("strategy-a", Decimal("1000"), cash_currency="USDT"),
+            market_resolver=resolver,
         )
 
         result = engine.run(DataViewEventSource(bars))
@@ -244,11 +249,9 @@ def test_backtest_fill_model_can_partially_fill_with_volume_participation() -> N
                 },
             ],
         )
-        data = DataContext(
-            store,
-            markets=MarketResolver(default_venue="binance", default_market="spot"),
-        )
-        bars = data.for_market("BTC/USDT").ohlcv("1m")
+        resolver = MarketResolver(default_venue="binance", default_market="spot")
+        data = DataContext(store)
+        bars = bind_market_data(data, resolver, "BTC/USDT").ohlcv("1m")
 
         class LargeTargetStrategy(StrategyBase):
             strategy_id = "large-target"
@@ -261,6 +264,7 @@ def test_backtest_fill_model_can_partially_fill_with_volume_participation() -> N
             data,
             SimulatedAccount("strategy-a", Decimal("1000"), cash_currency="USDT"),
             fill_model=ImmediateFillModel(volume_field="volume"),
+            market_resolver=resolver,
         )
 
         result = engine.run(DataViewEventSource(bars))
@@ -272,7 +276,7 @@ def test_backtest_fill_model_can_partially_fill_with_volume_participation() -> N
         assert [state.status.value for state in result.runtime.intent_states] == ["partially_filled"]
 
 
-def _bars(temporary: str, values: list[tuple[str, int]]) -> tuple[DataContext, object]:
+def _bars(temporary: str, values: list[tuple[str, int]]) -> tuple[DataContext, object, MarketResolver]:
     store = DataStore(temporary, storage_format="jsonl")
     store.write(
         "market.ohlcv.binance_spot_btc_usdt.1m",
@@ -285,8 +289,6 @@ def _bars(temporary: str, values: list[tuple[str, int]]) -> tuple[DataContext, o
             for at, close in values
         ],
     )
-    data = DataContext(
-        store,
-        markets=MarketResolver(default_venue="binance", default_market="spot"),
-    )
-    return data, data.for_market("BTC/USDT").ohlcv("1m")
+    resolver = MarketResolver(default_venue="binance", default_market="spot")
+    data = DataContext(store)
+    return data, bind_market_data(data, resolver, "BTC/USDT").ohlcv("1m"), resolver

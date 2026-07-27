@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .backtest import backtest_app
 from .broker import broker_app
 from .data import data_app
 from .integrations import integrations_app
@@ -9,6 +10,7 @@ from .strategy import strategy_app
 from .streams import streams_app
 
 __all__ = [
+    "backtest_app",
     "broker_app",
     "data_app",
     "integrations_app",

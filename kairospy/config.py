@@ -75,6 +75,17 @@ class AccountDefaults:
 
 
 @dataclass(frozen=True, slots=True)
+class AccountConfig:
+    account_id: str
+    index: int
+    venue: str
+    cash: Decimal = DEFAULT_ACCOUNT_CASH
+    currency: str = DEFAULT_ACCOUNT_CURRENCY
+    fee_rate: Decimal = DEFAULT_ACCOUNT_FEE_RATE
+    credential: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RunConfigValidationReport:
     path: Path | None
     valid: bool
@@ -119,7 +130,13 @@ class RunConfig:
 
     @property
     def run_id(self) -> str:
-        return _text(self._table("run").get("id"), "run.id")
+        run = self._table("run")
+        raw = run.get("id")
+        if raw is not None:
+            return _text(raw, "run.id")
+        if self.path is not None:
+            return self.path.stem
+        return "kairos-run"
 
     @property
     def strategy(self) -> str | None:
@@ -145,12 +162,34 @@ class RunConfig:
 
     @property
     def account_defaults(self) -> AccountDefaults:
+        accounts = self.accounts
+        if accounts:
+            first = min(accounts.values(), key=lambda account: account.index)
+            return AccountDefaults(first.cash, first.currency, first.fee_rate)
         account = self._table("account", required=False)
         return AccountDefaults(
             cash=_decimal(account.get("cash", DEFAULT_ACCOUNT_CASH), "account.cash"),
             currency=_text(account.get("currency", DEFAULT_ACCOUNT_CURRENCY), "account.currency"),
             fee_rate=_decimal(account.get("fee_rate", DEFAULT_ACCOUNT_FEE_RATE), "account.fee_rate"),
         )
+
+    @property
+    def accounts(self) -> Mapping[str, AccountConfig]:
+        table = self._table("accounts", required=False)
+        parsed: dict[str, AccountConfig] = {}
+        for fallback_index, (account_id, raw) in enumerate(table.items()):
+            if not isinstance(raw, Mapping):
+                raise ConfigError(f"accounts.{account_id} must be a table")
+            parsed[str(account_id)] = AccountConfig(
+                account_id=str(account_id),
+                index=_int(raw.get("index", fallback_index), f"accounts.{account_id}.index"),
+                venue=_text(raw.get("venue"), f"accounts.{account_id}.venue"),
+                cash=_decimal(raw.get("cash", DEFAULT_ACCOUNT_CASH), f"accounts.{account_id}.cash"),
+                currency=_text(raw.get("currency", DEFAULT_ACCOUNT_CURRENCY), f"accounts.{account_id}.currency"),
+                fee_rate=_decimal(raw.get("fee_rate", DEFAULT_ACCOUNT_FEE_RATE), f"accounts.{account_id}.fee_rate"),
+                credential=_optional_text(raw.get("credential"), f"accounts.{account_id}.credential") or None,
+            )
+        return dict(sorted(parsed.items(), key=lambda item: item[1].index))
 
     def validate(self) -> list[str]:
         return list(self.validation_report().issues)
@@ -164,9 +203,7 @@ class RunConfig:
             issues.append("[run] must be a table")
         mode = ""
         if isinstance(run, Mapping):
-            if "id" not in run:
-                issues.append("run.id is required")
-            else:
+            if "id" in run:
                 try:
                     _text(run.get("id"), "run.id")
                 except ConfigError as error:
@@ -189,32 +226,39 @@ class RunConfig:
             issues.append("run.mode must be one of: backtest, paper, live")
         if "data" in self.values:
             issues.append("[data] is not valid run config; declare data requirements in strategy code")
+        accounts = self.values.get("accounts")
+        if accounts is not None:
+            if not isinstance(accounts, Mapping):
+                issues.append("[accounts] must be a table")
+            else:
+                issues.extend(_accounts_issues(accounts, mode=mode))
         account = self.values.get("account")
         if account is not None:
             if not isinstance(account, Mapping):
                 issues.append("[account] must be a table")
             else:
                 issues.extend(_account_issues(account, mode=mode))
-        elif mode in {"paper", "live"}:
-            issues.append("[account] table is required for paper/live runs")
+        elif mode in {"paper", "live"} and not isinstance(accounts, Mapping):
+            issues.append("[accounts] table is required for paper/live runs")
         broker = self.values.get("broker")
         execution = self.values.get("execution")
         credentials = self.values.get("credentials")
         if mode == "live":
-            if not isinstance(broker, Mapping):
-                issues.append("[broker] table is required for live runs")
-            elif not _valid_optional_text(broker.get("provider")):
-                issues.append("broker.provider is required for live runs")
-            if not isinstance(account, Mapping) or not _valid_optional_text(account.get("id")):
-                issues.append("account.id is required for live runs")
-            elif str(account.get("environment", "")).strip() != "live":
-                issues.append("account.environment must be live for live runs")
-            if not isinstance(execution, Mapping):
-                issues.append("[execution] table is required for live runs")
-            else:
-                issues.extend(_execution_issues(execution, mode=mode))
-            if not isinstance(credentials, Mapping) or not credentials:
-                issues.append("[credentials] table is required for live runs")
+            if isinstance(account, Mapping):
+                if not isinstance(broker, Mapping):
+                    issues.append("[broker] table is required for legacy live runs")
+                elif not _valid_optional_text(broker.get("provider")):
+                    issues.append("broker.provider is required for legacy live runs")
+                if not _valid_optional_text(account.get("id")):
+                    issues.append("account.id is required for legacy live runs")
+                elif str(account.get("environment", "")).strip() != "live":
+                    issues.append("account.environment must be live for live runs")
+                if not isinstance(execution, Mapping):
+                    issues.append("[execution] table is required for legacy live runs")
+                else:
+                    issues.extend(_execution_issues(execution, mode=mode))
+                if not isinstance(credentials, Mapping) or not credentials:
+                    issues.append("[credentials] table is required for legacy live runs")
         elif mode == "paper":
             if isinstance(account, Mapping) and str(account.get("environment", "paper")).strip() not in {"paper"}:
                 issues.append("account.environment must be paper-compatible for paper runs")
@@ -251,6 +295,7 @@ class RunConfig:
             "run": dict(self._table("run", required=False)),
             "mode": self._optional_mode(),
             "strategy": self._optional_strategy(),
+            "accounts": {key: account for key, account in self.accounts.items()},
             "account": dict(self._table("account", required=False)),
             "broker": dict(self._table("broker", required=False)),
             "execution": dict(self._table("execution", required=False)),
@@ -336,6 +381,18 @@ def _decimal(value: object, source: str) -> Decimal:
         raise ConfigError(f"{source} must be decimal-compatible") from error
 
 
+def _int(value: object, source: str) -> int:
+    if isinstance(value, bool):
+        raise ConfigError(f"{source} must be an integer")
+    try:
+        parsed = int(value)
+    except Exception as error:
+        raise ConfigError(f"{source} must be an integer") from error
+    if str(value).strip() != str(parsed):
+        raise ConfigError(f"{source} must be an integer")
+    return parsed
+
+
 def _account_issues(account: Mapping[str, Any], *, mode: str) -> list[str]:
     issues: list[str] = []
     for key in ("cash", "fee_rate"):
@@ -362,6 +419,49 @@ def _account_issues(account: Mapping[str, Any], *, mode: str) -> list[str]:
     return issues
 
 
+def _accounts_issues(accounts: Mapping[str, Any], *, mode: str) -> list[str]:
+    issues: list[str] = []
+    indexes: dict[int, str] = {}
+    if mode in {"paper", "live"} and not accounts:
+        issues.append("[accounts] table must declare at least one account")
+    for fallback_index, (account_id, raw) in enumerate(accounts.items()):
+        source = f"accounts.{account_id}"
+        if not isinstance(raw, Mapping):
+            issues.append(f"{source} must be a table")
+            continue
+        if not str(account_id).strip():
+            issues.append("accounts account id cannot be empty")
+        try:
+            index = _int(raw.get("index", fallback_index), f"{source}.index")
+        except ConfigError as error:
+            issues.append(str(error))
+        else:
+            if index < 0:
+                issues.append(f"{source}.index cannot be negative")
+            elif index in indexes:
+                issues.append(f"{source}.index duplicates accounts.{indexes[index]}.index")
+            else:
+                indexes[index] = str(account_id)
+        if not _valid_optional_text(raw.get("venue")):
+            issues.append(f"{source}.venue is required")
+        for key in ("cash", "fee_rate"):
+            if key in raw:
+                try:
+                    value = _decimal(raw[key], f"{source}.{key}")
+                except ConfigError as error:
+                    issues.append(str(error))
+                else:
+                    if value < 0:
+                        issues.append(f"{source}.{key} cannot be negative")
+        if "currency" in raw and not _valid_optional_text(raw.get("currency")):
+            issues.append(f"{source}.currency must be a non-empty string")
+        if "credential" in raw and not _valid_optional_text(raw.get("credential")):
+            issues.append(f"{source}.credential must be a non-empty string")
+        if mode == "live" and not _valid_optional_text(raw.get("credential")):
+            issues.append(f"{source}.credential is required for live runs")
+    return issues
+
+
 def _execution_issues(execution: Mapping[str, Any], *, mode: str) -> list[str]:
     issues: list[str] = []
     if "dry_run" in execution and not isinstance(execution["dry_run"], bool):
@@ -378,6 +478,7 @@ def _execution_issues(execution: Mapping[str, Any], *, mode: str) -> list[str]:
 
 __all__ = [
     "CONFIG_FILENAME",
+    "AccountConfig",
     "AccountDefaults",
     "ConfigError",
     "DEFAULT_DATA_ROOT",

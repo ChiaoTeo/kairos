@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
-from kairospy.reference import (
+from kairospy.core.reference import (
     Asset,
     AssetId,
     AssetType,
@@ -22,7 +22,7 @@ from kairospy.reference import (
     MarketStatus,
     ReferenceCatalog,
 )
-from kairospy.reference.identity import reference_slug
+from kairospy.core.reference.identity import reference_slug
 
 from .instruments import ReferenceSnapshot
 from .protocols import InstrumentProvider

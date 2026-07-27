@@ -3,12 +3,19 @@ from __future__ import annotations
 import json
 from io import StringIO
 
+from rich.console import Console
+
 from kairospy.data import DataStore
-from kairospy.reference import LifecycleEvent, LifecycleEventType
+from kairospy.core.reference import LifecycleEvent, LifecycleEventType
+from kairospy.config import KairosConfig
+from kairospy.surface.app import PRODUCTS, AppSession, ProductMaturity, product_for_token
+from kairospy.surface.render_text import render_product_registry
+from kairospy.surface.tui import RichTui, TextTui
 from kairospy.surface import cli
 from kairospy.surface.products import data as data_product
 from kairospy.surface.products import reference as reference_product
 from kairospy.surface.products import streams as streams_product
+from kairospy.surface.state import SurfaceContext, render_run_strip, render_surface_overview
 
 
 class FakeBinance:
@@ -156,7 +163,7 @@ def _run(argv: list[str], stdout: StringIO) -> int:
     return cli.execute_argv(argv, stdout)
 
 
-def test_cli_help_does_not_expose_tui_command() -> None:
+def test_cli_help_hides_experimental_tui_command() -> None:
     stdout = StringIO()
 
     assert _run(["--help"], stdout) == 0
@@ -165,6 +172,243 @@ def test_cli_help_does_not_expose_tui_command() -> None:
     assert "data" in text
     assert "streams" in text
     assert "tui" not in text
+
+
+def test_cli_product_shell_shows_product_menu() -> None:
+    stdout = StringIO()
+
+    result = _run(["shell", "--command", "menu"], stdout)
+
+    assert result == 0
+    text = stdout.getvalue()
+    assert "Kairos" in text
+    assert "runs" in text
+    assert "Products" in text
+    assert "run" in text
+    assert "data" in text
+
+
+def test_app_registry_marks_product_maturity() -> None:
+    text = render_product_registry(PRODUCTS)
+
+    assert "run" in text
+    assert "workspace" in text
+    assert product_for_token("1").name == "run"
+    assert product_for_token("run").maturity is ProductMaturity.WORKSPACE
+    assert product_for_token("reference").maturity is ProductMaturity.PANEL
+    assert product_for_token("data").maturity is ProductMaturity.RAW
+
+
+def test_cli_app_home_shows_migration_layers() -> None:
+    stdout = StringIO()
+
+    result = _run(["app", "--command", "help"], stdout)
+
+    assert result == 0
+    text = stdout.getvalue()
+    assert "Products" in text
+    assert "maturity" in text
+    assert "workspace" in text
+    assert "raw" in text
+
+
+def test_cli_app_opens_run_workspace() -> None:
+    stdout = StringIO()
+
+    result = _run(["app", "--command", "run"], stdout)
+
+    assert result == 0
+    text = stdout.getvalue()
+    assert "Recent Runs" in text
+    assert "Run Workspace" in text
+    assert "use <#>" in text
+
+
+def test_cli_app_raw_product_bridges_to_cli() -> None:
+    stdout = StringIO()
+
+    result = _run(["app", "--command", "data", "--command", "help"], stdout)
+
+    assert result == 0
+    text = stdout.getvalue()
+    assert "Raw Command Bridge" in text
+    assert "Historical data commands" in text
+
+
+def test_cli_app_opens_reference_panel() -> None:
+    stdout = StringIO()
+
+    result = _run(["app", "--command", "reference"], stdout)
+
+    assert result == 0
+    text = stdout.getvalue()
+    assert "Reference" in text
+    assert "maturity  panel" in text
+    assert "Catalog" in text
+    assert "Reference Panel" in text
+    assert "list [filters]" in text
+
+
+def test_text_tui_uses_app_core() -> None:
+    stdout = StringIO()
+    tui = TextTui(stdout=stdout, command_executor=lambda argv: (0, ""))
+
+    assert tui.handle("reference") is False
+
+    assert tui.prompt() == "kairos/app/reference> "
+    assert "Reference Panel" in stdout.getvalue()
+
+
+def test_rich_tui_renders_home_panel() -> None:
+    console = Console(record=True, width=100, force_terminal=False)
+    tui = RichTui(console=console, command_executor=lambda argv: (0, ""))
+
+    console.print(tui.render())
+    text = console.export_text()
+
+    assert "Kairos" in text
+    assert "Experimental TUI preview" in text
+    assert "Products" in text
+    assert "workspace" in text
+
+
+def test_rich_tui_handles_reference_panel() -> None:
+    console = Console(record=True, width=100, force_terminal=False)
+    tui = RichTui(console=console, command_executor=lambda argv: (0, ""))
+
+    assert tui.handle("reference") is False
+    console.print(tui.render())
+    text = console.export_text()
+
+    assert tui.prompt() == "kairos/app/reference> "
+    assert "Reference Panel" in text
+    assert "Catalog" in text or "Metric" in text
+
+
+def test_cli_product_shell_refreshes_application_status() -> None:
+    stdout = StringIO()
+
+    result = _run(["shell", "--command", "refresh"], stdout)
+
+    assert result == 0
+    text = stdout.getvalue()
+    assert "Kairos" in text
+    assert "Runs" in text
+
+
+def test_surface_context_summarizes_run_state(monkeypatch, tmp_path) -> None:
+    from kairospy.surface import state as surface_state
+
+    class FakeStatus:
+        def to_dict(self):
+            return {
+                "mode": "paper",
+                "run_id": "demo",
+                "status": "running",
+                "phase": "running",
+                "heartbeat_age_seconds": 1.25,
+                "context": {"strategy": "examples.strategy"},
+                "log_file": str(tmp_path / "daemon.log"),
+            }
+
+    config = KairosConfig(None, tmp_path, {"project": {"name": "Demo"}})
+    monkeypatch.setattr(surface_state, "list_run_daemons", lambda *, stale_after_seconds: (FakeStatus(),))
+    context = SurfaceContext(config=config)
+
+    snapshot = context.snapshot()
+
+    assert snapshot.project_name == "Demo"
+    assert len(snapshot.active_runs) == 1
+    assert "1 active / 1 total" in render_surface_overview(snapshot)
+    assert "#  mode" in render_run_strip(snapshot)
+    assert "1  paper" in render_run_strip(snapshot)
+    assert "examples.strategy" in render_run_strip(snapshot)
+
+
+def test_cli_product_shell_selects_numbered_run_from_overview(monkeypatch, tmp_path) -> None:
+    from kairospy.surface import state as surface_state
+
+    class FakeStatus:
+        def to_dict(self):
+            return {
+                "mode": "paper",
+                "run_id": "demo",
+                "status": "running",
+                "phase": "running",
+                "heartbeat_age_seconds": 1.25,
+                "context": {"strategy": "examples.strategy"},
+                "log_file": str(tmp_path / "daemon.log"),
+            }
+
+    monkeypatch.setattr(surface_state, "list_run_daemons", lambda *, stale_after_seconds: (FakeStatus(),))
+    stdout = StringIO()
+
+    result = _run(["shell", "--command", "run", "--command", "use 1"], stdout)
+
+    assert result == 0
+    assert "Using paper run demo" in stdout.getvalue()
+
+
+def test_cli_app_run_prompt_reflects_selected_run(monkeypatch, tmp_path) -> None:
+    from kairospy.surface import state as surface_state
+
+    class FakeStatus:
+        def to_dict(self):
+            return {
+                "mode": "paper",
+                "run_id": "demo",
+                "status": "running",
+                "phase": "running",
+                "heartbeat_age_seconds": 1.25,
+                "context": {"strategy": "examples.strategy"},
+                "log_file": str(tmp_path / "daemon.log"),
+            }
+
+    monkeypatch.setattr(surface_state, "list_run_daemons", lambda *, stale_after_seconds: (FakeStatus(),))
+    stdout = StringIO()
+    session = AppSession(stdout=stdout, command_executor=lambda argv: (0, ""))
+
+    assert session.handle("run") is False
+    assert session.handle("use 1") is False
+
+    assert session.prompt() == "kairos/app/run[paper:demo]> "
+    assert "Using paper run demo" in stdout.getvalue()
+
+
+def test_cli_product_shell_enters_run_context() -> None:
+    stdout = StringIO()
+
+    result = _run([
+        "shell",
+        "--command",
+        "run",
+        "--command",
+        "list --mode paper",
+    ], stdout)
+
+    assert result == 0
+    text = stdout.getvalue()
+    assert "Run Workspace" in text
+    assert "use <#>" in text
+    assert "Recent Runs" in text
+    assert "1  use paper" not in text
+
+
+def test_cli_product_shell_runs_product_commands_without_prefix() -> None:
+    stdout = StringIO()
+
+    result = _run([
+        "shell",
+        "--command",
+        "data",
+        "--command",
+        "--help",
+    ], stdout)
+
+    assert result == 0
+    text = stdout.getvalue()
+    assert "data product" in text
+    assert "Historical data commands" in text
 
 
 def test_cli_downloads_historical_data(monkeypatch, tmp_path) -> None:
@@ -231,6 +475,91 @@ def test_cli_replays_historical_data_without_delay(tmp_path) -> None:
 
     assert result == 0
     assert [json.loads(line)["price"] for line in stdout.getvalue().splitlines()] == ["100", "101"]
+
+
+def test_cli_runs_dataset_backtest_and_writes_artifacts(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    strategy_path = project / "sample_strategy.py"
+    strategy_path.write_text(
+        "\n".join([
+            "from decimal import Decimal",
+            "from kairospy.strategy import StrategyBase",
+            "",
+            "class BuyAndHold(StrategyBase):",
+            '    strategy_id = "buy-and-hold"',
+            "    def __init__(self, symbol='BTC/USDT', quantity='1'):",
+            "        self.symbol = symbol",
+            "        self.quantity = Decimal(str(quantity))",
+            "        self.entered = False",
+            "    def on_market(self, context, signal):",
+            "        if self.entered:",
+            "            return ()",
+            "        context.target_position(self.symbol, self.quantity, intent_id='enter')",
+            "        self.entered = True",
+            "        return ()",
+        ]),
+        encoding="utf-8",
+    )
+    DataStore(project / ".kairos" / "data", storage_format="jsonl").write(
+        "market.ohlcv.binance_spot_btc_usdt.1m",
+        [
+            {
+                "time": "2026-01-01T00:00:00+00:00",
+                "kind": "bar",
+                "market_id": "market:binance:spot:btc_usdt",
+                "instrument_id": "instrument:spot:btc:usdt",
+                "market_key": "binance_spot_btc_usdt",
+                "close": "100",
+            },
+            {
+                "time": "2026-01-01T00:01:00+00:00",
+                "kind": "bar",
+                "market_id": "market:binance:spot:btc_usdt",
+                "instrument_id": "instrument:spot:btc:usdt",
+                "market_key": "binance_spot_btc_usdt",
+                "close": "110",
+            },
+        ],
+    )
+    config_path = project / "backtest.toml"
+    config_path.write_text(
+        "\n".join([
+            "[run]",
+            'id = "sample-backtest"',
+            'mode = "backtest"',
+            'strategy = "sample_strategy:BuyAndHold"',
+            "",
+            "[strategy.params]",
+            'symbol = "BTC/USDT"',
+            'quantity = "1"',
+            "",
+            "[backtest]",
+            'dataset = "market.ohlcv.binance_spot_btc_usdt.1m"',
+            'storage_format = "jsonl"',
+            'venue = "binance"',
+            'market = "spot"',
+            'price_field = "close"',
+            "",
+            "[account]",
+            'cash = "1000"',
+            'currency = "USDT"',
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+    stdout = StringIO()
+
+    result = _run(["backtest", "run", "--config", str(config_path)], stdout)
+
+    assert result == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["run_id"] == "sample-backtest"
+    assert payload["fills"] == 1
+    run_directory = project / ".kairos" / "runs" / "backtest" / "sample-backtest"
+    assert (run_directory / "summary.json").exists()
+    assert (run_directory / "fills.jsonl").exists()
+    assert (run_directory / "report.md").exists()
 
 
 def test_cli_prints_stream_data(monkeypatch) -> None:
@@ -365,21 +694,6 @@ def test_cli_validates_run_config(tmp_path) -> None:
     payload = json.loads(stdout.getvalue())
     assert payload["valid"] is True
     assert payload["issues"] == []
-
-
-def test_cli_runs_example_backtest() -> None:
-    stdout = StringIO()
-
-    result = _run(["run", "backtest", "--config", "configs/runs/simple-momentum-backtest.toml"], stdout)
-
-    assert result == 0
-    payload = json.loads(stdout.getvalue())
-    assert payload["run_id"] == "simple-momentum-backtest"
-    assert payload["mode"] == "backtest"
-    assert payload["strategy_id"] == "simple-momentum"
-    assert payload["event_count"] == 6
-    assert payload["fills"] == 4
-    assert payload["closed_trades"] == 2
 
 
 def test_cli_refreshes_and_queries_reference_catalog(monkeypatch, tmp_path) -> None:

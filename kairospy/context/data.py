@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from typing import AsyncIterator, Iterable, Literal
 
 from kairospy.data import DataStore, StreamFeed
-from kairospy.reference import MarketRef, MarketResolver
 
 
 DataMode = Literal["history", "stream", "both"]
@@ -50,11 +49,9 @@ class DataContext:
         store: DataStore,
         *,
         stream_feed: StreamFeed | None = None,
-        markets: MarketResolver | None = None,
     ) -> None:
         self.store = store
         self.stream_feed = stream_feed
-        self.markets = markets or MarketResolver()
         self._bindings: dict[str, DataBinding] = {}
 
     def attach(
@@ -81,26 +78,13 @@ class DataContext:
     def __getitem__(self, name: str) -> "DataView":
         return self.view(name)
 
-    def for_market(
-        self,
-        market_ref: object | MarketRef,
-        *,
-        venue: str | None = None,
-        market: str | None = None,
-    ) -> "MarketDataView":
-        return MarketDataView(self, self.markets.resolve(market_ref, venue=venue, market=market))
-
     def snapshot(self) -> dict[str, object]:
-        snapshot: dict[str, object] = {
+        return {
             "bindings": {
                 name: binding.to_dict()
                 for name, binding in sorted(self._bindings.items())
             },
         }
-        markets = self.markets.snapshot()
-        if markets:
-            snapshot["markets"] = markets
-        return snapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,43 +142,3 @@ class DataView:
         if self.context.stream_feed is None:
             raise RuntimeError("data context has no stream feed")
         return self.context.stream_feed.subscribe(self.binding.stream)
-
-
-@dataclass(frozen=True, slots=True)
-class MarketDataView:
-    context: DataContext
-    market_ref: MarketRef
-
-    def bind(
-        self,
-        name: str,
-        *,
-        kind: str,
-        timeframe: str | None = None,
-        mode: DataMode = "history",
-    ) -> DataView:
-        dataset = self.dataset(kind, timeframe=timeframe) if mode in {"history", "both"} else None
-        stream = self.stream(kind, timeframe=timeframe) if mode in {"stream", "both"} else None
-        return self.context.attach(name, dataset=dataset, stream=stream, mode=mode)
-
-    def ohlcv(self, timeframe: str, *, name: str = "bars", mode: DataMode = "history") -> DataView:
-        return self.bind(name, kind="ohlcv", timeframe=timeframe, mode=mode)
-
-    def ticker(self, *, name: str = "ticker", mode: DataMode = "history") -> DataView:
-        return self.bind(name, kind="ticker", mode=mode)
-
-    def orderbook(self, *, name: str = "orderbook", mode: DataMode = "stream") -> DataView:
-        return self.bind(name, kind="orderbook", mode=mode)
-
-    def dataset(self, kind: str, *, timeframe: str | None = None) -> str:
-        return ".".join(part for part in ("market", _name(kind), self.market_ref.market_key, timeframe) if part)
-
-    def stream(self, kind: str, *, timeframe: str | None = None) -> str:
-        return ".".join(part for part in ("market", _name(kind), self.market_ref.market_key, timeframe) if part)
-
-
-def _name(value: object) -> str:
-    text = str(value).strip().lower()
-    if not text:
-        raise ValueError("data kind cannot be empty")
-    return text

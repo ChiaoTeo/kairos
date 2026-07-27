@@ -5,11 +5,19 @@ from datetime import datetime, timezone
 from typing import AsyncIterator, Iterable, Mapping
 
 from kairospy.data import DataSink
-from kairospy.reference import MarketRef
+from kairospy.core.reference import MarketRef
 
+from kairospy.integrations.ccxt.market_data import (
+    ccxt_market_type,
+    ccxt_ohlcv_record,
+    ccxt_order_book_record,
+    ccxt_ticker_record,
+    ccxt_trade_record,
+    ephemeral_market_ref,
+)
 from kairospy.integrations.instruments import catalog_from_market_rows, market_definitions_from_rows
 from kairospy.integrations.drivers import CcxtDriver
-from kairospy.reference import MarketDefinition, ReferenceCatalog
+from kairospy.core.reference import MarketDefinition, ReferenceCatalog
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,15 +61,18 @@ class Hyperliquid:
         limit: int = 1000,
         params: Mapping[str, object] | None = None,
     ) -> Iterable[Mapping[str, object]]:
-        return self.driver.fetch_ohlcv(
+        ccxt_symbol = _ccxt_symbol(symbol)
+        market_ref = _market_ref(self.exchange_id, ccxt_symbol, params)
+        rows = self.driver.fetch_ohlcv(
             self.exchange_id,
-            _ccxt_symbol(symbol),
+            ccxt_symbol,
             timeframe=timeframe,
             since=since,
             until=until,
             limit=limit,
             params=params,
         )
+        return (ccxt_ohlcv_record(row, market=market_ref, timeframe=timeframe) for row in rows)
 
     def watch_ticker(
         self,
@@ -69,7 +80,11 @@ class Hyperliquid:
         *,
         params: Mapping[str, object] | None = None,
     ) -> AsyncIterator[Mapping[str, object]]:
-        return self.driver.watch_ticker(self.exchange_id, _ccxt_symbol(symbol), params=params)
+        ccxt_symbol = _ccxt_symbol(symbol)
+        return _ticker_records(
+            self.driver.watch_ticker(self.exchange_id, ccxt_symbol, params=params),
+            _market_ref(self.exchange_id, ccxt_symbol, params),
+        )
 
     def fetch_quote(
         self,
@@ -77,7 +92,9 @@ class Hyperliquid:
         *,
         params: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
-        return self.driver.fetch_ticker(self.exchange_id, _ccxt_symbol(market.source_symbol), params=params)
+        ccxt_symbol = _ccxt_symbol(market.source_symbol)
+        raw = self.driver.fetch_ticker(self.exchange_id, ccxt_symbol, params=params)
+        return ccxt_ticker_record(raw, market=_market_ref(self.exchange_id, ccxt_symbol, params))
 
     def watch_order_book(
         self,
@@ -86,7 +103,11 @@ class Hyperliquid:
         limit: int | None = None,
         params: Mapping[str, object] | None = None,
     ) -> AsyncIterator[Mapping[str, object]]:
-        return self.driver.watch_order_book(self.exchange_id, _ccxt_symbol(symbol), limit=limit, params=params)
+        ccxt_symbol = _ccxt_symbol(symbol)
+        return _order_book_records(
+            self.driver.watch_order_book(self.exchange_id, ccxt_symbol, limit=limit, params=params),
+            _market_ref(self.exchange_id, ccxt_symbol, params),
+        )
 
     def watch_trades(
         self,
@@ -96,7 +117,11 @@ class Hyperliquid:
         limit: int = 50,
         params: Mapping[str, object] | None = None,
     ) -> AsyncIterator[Mapping[str, object]]:
-        return self.driver.watch_trades(self.exchange_id, _ccxt_symbol(symbol), since=since, limit=limit, params=params)
+        ccxt_symbol = _ccxt_symbol(symbol)
+        return _trade_records(
+            self.driver.watch_trades(self.exchange_id, ccxt_symbol, since=since, limit=limit, params=params),
+            _market_ref(self.exchange_id, ccxt_symbol, params),
+        )
 
     async def persist_ticker(
         self,
@@ -140,3 +165,22 @@ def _ccxt_symbol(symbol: str) -> str:
     if "/" in value:
         return value
     return f"{value.upper()}/USDC:USDC"
+
+
+def _market_ref(exchange_id: str, symbol: str, params: Mapping[str, object] | None) -> MarketRef:
+    return ephemeral_market_ref(venue=exchange_id, market=ccxt_market_type(exchange_id, params), source_symbol=symbol)
+
+
+async def _ticker_records(events, market):
+    async for event in events:
+        yield ccxt_ticker_record(event, market=market)
+
+
+async def _order_book_records(events, market):
+    async for event in events:
+        yield ccxt_order_book_record(event, market=market)
+
+
+async def _trade_records(events, market):
+    async for event in events:
+        yield ccxt_trade_record(event, market=market)

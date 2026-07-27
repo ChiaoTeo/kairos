@@ -33,14 +33,23 @@ class StreamFeed(Protocol):
     def subscribe(self, stream: str) -> AsyncIterator[dict[str, object]]:
         ...
 
+    async def publish(self, stream: str, event: Mapping[str, object]) -> None:
+        ...
+
+    async def close(self, stream: str | None = None) -> None:
+        ...
+
 
 class InMemoryStreamFeed:
-    def __init__(self) -> None:
+    def __init__(self, *, max_queue_size: int = 0) -> None:
+        if max_queue_size < 0:
+            raise ValueError("max_queue_size cannot be negative")
         self._queues: dict[str, list[asyncio.Queue[dict[str, object] | None]]] = defaultdict(list)
+        self.max_queue_size = max_queue_size
 
     def subscribe(self, stream: str) -> StreamSubscription:
         stream_name = _clean_stream(stream)
-        queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
+        queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue(maxsize=self.max_queue_size)
         self._queues[stream_name].append(queue)
         return StreamSubscription(stream_name, self, queue)
 

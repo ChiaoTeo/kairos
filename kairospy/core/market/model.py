@@ -1,0 +1,231 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
+from types import MappingProxyType
+from typing import Any, Literal, Mapping
+
+
+MarketSubjectType = Literal["instrument", "market", "rate", "curve", "index"]
+MarketObservationKind = Literal[
+    "quote",
+    "orderbook",
+    "trade",
+    "bar",
+    "funding_rate",
+    "interest_rate",
+    "curve_point",
+    "index_value",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class MarketSubject:
+    subject_type: MarketSubjectType | str
+    subject_id: str
+
+    def __post_init__(self) -> None:
+        if not self.subject_type.strip() or not self.subject_id.strip():
+            raise ValueError("market subject identity fields are required")
+
+
+@dataclass(frozen=True, slots=True)
+class MarketObservation:
+    subject: MarketSubject
+    kind: MarketObservationKind | str
+    observed_at: datetime
+    payload: Mapping[str, object]
+    available_at: datetime | None = None
+    source: str = ""
+    sequence: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.kind.strip():
+            raise ValueError("market observation kind is required")
+        if self.observed_at.tzinfo is None:
+            raise ValueError("market observation observed_at must be timezone-aware")
+        if self.available_at is not None and self.available_at.tzinfo is None:
+            raise ValueError("market observation available_at must be timezone-aware")
+        if self.sequence is not None and self.sequence < 1:
+            raise ValueError("market observation sequence must be positive")
+        object.__setattr__(self, "payload", MappingProxyType(dict(self.payload)))
+
+
+@dataclass(frozen=True, slots=True)
+class Quote:
+    instrument_id: str
+    time: datetime
+    market_id: str | None = None
+    market_key: str | None = None
+    bid: Decimal | None = None
+    ask: Decimal | None = None
+    bid_size: Decimal | None = None
+    ask_size: Decimal | None = None
+    source: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.instrument_id.strip():
+            raise ValueError("quote instrument_id is required")
+        if self.market_id is not None and not self.market_id.strip():
+            raise ValueError("quote market_id cannot be blank")
+        if self.market_key is not None and not self.market_key.strip():
+            raise ValueError("quote market_key cannot be blank")
+        if self.time.tzinfo is None:
+            raise ValueError("quote time must be timezone-aware")
+        if self.bid is not None and self.bid < 0:
+            raise ValueError("quote bid cannot be negative")
+        if self.ask is not None and self.ask < 0:
+            raise ValueError("quote ask cannot be negative")
+        if self.bid_size is not None and self.bid_size < 0:
+            raise ValueError("quote bid_size cannot be negative")
+        if self.ask_size is not None and self.ask_size < 0:
+            raise ValueError("quote ask_size cannot be negative")
+
+    @property
+    def midpoint(self) -> Decimal | None:
+        if self.bid is None or self.ask is None:
+            return None
+        return (self.bid + self.ask) / Decimal("2")
+
+
+@dataclass(frozen=True, slots=True)
+class PriceLevel:
+    price: Decimal
+    size: Decimal
+
+    def __post_init__(self) -> None:
+        if self.price < 0:
+            raise ValueError("price level price cannot be negative")
+        if self.size < 0:
+            raise ValueError("price level size cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
+class OrderBookSnapshot:
+    instrument_id: str
+    time: datetime
+    market_id: str | None = None
+    market_key: str | None = None
+    bids: tuple[PriceLevel, ...] = ()
+    asks: tuple[PriceLevel, ...] = ()
+    nonce: object | None = None
+    source: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.instrument_id.strip():
+            raise ValueError("order book instrument_id is required")
+        if self.market_id is not None and not self.market_id.strip():
+            raise ValueError("order book market_id cannot be blank")
+        if self.market_key is not None and not self.market_key.strip():
+            raise ValueError("order book market_key cannot be blank")
+        if self.time.tzinfo is None:
+            raise ValueError("order book time must be timezone-aware")
+        object.__setattr__(self, "bids", tuple(self.bids))
+        object.__setattr__(self, "asks", tuple(self.asks))
+
+    @property
+    def bid1(self) -> PriceLevel | None:
+        return self.bids[0] if self.bids else None
+
+    @property
+    def ask1(self) -> PriceLevel | None:
+        return self.asks[0] if self.asks else None
+
+
+@dataclass(frozen=True, slots=True)
+class Bar:
+    instrument_id: str
+    time: datetime
+    timeframe: str
+    market_id: str | None = None
+    market_key: str | None = None
+    open: Decimal | None = None
+    high: Decimal | None = None
+    low: Decimal | None = None
+    close: Decimal | None = None
+    volume: Decimal | None = None
+    source: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.instrument_id.strip():
+            raise ValueError("bar instrument_id is required")
+        if not self.timeframe.strip():
+            raise ValueError("bar timeframe is required")
+        if self.time.tzinfo is None:
+            raise ValueError("bar time must be timezone-aware")
+
+
+@dataclass(frozen=True, slots=True)
+class TradePrint:
+    instrument_id: str
+    time: datetime
+    market_id: str | None = None
+    market_key: str | None = None
+    trade_id: str | None = None
+    side: str | None = None
+    price: Decimal | None = None
+    size: Decimal | None = None
+    cost: Decimal | None = None
+    source: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.instrument_id.strip():
+            raise ValueError("trade instrument_id is required")
+        if self.time.tzinfo is None:
+            raise ValueError("trade time must be timezone-aware")
+
+
+@dataclass(frozen=True, slots=True)
+class RateObservation:
+    rate_id: str
+    time: datetime
+    rate: Decimal
+    source: str = ""
+    tenor: str | None = None
+    basis: str = ""
+    market_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.rate_id.strip():
+            raise ValueError("rate_id is required")
+        if self.time.tzinfo is None:
+            raise ValueError("rate observation time must be timezone-aware")
+
+    @property
+    def subject(self) -> MarketSubject:
+        if self.market_id:
+            return MarketSubject("market", self.market_id)
+        return MarketSubject("rate", self.rate_id)
+
+    def to_observation(self, *, kind: str = "interest_rate", sequence: int | None = None) -> MarketObservation:
+        payload: dict[str, Any] = {
+            "rate_id": self.rate_id,
+            "rate": self.rate,
+            "tenor": self.tenor,
+            "basis": self.basis,
+            "market_id": self.market_id,
+        }
+        return MarketObservation(
+            self.subject,
+            kind,
+            self.time,
+            payload,
+            available_at=self.time,
+            source=self.source,
+            sequence=sequence,
+        )
+
+
+__all__ = [
+    "Bar",
+    "MarketObservation",
+    "MarketObservationKind",
+    "MarketSubject",
+    "MarketSubjectType",
+    "OrderBookSnapshot",
+    "PriceLevel",
+    "Quote",
+    "RateObservation",
+    "TradePrint",
+]

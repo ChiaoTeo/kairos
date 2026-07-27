@@ -1,21 +1,27 @@
 # KairosPy
 
-KairosPy is a Python toolkit for strategy runtime, historical simulation, paper runs, live account orchestration, and provider integrations.
+KairosPy is a strategy runtime for trading systems. Strategy authors write against stable strategy events, views, and intents; KairosPy composes core trading domains with backtest, paper, and live modes plus external provider integrations.
 
-The project is organized around explicit domain boundaries:
+The project is organized around one product axis:
 
-- `kairospy.runtime`: strategy event loop, runtime events, mode lines, views, and run profiles.
-- `kairospy.strategy`: strategy protocols, strategy context, controls, and strategy-facing views.
-- `kairospy.execution`: intent-to-order-to-fill behavior, execution state, local ledger updates, and simulated/live execution adapters.
-- `kairospy.accounts`: account identity, balances, positions, snapshots, projections, reservations, ledgers, and provider-neutral account bootstrap.
+- `kairospy.strategy`: strategy author API, stable strategy events, strategy context, controls, and strategy-facing views.
+- `kairospy.runtime`: strategy event loop, runtime data pipeline, event lines, component scheduling, and run profiles.
+- `kairospy.core`: stable trading domains.
+- `kairospy.core.market`: provider-neutral market observations, quote/book/bar/trade/rate models, subscription specifications, and row encoders.
+- `kairospy.core.execution`: intent-to-order-to-fill behavior, execution state, local ledger updates, and simulated/live execution adapters.
+- `kairospy.core.account`: account identity, balances, positions, snapshots, projections, reservations, ledgers, and provider-neutral account bootstrap.
+- `kairospy.core.reference`: provider-neutral instrument, listing, market, lifecycle, resolver, store, and universe models.
+- `kairospy.core.intent` and `kairospy.core.order`: strategy intent and order state models.
+- `kairospy.core.views`: shared view schema, envelope, registry, and store primitives.
+- `kairospy.modes`: run modes that compose strategy, runtime, core, data, and integrations.
+- `kairospy.modes.backtest`: historical simulation entry points, simulated account configuration, results, and metrics.
+- `kairospy.modes.paper`: non-production runtime entry points built from the same runtime and execution primitives as backtest.
+- `kairospy.modes.live`: live gateway protocols, account reconciliation, private stream collection, and live engine orchestration.
+- `kairospy.data`: durable datasets, stores, queries, sinks, and stream feeds.
 - `kairospy.integrations`: external systems and provider payload adapters such as ccxt, Binance, Hyperliquid, IBKR, and Massive.
-- `kairospy.backtest`: historical simulation entry points, simulated account configuration, results, and metrics.
-- `kairospy.paper`: non-production runtime entry points built from the same runtime and execution primitives as backtest.
-- `kairospy.live`: live gateway protocols, account reconciliation, private stream collection, and live engine orchestration.
-- `kairospy.reference`: provider-neutral instrument, listing, market, lifecycle, resolver, store, and universe models.
 - `kairospy.surface`: CLI and user-facing product APIs.
 
-Deprecated broad package names such as `trading` are intentionally not part of the package layout.
+Old top-level domain and mode packages are intentionally not part of the layout; use `kairospy.core.*` and `kairospy.modes.*`.
 
 ## Install For Development
 
@@ -24,7 +30,7 @@ uv sync
 .venv/bin/pytest tests/test_*_minimal.py -q
 ```
 
-The current minimal suite covers runtime, data, integrations, account/execution interaction, backtest, paper, live context, strategy views, schemas, reference catalog, and architecture boundaries.
+The current minimal suite covers runtime, data, integrations, account/execution interaction, backtest, paper, live context, strategy events/views, market observations, reference catalog, and architecture boundaries.
 
 ## CLI
 
@@ -44,15 +50,15 @@ Reference catalogs and lifecycle events are persisted in SQLite at `.kairos/refe
 
 ## Python Runtime Shape
 
-Strategies emit intents; runtime does not submit orders. Execution adapters convert intents into simulated fills or live orders.
+Strategies receive stable strategy events and emit intents; runtime does not submit orders. Execution adapters convert intents into simulated fills or live orders.
 
 ```python
 from decimal import Decimal
 from tempfile import TemporaryDirectory
 
-from kairospy.backtest import BacktestEngine, SimulatedAccount
+from kairospy.modes.backtest import BacktestEngine, SimulatedAccount
 from kairospy.context import DataContext
-from kairospy.reference import MarketResolver
+from kairospy.core.reference import MarketResolver
 from kairospy.data import DataStore
 from kairospy.runtime import IterableEventSource
 from kairospy.strategy import StrategyBase, StrategyContext
@@ -72,13 +78,12 @@ source = IterableEventSource(
 )
 
 with TemporaryDirectory() as temporary:
+    market_resolver = MarketResolver(default_venue="simulated", default_market="spot")
     result = BacktestEngine(
         TargetBtc(),
-        DataContext(
-            DataStore(temporary, storage_format="jsonl"),
-            markets=MarketResolver(default_venue="simulated", default_market="spot"),
-        ),
+        DataContext(DataStore(temporary, storage_format="jsonl")),
         SimulatedAccount("strategy-a", Decimal("1000"), cash_currency="USDT"),
+        market_resolver=market_resolver,
     ).run(source)
 ```
 
