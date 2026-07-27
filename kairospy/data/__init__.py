@@ -1,52 +1,23 @@
-from .api import DataApi, HistoricalDataService
-from .catalog import DataCatalog
-from .storage.client import DataQuery, DataUnavailableError, DatasetClient
-from .contracts import AcquirePolicy, DataView, OutputFormat, RunMode
-from .ids import DatasetId, normalize_alias, normalize_dataset_id
-from .layout import DatasetLayout
-from .live import LiveDataService
-from .catalog.manifest import DEFAULT_DATA_MANIFEST, DataManifest, DataManifestDataset, DataManifestError
-from .storage.metadata import DatasetMetadata, DatasetMetadataInference, FieldMetadata
-from .protocols import DataProtocolRegistry, HistoricalDataProtocol, HistoricalDataRequest, LiveDataProtocol, LiveDataRequest
-from .storage.reader import DatasetReader
-from .storage.store import DatasetStore
-from .storage.writer import DatasetWriter
-from .streams import DataSpaceId, DataStreamId, DataStreamRef, DataStreamResolver, normalize_stream_id
+from __future__ import annotations
+
+from .ids import DataId, normalize_alias, normalize_data_id
+from .ingest import DataSink
+from .query import DataQuery, OutputFormat
+from .store import DataStore
+from .streams import InMemoryStreamFeed, StreamFeed, StreamSubscription
+
+DatasetId = DataId
 
 __all__ = [
-    "DEFAULT_DATA_MANIFEST",
-    "AcquirePolicy",
-    "DataApi",
-    "DataCatalog",
-    "DataManifest",
-    "DataManifestDataset",
-    "DataManifestError",
-    "DataProtocolRegistry",
+    "DataSink",
+    "DataId",
     "DataQuery",
-    "DataSpaceId",
-    "DataStreamId",
-    "DataStreamRef",
-    "DataStreamResolver",
-    "DataView",
-    "DataUnavailableError",
-    "DatasetClient",
+    "DataStore",
     "DatasetId",
-    "DatasetLayout",
-    "DatasetMetadata",
-    "DatasetMetadataInference",
-    "DatasetReader",
-    "DatasetStore",
-    "DatasetWriter",
-    "FieldMetadata",
-    "HistoricalDataProtocol",
-    "HistoricalDataRequest",
-    "HistoricalDataService",
-    "LiveDataProtocol",
-    "LiveDataRequest",
-    "LiveDataService",
+    "InMemoryStreamFeed",
     "OutputFormat",
-    "RunMode",
+    "StreamFeed",
+    "StreamSubscription",
     "normalize_alias",
-    "normalize_dataset_id",
-    "normalize_stream_id",
+    "normalize_data_id",
 ]

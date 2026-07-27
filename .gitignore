@@ -9,9 +9,11 @@ __pycache__
 .venv
 .pytest_cache/
 build/
+/dist/
 .DS_Store
 .env
 /configs/
 /.kairos/
 /kairos.toml
 /.configs/
+kairospy.bak

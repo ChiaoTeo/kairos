@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
+from enum import StrEnum
+from uuid import UUID
+
+from .model import AccountRef
+
+
+class AccountEventKind(StrEnum):
+    DEPOSIT = "deposit"
+    WITHDRAWAL = "withdrawal"
+    FILL = "fill"
+    FEE = "fee"
+    FUNDING = "funding"
+    SETTLEMENT = "settlement"
+    ADJUSTMENT = "adjustment"
+
+
+@dataclass(frozen=True, slots=True)
+class AccountEvent:
+    event_id: UUID
+    account: AccountRef
+    kind: AccountEventKind
+    occurred_at: datetime
+    currency: str
+    cash_delta: Decimal = Decimal("0")
+    instrument_id: str | None = None
+    position_delta: Decimal = Decimal("0")
+    reference_id: str = ""
+
+    def __post_init__(self) -> None:
+        if self.occurred_at.tzinfo is None:
+            raise ValueError("account event timestamp must be timezone-aware")
+        if not self.currency.strip():
+            raise ValueError("account event currency cannot be empty")
+        if self.position_delta and not self.instrument_id:
+            raise ValueError("position delta requires instrument_id")
+        if self.cash_delta == 0 and self.position_delta == 0:
+            raise ValueError("account event must change cash or position")
+
+
+class AccountLedger:
+    def __init__(self, events: tuple[AccountEvent, ...] = ()) -> None:
+        self._events: list[AccountEvent] = []
+        self._ids: set[UUID] = set()
+        for event in events:
+            self.record(event)
+
+    def record(self, event: AccountEvent) -> None:
+        if event.event_id in self._ids:
+            raise ValueError(f"duplicate account event: {event.event_id}")
+        if self._events and event.occurred_at < self._events[-1].occurred_at:
+            raise ValueError("account events must be time ordered")
+        self._events.append(event)
+        self._ids.add(event.event_id)
+
+    @property
+    def events(self) -> tuple[AccountEvent, ...]:
+        return tuple(self._events)
+
+    def cash(self, account: AccountRef) -> dict[str, Decimal]:
+        balances: dict[str, Decimal] = {}
+        for event in self._events:
+            if event.account != account or event.cash_delta == 0:
+                continue
+            balances[event.currency] = balances.get(event.currency, Decimal("0")) + event.cash_delta
+        return {currency: amount for currency, amount in balances.items() if amount != 0}
+
+    def positions(self, account: AccountRef) -> dict[str, Decimal]:
+        positions: dict[str, Decimal] = {}
+        for event in self._events:
+            if event.account != account or event.position_delta == 0 or event.instrument_id is None:
+                continue
+            positions[event.instrument_id] = positions.get(event.instrument_id, Decimal("0")) + event.position_delta
+        return {instrument: quantity for instrument, quantity in positions.items() if quantity != 0}
+
+
+__all__ = ["AccountEvent", "AccountEventKind", "AccountLedger"]

@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from kairospy.identity import InstitutionId
+import re
 
 
-class _NormalizedId:
+@dataclass(frozen=True, slots=True, order=True)
+class ReferenceId:
     value: str
 
     def __post_init__(self) -> None:
-        value = self.value.strip()
+        value = str(self.value).strip()
         if not value:
             raise ValueError(f"{type(self).__name__} cannot be empty")
         object.__setattr__(self, "value", value)
@@ -17,66 +18,37 @@ class _NormalizedId:
         return self.value
 
 
-@dataclass(frozen=True, slots=True, order=True)
-class EntityId(_NormalizedId):
-    value: str
+class EntityId(ReferenceId):
+    pass
 
 
-@dataclass(frozen=True, slots=True, order=True)
-class BenchmarkId(_NormalizedId):
-    value: str
+class AssetId(ReferenceId):
+    pass
 
 
-@dataclass(frozen=True, slots=True, order=True)
-class ProductId(_NormalizedId):
-    value: str
+class InstrumentId(ReferenceId):
+    pass
 
 
-@dataclass(frozen=True, slots=True, order=True)
-class SeriesId(_NormalizedId):
-    value: str
+class ListingId(ReferenceId):
+    pass
 
 
-@dataclass(frozen=True, slots=True, order=True)
-class ListingId(_NormalizedId):
-    value: str
+class MarketId(ReferenceId):
+    pass
 
 
-@dataclass(frozen=True, slots=True, order=True)
-class ProviderId(_NormalizedId):
-    value: str
+def reference_slug(value: object) -> str:
+    text = str(value).strip().lower()
+    return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", text)).strip("_")
 
 
-@dataclass(frozen=True, slots=True, order=True)
-class BrokerId(_NormalizedId):
-    value: str
-
-
-@dataclass(frozen=True, slots=True, order=True)
-class RouteId(_NormalizedId):
-    value: str
-
-
-@dataclass(frozen=True, slots=True, order=True)
-class CalendarId(_NormalizedId):
-    value: str
-
-
-@dataclass(frozen=True, slots=True, order=True)
-class NetworkId(_NormalizedId):
-    value: str
-
-
-@dataclass(frozen=True, slots=True, order=True)
-class NetworkAssetId(_NormalizedId):
-    value: str
-
-
-@dataclass(frozen=True, slots=True, order=True)
-class RailId(_NormalizedId):
-    value: str
-
-
-@dataclass(frozen=True, slots=True, order=True)
-class LocationId(_NormalizedId):
-    value: str
+__all__ = [
+    "AssetId",
+    "EntityId",
+    "InstrumentId",
+    "ListingId",
+    "MarketId",
+    "ReferenceId",
+    "reference_slug",
+]
