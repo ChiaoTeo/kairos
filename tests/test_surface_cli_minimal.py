@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import json
 from io import StringIO
+from pathlib import Path
+import subprocess
+import sys
 
 from rich.console import Console
 
-from kairospy.data import DataStore
+from kairospy.infrastructure.data import DataStore
 from kairospy.core.reference import LifecycleEvent, LifecycleEventType
 from kairospy.config import KairosConfig
 from kairospy.surface.app import PRODUCTS, AppSession, ProductMaturity, product_for_token
 from kairospy.surface.render_text import render_product_registry
 from kairospy.surface.tui import RichTui, TextTui
 from kairospy.surface import cli
+from kairospy.surface.products import broker as broker_product
 from kairospy.surface.products import data as data_product
 from kairospy.surface.products import reference as reference_product
 from kairospy.surface.products import streams as streams_product
@@ -58,6 +62,21 @@ class FakeBinance:
             "symbol": symbol,
             "id": "1",
             "price": "100",
+        }
+
+    def fetch_quote(self, market, *, params=None):
+        assert market.source_symbol == "BTC/USDT"
+        assert params == {"type": "spot"}
+        return {
+            "time": "2026-01-01T00:00:00+00:00",
+            "kind": "ticker",
+            "market_id": market.market_id,
+            "instrument_id": market.instrument_id,
+            "market_key": market.market_key,
+            "source_symbol": market.source_symbol,
+            "bid1": "100",
+            "ask1": "101",
+            "last": "100.5",
         }
 
     def fetch_markets(self, *, params=None):
@@ -142,6 +161,45 @@ class FakeMassiveProvider:
         )
 
 
+class FakeBroker:
+    fail_balance = False
+
+    def fetch_balance(self, *, params=None):
+        assert params == {"type": "spot"}
+        if self.fail_balance:
+            raise RuntimeError("missing api key")
+        return {"free": {"USDT": "90"}, "used": {"USDT": "10"}, "total": {"USDT": "100"}}
+
+    def fetch_open_orders(self, symbol=None, *, since=None, limit=None, params=None):
+        assert symbol == "BTC/USDT"
+        assert since is None
+        if limit is not None:
+            assert limit == 10
+        assert params == {"type": "spot"}
+        return (
+            {
+                "id": "okx-open-1",
+                "symbol": symbol,
+                "side": "buy",
+                "amount": "1",
+            },
+        )
+
+    async def watch_balance(self, *, params=None):
+        assert params == {"type": "spot"}
+        yield {"total": {"USDT": "100"}}
+
+    async def watch_orders(self, symbol=None, *, since=None, limit=None, params=None):
+        assert symbol == "BTC/USDT"
+        assert params == {"type": "spot"}
+        yield {"id": "okx-ws-order-1", "symbol": symbol}
+
+    async def watch_my_trades(self, symbol=None, *, since=None, limit=None, params=None):
+        assert symbol == "BTC/USDT"
+        assert params == {"type": "spot"}
+        yield {"id": "okx-ws-fill-1", "symbol": symbol}
+
+
 class FakeDriver:
     pass
 
@@ -157,6 +215,8 @@ def _patch_integration(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(reference_product, "provider", lambda provider_name, driver_name: FakeMassiveProvider())
+    monkeypatch.setattr(broker_product, "broker", lambda exchange_name, driver_name, credential=None: FakeBroker())
+    monkeypatch.setattr(broker_product, "exchange", lambda exchange_name, driver_name: FakeBinance(driver_name))
 
 
 def _run(argv: list[str], stdout: StringIO) -> int:
@@ -172,6 +232,21 @@ def test_cli_help_hides_experimental_tui_command() -> None:
     assert "data" in text
     assert "streams" in text
     assert "tui" not in text
+
+
+def test_python_module_entrypoint_loads_cli_in_fresh_process() -> None:
+    project_root = Path(__file__).resolve().parents[1]
+
+    result = subprocess.run(
+        [sys.executable, "-m", "kairospy", "--help"],
+        cwd=project_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "KairosPy strategy runtime toolkit" in result.stdout
 
 
 def test_cli_product_shell_shows_product_menu() -> None:
@@ -312,7 +387,7 @@ def test_surface_context_summarizes_run_state(monkeypatch, tmp_path) -> None:
             }
 
     config = KairosConfig(None, tmp_path, {"project": {"name": "Demo"}})
-    monkeypatch.setattr(surface_state, "list_run_daemons", lambda *, stale_after_seconds: (FakeStatus(),))
+    monkeypatch.setattr(surface_state, "list_run_daemons", lambda *, root=None, stale_after_seconds: (FakeStatus(),))
     context = SurfaceContext(config=config)
 
     snapshot = context.snapshot()
@@ -340,7 +415,7 @@ def test_cli_product_shell_selects_numbered_run_from_overview(monkeypatch, tmp_p
                 "log_file": str(tmp_path / "daemon.log"),
             }
 
-    monkeypatch.setattr(surface_state, "list_run_daemons", lambda *, stale_after_seconds: (FakeStatus(),))
+    monkeypatch.setattr(surface_state, "list_run_daemons", lambda *, root=None, stale_after_seconds: (FakeStatus(),))
     stdout = StringIO()
 
     result = _run(["shell", "--command", "run", "--command", "use 1"], stdout)
@@ -364,7 +439,7 @@ def test_cli_app_run_prompt_reflects_selected_run(monkeypatch, tmp_path) -> None
                 "log_file": str(tmp_path / "daemon.log"),
             }
 
-    monkeypatch.setattr(surface_state, "list_run_daemons", lambda *, stale_after_seconds: (FakeStatus(),))
+    monkeypatch.setattr(surface_state, "list_run_daemons", lambda *, root=None, stale_after_seconds: (FakeStatus(),))
     stdout = StringIO()
     session = AppSession(stdout=stdout, command_executor=lambda argv: (0, ""))
 
@@ -572,7 +647,7 @@ def test_cli_runs_dataset_backtest_and_writes_artifacts(tmp_path, monkeypatch) -
     strategy_path.write_text(
         "\n".join([
             "from decimal import Decimal",
-            "from kairospy.strategy import StrategyBase",
+            "from kairospy.application.strategy import StrategyBase",
             "",
             "class BuyAndHold(StrategyBase):",
             '    strategy_id = "buy-and-hold"',
@@ -654,10 +729,10 @@ def test_cli_runs_subscription_discovered_backtest_and_writes_artifacts(tmp_path
     project = tmp_path / "project"
     project.mkdir()
     (project / "sample_strategy.py").write_text(
-        "\n".join([
-            "from decimal import Decimal",
-            "from kairospy.core.market import FIELD_BAR_CLOSE, MarketDataField",
-            "from kairospy.strategy import StrategyBase",
+            "\n".join([
+                "from decimal import Decimal",
+                "from kairospy.core.market import Bar",
+                "from kairospy.application.strategy import StrategyBase",
             "",
             "class BuyAndHold(StrategyBase):",
             '    strategy_id = "buy-and-hold"',
@@ -665,12 +740,12 @@ def test_cli_runs_subscription_discovered_backtest_and_writes_artifacts(tmp_path
             "        self.symbol = symbol",
             "        self.entered = False",
             "    def on_start(self, context):",
-            "        context.subscribe_market_fields(",
-            "            self.symbol,",
-            "            venue='binance',",
-            "            market='spot',",
-            "            fields=(MarketDataField(FIELD_BAR_CLOSE, interval='1m'),),",
-            "        )",
+                "        context.subscribe_market_data(",
+                "            self.symbol,",
+                "            venue='binance',",
+                "            market='spot',",
+                "            selectors=(Bar.select('close', interval='1m'),),",
+                "        )",
             "        return ()",
             "    def on_market(self, context, signal):",
             "        if not self.entered:",
@@ -751,6 +826,243 @@ def test_cli_prints_stream_data(monkeypatch) -> None:
     row = json.loads(stdout.getvalue())
     assert row["last"] == "100"
     assert row["params"]["max_events"] == 1
+
+
+def test_cli_broker_balance_prints_account_payload(monkeypatch) -> None:
+    _patch_integration(monkeypatch)
+    stdout = StringIO()
+
+    result = _run([
+        "broker",
+        "balance",
+        "--exchange",
+        "okx",
+        "--params-json",
+        '{"type": "spot"}',
+    ], stdout)
+
+    assert result == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["free"]["USDT"] == "90"
+    assert payload["total"]["USDT"] == "100"
+
+
+def test_cli_broker_balance_passes_credential_to_runtime_broker(monkeypatch) -> None:
+    captured = {}
+
+    def fake_broker(exchange_name, driver_name, credential=None):
+        captured["exchange_name"] = exchange_name.value
+        captured["credential"] = credential
+        return FakeBroker()
+
+    monkeypatch.setattr(broker_product, "broker", fake_broker)
+    stdout = StringIO()
+
+    result = _run([
+        "broker",
+        "balance",
+        "--exchange",
+        "okx",
+        "--credential",
+        "env:okx-main",
+        "--params-json",
+        '{"type": "spot"}',
+    ], stdout)
+
+    assert result == 0
+    assert captured == {"exchange_name": "okx", "credential": "env:okx-main"}
+
+
+def test_cli_broker_open_orders_prints_order_rows(monkeypatch) -> None:
+    _patch_integration(monkeypatch)
+    stdout = StringIO()
+
+    result = _run([
+        "broker",
+        "open-orders",
+        "--exchange",
+        "okx",
+        "--symbol",
+        "BTC/USDT",
+        "--limit",
+        "10",
+        "--params-json",
+        '{"type": "spot"}',
+    ], stdout)
+
+    assert result == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload == [
+        {
+            "amount": "1",
+            "id": "okx-open-1",
+            "side": "buy",
+            "symbol": "BTC/USDT",
+        }
+    ]
+
+
+def test_cli_broker_preflight_reads_live_config_and_checks_account(monkeypatch, tmp_path) -> None:
+    _patch_integration(monkeypatch)
+    monkeypatch.setenv("OKX_MAIN_API_KEY", "api-key")
+    monkeypatch.setenv("OKX_MAIN_SECRET", "secret")
+    monkeypatch.delenv("OKX_MAIN_PASSWORD", raising=False)
+    monkeypatch.delenv("OKX_API_KEY", raising=False)
+    monkeypatch.delenv("OKEX_API_KEY", raising=False)
+    monkeypatch.delenv("OKX_SECRET", raising=False)
+    monkeypatch.delenv("OKEX_SECRET", raising=False)
+    monkeypatch.delenv("OKX_PASSWORD", raising=False)
+    monkeypatch.delenv("OKEX_PASSWORD", raising=False)
+    monkeypatch.delenv("OKX_PASSPHRASE", raising=False)
+    config_path = tmp_path / "okx_live.toml"
+    config_path.write_text(
+        "\n".join([
+            "[run]",
+            'id = "okx-live-preflight"',
+            'mode = "live"',
+            'strategy = "strategies:NoopStrategy"',
+            "",
+            "[live]",
+            'venue = "okx"',
+            'market = "spot"',
+            'symbol = "BTC/USDT"',
+            "",
+            "[live.safety]",
+            "trading_enabled = false",
+            "require_limit_orders = true",
+            'max_order_notional = "20"',
+            "",
+            "[accounts.okx_main]",
+            "index = 0",
+            'venue = "okx"',
+            'credential = "env:okx-main"',
+        ]),
+        encoding="utf-8",
+    )
+    stdout = StringIO()
+
+    result = _run([
+        "broker",
+        "preflight",
+        "--config",
+        str(config_path),
+        "--watch-private",
+        "--watch-timeout-seconds",
+        "0.5",
+    ], stdout)
+
+    assert result == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["run_id"] == "okx-live-preflight"
+    assert payload["venue"] == "okx"
+    assert payload["symbol"] == "BTC/USDT"
+    assert payload["account"] == {
+        "account_id": "okx_main",
+        "credential": "env:okx-main",
+    }
+    assert payload["safety"] == {
+        "max_order_notional": "20",
+        "require_limit_orders": True,
+        "trading_enabled": False,
+    }
+    assert payload["credentials"] == {
+        "OKX_MAIN_API_KEY": True,
+        "OKX_MAIN_PASSWORD": False,
+        "OKX_MAIN_SECRET": True,
+        "fallback_OKX_API_KEY": False,
+        "fallback_OKX_PASSWORD": False,
+        "fallback_OKX_SECRET": False,
+    }
+    assert payload["quote"]["data"]["ask1"] == "101"
+    assert payload["balance"]["data"]["total"]["USDT"] == "100"
+    assert payload["open_orders"]["data"][0]["id"] == "okx-open-1"
+    assert payload["private_streams"]["balance"]["status"] == "event"
+    assert payload["private_streams"]["orders"]["event"]["id"] == "okx-ws-order-1"
+    assert payload["private_streams"]["my_trades"]["event"]["id"] == "okx-ws-fill-1"
+
+
+def test_cli_broker_preflight_rejects_ambiguous_live_accounts(monkeypatch, tmp_path) -> None:
+    _patch_integration(monkeypatch)
+    config_path = tmp_path / "okx_live.toml"
+    config_path.write_text(
+        "\n".join([
+            "[run]",
+            'id = "okx-live-preflight"',
+            'mode = "live"',
+            'strategy = "strategies:NoopStrategy"',
+            "",
+            "[live]",
+            'venue = "okx"',
+            'market = "spot"',
+            'symbol = "BTC/USDT"',
+            "",
+            "[accounts.okx_main]",
+            "index = 0",
+            'venue = "okx"',
+            'credential = "env:okx-main"',
+            "",
+            "[accounts.okx_backup]",
+            "index = 1",
+            'venue = "okx"',
+            'credential = "env:okx-backup"',
+        ]),
+        encoding="utf-8",
+    )
+    stdout = StringIO()
+
+    result = _run([
+        "broker",
+        "preflight",
+        "--config",
+        str(config_path),
+    ], stdout)
+
+    assert result == 2
+    assert "multiple accounts configured for live venue okx" in stdout.getvalue()
+
+
+def test_cli_broker_preflight_reports_private_check_failure_without_traceback(monkeypatch, tmp_path) -> None:
+    _patch_integration(monkeypatch)
+    failing = FakeBroker()
+    failing.fail_balance = True
+    monkeypatch.setattr(broker_product, "broker", lambda exchange_name, driver_name, credential=None: failing)
+    config_path = tmp_path / "okx_live.toml"
+    config_path.write_text(
+        "\n".join([
+            "[run]",
+            'id = "okx-live-preflight"',
+            'mode = "live"',
+            'strategy = "strategies:NoopStrategy"',
+            "",
+            "[live]",
+            'venue = "okx"',
+            'market = "spot"',
+            'symbol = "BTC/USDT"',
+            "",
+            "[accounts.okx_main]",
+            "index = 0",
+            'venue = "okx"',
+            'credential = "env:okx-main"',
+        ]),
+        encoding="utf-8",
+    )
+    stdout = StringIO()
+
+    result = _run([
+        "broker",
+        "preflight",
+        "--config",
+        str(config_path),
+    ], stdout)
+
+    assert result == 2
+    payload = json.loads(stdout.getvalue())
+    assert payload["quote"]["ok"] is True
+    assert payload["balance"] == {
+        "error": "missing api key",
+        "error_type": "RuntimeError",
+        "ok": False,
+    }
 
 
 def test_cli_persists_stream_data(monkeypatch, tmp_path) -> None:

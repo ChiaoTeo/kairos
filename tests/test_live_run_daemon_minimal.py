@@ -8,17 +8,17 @@ from decimal import Decimal
 from pathlib import Path
 
 from kairospy.core.account import AccountContext, AccountRef, Environment
-from kairospy.context import DataContext
-from kairospy.data import DataStore
-from kairospy.integrations.payloads import CcxtAccountPayloadAdapter
-from kairospy.modes.live import LiveEngine, LiveEngineDaemonTarget
-from kairospy.runtime import IterableEventSource
-from kairospy.runtime.account_journal import RunAccountJournal
-from kairospy.runtime.daemon import RunDaemonControlPlane, RunDaemonPhase
+from kairospy.application.context import DataContext
+from kairospy.infrastructure.data import DataStore
+from kairospy.infrastructure.integrations.payloads import CcxtAccountPayloadAdapter
+from kairospy.application.mode.live import LiveEngine, LiveEngineDaemonTarget
+from kairospy.application.service.domains.market import IterableEventSource
+from kairospy.application.service.operations.run import RunAccountJournal
+from kairospy.application.runtime.control import RunDaemonControlPlane, RunDaemonPhase
 from kairospy.surface import cli
 from kairospy.surface.products import run as run_product
 from kairospy.surface.products.run import OutputFormat, RunAttachSession
-from kairospy.strategy import StrategyBase
+from kairospy.application.strategy import StrategyBase
 
 
 class DaemonAccountReadingStrategy(StrategyBase):
@@ -66,11 +66,31 @@ def test_run_daemon_control_plane_supports_non_live_modes(tmp_path) -> None:
     assert status.phase is RunDaemonPhase.STOPPED
     assert status.mode.value == "paper"
     assert status.to_dict()["mode"] == "paper"
-    assert (tmp_path / "paper-run" / "state.json").exists()
+    assert (tmp_path / "paper" / "paper-run" / "state.json").exists()
+
+
+def test_run_daemon_instances_are_grouped_under_logical_run_id(tmp_path) -> None:
+    runtime_root = tmp_path / "runtime"
+    first = RunDaemonControlPlane("paper-run", mode="paper", root=runtime_root, instance_id="first")
+    second = RunDaemonControlPlane("paper-run", mode="paper", root=runtime_root, instance_id="second")
+
+    first.run_foreground(poll_seconds=0.01, duration_seconds=0.02)
+    second.run_foreground(poll_seconds=0.01, duration_seconds=0.02)
+
+    assert (runtime_root / "paper" / "paper-run" / "runs" / "first" / "state.json").exists()
+    assert (runtime_root / "paper" / "paper-run" / "runs" / "second" / "state.json").exists()
+    current = json.loads((runtime_root / "paper" / "paper-run" / "current.json").read_text(encoding="utf-8"))
+    assert current["run_id"] == "paper-run"
+    assert current["run_instance_id"] == "second"
+    latest = RunDaemonControlPlane("paper-run", mode="paper", root=runtime_root)
+    assert latest.directory == second.directory
+    assert latest.status().run_instance_id == "second"
+    history = run_product.list_run_instances("paper-run", mode="paper", root=runtime_root)
+    assert [status.run_instance_id for status in history] == ["first", "second"]
 
 
 def test_live_daemon_target_uses_generic_runtime_daemon_boundary() -> None:
-    text = Path("kairospy/modes/live/daemon.py").read_text(encoding="utf-8")
+    text = Path("kairospy/application/mode/live/daemon.py").read_text(encoding="utf-8")
 
     assert "RunDaemonPhase" in text
     assert "RunExecutionContext" in text
@@ -80,7 +100,7 @@ def test_live_daemon_target_uses_generic_runtime_daemon_boundary() -> None:
 
 def test_runtime_daemon_targets_are_owned_symmetrically_by_modes() -> None:
     for mode in ("backtest", "paper", "live"):
-        assert Path("kairospy", "modes", mode, "daemon.py").exists()
+        assert Path("kairospy", "application", "mode", mode, "daemon.py").exists()
 
 
 def test_live_run_stop_request_stops_foreground_daemon(tmp_path) -> None:
@@ -132,6 +152,64 @@ def test_cli_run_daemon_status_outputs_mode_json() -> None:
     assert payload["phase"] in {"created", "stopped", "running", "stale"}
 
 
+def test_cli_run_daemon_start_can_run_configured_live_target(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    config_path = project / "okx_live.toml"
+    config_path.write_text(
+        "\n".join([
+            "[run]",
+            'id = "okx-live-cli"',
+            'mode = "live"',
+            'strategy = "strategies:NoopStrategy"',
+            "",
+            "[live]",
+            'venue = "okx"',
+            'market = "spot"',
+            'symbol = "BTC/USDT"',
+            "",
+            "[accounts.okx_main]",
+            "index = 0",
+            'venue = "okx"',
+            'credential = "env:okx-main"',
+        ]),
+        encoding="utf-8",
+    )
+
+    class FakeLiveTarget:
+        def run(self, context):
+            context.heartbeat(metrics={"mode_run_status": "running", "venue": "okx"})
+            return {"run_id": context.run_id, "venue": "okx", "submitted": False}
+
+    def fake_configured_live_target(path, *, exchange_factory):
+        assert path == config_path
+        return FakeLiveTarget()
+
+    monkeypatch.setattr(run_product, "_runtime_root", lambda: tmp_path / "runtime")
+    monkeypatch.setattr(run_product, "configured_live_target", fake_configured_live_target)
+    stdout = StringIO()
+
+    result = cli.execute_argv([
+        "run",
+        "daemon",
+        "start",
+        "--mode",
+        "live",
+        "--config",
+        str(config_path),
+        "--foreground",
+        "--poll-seconds",
+        "0.01",
+    ], stdout)
+
+    assert result == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["run_id"] == "okx-live-cli"
+    assert payload["mode"] == "live"
+    assert payload["phase"] == "stopped"
+    assert payload["result"] == {"run_id": "okx-live-cli", "submitted": False, "venue": "okx"}
+
+
 def test_cli_run_daemon_status_can_output_text() -> None:
     stdout = StringIO()
 
@@ -163,8 +241,8 @@ def test_run_daemon_context_and_events_are_persisted(tmp_path) -> None:
 
     assert status.context["config_file"] == "examples/paper.toml"
     assert status.to_dict()["context"]["strategy"] == "demo:Strategy"
-    assert (tmp_path / "context-run" / "context.json").exists()
-    events = (tmp_path / "context-run" / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    assert (tmp_path / "paper" / "context-run" / "context.json").exists()
+    events = (tmp_path / "paper" / "context-run" / "events.jsonl").read_text(encoding="utf-8").splitlines()
     assert any(json.loads(line)["type"] == "context" for line in events)
     assert any(json.loads(line)["type"] == "status" for line in events)
 
@@ -286,7 +364,7 @@ def test_cli_run_daemon_start_can_run_configured_backtest(tmp_path) -> None:
     (project / "kairos.toml").write_text("schema_version = 1\n", encoding="utf-8")
     (project / "strategies.py").write_text(
         "\n".join([
-            "from kairospy.strategy import StrategyBase",
+            "from kairospy.application.strategy import StrategyBase",
             "",
             "class NoopStrategy(StrategyBase):",
             '    strategy_id = "configured-daemon-noop"',
@@ -353,6 +431,29 @@ def test_cli_run_daemon_start_can_run_configured_backtest(tmp_path) -> None:
     assert payload["result"]["event_count"] == 1
 
 
+def test_configured_daemon_start_keeps_run_id_stable_and_generates_instance_ids(tmp_path) -> None:
+    config_path = tmp_path / "paper.toml"
+    config_path.write_text(
+        "\n".join([
+            "[run]",
+            'id = "configured-paper"',
+            'mode = "paper"',
+        ]),
+        encoding="utf-8",
+    )
+
+    run_id = run_product._resolve_daemon_run_id("start", run_id=None, config_path=config_path)
+    first = run_product._unique_run_instance_id()
+    second = run_product._unique_run_instance_id()
+
+    assert run_id == "configured-paper"
+    assert first[:8].isdigit()
+    assert first[8] == "T"
+    assert second[:8].isdigit()
+    assert second[8] == "T"
+    assert first != second
+
+
 def test_cli_run_daemon_start_can_run_configured_streaming_paper(monkeypatch, tmp_path) -> None:
     project = tmp_path / "project"
     project.mkdir()
@@ -360,16 +461,16 @@ def test_cli_run_daemon_start_can_run_configured_streaming_paper(monkeypatch, tm
     (project / "paper_strategies.py").write_text(
         "\n".join([
             "from decimal import Decimal",
-            "from kairospy.context import StrategyContext",
-            "from kairospy.core.market import FIELD_QUOTE_ASK, FIELD_QUOTE_BID",
-            "from kairospy.strategy import StrategyBase, StrategySignal",
+            "from kairospy.application.context import StrategyContext",
+            "from kairospy.core.market import Quote",
+            "from kairospy.application.strategy import StrategyBase, StrategySignal",
             "",
             "class PaperStrategy(StrategyBase):",
             '    strategy_id = "configured-streaming-paper"',
             "    def __init__(self):",
             "        self.entered = False",
             "    def on_start(self, context: StrategyContext):",
-            '        context.subscribe_market_fields("binance:spot:BTC/USDC", fields=(FIELD_QUOTE_BID, FIELD_QUOTE_ASK))',
+            '        context.subscribe_market_data("binance:spot:BTC/USDC", selectors=(Quote.select("bid", "ask", basis="ticker"),))',
             "        return ()",
             "    def on_market(self, context: StrategyContext, signal: StrategySignal):",
             "        if self.entered:",

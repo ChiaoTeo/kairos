@@ -225,7 +225,7 @@ class RunConfig:
         if mode not in VALID_RUN_MODES:
             issues.append("run.mode must be one of: backtest, paper, live")
         if "data" in self.values:
-            issues.append("[data] is not valid run config; strategy code declares market data with context.subscribe_market_fields")
+            issues.append("[data] is not valid run config; strategy code declares market data with context.subscribe_market_data")
         accounts = self.values.get("accounts")
         if accounts is not None:
             if not isinstance(accounts, Mapping):
@@ -243,7 +243,13 @@ class RunConfig:
         broker = self.values.get("broker")
         execution = self.values.get("execution")
         credentials = self.values.get("credentials")
+        live = self.values.get("live")
         if mode == "live":
+            if isinstance(accounts, Mapping):
+                if not isinstance(live, Mapping):
+                    issues.append("[live] table is required for live runs")
+                else:
+                    issues.extend(_live_issues(live))
             if isinstance(account, Mapping):
                 if not isinstance(broker, Mapping):
                     issues.append("[broker] table is required for legacy live runs")
@@ -270,6 +276,8 @@ class RunConfig:
             issues.append("[execution] must be a table")
         elif credentials is not None and not isinstance(credentials, Mapping):
             issues.append("[credentials] must be a table")
+        elif live is not None and not isinstance(live, Mapping):
+            issues.append("[live] must be a table")
         return RunConfigValidationReport(self.path, not issues, tuple(issues))
 
     def require_valid(self) -> None:
@@ -459,6 +467,59 @@ def _accounts_issues(accounts: Mapping[str, Any], *, mode: str) -> list[str]:
             issues.append(f"{source}.credential must be a non-empty string")
         if mode == "live" and not _valid_optional_text(raw.get("credential")):
             issues.append(f"{source}.credential is required for live runs")
+    return issues
+
+
+def _live_issues(live: Mapping[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for key in ("venue", "symbol"):
+        if not _valid_optional_text(live.get(key)):
+            issues.append(f"live.{key} is required")
+    if "market" in live and not _valid_optional_text(live.get("market")):
+        issues.append("live.market must be a non-empty string")
+    if "equity_currency" in live and not _valid_optional_text(live.get("equity_currency")):
+        issues.append("live.equity_currency must be a non-empty string")
+    if "max_iterations" in live:
+        try:
+            value = _int(live["max_iterations"], "live.max_iterations")
+        except ConfigError as error:
+            issues.append(str(error))
+        else:
+            if value < 1:
+                issues.append("live.max_iterations must be positive")
+    safety = live.get("safety")
+    if safety is not None:
+        if not isinstance(safety, Mapping):
+            issues.append("live.safety must be a table")
+        else:
+            for key in ("trading_enabled", "require_limit_orders"):
+                if key in safety and not isinstance(safety[key], bool):
+                    issues.append(f"live.safety.{key} must be a boolean")
+            if "max_order_notional" in safety:
+                try:
+                    value = _decimal(safety["max_order_notional"], "live.safety.max_order_notional")
+                except ConfigError as error:
+                    issues.append(str(error))
+                else:
+                    if value <= 0:
+                        issues.append("live.safety.max_order_notional must be positive")
+    stream = live.get("account_stream")
+    if stream is not None:
+        if not isinstance(stream, Mapping):
+            issues.append("live.account_stream must be a table")
+        else:
+            for key in ("max_balance_events", "max_order_events", "max_trade_events"):
+                if key in stream:
+                    try:
+                        value = _int(stream[key], f"live.account_stream.{key}")
+                    except ConfigError as error:
+                        issues.append(str(error))
+                    else:
+                        if value < 0:
+                            issues.append(f"live.account_stream.{key} cannot be negative")
+    for key in ("stream", "balance_params", "order_params"):
+        if key in live and not isinstance(live[key], Mapping):
+            issues.append(f"live.{key} must be a table")
     return issues
 
 

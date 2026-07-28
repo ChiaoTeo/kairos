@@ -3,11 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from tempfile import TemporaryDirectory
 
-from kairospy.context import Context, DataContext, StrategyContext
-from kairospy.data import DataStore
-from kairospy.runtime import DataViewEventSource, StrategyRuntime
+from kairospy.application.context import Context, DataContext, StrategyContext
+from kairospy.infrastructure.data import DataStore
+from kairospy.application.runtime.kernel import RuntimeKernel
+from kairospy.application.service.domains.market import DataViewEventSource
 from kairospy.core.reference import MarketResolver
-from kairospy.strategy import ControlRequestKind, StrategyBase, StrategyRunView, ViewSchema, ViewStore
+from kairospy.application.runtime.projection.system import StrategyRunView
+from kairospy.application.strategy import ControlRequestKind, StrategyBase, ViewSchema, ViewStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +71,7 @@ def test_strategy_views_support_project_and_strategy_maintained_views() -> None:
         views.register(ViewSchema("strategy.counter", "strategy", mutability="strategy_writable", persistence="checkpointed"))
         views.put_runtime("project.regime", ProjectRegimeView("risk-on"))
 
-        result = StrategyRuntime(ViewMaintainingStrategy(), data, views=views, market_resolver=resolver).run(DataViewEventSource(bars))
+        result = RuntimeKernel(ViewMaintainingStrategy(), data, views=views, market_resolver=resolver).run(DataViewEventSource(bars))
 
         counter = views.require("strategy.counter")
         strategy_run = views.require("system.strategy")
@@ -90,7 +92,7 @@ def test_strategy_context_control_records_audited_runtime_requests() -> None:
         resolver = MarketResolver(default_venue="simulated", default_market="spot")
         data = DataContext(store)
         bars = data.attach("bars", dataset="market.ohlcv.btc_usdt.1m")
-        runtime = StrategyRuntime(ControlRequestingStrategy(), data, market_resolver=resolver)
+        runtime = RuntimeKernel(ControlRequestingStrategy(), data, market_resolver=resolver)
 
         result = runtime.run(DataViewEventSource(bars))
 
@@ -117,7 +119,7 @@ def test_runtime_publishes_intent_state_view() -> None:
             def on_market(self, context: Context, event):
                 context.target_position("btc_usdt", 1, intent_id="intent-1")
 
-        runtime = StrategyRuntime(IntentStrategy(), data, market_resolver=resolver)
+        runtime = RuntimeKernel(IntentStrategy(), data, market_resolver=resolver)
         runtime.run(DataViewEventSource(bars))
 
         intent_view = runtime.views.require("system.intents")

@@ -86,7 +86,7 @@ def test_run_config_rejects_data_requirements() -> None:
     })
 
     assert config.validation_report().issues == (
-        "[data] is not valid run config; strategy code declares market data with context.subscribe_market_fields",
+        "[data] is not valid run config; strategy code declares market data with context.subscribe_market_data",
     )
 
 
@@ -109,6 +109,16 @@ def test_live_run_config_accepts_explicit_execution_boundary() -> None:
             "mode": "live",
             "strategy": "strategies.momentum:MomentumStrategy",
         },
+        "live": {
+            "venue": "binance",
+            "market": "spot",
+            "symbol": "BTC/USDT",
+            "safety": {
+                "trading_enabled": False,
+                "require_limit_orders": True,
+                "max_order_notional": "100",
+            },
+        },
         "accounts": {
             "binance_main": {
                 "index": 0,
@@ -121,11 +131,66 @@ def test_live_run_config_accepts_explicit_execution_boundary() -> None:
     assert config.validation_report().valid is True
 
 
+def test_live_run_config_requires_live_table_for_configured_accounts() -> None:
+    config = RunConfig.from_values({
+        "run": {
+            "id": "momentum-live",
+            "mode": "live",
+            "strategy": "strategies.momentum:MomentumStrategy",
+        },
+        "accounts": {
+            "binance_main": {
+                "index": 0,
+                "venue": "binance",
+                "credential": "binance-main",
+            },
+        },
+    })
+
+    assert config.validation_report().issues == ("[live] table is required for live runs",)
+
+
+def test_live_run_config_validates_live_safety_options() -> None:
+    config = RunConfig.from_values({
+        "run": {
+            "id": "momentum-live",
+            "mode": "live",
+            "strategy": "strategies.momentum:MomentumStrategy",
+        },
+        "live": {
+            "venue": "binance",
+            "symbol": "BTC/USDT",
+            "safety": {
+                "trading_enabled": "yes",
+                "require_limit_orders": "true",
+                "max_order_notional": "0",
+            },
+        },
+        "accounts": {
+            "binance_main": {
+                "index": 0,
+                "venue": "binance",
+                "credential": "binance-main",
+            },
+        },
+    })
+
+    assert config.validation_report().issues == (
+        "live.safety.trading_enabled must be a boolean",
+        "live.safety.require_limit_orders must be a boolean",
+        "live.safety.max_order_notional must be positive",
+    )
+
+
 def test_live_run_config_requires_account_credentials() -> None:
     config = RunConfig.from_values({
         "run": {
             "mode": "live",
             "strategy": "strategies.momentum:MomentumStrategy",
+        },
+        "live": {
+            "venue": "binance",
+            "symbol": "BTC/USDT",
         },
         "accounts": {
             "binance_main": {

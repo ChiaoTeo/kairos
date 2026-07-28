@@ -6,16 +6,18 @@ from pathlib import Path
 import typer
 
 from kairospy.config import load_config
-from kairospy.data import DataStore
-from kairospy.integrations import (
+from kairospy.infrastructure.data import DataStore
+from kairospy.infrastructure.integrations import (
+    BinanceBroker,
     BinanceMarketDataConnector,
     CcxtDriver,
     HyperliquidMarketDataConnector,
     Massive,
     MassiveDriver,
+    OkxBroker,
     OkxMarketDataConnector,
 )
-from kairospy.service.domains.reference import ReferenceStore
+from kairospy.application.service.domains.reference import ReferenceStore
 
 
 class StorageFormat(str, Enum):
@@ -65,6 +67,16 @@ def exchange(
     if exchange_name in (ExchangeName.okx, ExchangeName.okex):
         return OkxMarketDataConnector()
     raise typer.BadParameter(f"unsupported exchange: {exchange_name.value}")
+
+
+def broker(exchange_name: ExchangeName, driver_name: DriverName, *, credential: str | None = None) -> BinanceBroker | OkxBroker:
+    if driver_name is not DriverName.ccxt:
+        raise typer.BadParameter("only ccxt driver is supported")
+    if exchange_name is ExchangeName.binance:
+        return BinanceBroker(CcxtDriver())
+    if exchange_name in (ExchangeName.okx, ExchangeName.okex):
+        return OkxBroker.from_credential(credential)
+    raise typer.BadParameter(f"unsupported broker exchange: {exchange_name.value}")
 
 
 def provider(provider_name: ProviderName, driver_name: DriverName) -> Massive:

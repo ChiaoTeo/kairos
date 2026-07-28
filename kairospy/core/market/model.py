@@ -6,6 +6,9 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Any, Literal, Mapping
 
+from .orderbook import OrderBookSnapshot, PriceLevel
+from .selectors import MarketSelectable
+
 
 MarketSubjectType = Literal["instrument", "market", "rate", "curve", "index"]
 MarketObservationKind = Literal[
@@ -53,7 +56,7 @@ class MarketObservation:
 
 
 @dataclass(frozen=True, slots=True)
-class Quote:
+class Quote(MarketSelectable):
     instrument_id: str
     time: datetime
     market_id: str | None = None
@@ -63,6 +66,8 @@ class Quote:
     bid_size: Decimal | None = None
     ask_size: Decimal | None = None
     source: str = ""
+    basis: str = "ticker"
+    derivation: str = "direct"
 
     def __post_init__(self) -> None:
         if not self.instrument_id.strip():
@@ -81,6 +86,10 @@ class Quote:
             raise ValueError("quote bid_size cannot be negative")
         if self.ask_size is not None and self.ask_size < 0:
             raise ValueError("quote ask_size cannot be negative")
+        if not self.basis.strip():
+            raise ValueError("quote basis is required")
+        if not self.derivation.strip():
+            raise ValueError("quote derivation is required")
 
     @property
     def midpoint(self) -> Decimal | None:
@@ -90,51 +99,7 @@ class Quote:
 
 
 @dataclass(frozen=True, slots=True)
-class PriceLevel:
-    price: Decimal
-    size: Decimal
-
-    def __post_init__(self) -> None:
-        if self.price < 0:
-            raise ValueError("price level price cannot be negative")
-        if self.size < 0:
-            raise ValueError("price level size cannot be negative")
-
-
-@dataclass(frozen=True, slots=True)
-class OrderBookSnapshot:
-    instrument_id: str
-    time: datetime
-    market_id: str | None = None
-    market_key: str | None = None
-    bids: tuple[PriceLevel, ...] = ()
-    asks: tuple[PriceLevel, ...] = ()
-    nonce: object | None = None
-    source: str = ""
-
-    def __post_init__(self) -> None:
-        if not self.instrument_id.strip():
-            raise ValueError("order book instrument_id is required")
-        if self.market_id is not None and not self.market_id.strip():
-            raise ValueError("order book market_id cannot be blank")
-        if self.market_key is not None and not self.market_key.strip():
-            raise ValueError("order book market_key cannot be blank")
-        if self.time.tzinfo is None:
-            raise ValueError("order book time must be timezone-aware")
-        object.__setattr__(self, "bids", tuple(self.bids))
-        object.__setattr__(self, "asks", tuple(self.asks))
-
-    @property
-    def bid1(self) -> PriceLevel | None:
-        return self.bids[0] if self.bids else None
-
-    @property
-    def ask1(self) -> PriceLevel | None:
-        return self.asks[0] if self.asks else None
-
-
-@dataclass(frozen=True, slots=True)
-class Bar:
+class Bar(MarketSelectable):
     instrument_id: str
     time: datetime
     timeframe: str
@@ -146,6 +111,8 @@ class Bar:
     close: Decimal | None = None
     volume: Decimal | None = None
     source: str = ""
+    basis: str = "bar"
+    derivation: str = "direct"
 
     def __post_init__(self) -> None:
         if not self.instrument_id.strip():
@@ -154,10 +121,14 @@ class Bar:
             raise ValueError("bar timeframe is required")
         if self.time.tzinfo is None:
             raise ValueError("bar time must be timezone-aware")
+        if not self.basis.strip():
+            raise ValueError("bar basis is required")
+        if not self.derivation.strip():
+            raise ValueError("bar derivation is required")
 
 
 @dataclass(frozen=True, slots=True)
-class TradePrint:
+class TradePrint(MarketSelectable):
     instrument_id: str
     time: datetime
     market_id: str | None = None
@@ -168,16 +139,22 @@ class TradePrint:
     size: Decimal | None = None
     cost: Decimal | None = None
     source: str = ""
+    basis: str = "trade"
+    derivation: str = "direct"
 
     def __post_init__(self) -> None:
         if not self.instrument_id.strip():
             raise ValueError("trade instrument_id is required")
         if self.time.tzinfo is None:
             raise ValueError("trade time must be timezone-aware")
+        if not self.basis.strip():
+            raise ValueError("trade basis is required")
+        if not self.derivation.strip():
+            raise ValueError("trade derivation is required")
 
 
 @dataclass(frozen=True, slots=True)
-class RateObservation:
+class RateObservation(MarketSelectable):
     rate_id: str
     time: datetime
     rate: Decimal
@@ -185,12 +162,15 @@ class RateObservation:
     tenor: str | None = None
     basis: str = ""
     market_id: str | None = None
+    derivation: str = "direct"
 
     def __post_init__(self) -> None:
         if not self.rate_id.strip():
             raise ValueError("rate_id is required")
         if self.time.tzinfo is None:
             raise ValueError("rate observation time must be timezone-aware")
+        if not self.derivation.strip():
+            raise ValueError("rate observation derivation is required")
 
     @property
     def subject(self) -> MarketSubject:

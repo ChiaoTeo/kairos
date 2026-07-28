@@ -10,10 +10,9 @@ from kairospy.core.reference import (
     MarketStatus,
     ReferenceCatalog,
     UniverseQuery,
-    UniverseSelector,
 )
-from kairospy.service.domains.reference import catalog_from_market_rows
-from kairospy.service.domains.reference import ReferenceStore
+from kairospy.application.service.domains.reference import UniverseSelector, catalog_from_market_rows
+from kairospy.application.service.domains.reference import ReferenceStore
 
 
 UTC = timezone.utc

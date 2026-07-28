@@ -66,3 +66,82 @@ kairospy run daemon start \
   --config examples/configs/hyperliquid_paper.toml \
   --foreground
 ```
+
+## OKX Data And Paper Smoke Test
+
+If OKX is not directly reachable from your network, export the local proxy first:
+
+```bash
+export https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897 all_proxy=socks5://127.0.0.1:7897
+```
+
+Download a small OKX OHLCV sample:
+
+```bash
+kairospy data download \
+  --root examples/.kairos/data \
+  --format jsonl \
+  --exchange okx \
+  --driver ccxt \
+  --symbol BTC/USDT \
+  --timeframe 1m \
+  --limit 5 \
+  --mode replace
+```
+
+Print one live OKX ticker event:
+
+```bash
+kairospy streams print --exchange okx --driver ccxt --kind ticker --symbol BTC/USDT --limit 1 --poll-seconds 0
+```
+
+The OKX paper config is:
+
+```bash
+kairospy run daemon start \
+  --mode paper \
+  --run-id okx-paper \
+  --config examples/configs/okx_paper.toml \
+  --foreground
+```
+
+## OKX Live Configuration
+
+The live OKX path is configured through `service.operations.run` and defaults to read-only execution:
+
+```bash
+export OKX_MAIN_API_KEY=...
+export OKX_MAIN_SECRET=...
+export OKX_MAIN_PASSWORD=...
+
+kairospy broker preflight \
+  --config examples/configs/okx_live.toml
+
+kairospy broker preflight \
+  --config examples/configs/okx_live.toml \
+  --watch-private \
+  --watch-timeout-seconds 5
+
+kairospy broker balance \
+  --exchange okx \
+  --credential env:okx-main \
+  --params-json '{"type": "spot"}'
+
+kairospy broker open-orders \
+  --exchange okx \
+  --credential env:okx-main \
+  --symbol BTC/USDT \
+  --params-json '{"type": "spot"}'
+
+kairospy run daemon start \
+  --mode live \
+  --run-id okx-live \
+  --config examples/configs/okx_live.toml \
+  --foreground
+```
+
+The preflight command checks the configured public quote, account balance, open orders, safety settings, and whether the expected OKX credential environment variables are present. It prints structured JSON; exit code `2` means at least one check failed, while successful checks are still included in the output. `--watch-private` additionally probes private websocket streams with a timeout. The example live config uses `max_iterations = 1` so the foreground daemon command is a bounded smoke run.
+
+The example account uses `credential = "env:okx-main"`, so the preferred environment variables are `OKX_MAIN_API_KEY`, `OKX_MAIN_SECRET`, and `OKX_MAIN_PASSWORD`. The connector also accepts global fallback names such as `OKX_API_KEY`, `OKX_SECRET`, and `OKX_PASSWORD`.
+
+Set `live.safety.trading_enabled = true` only after verifying account bootstrap, private streams, and order limits.

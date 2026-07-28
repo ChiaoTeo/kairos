@@ -1,0 +1,27 @@
+[run]
+id = "okx-live"
+mode = "live"
+strategy = "examples.strategies.okx:LiveLimitLong"
+
+[live]
+venue = "okx"
+market = "spot"
+symbol = "BTC/USDT"
+equity_currency = "USDT"
+max_iterations = 1
+
+[live.safety]
+trading_enabled = false
+require_limit_orders = true
+max_order_notional = "20"
+
+[live.account_stream]
+max_balance_events = 0
+max_order_events = 0
+max_trade_events = 0
+
+[accounts.okx_main]
+index = 0
+venue = "okx"
+currency = "USDT"
+credential = "env:okx-main"

@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-from kairospy.data import DataId, DataStore
+from kairospy.infrastructure.data import DataId, DataStore
 
 
 @pytest.mark.parametrize("storage_format", ["parquet", "jsonl"])

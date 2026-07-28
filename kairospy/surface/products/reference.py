@@ -6,13 +6,13 @@ import sys
 import typer
 
 from kairospy.core.reference import MarketStatus
-from kairospy.service.domains.reference import (
+from kairospy.application.service.domains.reference import (
     refresh_equity_provider,
     refresh_instrument_provider,
     refresh_instrument_provider_with_delist_schedule,
     sync_lifecycle_events,
 )
-from kairospy.core.reference.serde import lifecycle_event_to_primitive, market_to_primitive
+from kairospy.application.service.domains.reference.serde import lifecycle_event_to_primitive, market_to_primitive
 from kairospy.surface.runtime import DriverName, ExchangeName, ProviderName, exchange, provider, reference_store
 from kairospy.surface.ui.terminal import write_jsonl
 

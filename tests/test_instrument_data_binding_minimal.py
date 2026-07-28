@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from tempfile import TemporaryDirectory
 
-from kairospy.context import DataContext
-from kairospy.data import DataStore
+from kairospy.application.context import DataContext
+from kairospy.infrastructure.data import DataStore
 from kairospy.core.reference import MarketResolver
-from kairospy.service.domains.market import bind_market_data, market_data_id_from_symbol
+from kairospy.application.service.domains.market import bind_market_data, market_data_id_from_symbol
 
 
 def test_data_context_resolves_named_market_to_dataset_view() -> None:

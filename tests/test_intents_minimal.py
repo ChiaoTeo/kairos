@@ -3,13 +3,14 @@ from __future__ import annotations
 from decimal import Decimal
 from tempfile import TemporaryDirectory
 
-from kairospy.context import DataContext, StrategyContext
-from kairospy.data import DataStore
+from kairospy.application.context import DataContext, StrategyContext
+from kairospy.infrastructure.data import DataStore
 from kairospy.core.intent import IntentEvent, IntentEventKind, IntentKind, IntentStatus, TradeIntent
-from kairospy.runtime import DataViewEventSource, StrategyRuntime
+from kairospy.application.runtime.kernel import RuntimeKernel
+from kairospy.application.service.domains.market import DataViewEventSource
 from kairospy.core.reference import MarketResolver
-from kairospy.service.domains.market import bind_market_data
-from kairospy.strategy import StrategyBase
+from kairospy.application.service.domains.market import bind_market_data
+from kairospy.application.strategy import StrategyBase
 
 
 class TargetPositionStrategy(StrategyBase):
@@ -67,7 +68,7 @@ def test_strategy_runtime_records_typed_trade_intents() -> None:
         data = DataContext(store)
         bars = bind_market_data(data, resolver, "BTC/USDT").ohlcv("1m")
 
-        result = StrategyRuntime(TargetPositionStrategy(), data, market_resolver=resolver).run(DataViewEventSource(bars))
+        result = RuntimeKernel(TargetPositionStrategy(), data, market_resolver=resolver).run(DataViewEventSource(bars))
 
         assert len(result.intents) == 1
         assert isinstance(result.intents[0], TradeIntent)
@@ -90,7 +91,7 @@ def test_strategy_context_target_position_records_intent_without_return_value() 
         data = DataContext(store)
         bars = bind_market_data(data, resolver, "BTC/USDT").ohlcv("1m")
 
-        result = StrategyRuntime(DirectTargetPositionStrategy(), data, market_resolver=resolver).run(DataViewEventSource(bars))
+        result = RuntimeKernel(DirectTargetPositionStrategy(), data, market_resolver=resolver).run(DataViewEventSource(bars))
 
         assert len(result.intents) == 1
         assert isinstance(result.intents[0], TradeIntent)
@@ -109,7 +110,7 @@ def test_strategy_runtime_rejects_returned_trade_intents() -> None:
         bars = bind_market_data(data, resolver, "BTC/USDT").ohlcv("1m")
 
         try:
-            StrategyRuntime(ReturnedTradeIntentStrategy(), data, market_resolver=resolver).run(DataViewEventSource(bars))
+            RuntimeKernel(ReturnedTradeIntentStrategy(), data, market_resolver=resolver).run(DataViewEventSource(bars))
         except TypeError as error:
             assert "context.target_position" in str(error)
         else:
@@ -125,7 +126,7 @@ def test_intent_journal_tracks_status_transitions() -> None:
         resolver = MarketResolver(default_venue="binance", default_market="spot")
         data = DataContext(store)
         bars = bind_market_data(data, resolver, "BTC/USDT").ohlcv("1m")
-        runtime = StrategyRuntime(TargetPositionStrategy(), data, market_resolver=resolver)
+        runtime = RuntimeKernel(TargetPositionStrategy(), data, market_resolver=resolver)
         result = runtime.run(DataViewEventSource(bars))
         at = result.last_event.time
 
@@ -135,3 +136,23 @@ def test_intent_journal_tracks_status_transitions() -> None:
         assert planned.order_ids == ("order-1",)
         assert ordering.status is IntentStatus.ORDERING
         assert runtime.intents.latest(instrument_id="instrument:spot:btc:usdt", active=True).intent.intent_id == "intent-1"
+
+
+def test_intent_journal_allows_accepted_intent_to_be_satisfied_without_order() -> None:
+    with TemporaryDirectory() as temporary:
+        store = DataStore(temporary, storage_format="jsonl")
+        store.write("market.ohlcv.binance_spot_btc_usdt.1m", [
+            {"time": "2026-01-01T00:00:00+00:00", "close": 100},
+        ])
+        resolver = MarketResolver(default_venue="binance", default_market="spot")
+        data = DataContext(store)
+        bars = bind_market_data(data, resolver, "BTC/USDT").ohlcv("1m")
+        runtime = RuntimeKernel(TargetPositionStrategy(), data, market_resolver=resolver)
+        result = runtime.run(DataViewEventSource(bars))
+        at = result.last_event.time
+
+        runtime.intents.record(IntentEvent("intent-1", IntentEventKind.ACCEPTED, at))
+        satisfied = runtime.intents.record(IntentEvent("intent-1", IntentEventKind.SATISFIED, at))
+
+        assert satisfied.status is IntentStatus.SATISFIED
+        assert satisfied.order_ids == ()

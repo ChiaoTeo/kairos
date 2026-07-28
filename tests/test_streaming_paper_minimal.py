@@ -5,14 +5,20 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from tempfile import TemporaryDirectory
 
-from kairospy.context import DataContext, StrategyContext
-from kairospy.core.market import FIELD_QUOTE_ASK, FIELD_QUOTE_BID, MarketSubscription
+from kairospy.application.context import DataContext, StrategyContext
+from kairospy.core.market import Quote
 from kairospy.core.reference import MarketResolver
-from kairospy.data import DataStore, InMemoryStreamFeed
-from kairospy.modes.backtest import SimulatedAccount
-from kairospy.modes.paper import PaperAccountConfig, StreamingPaperEngine, run_streaming_paper
-from kairospy.runtime import AsyncDataViewEventSource, AsyncIterableEventSource, StrategyRuntime
-from kairospy.strategy import StrategyBase, StrategySignal
+from kairospy.infrastructure.data import DataStore, InMemoryStreamFeed
+from kairospy.application.mode.backtest import SimulatedAccount
+from kairospy.application.mode.paper import PaperAccountConfig, StreamingPaperEngine, run_streaming_paper
+from kairospy.application.runtime.model import BACKTEST_PROFILE
+from kairospy.application.runtime.run import RuntimeAsyncEnvelopeBridge, RuntimeRunSpec, RuntimeStateConfig
+from kairospy.application.service.domains.market import (
+    AsyncDataViewEventSource,
+    AsyncIterableEventSource,
+    MarketSubscription,
+)
+from kairospy.application.strategy import StrategyBase, StrategySignal
 
 
 class CountTickerStrategy(StrategyBase):
@@ -51,7 +57,7 @@ class SubscribedOneShotTickerLong(OneShotTickerLong):
 
     def on_start(self, context: StrategyContext):
         self.start_count += 1
-        context.subscribe_market_fields(self.symbol, fields=(FIELD_QUOTE_BID, FIELD_QUOTE_ASK))
+        context.subscribe_market_data(self.symbol, selectors=(Quote.select("bid", "ask", basis="ticker"),))
         return ()
 
 
@@ -59,9 +65,9 @@ class DynamicSubscriptionStrategy(SubscribedOneShotTickerLong):
     strategy_id = "dynamic-subscription"
 
     def on_market(self, context: StrategyContext, signal: StrategySignal):
-        context.subscribe_market_fields(
+        context.subscribe_market_data(
             "ETH/USDC:USDC",
-            fields=(FIELD_QUOTE_BID, FIELD_QUOTE_ASK),
+            selectors=(Quote.select("bid", "ask", basis="ticker"),),
             identity="follow-up",
         )
         return super().on_market(context, signal)
@@ -74,13 +80,22 @@ def test_async_data_view_event_source_feeds_strategy_runtime() -> None:
             data = DataContext(DataStore(directory, storage_format="jsonl"), stream_feed=feed)
             view = data.attach("ticker", stream="market.test.btc.ticker", mode="stream")
             strategy = CountTickerStrategy()
-            runtime = StrategyRuntime(strategy, data)
-            task = asyncio.create_task(runtime.run_async(AsyncDataViewEventSource(view)))
+            task = asyncio.create_task(
+                RuntimeAsyncEnvelopeBridge.run(
+                    RuntimeRunSpec(
+                        run_id="async-source",
+                        profile=BACKTEST_PROFILE,
+                        strategy=strategy,
+                        source=AsyncDataViewEventSource(view),
+                        state_config=RuntimeStateConfig(data),
+                    )
+                )
+            )
             await asyncio.sleep(0)
             await feed.publish("market.test.btc.ticker", _ticker_row("100", sequence_time="2026-01-01T00:00:00+00:00"))
             await feed.publish("market.test.btc.ticker", _ticker_row("101", sequence_time="2026-01-01T00:00:01+00:00"))
             await feed.close("market.test.btc.ticker")
-            result = await task
+            result = (await task).runtime
 
         assert strategy.count == 2
         assert result.event_count == 2
@@ -214,7 +229,7 @@ def _ticker_row(quote: str, *, sequence_time: str) -> dict[str, object]:
 
 
 def runtime_envelope_from_test_row(quote: str, *, sequence: int):
-    from kairospy.runtime import runtime_envelope_from_row
+    from kairospy.application.service.domains.market import runtime_envelope_from_row
 
     return runtime_envelope_from_row(
         _ticker_row(quote, sequence_time=f"2026-01-01T00:00:{sequence - 1:02d}+00:00"),

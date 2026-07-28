@@ -14,17 +14,16 @@ from kairospy.core.account import (
     MarginScope,
     MarginState,
     OpenOrderSnapshot,
-    ReservationStatus,
-    project_account,
+    derive_account_state,
 )
-from kairospy.core.execution import FillReport, ExecutionCoordinator
-from kairospy.service.domains.execution import JsonExecutionStateStore
-from kairospy.integrations.payloads import CcxtAccountBootstrapParser
+from kairospy.core.execution import FillReport, ExecutionCoordinator, ReservationStatus
+from kairospy.application.service.domains.execution import JsonExecutionStateStore
+from kairospy.infrastructure.integrations.payloads import CcxtAccountBootstrapParser
 from kairospy.core.reference import MarketResolver
 from kairospy.core.execution import ExecutionUpdate
-from kairospy.integrations.payloads.ccxt_execution import ccxt_order_update, ingest_ccxt_order_update
+from kairospy.infrastructure.integrations.payloads.ccxt_execution import ccxt_order_update, ingest_ccxt_order_update
 from kairospy.core.order import OrderEvent, OrderEventKind, OrderOrigin, OrderRequest, OrderSide, OrderStatus
-from kairospy.service.domains.account import bootstrap_account
+from kairospy.application.service.domains.account import bootstrap_account
 
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -266,10 +265,10 @@ def test_coordinator_keeps_orders_and_account_state_separate_but_composes_projec
         venue_snapshot=_snapshot(context, free="100"),
         at=NOW,
     )
-    projection = project_account(
+    projection = derive_account_state(
         context,
         venue=_snapshot(context, free="100"),
-        reservations=coordinator.reservations,
+        holds=coordinator.reservations,
     )
 
     assert state.status is OrderStatus.RESERVED
@@ -291,10 +290,10 @@ def test_reflected_reservation_stops_local_double_counting_after_venue_snapshot_
     )
 
     coordinator.mark_reservation_reflected("client-1")
-    projection = project_account(
+    projection = derive_account_state(
         context,
         venue=_snapshot(context, free="75", locked="25"),
-        reservations=coordinator.reservations,
+        holds=coordinator.reservations,
     )
 
     assert coordinator.reservations.reservations[0].status is ReservationStatus.REFLECTED
@@ -340,7 +339,7 @@ def test_order_book_records_events_without_mutating_account_projection_by_itself
 
     coordinator.orders.plan(request)
     coordinator.orders.record(OrderEvent("client-1", OrderEventKind.SUBMITTED, NOW))
-    projection = project_account(context, venue=_snapshot(context, free="100"))
+    projection = derive_account_state(context, venue=_snapshot(context, free="100"))
 
     assert coordinator.orders.get("client-1").status is OrderStatus.SUBMITTING
     assert projection.balance("USDT").free == Decimal("100")
@@ -388,7 +387,7 @@ def test_venue_order_id_can_match_external_order_events() -> None:
     assert canceled.status is OrderStatus.CANCELED
 
 
-def test_account_projection_exposes_venue_open_orders_and_local_pending_orders() -> None:
+def test_account_projection_exposes_venue_open_orders_while_orders_stay_with_coordinator() -> None:
     context = _context()
     coordinator = ExecutionCoordinator()
     request = OrderRequest("client-1", context, "ETH/USDT", OrderSide.BUY, Decimal("2"))
@@ -413,8 +412,8 @@ def test_account_projection_exposes_venue_open_orders_and_local_pending_orders()
     projection = coordinator.account_projection(context, venue_snapshot=venue)
 
     assert [order.order_id for order in projection.open_orders] == ["venue-existing-1"]
-    assert [order.local_order_id for order in projection.pending_orders] == ["client-1"]
-    assert projection.source is AccountSource.MIXED
+    assert [order.local_order_id for order in coordinator.orders.active_for_context(context)] == ["client-1"]
+    assert projection.source is AccountSource.VENUE
 
 
 def test_bootstrap_account_imports_ccxt_balance_and_existing_open_orders() -> None:
@@ -439,7 +438,7 @@ def test_bootstrap_account_imports_ccxt_balance_and_existing_open_orders() -> No
     assert [order.local_order_id for order in result.imported_orders] == ["external:binance:main:spot:venue-existing-1"]
     assert result.imported_orders[0].status is OrderStatus.PARTIALLY_FILLED
     assert coordinator.orders.get_by_venue_order_id("venue-existing-1").remaining_quantity == Decimal("0.75")
-    assert [order.local_order_id for order in result.projection.pending_orders] == [
+    assert [order.local_order_id for order in coordinator.orders.active_for_context(context)] == [
         "external:binance:main:spot:venue-existing-1"
     ]
 

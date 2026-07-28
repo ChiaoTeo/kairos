@@ -13,13 +13,11 @@ from kairospy.core.account import (
     AccountRef,
     AccountContext,
     Environment,
-    Reservation,
-    ReservationBook,
-    ReservationStatus,
 )
 from kairospy.core.order import OrderJournal, OrderOrigin, OrderRequest, OrderSide, OrderState, OrderStatus, OrderType
 
 from .coordinator import ExecutionCoordinator
+from .reservation import Reservation, ReservationBook, ReservationStatus
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,13 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 
-from kairospy.context import DataContext
-from kairospy.data import DataStore
-from kairospy.core.market import FIELD_QUOTE_ASK, FIELD_QUOTE_BID, MarketSubscriptionRegistry
+from kairospy.application.context import DataContext
+from kairospy.infrastructure.data import DataStore
+from kairospy.core.market import Quote
 from kairospy.core.reference import MarketResolver
-from kairospy.service.domains.market import bind_market_data
-from kairospy.service.domains.reference import catalog_from_market_rows
-from kairospy.service.domains.reference import ReferenceStore
+from kairospy.application.service.domains.market import MarketSubscriptionRegistry, bind_market_data
+from kairospy.application.service.domains.reference import catalog_from_market_rows
+from kairospy.application.service.domains.reference import ReferenceStore
 
 
 def main() -> None:
@@ -43,10 +43,10 @@ def main() -> None:
         bars = bind_market_data(data, resolver, market).ohlcv("1m", mode="both")
 
         subscriptions = MarketSubscriptionRegistry()
-        quote_subscription = subscriptions.subscribe_fields(
+        quote_subscription = subscriptions.subscribe_data(
             "market",
             market.market_id,
-            (FIELD_QUOTE_BID, FIELD_QUOTE_ASK),
+            (Quote.select("bid", "ask", basis="ticker"),),
             venue=market.venue,
             market=market.market,
             source_symbol=market.source_symbol,

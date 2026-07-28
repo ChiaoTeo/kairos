@@ -3,11 +3,11 @@ from __future__ import annotations
 import asyncio
 from tempfile import TemporaryDirectory
 
-from kairospy.data import DataStore
-from kairospy.integrations import BinanceBroker, BinanceMarketDataConnector, CcxtDriver
-from kairospy.integrations.payloads import ccxt_ticker_update, ephemeral_market_ref
-from kairospy.data import DataSink
-from kairospy.core.market import FIELD_BAR_CLOSE, FIELD_QUOTE_ASK, FIELD_QUOTE_BID, MarketUpdate
+from kairospy.infrastructure.data import DataStore
+from kairospy.infrastructure.integrations import BinanceBroker, BinanceMarketDataConnector, CcxtDriver
+from kairospy.infrastructure.integrations.payloads import ccxt_ticker_update, ephemeral_market_ref
+from kairospy.infrastructure.data import DataSink
+from kairospy.core.market import Bar, MarketEvent, Quote
 
 
 class FakeSyncExchange:
@@ -189,11 +189,12 @@ def test_historical_rows_are_persisted_by_data_store_not_exchange_or_driver() ->
 def test_binance_exchange_exposes_historical_ohlcv_updates() -> None:
     updates = list(BinanceMarketDataConnector(_driver()).fetch_ohlcv_updates("BTC/USDT", timeframe="1m", limit=100))
 
-    assert all(isinstance(update, MarketUpdate) for update in updates)
-    assert updates[0].kind == "ohlcv"
-    assert updates[0].market_id == "market:binance:spot:btc_usdt"
-    assert updates[0].fields[FIELD_BAR_CLOSE].normalize() == 105
-    assert updates[1].fields[FIELD_BAR_CLOSE].normalize() == 106
+    assert all(isinstance(update, MarketEvent) for update in updates)
+    assert updates[0].kind == "bar"
+    assert isinstance(updates[0].value, Bar)
+    assert updates[0].value.market_id == "market:binance:spot:btc_usdt"
+    assert updates[0].value.close.normalize() == 105
+    assert updates[1].value.close.normalize() == 106
 
 
 def test_binance_exchange_uses_ccxt_driver_for_live_ticker_stream() -> None:
@@ -236,28 +237,30 @@ def test_binance_exchange_exposes_live_ticker_updates() -> None:
         ]
 
         assert len(updates) == 1
-        assert isinstance(updates[0], MarketUpdate)
-        assert updates[0].kind == "ticker"
-        assert updates[0].market_key == "binance_spot_btc_usdt"
-        assert updates[0].fields[FIELD_QUOTE_BID].normalize() == 100
-        assert updates[0].fields[FIELD_QUOTE_ASK].normalize() == 101
+        assert isinstance(updates[0], MarketEvent)
+        assert updates[0].kind == "quote"
+        assert isinstance(updates[0].value, Quote)
+        assert updates[0].value.market_key == "binance_spot_btc_usdt"
+        assert updates[0].value.bid.normalize() == 100
+        assert updates[0].value.ask.normalize() == 101
 
     asyncio.run(scenario())
 
 
-def test_ccxt_market_payload_adapter_emits_core_market_update() -> None:
+def test_ccxt_market_payload_adapter_emits_core_market_event() -> None:
     update = ccxt_ticker_update(
         {"timestamp": 1767225600000, "bid": "100", "ask": "101"},
         market=ephemeral_market_ref(venue="binance", market="spot", source_symbol="BTC/USDT"),
     )
 
-    assert isinstance(update, MarketUpdate)
-    assert update.subject_type == "instrument"
-    assert update.subject_id == "instrument:spot:btc:usdt"
-    assert update.market_id == "market:binance:spot:btc_usdt"
-    assert update.kind == "ticker"
-    assert update.fields[FIELD_QUOTE_BID].normalize() == 100
-    assert update.fields[FIELD_QUOTE_ASK].normalize() == 101
+    assert isinstance(update, MarketEvent)
+    assert update.subject.subject_type == "instrument"
+    assert update.subject.subject_id == "instrument:spot:btc:usdt"
+    assert update.kind == "quote"
+    assert isinstance(update.value, Quote)
+    assert update.value.market_id == "market:binance:spot:btc_usdt"
+    assert update.value.bid.normalize() == 100
+    assert update.value.ask.normalize() == 101
 
 
 def test_live_orderbook_can_be_persisted_to_data_store() -> None:

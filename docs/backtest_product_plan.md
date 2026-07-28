@@ -2,9 +2,9 @@
 
 KairosPy already has the core pieces needed to run an initial backtest:
 
-- `kairospy.modes.backtest` provides `BacktestEngine`, simulated accounts, fills, equity, trades, and metrics.
-- `kairospy.data` provides durable historical datasets and event replay inputs.
-- `kairospy.strategy` and `kairospy.context` give strategy authors a stable API for reading runtime state and emitting intents.
+- `kairospy.application.mode.backtest` provides `BacktestEngine`, simulated accounts, fills, equity, trades, and metrics.
+- `kairospy.infrastructure.data` provides durable historical datasets and event replay inputs.
+- `kairospy.application.strategy` and `kairospy.application.context` give strategy authors a stable API for reading runtime state and emitting intents.
 - `kairospy.surface.products.run` exposes a configured `run backtest` command.
 
 The next step is not to rebuild a large research platform. The next step is to make the existing backtest path usable as a product: easy to configure, easy to run, easy to inspect, and extensible enough for strategy-local factors first.
@@ -140,6 +140,11 @@ Initial strategy support can keep factors strategy-local.
 That means a strategy may maintain rolling windows, pandas-derived series, or custom state internally:
 
 ```python
+from decimal import Decimal
+
+from kairospy.core.market import Bar
+
+
 class SmaStrategy(StrategyBase):
     strategy_id = "sma"
 
@@ -149,19 +154,19 @@ class SmaStrategy(StrategyBase):
         self.closes = []
 
     def on_start(self, context):
-        context.subscribe_market_fields(
+        context.subscribe_market_data(
             "BTC/USDT",
             venue="binance",
             market="spot",
-            fields=(MarketDataField("bar.close", interval="1m"),),
+            selectors=(Bar.select("close", interval="1m"),),
         )
         return ()
 
     def on_market(self, context, signal):
-        bar = context.latest_data(domain="market", kind="bar")
-        if bar is None:
+        close = context.latest_data(domain="market", field="Bar.close", interval="1m")
+        if close is None:
             return ()
-        close = Decimal(str(bar.fields["bar.close"]))
+        close = Decimal(str(close))
         self.closes.append(close)
         if len(self.closes) < self.slow_window:
             return ()
@@ -170,7 +175,7 @@ class SmaStrategy(StrategyBase):
         context.target_position("BTC/USDT", Decimal("1") if fast > slow else Decimal("0"))
 ```
 
-After the configured single-run path is stable, introduce a narrow factor module. Prefer `kairospy.core.factor` only if factors become runtime/domain-owned primitives; otherwise prefer a product-facing `kairospy.strategy.factor` helper layer.
+After the configured single-run path is stable, introduce a narrow factor module. Prefer `kairospy.core.factor` only if factors become runtime/domain-owned primitives; otherwise prefer a product-facing `kairospy.application.strategy.factor` helper layer.
 
 Minimum factor model:
 
@@ -265,12 +270,12 @@ The existing `run account` commands can continue to serve daemon-backed runs. Th
 
 ## Design Rules
 
-- Keep the backtest runner thin. Domain behavior belongs in `kairospy.modes.backtest`, `kairospy.core.execution`, and `kairospy.runtime`.
+- Keep the backtest runner thin. Domain behavior belongs in `kairospy.application.mode.backtest`, `kairospy.core.execution`, and `kairospy.application.runtime`.
 - Keep data preparation explicit but lightweight. Do not add data manifests, promotion statuses, or quality gates.
 - Keep factor support optional until users need reusable factor artifacts.
 - Persist enough metadata to reproduce a run.
 - Prefer deterministic failures over silent assumptions.
-- Avoid importing provider-specific code into backtest mode. Provider-specific parsing stays in `kairospy.integrations`.
+- Avoid importing provider-specific code into backtest mode. Provider-specific parsing stays in `kairospy.infrastructure.integrations`.
 
 ## Near-Term Definition Of Done
 

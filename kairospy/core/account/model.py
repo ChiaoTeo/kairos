@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Mapping, Protocol
+from typing import Mapping
 
 
 class Environment(StrEnum):
@@ -177,15 +177,9 @@ class AccountSnapshot:
             raise ValueError("account snapshot timestamp must be timezone-aware")
 
 
-class AccountGateway(Protocol):
-    def account_snapshot(self, context: AccountContext) -> AccountSnapshot:
-        ...
-
-
 __all__ = [
     "AccountBalance",
     "AccountContext",
-    "AccountGateway",
     "AccountRef",
     "AccountSnapshot",
     "AccountSource",

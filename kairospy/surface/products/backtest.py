@@ -9,10 +9,10 @@ from typing import Mapping
 
 import typer
 
-from kairospy.modes.backtest import backtest_result_summary
-from kairospy.runtime.account_journal import RunAccountJournal
-from kairospy.runtime.line import RuntimeMode
-from kairospy.service.modes.backtest import BacktestConfigurationError, ConfiguredBacktest, configured_backtest
+from kairospy.application.mode.backtest import backtest_result_summary
+from kairospy.application.runtime.model import RuntimeMode
+from kairospy.application.service.modes.backtest import BacktestConfigurationError, ConfiguredBacktest, configured_backtest
+from kairospy.application.service.operations.run import RunAccountJournal
 
 
 backtest_app = typer.Typer(no_args_is_help=True, help="Backtest commands")

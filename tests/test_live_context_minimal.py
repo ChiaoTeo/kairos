@@ -8,14 +8,14 @@ from tempfile import TemporaryDirectory
 import pytest
 
 from kairospy.core.account import AccountContext, AccountEventKind, AccountRef, AccountSnapshot, AccountSource, Environment, MarginScope, MarginState
-from kairospy.context import DataContext, StrategyContext
-from kairospy.data import DataSink, DataStore, InMemoryStreamFeed
-from kairospy.integrations.payloads import CcxtAccountPayloadAdapter
-from kairospy.modes.live import JsonLiveRuntimeStateStore, LiveEngine, LiveStopToken
-from kairospy.service.domains.account import classify_balance_delta
-from kairospy.runtime import IterableEventSource
+from kairospy.application.context import DataContext, StrategyContext
+from kairospy.infrastructure.data import DataSink, DataStore, InMemoryStreamFeed
+from kairospy.infrastructure.integrations.payloads import CcxtAccountPayloadAdapter
+from kairospy.application.mode.live import JsonLiveRuntimeStateStore, LiveEngine, LiveStopToken
+from kairospy.application.service.domains.account import classify_balance_delta
+from kairospy.application.service.domains.market import IterableEventSource
 from kairospy.core.reference import MarketResolver
-from kairospy.strategy import StrategyBase
+from kairospy.application.strategy import StrategyBase
 
 
 class AccountReadingStrategy(StrategyBase):
@@ -374,7 +374,7 @@ def test_live_strategy_runner_bootstraps_account_and_applies_order_ws_updates() 
         ("open_order.present", "venue-existing-1", Decimal("1"), Decimal("0")),
         ("pending_order.venue_present", "venue-existing-1", Decimal("1"), Decimal("0")),
     ]
-    assert reconciliation.event.payload.projection.balance("USDT").free == Decimal("875")
+    assert reconciliation.event.payload.account_state.balance("USDT").free == Decimal("875")
 
 
 def test_live_strategy_runner_applies_private_trade_updates_to_ledger() -> None:
@@ -445,7 +445,7 @@ def test_live_strategy_runner_records_balance_total_delta_as_account_adjustment(
     assert [(event.kind, event.cash_delta) for event in result.coordinator.ledger.events] == [
         (AccountEventKind.ADJUSTMENT, Decimal("10")),
     ]
-    assert result.account_view.projection.balance("USDT").total == Decimal("1010")
+    assert result.account_view.account_state.balance("USDT").total == Decimal("1010")
 
 
 def test_live_strategy_runner_updates_margin_view_from_balance_stream() -> None:

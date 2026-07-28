@@ -5,7 +5,7 @@ import sys
 
 import typer
 
-from kairospy.service.domains.market import MarketDataResolver, MarketDataService, MarketDataSpec, replay_rows
+from kairospy.application.service.domains.market import MarketDataResolver, MarketDataService, MarketDataSpec, replay_rows
 from kairospy.surface.runtime import DriverName, ExchangeName, StorageFormat, exchange, store
 from kairospy.surface.ui.terminal import write_jsonl
 

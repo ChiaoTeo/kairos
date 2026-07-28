@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from kairospy.context import StrategyContext
-from kairospy.core.market import FIELD_QUOTE_ASK, FIELD_QUOTE_BID
-from kairospy.strategy import StrategyBase, StrategySignal
+from kairospy.application.context import StrategyContext
+from kairospy.core.market import Quote
+from kairospy.application.strategy import StrategyBase, StrategySignal
 
 
 class OneShotLong(StrategyBase):
@@ -16,7 +16,7 @@ class OneShotLong(StrategyBase):
         self.entered = False
 
     def on_start(self, context: StrategyContext):
-        context.subscribe_market_fields(self.symbol, fields=(FIELD_QUOTE_BID, FIELD_QUOTE_ASK))
+        context.subscribe_market_data(self.symbol, selectors=(Quote.select("bid", "ask", basis="ticker"),))
         return ()
 
     def on_market(self, context: StrategyContext, signal: StrategySignal):

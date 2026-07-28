@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from kairospy.integrations import BinanceMarketDataConnector, CcxtDriver
+from kairospy.infrastructure.integrations import BinanceMarketDataConnector, CcxtDriver
 from kairospy.core.reference import (
     Asset,
     AssetId,
@@ -20,7 +20,7 @@ from kairospy.core.reference import (
     ReferenceCatalog,
     instrument_product_for_market,
 )
-from kairospy.service.domains.reference import catalog_from_reference_rows
+from kairospy.application.service.domains.reference import catalog_from_reference_rows
 
 
 UTC = timezone.utc

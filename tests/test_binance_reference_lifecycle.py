@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from kairospy.integrations import BinanceMarketDataConnector, BinanceReferenceDriver, CcxtDriver
+from kairospy.infrastructure.integrations import BinanceMarketDataConnector, BinanceReferenceDriver, CcxtDriver
 from kairospy.core.reference import LifecycleEventType
 
 

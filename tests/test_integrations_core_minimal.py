@@ -6,10 +6,10 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-from kairospy.data import DataStore
-from kairospy.integrations import IntegrationRegistry, InstrumentReferenceSnapshotProvider, Massive, MassiveDriver
-from kairospy.integrations.simulated import SimulatedProvider
-from kairospy.data import DataSink
+from kairospy.infrastructure.data import DataStore
+from kairospy.infrastructure.integrations import IntegrationRegistry, InstrumentReferenceSnapshotProvider, Massive, MassiveDriver
+from kairospy.infrastructure.integrations.simulated import SimulatedProvider
+from kairospy.infrastructure.data import DataSink
 
 
 class FakeMassiveDriver:

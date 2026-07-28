@@ -4,28 +4,28 @@ KairosPy is a strategy runtime for trading systems. Strategy authors write again
 
 The project is organized around one product axis:
 
-- `kairospy.strategy`: strategy author API, stable strategy events, strategy context, controls, and strategy-facing views.
-- `kairospy.runtime`: strategy event loop, runtime data pipeline, event lines, component scheduling, and run profiles.
+- `kairospy.application.strategy`: strategy author API, stable strategy events, strategy context, controls, and strategy-facing views.
+- `kairospy.application.runtime`: strategy event loop, runtime data pipeline, event lines, projection scheduling, runtime views, and run profiles.
 - `kairospy.core`: stable trading domains.
 - `kairospy.core.market`: provider-neutral market observations, quote/book/bar/trade/rate models, subscription specifications, and row encoders.
-- `kairospy.service.domains.market`: user-facing market data specs, resolution, historical read/download coordination, live persistence, and replay.
+- `kairospy.application.service.domains.market`: user-facing market data specs, resolution, historical read/download coordination, live persistence, and replay.
 - `kairospy.core.execution`: intent-to-order-to-fill behavior, execution state, local ledger updates, and simulated/live execution adapters.
-- `kairospy.core.account`: account identity, balances, positions, snapshots, projections, reservations, and ledgers.
-- `kairospy.core.reference`: provider-neutral instrument, listing, market, lifecycle, resolver, store, and universe models.
-- `kairospy.service.domains.account`, `kairospy.service.domains.market`, and `kairospy.service.domains.reference`: domain use-case orchestration for account, market data, and reference data.
-- `kairospy.service.modes.backtest`: backtest mode config assembly.
-- `kairospy.service.operations.run`: run and daemon operational assembly across modes.
+- `kairospy.core.account`: account identity, balances, positions, snapshots, account state derivation, and ledgers.
+- `kairospy.core.reference`: provider-neutral asset, instrument, listing, market, lifecycle, participant, identity, resolver handle, product, catalog, and universe models.
+- `kairospy.application.service.domains.account`, `kairospy.application.service.domains.market`, and `kairospy.application.service.domains.reference`: domain use-case orchestration for account, market data, and reference data.
+- `kairospy.application.service.modes.backtest`: backtest mode config assembly.
+- `kairospy.application.service.operations.run`: run and daemon operational assembly across modes.
 - `kairospy.core.intent` and `kairospy.core.order`: strategy intent and order state models.
 - `kairospy.core.views`: shared view schema, envelope, registry, and store primitives.
-- `kairospy.modes`: run modes that compose strategy, runtime, core, data, and integrations.
-- `kairospy.modes.backtest`: historical simulation entry points, simulated account configuration, results, and metrics.
-- `kairospy.modes.paper`: non-production runtime entry points built from the same runtime and execution primitives as backtest.
-- `kairospy.modes.live`: live gateway protocols, account reconciliation, private stream collection, and live engine orchestration.
-- `kairospy.data`: durable datasets, stores, queries, sinks, and stream feeds.
-- `kairospy.integrations`: external systems and provider payload adapters such as ccxt, Binance, Hyperliquid, IBKR, and Massive.
+- `kairospy.application.mode`: run modes that compose strategy, runtime, core, data, and integrations.
+- `kairospy.application.mode.backtest`: historical simulation entry points, simulated account configuration, results, and metrics.
+- `kairospy.application.mode.paper`: non-production runtime entry points built from the same runtime and execution primitives as backtest.
+- `kairospy.application.mode.live`: live gateway protocols, account reconciliation, private stream collection, and live engine orchestration.
+- `kairospy.infrastructure.data`: durable datasets, stores, queries, sinks, and stream feeds.
+- `kairospy.infrastructure.integrations`: external systems and provider payload adapters such as ccxt, Binance, Hyperliquid, IBKR, and Massive.
 - `kairospy.surface`: CLI and user-facing product APIs.
 
-Old top-level domain and mode packages are intentionally not part of the layout; use `kairospy.core.*` and `kairospy.modes.*`.
+Old top-level domain and mode packages are intentionally not part of the layout; use `kairospy.core.*` and `kairospy.application.mode.*`.
 
 ## Install For Development
 
@@ -60,12 +60,12 @@ Strategies receive stable strategy events and emit intents; runtime does not sub
 from decimal import Decimal
 from tempfile import TemporaryDirectory
 
-from kairospy.modes.backtest import BacktestEngine, SimulatedAccount
-from kairospy.context import DataContext
+from kairospy.application.mode.backtest import BacktestEngine, SimulatedAccount
+from kairospy.application.context import DataContext
 from kairospy.core.reference import MarketResolver
-from kairospy.data import DataStore
-from kairospy.runtime import IterableEventSource
-from kairospy.strategy import StrategyBase, StrategyContext
+from kairospy.infrastructure.data import DataStore
+from kairospy.application.service.domains.market import IterableEventSource
+from kairospy.application.strategy import StrategyBase, StrategyContext
 
 
 class TargetBtc(StrategyBase):
@@ -91,11 +91,12 @@ with TemporaryDirectory() as temporary:
     ).run(source)
 ```
 
-Live runs require an explicit account payload adapter from an integration package, for example `CcxtAccountPayloadAdapter`. This keeps live orchestration provider-neutral while provider parsing and ingestion remain in `kairospy.integrations`.
+Live runs require an explicit account payload adapter from an integration package, for example `CcxtAccountPayloadAdapter`. This keeps live orchestration provider-neutral while provider parsing and ingestion remain in `kairospy.infrastructure.integrations`.
 
 ## Architecture
 
 See [docs/architecture.md](docs/architecture.md) for the package boundary rules and runtime flow.
+See [docs/runtime_layers.md](docs/runtime_layers.md) for the target layering inside `kairospy.application.runtime`.
 See [docs/migration_audit.md](docs/migration_audit.md) for the legacy-domain deletion and replacement map.
 
 Useful checks:

@@ -5,13 +5,13 @@ from decimal import Decimal
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from kairospy.context import DataContext, StrategyContext
-from kairospy.core.market import FIELD_BAR_CLOSE
-from kairospy.core.market.views import MarketCurrentProjection
+from kairospy.application.context import DataContext, StrategyContext
 from kairospy.core.reference import MarketResolver
-from kairospy.data import DataStore
-from kairospy.runtime import DataViewEventSource, StrategyRuntime
-from kairospy.strategy import StrategyBase, StrategySignal, ViewFieldSchema, ViewSchema, ViewStore
+from kairospy.infrastructure.data import DataStore
+from kairospy.application.runtime.kernel import RuntimeKernel
+from kairospy.application.runtime.projection.market import MarketCurrentProjection
+from kairospy.application.service.domains.market import DataViewEventSource
+from kairospy.application.strategy import StrategyBase, StrategySignal, ViewFieldSchema, ViewSchema, ViewStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,7 +37,7 @@ class ViewReadingStrategy(StrategyBase):
     def on_market(self, context: StrategyContext, signal: StrategySignal):
         current = context.views.require("strategy.counter")
         fields = context.views.require("market.fields")
-        last_close = _latest_market_field(fields, FIELD_BAR_CLOSE)
+        last_close = _latest_market_field(fields, "Bar.close")
         context.views.put(
             "strategy.counter",
             StrategyCounterView(current.market_events + 1, current.regime, Decimal(str(last_close))),
@@ -114,7 +114,7 @@ def main() -> None:
         )
         views.put_runtime("project.regime", ProjectRegimeView("risk-on"))
 
-        runtime = StrategyRuntime(
+        runtime = RuntimeKernel(
             ViewReadingStrategy(),
             data,
             views=views,

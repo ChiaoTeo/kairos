@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Mapping
 
 from kairospy.config import KairosConfig, load_config
-from kairospy.runtime import list_run_daemons
+from kairospy.application.runtime.control import list_run_daemons
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +78,10 @@ class SurfaceContext:
         config = self._config or load_config()
         runs = tuple(
             _run_summary(status.to_dict())
-            for status in list_run_daemons(stale_after_seconds=self.stale_after_seconds)
+            for status in list_run_daemons(
+                root=config.resolve_path(".kairos/runtime"),
+                stale_after_seconds=self.stale_after_seconds,
+            )
         )
         snapshot = SurfaceSnapshot(
             project_name=config.project_name or config.root.name,

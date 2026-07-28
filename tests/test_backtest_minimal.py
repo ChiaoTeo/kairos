@@ -3,20 +3,20 @@ from __future__ import annotations
 from decimal import Decimal
 from tempfile import TemporaryDirectory
 
-from kairospy.modes.backtest import (
+from kairospy.application.mode.backtest import (
     BacktestEngine,
     BasisPointSlippageModel,
     ImmediateFillModel,
     PercentageCommissionModel,
     SimulatedAccount,
 )
-from kairospy.context import DataContext, StrategyContext
-from kairospy.data import DataStore
-from kairospy.runtime import DataViewEventSource
-from kairospy.modes.paper import PaperEngine
+from kairospy.application.context import DataContext, StrategyContext
+from kairospy.infrastructure.data import DataStore
+from kairospy.application.service.domains.market import DataViewEventSource
+from kairospy.application.mode.paper import PaperEngine
 from kairospy.core.reference import MarketResolver
-from kairospy.service.domains.market import bind_market_data
-from kairospy.strategy import StrategyBase
+from kairospy.application.service.domains.market import bind_market_data
+from kairospy.application.strategy import StrategyBase
 
 
 class RoundTripStrategy(StrategyBase):
@@ -117,8 +117,8 @@ def test_backtest_runs_strategy_against_simulated_account_without_strategy_mode_
         assert result.account_view.equity == result.final_equity
         assert result.account_view.net_profit == result.net_profit
         assert result.account_view.total_return == result.total_return
-        assert result.account_view.projection is not None
-        assert result.account_view.projection.balances == result.account_view.balances
+        assert result.account_view.account_state is not None
+        assert result.account_view.account_state.balances == result.account_view.balances
         assert result.account_view.pending_orders == ()
         assert [state.status.value for state in result.runtime.intent_states] == ["satisfied", "satisfied"]
 

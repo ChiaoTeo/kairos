@@ -3,12 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.integrations import EquityReferenceSnapshotProvider, massive_corporate_action_events
+from kairospy.infrastructure.integrations import EquityReferenceSnapshotProvider, massive_corporate_action_events
 from kairospy.core.reference import (
-    CorporateActionTransitions,
     LifecycleEventType,
 )
-from kairospy.service.domains.reference import (
+from kairospy.application.service.domains.reference import (
+    CorporateActionService,
     ReferenceDataRefreshService,
     ReferenceRefreshService,
     ReferenceStore,
@@ -92,7 +92,7 @@ def test_equity_reference_snapshot_provider_and_corporate_action_events() -> Non
     market = snapshot.resolve_market("AAPL", venue="nasdaq", market="equity")
     assert str(market.instrument_id) == "instrument:equity:320193"
 
-    actions = CorporateActionTransitions(snapshot.catalog)
+    actions = CorporateActionService(snapshot.catalog)
     split = actions.split(instrument_id=market.instrument_id, effective_at=as_of, ratio=Decimal("4"))
     dividend = actions.dividend(
         instrument_id=market.instrument_id,

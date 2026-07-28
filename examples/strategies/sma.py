@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from kairospy.context import StrategyContext
-from kairospy.core.market import FIELD_BAR_CLOSE, MarketDataField
-from kairospy.strategy import StrategyBase, StrategySignal
+from kairospy.application.context import StrategyContext
+from kairospy.core.market import Bar
+from kairospy.application.strategy import StrategyBase, StrategySignal
 
 
 class SmaCrossBacktest(StrategyBase):
@@ -33,11 +33,11 @@ class SmaCrossBacktest(StrategyBase):
         self.positioned = False
 
     def on_start(self, context: StrategyContext):
-        context.subscribe_market_fields(
+        context.subscribe_market_data(
             self.symbol,
             venue=self.venue,
             market=self.market,
-            fields=(MarketDataField(FIELD_BAR_CLOSE, interval=self.timeframe),),
+            selectors=(Bar.select("close", interval=self.timeframe),),
         )
         return ()
 
@@ -65,7 +65,7 @@ class SmaCrossBacktest(StrategyBase):
 def _latest_close(context: StrategyContext) -> Decimal | None:
     fields = context.views.require("market.fields")
     for item in reversed(tuple(getattr(fields, "fields", ()))):  # latest field summaries are stored by market field key.
-        if getattr(item, "field", None) == FIELD_BAR_CLOSE:
+        if getattr(item, "field", None) == "Bar.close":
             value = getattr(item, "value", None)
             return None if value is None else Decimal(str(value))
     return None

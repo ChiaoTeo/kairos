@@ -8,7 +8,7 @@ from typing import Mapping, TextIO
 
 import typer
 
-from kairospy.service.domains.market import MarketDataResolver, MarketDataService, MarketDataSpec
+from kairospy.application.service.domains.market import MarketDataResolver, MarketDataService, MarketDataSpec
 from kairospy.surface.runtime import DriverName, ExchangeName, StorageFormat, exchange, store
 from kairospy.surface.ui.terminal import write_jsonl
 

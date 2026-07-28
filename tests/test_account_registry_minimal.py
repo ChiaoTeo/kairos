@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from kairospy.config import RunConfig
-from kairospy.runtime import AccountRegistry
+from kairospy.application.service.operations.run import AccountRegistry
 
 
 def test_account_registry_resolves_single_account_for_venue() -> None:

@@ -15,20 +15,22 @@ from kairospy.core.account import (
     AccountRef,
     AccountSnapshot,
     AccountSource,
-    CashBuyingPowerModel,
     Environment,
-    MarginBuyingPowerModel,
     MarginScope,
     MarginState,
     OpenOrderSnapshot,
     PositionSnapshot,
+    derive_account_state,
+)
+from kairospy.core.execution import (
+    CashBuyingPowerModel,
+    MarginBuyingPowerModel,
     Reservation,
     ReservationBook,
-    compare_account_state,
-    project_account,
     reserve_cash_order,
 )
 from kairospy.core.order import OrderEvent, OrderEventKind, OrderJournal, OrderRequest, OrderSide
+from kairospy.application.service.domains.account import compare_account_state
 
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -105,9 +107,9 @@ def test_live_projection_keeps_venue_snapshot_authoritative_and_adds_local_reser
     check = reserve_cash_order(
         reservations,
         reservation,
-        project_account(context, venue=snapshot),
+        derive_account_state(context, venue=snapshot),
     )
-    projection = project_account(context, venue=snapshot, reservations=reservations)
+    projection = derive_account_state(context, venue=snapshot, holds=reservations)
 
     assert check.accepted
     assert projection.source is AccountSource.MIXED
@@ -142,7 +144,7 @@ def test_ledger_only_projection_models_backtest_or_simulation_account_state() ->
         ),
     ))
 
-    projection = project_account(context, ledger=ledger)
+    projection = derive_account_state(context, ledger=ledger)
 
     assert projection.source is AccountSource.LEDGER
     assert projection.balance("USD").total == Decimal("900")
@@ -154,7 +156,7 @@ def test_ledger_only_projection_models_backtest_or_simulation_account_state() ->
 
 def test_local_cash_model_rejects_more_than_free_balance() -> None:
     context = _context()
-    projection = project_account(
+    projection = derive_account_state(
         context,
         venue=AccountSnapshot(
             context,
@@ -178,7 +180,7 @@ def test_local_cash_model_rejects_more_than_free_balance() -> None:
 
 def test_local_margin_model_uses_instrument_available_margin_and_leverage() -> None:
     context = _context()
-    projection = project_account(
+    projection = derive_account_state(
         context,
         venue=AccountSnapshot(
             context,
@@ -222,7 +224,7 @@ def test_local_margin_model_uses_instrument_available_margin_and_leverage() -> N
 
 def test_compare_account_state_reports_balance_fields_separately() -> None:
     context = _context()
-    local = project_account(
+    local = derive_account_state(
         context,
         venue=AccountSnapshot(
             context,
@@ -246,7 +248,7 @@ def test_compare_account_state_reports_balance_fields_separately() -> None:
 
 def test_compare_account_state_reports_open_order_presence_and_quantity_differences() -> None:
     context = _context()
-    local = project_account(
+    local = derive_account_state(
         context,
         venue=AccountSnapshot(
             context,
@@ -288,14 +290,13 @@ def test_compare_account_state_reports_pending_order_missing_or_remaining_mismat
     journal.plan(mismatch)
     journal.record(OrderEvent("client-mismatch", OrderEventKind.SUBMITTED, NOW))
     journal.record(OrderEvent("client-mismatch", OrderEventKind.ACKNOWLEDGED, NOW, venue_order_id="venue-mismatch"))
-    local = project_account(
+    local = derive_account_state(
         context,
         venue=AccountSnapshot(
             context,
             balances=(AccountBalance.from_free_locked("USDT", Decimal("100"), Decimal("0"), source=AccountSource.VENUE),),
             observed_at=NOW,
         ),
-        local_orders=journal.active_for_context(context),
     )
     external = AccountSnapshot(
         context,
@@ -306,7 +307,7 @@ def test_compare_account_state_reports_pending_order_missing_or_remaining_mismat
         observed_at=NOW,
     )
 
-    differences = compare_account_state(local, external)
+    differences = compare_account_state(local, external, pending_orders=journal.active_for_context(context))
 
     assert [(item.kind, item.key, item.local, item.external) for item in differences] == [
         ("open_order.present", "venue-mismatch", Decimal("0"), Decimal("1")),

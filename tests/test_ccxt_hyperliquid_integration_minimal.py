@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from kairospy.integrations import CcxtDriver, HyperliquidMarketDataConnector
-from kairospy.core.market import FIELD_QUOTE_ASK, FIELD_QUOTE_BID, MarketUpdate
+from kairospy.infrastructure.integrations import CcxtDriver, HyperliquidMarketDataConnector
+from kairospy.core.market import MarketEvent, Quote
 from kairospy.core.reference import MarketRef
 from kairospy.surface.runtime import DriverName, ExchangeName, exchange
 
@@ -99,10 +99,11 @@ def test_hyperliquid_exchange_exposes_ticker_updates_with_normalized_symbol() ->
         ]
 
         assert len(updates) == 1
-        assert isinstance(updates[0], MarketUpdate)
-        assert updates[0].market_id == "market:hyperliquid:derivative:btc_usdc_usdc"
-        assert updates[0].fields[FIELD_QUOTE_BID].normalize() == 100
-        assert updates[0].fields[FIELD_QUOTE_ASK].normalize() == 101
+        assert isinstance(updates[0], MarketEvent)
+        assert isinstance(updates[0].value, Quote)
+        assert updates[0].value.market_id == "market:hyperliquid:derivative:btc_usdc_usdc"
+        assert updates[0].value.bid.normalize() == 100
+        assert updates[0].value.ask.normalize() == 101
 
     asyncio.run(scenario())
 
@@ -137,7 +138,7 @@ def test_hyperliquid_fetch_quote_uses_ccxt_ticker_for_clock_requests() -> None:
     }
 
 
-def test_hyperliquid_fetch_quote_update_uses_core_market_update() -> None:
+def test_hyperliquid_fetch_quote_update_uses_core_market_event() -> None:
     seen_exchange_ids: list[str] = []
 
     def exchange_factory(exchange_id: str) -> FakeSyncExchange:
@@ -148,10 +149,11 @@ def test_hyperliquid_fetch_quote_update_uses_core_market_update() -> None:
     update = HyperliquidMarketDataConnector(CcxtDriver(exchange_factory=exchange_factory)).fetch_quote_update(market)
 
     assert seen_exchange_ids == ["hyperliquid"]
-    assert isinstance(update, MarketUpdate)
-    assert update.market_key == "hyperliquid_derivative_btc_usdc_usdc"
-    assert update.fields[FIELD_QUOTE_BID].normalize() == 100
-    assert update.fields[FIELD_QUOTE_ASK].normalize() == 101
+    assert isinstance(update, MarketEvent)
+    assert isinstance(update.value, Quote)
+    assert update.value.market_key == "hyperliquid_derivative_btc_usdc_usdc"
+    assert update.value.bid.normalize() == 100
+    assert update.value.ask.normalize() == 101
 
 
 def test_runtime_constructs_hyperliquid_ccxt_exchange() -> None:

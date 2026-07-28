@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from kairospy.core.reference import MarketRef
-from kairospy.service.domains.market.records import orderbook_record
+from kairospy.application.service.domains.market.records import orderbook_record
 
 
 def test_market_ref_carries_market_identity_and_records_carry_quote_fields() -> None:

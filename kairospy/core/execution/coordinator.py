@@ -12,15 +12,13 @@ from kairospy.core.account import (
     AccountContext,
     AccountLedger,
     AccountSnapshot,
-    AccountProjection,
-    Reservation,
-    ReservationBook,
-    project_account,
-    reserve_cash_order,
-    reserve_margin_order,
+    AccountState,
+    derive_account_state,
 )
 from kairospy.core.order import OrderEvent, OrderEventKind, OrderJournal, OrderRequest, OrderSide, OrderState, OrderStatus, OrderType
 
+from .impact import reserve_cash_order, reserve_margin_order
+from .reservation import Reservation, ReservationBook
 from .updates import ExecutionUpdate
 
 
@@ -114,11 +112,11 @@ class ExecutionCoordinator:
                 raise ValueError("reserve_amount and margin_notional cannot be supplied together")
         elif not reserve_currency or reserve_amount is None:
             raise ValueError("reserve_currency and reserve_amount must be supplied together")
-        projection = project_account(
+        projection = derive_account_state(
             request.context,
             ledger=self.ledger,
             venue=venue_snapshot,
-            reservations=self.reservations,
+            holds=self.reservations,
         )
         amount = reserve_amount
         if margin_notional is not None:
@@ -186,13 +184,12 @@ class ExecutionCoordinator:
         context: AccountContext,
         *,
         venue_snapshot: AccountSnapshot | None = None,
-    ) -> AccountProjection:
-        return project_account(
+    ) -> AccountState:
+        return derive_account_state(
             context,
             ledger=self.ledger,
             venue=venue_snapshot,
-            reservations=self.reservations,
-            local_orders=self.orders.active_for_context(context),
+            holds=self.reservations,
         )
 
     def request_cancel(self, client_order_id: str, *, at: datetime) -> OrderState:

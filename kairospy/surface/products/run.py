@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import StrEnum
 import json
@@ -9,17 +10,22 @@ import sys
 import time
 from pathlib import Path
 from typing import Mapping, TextIO
+from uuid import uuid4
 
 import typer
 
-from kairospy.config import load_run_config
-from kairospy.modes.backtest import BacktestEngineDaemonTarget, backtest_result_summary
-from kairospy.modes.paper import paper_result_summary
-from kairospy.runtime import list_run_daemons
-from kairospy.runtime.account_journal import RunAccountJournal
-from kairospy.runtime.line import RuntimeMode
-from kairospy.runtime.daemon import RunDaemonControlPlane, RunDaemonTarget
-from kairospy.service.operations.run import RunConfigurationError, configured_event_mode, configured_streaming_paper_target
+from kairospy.config import load_config, load_run_config
+from kairospy.application.mode.backtest import BacktestEngineDaemonTarget, backtest_result_summary
+from kairospy.application.mode.paper import paper_result_summary
+from kairospy.application.runtime.model import RuntimeMode
+from kairospy.application.runtime.control import RunDaemonControlPlane, RunDaemonTarget, list_run_daemons, list_run_instances
+from kairospy.application.service.modes.live import configured_live_target
+from kairospy.application.service.operations.run import (
+    RunConfigurationError,
+    configured_event_mode,
+    configured_streaming_paper_target,
+)
+from kairospy.application.service.operations.run import RunAccountJournal
 from kairospy.surface.runtime import DriverName, ExchangeName, exchange
 
 
@@ -70,7 +76,7 @@ def list_runs(
     output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format"),
     stale_after_seconds: float = typer.Option(5.0, "--stale-after-seconds"),
 ) -> None:
-    statuses = list_run_daemons(mode=mode, stale_after_seconds=stale_after_seconds)
+    statuses = list_run_daemons(mode=mode, root=_runtime_root(), stale_after_seconds=stale_after_seconds)
     rows = [_run_list_row(status.to_dict(), index=index) for index, status in enumerate(statuses, start=1)]
     if _use_json_output(output_format):
         for row in rows:
@@ -79,13 +85,29 @@ def list_runs(
     typer.echo(_render_run_list(rows))
 
 
+@run_app.command("history")
+def history(
+    mode: RuntimeMode = typer.Option(..., "--mode"),
+    run_id: str = typer.Option(..., "--run-id"),
+    output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format"),
+    stale_after_seconds: float = typer.Option(5.0, "--stale-after-seconds"),
+) -> None:
+    statuses = list_run_instances(run_id, mode=mode, root=_runtime_root(), stale_after_seconds=stale_after_seconds)
+    rows = [_run_list_row(status.to_dict(), index=index) for index, status in enumerate(statuses, start=1)]
+    if _use_json_output(output_format):
+        for row in rows:
+            _echo(row)
+        return
+    typer.echo(_render_run_history(rows))
+
+
 @account_app.command("summary")
 def account_summary(
     mode: RuntimeMode = typer.Option(..., "--mode"),
     run_id: str = typer.Option(..., "--run-id"),
     output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format"),
 ) -> None:
-    control = RunDaemonControlPlane(run_id, mode=mode)
+    control = RunDaemonControlPlane(run_id, mode=mode, root=_runtime_root())
     payload = RunAccountJournal(control.directory).read_current()
     _echo_account_payload("summary", payload, output_format=output_format)
 
@@ -144,7 +166,8 @@ def account_trades(
 def daemon(
     action: str = typer.Argument("status"),
     mode: RuntimeMode = typer.Option(..., "--mode"),
-    run_id: str = typer.Option(..., "--run-id"),
+    run_id: str | None = typer.Option(None, "--run-id"),
+    run_instance_id: str | None = typer.Option(None, "--run-instance-id", hidden=True),
     config_path: Path | None = typer.Option(None, "--config"),
     events: Path | None = typer.Option(None, "--events"),
     foreground: bool = typer.Option(False, "--foreground"),
@@ -163,6 +186,7 @@ def daemon(
         mode,
         action=action,
         run_id=run_id,
+        run_instance_id=run_instance_id,
         config_path=config_path,
         events=events,
         foreground=foreground,
@@ -208,7 +232,8 @@ def _daemon(
     mode: RuntimeMode,
     *,
     action: str,
-    run_id: str,
+    run_id: str | None,
+    run_instance_id: str | None,
     config_path: Path | None,
     events: Path | None,
     foreground: bool,
@@ -223,7 +248,10 @@ def _daemon(
     output_format: OutputFormat,
     tail_lines: int,
 ) -> None:
-    control = RunDaemonControlPlane(run_id, mode=mode)
+    run_id = _resolve_daemon_run_id(action, run_id=run_id, config_path=config_path)
+    if action == "start" and run_instance_id is None:
+        run_instance_id = _unique_run_instance_id()
+    control = RunDaemonControlPlane(run_id, mode=mode, root=_runtime_root(), instance_id=run_instance_id)
     if action == "start":
         _update_daemon_context(
             control,
@@ -290,6 +318,25 @@ def _daemon(
     raise typer.BadParameter(f"unsupported daemon action: {action}")
 
 
+def _resolve_daemon_run_id(action: str, *, run_id: str | None, config_path: Path | None) -> str:
+    if run_id:
+        return run_id
+    if action != "start":
+        raise typer.BadParameter("--run-id is required unless starting a configured run")
+    base = "kairos-run"
+    if config_path is not None:
+        try:
+            base = load_run_config(config_path).run_id
+        except Exception:
+            base = Path(config_path).stem
+    return base
+
+
+def _unique_run_instance_id() -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{stamp}-{uuid4().hex[:8]}"
+
+
 def _configured_daemon_target(
     mode: RuntimeMode,
     config_path: Path | None,
@@ -298,7 +345,7 @@ def _configured_daemon_target(
     if config_path is None:
         raise typer.BadParameter("--config is required for configured daemon runs")
     if mode is RuntimeMode.LIVE:
-        raise typer.BadParameter("live daemon targets are configured by live runtime adapters")
+        return _configured_live_target(config_path)
     if mode is RuntimeMode.PAPER:
         return _configured_streaming_paper_target(config_path)
     try:
@@ -422,7 +469,7 @@ def _echo_account_rows(
     output_format: OutputFormat,
     limit: int | None,
 ) -> None:
-    control = RunDaemonControlPlane(run_id, mode=mode)
+    control = RunDaemonControlPlane(run_id, mode=mode, root=_runtime_root())
     rows = RunAccountJournal(control.directory).read_rows(name, limit=limit)
     if _use_json_output(output_format):
         for row in rows:
@@ -467,6 +514,7 @@ def _run_list_row(payload: Mapping[str, object], *, index: int) -> dict[str, obj
         "index": index,
         "mode": payload.get("mode"),
         "run_id": payload.get("run_id"),
+        "run_instance_id": payload.get("run_instance_id") or "",
         "status": payload.get("status"),
         "phase": payload.get("phase"),
         "updated_at": payload.get("updated_at"),
@@ -482,6 +530,15 @@ def _render_run_list(rows: list[dict[str, object]]) -> str:
         return "Runs\n  no run daemons recorded"
     return "Runs\n" + _render_table(
         ("index", "mode", "run_id", "status", "updated_at", "strategy"),
+        rows,
+    )
+
+
+def _render_run_history(rows: list[dict[str, object]]) -> str:
+    if not rows:
+        return "Run History\n  no run history recorded"
+    return "Run History\n" + _render_table(
+        ("index", "mode", "run_id", "run_instance_id", "status", "updated_at", "strategy"),
         rows,
     )
 
@@ -921,7 +978,7 @@ class RunShellSession:
             index = parts.index("--mode")
             if index + 1 < len(parts):
                 mode = RuntimeMode(parts[index + 1])
-        statuses = list_run_daemons(mode=mode)
+        statuses = list_run_daemons(mode=mode, root=_runtime_root())
         self.run_choices = [
             _run_list_row(status.to_dict(), index=index)
             for index, status in enumerate(statuses, start=1)
@@ -1049,6 +1106,10 @@ def _option_value_int(parts: list[str], name: str) -> int | None:
         return None
 
 
+def _runtime_root() -> Path:
+    return load_config().resolve_path(".kairos/runtime")
+
+
 def _run_configured_mode(mode: RuntimeMode, config_path: Path, *, events: Path | None = None) -> dict[str, object]:
     try:
         configured = configured_event_mode(mode, config_path, events=events)
@@ -1062,6 +1123,16 @@ def _run_configured_mode(mode: RuntimeMode, config_path: Path, *, events: Path |
 def _configured_streaming_paper_target(config_path: Path) -> RunDaemonTarget:
     try:
         return configured_streaming_paper_target(
+            config_path,
+            exchange_factory=lambda venue: exchange(_exchange_name(venue), DriverName.ccxt),
+        )
+    except RunConfigurationError as error:
+        raise typer.BadParameter(str(error)) from error
+
+
+def _configured_live_target(config_path: Path) -> RunDaemonTarget:
+    try:
+        return configured_live_target(
             config_path,
             exchange_factory=lambda venue: exchange(_exchange_name(venue), DriverName.ccxt),
         )
