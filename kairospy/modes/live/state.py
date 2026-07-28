@@ -6,8 +6,7 @@ from pathlib import Path
 from typing import Mapping, Protocol
 
 from kairospy.core.execution import ExecutionCoordinator, ExecutionStateSnapshot
-
-from .private_stream import LivePrivateStreamState
+from kairospy.service.domains.account import LivePrivateStreamState
 
 
 @dataclass(frozen=True, slots=True)

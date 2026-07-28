@@ -1,6 +1,6 @@
 # KairosPy Architecture
 
-KairosPy is organized around a strategy-runtime product axis: strategy API, runtime orchestration, core domains, run modes, integrations, data, and surface.
+KairosPy is organized around a strategy-runtime product axis: strategy API, runtime orchestration, core domains, service orchestration, run modes, integrations, data storage, and surface.
 
 ## Package Boundaries
 
@@ -8,19 +8,37 @@ KairosPy is organized around a strategy-runtime product axis: strategy API, runt
   Owns the run-scoped data pipeline, strategy event loop, runtime events, event lines, component scheduling, system projections, and run profiles. Runtime code does not submit orders, parse venue payloads, or own market/account/execution domain views. External integrations, execution adapters, and account collectors feed runtime through one data pipeline boundary.
 
 - `kairospy.core.execution`
-  Owns the execution domain after a strategy emits an intent: order planning, order state transitions, fills, local ledger updates, reservations, and simulated execution models.
+  Owns the execution domain after a strategy emits an intent: order planning, order state transitions, fills, local ledger updates, reservations, broker gateway protocols, and execution state snapshots. Runtime-mode adapters, persistence, and simulation policy selection live above core.
 
 - `kairospy.core.account`
-  Owns account identity, balances, positions, margin snapshots, account projections, reservations, ledgers, and provider-neutral account bootstrap orchestration.
+  Owns account identity, balances, positions, margin snapshots, account projections, reservations, ledgers, and provider-neutral account projection rules.
 
 - `kairospy.integrations`
-  Owns external system adapters. Provider-specific parsing and private stream ingestion belong here, such as `kairospy.integrations.ccxt`. Integration adapters normalize provider payloads into stable core-domain update models such as `MarketUpdate` before domain packages apply them.
+  Owns external system adapters. Exchange connectors represent venues that own order matching; broker adapters are account/order gateways used for market access and execution; provider adapters supply market/reference data without order routing. Provider-specific parsing, lifecycle row mapping, and private stream ingestion belong under provider/connector payload modules such as `kairospy.integrations.payloads.ccxt_market`, `kairospy.integrations.payloads.ccxt_execution`, `kairospy.integrations.connectors.binance.reference`, and `kairospy.integrations.providers.massive_reference`. Integration adapters normalize provider payloads into stable core-domain update models such as `MarketUpdate` before domain packages apply them.
 
 - `kairospy.core.market`
-  Owns provider-neutral market observations, quote/book/bar/trade/rate models, market subscription specifications, market row encoders, and market-specific data binding helpers. Market code can depend on reference market handles, but it does not own durable storage, runtime event loops, or provider I/O.
+  Owns provider-neutral market observations, quote/book/bar/trade/rate models, market subscription specifications, market row encoders, and dataset/stream identity functions for explicit market references. Market code can depend on reference market handles, but it does not own durable storage, runtime event loops, data-context binding, or provider I/O.
+
+- `kairospy.service.domains.execution`
+  Owns execution use-case adapters and persistence around core execution state: live intent execution against broker gateways, simulated execution policies for backtest/paper runs, and JSON execution state storage.
+
+- `kairospy.service.domains.market`
+  Owns user-facing market data requests and orchestration: `MarketDataSpec`, market data resolution, data-context binding helpers, derived dataset/stream names, historical download/read coordination, live persistence, replay timing, and subscription stream lookup. It composes `core.market`, `core.reference`, and `data`; durable storage remains in `kairospy.data`, and provider payload parsing remains in `kairospy.integrations`.
+
+- `kairospy.service.domains.account`
+  Owns account startup, reconciliation, snapshot gateway implementations, and live private stream collection use cases: fetching venue balances/open orders through injected gateways, applying provider-neutral parsers, importing open orders into execution state, classifying account stream balance deltas, and returning bootstrap/reconciliation results. Account models, ledgers, and projections remain in `kairospy.core.account`.
+
+- `kairospy.service.domains.reference`
+  Owns reference catalog refresh use cases: loading stored catalogs, building snapshots from provider rows, applying provider-neutral snapshots through core reference merge rules, saving catalogs, and appending lifecycle events. Reference identity, product identity helpers, and catalog diff/merge rules remain in `kairospy.core.reference`.
+
+- `kairospy.service.modes.backtest`
+  Owns backtest mode configuration assembly: loading run config, constructing data context, resolving event or dataset sources, discovering startup subscriptions, loading strategies, and returning a configured backtest run. Backtest simulation behavior remains in `kairospy.modes.backtest`.
+
+- `kairospy.service.operations.run`
+  Owns operational run configuration across modes: event-file run assembly, configured daemon targets, and streaming paper daemon source binding. It sits above mode services because it coordinates run control and daemon execution.
 
 - `kairospy.core.reference`
-  Owns provider-neutral asset, instrument, listing, market, lifecycle, store, universe, and market resolution models. Reference models are the canonical source for market and instrument identity. `MarketResolver` converts user-facing symbols and aliases into runtime `MarketRef` handles derived from reference market definitions or explicit ephemeral defaults for local simulation.
+  Owns provider-neutral asset, instrument, listing, market, lifecycle, universe, market resolution models, product identity helpers, and catalog state transitions. Reference models are the canonical source for market and instrument identity. `MarketResolver` converts user-facing symbols and aliases into runtime `MarketRef` handles derived from reference market definitions or explicit ephemeral defaults for local simulation.
 
 - `kairospy.core.views`
   Owns shared view primitives: `ViewSchema`, `ViewFieldSchema`, `ViewEnvelope`, `ViewRegistry`, `ViewStore`, and view hashes. Strategy can re-export these for author ergonomics, but core domains must import them from `core.views`.
@@ -35,7 +53,7 @@ KairosPy is organized around a strategy-runtime product axis: strategy API, runt
   Owns the strategy author protocol and re-exports: stable `StrategySignal` trigger notifications, hook contracts, control request types, and strategy-facing view helpers. It does not own runtime context/control implementation and does not import runtime implementation modules.
 
 - `kairospy.modes.backtest`
-  Owns historical simulation entry points, simulated account configuration, backtest results, and metrics. Shared simulated execution models live in `kairospy.core.execution`.
+  Owns historical simulation entry points, simulated account configuration, backtest results, and metrics. Shared simulated execution policies live in `kairospy.service.domains.execution`.
 
 - `kairospy.modes.live`
   Owns live runtime binding: gateway protocols, account reconciliation, private account stream collection, and live engine orchestration. Provider payload parsing is injected through adapters from `kairospy.integrations`.
@@ -51,8 +69,11 @@ KairosPy is organized around a strategy-runtime product axis: strategy API, runt
 - Use `Runtime` for strategy event-loop concerns.
 - Use `RunProfile` for mode declarations such as backtest, paper, and live.
 - Use `Execution` for intent-to-order-to-fill behavior.
-- Use `Account` for balances, positions, snapshots, projections, and account bootstrap.
+- Use `Account` for balances, positions, snapshots, and projections.
 - Use `Integration` for external systems and provider-specific payloads.
+- Use `Exchange` for a venue that owns matching and market identity.
+- Use `Broker` for a market/account/order gateway used to fetch account state and place/cancel orders.
+- Use `Provider` for market/reference data sources that do not route orders.
 - Use `Gateway` for external I/O protocols.
 - Use `PayloadAdapter` for provider payload normalization and ingestion.
 - Use `Projection` for state derived from events.

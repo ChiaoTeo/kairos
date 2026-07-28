@@ -4,8 +4,10 @@ import asyncio
 from tempfile import TemporaryDirectory
 
 from kairospy.data import DataStore
-from kairospy.integrations import Binance, BinanceBroker, CcxtDriver
+from kairospy.integrations import BinanceBroker, BinanceMarketDataConnector, CcxtDriver
+from kairospy.integrations.payloads import ccxt_ticker_update, ephemeral_market_ref
 from kairospy.data import DataSink
+from kairospy.core.market import FIELD_BAR_CLOSE, FIELD_QUOTE_ASK, FIELD_QUOTE_BID, MarketUpdate
 
 
 class FakeSyncExchange:
@@ -152,7 +154,7 @@ def _ws_driver() -> CcxtDriver:
 
 
 def test_binance_exchange_uses_ccxt_driver_for_historical_ohlcv_download() -> None:
-    rows = list(Binance(_driver()).fetch_ohlcv("BTC/USDT", timeframe="1m", limit=100))
+    rows = list(BinanceMarketDataConnector(_driver()).fetch_ohlcv("BTC/USDT", timeframe="1m", limit=100))
 
     assert rows[0] == {
         "time": "2026-01-01T00:00:00+00:00",
@@ -178,17 +180,27 @@ def test_historical_rows_are_persisted_by_data_store_not_exchange_or_driver() ->
     with TemporaryDirectory() as temporary:
         store = DataStore(temporary, storage_format="jsonl")
 
-        rows = Binance(_driver()).fetch_ohlcv("BTC/USDT")
+        rows = BinanceMarketDataConnector(_driver()).fetch_ohlcv("BTC/USDT")
         store.write("market.ohlcv.btc_usdt.1m", rows)
 
         assert [row["close"] for row in store.read_rows("market.ohlcv.btc_usdt.1m")] == ["105", "106"]
+
+
+def test_binance_exchange_exposes_historical_ohlcv_updates() -> None:
+    updates = list(BinanceMarketDataConnector(_driver()).fetch_ohlcv_updates("BTC/USDT", timeframe="1m", limit=100))
+
+    assert all(isinstance(update, MarketUpdate) for update in updates)
+    assert updates[0].kind == "ohlcv"
+    assert updates[0].market_id == "market:binance:spot:btc_usdt"
+    assert updates[0].fields[FIELD_BAR_CLOSE].normalize() == 105
+    assert updates[1].fields[FIELD_BAR_CLOSE].normalize() == 106
 
 
 def test_binance_exchange_uses_ccxt_driver_for_live_ticker_stream() -> None:
     async def scenario() -> None:
         events = [
             event
-            async for event in Binance(_driver()).watch_ticker(
+            async for event in BinanceMarketDataConnector(_driver()).watch_ticker(
                 "BTC/USDT",
                 params={"max_events": 1, "poll_seconds": 0},
             )
@@ -213,13 +225,48 @@ def test_binance_exchange_uses_ccxt_driver_for_live_ticker_stream() -> None:
     asyncio.run(scenario())
 
 
+def test_binance_exchange_exposes_live_ticker_updates() -> None:
+    async def scenario() -> None:
+        updates = [
+            update
+            async for update in BinanceMarketDataConnector(_driver()).watch_ticker_updates(
+                "BTC/USDT",
+                params={"max_events": 1, "poll_seconds": 0},
+            )
+        ]
+
+        assert len(updates) == 1
+        assert isinstance(updates[0], MarketUpdate)
+        assert updates[0].kind == "ticker"
+        assert updates[0].market_key == "binance_spot_btc_usdt"
+        assert updates[0].fields[FIELD_QUOTE_BID].normalize() == 100
+        assert updates[0].fields[FIELD_QUOTE_ASK].normalize() == 101
+
+    asyncio.run(scenario())
+
+
+def test_ccxt_market_payload_adapter_emits_core_market_update() -> None:
+    update = ccxt_ticker_update(
+        {"timestamp": 1767225600000, "bid": "100", "ask": "101"},
+        market=ephemeral_market_ref(venue="binance", market="spot", source_symbol="BTC/USDT"),
+    )
+
+    assert isinstance(update, MarketUpdate)
+    assert update.subject_type == "instrument"
+    assert update.subject_id == "instrument:spot:btc:usdt"
+    assert update.market_id == "market:binance:spot:btc_usdt"
+    assert update.kind == "ticker"
+    assert update.fields[FIELD_QUOTE_BID].normalize() == 100
+    assert update.fields[FIELD_QUOTE_ASK].normalize() == 101
+
+
 def test_live_orderbook_can_be_persisted_to_data_store() -> None:
     async def scenario() -> None:
         with TemporaryDirectory() as temporary:
             store = DataStore(temporary, storage_format="jsonl")
             sink = DataSink(store, "market.orderbook.btc_usdt")
 
-            count = await Binance(_driver()).persist_order_book(
+            count = await BinanceMarketDataConnector(_driver()).persist_order_book(
                 "BTC/USDT",
                 sink,
                 book_limit=5,
@@ -247,7 +294,7 @@ def test_binance_exchange_uses_ccxt_driver_for_live_trades_stream() -> None:
     async def scenario() -> None:
         events = [
             event
-            async for event in Binance(_driver()).watch_trades(
+            async for event in BinanceMarketDataConnector(_driver()).watch_trades(
                 "BTC/USDT",
                 params={"max_events": 1, "poll_seconds": 0},
             )
@@ -275,7 +322,7 @@ def test_binance_exchange_uses_ccxt_driver_for_live_trades_stream() -> None:
 
 def test_binance_exchange_prefers_ccxt_pro_watch_methods_for_live_streams() -> None:
     async def scenario() -> None:
-        exchange = Binance(_ws_driver())
+        exchange = BinanceMarketDataConnector(_ws_driver())
 
         ticker = [
             event
@@ -311,7 +358,13 @@ def test_ccxt_driver_can_require_websocket_live_streams() -> None:
     async def scenario() -> None:
         driver = CcxtDriver(async_exchange_factory=lambda exchange_id: FakeAsyncExchange(), require_websocket=True)
         try:
-            _ = [event async for event in Binance(driver).watch_ticker("BTC/USDT", params={"max_events": 1, "poll_seconds": 0})]
+            _ = [
+                event
+                async for event in BinanceMarketDataConnector(driver).watch_ticker(
+                    "BTC/USDT",
+                    params={"max_events": 1, "poll_seconds": 0},
+                )
+            ]
         except Exception as error:
             assert error.__class__.__name__ == "_WsUnavailable"
         else:

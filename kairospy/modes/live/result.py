@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
-from kairospy.core.account import AccountBootstrapResult, AccountContext, AccountCurrentView, AccountDifference
+from kairospy.core.account import AccountContext, AccountCurrentView, AccountDifference
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.runtime import RuntimeDataEnvelope, StrategyRunResult
+from kairospy.service.domains.account import AccountBootstrapResult
 
 
 @dataclass(frozen=True, slots=True)

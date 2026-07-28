@@ -9,7 +9,7 @@ from .identity import InstrumentId, ListingId, MarketId
 from .model import LifecycleEvent, LifecycleEventType
 
 
-class CorporateActionService:
+class CorporateActionTransitions:
     def __init__(self, catalog: ReferenceCatalog) -> None:
         self.catalog = catalog
 
@@ -81,4 +81,4 @@ class CorporateActionService:
         )
 
 
-__all__ = ["CorporateActionService"]
+__all__ = ["CorporateActionTransitions"]

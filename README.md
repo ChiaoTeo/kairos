@@ -8,9 +8,13 @@ The project is organized around one product axis:
 - `kairospy.runtime`: strategy event loop, runtime data pipeline, event lines, component scheduling, and run profiles.
 - `kairospy.core`: stable trading domains.
 - `kairospy.core.market`: provider-neutral market observations, quote/book/bar/trade/rate models, subscription specifications, and row encoders.
+- `kairospy.service.domains.market`: user-facing market data specs, resolution, historical read/download coordination, live persistence, and replay.
 - `kairospy.core.execution`: intent-to-order-to-fill behavior, execution state, local ledger updates, and simulated/live execution adapters.
-- `kairospy.core.account`: account identity, balances, positions, snapshots, projections, reservations, ledgers, and provider-neutral account bootstrap.
+- `kairospy.core.account`: account identity, balances, positions, snapshots, projections, reservations, and ledgers.
 - `kairospy.core.reference`: provider-neutral instrument, listing, market, lifecycle, resolver, store, and universe models.
+- `kairospy.service.domains.account`, `kairospy.service.domains.market`, and `kairospy.service.domains.reference`: domain use-case orchestration for account, market data, and reference data.
+- `kairospy.service.modes.backtest`: backtest mode config assembly.
+- `kairospy.service.operations.run`: run and daemon operational assembly across modes.
 - `kairospy.core.intent` and `kairospy.core.order`: strategy intent and order state models.
 - `kairospy.core.views`: shared view schema, envelope, registry, and store primitives.
 - `kairospy.modes`: run modes that compose strategy, runtime, core, data, and integrations.
@@ -38,9 +42,9 @@ The CLI currently exposes focused product surfaces:
 
 ```bash
 kairospy --help
-kairospy data download --symbol BTC/USDT --dataset market.ohlcv.binance.btc_usdt.1m
-kairospy data read market.ohlcv.binance.btc_usdt.1m
-kairospy data replay market.trades.binance.btc_usdt --speed 0
+kairospy data download --symbol BTC/USDT
+kairospy data read market.ohlcv.binance_spot_btc_usdt.1m
+kairospy data replay market.trades.binance_spot_btc_usdt --speed 0
 kairospy reference markets --active-only
 kairospy streams print --kind ticker --symbol BTC/USDT --limit 1
 ```

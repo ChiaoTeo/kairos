@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.core.market.records import orderbook_record
+from kairospy.service.domains.market.records import orderbook_record
 
 
 def test_orderbook_record_accepts_missing_depth_and_keeps_flat_best_quote_fields() -> None:

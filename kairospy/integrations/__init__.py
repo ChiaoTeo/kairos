@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from .brokers import BinanceBroker, IBKR
-from .binance_lifecycle import delist_schedule_events
+from .connectors.broker import IBKR
+from .connectors.exchange.binance import BinanceBroker
+from .connectors.exchange.binance.reference import delist_schedule_events
 from .drivers import BinanceReferenceDriver, CcxtDriver, MassiveDriver
-from .equities import EquityReferenceSnapshotProvider, catalog_from_equity_rows
-from .exchanges import Binance, Hyperliquid, Nasdaq
-from .instruments import InstrumentReferenceSnapshotProvider, ReferenceSnapshot, catalog_from_market_rows, market_definitions_from_rows
-from .massive_lifecycle import (
+from .equities import EquityReferenceSnapshotProvider
+from .connectors import Binance, BinanceMarketDataConnector, Hyperliquid, HyperliquidMarketDataConnector, OkxMarketDataConnector
+from .instruments import InstrumentReferenceSnapshotProvider
+from .connectors.provider import Massive
+from .connectors.provider.massive_reference import (
     massive_corporate_action_events,
     massive_dividend_events,
     massive_split_events,
@@ -20,41 +22,35 @@ from .model import (
     IntegrationOrderUpdate,
     IntegrationReferenceUpdate,
 )
-from .protocols import Broker, HistoricalMarketData, InstrumentProvider, Integration, LiveMarketData
-from .reference import EquityProviderRefreshService, InstrumentProviderRefreshService
-from .providers import Massive
+from .protocols import BrokerClient, HistoricalMarketDataClient, IntegrationAdapter, LiveMarketDataFeed, ReferenceDataClient
 from .registry import IntegrationRegistry
 
 __all__ = [
     "Binance",
     "BinanceBroker",
+    "BinanceMarketDataConnector",
     "BinanceReferenceDriver",
-    "Broker",
+    "BrokerClient",
     "CcxtDriver",
     "EquityReferenceSnapshotProvider",
-    "EquityProviderRefreshService",
     "Hyperliquid",
-    "HistoricalMarketData",
+    "HyperliquidMarketDataConnector",
+    "HistoricalMarketDataClient",
     "IBKR",
     "INTEGRATION_DOMAIN_ACCOUNT",
     "INTEGRATION_DOMAIN_ORDER",
     "INTEGRATION_DOMAIN_REFERENCE",
-    "InstrumentProvider",
+    "ReferenceDataClient",
     "InstrumentReferenceSnapshotProvider",
-    "InstrumentProviderRefreshService",
-    "Integration",
+    "IntegrationAdapter",
     "IntegrationAccountUpdate",
     "IntegrationOrderUpdate",
     "IntegrationRegistry",
     "IntegrationReferenceUpdate",
-    "LiveMarketData",
+    "LiveMarketDataFeed",
     "Massive",
     "MassiveDriver",
-    "Nasdaq",
-    "ReferenceSnapshot",
-    "catalog_from_market_rows",
-    "catalog_from_equity_rows",
-    "market_definitions_from_rows",
+    "OkxMarketDataConnector",
     "delist_schedule_events",
     "massive_corporate_action_events",
     "massive_dividend_events",

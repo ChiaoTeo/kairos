@@ -10,9 +10,6 @@ from kairospy.core.account import (
     AccountContext,
     AccountProjection,
     AccountSnapshot,
-    AccountBootstrapParser,
-    bootstrap_account,
-    compare_account_state,
 )
 from kairospy.context import DataContext, StrategyContext
 from kairospy.core.reference import MarketResolver
@@ -25,10 +22,17 @@ from kairospy.runtime import (
     system_data_envelope,
 )
 from kairospy.core.intent import TradeIntent
+from kairospy.service.domains.account import (
+    AccountBootstrapParser,
+    AccountReconciliationService,
+    LivePrivateStreamCollector,
+    LivePrivateStreamPayloadAdapter,
+    bootstrap_account,
+)
 from kairospy.strategy import Strategy
-from kairospy.core.execution import ExecutionCoordinator, LiveExecutionAdapter
+from kairospy.core.execution import ExecutionCoordinator
+from kairospy.service.domains.execution import LiveExecutionAdapter
 from .gateway import LiveAccountGateway
-from .private_stream import LivePrivateStreamCollector, LivePrivateStreamPayloadAdapter
 from .result import (
     LiveLoopHeartbeat,
     LiveLoopIteration,
@@ -171,29 +175,21 @@ class LiveEngine:
         balance_params: Mapping[str, object] | None = None,
         order_params: Mapping[str, object] | None = None,
     ) -> LiveReconciliationResult:
-        observed_at = at or datetime.now(timezone.utc)
-        if observed_at.tzinfo is None:
-            raise ValueError("reconciliation timestamp must be timezone-aware")
-        previous = self._last_projection
-        bootstrap = bootstrap_account(
+        result = AccountReconciliationService(
             self.account,
             self.gateway,
             self.coordinator,
             self._account_payload_adapter,
+            self._account_event,
+        ).reconcile(
+            previous=self._last_projection,
             symbol=symbol,
-            at=observed_at,
+            at=at,
             balance_params=balance_params,
             order_params=order_params,
         )
-        differences = () if previous is None else compare_account_state(previous, bootstrap.snapshot)
-        self._remember(bootstrap.snapshot, bootstrap.projection)
-        result = LiveReconciliationResult(
-            bootstrap,
-            differences,
-            self._account_event(observed_at, bootstrap.snapshot),
-        )
         self._save_state()
-        return result
+        return LiveReconciliationResult(result.bootstrap, result.differences, result.event)
 
     def run_loop(
         self,

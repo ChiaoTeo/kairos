@@ -15,14 +15,16 @@ from kairospy.core.account import (
     MarginState,
     OpenOrderSnapshot,
     ReservationStatus,
-    bootstrap_account,
     project_account,
 )
-from kairospy.core.execution import FillReport, ExecutionCoordinator, JsonExecutionStateStore
-from kairospy.integrations.ccxt import CcxtAccountBootstrapParser
+from kairospy.core.execution import FillReport, ExecutionCoordinator
+from kairospy.service.domains.execution import JsonExecutionStateStore
+from kairospy.integrations.payloads import CcxtAccountBootstrapParser
 from kairospy.core.reference import MarketResolver
-from kairospy.integrations.ccxt.private_events import ingest_ccxt_order_update
+from kairospy.core.execution import ExecutionUpdate
+from kairospy.integrations.payloads.ccxt_execution import ccxt_order_update, ingest_ccxt_order_update
 from kairospy.core.order import OrderEvent, OrderEventKind, OrderOrigin, OrderRequest, OrderSide, OrderStatus
+from kairospy.service.domains.account import bootstrap_account
 
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -561,6 +563,30 @@ def test_ccxt_order_ws_update_imports_unknown_active_external_order() -> None:
     assert state.local_order_id == "external:binance:main:spot:venue-ws-1"
     assert state.status is OrderStatus.PARTIALLY_FILLED
     assert state.remaining_quantity == Decimal("0.8")
+
+
+def test_ccxt_order_payload_adapter_emits_core_execution_update() -> None:
+    update = ccxt_order_update(
+        _context(),
+        {
+            "id": "venue-ws-1",
+            "symbol": "BTC/USDT",
+            "side": "sell",
+            "type": "limit",
+            "amount": "1",
+            "filled": "0.2",
+            "remaining": "0.8",
+            "price": "100",
+            "status": "open",
+            "timestamp": 1767225600000,
+        },
+    )
+
+    assert isinstance(update, ExecutionUpdate)
+    assert update.venue_order_id == "venue-ws-1"
+    assert update.instrument_id == "instrument:unknown:btc:usdt"
+    assert update.filled_quantity == Decimal("0.2")
+    assert update.remaining_quantity == Decimal("0.8")
 
 
 def test_ccxt_order_ws_update_advances_known_system_order_by_venue_id() -> None:

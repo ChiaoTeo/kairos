@@ -19,7 +19,9 @@ from kairospy.core.account import (
     reserve_cash_order,
     reserve_margin_order,
 )
-from kairospy.core.order import OrderEvent, OrderEventKind, OrderJournal, OrderRequest, OrderSide, OrderState, OrderType
+from kairospy.core.order import OrderEvent, OrderEventKind, OrderJournal, OrderRequest, OrderSide, OrderState, OrderStatus, OrderType
+
+from .updates import ExecutionUpdate
 
 
 class BrokerGateway(Protocol):
@@ -264,6 +266,41 @@ class ExecutionCoordinator:
             self._consume_reservation(updated)
         return updated
 
+    def apply_execution_update(self, update: ExecutionUpdate) -> OrderState:
+        state = _known_order(self.orders, update)
+        if state is None:
+            return self._import_execution_update(update)
+        if update.fill_quantity is not None and update.fill_price is not None:
+            return self.ingest_fill(
+                FillReport(
+                    state.request.client_order_id,
+                    update.observed_at,
+                    update.fill_quantity,
+                    update.fill_price,
+                    update.settlement_currency or _settlement_currency(state.request.instrument_id),
+                    cash_delta=update.cash_delta
+                    if update.cash_delta is not None
+                    else _cash_delta(state.request.side, update.fill_quantity, update.fill_price),
+                    fee_currency=update.fee_currency,
+                    fee_amount=update.fee_amount,
+                    cumulative_filled_quantity=update.filled_quantity,
+                )
+            )
+        if update.kind is OrderEventKind.ACKNOWLEDGED and state.status is OrderStatus.ACKNOWLEDGED:
+            return state
+        return self.orders.record(
+            OrderEvent(
+                state.request.client_order_id,
+                update.kind,
+                update.observed_at,
+                venue_order_id=update.venue_order_id or None,
+                filled_quantity=update.filled_quantity
+                if update.kind in {OrderEventKind.PARTIALLY_FILLED, OrderEventKind.FILLED}
+                else None,
+                reason=update.reason,
+            )
+        )
+
     def _release_reservation(self, state: OrderState) -> None:
         reservation_id = state.request.reservation_id or state.request.client_order_id
         try:
@@ -284,6 +321,27 @@ class ExecutionCoordinator:
         except KeyError:
             return
 
+    def _import_execution_update(self, update: ExecutionUpdate) -> OrderState:
+        if update.kind not in {OrderEventKind.ACKNOWLEDGED, OrderEventKind.PARTIALLY_FILLED}:
+            raise LookupError(f"terminal execution update has no known local order: {update.venue_order_id}")
+        if update.context is None:
+            raise LookupError(f"execution update has no account context for unknown order: {update.venue_order_id}")
+        if update.instrument_id is None or update.side is None or update.quantity is None or update.order_type is None:
+            raise ValueError("execution update cannot import an unknown order without order identity fields")
+        return self.orders.import_venue_open_order(
+            context=update.context,
+            venue_order_id=update.venue_order_id,
+            instrument_id=update.instrument_id,
+            market_id=update.market_id,
+            side=update.side,
+            quantity=update.quantity,
+            order_type=update.order_type,
+            limit_price=update.limit_price if update.order_type is OrderType.LIMIT else None,
+            status=OrderStatus.PARTIALLY_FILLED if update.kind is OrderEventKind.PARTIALLY_FILLED else OrderStatus.ACKNOWLEDGED,
+            filled_quantity=update.filled_quantity or Decimal("0"),
+            observed_at=update.observed_at,
+        )
+
 
 def cash_order_request(
     *,
@@ -296,6 +354,34 @@ def cash_order_request(
     limit_price: Decimal | None = None,
 ) -> OrderRequest:
     return OrderRequest(client_order_id, context, instrument_id, side, quantity, order_type, limit_price)
+
+
+def _known_order(orders: OrderJournal, update: ExecutionUpdate) -> OrderState | None:
+    if update.client_order_id:
+        try:
+            return orders.get(update.client_order_id)
+        except LookupError:
+            pass
+    if update.venue_order_id:
+        try:
+            return orders.get_by_venue_order_id(update.venue_order_id)
+        except LookupError:
+            pass
+    return None
+
+
+def _settlement_currency(symbol: str) -> str:
+    if "/" not in symbol:
+        parts = symbol.split(":")
+        if len(parts) >= 4 and parts[0] == "instrument":
+            return parts[-1].upper() or "USD"
+        return "USD"
+    return symbol.split("/", 1)[1].split(":", 1)[0] or "USD"
+
+
+def _cash_delta(side: OrderSide, quantity: Decimal, price: Decimal) -> Decimal:
+    cost = quantity * price
+    return cost if side is OrderSide.SELL else -cost
 
 
 __all__ = ["BrokerGateway", "ExecutionCoordinator", "FillReport", "cash_order_request"]

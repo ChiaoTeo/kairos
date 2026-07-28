@@ -7,8 +7,15 @@ import typer
 
 from kairospy.config import load_config
 from kairospy.data import DataStore
-from kairospy.integrations import Binance, CcxtDriver, Hyperliquid, Massive, MassiveDriver
-from kairospy.core.reference import ReferenceStore
+from kairospy.integrations import (
+    BinanceMarketDataConnector,
+    CcxtDriver,
+    HyperliquidMarketDataConnector,
+    Massive,
+    MassiveDriver,
+    OkxMarketDataConnector,
+)
+from kairospy.service.domains.reference import ReferenceStore
 
 
 class StorageFormat(str, Enum):
@@ -19,6 +26,8 @@ class StorageFormat(str, Enum):
 class ExchangeName(str, Enum):
     binance = "binance"
     hyperliquid = "hyperliquid"
+    okex = "okex"
+    okx = "okx"
 
 
 class DriverName(str, Enum):
@@ -43,13 +52,18 @@ def reference_store(root: str | Path | None) -> ReferenceStore:
     return ReferenceStore(resolved_root)
 
 
-def exchange(exchange_name: ExchangeName, driver_name: DriverName) -> Binance | Hyperliquid:
+def exchange(
+    exchange_name: ExchangeName,
+    driver_name: DriverName,
+) -> BinanceMarketDataConnector | HyperliquidMarketDataConnector | OkxMarketDataConnector:
     if driver_name is not DriverName.ccxt:
         raise typer.BadParameter("only ccxt driver is supported")
     if exchange_name is ExchangeName.binance:
-        return Binance(CcxtDriver())
+        return BinanceMarketDataConnector(CcxtDriver())
     if exchange_name is ExchangeName.hyperliquid:
-        return Hyperliquid(CcxtDriver())
+        return HyperliquidMarketDataConnector(CcxtDriver())
+    if exchange_name in (ExchangeName.okx, ExchangeName.okex):
+        return OkxMarketDataConnector()
     raise typer.BadParameter(f"unsupported exchange: {exchange_name.value}")
 
 

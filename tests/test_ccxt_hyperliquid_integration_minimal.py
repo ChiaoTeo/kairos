@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from kairospy.integrations import CcxtDriver, Hyperliquid
+from kairospy.integrations import CcxtDriver, HyperliquidMarketDataConnector
+from kairospy.core.market import FIELD_QUOTE_ASK, FIELD_QUOTE_BID, MarketUpdate
 from kairospy.core.reference import MarketRef
 from kairospy.surface.runtime import DriverName, ExchangeName, exchange
 
@@ -50,7 +51,7 @@ def test_hyperliquid_exchange_uses_ccxt_driver_and_normalizes_bare_symbol() -> N
     async def scenario() -> None:
         events = [
             event
-            async for event in Hyperliquid(
+            async for event in HyperliquidMarketDataConnector(
                 CcxtDriver(async_exchange_factory=async_exchange_factory),
             ).watch_ticker(
                 "BTC",
@@ -79,6 +80,35 @@ def test_hyperliquid_exchange_uses_ccxt_driver_and_normalizes_bare_symbol() -> N
     assert seen_exchange_ids == ["hyperliquid"]
 
 
+def test_hyperliquid_exchange_exposes_ticker_updates_with_normalized_symbol() -> None:
+    seen_exchange_ids: list[str] = []
+
+    def async_exchange_factory(exchange_id: str) -> FakeAsyncExchange:
+        seen_exchange_ids.append(exchange_id)
+        return FakeAsyncExchange()
+
+    async def scenario() -> None:
+        updates = [
+            update
+            async for update in HyperliquidMarketDataConnector(
+                CcxtDriver(async_exchange_factory=async_exchange_factory),
+            ).watch_ticker_updates(
+                "BTC",
+                params={"max_events": 1, "poll_seconds": 0},
+            )
+        ]
+
+        assert len(updates) == 1
+        assert isinstance(updates[0], MarketUpdate)
+        assert updates[0].market_id == "market:hyperliquid:derivative:btc_usdc_usdc"
+        assert updates[0].fields[FIELD_QUOTE_BID].normalize() == 100
+        assert updates[0].fields[FIELD_QUOTE_ASK].normalize() == 101
+
+    asyncio.run(scenario())
+
+    assert seen_exchange_ids == ["hyperliquid"]
+
+
 def test_hyperliquid_fetch_quote_uses_ccxt_ticker_for_clock_requests() -> None:
     seen_exchange_ids: list[str] = []
 
@@ -87,7 +117,7 @@ def test_hyperliquid_fetch_quote_uses_ccxt_ticker_for_clock_requests() -> None:
         return FakeSyncExchange()
 
     market = MarketRef.ephemeral(venue="hyperliquid", market="derivative", source_symbol="BTC")
-    row = Hyperliquid(CcxtDriver(exchange_factory=exchange_factory)).fetch_quote(market)
+    row = HyperliquidMarketDataConnector(CcxtDriver(exchange_factory=exchange_factory)).fetch_quote(market)
 
     assert seen_exchange_ids == ["hyperliquid"]
     assert row == {
@@ -107,8 +137,25 @@ def test_hyperliquid_fetch_quote_uses_ccxt_ticker_for_clock_requests() -> None:
     }
 
 
+def test_hyperliquid_fetch_quote_update_uses_core_market_update() -> None:
+    seen_exchange_ids: list[str] = []
+
+    def exchange_factory(exchange_id: str) -> FakeSyncExchange:
+        seen_exchange_ids.append(exchange_id)
+        return FakeSyncExchange()
+
+    market = MarketRef.ephemeral(venue="hyperliquid", market="derivative", source_symbol="BTC")
+    update = HyperliquidMarketDataConnector(CcxtDriver(exchange_factory=exchange_factory)).fetch_quote_update(market)
+
+    assert seen_exchange_ids == ["hyperliquid"]
+    assert isinstance(update, MarketUpdate)
+    assert update.market_key == "hyperliquid_derivative_btc_usdc_usdc"
+    assert update.fields[FIELD_QUOTE_BID].normalize() == 100
+    assert update.fields[FIELD_QUOTE_ASK].normalize() == 101
+
+
 def test_runtime_constructs_hyperliquid_ccxt_exchange() -> None:
     integration = exchange(ExchangeName.hyperliquid, DriverName.ccxt)
 
-    assert isinstance(integration, Hyperliquid)
+    assert isinstance(integration, HyperliquidMarketDataConnector)
     assert integration.exchange_id == "hyperliquid"

@@ -5,7 +5,8 @@ from datetime import datetime
 from decimal import Decimal
 
 from kairospy.core.account import AccountContext, AccountCurrentView
-from kairospy.core.execution import ExecutionCoordinator, SimulatedFill
+from kairospy.core.execution import ExecutionCoordinator
+from kairospy.service.domains.execution import SimulatedFill
 from kairospy.runtime import StrategyRunResult
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from kairospy.integrations import Binance, BinanceReferenceDriver, CcxtDriver
+from kairospy.integrations import BinanceMarketDataConnector, BinanceReferenceDriver, CcxtDriver
 from kairospy.core.reference import LifecycleEventType
 
 
@@ -49,7 +49,7 @@ def test_binance_delist_schedule_maps_to_reference_events() -> None:
     def http_get(url, headers):
         return [{"delistTime": 1767225600000, "symbols": ["OLD/USDT"]}]
 
-    binance = Binance(
+    binance = BinanceMarketDataConnector(
         CcxtDriver(exchange_factory=lambda exchange_id: FakeMarketExchange()),
         BinanceReferenceDriver(http_get=http_get),
     )

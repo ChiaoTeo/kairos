@@ -5,10 +5,11 @@ from tempfile import TemporaryDirectory
 
 from kairospy.context import DataContext
 from kairospy.data import DataStore
-from kairospy.core.market import bind_market_data
-from kairospy.integrations import catalog_from_market_rows
 from kairospy.core.market import FIELD_QUOTE_ASK, FIELD_QUOTE_BID, MarketSubscriptionRegistry
-from kairospy.core.reference import MarketResolver, ReferenceStore
+from kairospy.core.reference import MarketResolver
+from kairospy.service.domains.market import bind_market_data
+from kairospy.service.domains.reference import catalog_from_market_rows
+from kairospy.service.domains.reference import ReferenceStore
 
 
 def main() -> None:

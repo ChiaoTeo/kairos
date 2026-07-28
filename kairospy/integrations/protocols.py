@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import AsyncIterator, Iterable, Mapping, Protocol
 
 
-class Integration(Protocol):
+class IntegrationAdapter(Protocol):
     name: str
 
 
-class HistoricalMarketData(Protocol):
+class HistoricalMarketDataClient(Protocol):
     def fetch_ohlcv(
         self,
         symbol: str,
@@ -21,7 +21,7 @@ class HistoricalMarketData(Protocol):
         ...
 
 
-class LiveMarketData(Protocol):
+class LiveMarketDataFeed(Protocol):
     def watch_ticker(
         self,
         symbol: str,
@@ -50,7 +50,7 @@ class LiveMarketData(Protocol):
         ...
 
 
-class InstrumentProvider(Protocol):
+class ReferenceDataClient(Protocol):
     def fetch_markets(
         self,
         *,
@@ -59,7 +59,7 @@ class InstrumentProvider(Protocol):
         ...
 
 
-class Broker(Protocol):
+class BrokerClient(Protocol):
     def create_order(
         self,
         symbol: str,
@@ -83,3 +83,12 @@ class Broker(Protocol):
 
     def fetch_balance(self, *, params: Mapping[str, object] | None = None) -> Mapping[str, object]:
         ...
+
+
+__all__ = [
+    "BrokerClient",
+    "HistoricalMarketDataClient",
+    "IntegrationAdapter",
+    "LiveMarketDataFeed",
+    "ReferenceDataClient",
+]

@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import Mapping
 from uuid import UUID
 
@@ -59,24 +57,6 @@ class ExecutionStateSnapshot:
             ledger_events=tuple(_account_event_from_dict(item) for item in _items(value.get("ledger_events"))),
             reservations=tuple(_reservation_from_dict(item) for item in _items(value.get("reservations"))),
         )
-
-
-@dataclass(frozen=True, slots=True)
-class JsonExecutionStateStore:
-    path: Path | str
-
-    def load(self) -> ExecutionStateSnapshot | None:
-        path = Path(self.path)
-        if not path.exists():
-            return None
-        return ExecutionStateSnapshot.from_dict(json.loads(path.read_text(encoding="utf-8")))
-
-    def save(self, coordinator: ExecutionCoordinator) -> ExecutionStateSnapshot:
-        snapshot = ExecutionStateSnapshot.capture(coordinator)
-        path = Path(self.path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(snapshot.to_dict(), sort_keys=True, indent=2), encoding="utf-8")
-        return snapshot
 
 
 def _order_state_to_dict(state: OrderState) -> dict[str, object]:
@@ -232,4 +212,4 @@ def _datetime(value: object) -> datetime:
     return parsed
 
 
-__all__ = ["ExecutionStateSnapshot", "JsonExecutionStateStore"]
+__all__ = ["ExecutionStateSnapshot"]

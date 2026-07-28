@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 
 from .catalog import ReferenceCatalog
 from .identity import reference_slug
@@ -93,8 +93,10 @@ class MarketResolver:
         default_venue: str | None = None,
         default_market: str | None = None,
     ) -> None:
+        if catalog is not None and as_of is None:
+            raise ValueError("catalog-backed market resolver requires as_of")
         self.catalog = catalog
-        self.as_of = as_of or datetime.now(timezone.utc)
+        self.as_of = as_of
         self.default_venue = default_venue
         self.default_market = default_market
         self._by_key: dict[str, MarketRef] = {}
@@ -146,6 +148,8 @@ class MarketResolver:
         if market_key is not None:
             return self._by_key[market_key]
         if self.catalog is not None and ref.venue and ref.market:
+            if self.as_of is None:
+                raise RuntimeError("catalog-backed market resolver has no as_of")
             definition = self.catalog.resolve_market(ref.symbol, venue=ref.venue, market=ref.market, at=self.as_of)
             return self.add(MarketRef.from_definition(definition))
         if not ref.venue or not ref.market:

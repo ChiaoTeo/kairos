@@ -432,6 +432,33 @@ def test_cli_downloads_historical_data(monkeypatch, tmp_path) -> None:
     assert (tmp_path / "datasets" / "market" / "ohlcv" / "binance" / "btc_usdt" / "1m" / "data.jsonl").exists()
 
 
+def test_cli_download_infers_dataset_from_market_identity(monkeypatch, tmp_path) -> None:
+    _patch_integration(monkeypatch)
+    stdout = StringIO()
+
+    result = _run([
+        "data",
+        "download",
+        "--root",
+        str(tmp_path),
+        "--format",
+        "jsonl",
+        "--symbol",
+        "BTC/USDT",
+    ], stdout)
+
+    assert result == 0
+    assert (
+        tmp_path
+        / "datasets"
+        / "market"
+        / "ohlcv"
+        / "binance_spot_btc_usdt"
+        / "1m"
+        / "data.jsonl"
+    ).exists()
+
+
 def test_cli_reads_historical_data(tmp_path) -> None:
     DataStore(tmp_path, storage_format="jsonl").write(
         "market.ohlcv.binance.btc_usdt.1m",
@@ -446,6 +473,35 @@ def test_cli_reads_historical_data(tmp_path) -> None:
         "--format",
         "jsonl",
         "market.ohlcv.binance.btc_usdt.1m",
+    ], stdout)
+
+    assert result == 0
+    assert json.loads(stdout.getvalue())["close"] == "100"
+
+
+def test_cli_reads_market_data_by_spec(tmp_path) -> None:
+    DataStore(tmp_path, storage_format="jsonl").write(
+        "market.ohlcv.binance_spot_btc_usdt.1m",
+        [{"time": "2026-01-01T00:00:00+00:00", "close": "100"}],
+    )
+    stdout = StringIO()
+    result = _run([
+        "data",
+        "read",
+        "--root",
+        str(tmp_path),
+        "--format",
+        "jsonl",
+        "--symbol",
+        "BTC/USDT",
+        "--exchange",
+        "binance",
+        "--market",
+        "spot",
+        "--kind",
+        "ohlcv",
+        "--timeframe",
+        "1m",
     ], stdout)
 
     assert result == 0
@@ -471,6 +527,38 @@ def test_cli_replays_historical_data_without_delay(tmp_path) -> None:
         "--speed",
         "0",
         "market.trades.binance.btc_usdt",
+    ], stdout)
+
+    assert result == 0
+    assert [json.loads(line)["price"] for line in stdout.getvalue().splitlines()] == ["100", "101"]
+
+
+def test_cli_replays_market_data_by_spec(tmp_path) -> None:
+    DataStore(tmp_path, storage_format="jsonl").write(
+        "market.trades.binance_spot_btc_usdt",
+        [
+            {"time": "2026-01-01T00:00:00+00:00", "price": "100"},
+            {"time": "2026-01-01T00:00:01+00:00", "price": "101"},
+        ],
+    )
+    stdout = StringIO()
+    result = _run([
+        "data",
+        "replay",
+        "--root",
+        str(tmp_path),
+        "--format",
+        "jsonl",
+        "--speed",
+        "0",
+        "--symbol",
+        "BTC/USDT",
+        "--exchange",
+        "binance",
+        "--market",
+        "spot",
+        "--kind",
+        "trades",
     ], stdout)
 
     assert result == 0
@@ -562,6 +650,87 @@ def test_cli_runs_dataset_backtest_and_writes_artifacts(tmp_path, monkeypatch) -
     assert (run_directory / "report.md").exists()
 
 
+def test_cli_runs_subscription_discovered_backtest_and_writes_artifacts(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "sample_strategy.py").write_text(
+        "\n".join([
+            "from decimal import Decimal",
+            "from kairospy.core.market import FIELD_BAR_CLOSE, MarketDataField",
+            "from kairospy.strategy import StrategyBase",
+            "",
+            "class BuyAndHold(StrategyBase):",
+            '    strategy_id = "buy-and-hold"',
+            "    def __init__(self, symbol='BTC/USDT'):",
+            "        self.symbol = symbol",
+            "        self.entered = False",
+            "    def on_start(self, context):",
+            "        context.subscribe_market_fields(",
+            "            self.symbol,",
+            "            venue='binance',",
+            "            market='spot',",
+            "            fields=(MarketDataField(FIELD_BAR_CLOSE, interval='1m'),),",
+            "        )",
+            "        return ()",
+            "    def on_market(self, context, signal):",
+            "        if not self.entered:",
+            "            context.target_position(self.symbol, Decimal('1'), intent_id='enter')",
+            "            self.entered = True",
+            "        return ()",
+        ]),
+        encoding="utf-8",
+    )
+    DataStore(project / ".kairos" / "data", storage_format="jsonl").write(
+        "market.ohlcv.binance_spot_btc_usdt.1m",
+        [
+            {
+                "time": "2026-01-01T00:00:00+00:00",
+                "market_id": "market:binance:spot:btc_usdt",
+                "instrument_id": "instrument:spot:btc:usdt",
+                "market_key": "binance_spot_btc_usdt",
+                "close": "100",
+            },
+            {
+                "time": "2026-01-01T00:01:00+00:00",
+                "market_id": "market:binance:spot:btc_usdt",
+                "instrument_id": "instrument:spot:btc:usdt",
+                "market_key": "binance_spot_btc_usdt",
+                "close": "110",
+            },
+        ],
+    )
+    config_path = project / "backtest.toml"
+    config_path.write_text(
+        "\n".join([
+            "[run]",
+            'id = "sample-subscription-backtest"',
+            'mode = "backtest"',
+            'strategy = "sample_strategy:BuyAndHold"',
+            "",
+            "[backtest]",
+            'storage_format = "jsonl"',
+            'price_field = "close"',
+            "",
+            "[account]",
+            'cash = "1000"',
+            'currency = "USDT"',
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(project)
+    stdout = StringIO()
+
+    result = _run(["backtest", "run", "--config", str(config_path)], stdout)
+
+    assert result == 0
+    payload = json.loads(stdout.getvalue())
+    assert payload["run_id"] == "sample-subscription-backtest"
+    assert payload["fills"] == 1
+    run_directory = project / ".kairos" / "runs" / "backtest" / "sample-subscription-backtest"
+    normalized = json.loads((run_directory / "config.normalized.json").read_text(encoding="utf-8"))
+    assert normalized["backtest"]["source"] == "market.ohlcv.binance_spot_btc_usdt.1m"
+
+
 def test_cli_prints_stream_data(monkeypatch) -> None:
     _patch_integration(monkeypatch)
     stdout = StringIO()
@@ -608,6 +777,32 @@ def test_cli_persists_stream_data(monkeypatch, tmp_path) -> None:
 
     assert result == 0
     rows = DataStore(tmp_path, storage_format="jsonl").read_rows("market.trades.binance.btc_usdt")
+    assert stdout.getvalue() == "1\n"
+    assert rows[0]["id"] == "1"
+
+
+def test_cli_persist_infers_dataset_from_market_identity(monkeypatch, tmp_path) -> None:
+    _patch_integration(monkeypatch)
+    stdout = StringIO()
+    result = _run([
+        "streams",
+        "persist",
+        "--root",
+        str(tmp_path),
+        "--format",
+        "jsonl",
+        "--kind",
+        "trades",
+        "--symbol",
+        "BTC/USDT",
+        "--trade-limit",
+        "1",
+        "--limit",
+        "1",
+    ], stdout)
+
+    assert result == 0
+    rows = DataStore(tmp_path, storage_format="jsonl").read_rows("market.trades.binance_spot_btc_usdt")
     assert stdout.getvalue() == "1\n"
     assert rows[0]["id"] == "1"
 

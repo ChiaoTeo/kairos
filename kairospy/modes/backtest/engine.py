@@ -15,7 +15,7 @@ from kairospy.core.account import (
     PositionSnapshot,
 )
 from kairospy.context import DataContext, StrategyContext
-from kairospy.core.execution.simulation import (
+from kairospy.service.domains.execution import (
     CommissionModel,
     FillModel,
     ImmediateFillModel,

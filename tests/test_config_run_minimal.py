@@ -77,12 +77,16 @@ def test_run_config_rejects_data_requirements() -> None:
             "strategy": "strategies.momentum:MomentumStrategy",
         },
         "data": {
-            "dataset": "market.ohlcv.binance.btc_usdt.1m",
+            "venue": "binance",
+            "market": "spot",
+            "symbol": "BTC/USDT",
+            "kind": "ohlcv",
+            "timeframe": "1m",
         },
     })
 
     assert config.validation_report().issues == (
-        "[data] is not valid run config; declare data requirements in strategy code",
+        "[data] is not valid run config; strategy code declares market data with context.subscribe_market_fields",
     )
 
 

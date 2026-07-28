@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Iterable, Mapping
 
-from kairospy.integrations import InstrumentProviderRefreshService
-from kairospy.core.reference import LifecycleEventType, MarketStatus, ReferenceRefreshService, ReferenceStore
+from kairospy.core.reference import LifecycleEventType, MarketStatus
+from kairospy.service.domains.reference import ReferenceDataRefreshService, ReferenceRefreshService, ReferenceStore
 
 
 UTC = timezone.utc
@@ -21,7 +21,7 @@ class FakeInstrumentProvider:
 
 def test_reference_refresh_persists_provider_snapshot_and_lifecycle_events(tmp_path) -> None:
     store = ReferenceStore(tmp_path / "reference")
-    service = InstrumentProviderRefreshService(ReferenceRefreshService(store))
+    service = ReferenceDataRefreshService(ReferenceRefreshService(store))
     first_time = datetime(2026, 1, 1, tzinfo=UTC)
     second_time = datetime(2026, 1, 2, tzinfo=UTC)
 

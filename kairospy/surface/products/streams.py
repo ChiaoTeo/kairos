@@ -8,7 +8,7 @@ from typing import Mapping, TextIO
 
 import typer
 
-from kairospy.data import DataSink
+from kairospy.service.domains.market import MarketDataResolver, MarketDataService, MarketDataSpec
 from kairospy.surface.runtime import DriverName, ExchangeName, StorageFormat, exchange, store
 from kairospy.surface.ui.terminal import write_jsonl
 
@@ -39,21 +39,32 @@ def print_stream(
 
 @streams_app.command("persist")
 def persist(
-    dataset: str = typer.Option(..., "--dataset"),
+    dataset: str | None = typer.Option(None, "--dataset"),
     kind: StreamKind = typer.Option(..., "--kind"),
     symbol: str = typer.Option(..., "--symbol"),
     root: str = typer.Option(".kairos/data", "--root"),
     storage_format: StorageFormat = typer.Option(StorageFormat.parquet, "--format"),
     exchange_name: ExchangeName = typer.Option(ExchangeName.binance, "--exchange"),
     driver_name: DriverName = typer.Option(DriverName.ccxt, "--driver"),
+    market: str = typer.Option("spot", "--market"),
     limit: int | None = typer.Option(None, "--limit"),
     book_limit: int | None = typer.Option(None, "--book-limit"),
     trade_limit: int = typer.Option(50, "--trade-limit"),
     poll_seconds: float = typer.Option(1.0, "--poll-seconds"),
 ) -> None:
-    sink = DataSink(store(root, storage_format), dataset)
+    service = MarketDataService(
+        store(root, storage_format),
+        MarketDataResolver(default_venue=exchange_name.value, default_market=market),
+    )
+    spec = MarketDataSpec(
+        symbol=symbol,
+        kind=kind.value,
+        venue=exchange_name.value,
+        market=market,
+        dataset=dataset,
+    )
     events = stream_events(exchange_name, driver_name, kind, symbol, limit, book_limit, trade_limit, poll_seconds)
-    count = asyncio.run(sink.consume(events, limit=limit))
+    count = asyncio.run(service.persist(spec, events, limit=limit))
     typer.echo(str(count))
 
 

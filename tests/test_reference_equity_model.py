@@ -3,12 +3,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.integrations import EquityReferenceSnapshotProvider, catalog_from_equity_rows, massive_corporate_action_events
+from kairospy.integrations import EquityReferenceSnapshotProvider, massive_corporate_action_events
 from kairospy.core.reference import (
-    CorporateActionService,
+    CorporateActionTransitions,
     LifecycleEventType,
+)
+from kairospy.service.domains.reference import (
+    ReferenceDataRefreshService,
     ReferenceRefreshService,
     ReferenceStore,
+    catalog_from_equity_rows,
 )
 
 
@@ -88,7 +92,7 @@ def test_equity_reference_snapshot_provider_and_corporate_action_events() -> Non
     market = snapshot.resolve_market("AAPL", venue="nasdaq", market="equity")
     assert str(market.instrument_id) == "instrument:equity:320193"
 
-    actions = CorporateActionService(snapshot.catalog)
+    actions = CorporateActionTransitions(snapshot.catalog)
     split = actions.split(instrument_id=market.instrument_id, effective_at=as_of, ratio=Decimal("4"))
     dividend = actions.dividend(
         instrument_id=market.instrument_id,
@@ -102,6 +106,32 @@ def test_equity_reference_snapshot_provider_and_corporate_action_events() -> Non
     assert split.current == {"ratio": "4"}
     assert dividend.event_type is LifecycleEventType.DIVIDEND
     assert dividend.current["amount_per_share"] == "0.25"
+
+
+def test_generic_reference_refresh_routes_equity_asset_class(tmp_path) -> None:
+    as_of = datetime(2026, 1, 1, tzinfo=UTC)
+    store = ReferenceStore(tmp_path / "reference")
+    service = ReferenceDataRefreshService(ReferenceRefreshService(store))
+
+    result = service.refresh(
+        FakeEquityProvider((
+            {
+                "venue": "nasdaq",
+                "ticker": "MSFT",
+                "name": "Microsoft Corp.",
+                "cik": "789019",
+                "currency": "USD",
+                "active": True,
+            },
+        )),
+        as_of=as_of,
+        venue="nasdaq",
+        params={"asset_class": "equity"},
+    )
+
+    market = result.catalog.resolve_market("MSFT", venue="nasdaq", market="equity", at=as_of)
+    assert str(market.market_id) == "market:nasdaq:equity:789019"
+    assert str(market.instrument_id) == "instrument:equity:789019"
 
 
 def test_massive_corporate_action_rows_map_to_unified_lifecycle_events(tmp_path) -> None:

@@ -47,7 +47,6 @@ The intended workflow:
 kairospy data download \
   --exchange binance \
   --symbol BTC/USDT \
-  --dataset market.ohlcv.binance_spot_btc_usdt.1m \
   --timeframe 1m \
   --start 2026-01-01T00:00:00+00:00 \
   --end 2026-02-01T00:00:00+00:00
@@ -77,14 +76,15 @@ symbol = "BTC/USDT"
 fast_window = 20
 slow_window = 50
 target_quantity = "1"
+venue = "binance"
+market = "spot"
+timeframe = "1m"
 
 [backtest]
-dataset = "market.ohlcv.binance_spot_btc_usdt.1m"
 start = "2026-01-01T00:00:00+00:00"
 end = "2026-02-01T00:00:00+00:00"
 venue = "binance"
 market = "spot"
-timeframe = "1m"
 price_field = "close"
 
 [account]
@@ -147,6 +147,15 @@ class SmaStrategy(StrategyBase):
         self.fast_window = fast_window
         self.slow_window = slow_window
         self.closes = []
+
+    def on_start(self, context):
+        context.subscribe_market_fields(
+            "BTC/USDT",
+            venue="binance",
+            market="spot",
+            fields=(MarketDataField("bar.close", interval="1m"),),
+        )
+        return ()
 
     def on_market(self, context, signal):
         bar = context.latest_data(domain="market", kind="bar")
@@ -268,7 +277,7 @@ The existing `run account` commands can continue to serve daemon-backed runs. Th
 The backtest product is usable when this works end to end:
 
 ```bash
-kairospy data download --symbol BTC/USDT --dataset market.ohlcv.binance_spot_btc_usdt.1m
+kairospy data download --symbol BTC/USDT
 kairospy backtest run --config examples/btc_sma_backtest.toml
 kairospy backtest show btc-sma-2026-01
 kairospy backtest trades btc-sma-2026-01

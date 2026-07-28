@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.core.execution.simulation import (
+from kairospy.service.domains.execution import (
     BasisPointSlippageModel,
     CommissionModel,
     FillCandidate,

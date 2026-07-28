@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from kairospy.integrations import Binance, CcxtDriver
+from kairospy.integrations import BinanceMarketDataConnector, CcxtDriver
 from kairospy.core.reference import (
     Asset,
     AssetId,
@@ -18,7 +18,9 @@ from kairospy.core.reference import (
     MarketId,
     MarketStatus,
     ReferenceCatalog,
+    instrument_product_for_market,
 )
+from kairospy.service.domains.reference import catalog_from_reference_rows
 
 
 UTC = timezone.utc
@@ -56,7 +58,7 @@ def test_binance_discovers_markets_as_reference_catalog() -> None:
     as_of = datetime(2026, 1, 1, tzinfo=UTC)
     driver = CcxtDriver(exchange_factory=lambda exchange_id: FakeMarketExchange())
 
-    catalog = Binance(driver).fetch_reference_catalog(as_of=as_of, params={"type": "spot"})
+    catalog = BinanceMarketDataConnector(driver).fetch_reference_catalog(as_of=as_of, params={"type": "spot"})
 
     market = catalog.resolve_market("BTC/USDT", venue="binance", market="spot", at=as_of)
     assert market.market_id == MarketId("market:binance:spot:btc_usdt")
@@ -144,3 +146,36 @@ def test_market_diff_emits_lifecycle_events() -> None:
     assert events[0].source_symbol == "NEW/USDT"
     assert events[1].previous == {"status": "active"}
     assert events[1].current == {"status": "halted"}
+
+
+def test_reference_product_spec_normalizes_market_aliases_and_identity_segments() -> None:
+    swap = instrument_product_for_market("swap")
+    derivative = instrument_product_for_market("derivative")
+
+    assert swap.instrument_type is InstrumentType.PERPETUAL
+    assert swap.identity_segment == "perpetual"
+    assert derivative.instrument_type is InstrumentType.PERPETUAL
+    assert derivative.identity_segment == "derivative"
+
+
+def test_catalog_from_reference_rows_routes_equity_products() -> None:
+    as_of = datetime(2026, 1, 1, tzinfo=UTC)
+
+    catalog = catalog_from_reference_rows(
+        (
+            {
+                "venue": "nasdaq",
+                "ticker": "AAPL",
+                "name": "Apple Inc.",
+                "cik": "320193",
+                "currency": "USD",
+                "active": True,
+            },
+        ),
+        effective_from=as_of,
+        product="equity",
+    )
+
+    market = catalog.resolve_market("AAPL", venue="nasdaq", market="equity", at=as_of)
+    assert market.market_id == MarketId("market:nasdaq:equity:320193")
+    assert market.instrument_id == InstrumentId("instrument:equity:320193")

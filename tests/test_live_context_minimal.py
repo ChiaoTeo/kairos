@@ -10,9 +10,9 @@ import pytest
 from kairospy.core.account import AccountContext, AccountEventKind, AccountRef, AccountSnapshot, AccountSource, Environment, MarginScope, MarginState
 from kairospy.context import DataContext, StrategyContext
 from kairospy.data import DataSink, DataStore, InMemoryStreamFeed
-from kairospy.integrations.ccxt import CcxtAccountPayloadAdapter
+from kairospy.integrations.payloads import CcxtAccountPayloadAdapter
 from kairospy.modes.live import JsonLiveRuntimeStateStore, LiveEngine, LiveStopToken
-from kairospy.modes.live.private_stream import classify_balance_delta
+from kairospy.service.domains.account import classify_balance_delta
 from kairospy.runtime import IterableEventSource
 from kairospy.core.reference import MarketResolver
 from kairospy.strategy import StrategyBase

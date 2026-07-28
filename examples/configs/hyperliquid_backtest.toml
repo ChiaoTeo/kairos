@@ -8,15 +8,16 @@ symbol = "BTC/USDC:USDC"
 quantity = "0.01"
 fast_window = 3
 slow_window = 5
+venue = "hyperliquid"
+market = "swap"
+timeframe = "1m"
 
 [backtest]
-dataset = "market.ohlcv.hyperliquid_swap_btc_usdc_usdc.1m"
 data_root = "../.kairos/data"
 runs_root = "../.kairos/runs"
 storage_format = "jsonl"
 venue = "hyperliquid"
 market = "swap"
-stream = "market.ohlcv.hyperliquid_swap_btc_usdc_usdc.1m"
 price_field = "close"
 
 [account]

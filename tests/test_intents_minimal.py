@@ -6,9 +6,9 @@ from tempfile import TemporaryDirectory
 from kairospy.context import DataContext, StrategyContext
 from kairospy.data import DataStore
 from kairospy.core.intent import IntentEvent, IntentEventKind, IntentKind, IntentStatus, TradeIntent
-from kairospy.core.market import bind_market_data
 from kairospy.runtime import DataViewEventSource, StrategyRuntime
 from kairospy.core.reference import MarketResolver
+from kairospy.service.domains.market import bind_market_data
 from kairospy.strategy import StrategyBase
 
 

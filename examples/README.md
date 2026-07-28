@@ -18,7 +18,6 @@ kairospy data download \
   --exchange binance \
   --driver ccxt \
   --symbol BTC/USDT \
-  --dataset market.ohlcv.binance_spot_btc_usdt.1m \
   --timeframe 1m \
   --limit 1000 \
   --mode replace

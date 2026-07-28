@@ -77,17 +77,6 @@ class MarginBuyingPowerModel:
         )
 
 
-class SnapshotAccountGateway:
-    def __init__(self, snapshots: dict[AccountContext, AccountSnapshot]) -> None:
-        self._snapshots = dict(snapshots)
-
-    def account_snapshot(self, context: AccountContext) -> AccountSnapshot:
-        try:
-            return self._snapshots[context]
-        except KeyError as error:
-            raise LookupError(context.value) from error
-
-
 def reserve_cash_order(
     reservations: ReservationBook,
     reservation: Reservation,
@@ -128,7 +117,6 @@ __all__ = [
     "BuyingPowerCheck",
     "CashBuyingPowerModel",
     "MarginBuyingPowerModel",
-    "SnapshotAccountGateway",
     "reserve_cash_order",
     "reserve_margin_order",
 ]

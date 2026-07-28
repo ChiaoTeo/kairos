@@ -12,10 +12,10 @@ from kairospy.modes.backtest import (
 )
 from kairospy.context import DataContext, StrategyContext
 from kairospy.data import DataStore
-from kairospy.core.market import bind_market_data
 from kairospy.runtime import DataViewEventSource
 from kairospy.modes.paper import PaperEngine
 from kairospy.core.reference import MarketResolver
+from kairospy.service.domains.market import bind_market_data
 from kairospy.strategy import StrategyBase
 
 

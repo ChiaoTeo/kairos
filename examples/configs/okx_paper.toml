@@ -1,0 +1,13 @@
+[run]
+mode = "paper"
+strategy = "examples.strategies.okx:OneShotLong"
+
+[paper]
+venue = "okx"
+market = "spot"
+
+[accounts.okx_main]
+index = 0
+venue = "okx"
+cash = "10000"
+currency = "USDT"

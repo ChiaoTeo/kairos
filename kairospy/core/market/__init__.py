@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .bindings import DataBinder, MarketDataBinding, bind_market_data
+from .data_identity import market_data_id, market_stream_name
 from .model import (
     Bar,
     MarketObservation,
@@ -56,7 +56,6 @@ from .views import MarketCurrentProjection, MarketCurrentView
 
 __all__ = [
     "Bar",
-    "DataBinder",
     "FIELD_BAR_CLOSE",
     "FIELD_BAR_HIGH",
     "FIELD_BAR_LOW",
@@ -88,7 +87,6 @@ __all__ = [
     "STREAM_TRADE",
     "SUBSCRIPTION_KIND_FIELDS",
     "MarketDataField",
-    "MarketDataBinding",
     "MarketCurrentProjection",
     "MarketCurrentView",
     "MarketObservation",
@@ -105,6 +103,7 @@ __all__ = [
     "Quote",
     "RateObservation",
     "TradePrint",
-    "bind_market_data",
+    "market_data_id",
+    "market_stream_name",
     "plan_market_streams",
 ]

@@ -225,7 +225,7 @@ class RunConfig:
         if mode not in VALID_RUN_MODES:
             issues.append("run.mode must be one of: backtest, paper, live")
         if "data" in self.values:
-            issues.append("[data] is not valid run config; declare data requirements in strategy code")
+            issues.append("[data] is not valid run config; strategy code declares market data with context.subscribe_market_fields")
         accounts = self.values.get("accounts")
         if accounts is not None:
             if not isinstance(accounts, Mapping):

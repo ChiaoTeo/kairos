@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from kairospy.core.reference import MarketRef
-from kairospy.core.market.records import orderbook_record
+from kairospy.service.domains.market.records import orderbook_record
 
 
 def test_market_ref_carries_market_identity_and_records_carry_quote_fields() -> None:
@@ -10,7 +10,7 @@ def test_market_ref_carries_market_identity_and_records_carry_quote_fields() -> 
         venue="binance",
         market="spot",
         instrument=market,
-        book={"bids": [["100", "1.2"]], "asks": [["101", "0.8"]]},
+        book={"timestamp": 1767225600000, "bids": [["100", "1.2"]], "asks": [["101", "0.8"]]},
     )
 
     assert market.identity_fields() == {

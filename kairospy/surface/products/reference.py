@@ -5,8 +5,13 @@ import sys
 
 import typer
 
-from kairospy.integrations import EquityProviderRefreshService, InstrumentProviderRefreshService
-from kairospy.core.reference import MarketStatus, ReferenceRefreshService
+from kairospy.core.reference import MarketStatus
+from kairospy.service.domains.reference import (
+    refresh_equity_provider,
+    refresh_instrument_provider,
+    refresh_instrument_provider_with_delist_schedule,
+    sync_lifecycle_events,
+)
 from kairospy.core.reference.serde import lifecycle_event_to_primitive, market_to_primitive
 from kairospy.surface.runtime import DriverName, ExchangeName, ProviderName, exchange, provider, reference_store
 from kairospy.surface.ui.terminal import write_jsonl
@@ -25,9 +30,13 @@ def refresh_hyperliquid(
     as_of: str | None = typer.Option(None, "--as-of"),
 ) -> None:
     at = _time(as_of)
-    provider = exchange(ExchangeName.hyperliquid, driver_name)
-    service = InstrumentProviderRefreshService(ReferenceRefreshService(reference_store(root)))
-    result = service.refresh(provider, as_of=at, venue=ExchangeName.hyperliquid.value, market=market)
+    result = refresh_instrument_provider(
+        reference_store(root),
+        exchange(ExchangeName.hyperliquid, driver_name),
+        as_of=at,
+        venue=ExchangeName.hyperliquid.value,
+        market=market,
+    ).refresh
     write_jsonl((
         {
             "time": at.isoformat(),
@@ -52,14 +61,17 @@ def refresh_binance(
     if exchange_name is not ExchangeName.binance:
         raise typer.BadParameter("refresh-binance only supports binance")
     at = _time(as_of)
-    provider = exchange(exchange_name, driver_name)
     store = reference_store(root)
-    service = InstrumentProviderRefreshService(ReferenceRefreshService(store))
-    result = service.refresh(provider, as_of=at, venue=exchange_name.value, market=market, params={"type": market})
-    schedule_events = ()
-    if include_delist_schedule and hasattr(provider, "fetch_delist_events"):
-        schedule_events = provider.fetch_delist_events(catalog=result.catalog, market=market)
-        store.append_events(schedule_events)
+    provider_result = refresh_instrument_provider_with_delist_schedule(
+        store,
+        exchange(exchange_name, driver_name),
+        as_of=at,
+        venue=exchange_name.value,
+        market=market,
+        params={"type": market},
+        include_delist_schedule=include_delist_schedule,
+    )
+    result = provider_result.refresh
     write_jsonl((
         {
             "time": at.isoformat(),
@@ -68,7 +80,7 @@ def refresh_binance(
             "previous_markets": len(result.previous_markets),
             "current_markets": len(result.current_markets),
             "events": len(result.events),
-            "scheduled_events": len(schedule_events),
+            "scheduled_events": len(provider_result.scheduled_events),
         },
     ), sys.stdout)
 
@@ -81,9 +93,13 @@ def refresh_massive_equities(
     as_of: str | None = typer.Option(None, "--as-of"),
 ) -> None:
     at = _time(as_of)
-    provider_client = provider(ProviderName.massive, driver_name)
-    service = EquityProviderRefreshService(ReferenceRefreshService(reference_store(root)))
-    result = service.refresh(provider_client, as_of=at, venue=venue, params={"asset_class": "equity"})
+    result = refresh_equity_provider(
+        reference_store(root),
+        provider(ProviderName.massive, driver_name),
+        as_of=at,
+        venue=venue,
+        params={"asset_class": "equity"},
+    ).refresh
     write_jsonl((
         {
             "time": at.isoformat(),
@@ -109,13 +125,17 @@ def sync_massive_actions(
     end_at = _time(end)
     if end_at <= start_at:
         raise typer.BadParameter("end must be after start")
-    store = reference_store(root)
-    catalog = store.load_catalog()
-    provider_client = provider(ProviderName.massive, driver_name)
-    if not hasattr(provider_client, "fetch_lifecycle_events"):
-        raise typer.BadParameter("provider does not support lifecycle events")
-    events = provider_client.fetch_lifecycle_events(ticker, start=start_at, end=end_at, catalog=catalog, venue=venue)
-    store.append_events(events)
+    try:
+        events = sync_lifecycle_events(
+            reference_store(root),
+            provider(ProviderName.massive, driver_name),
+            ticker=ticker,
+            start=start_at,
+            end=end_at,
+            venue=venue,
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
     write_jsonl((
         {
             "provider": "massive",

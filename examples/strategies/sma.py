@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from kairospy.context import StrategyContext
-from kairospy.core.market import FIELD_BAR_CLOSE
+from kairospy.core.market import FIELD_BAR_CLOSE, MarketDataField
 from kairospy.strategy import StrategyBase, StrategySignal
 
 
@@ -16,6 +16,9 @@ class SmaCrossBacktest(StrategyBase):
         quantity: str | Decimal,
         fast_window: int = 3,
         slow_window: int = 5,
+        venue: str | None = None,
+        market: str | None = None,
+        timeframe: str = "1m",
     ) -> None:
         if fast_window < 1 or slow_window <= fast_window:
             raise ValueError("SMA windows must satisfy 1 <= fast_window < slow_window")
@@ -23,8 +26,20 @@ class SmaCrossBacktest(StrategyBase):
         self.quantity = Decimal(str(quantity))
         self.fast_window = fast_window
         self.slow_window = slow_window
+        self.venue = venue
+        self.market = market
+        self.timeframe = timeframe
         self.closes: list[Decimal] = []
         self.positioned = False
+
+    def on_start(self, context: StrategyContext):
+        context.subscribe_market_fields(
+            self.symbol,
+            venue=self.venue,
+            market=self.market,
+            fields=(MarketDataField(FIELD_BAR_CLOSE, interval=self.timeframe),),
+        )
+        return ()
 
     def on_market(self, context: StrategyContext, signal: StrategySignal):
         if not signal.changed("market", "bar"):

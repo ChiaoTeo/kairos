@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from enum import Enum
 import sys
-from time import monotonic, sleep
-from typing import Iterable, Mapping, TextIO
 
 import typer
 
+from kairospy.service.domains.market import MarketDataResolver, MarketDataService, MarketDataSpec, replay_rows
 from kairospy.surface.runtime import DriverName, ExchangeName, StorageFormat, exchange, store
 from kairospy.surface.ui.terminal import write_jsonl
 
@@ -26,11 +25,12 @@ data_app = typer.Typer(no_args_is_help=True, help="Historical data commands")
 @data_app.command("download")
 def download(
     symbol: str = typer.Option(..., "--symbol"),
-    dataset: str = typer.Option(..., "--dataset"),
+    dataset: str | None = typer.Option(None, "--dataset"),
     root: str | None = typer.Option(None, "--root"),
     storage_format: StorageFormat | None = typer.Option(None, "--format"),
     exchange_name: ExchangeName = typer.Option(ExchangeName.binance, "--exchange"),
     driver_name: DriverName = typer.Option(DriverName.ccxt, "--driver"),
+    market: str = typer.Option("spot", "--market"),
     kind: HistoricalKind = typer.Option(HistoricalKind.ohlcv, "--kind"),
     timeframe: str = typer.Option("1m", "--timeframe"),
     start: str | None = typer.Option(None, "--start"),
@@ -41,80 +41,108 @@ def download(
     exchange_client = exchange(exchange_name, driver_name)
     if kind is not HistoricalKind.ohlcv:
         raise typer.BadParameter(f"unsupported historical data kind: {kind.value}")
-    rows = exchange_client.fetch_ohlcv(
-        symbol,
+    spec = MarketDataSpec(
+        symbol=symbol,
+        kind=kind.value,
+        venue=exchange_name.value,
+        market=market,
         timeframe=timeframe,
-        since=start,
-        until=end,
+        start=start,
+        end=end,
         limit=limit,
+        dataset=dataset,
     )
-    path = store(root, storage_format).write(dataset, rows, mode=mode.value)
+    path = _service(root, storage_format, exchange_name=exchange_name, market=market).download(spec, exchange_client, mode=mode.value)
     typer.echo(str(path))
 
 
 @data_app.command("read")
 def read(
-    dataset: str = typer.Argument(...),
+    dataset: str | None = typer.Argument(None),
     root: str | None = typer.Option(None, "--root"),
     storage_format: StorageFormat | None = typer.Option(None, "--format"),
+    symbol: str | None = typer.Option(None, "--symbol"),
+    exchange_name: ExchangeName = typer.Option(ExchangeName.binance, "--exchange"),
+    market: str = typer.Option("spot", "--market"),
+    kind: HistoricalKind = typer.Option(HistoricalKind.ohlcv, "--kind"),
+    timeframe: str = typer.Option("1m", "--timeframe"),
     start: str | None = typer.Option(None, "--start"),
     end: str | None = typer.Option(None, "--end"),
     columns: list[str] | None = typer.Option(None, "--columns"),
     limit: int | None = typer.Option(None, "--limit"),
 ) -> None:
-    rows = store(root, storage_format).read_rows(
-        dataset,
-        start=start,
-        end=end,
-        columns=columns,
-        limit=limit,
-    )
+    if dataset is not None:
+        rows = store(root, storage_format).read_rows(
+            dataset,
+            start=start,
+            end=end,
+            columns=columns,
+            limit=limit,
+        )
+    else:
+        if symbol is None:
+            raise typer.BadParameter("dataset or --symbol is required")
+        rows = _service(root, storage_format, exchange_name=exchange_name, market=market).read(
+            MarketDataSpec(
+                symbol=symbol,
+                kind=kind.value,
+                venue=exchange_name.value,
+                market=market,
+                timeframe=timeframe,
+                start=start,
+                end=end,
+                limit=limit,
+            )
+        )
+        if columns is not None:
+            selected = set(columns)
+            rows = [{key: value for key, value in row.items() if key in selected} for row in rows]
     write_jsonl(rows, sys.stdout)
 
 
 @data_app.command("replay")
 def replay(
-    dataset: str = typer.Argument(...),
+    dataset: str | None = typer.Argument(None),
     root: str | None = typer.Option(None, "--root"),
     storage_format: StorageFormat | None = typer.Option(None, "--format"),
+    symbol: str | None = typer.Option(None, "--symbol"),
+    exchange_name: ExchangeName = typer.Option(ExchangeName.binance, "--exchange"),
+    market: str = typer.Option("spot", "--market"),
+    kind: str = typer.Option("trades", "--kind"),
+    timeframe: str | None = typer.Option(None, "--timeframe"),
     start: str | None = typer.Option(None, "--start"),
     end: str | None = typer.Option(None, "--end"),
     limit: int | None = typer.Option(None, "--limit"),
     speed: float = typer.Option(1.0, "--speed"),
 ) -> None:
-    rows = store(root, storage_format).read_rows(dataset, start=start, end=end, limit=limit)
-    replay_rows(rows, speed=speed, stdout=sys.stdout)
+    if dataset is not None:
+        rows = store(root, storage_format).read_rows(dataset, start=start, end=end, limit=limit)
+    else:
+        if symbol is None:
+            raise typer.BadParameter("dataset or --symbol is required")
+        rows = _service(root, storage_format, exchange_name=exchange_name, market=market).read(
+            MarketDataSpec(
+                symbol=symbol,
+                kind=kind,
+                venue=exchange_name.value,
+                market=market,
+                timeframe=timeframe,
+                start=start,
+                end=end,
+                limit=limit,
+            )
+        )
+    replay_rows(rows, speed=speed, write=lambda batch: write_jsonl(batch, sys.stdout))
 
 
-def replay_rows(rows: Iterable[Mapping[str, object]], *, speed: float, stdout: TextIO) -> int:
-    if speed < 0:
-        raise ValueError("replay speed cannot be negative")
-    previous_time: float | None = None
-    wall_start = monotonic()
-    replay_start: float | None = None
-    for row in rows:
-        current_time = _timestamp(row["time"])
-        if speed > 0:
-            if replay_start is None:
-                replay_start = current_time
-            target_elapsed = (current_time - replay_start) / speed
-            sleep_seconds = target_elapsed - (monotonic() - wall_start)
-            if previous_time is not None and sleep_seconds > 0:
-                sleep(sleep_seconds)
-        previous_time = current_time
-        write_jsonl((row,), stdout)
-    return 0
-
-
-def _timestamp(value: object) -> float:
-    from datetime import datetime, timezone
-
-    if not isinstance(value, str):
-        raise ValueError(f"replay row time must be ISO-8601 text: {value!r}")
-    text = value.strip()
-    if text.endswith("Z"):
-        text = f"{text[:-1]}+00:00"
-    parsed = datetime.fromisoformat(text)
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise ValueError(f"replay row time must be timezone-aware: {value!r}")
-    return parsed.astimezone(timezone.utc).timestamp()
+def _service(
+    root: str | None,
+    storage_format: StorageFormat | None,
+    *,
+    exchange_name: ExchangeName,
+    market: str,
+) -> MarketDataService:
+    return MarketDataService(
+        store(root, storage_format),
+        MarketDataResolver(default_venue=exchange_name.value, default_market=market),
+    )

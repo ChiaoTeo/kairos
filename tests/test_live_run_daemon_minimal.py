@@ -10,7 +10,7 @@ from pathlib import Path
 from kairospy.core.account import AccountContext, AccountRef, Environment
 from kairospy.context import DataContext
 from kairospy.data import DataStore
-from kairospy.integrations.ccxt import CcxtAccountPayloadAdapter
+from kairospy.integrations.payloads import CcxtAccountPayloadAdapter
 from kairospy.modes.live import LiveEngine, LiveEngineDaemonTarget
 from kairospy.runtime import IterableEventSource
 from kairospy.runtime.account_journal import RunAccountJournal

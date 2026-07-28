@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .catalog import ReferenceCatalog
-from .corporate_actions import CorporateActionService
+from .corporate_actions import CorporateActionTransitions
 from .identity import AssetId, EntityId, InstrumentId, ListingId, MarketId, ReferenceId
 from .markets import MarketRef, MarketResolver, SymbolRef
 from .model import (
@@ -17,20 +17,35 @@ from .model import (
     MarketDefinition,
     MarketStatus,
 )
-from .refresh import ReferenceRefreshResult, ReferenceRefreshService, refresh_catalog_from_snapshot
-from .store import ReferenceStore
+from .products import (
+    EquityProductSpec,
+    InstrumentProductSpec,
+    asset_id_for_product,
+    currency_asset_id,
+    equity_asset_id,
+    equity_instrument_id,
+    equity_listing_id,
+    equity_market_id,
+    instrument_id_for_product,
+    instrument_product_for_market,
+    listing_id_for_market,
+    market_id_for_product,
+)
+from .transition import ReferenceCatalogTransition, apply_catalog_snapshot
 from .universe import Universe, UniverseQuery, UniverseSelector
 
 __all__ = [
     "Asset",
     "AssetId",
     "AssetType",
-    "CorporateActionService",
+    "CorporateActionTransitions",
     "Entity",
     "EntityId",
     "EntityType",
+    "EquityProductSpec",
     "InstrumentDefinition",
     "InstrumentId",
+    "InstrumentProductSpec",
     "InstrumentType",
     "LifecycleEvent",
     "LifecycleEventType",
@@ -43,12 +58,20 @@ __all__ = [
     "MarketStatus",
     "ReferenceCatalog",
     "ReferenceId",
-    "ReferenceRefreshResult",
-    "ReferenceRefreshService",
-    "ReferenceStore",
+    "ReferenceCatalogTransition",
     "SymbolRef",
     "Universe",
     "UniverseQuery",
     "UniverseSelector",
-    "refresh_catalog_from_snapshot",
+    "asset_id_for_product",
+    "currency_asset_id",
+    "equity_asset_id",
+    "equity_instrument_id",
+    "equity_listing_id",
+    "equity_market_id",
+    "instrument_id_for_product",
+    "instrument_product_for_market",
+    "listing_id_for_market",
+    "market_id_for_product",
+    "apply_catalog_snapshot",
 ]

@@ -8,15 +8,16 @@ symbol = "BTC/USDT"
 quantity = "0.01"
 fast_window = 20
 slow_window = 50
+venue = "binance"
+market = "spot"
+timeframe = "1m"
 
 [backtest]
-dataset = "market.ohlcv.binance_spot_btc_usdt.1m"
 data_root = "../.kairos/data"
 runs_root = "../.kairos/runs"
 storage_format = "jsonl"
 venue = "binance"
 market = "spot"
-stream = "market.ohlcv.binance_spot_btc_usdt.1m"
 price_field = "close"
 
 [account]

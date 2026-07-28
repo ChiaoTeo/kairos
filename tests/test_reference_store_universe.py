@@ -3,17 +3,17 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from kairospy.integrations.instruments import catalog_from_market_rows
 from kairospy.core.reference import (
     AssetId,
     InstrumentType,
     LifecycleEventType,
     MarketStatus,
     ReferenceCatalog,
-    ReferenceStore,
     UniverseQuery,
     UniverseSelector,
 )
+from kairospy.service.domains.reference import catalog_from_market_rows
+from kairospy.service.domains.reference import ReferenceStore
 
 
 UTC = timezone.utc
