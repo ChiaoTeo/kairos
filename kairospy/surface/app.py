@@ -6,7 +6,7 @@ import shlex
 import sys
 from typing import Callable, Mapping, TextIO
 
-from kairospy.application.service.domains.reference import ReferenceStore
+from kairospy.application.service.domain.reference import ReferenceStore
 from kairospy.surface.products.run import RunShellSession
 from kairospy.surface.render_text import (
     render_home_screen,

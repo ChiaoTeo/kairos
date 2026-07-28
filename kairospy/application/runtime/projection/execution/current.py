@@ -4,10 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.order import OrderState
 from kairospy.core.views import ViewFieldSchema, ViewSchema
-
-from kairospy.core.execution.coordinator import ExecutionCoordinator
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,35 +38,33 @@ class ExecutionCurrentView:
 
 
 class ExecutionCurrentProjection:
-    """Projection for local execution state owned by an ExecutionCoordinator."""
+    key = "execution.current"
+    schema = ViewSchema(
+        key,
+        "system",
+        fields=(
+            ViewFieldSchema("total_orders", "known order count", "runtime state", "execution coordinator"),
+            ViewFieldSchema("active_orders", "non-terminal order count", "runtime state", "order journal"),
+            ViewFieldSchema("terminal_orders", "terminal order count", "runtime state", "order journal"),
+            ViewFieldSchema("unknown_orders", "orders requiring reconciliation", "runtime state", "order journal"),
+            ViewFieldSchema("pending_reservations", "open local reservations", "runtime state", "reservation book"),
+            ViewFieldSchema("ledger_event_count", "local account ledger event count", "runtime state", "account ledger"),
+            ViewFieldSchema("latest_order", "most recently updated order", "order update time", "order journal"),
+            ViewFieldSchema("orders", "local order state summaries", "runtime state", "order journal"),
+        ),
+        mutability="runtime_writable",
+        evidence="runtime execution coordinator projection",
+    )
 
-    def __init__(self, coordinator: ExecutionCoordinator, *, key: str = "execution.current") -> None:
+    def __init__(self, coordinator: ExecutionCoordinator) -> None:
         self.coordinator = coordinator
-        self.key = key
-        self.schema = ViewSchema(
-            self.key,
-            "system",
-            fields=(
-                ViewFieldSchema("total_orders", "known order count", "runtime state", "execution coordinator"),
-                ViewFieldSchema("active_orders", "non-terminal order count", "runtime state", "order journal"),
-                ViewFieldSchema("terminal_orders", "terminal order count", "runtime state", "order journal"),
-                ViewFieldSchema("unknown_orders", "orders requiring reconciliation", "runtime state", "order journal"),
-                ViewFieldSchema("pending_reservations", "open local reservations", "runtime state", "reservation book"),
-                ViewFieldSchema("ledger_event_count", "local account ledger event count", "runtime state", "account ledger"),
-                ViewFieldSchema("latest_order", "most recently updated order", "order update time", "order journal"),
-                ViewFieldSchema("orders", "local order state summaries", "runtime state", "order journal"),
-            ),
-            mutability="runtime_writable",
-            evidence="runtime execution coordinator projection",
-        )
 
-    def on_event(self, event: object) -> None:
+    def on_event(self, event: RuntimeEnvelope) -> None:
         return None
 
     def view(self) -> ExecutionCurrentView:
         orders = tuple(_execution_order_summary(order) for order in self.coordinator.orders.states)
         active = tuple(item for item in orders if item.status not in {"filled", "canceled", "rejected", "expired"})
-        latest = _latest_order(orders)
         return ExecutionCurrentView(
             total_orders=len(orders),
             active_orders=len(active),
@@ -74,7 +72,7 @@ class ExecutionCurrentProjection:
             unknown_orders=sum(1 for item in orders if item.status == "unknown"),
             pending_reservations=sum(1 for item in self.coordinator.reservations.reservations if item.status.value in {"held", "reflected"}),
             ledger_event_count=len(self.coordinator.ledger.events),
-            latest_order=latest,
+            latest_order=_latest_order(orders),
             orders=orders,
         )
 

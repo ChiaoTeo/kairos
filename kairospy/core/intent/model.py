@@ -4,6 +4,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 
@@ -55,8 +56,17 @@ class IntentEventKind(StrEnum):
     FAILED = "failed"
 
 
+@runtime_checkable
+class Intent(Protocol):
+    intent_id: str
+    strategy_id: str
+    kind: object
+    created_at: datetime | None
+    reason: str
+
+
 @dataclass(frozen=True, slots=True)
-class TradeIntent:
+class TradeIntent(Intent):
     intent_id: str
     strategy_id: str
     instrument_id: str
@@ -107,7 +117,7 @@ class IntentEvent:
 
 @dataclass(frozen=True, slots=True)
 class IntentState:
-    intent: TradeIntent
+    intent: Intent
     status: IntentStatus = IntentStatus.CREATED
     order_ids: tuple[str, ...] = ()
     updated_at: datetime | None = None
@@ -204,6 +214,7 @@ def _next_status(status: IntentStatus, kind: IntentEventKind) -> IntentStatus:
 
 
 __all__ = [
+    "Intent",
     "IntentEvent",
     "IntentEventKind",
     "IntentKind",

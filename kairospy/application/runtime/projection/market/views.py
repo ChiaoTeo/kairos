@@ -115,7 +115,6 @@ class MarketSubscriptionSummary:
     status: str
     fields: tuple[str, ...] = ()
     requested_by: str = "strategy"
-    requested_at: datetime | None = None
     provider: str = ""
     stream: str = ""
     last_event_time: datetime | None = None
@@ -167,6 +166,7 @@ class MarketObservationSummary:
 class MarketObservationsView:
     event_count: int = 0
     observations: tuple[MarketObservationSummary, ...] = ()
+
 
 __all__ = [
     "MarketBarSummary",

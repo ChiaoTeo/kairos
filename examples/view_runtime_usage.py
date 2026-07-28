@@ -5,7 +5,7 @@ from decimal import Decimal
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from kairospy.application.context import DataContext, StrategyContext
+from kairospy.application.strategy import DataContext, StrategyContext
 from kairospy.core.reference import MarketResolver
 from kairospy.infrastructure.data import DataStore
 from kairospy.application.runtime.kernel import RuntimeKernel

@@ -2,63 +2,54 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from kairospy.application.context import Context, StrategyContext
-from kairospy.application.strategy.events import StrategySignal
+from kairospy.core.intent import Intent
 
-
-StrategyOutput = object | None
+from .context import Context
+from .events import Signal
 
 
 class Strategy(Protocol):
-    @property
-    def strategy_id(self) -> str:
+    strategy_id: str
+
+    def on_start(self, context: Context) -> None:
         ...
 
-    def on_start(self, context: StrategyContext) -> StrategyOutput:
+    def on_data(self, context: Context, signal: Signal) -> None:
         ...
 
-    def on_market(self, context: StrategyContext, signal: StrategySignal) -> StrategyOutput:
+    def on_intent(self, context: Context, intent: Intent) -> None:
         ...
 
-    def on_account(self, context: StrategyContext, signal: StrategySignal) -> StrategyOutput:
+    def on_clock(self, context: Context, signal: Signal) -> None:
         ...
 
-    def on_order(self, context: StrategyContext, signal: StrategySignal) -> StrategyOutput:
+    def on_system(self, context: Context, signal: Signal) -> None:
         ...
 
-    def on_clock(self, context: StrategyContext, signal: StrategySignal) -> StrategyOutput:
-        ...
-
-    def on_system(self, context: StrategyContext, signal: StrategySignal) -> StrategyOutput:
-        ...
-
-    def on_end(self, context: StrategyContext) -> StrategyOutput:
+    def on_end(self, context: Context) -> None:
         ...
 
 
 class StrategyBase:
     strategy_id = "strategy"
 
-    def on_start(self, context: StrategyContext) -> StrategyOutput:
-        return ()
+    def on_start(self, context: Context) -> None:
+        return None
 
-    def on_market(self, context: StrategyContext, signal: StrategySignal) -> StrategyOutput:
-        return ()
+    def on_data(self, context: Context, signal: Signal) -> None:
+        return None
 
-    def on_account(self, context: StrategyContext, signal: StrategySignal) -> StrategyOutput:
-        return ()
+    def on_intent(self, context: Context, intent: Intent) -> None:
+        return None
 
-    def on_order(self, context: StrategyContext, signal: StrategySignal) -> StrategyOutput:
-        return ()
+    def on_clock(self, context: Context, signal: Signal) -> None:
+        return None
 
-    def on_clock(self, context: StrategyContext, signal: StrategySignal) -> StrategyOutput:
-        return ()
+    def on_system(self, context: Context, signal: Signal) -> None:
+        return None
 
-    def on_system(self, context: StrategyContext, signal: StrategySignal) -> StrategyOutput:
-        return ()
-
-    def on_end(self, context: StrategyContext) -> StrategyOutput:
-        return ()
+    def on_end(self, context: Context) -> None:
+        return None
 
 
-__all__ = ["Context", "Strategy", "StrategyBase", "StrategyContext", "StrategyOutput"]
+__all__ = ["Strategy", "StrategyBase"]

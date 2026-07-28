@@ -3,11 +3,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 
-from kairospy.application.context import DataContext
+from kairospy.application.strategy import DataContext
 from kairospy.infrastructure.data import DataStore
 from kairospy.core.market import Quote
 from kairospy.core.reference import MarketResolver
-from kairospy.application.service.domains.market import MarketSubscriptionRegistry, bind_market_data
+from kairospy.application.service.domains.market import MarketSubscriptionRegistry, bind_market_data, plan_market_streams
 from kairospy.application.service.domains.reference import catalog_from_market_rows
 from kairospy.application.service.domains.reference import ReferenceStore
 
@@ -59,7 +59,7 @@ def main() -> None:
         print("dataset:", bars.binding.dataset)
         print("stream:", bars.binding.stream)
         print("subscription:", quote_subscription.key)
-        print("stream plans:", [plan.key for plan in quote_subscription.stream_plans])
+        print("stream plans:", [plan.key for plan in plan_market_streams(quote_subscription.spec)])
 
 
 if __name__ == "__main__":

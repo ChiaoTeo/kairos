@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from tempfile import TemporaryDirectory
 
-from kairospy.application.context import DataContext, StrategyContext
+from kairospy.application.strategy import DataContext, StrategyContext
 from kairospy.core.reference import MarketResolver
 from kairospy.infrastructure.data import DataStore
 from kairospy.application.mode.backtest import BacktestEngine, SimulatedAccount

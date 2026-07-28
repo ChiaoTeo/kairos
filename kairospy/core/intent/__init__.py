@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .journal import IntentJournal
 from .model import (
+    Intent,
     IntentEvent,
     IntentEventKind,
     IntentKind,
@@ -12,6 +13,7 @@ from .model import (
 )
 
 __all__ = [
+    "Intent",
     "IntentEvent",
     "IntentEventKind",
     "IntentJournal",

@@ -23,7 +23,7 @@ from kairospy.infrastructure.integrations.payloads.ccxt_market import (
     ccxt_trade_update,
     ephemeral_market_ref,
 )
-from kairospy.application.service.domains.reference.builders import catalog_from_market_rows, market_definitions_from_rows
+from kairospy.application.service.domain.reference.builders import catalog_from_market_rows, market_definitions_from_rows
 
 
 @dataclass(frozen=True, slots=True)

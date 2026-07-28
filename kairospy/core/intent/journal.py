@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import is_dataclass, replace
 from datetime import datetime
 from datetime import timezone
 from typing import Iterable
 
-from .model import IntentEvent, IntentEventKind, IntentState, TradeIntent
+from .model import Intent, IntentEvent, IntentEventKind, IntentState
 
 
 class IntentJournal:
@@ -13,13 +13,15 @@ class IntentJournal:
         self._states: dict[str, IntentState] = {}
         self._events: list[IntentEvent] = []
 
-    def record_intent(self, intent: TradeIntent, *, at: datetime) -> IntentState:
+    def record_intent(self, intent: Intent, *, at: datetime) -> IntentState:
         if intent.intent_id in self._states:
             raise ValueError(f"intent already exists: {intent.intent_id}")
-        recorded = intent if intent.created_at is not None else replace(intent, created_at=at)
+        recorded = intent
+        if intent.created_at is None and is_dataclass(intent):
+            recorded = replace(intent, created_at=at)
         state = IntentState(recorded)
         self._states[intent.intent_id] = state
-        self._events.append(IntentEvent(intent.intent_id, IntentEventKind.CREATED, at, reason=intent.reason))
+        self._events.append(IntentEvent(intent.intent_id, IntentEventKind.CREATED, at, reason=getattr(intent, "reason", "")))
         return state
 
     def record(self, event: IntentEvent) -> IntentState:
@@ -45,7 +47,7 @@ class IntentJournal:
         if strategy_id is not None:
             states = (state for state in states if state.intent.strategy_id == strategy_id)
         if instrument_id is not None:
-            states = (state for state in states if state.intent.instrument_id == instrument_id)
+            states = (state for state in states if getattr(state.intent, "instrument_id", None) == instrument_id)
         if active is not None:
             states = (state for state in states if state.active is active)
         return tuple(sorted(states, key=lambda state: state.intent.created_at or datetime.min.replace(tzinfo=timezone.utc)))

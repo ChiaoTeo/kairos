@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Mapping
 
 from kairospy.config import KairosConfig, load_config
-from kairospy.application.runtime.control import list_run_daemons
+
+try:
+    from kairospy.application.service.runtime import list_run_daemons
+except ModuleNotFoundError:
+    list_run_daemons = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,13 +80,15 @@ class SurfaceContext:
             if age < self.refresh_interval_seconds and cached.current_product == self.product:
                 return cached
         config = self._config or load_config()
-        runs = tuple(
-            _run_summary(status.to_dict())
-            for status in list_run_daemons(
-                root=config.resolve_path(".kairos/runtime"),
-                stale_after_seconds=self.stale_after_seconds,
+        runs = ()
+        if list_run_daemons is not None:
+            runs = tuple(
+                _run_summary(status.to_dict())
+                for status in list_run_daemons(
+                    root=config.resolve_path(".kairos/runtime"),
+                    stale_after_seconds=self.stale_after_seconds,
+                )
             )
-        )
         snapshot = SurfaceSnapshot(
             project_name=config.project_name or config.root.name,
             root=config.root,

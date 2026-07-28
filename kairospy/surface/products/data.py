@@ -5,7 +5,8 @@ import sys
 
 import typer
 
-from kairospy.application.service.domains.market import MarketDataResolver, MarketDataService, MarketDataSpec, replay_rows
+from kairospy.application.service.domain.market import MarketDataResolver, MarketDataSpec, replay_rows
+from kairospy.application.service.engine.backtest import BacktestMarketDataService
 from kairospy.surface.runtime import DriverName, ExchangeName, StorageFormat, exchange, store
 from kairospy.surface.ui.terminal import write_jsonl
 
@@ -142,7 +143,7 @@ def _service(
     exchange_name: ExchangeName,
     market: str,
 ) -> MarketDataService:
-    return MarketDataService(
+    return BacktestMarketDataService(
         store(root, storage_format),
-        MarketDataResolver(default_venue=exchange_name.value, default_market=market),
+        resolver=MarketDataResolver(default_venue=exchange_name.value, default_market=market),
     )

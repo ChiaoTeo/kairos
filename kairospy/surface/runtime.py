@@ -17,7 +17,7 @@ from kairospy.infrastructure.integrations import (
     OkxBroker,
     OkxMarketDataConnector,
 )
-from kairospy.application.service.domains.reference import ReferenceStore
+from kairospy.application.service.domain.reference import ReferenceStore
 
 
 class StorageFormat(str, Enum):

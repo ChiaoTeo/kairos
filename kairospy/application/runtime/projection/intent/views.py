@@ -7,7 +7,7 @@ from datetime import datetime
 @dataclass(frozen=True, slots=True)
 class IntentStateSummary:
     intent_id: str
-    instrument_id: str
+    instrument_id: str | None
     status: str
     active: bool
     updated_at: datetime | None = None

@@ -9,10 +9,9 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.mode.backtest import backtest_result_summary
 from kairospy.application.runtime.model import RuntimeMode
-from kairospy.application.service.modes.backtest import BacktestConfigurationError, ConfiguredBacktest, configured_backtest
-from kairospy.application.service.operations.run import RunAccountJournal
+from kairospy.application.service.engine.backtest import BacktestConfigurationError, ConfiguredBacktest, configured_backtest
+from kairospy.application.service.system.run import RunAccountJournal
 
 
 backtest_app = typer.Typer(no_args_is_help=True, help="Backtest commands")
@@ -26,7 +25,7 @@ def run(
         configured = configured_backtest(config_path)
     except BacktestConfigurationError as error:
         raise typer.BadParameter(str(error)) from error
-    result = configured.engine.run(configured.source)
+    result = configured.run()
     summary = {"run_id": configured.run_id, **backtest_result_summary(result)}
     artifact = BacktestArtifactWriter(configured.run_directory, configured.run_id)
     artifact.write(configured, result, summary)
@@ -38,7 +37,7 @@ class BacktestArtifactWriter:
         self.directory = directory
         self.run_id = run_id
 
-    def write(self, configured: ConfiguredBacktest, result: object, summary: Mapping[str, object]) -> None:
+    def write(self, configured: object, result: object, summary: Mapping[str, object]) -> None:
         self.directory.mkdir(parents=True, exist_ok=True)
         _write_json(self.directory / "summary.json", summary)
         _write_json(self.directory / "metrics.json", getattr(result, "metrics", {}))
@@ -48,11 +47,24 @@ class BacktestArtifactWriter:
         _write_jsonl(self.directory / "trades.jsonl", getattr(result, "trades", ()))
         _write_jsonl(self.directory / "intent_states.jsonl", getattr(getattr(result, "runtime", None), "intent_states", ()))
         (self.directory / "report.md").write_text(_report_markdown(configured, summary), encoding="utf-8")
-        RunAccountJournal(self.directory, run_id=self.run_id, mode=RuntimeMode.BACKTEST.value).record_backtest_result(
-            result,
-            run_id=self.run_id,
-            mode=RuntimeMode.BACKTEST.value,
-        )
+        RunAccountJournal(self.directory, run_id=self.run_id, mode=RuntimeMode.BACKTEST.value).record_backtest_result(result)
+
+
+def backtest_result_summary(result: object) -> dict[str, object]:
+    runtime = getattr(result, "runtime", None)
+    account = getattr(result, "account", None)
+    return _jsonable({
+        "mode": getattr(getattr(account, "environment", None), "value", None),
+        "strategy_id": getattr(runtime, "strategy_id", None),
+        "event_count": getattr(runtime, "event_count", None),
+        "initial_equity": getattr(result, "initial_equity", None),
+        "final_equity": getattr(result, "final_equity", None),
+        "net_profit": getattr(result, "net_profit", None),
+        "total_return": getattr(result, "total_return", None),
+        "fills": len(tuple(getattr(result, "fills", ()))),
+        "closed_trades": len(tuple(getattr(result, "trades", ()))),
+        "metrics": getattr(result, "metrics", {}),
+    })
 
 
 def _write_json(path: Path, value: object) -> None:

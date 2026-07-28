@@ -4,9 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Mapping
 
+from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.core.views import ViewFieldSchema, ViewSchema
-
-from ...model import RuntimeDataEnvelope
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,9 +33,9 @@ class RiskEventProjection:
 
     def __init__(self) -> None:
         self._event_count = 0
-        self._last_event: RuntimeDataEnvelope | None = None
+        self._last_event: RuntimeEnvelope | None = None
 
-    def on_event(self, event: RuntimeDataEnvelope) -> None:
+    def on_event(self, event: RuntimeEnvelope) -> None:
         if event.domain == "system" and event.kind.startswith("risk."):
             self._event_count += 1
             self._last_event = event
@@ -55,10 +54,6 @@ class RiskEventProjection:
 def _payload_dict(payload: object) -> dict[str, object]:
     if isinstance(payload, Mapping):
         return dict(payload)
-    if hasattr(payload, "fields"):
-        fields = getattr(payload, "fields")
-        if isinstance(fields, Mapping):
-            return dict(fields)
     return {"type": type(payload).__name__}
 
 

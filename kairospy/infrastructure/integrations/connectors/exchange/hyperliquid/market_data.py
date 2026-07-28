@@ -11,7 +11,7 @@ from kairospy.core.reference import (
     MarketRef,
     ReferenceCatalog,
 )
-from kairospy.application.service.domains.reference.builders import (
+from kairospy.application.service.domain.reference.builders import (
     catalog_from_market_rows,
     market_definitions_from_rows,
 )

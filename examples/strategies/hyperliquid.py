@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from kairospy.application.context import StrategyContext
+from kairospy.application.strategy import StrategyContext
 from kairospy.core.market import Quote
 from kairospy.application.strategy import StrategyBase, StrategySignal
 

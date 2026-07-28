@@ -2,55 +2,41 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Mapping
 
-from kairospy.application.context import DataContext
-from kairospy.core.reference import MarketResolver
-from kairospy.application.strategy import Strategy
-
-from ..kernel import IntentHandler, RuntimeRequestProviders, SubscriptionHandler
-from ..model import RuntimeDataEnvelope, RunProfile, RuntimeMode
-from ..projection.base import RuntimeComponent
-from ..source import AsyncEventSource, EventSource
-
-
-@dataclass(frozen=True, slots=True)
-class RuntimeStateConfig:
-    data: DataContext
-    market_resolver: MarketResolver | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class RuntimeServiceConfig:
-    intent_handler: IntentHandler | None = None
-    subscription_handler: SubscriptionHandler | None = None
-    request_providers: RuntimeRequestProviders | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class RuntimeProjectionConfig:
-    components: tuple[RuntimeComponent, ...] = ()
+from kairospy.application.runtime.model import RuntimeMode
+from kairospy.application.runtime.protocol import RuntimeEnvelope, RuntimeEventLine
+from kairospy.application.runtime.services import AccountService, MarketDataService, ReferenceService
+from kairospy.application.runtime.services.component import RuntimeComponentProvider, RuntimeViewPublisher
+from kairospy.application.strategy import ControlJournal, Strategy
+from kairospy.core.execution import ExecutionCoordinator
+from kairospy.core.intent import IntentJournal
+from kairospy.core.views import ViewStore
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeRunSpec:
     run_id: str
-    profile: RunProfile
+    mode: RuntimeMode | str
     strategy: Strategy
-    source: EventSource | AsyncEventSource
-    state_config: RuntimeStateConfig
-    service_config: RuntimeServiceConfig = field(default_factory=RuntimeServiceConfig)
-    projection_config: RuntimeProjectionConfig = field(default_factory=RuntimeProjectionConfig)
-    pre_events: tuple[RuntimeDataEnvelope, ...] = ()
+    source: RuntimeEventLine | None = None
+    state: Mapping[str, object] = field(default_factory=dict)
+    intents: IntentJournal | None = None
+    controls: ControlJournal | None = None
+    views: ViewStore | None = None
+    data: MarketDataService | None = None
+    account: AccountService | None = None
+    reference: ReferenceService | None = None
+    execution: ExecutionCoordinator | None = None
+    providers: tuple[RuntimeComponentProvider, ...] = ()
+    components: tuple[RuntimeViewPublisher, ...] = ()
+    pre_events: tuple[RuntimeEnvelope, ...] = ()
     started_at: datetime | None = None
 
-    @property
-    def mode(self) -> RuntimeMode:
-        return self.profile.mode
+    def __post_init__(self) -> None:
+        if not self.run_id.strip():
+            raise ValueError("run_id is required")
+        object.__setattr__(self, "mode", RuntimeMode(self.mode))
 
 
-__all__ = [
-    "RuntimeProjectionConfig",
-    "RuntimeRunSpec",
-    "RuntimeServiceConfig",
-    "RuntimeStateConfig",
-]
+__all__ = ["RuntimeRunSpec"]

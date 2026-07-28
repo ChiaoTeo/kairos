@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from kairospy.core.market import Bar, MarketEvent, MarketSubject, OrderBookSnapshot, PriceLevel, Quote, TradePrint
-from kairospy.application.service.domains.market.records import (
+from kairospy.application.service.domain.market.records import (
     BarRecord,
     OrderBookRecord,
     QuoteRecord,

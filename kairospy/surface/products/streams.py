@@ -8,7 +8,8 @@ from typing import Mapping, TextIO
 
 import typer
 
-from kairospy.application.service.domains.market import MarketDataResolver, MarketDataService, MarketDataSpec
+from kairospy.application.service.domain.market import MarketDataResolver, MarketDataSpec
+from kairospy.application.service.engine.backtest import BacktestMarketDataService
 from kairospy.surface.runtime import DriverName, ExchangeName, StorageFormat, exchange, store
 from kairospy.surface.ui.terminal import write_jsonl
 
@@ -52,9 +53,9 @@ def persist(
     trade_limit: int = typer.Option(50, "--trade-limit"),
     poll_seconds: float = typer.Option(1.0, "--poll-seconds"),
 ) -> None:
-    service = MarketDataService(
+    service = BacktestMarketDataService(
         store(root, storage_format),
-        MarketDataResolver(default_venue=exchange_name.value, default_market=market),
+        resolver=MarketDataResolver(default_venue=exchange_name.value, default_market=market),
     )
     spec = MarketDataSpec(
         symbol=symbol,

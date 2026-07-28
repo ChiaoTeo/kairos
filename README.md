@@ -61,7 +61,7 @@ from decimal import Decimal
 from tempfile import TemporaryDirectory
 
 from kairospy.application.mode.backtest import BacktestEngine, SimulatedAccount
-from kairospy.application.context import DataContext
+from kairospy.application.strategy import DataContext
 from kairospy.core.reference import MarketResolver
 from kairospy.infrastructure.data import DataStore
 from kairospy.application.service.domains.market import IterableEventSource

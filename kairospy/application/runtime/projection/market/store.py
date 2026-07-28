@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Mapping
 
+from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.application.runtime.services import MarketDataService
 from kairospy.core.market import (
     Bar,
     MarketEvent,
+    MarketEventValue,
     MarketObservation,
     MarketSubject,
     OrderBookSnapshot,
@@ -13,10 +15,8 @@ from kairospy.core.market import (
     RateObservation,
     TradePrint,
 )
-from kairospy.core.views import ViewFieldSchema, ViewSchema, ViewStore
-from kairospy.application.service.domains.market import MarketSubscriptionRegistry
+from kairospy.core.views import ViewFieldSchema, ViewSchema
 
-from ...model import RuntimeDataEnvelope
 from .views import (
     MarketBarSummary,
     MarketBarsView,
@@ -38,101 +38,92 @@ from .views import (
 
 
 class MarketStore:
-    key = "market.quotes"
-    quotes_schema = ViewSchema(
-        key,
-        "system",
-        fields=(
-            ViewFieldSchema("event_count", "quote update count", "runtime sequence", "market event projection"),
-            ViewFieldSchema("quotes", "latest quotes by market key", "event time", "market event projection"),
-        ),
-        mutability="runtime_writable",
-        evidence="runtime market quote projection",
-    )
-    rates_schema = ViewSchema(
-        "market.rates",
-        "system",
-        fields=(
-            ViewFieldSchema("event_count", "rate update count", "runtime sequence", "market event projection"),
-            ViewFieldSchema("rates", "latest rates by rate or market id", "event time", "market event projection"),
-        ),
-        mutability="runtime_writable",
-        evidence="runtime market rate projection",
-    )
-    books_schema = ViewSchema(
-        "market.books",
-        "system",
-        fields=(
-            ViewFieldSchema("event_count", "order book update count", "runtime sequence", "market event projection"),
-            ViewFieldSchema("books", "latest order books by market key", "event time", "market event projection"),
-        ),
-        mutability="runtime_writable",
-        evidence="runtime market book projection",
-    )
-    bars_schema = ViewSchema(
-        "market.bars",
-        "system",
-        fields=(
-            ViewFieldSchema("event_count", "bar update count", "runtime sequence", "market event projection"),
-            ViewFieldSchema("bars", "latest bars by market key and timeframe", "event time", "market event projection"),
-        ),
-        mutability="runtime_writable",
-        evidence="runtime market bar projection",
-    )
-    trades_schema = ViewSchema(
-        "market.trades",
-        "system",
-        fields=(
-            ViewFieldSchema("event_count", "trade update count", "runtime sequence", "market event projection"),
-            ViewFieldSchema("trades", "latest trades by market key", "event time", "market event projection"),
-        ),
-        mutability="runtime_writable",
-        evidence="runtime market trade projection",
-    )
-    subscriptions_schema = ViewSchema(
-        "market.subscriptions",
-        "system",
-        fields=(
-            ViewFieldSchema("total_count", "known market subscription count", "runtime state", "subscription registry"),
-            ViewFieldSchema("active_count", "active market subscription count", "runtime state", "subscription registry"),
-            ViewFieldSchema("subscriptions", "market subscription summaries", "runtime state", "subscription registry"),
-        ),
-        mutability="runtime_writable",
-        evidence="runtime market subscription registry",
-    )
-    observations_schema = ViewSchema(
-        "market.observations",
-        "system",
-        fields=(
-            ViewFieldSchema("event_count", "market observation count", "runtime sequence", "market event projection"),
-            ViewFieldSchema("observations", "latest observations by subject and kind", "event time", "market event projection"),
-        ),
-        mutability="runtime_writable",
-        evidence="runtime market observation projection",
-    )
-    fields_schema = ViewSchema(
-        "market.fields",
-        "system",
-        fields=(
-            ViewFieldSchema("event_count", "market field update count", "runtime sequence", "market field projection"),
-            ViewFieldSchema("fields", "latest market facts by subject and field", "event time", "market field projection"),
-        ),
-        mutability="runtime_writable",
-        evidence="runtime market field projection",
-    )
-    schema = quotes_schema
     schemas = (
-        quotes_schema,
-        rates_schema,
-        books_schema,
-        bars_schema,
-        trades_schema,
-        subscriptions_schema,
-        observations_schema,
-        fields_schema,
+        ViewSchema(
+            "market.subscriptions",
+            "system",
+            fields=(
+                ViewFieldSchema("total_count", "known market subscription count", "runtime state", "market service"),
+                ViewFieldSchema("active_count", "active market subscription count", "runtime state", "market service"),
+                ViewFieldSchema("subscriptions", "market subscription summaries", "runtime state", "market service"),
+            ),
+            mutability="runtime_writable",
+            evidence="runtime market subscription service",
+        ),
+        ViewSchema(
+            "market.quotes",
+            "system",
+            fields=(
+                ViewFieldSchema("event_count", "quote update count", "runtime sequence", "market event projection"),
+                ViewFieldSchema("quotes", "latest quotes by market key", "event time", "market event projection"),
+            ),
+            mutability="runtime_writable",
+            evidence="runtime market quote projection",
+        ),
+        ViewSchema(
+            "market.rates",
+            "system",
+            fields=(
+                ViewFieldSchema("event_count", "rate update count", "runtime sequence", "market event projection"),
+                ViewFieldSchema("rates", "latest rates by rate or market id", "event time", "market event projection"),
+            ),
+            mutability="runtime_writable",
+            evidence="runtime market rate projection",
+        ),
+        ViewSchema(
+            "market.books",
+            "system",
+            fields=(
+                ViewFieldSchema("event_count", "order book update count", "runtime sequence", "market event projection"),
+                ViewFieldSchema("books", "latest order books by market key", "event time", "market event projection"),
+            ),
+            mutability="runtime_writable",
+            evidence="runtime market book projection",
+        ),
+        ViewSchema(
+            "market.bars",
+            "system",
+            fields=(
+                ViewFieldSchema("event_count", "bar update count", "runtime sequence", "market event projection"),
+                ViewFieldSchema("bars", "latest bars by market key and timeframe", "event time", "market event projection"),
+            ),
+            mutability="runtime_writable",
+            evidence="runtime market bar projection",
+        ),
+        ViewSchema(
+            "market.trades",
+            "system",
+            fields=(
+                ViewFieldSchema("event_count", "trade update count", "runtime sequence", "market event projection"),
+                ViewFieldSchema("trades", "latest trades by market key", "event time", "market event projection"),
+            ),
+            mutability="runtime_writable",
+            evidence="runtime market trade projection",
+        ),
+        ViewSchema(
+            "market.observations",
+            "system",
+            fields=(
+                ViewFieldSchema("event_count", "market observation count", "runtime sequence", "market event projection"),
+                ViewFieldSchema("observations", "latest observations by subject and kind", "event time", "market event projection"),
+            ),
+            mutability="runtime_writable",
+            evidence="runtime market observation projection",
+        ),
+        ViewSchema(
+            "market.fields",
+            "system",
+            fields=(
+                ViewFieldSchema("event_count", "market field update count", "runtime sequence", "market field projection"),
+                ViewFieldSchema("fields", "latest market facts by subject and field", "event time", "market field projection"),
+            ),
+            mutability="runtime_writable",
+            evidence="runtime market field projection",
+        ),
     )
 
-    def __init__(self, subscriptions: MarketSubscriptionRegistry | None = None) -> None:
+    def __init__(self, data: MarketDataService | None = None) -> None:
+        self.data = data
         self._quote_event_count = 0
         self._rate_event_count = 0
         self._book_event_count = 0
@@ -147,7 +138,42 @@ class MarketStore:
         self._trades: dict[str, MarketTradeSummary] = {}
         self._observations: dict[str, MarketObservationSummary] = {}
         self._fields: dict[str, MarketFieldSummary] = {}
-        self.subscriptions = subscriptions or MarketSubscriptionRegistry()
+
+    def apply_envelope(self, envelope: RuntimeEnvelope) -> None:
+        if str(envelope.domain) not in {"market", "data"}:
+            return
+        payload = envelope.payload
+        if isinstance(payload, MarketEvent):
+            self.apply_market_event(payload)
+            return
+        if isinstance(payload, MarketObservation):
+            self.update_observation(payload)
+            return
+        if isinstance(payload, (Quote, OrderBookSnapshot, Bar, TradePrint, RateObservation)):
+            self.apply_market_event(_market_event_from_value(payload, envelope))
+
+    def apply_market_event(self, event: MarketEvent) -> None:
+        self.update_observation(_observation_from_market_event(event))
+        for summary in _field_summaries_from_market_event(event):
+            self.update_field(summary)
+        self._apply_typed_market_event(event.value, event.kind)
+
+    def _apply_typed_market_event(self, value: MarketEventValue, kind: str) -> None:
+        if isinstance(value, Quote):
+            self.update_quote(value)
+        elif isinstance(value, OrderBookSnapshot):
+            self.update_book(_book_summary(value))
+            quote = _quote_from_book(value)
+            if quote is not None:
+                self.update_quote(quote)
+        elif isinstance(value, Bar):
+            self.update_bar(_bar_summary(value))
+        elif isinstance(value, TradePrint):
+            self.update_trade(_trade_summary(value))
+        elif isinstance(value, RateObservation):
+            self.update_rate(value, kind=kind)
+        elif isinstance(value, MarketObservation):
+            self.update_observation(value)
 
     def update_quote(self, quote: Quote) -> Quote:
         key = _quote_state_key(quote)
@@ -194,34 +220,6 @@ class MarketStore:
         self._trades[key] = trade
         return trade
 
-    def latest_quote(self, key: str) -> Quote | None:
-        return self._quotes.get(key)
-
-    def latest_rate(self, rate_id: str) -> RateObservation | None:
-        return self._rates.get(str(rate_id))
-
-    def latest_book(self, key: str) -> MarketBookSummary | None:
-        return self._books.get(key)
-
-    def latest_bar(self, key: str, *, timeframe: str | None = None) -> MarketBarSummary | None:
-        state_key = ".".join(part for part in (key, timeframe) if part)
-        return self._bars.get(state_key)
-
-    def latest_trade(self, key: str) -> MarketTradeSummary | None:
-        return self._trades.get(key)
-
-    def apply_envelope(
-        self,
-        envelope: RuntimeDataEnvelope,
-    ) -> Quote | RateObservation | MarketBookSummary | MarketBarSummary | MarketTradeSummary | tuple[MarketFieldSummary, ...] | MarketObservationSummary | None:
-        if envelope.domain != "market":
-            return None
-        if isinstance(envelope.payload, MarketEvent):
-            return self.apply_market_event(envelope.payload)
-        if isinstance(envelope.payload, MarketObservation):
-            return self.update_observation(envelope.payload)
-        return None
-
     def update_observation(self, observation: MarketObservation) -> MarketObservationSummary:
         key = _observation_state_key(observation)
         previous = self._observations.get(key)
@@ -241,36 +239,6 @@ class MarketStore:
         self._observations[key] = summary
         return summary
 
-    def apply_market_event(self, event: MarketEvent) -> tuple[MarketFieldSummary, ...]:
-        observation = _observation_from_market_event(event)
-        self.update_observation(observation)
-        self.subscriptions.observe(event)
-        summaries = tuple(_field_summaries_from_market_event(event))
-        for summary in summaries:
-            self.update_field(summary)
-        self._apply_typed_market_event(event)
-        return summaries
-
-    def _apply_typed_market_event(self, event: MarketEvent) -> None:
-        value = event.value
-        if isinstance(value, Quote):
-            self.update_quote(value)
-            return
-        if isinstance(value, OrderBookSnapshot):
-            self.update_book(_book_summary(value))
-            top_quote = _quote_from_book(value)
-            if top_quote is not None:
-                self.update_quote(top_quote)
-            return
-        if isinstance(value, Bar):
-            self.update_bar(_bar_summary(value))
-            return
-        if isinstance(value, TradePrint):
-            self.update_trade(_trade_summary(value))
-            return
-        if isinstance(value, RateObservation):
-            self.update_rate(value, kind=event.kind)
-
     def update_field(self, summary: MarketFieldSummary) -> MarketFieldSummary:
         key = _field_state_key(summary)
         previous = self._fields.get(key)
@@ -280,8 +248,27 @@ class MarketStore:
         self._fields[key] = summary
         return summary
 
-    def view(self) -> MarketQuotesView:
-        return self.quotes_view()
+    def subscriptions_view(self) -> MarketSubscriptionsView:
+        subscriptions = ()
+        if self.data is not None:
+            subscriptions = tuple(
+                MarketSubscriptionSummary(
+                    key=item.key,
+                    subject_type="market",
+                    subject_id=item.spec.market.market_key,
+                    kind="data",
+                    fields=tuple(selector.key for selector in item.spec.selectors),
+                    status="active",
+                    provider=item.spec.market.venue,
+                    stream=item.spec.market.source_symbol,
+                )
+                for item in self.data.subscriptions()
+            )
+        return MarketSubscriptionsView(
+            total_count=len(subscriptions),
+            active_count=sum(1 for item in subscriptions if item.status == "active"),
+            subscriptions=subscriptions,
+        )
 
     def quotes_view(self) -> MarketQuotesView:
         return MarketQuotesView(
@@ -320,124 +307,36 @@ class MarketStore:
         )
 
     def books_view(self) -> MarketBooksView:
-        return MarketBooksView(
-            event_count=self._book_event_count,
-            books=tuple(self._books[key] for key in sorted(self._books)),
-        )
+        return MarketBooksView(self._book_event_count, tuple(self._books[key] for key in sorted(self._books)))
 
     def bars_view(self) -> MarketBarsView:
-        return MarketBarsView(
-            event_count=self._bar_event_count,
-            bars=tuple(self._bars[key] for key in sorted(self._bars)),
-        )
+        return MarketBarsView(self._bar_event_count, tuple(self._bars[key] for key in sorted(self._bars)))
 
     def trades_view(self) -> MarketTradesView:
-        return MarketTradesView(
-            event_count=self._trade_event_count,
-            trades=tuple(self._trades[key] for key in sorted(self._trades)),
-        )
-
-    def subscriptions_view(self) -> MarketSubscriptionsView:
-        subscriptions = tuple(
-            MarketSubscriptionSummary(
-                key=item.key,
-                subject_type=item.spec.subject_type,
-                subject_id=item.spec.subject_id,
-                kind=item.kind,
-                fields=tuple(selector.key for selector in item.spec.selectors),
-                status=item.status,
-                requested_by=item.requested_by,
-                requested_at=item.requested_at,
-                provider=item.provider,
-                stream=item.stream,
-                last_event_time=item.last_event_time,
-                error=item.error,
-            )
-            for item in self.subscriptions.list()
-        )
-        return MarketSubscriptionsView(
-            total_count=len(subscriptions),
-            active_count=sum(1 for item in subscriptions if item.status == "active"),
-            subscriptions=subscriptions,
-        )
+        return MarketTradesView(self._trade_event_count, tuple(self._trades[key] for key in sorted(self._trades)))
 
     def observations_view(self) -> MarketObservationsView:
-        return MarketObservationsView(
-            event_count=self._observation_event_count,
-            observations=tuple(self._observations[key] for key in sorted(self._observations)),
-        )
+        return MarketObservationsView(self._observation_event_count, tuple(self._observations[key] for key in sorted(self._observations)))
 
     def fields_view(self) -> MarketFieldsView:
-        return MarketFieldsView(
-            event_count=self._field_event_count,
-            fields=tuple(self._fields[key] for key in sorted(self._fields)),
-        )
-
-    def publisher(self) -> "MarketViewPublisher":
-        from .publisher import MarketViewPublisher
-
-        return MarketViewPublisher(self)
-
-class MarketState(MarketStore):
-    """Compatibility facade for the market runtime store.
-
-    New runtime code should treat this as a store and use MarketProjection /
-    MarketViewPublisher for projection and view publication.
-    """
-
-    def __init__(self, subscriptions: MarketSubscriptionRegistry | None = None) -> None:
-        super().__init__(subscriptions)
-        from .publisher import MarketViewPublisher
-
-        self.view_publisher = MarketViewPublisher(self)
-
-    def publish_views(self, views: ViewStore, *, as_of: datetime | None = None) -> None:
-        self.view_publisher.publish(views, as_of=as_of)
-
-def _quote_observation(quote: Quote) -> MarketObservation:
-    return MarketObservation(
-        MarketSubject("instrument", quote.instrument_id),
-        "quote",
-        quote.time,
-        {
-            "instrument_id": quote.instrument_id,
-            "market_id": quote.market_id,
-            "market_key": quote.market_key,
-            "bid": quote.bid,
-            "ask": quote.ask,
-            "bid_size": quote.bid_size,
-            "ask_size": quote.ask_size,
-        },
-        available_at=quote.time,
-        source=quote.source,
-    )
+        return MarketFieldsView(self._field_event_count, tuple(self._fields[key] for key in sorted(self._fields)))
 
 
-def _quote_state_key(quote: Quote) -> str:
-    return quote.market_key or quote.market_id or quote.instrument_id
-
-
-def _rate_state_key(rate: RateObservation) -> str:
-    return rate.market_id or rate.rate_id
-
-
-def _observation_state_key(observation: MarketObservation) -> str:
-    return f"{observation.subject.subject_type}.{observation.subject.subject_id}.{observation.kind}"
-
-
-def _field_state_key(summary: MarketFieldSummary) -> str:
-    parts = (summary.subject_type, summary.subject_id, summary.field, summary.interval or "")
-    return ".".join(_key_part(part) for part in parts)
+def _market_event_from_value(value: MarketEventValue, envelope: RuntimeEnvelope) -> MarketEvent:
+    subject = getattr(value, "subject", None)
+    if not isinstance(subject, MarketSubject):
+        subject = MarketSubject("instrument", getattr(value, "instrument_id", getattr(value, "rate_id", "unknown")))
+    observed_at = getattr(value, "time", getattr(value, "observed_at", envelope.time))
+    source = getattr(value, "source", "")
+    return MarketEvent(subject, observed_at, value, available_at=envelope.time, source=source, sequence=envelope.sequence)
 
 
 def _observation_from_market_event(event: MarketEvent) -> MarketObservation:
-    value = event.value
-    payload = _market_object_payload(value)
     return MarketObservation(
         event.subject,
         event.kind,
         event.observed_at,
-        payload,
+        _market_object_payload(event.value),
         available_at=event.available_at or event.observed_at,
         source=event.source,
         sequence=event.sequence,
@@ -451,17 +350,7 @@ def _field_summaries_from_market_event(event: MarketEvent) -> tuple[MarketFieldS
     interval = getattr(value, "timeframe", None)
     summaries: list[MarketFieldSummary] = []
     for name, field_value in _market_object_payload(value).items():
-        if field_value is None or name in {
-            "instrument_id",
-            "market_id",
-            "market_key",
-            "source",
-            "basis",
-            "derivation",
-            "timeframe",
-            "bids",
-            "asks",
-        }:
+        if field_value is None or name in {"instrument_id", "market_id", "market_key", "source", "basis", "derivation", "timeframe", "bids", "asks"}:
             continue
         summaries.append(
             MarketFieldSummary(
@@ -592,87 +481,32 @@ def _quote_from_book(book: OrderBookSnapshot) -> Quote | None:
 
 
 def _bar_summary(bar: Bar) -> MarketBarSummary:
-    return MarketBarSummary(
-        market_id=bar.market_id,
-        instrument_id=bar.instrument_id,
-        market_key=bar.market_key,
-        time=bar.time,
-        timeframe=bar.timeframe,
-        open=bar.open,
-        high=bar.high,
-        low=bar.low,
-        close=bar.close,
-        volume=bar.volume,
-        source=bar.source,
-    )
+    return MarketBarSummary(bar.market_id, bar.instrument_id, bar.market_key, bar.time, bar.timeframe, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.source)
 
 
 def _trade_summary(trade: TradePrint) -> MarketTradeSummary:
-    return MarketTradeSummary(
-        market_id=trade.market_id,
-        instrument_id=trade.instrument_id,
-        market_key=trade.market_key,
-        time=trade.time,
-        trade_id=trade.trade_id,
-        side=trade.side,
-        price=trade.price,
-        size=trade.size,
-        cost=trade.cost,
-        source=trade.source,
-    )
+    return MarketTradeSummary(trade.market_id, trade.instrument_id, trade.market_key, trade.time, trade.trade_id, trade.side, trade.price, trade.size, trade.cost, trade.source)
 
 
-def _summary_observation(
-    summary: MarketBookSummary | MarketBarSummary | MarketTradeSummary,
-    kind: str,
-) -> MarketObservation:
-    return MarketObservation(
-        MarketSubject("instrument", summary.instrument_id),
-        kind,
-        summary.time,
-        {
-            "instrument_id": summary.instrument_id,
-            "market_id": summary.market_id,
-            "market_key": summary.market_key,
-        },
-        available_at=summary.time,
-        source=summary.source,
-    )
+def _quote_state_key(quote: Quote) -> str:
+    return quote.market_key or quote.market_id or quote.instrument_id
+
+
+def _rate_state_key(rate: RateObservation) -> str:
+    return rate.market_id or rate.rate_id
+
+
+def _observation_state_key(observation: MarketObservation) -> str:
+    return f"{observation.subject.subject_type}.{observation.subject.subject_id}.{observation.kind}"
+
+
+def _field_state_key(summary: MarketFieldSummary) -> str:
+    parts = (summary.subject_type, summary.subject_id, summary.field, summary.interval or "")
+    return ".".join(_key_part(part) for part in parts)
 
 
 def _key_part(value: object) -> str:
     return "".join(character if character.isalnum() else "_" for character in str(value).lower()).strip("_")
 
 
-def _first(value: Mapping[str, object], *keys: str) -> object | None:
-    for key in keys:
-        if value.get(key) is not None:
-            return value[key]
-    return None
-
-
-def _optional_decimal(value: object | None) -> Decimal | None:
-    return None if value is None else Decimal(str(value))
-
-
-def _levels(value: object) -> tuple[tuple[Decimal, Decimal], ...]:
-    if not isinstance(value, (list, tuple)):
-        return ()
-    levels: list[tuple[Decimal, Decimal]] = []
-    for item in value:
-        if not isinstance(item, (list, tuple)) or len(item) < 2:
-            continue
-        levels.append((Decimal(str(item[0])), Decimal(str(item[1]))))
-    return tuple(levels)
-
-
-def _book_levels(price: object | None, size: object | None) -> tuple[tuple[Decimal, Decimal], ...]:
-    if price is None or size is None:
-        return ()
-    return ((Decimal(str(price)), Decimal(str(size))),)
-
-
-__all__ = [
-    "MarketState",
-    "MarketStore",
-]
+__all__ = ["MarketStore"]

@@ -10,7 +10,6 @@ from typer.testing import CliRunner
 from kairospy.surface.products import backtest_app, broker_app, data_app, integrations_app, reference_app, run_app, strategy_app, streams_app
 from kairospy.surface.products.run import RunShellSession
 from kairospy.surface.state import SurfaceContext, render_run_strip, render_surface_overview
-from kairospy.surface.tui import TextTui
 
 
 app = typer.Typer(no_args_is_help=True, help="KairosPy strategy runtime toolkit")
@@ -46,6 +45,8 @@ def tui() -> None:
 
 
 def _app(command: list[str] | None = None) -> None:
+    from kairospy.surface.tui import TextTui
+
     session = TextTui(command_executor=_execute_product_command)
     if command:
         for line in command:

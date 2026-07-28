@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 
-from kairospy.application.service.domains.reference.builders import ReferenceSnapshot, catalog_from_equity_rows
+from kairospy.application.service.domain.reference.builders import ReferenceSnapshot, catalog_from_equity_rows
 
 from .protocols import ReferenceDataClient
 
