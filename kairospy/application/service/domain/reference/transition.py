@@ -105,7 +105,7 @@ def _in_scope_listing(
     venue: str | None,
     market: str | None,
 ) -> bool:
-    if venue is not None and listing.venue != venue:
+    if venue is not None and str(listing.venue) != str(venue):
         return False
     return any(item.listing_id == listing.listing_id for item in snapshot.list_markets(at=as_of, venue=venue, market=market))
 

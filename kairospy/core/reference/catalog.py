@@ -110,7 +110,7 @@ class ReferenceCatalog:
         if instrument_id is not None:
             values = [item for item in values if str(item.instrument_id) == str(instrument_id)]
         if venue is not None:
-            values = [item for item in values if item.venue == venue]
+            values = [item for item in values if str(item.venue) == str(venue)]
         return tuple(sorted(values, key=lambda item: str(item.listing_id)))
 
     def list_markets(
@@ -124,9 +124,9 @@ class ReferenceCatalog:
     ) -> tuple[MarketDefinition, ...]:
         values = _active_values(self._markets, at)
         if venue is not None:
-            values = [item for item in values if item.venue == venue]
+            values = [item for item in values if str(item.venue) == str(venue)]
         if market is not None:
-            values = [item for item in values if item.market == market]
+            values = [item for item in values if str(item.market) == str(market)]
         if status is not None:
             expected = status if isinstance(status, MarketStatus) else MarketStatus(str(status))
             values = [item for item in values if item.status is expected]
@@ -144,7 +144,7 @@ class ReferenceCatalog:
     ) -> MarketDefinition:
         candidates = [
             item for item in self.list_markets(at=at, venue=venue, market=market)
-            if item.source_symbol.casefold() == source_symbol.casefold()
+            if str(item.source_symbol).casefold() == source_symbol.casefold()
         ]
         if not candidates:
             raise KeyError(f"unknown market: {venue}:{market or '*'}:{source_symbol}")
@@ -218,14 +218,14 @@ class ReferenceCatalog:
             events.append(_market_event(LifecycleEventType.DELISTED, item, event_time=event_time))
         for market_id in sorted(before.keys() & after.keys()):
             old, new = before[market_id], after[market_id]
-            if old.source_symbol != new.source_symbol:
+            if str(old.source_symbol) != str(new.source_symbol):
                 events.append(
                     _market_event(
                         LifecycleEventType.SYMBOL_CHANGED,
                         new,
                         event_time=event_time,
-                        previous={"symbol": old.source_symbol},
-                        current={"symbol": new.source_symbol},
+                        previous={"symbol": str(old.source_symbol)},
+                        current={"symbol": str(new.source_symbol)},
                     )
                 )
             if old.status != new.status:

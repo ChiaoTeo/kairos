@@ -123,17 +123,17 @@ def compare_account_state(
         if abs(left.reserved_amount - right.reserved_amount) > tolerance:
             differences.append(AccountDifference("open_order.reserved_amount", order_id, left.reserved_amount, right.reserved_amount))
 
-    for state in sorted(pending_orders, key=lambda item: item.venue_order_id or item.request.venue_order_id or item.local_order_id):
-        venue_order_id = state.venue_order_id or state.request.venue_order_id
-        if not venue_order_id:
+    for state in sorted(pending_orders, key=lambda item: item.order_venue_id or item.request.order_venue_id or item.order_id):
+        order_venue_id = state.order_venue_id or state.request.order_venue_id
+        if not order_venue_id:
             continue
-        external_order = external_open_orders.get(venue_order_id)
+        external_order = external_open_orders.get(order_venue_id)
         if external_order is None:
-            differences.append(AccountDifference("pending_order.venue_present", venue_order_id, Decimal("1"), Decimal("0")))
+            differences.append(AccountDifference("pending_order.venue_present", order_venue_id, Decimal("1"), Decimal("0")))
             continue
         remaining = state.remaining_quantity
         if abs(remaining - external_order.quantity) > tolerance:
-            differences.append(AccountDifference("pending_order.remaining_quantity", venue_order_id, remaining, external_order.quantity))
+            differences.append(AccountDifference("pending_order.remaining_quantity", order_venue_id, remaining, external_order.quantity))
 
     return tuple(differences)
 

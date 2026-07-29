@@ -65,7 +65,7 @@ class RuntimeDispatcher:
             Callback(
                 hook,
                 None if event is None else event.sequence,
-                tuple(intent.intent_id for intent in context.emitted_intents),
+                tuple(str(intent.intent_id) for intent in context.emitted_intents),
             )
         )
 

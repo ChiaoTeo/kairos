@@ -5,10 +5,28 @@ import json
 
 from typer.testing import CliRunner
 
-from kairospy.config import KairosConfig
-from kairospy.surface.app import AppSession
-from kairospy.surface.products.run import run_app
-from kairospy.surface.state import SurfaceContext
+from kairospy.surface.interactive.shell import AppSession
+from kairospy.surface.cli.commands.run import run_app
+from kairospy.surface.interactive.session import SurfaceContext
+
+
+class _ProjectFacade:
+    def __init__(self, root):
+        self.root = root
+
+    def surface_snapshot(self, *, stale_after_seconds: float = 5.0):
+        _ = stale_after_seconds
+        return {
+            "project_name": self.root.name,
+            "root": self.root,
+            "data_root": self.root / ".kairos" / "data",
+            "reference_root": self.root / ".kairos" / "reference",
+            "runs": (),
+        }
+
+
+def _surface_context(root) -> SurfaceContext:
+    return SurfaceContext(project_facade=_ProjectFacade(root))
 
 
 def test_run_list_reads_rewritten_runtime_artifact_registry(tmp_path) -> None:
@@ -55,10 +73,161 @@ def test_run_daemon_status_uses_artifact_registry(tmp_path) -> None:
 def test_app_run_workspace_prompt_has_default_run_state(tmp_path) -> None:
     session = AppSession(
         stdout=StringIO(),
-        context=SurfaceContext(config=KairosConfig(source_path=None, root=tmp_path, values={})),
+        context=_surface_context(tmp_path),
     )
 
     assert session.prompt() == "kairos/app> "
-    assert session.handle("1") is False
+    assert session.handle("2") is False
 
     assert session.prompt() == "kairos/app/run> "
+
+
+def test_app_initial_screen_renders_home_from_navigation(tmp_path) -> None:
+    session = AppSession(
+        stdout=StringIO(),
+        context=_surface_context(tmp_path),
+    )
+
+    output = session.screen()
+
+    assert "view home" in output
+    assert "Products" in output
+    assert "reference" in output
+    assert "Commands" in output
+
+
+def test_app_account_view_uses_navigation_subcommands(tmp_path) -> None:
+    stdout = StringIO()
+    session = AppSession(
+        stdout=stdout,
+        context=_surface_context(tmp_path),
+    )
+
+    assert session.handle("3") is False
+
+    output = stdout.getvalue()
+    assert "view account" in output
+    assert "Subcommands" in output
+    assert "list" in output
+    assert "show" in output
+    assert "Recent Runs" not in output
+
+
+def test_app_order_context_does_not_inject_account(tmp_path) -> None:
+    stdout = StringIO()
+    calls: list[list[str]] = []
+
+    def execute(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
+        return 0, "ok\n"
+
+    session = AppSession(
+        stdout=stdout,
+        context=_surface_context(tmp_path),
+        command_executor=execute,
+    )
+
+    assert session.handle("order") is False
+    assert session.prompt() == "kairos/app/order> "
+    assert session.handle("open --account account1 --symbol BTC/USDT") is False
+
+    assert calls[-1] == ["order", "open", "--account", "account1", "--symbol", "BTC/USDT"]
+
+
+def test_app_reference_view_shows_reference_commands(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".kairos").mkdir()
+    (tmp_path / ".kairos" / "kairos.toml").write_text(
+        "\n".join(["schema_version = 1", "[project]", 'name = "demo"']),
+        encoding="utf-8",
+    )
+    stdout = StringIO()
+    session = AppSession(
+        stdout=stdout,
+        context=_surface_context(tmp_path),
+    )
+
+    assert session.handle("6") is False
+
+    output = stdout.getvalue()
+    assert "view reference" in output
+    assert "Subcommands" in output
+    assert "sync" in output
+    assert "participants" in output
+    assert "assets" in output
+    assert "catalog" in output
+    assert "Reference Panel" not in output
+
+
+def test_app_reference_removed_legacy_refresh_context(tmp_path) -> None:
+    stdout = StringIO()
+    calls: list[list[str]] = []
+
+    def execute(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
+        return 2, "no such command\n"
+
+    session = AppSession(
+        stdout=stdout,
+        context=_surface_context(tmp_path),
+        command_executor=execute,
+    )
+
+    assert session.handle("reference refresh") is False
+
+    assert session.prompt() == "kairos/app/reference> "
+    assert calls == [["reference", "refresh"]]
+
+
+def test_app_top_level_product_tail_executes_in_context(tmp_path) -> None:
+    stdout = StringIO()
+    calls: list[list[str]] = []
+
+    def execute(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
+        return 0, "ok\n"
+
+    session = AppSession(
+        stdout=stdout,
+        context=_surface_context(tmp_path),
+        command_executor=execute,
+    )
+
+    assert session.handle("reference assets list --type crypto") is False
+
+    assert session.prompt() == "kairos/app/reference/assets> "
+    assert calls == [["reference", "assets", "list", "--type", "crypto"]]
+
+
+def test_app_reference_child_context_prefixes_commands(tmp_path) -> None:
+    stdout = StringIO()
+    calls: list[list[str]] = []
+
+    def execute(argv: list[str]) -> tuple[int, str]:
+        calls.append(argv)
+        return 0, "ok\n"
+
+    session = AppSession(
+        stdout=stdout,
+        context=_surface_context(tmp_path),
+        command_executor=execute,
+    )
+
+    assert session.handle("reference") is False
+    assert session.handle("assets") is False
+    assert session.prompt() == "kairos/app/reference/assets> "
+    assert session.handle("list --type crypto") is False
+
+    assert calls == [["reference", "assets", "list", "--type", "crypto"]]
+
+
+def test_app_back_pops_one_context_level(tmp_path) -> None:
+    session = AppSession(
+        stdout=StringIO(),
+        context=_surface_context(tmp_path),
+    )
+
+    assert session.handle("reference assets") is False
+    assert session.prompt() == "kairos/app/reference/assets> "
+    assert session.handle("back") is False
+    assert session.prompt() == "kairos/app/reference> "

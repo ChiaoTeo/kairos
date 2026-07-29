@@ -141,8 +141,7 @@ def test_mode_config_recipes_do_not_construct_runtime_account_resources() -> Non
 
 def test_surface_uses_system_facade_for_run_startup() -> None:
     surface_files = (
-        ROOT / "kairospy" / "surface" / "products" / "run.py",
-        ROOT / "kairospy" / "surface" / "products" / "backtest.py",
+        ROOT / "kairospy" / "surface" / "cli" / "commands" / "run.py",
     )
     forbidden = (
         "RuntimeKernel",
@@ -163,8 +162,7 @@ def test_surface_uses_system_facade_for_run_startup() -> None:
 
 def test_surface_run_startup_does_not_import_mode_recipes() -> None:
     surface_files = (
-        ROOT / "kairospy" / "surface" / "products" / "run.py",
-        ROOT / "kairospy" / "surface" / "products" / "backtest.py",
+        ROOT / "kairospy" / "surface" / "cli" / "commands" / "run.py",
     )
     offenders = []
     for path in surface_files:
@@ -181,6 +179,91 @@ def test_surface_does_not_import_system_control_internals() -> None:
         text = path.read_text(encoding="utf-8")
         if "application.system.control" in text:
             offenders.append(str(path.relative_to(ROOT)))
+    assert offenders == []
+
+
+def test_surface_does_not_import_lower_layers_directly() -> None:
+    surface_root = ROOT / "kairospy" / "surface"
+    forbidden = (
+        "kairospy.infrastructure",
+        "kairospy.application.runtime",
+        "kairospy.application.service.modes",
+        "kairospy.application.service.runtime",
+        "kairospy.application.service.domain",
+        "kairospy.core",
+    )
+    offenders = []
+    for path in surface_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if any(marker in line for marker in forbidden):
+                offenders.append(f"{path.relative_to(ROOT)}:{line_number}:{line.strip()}")
+    assert offenders == []
+
+
+def test_surface_runtime_bridge_has_been_removed() -> None:
+    assert not (ROOT / "kairospy" / "surface" / "runtime.py").exists()
+
+
+def test_surface_uses_cli_interactive_rendering_packages() -> None:
+    surface_root = ROOT / "kairospy" / "surface"
+    removed_paths = (
+        surface_root / "app.py",
+        surface_root / "cli.py",
+        surface_root / "cli" / "command_index.py",
+        surface_root / "command_tree.py",
+        surface_root / "render_text.py",
+        surface_root / "state.py",
+        surface_root / "tui.py",
+        surface_root / "products",
+        surface_root / "ui",
+    )
+    assert [str(path.relative_to(ROOT)) for path in removed_paths if path.exists()] == []
+    assert (surface_root / "cli" / "app.py").exists()
+    assert (surface_root / "cli" / "commands").is_dir()
+    assert (surface_root / "interactive" / "navigation.py").exists()
+    assert (surface_root / "interactive" / "shell.py").exists()
+    assert (surface_root / "interactive" / "session.py").exists()
+    assert (surface_root / "rendering" / "text.py").exists()
+
+
+def test_surface_interactive_does_not_use_clirunner() -> None:
+    interactive_root = ROOT / "kairospy" / "surface" / "interactive"
+    offenders = []
+    for path in interactive_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "CliRunner" in text:
+            offenders.append(str(path.relative_to(ROOT)))
+    assert offenders == []
+
+
+def test_surface_has_no_second_command_group_abstraction() -> None:
+    surface_root = ROOT / "kairospy" / "surface"
+    forbidden = ("CommandTree", "CommandNode", "CommandGroup", "TyperCommandIndex")
+    offenders = []
+    for path in surface_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for marker in forbidden:
+            if marker in text:
+                offenders.append(f"{path.relative_to(ROOT)}:{marker}")
+    assert offenders == []
+
+
+def test_surface_does_not_use_workspace_internals_directly() -> None:
+    surface_root = ROOT / "kairospy" / "surface"
+    forbidden = (
+        "application.system.workspace",
+        "kairospy.config",
+        "KairosWorkspace",
+        "OperationJournal",
+        "AccountRecord",
+    )
+    offenders = []
+    for path in surface_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if any(marker in line for marker in forbidden):
+                offenders.append(f"{path.relative_to(ROOT)}:{line_number}:{line.strip()}")
     assert offenders == []
 
 

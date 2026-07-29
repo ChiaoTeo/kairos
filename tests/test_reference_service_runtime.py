@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
 from kairospy.application.service.domain.reference import ReferenceStore, refresh_instrument_provider
 from kairospy.application.service.runtime.reference import ReferenceCatalogService
+from kairospy.core.reference import SourceSymbol
 
 
 class NoopStrategy:
@@ -64,6 +65,7 @@ def test_reference_provider_refresh_feeds_runtime_view_state(tmp_path) -> None:
     assert len(result.refresh.current_markets) == 1
     assert len(store.load_events()) == 1
     resolved = service.resolver(as_of=as_of).resolve("BTC/USDT")
-    assert resolved.source_symbol == "BTC/USDT"
+    assert isinstance(resolved.source_symbol, SourceSymbol)
+    assert str(resolved.source_symbol) == "BTC/USDT"
     assert kernel.views.require("reference.catalog").market_count == 1
     assert kernel.views.require("reference.catalog").lifecycle_event_count == 1

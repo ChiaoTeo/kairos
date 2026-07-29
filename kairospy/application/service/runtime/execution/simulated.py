@@ -81,21 +81,21 @@ class SimulatedExecutionService:
 
     def submit_order(
         self,
-        client_order_id: str,
+        order_id: str,
         *,
         at: datetime,
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
-        return self.coordinator.submit_order(client_order_id, at=at, params=params)
+        return self.coordinator.submit_order(order_id, at=at, params=params)
 
     def cancel_order(
         self,
-        client_order_id: str,
+        order_id: str,
         *,
         at: datetime,
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
-        return self.coordinator.cancel_order(client_order_id, at=at, params=params)
+        return self.coordinator.cancel_order(order_id, at=at, params=params)
 
     def _require_adapter(self) -> SimulatedExecutionAdapter:
         if self._adapter is not None:

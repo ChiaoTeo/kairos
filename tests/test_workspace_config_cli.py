@@ -5,10 +5,10 @@ import json
 from typer.testing import CliRunner
 
 from kairospy.application.system.workspace import KairosWorkspace
-import kairospy.surface.products.account as account_product
+import kairospy.surface.cli.commands.account as account_product
 from kairospy.surface.cli import app
-from kairospy.surface.products.account import account_app
-from kairospy.surface.products.run import run_app
+from kairospy.surface.cli.commands.account import account_app
+from kairospy.surface.cli.commands.run import run_app
 
 
 def test_workspace_resolves_project_paths_and_local_accounts(tmp_path, monkeypatch) -> None:
@@ -101,7 +101,7 @@ def test_account_cli_reads_balance_through_configured_account(tmp_path, monkeypa
         def fetch_balance(self, *, params=None):
             return {"total": {"USDT": "100"}}
 
-    monkeypatch.setattr(account_product, "_broker", lambda account: FakeBroker())
+    monkeypatch.setattr(account_product._ACCOUNTS, "_broker", lambda account: FakeBroker())
 
     result = CliRunner().invoke(account_app, ["balance", "binance_testnet"], catch_exceptions=False)
 
@@ -133,7 +133,7 @@ def test_account_cli_snapshot_and_doctor_use_local_account(tmp_path, monkeypatch
         def fetch_open_orders(self, symbol=None, limit=None, params=None):
             return ({"id": "order-1", "symbol": symbol or "BTC/USDT"},)
 
-    monkeypatch.setattr(account_product, "_broker", lambda account: FakeBroker())
+    monkeypatch.setattr(account_product._ACCOUNTS, "_broker", lambda account: FakeBroker())
 
     snapshot = CliRunner().invoke(account_app, ["snapshot", "binance_testnet"], catch_exceptions=False)
     doctor = CliRunner().invoke(account_app, ["doctor", "binance_testnet", "--format", "json"], catch_exceptions=False)
@@ -226,7 +226,7 @@ def test_main_cli_exposes_config_and_account_products() -> None:
 
 
 def test_main_cli_initializes_local_project(tmp_path) -> None:
-    result = CliRunner().invoke(app, ["init", str(tmp_path / "demo")], catch_exceptions=False)
+    result = CliRunner().invoke(app, ["project", "init", str(tmp_path / "demo")], catch_exceptions=False)
 
     assert result.exit_code == 0
     assert (tmp_path / "demo" / ".kairos" / "kairos.toml").exists()
@@ -237,7 +237,7 @@ def test_main_cli_initializes_local_project(tmp_path) -> None:
 
 def test_account_cli_creates_local_account_file(tmp_path, monkeypatch) -> None:
     project = tmp_path / "demo"
-    CliRunner().invoke(app, ["init", str(project)], catch_exceptions=False)
+    CliRunner().invoke(app, ["project", "init", str(project)], catch_exceptions=False)
     monkeypatch.chdir(project)
 
     result = CliRunner().invoke(
@@ -267,9 +267,99 @@ def test_account_cli_creates_local_account_file(tmp_path, monkeypatch) -> None:
     assert json.loads(operations[-1])["action"] == "account.create"
 
 
+def test_account_cli_creates_provider_specific_okx_fields(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "demo"
+    CliRunner().invoke(app, ["project", "init", str(project)], catch_exceptions=False)
+    monkeypatch.chdir(project)
+
+    result = CliRunner().invoke(
+        account_app,
+        [
+            "create",
+            "okx_live_spot",
+            "--provider",
+            "okx",
+            "--environment",
+            "live",
+            "--api-key",
+            "key",
+            "--api-secret",
+            "secret",
+            "--passphrase",
+            "phrase",
+        ],
+        catch_exceptions=False,
+    )
+
+    path = project / ".kairos" / "accounts" / "okx_live_spot.toml"
+    text = path.read_text(encoding="utf-8")
+    assert result.exit_code == 0
+    assert 'provider = "okx"' in text
+    assert 'market = "spot"' in text
+    assert 'kind = "api_key_secret_passphrase"' in text
+    assert 'passphrase = "phrase"' in text
+
+    show = CliRunner().invoke(account_app, ["show", "okx_live_spot"], catch_exceptions=False)
+    assert json.loads(show.output)["credential_values"]["passphrase"] == "<redacted>"
+
+
+def test_account_cli_creates_provider_specific_hyperliquid_fields(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "demo"
+    CliRunner().invoke(app, ["project", "init", str(project)], catch_exceptions=False)
+    monkeypatch.chdir(project)
+
+    result = CliRunner().invoke(
+        account_app,
+        [
+            "create",
+            "hl_perp",
+            "--provider",
+            "hyperliquid",
+            "--environment",
+            "live",
+            "--wallet-address",
+            "0xabc",
+            "--private-key",
+            "0xdef",
+        ],
+        catch_exceptions=False,
+    )
+
+    path = project / ".kairos" / "accounts" / "hl_perp.toml"
+    text = path.read_text(encoding="utf-8")
+    assert result.exit_code == 0
+    assert 'provider = "hyperliquid"' in text
+    assert 'market = "swap"' in text
+    assert 'kind = "wallet_private_key"' in text
+    assert 'wallet_address = "0xabc"' in text
+    assert 'private_key = "0xdef"' in text
+
+    doctor = CliRunner().invoke(account_app, ["doctor", "hl_perp", "--format", "json"], catch_exceptions=False)
+    assert json.loads(doctor.output)["valid"] is True
+
+
+def test_account_cli_deletes_local_account_config(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "demo"
+    CliRunner().invoke(app, ["project", "init", str(project)], catch_exceptions=False)
+    monkeypatch.chdir(project)
+    CliRunner().invoke(
+        account_app,
+        ["create", "binance_paper", "--provider", "binance", "--environment", "paper"],
+        catch_exceptions=False,
+    )
+
+    result = CliRunner().invoke(account_app, ["delete", "binance_paper"], catch_exceptions=False)
+
+    path = project / ".kairos" / "accounts" / "binance_paper.toml"
+    assert result.exit_code == 0
+    assert not path.exists()
+    operations = (project / ".kairos" / "state" / "operations.jsonl").read_text(encoding="utf-8").splitlines()
+    assert json.loads(operations[-1])["action"] == "account.delete"
+
+
 def test_config_operations_reads_operation_journal(tmp_path, monkeypatch) -> None:
     project = tmp_path / "demo"
-    CliRunner().invoke(app, ["init", str(project)], catch_exceptions=False)
+    CliRunner().invoke(app, ["project", "init", str(project)], catch_exceptions=False)
     monkeypatch.chdir(project)
 
     result = CliRunner().invoke(app, ["config", "operations", "--format", "json"], catch_exceptions=False)

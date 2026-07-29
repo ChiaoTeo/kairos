@@ -61,20 +61,20 @@ def _order_state_to_dict(state: OrderState) -> dict[str, object]:
     request = state.request
     return {
         "request": {
-            "client_order_id": request.client_order_id,
+            "order_id": request.order_id,
             "context": _account_context_to_dict(request.context),
-            "instrument_id": request.instrument_id,
+            "instrument_id": str(request.instrument_id),
             "side": request.side.value,
             "quantity": str(request.quantity),
             "order_type": request.order_type.value,
             "limit_price": None if request.limit_price is None else str(request.limit_price),
-            "market_id": request.market_id,
+            "market_id": None if request.market_id is None else str(request.market_id),
             "reservation_id": request.reservation_id,
             "origin": request.origin.value,
-            "venue_order_id": request.venue_order_id,
+            "order_venue_id": request.order_venue_id,
         },
         "status": state.status.value,
-        "venue_order_id": state.venue_order_id,
+        "order_venue_id": state.order_venue_id,
         "filled_quantity": str(state.filled_quantity),
         "updated_at": None if state.updated_at is None else state.updated_at.isoformat(),
         "reason": state.reason,
@@ -84,7 +84,7 @@ def _order_state_to_dict(state: OrderState) -> dict[str, object]:
 def _order_state_from_dict(value: Mapping[str, object]) -> OrderState:
     request_value = _mapping(value.get("request"))
     request = OrderRequest(
-        str(request_value["client_order_id"]),
+        str(request_value["order_id"]),
         _account_context_from_dict(_mapping(request_value["context"])),
         str(request_value["instrument_id"]),
         OrderSide(str(request_value["side"])),
@@ -94,12 +94,12 @@ def _order_state_from_dict(value: Mapping[str, object]) -> OrderState:
         market_id=_optional_text(request_value.get("market_id")),
         reservation_id=_optional_text(request_value.get("reservation_id")),
         origin=OrderOrigin(str(request_value.get("origin") or OrderOrigin.SYSTEM.value)),
-        venue_order_id=_optional_text(request_value.get("venue_order_id")),
+        order_venue_id=_optional_text(request_value.get("order_venue_id")),
     )
     return OrderState(
         request,
         status=OrderStatus(str(value["status"])),
-        venue_order_id=_optional_text(value.get("venue_order_id")),
+        order_venue_id=_optional_text(value.get("order_venue_id")),
         filled_quantity=Decimal(str(value.get("filled_quantity") or "0")),
         updated_at=_optional_datetime(value.get("updated_at")),
         reason=str(value.get("reason") or ""),
@@ -114,7 +114,7 @@ def _account_event_to_dict(event: AccountEvent) -> dict[str, object]:
         "occurred_at": event.occurred_at.isoformat(),
         "currency": event.currency,
         "cash_delta": str(event.cash_delta),
-        "instrument_id": event.instrument_id,
+        "instrument_id": None if event.instrument_id is None else str(event.instrument_id),
         "position_delta": str(event.position_delta),
         "reference_id": event.reference_id,
     }
@@ -169,7 +169,7 @@ def _account_context_from_dict(value: Mapping[str, object]) -> AccountContext:
 
 
 def _account_ref_to_dict(account: AccountRef) -> dict[str, object]:
-    return {"broker": account.broker, "account_id": account.account_id, "segment": account.segment}
+    return {"broker": str(account.broker), "account_id": str(account.account_id), "segment": account.segment}
 
 
 def _account_ref_from_dict(value: Mapping[str, object]) -> AccountRef:

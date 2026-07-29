@@ -71,7 +71,7 @@ class LiveExecutionAdapter:
             self._record_intent_event(context, intent, IntentEventKind.REJECTED, "target_position intent requires target_quantity")
             return True
 
-        current = self.coordinator.ledger.positions(self.account.account).get(intent.instrument_id, Decimal("0"))
+        current = self.coordinator.ledger.positions(self.account.account).get(str(intent.instrument_id), Decimal("0"))
         delta = intent.target_quantity - current
         if delta == 0:
             self._record_intent_event(context, intent, IntentEventKind.ACCEPTED, "")
@@ -104,20 +104,20 @@ class LiveExecutionAdapter:
             at=context.now,
             **_margin_plan_args(order_params, request.instrument_id),
         )
-        self._record_intent_event(context, intent, IntentEventKind.PLANNED, "", order_ids=(state.local_order_id,))
+        self._record_intent_event(context, intent, IntentEventKind.PLANNED, "", order_ids=(state.order_id,))
         if state.status.value == "rejected":
-            self._record_intent_event(context, intent, IntentEventKind.FAILED, state.reason, order_ids=(state.local_order_id,))
+            self._record_intent_event(context, intent, IntentEventKind.FAILED, state.reason, order_ids=(state.order_id,))
             return True
 
         state = self.coordinator.submit_order(
-            state.request.client_order_id,
+            state.request.order_id,
             at=context.now,
             params=_broker_order_params(order_params),
         )
         if state.status.value in {"rejected", "unknown"}:
-            self._record_intent_event(context, intent, IntentEventKind.FAILED, state.reason, order_ids=(state.local_order_id,))
+            self._record_intent_event(context, intent, IntentEventKind.FAILED, state.reason, order_ids=(state.order_id,))
         else:
-            self._record_intent_event(context, intent, IntentEventKind.ORDERING, "", order_ids=(state.local_order_id,))
+            self._record_intent_event(context, intent, IntentEventKind.ORDERING, "", order_ids=(state.order_id,))
         return True
 
     def _record_intent_event(
@@ -177,21 +177,21 @@ class LiveExecutionService:
 
     def submit_order(
         self,
-        client_order_id: str,
+        order_id: str,
         *,
         at: datetime,
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
-        return self.coordinator.submit_order(client_order_id, at=at, params=params)
+        return self.coordinator.submit_order(order_id, at=at, params=params)
 
     def cancel_order(
         self,
-        client_order_id: str,
+        order_id: str,
         *,
         at: datetime,
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
-        return self.coordinator.cancel_order(client_order_id, at=at, params=params)
+        return self.coordinator.cancel_order(order_id, at=at, params=params)
 
     def _adapter(self) -> LiveExecutionAdapter:
         if self.account is None:

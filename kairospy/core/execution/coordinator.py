@@ -16,6 +16,7 @@ from kairospy.core.account import (
     derive_account_state,
 )
 from kairospy.core.order import OrderEvent, OrderEventKind, OrderJournal, OrderRequest, OrderSide, OrderState, OrderStatus, OrderType
+from kairospy.core.reference import InstrumentId
 
 from .impact import reserve_cash_order, reserve_margin_order
 from .reservation import Reservation, ReservationBook
@@ -47,7 +48,7 @@ class BrokerGateway(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class FillReport:
-    client_order_id: str
+    order_id: str
     occurred_at: datetime
     fill_quantity: Decimal
     fill_price: Decimal
@@ -78,7 +79,7 @@ class ExecutionCoordinator:
         ledger: AccountLedger | None = None,
         reservations: ReservationBook | None = None,
         broker: BrokerGateway | None = None,
-        broker_symbol_resolver: Callable[[str], str] | None = None,
+        broker_symbol_resolver: Callable[[object], str] | None = None,
     ) -> None:
         self.orders = orders or OrderJournal()
         self.ledger = ledger or AccountLedger()
@@ -94,7 +95,7 @@ class ExecutionCoordinator:
         reserve_amount: Decimal | None = None,
         margin_notional: Decimal | None = None,
         margin_leverage: Decimal = Decimal("1"),
-        margin_instrument_id: str | None = None,
+        margin_instrument_id: InstrumentId | str | None = None,
         venue_snapshot: AccountSnapshot | None = None,
         at: datetime,
     ) -> OrderState:
@@ -122,13 +123,13 @@ class ExecutionCoordinator:
         if margin_notional is not None:
             amount = margin_notional / margin_leverage
         reservation = Reservation(
-            request.reservation_id or request.client_order_id,
+            request.reservation_id or request.order_id,
             request.context.account,
             reserve_currency,
             amount,
             "order margin pre-submit hold" if margin_notional is not None else "order pre-submit hold",
             at,
-            order_id=request.client_order_id,
+            order_id=request.order_id,
         )
         if margin_notional is None:
             check = reserve_cash_order(self.reservations, reservation, projection)
@@ -142,20 +143,20 @@ class ExecutionCoordinator:
                 leverage=margin_leverage,
             )
         if not check.accepted:
-            self.orders.record(OrderEvent(request.client_order_id, OrderEventKind.REJECTED, at, reason=check.reason))
-            return self.orders.get(request.client_order_id)
-        return self.orders.record(OrderEvent(request.client_order_id, OrderEventKind.RESERVED, at))
+            self.orders.record(OrderEvent(request.order_id, OrderEventKind.REJECTED, at, reason=check.reason))
+            return self.orders.get(request.order_id)
+        return self.orders.record(OrderEvent(request.order_id, OrderEventKind.RESERVED, at))
 
     def submit_order(
         self,
-        client_order_id: str,
+        order_id: str,
         *,
         at: datetime,
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
         if at.tzinfo is None:
             raise ValueError("submit timestamp must be timezone-aware")
-        state = self.orders.record(OrderEvent(client_order_id, OrderEventKind.SUBMITTED, at))
+        state = self.orders.record(OrderEvent(order_id, OrderEventKind.SUBMITTED, at))
         if self.broker is None:
             return state
         try:
@@ -168,15 +169,15 @@ class ExecutionCoordinator:
                 params=params,
             )
         except Exception as error:
-            return self.orders.record(OrderEvent(client_order_id, OrderEventKind.UNKNOWN, at, reason=str(error)))
-        venue_order_id = str(response.get("id") or response.get("orderId") or "")
-        if not venue_order_id:
-            return self.orders.record(OrderEvent(client_order_id, OrderEventKind.UNKNOWN, at, reason="missing venue order id"))
-        return self.orders.record(OrderEvent(client_order_id, OrderEventKind.ACKNOWLEDGED, at, venue_order_id=venue_order_id))
+            return self.orders.record(OrderEvent(order_id, OrderEventKind.UNKNOWN, at, reason=str(error)))
+        order_venue_id = str(response.get("id") or response.get("orderId") or "")
+        if not order_venue_id:
+            return self.orders.record(OrderEvent(order_id, OrderEventKind.UNKNOWN, at, reason="missing venue order id"))
+        return self.orders.record(OrderEvent(order_id, OrderEventKind.ACKNOWLEDGED, at, order_venue_id=order_venue_id))
 
-    def mark_reservation_reflected(self, client_order_id: str) -> None:
-        state = self.orders.get(client_order_id)
-        reservation_id = state.request.reservation_id or client_order_id
+    def mark_reservation_reflected(self, order_id: str) -> None:
+        state = self.orders.get(order_id)
+        reservation_id = state.request.reservation_id or order_id
         self.reservations.reflect(reservation_id)
 
     def account_projection(
@@ -192,47 +193,47 @@ class ExecutionCoordinator:
             holds=self.reservations,
         )
 
-    def request_cancel(self, client_order_id: str, *, at: datetime) -> OrderState:
-        return self.orders.record(OrderEvent(client_order_id, OrderEventKind.CANCEL_REQUESTED, at))
+    def request_cancel(self, order_id: str, *, at: datetime) -> OrderState:
+        return self.orders.record(OrderEvent(order_id, OrderEventKind.CANCEL_REQUESTED, at))
 
     def cancel_order(
         self,
-        client_order_id: str,
+        order_id: str,
         *,
         at: datetime,
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
-        state = self.request_cancel(client_order_id, at=at)
+        state = self.request_cancel(order_id, at=at)
         if self.broker is None:
             return state
-        if not state.venue_order_id:
+        if not state.order_venue_id:
             return self.orders.record(
-                OrderEvent(client_order_id, OrderEventKind.UNKNOWN, at, reason="missing venue order id for cancel")
+                OrderEvent(order_id, OrderEventKind.UNKNOWN, at, reason="missing venue order id for cancel")
             )
         try:
             response = self.broker.cancel_order(
-                state.venue_order_id,
+                state.order_venue_id,
                 symbol=self.broker_symbol(state.request.market_id or state.request.instrument_id),
                 params=params,
             )
         except Exception as error:
-            return self.orders.record(OrderEvent(client_order_id, OrderEventKind.UNKNOWN, at, reason=str(error)))
+            return self.orders.record(OrderEvent(order_id, OrderEventKind.UNKNOWN, at, reason=str(error)))
         status = str(response.get("status") or "").strip().lower()
         if status in {"canceled", "cancelled"}:
-            return self.cancel_confirmed(client_order_id, at=at)
+            return self.cancel_confirmed(order_id, at=at)
         return state
 
-    def cancel_confirmed(self, client_order_id: str, *, at: datetime) -> OrderState:
-        state = self.orders.record(OrderEvent(client_order_id, OrderEventKind.CANCELED, at))
+    def cancel_confirmed(self, order_id: str, *, at: datetime) -> OrderState:
+        state = self.orders.record(OrderEvent(order_id, OrderEventKind.CANCELED, at))
         self._release_reservation(state)
         return state
 
     def ingest_fill(self, report: FillReport) -> OrderState:
-        state = self.orders.get(report.client_order_id)
+        state = self.orders.get(report.order_id)
         cumulative = report.cumulative_filled_quantity or state.filled_quantity + report.fill_quantity
         kind = OrderEventKind.FILLED if cumulative >= state.request.quantity else OrderEventKind.PARTIALLY_FILLED
         updated = self.orders.record(
-            OrderEvent(report.client_order_id, kind, report.occurred_at, filled_quantity=cumulative)
+            OrderEvent(report.order_id, kind, report.occurred_at, filled_quantity=cumulative)
         )
         self.ledger.record(
             AccountEvent(
@@ -244,7 +245,7 @@ class ExecutionCoordinator:
                 cash_delta=report.cash_delta,
                 instrument_id=state.request.instrument_id,
                 position_delta=report.fill_quantity * Decimal(state.request.side.position_sign),
-                reference_id=report.client_order_id,
+                reference_id=report.order_id,
             )
         )
         if report.fee_amount:
@@ -256,7 +257,7 @@ class ExecutionCoordinator:
                     report.occurred_at,
                     report.fee_currency or report.settlement_currency,
                     cash_delta=-report.fee_amount,
-                    reference_id=report.client_order_id,
+                    reference_id=report.order_id,
                 )
             )
         if updated.status.terminal:
@@ -270,7 +271,7 @@ class ExecutionCoordinator:
         if update.fill_quantity is not None and update.fill_price is not None:
             return self.ingest_fill(
                 FillReport(
-                    state.request.client_order_id,
+                    state.request.order_id,
                     update.observed_at,
                     update.fill_quantity,
                     update.fill_price,
@@ -287,10 +288,10 @@ class ExecutionCoordinator:
             return state
         return self.orders.record(
             OrderEvent(
-                state.request.client_order_id,
+                state.request.order_id,
                 update.kind,
                 update.observed_at,
-                venue_order_id=update.venue_order_id or None,
+                order_venue_id=update.order_venue_id or None,
                 filled_quantity=update.filled_quantity
                 if update.kind in {OrderEventKind.PARTIALLY_FILLED, OrderEventKind.FILLED}
                 else None,
@@ -299,20 +300,20 @@ class ExecutionCoordinator:
         )
 
     def _release_reservation(self, state: OrderState) -> None:
-        reservation_id = state.request.reservation_id or state.request.client_order_id
+        reservation_id = state.request.reservation_id or state.request.order_id
         try:
             self.reservations.release(reservation_id)
         except KeyError:
             return
 
-    def broker_symbol(self, instrument_id: str) -> str:
+    def broker_symbol(self, instrument_id: InstrumentId | str) -> str:
         symbol = str(self.broker_symbol_resolver(instrument_id)).strip()
         if not symbol:
             raise ValueError(f"empty broker symbol for instrument: {instrument_id}")
         return symbol
 
     def _consume_reservation(self, state: OrderState) -> None:
-        reservation_id = state.request.reservation_id or state.request.client_order_id
+        reservation_id = state.request.reservation_id or state.request.order_id
         try:
             self.reservations.consume(reservation_id)
         except KeyError:
@@ -320,14 +321,14 @@ class ExecutionCoordinator:
 
     def _import_execution_update(self, update: ExecutionUpdate) -> OrderState:
         if update.kind not in {OrderEventKind.ACKNOWLEDGED, OrderEventKind.PARTIALLY_FILLED}:
-            raise LookupError(f"terminal execution update has no known local order: {update.venue_order_id}")
+            raise LookupError(f"terminal execution update has no known local order: {update.order_venue_id}")
         if update.context is None:
-            raise LookupError(f"execution update has no account context for unknown order: {update.venue_order_id}")
+            raise LookupError(f"execution update has no account context for unknown order: {update.order_venue_id}")
         if update.instrument_id is None or update.side is None or update.quantity is None or update.order_type is None:
             raise ValueError("execution update cannot import an unknown order without order identity fields")
-        return self.orders.import_venue_open_order(
+        return self.orders.import_order_venue_open_order(
             context=update.context,
-            venue_order_id=update.venue_order_id,
+            order_venue_id=update.order_venue_id,
             instrument_id=update.instrument_id,
             market_id=update.market_id,
             side=update.side,
@@ -342,32 +343,35 @@ class ExecutionCoordinator:
 
 def cash_order_request(
     *,
-    client_order_id: str,
+    order_id: str | None = None,
     context: AccountContext,
-    instrument_id: str,
+    instrument_id: InstrumentId | str,
     side: OrderSide,
     quantity: Decimal,
     order_type: OrderType = OrderType.MARKET,
     limit_price: Decimal | None = None,
 ) -> OrderRequest:
-    return OrderRequest(client_order_id, context, instrument_id, side, quantity, order_type, limit_price)
+    if order_id is None:
+        raise ValueError("order_id is required")
+    return OrderRequest(order_id, context, instrument_id, side, quantity, order_type, limit_price)
 
 
 def _known_order(orders: OrderJournal, update: ExecutionUpdate) -> OrderState | None:
-    if update.client_order_id:
+    if update.order_id:
         try:
-            return orders.get(update.client_order_id)
+            return orders.get(update.order_id)
         except LookupError:
             pass
-    if update.venue_order_id:
+    if update.order_venue_id:
         try:
-            return orders.get_by_venue_order_id(update.venue_order_id)
+            return orders.get_by_order_venue_id(update.order_venue_id)
         except LookupError:
             pass
     return None
 
 
-def _settlement_currency(symbol: str) -> str:
+def _settlement_currency(symbol: object) -> str:
+    symbol = str(symbol)
     if "/" not in symbol:
         parts = symbol.split(":")
         if len(parts) >= 4 and parts[0] == "instrument":

@@ -8,8 +8,7 @@ from typer.testing import CliRunner
 
 from kairospy.application.service.modes.backtest import configured_backtest
 from kairospy.application.system import TradingConfigurationError, TradingSystemLauncher
-from kairospy.surface.products.backtest import backtest_app
-from kairospy.surface.products.run import run_app
+from kairospy.surface.cli.commands.run import run_app
 
 
 @pytest.fixture(autouse=True)
@@ -33,14 +32,14 @@ def test_configured_backtest_runs_new_engine_and_writes_account_journal(tmp_path
     assert current["equity"] == str(result.final_equity)
 
 
-def test_backtest_run_command_uses_new_config_runner(tmp_path) -> None:
+def test_run_backtest_command_writes_run_artifacts(tmp_path) -> None:
     config_path = _write_backtest_project(tmp_path)
 
-    result = CliRunner().invoke(backtest_app, ["--config", str(config_path)], catch_exceptions=False)
+    result = CliRunner().invoke(run_app, ["start", str(config_path), "--format", "json"], catch_exceptions=False)
 
     assert result.exit_code == 0
     assert '"run_id": "bt-1"' in result.output
-    assert '"fills": 1' in result.output
+    assert '"event_count": 2' in result.output
     run_directory = tmp_path / "runs" / "backtest" / "bt-1"
     assert (run_directory / "summary.json").exists()
     assert (run_directory / "account" / "current.json").exists()
@@ -52,7 +51,7 @@ def test_backtest_run_command_uses_new_config_runner(tmp_path) -> None:
 def test_run_backtest_command_uses_new_config_runner(tmp_path) -> None:
     config_path = _write_backtest_project(tmp_path)
 
-    result = CliRunner().invoke(run_app, ["backtest", "--config", str(config_path), "--format", "json"], catch_exceptions=False)
+    result = CliRunner().invoke(run_app, ["start", str(config_path), "--format", "json"], catch_exceptions=False)
 
     assert result.exit_code == 0
     assert '"run_id": "bt-1"' in result.output

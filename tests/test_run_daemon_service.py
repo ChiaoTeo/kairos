@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 from kairospy.application.runtime import RuntimeMode
 from kairospy.application.system.control.daemon import RunAlreadyActiveError, RunDaemonService
 from kairospy.application.system.control.registry import RunRegistry
-from kairospy.surface.products.run import run_app
+from kairospy.surface.cli.commands.run import run_app
 
 
 @pytest.fixture(autouse=True)

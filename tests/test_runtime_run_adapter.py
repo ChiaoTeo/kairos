@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from kairospy.application.runtime import RuntimeEnvelope, RuntimeLine, RuntimeMode, RuntimeRunSpec, RuntimeRunner
 from kairospy.application.strategy import StrategyBase
-from kairospy.surface.products.run import run_app
+from kairospy.surface.cli.commands.run import run_app
 
 
 class RecordingStrategy(StrategyBase):

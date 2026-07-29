@@ -49,7 +49,7 @@ class UniverseSelector:
             ]
         if options.symbols:
             symbols = {item.casefold() for item in options.symbols}
-            markets = [market for market in markets if market.source_symbol.casefold() in symbols]
+            markets = [market for market in markets if str(market.source_symbol).casefold() in symbols]
         markets = sorted(markets, key=lambda item: str(item.market_id))
         if options.limit is not None:
             markets = markets[: options.limit]

@@ -84,6 +84,26 @@ class BrokerClient(Protocol):
     def fetch_balance(self, *, params: Mapping[str, object] | None = None) -> Mapping[str, object]:
         ...
 
+    def fetch_open_orders(
+        self,
+        symbol: str | None = None,
+        *,
+        since: object | None = None,
+        limit: int | None = None,
+        params: Mapping[str, object] | None = None,
+    ) -> Iterable[Mapping[str, object]]:
+        ...
+
+    def fetch_closed_orders(
+        self,
+        symbol: str | None = None,
+        *,
+        since: object | None = None,
+        limit: int | None = None,
+        params: Mapping[str, object] | None = None,
+    ) -> Iterable[Mapping[str, object]]:
+        ...
+
 
 __all__ = [
     "BrokerClient",

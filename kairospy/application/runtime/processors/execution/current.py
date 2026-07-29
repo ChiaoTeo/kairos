@@ -12,7 +12,7 @@ from kairospy.core.views import ViewFieldSchema, ViewSchema
 
 @dataclass(frozen=True, slots=True)
 class ExecutionOrderSummary:
-    client_order_id: str
+    order_id: str
     instrument_id: str
     status: str
     side: str
@@ -20,7 +20,7 @@ class ExecutionOrderSummary:
     filled_quantity: Decimal
     remaining_quantity: Decimal
     market_id: str | None = None
-    venue_order_id: str | None = None
+    order_venue_id: str | None = None
     updated_at: datetime | None = None
     reason: str = ""
 
@@ -79,7 +79,7 @@ class ExecutionCurrentViewState:
 
 def _execution_order_summary(order: OrderState) -> ExecutionOrderSummary:
     return ExecutionOrderSummary(
-        client_order_id=order.request.client_order_id,
+        order_id=order.order_id,
         instrument_id=order.request.instrument_id,
         status=order.status.value,
         side=order.request.side.value,
@@ -87,7 +87,7 @@ def _execution_order_summary(order: OrderState) -> ExecutionOrderSummary:
         filled_quantity=order.filled_quantity,
         remaining_quantity=order.remaining_quantity,
         market_id=order.request.market_id,
-        venue_order_id=order.venue_order_id or order.request.venue_order_id,
+        order_venue_id=order.order_venue_id or order.request.order_venue_id,
         updated_at=order.updated_at,
         reason=order.reason,
     )

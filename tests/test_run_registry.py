@@ -5,7 +5,7 @@ import json
 from typer.testing import CliRunner
 
 from kairospy.application.system.control.registry import RunRegistry, list_run_daemons
-from kairospy.surface.products.run import run_app
+from kairospy.surface.cli.commands.run import run_app
 
 
 def test_run_registry_lists_summary_and_writes_stop_command(tmp_path) -> None:

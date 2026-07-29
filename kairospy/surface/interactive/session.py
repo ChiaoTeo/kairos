@@ -5,8 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
-from kairospy.application.system import RunControl
-from kairospy.config import KairosConfig, load_config
+from kairospy.application.system.facade.project import ProjectFacade
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +51,7 @@ class SurfaceContext:
         product: str = "top",
         refresh_interval_seconds: float = 2.0,
         stale_after_seconds: float = 5.0,
-        config: KairosConfig | None = None,
+        project_facade: ProjectFacade | None = None,
     ) -> None:
         if refresh_interval_seconds <= 0:
             raise ValueError("refresh_interval_seconds must be positive")
@@ -61,7 +60,7 @@ class SurfaceContext:
         self.product = product
         self.refresh_interval_seconds = refresh_interval_seconds
         self.stale_after_seconds = stale_after_seconds
-        self._config = config
+        self._project_facade = project_facade or ProjectFacade()
         self._snapshot: SurfaceSnapshot | None = None
 
     def set_product(self, product: str) -> None:
@@ -75,22 +74,16 @@ class SurfaceContext:
             age = (now - cached.refreshed_at).total_seconds()
             if age < self.refresh_interval_seconds and cached.current_product == self.product:
                 return cached
-        config = self._config or load_config()
-        runs = tuple(
-            _run_summary(status.to_dict())
-            for status in RunControl(config.resolve_path(".kairos/runs")).list(
-                stale_after_seconds=self.stale_after_seconds,
-            )
-        )
+        payload = self._project_facade.surface_snapshot(stale_after_seconds=self.stale_after_seconds)
         snapshot = SurfaceSnapshot(
-            project_name=config.project_name or config.root.name,
-            root=config.root,
-            data_root=config.data_root,
-            reference_root=config.reference_root,
+            project_name=str(payload["project_name"]),
+            root=Path(payload["root"]),
+            data_root=Path(payload["data_root"]),
+            reference_root=Path(payload["reference_root"]),
             current_product=self.product,
             refreshed_at=now,
             refresh_interval_seconds=self.refresh_interval_seconds,
-            runs=runs,
+            runs=tuple(_run_summary(status) for status in payload["runs"] if isinstance(status, Mapping)),
         )
         self._snapshot = snapshot
         return snapshot

@@ -11,6 +11,15 @@ from kairospy.application.service.domain.execution import JsonExecutionStateStor
 from kairospy.application.service.modes.paper import PaperAccountService
 from kairospy.core.account import AccountSource, Environment
 from kairospy.core.execution import ExecutionCoordinator
+from kairospy.core.order import OrderRequest, OrderSide
+
+
+class FakeBroker:
+    def create_order(self, symbol: str, *, side: str, type: str, amount: object, price: object | None = None, params=None):
+        return {"id": "venue-order-1"}
+
+    def cancel_order(self, id: str, *, symbol: str | None = None, params=None):
+        return {"id": id, "status": "canceled"}
 
 
 class NoopStrategy:
@@ -67,3 +76,25 @@ def test_json_execution_state_store_round_trips_snapshot(tmp_path) -> None:
 
     assert loaded == saved
     assert (tmp_path / "execution.json").exists()
+
+
+def test_order_id_preserves_intent_context_and_resolves_order_venue_id() -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    account = SimulatedAccount("paper-main", Decimal("0"), cash_currency="USDT", broker="paper", environment=Environment.PAPER)
+    coordinator = ExecutionCoordinator(broker=FakeBroker())
+    order_id = "intent:rebalance-btc:order:0001"
+    request = OrderRequest(
+        order_id,
+        account.context,
+        "instrument:spot:btc:usdt",
+        OrderSide.BUY,
+        Decimal("1"),
+    )
+
+    coordinator.plan_order(request, at=now)
+    state = coordinator.submit_order(order_id, at=now)
+
+    assert state.order_id == order_id
+    assert state.order_venue_id == "venue-order-1"
+    assert coordinator.orders.get(order_id).order_venue_id == "venue-order-1"
+    assert coordinator.orders.get_by_order_venue_id("venue-order-1").order_id == order_id

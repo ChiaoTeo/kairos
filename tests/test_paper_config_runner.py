@@ -11,7 +11,7 @@ from kairospy.application.service.modes.paper import configured_paper
 from kairospy.application.system import TradingSystemLauncher
 from kairospy.application.system.control.registry import RunRegistry
 from kairospy.infrastructure.integrations import HyperliquidMarketDataConnector
-from kairospy.surface.products.run import run_app
+from kairospy.surface.cli.commands.run import run_app
 
 
 @pytest.fixture(autouse=True)
@@ -40,7 +40,7 @@ def test_configured_paper_runs_new_engine(tmp_path) -> None:
 def test_run_paper_command_uses_new_config_runner(tmp_path) -> None:
     config_path = _write_paper_project(tmp_path)
 
-    result = CliRunner().invoke(run_app, ["paper", "--config", str(config_path), "--format", "json"], catch_exceptions=False)
+    result = CliRunner().invoke(run_app, ["start", str(config_path), "--format", "json"], catch_exceptions=False)
 
     assert result.exit_code == 0
     assert "paper strategy saw quote" in result.output

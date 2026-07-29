@@ -140,7 +140,7 @@ def test_configured_live_restores_runtime_state(tmp_path) -> None:
 
     state = json.loads((tmp_path / ".kairos" / "runs" / "live" / "live-1" / "live_state.json").read_text(encoding="utf-8"))
     orders = state["execution"]["orders"]
-    assert any(order["venue_order_id"] == "venue-open-1" for order in orders)
+    assert any(order["order_venue_id"] == "venue-open-1" for order in orders)
 
 
 def test_configured_live_selects_account_ref(tmp_path) -> None:

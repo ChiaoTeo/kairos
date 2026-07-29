@@ -103,7 +103,7 @@ class LivePrivateStreamState:
         )
         if key in self._seen_order_updates:
             return False
-        identity = str(raw.get("id") or raw.get("clientOrderId") or raw.get("client_order_id") or "").strip()
+        identity = str(raw.get("id") or raw.get("clientOrderId") or raw.get("order_id") or "").strip()
         timestamp = _event_timestamp(raw)
         if identity and timestamp is not None:
             latest = self._order_timestamps.get(identity)

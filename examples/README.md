@@ -63,7 +63,7 @@ uv run kairos run backtest --config examples/configs/hyperliquid_backtest.toml
 To download fresh Binance OHLCV data for `examples/configs/binance_backtest.toml`:
 
 ```bash
-uv run kairos data download \
+uv run kairos market download \
   --root examples/.kairos/data \
   --format jsonl \
   --exchange binance \

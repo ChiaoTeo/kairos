@@ -6,6 +6,8 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Any, Literal, Mapping
 
+from kairospy.core.reference import InstrumentId, MarketId
+
 from .orderbook import OrderBookSnapshot, PriceLevel
 from .selectors import MarketSelectable
 
@@ -26,11 +28,17 @@ MarketObservationKind = Literal[
 @dataclass(frozen=True, slots=True)
 class MarketSubject:
     subject_type: MarketSubjectType | str
-    subject_id: str
+    subject_id: InstrumentId | MarketId | str
 
     def __post_init__(self) -> None:
-        if not self.subject_type.strip() or not self.subject_id.strip():
+        subject_type = str(self.subject_type).strip()
+        if not subject_type or not str(self.subject_id).strip():
             raise ValueError("market subject identity fields are required")
+        object.__setattr__(self, "subject_type", subject_type)
+        if subject_type == "instrument":
+            object.__setattr__(self, "subject_id", _id(self.subject_id, InstrumentId, "subject_id"))
+        elif subject_type == "market":
+            object.__setattr__(self, "subject_id", _id(self.subject_id, MarketId, "subject_id"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,9 +65,9 @@ class MarketObservation:
 
 @dataclass(frozen=True, slots=True)
 class Quote(MarketSelectable):
-    instrument_id: str
+    instrument_id: InstrumentId | str
     time: datetime
-    market_id: str | None = None
+    market_id: MarketId | str | None = None
     market_key: str | None = None
     bid: Decimal | None = None
     ask: Decimal | None = None
@@ -70,10 +78,8 @@ class Quote(MarketSelectable):
     derivation: str = "direct"
 
     def __post_init__(self) -> None:
-        if not self.instrument_id.strip():
-            raise ValueError("quote instrument_id is required")
-        if self.market_id is not None and not self.market_id.strip():
-            raise ValueError("quote market_id cannot be blank")
+        object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
+        object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
         if self.market_key is not None and not self.market_key.strip():
             raise ValueError("quote market_key cannot be blank")
         if self.time.tzinfo is None:
@@ -100,10 +106,10 @@ class Quote(MarketSelectable):
 
 @dataclass(frozen=True, slots=True)
 class Bar(MarketSelectable):
-    instrument_id: str
+    instrument_id: InstrumentId | str
     time: datetime
     timeframe: str
-    market_id: str | None = None
+    market_id: MarketId | str | None = None
     market_key: str | None = None
     open: Decimal | None = None
     high: Decimal | None = None
@@ -115,8 +121,8 @@ class Bar(MarketSelectable):
     derivation: str = "direct"
 
     def __post_init__(self) -> None:
-        if not self.instrument_id.strip():
-            raise ValueError("bar instrument_id is required")
+        object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
+        object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
         if not self.timeframe.strip():
             raise ValueError("bar timeframe is required")
         if self.time.tzinfo is None:
@@ -129,9 +135,9 @@ class Bar(MarketSelectable):
 
 @dataclass(frozen=True, slots=True)
 class TradePrint(MarketSelectable):
-    instrument_id: str
+    instrument_id: InstrumentId | str
     time: datetime
-    market_id: str | None = None
+    market_id: MarketId | str | None = None
     market_key: str | None = None
     trade_id: str | None = None
     side: str | None = None
@@ -143,8 +149,8 @@ class TradePrint(MarketSelectable):
     derivation: str = "direct"
 
     def __post_init__(self) -> None:
-        if not self.instrument_id.strip():
-            raise ValueError("trade instrument_id is required")
+        object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
+        object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
         if self.time.tzinfo is None:
             raise ValueError("trade time must be timezone-aware")
         if not self.basis.strip():
@@ -161,12 +167,13 @@ class RateObservation(MarketSelectable):
     source: str = ""
     tenor: str | None = None
     basis: str = ""
-    market_id: str | None = None
+    market_id: MarketId | str | None = None
     derivation: str = "direct"
 
     def __post_init__(self) -> None:
         if not self.rate_id.strip():
             raise ValueError("rate_id is required")
+        object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
         if self.time.tzinfo is None:
             raise ValueError("rate observation time must be timezone-aware")
         if not self.derivation.strip():
@@ -184,7 +191,7 @@ class RateObservation(MarketSelectable):
             "rate": self.rate,
             "tenor": self.tenor,
             "basis": self.basis,
-            "market_id": self.market_id,
+            "market_id": None if self.market_id is None else str(self.market_id),
         }
         return MarketObservation(
             self.subject,
@@ -209,3 +216,16 @@ __all__ = [
     "RateObservation",
     "TradePrint",
 ]
+
+
+def _required_text(value: object, label: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{label} cannot be empty")
+    return text
+
+
+def _id(value, id_type, label: str):
+    if isinstance(value, id_type):
+        return value
+    return id_type(_required_text(value, label))

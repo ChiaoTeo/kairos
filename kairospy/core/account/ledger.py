@@ -6,6 +6,8 @@ from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
 
+from kairospy.core.reference import InstrumentId
+
 from .model import AccountRef
 
 
@@ -27,7 +29,7 @@ class AccountEvent:
     occurred_at: datetime
     currency: str
     cash_delta: Decimal = Decimal("0")
-    instrument_id: str | None = None
+    instrument_id: InstrumentId | str | None = None
     position_delta: Decimal = Decimal("0")
     reference_id: str = ""
 
@@ -36,6 +38,7 @@ class AccountEvent:
             raise ValueError("account event timestamp must be timezone-aware")
         if not self.currency.strip():
             raise ValueError("account event currency cannot be empty")
+        object.__setattr__(self, "instrument_id", None if self.instrument_id is None else _id(self.instrument_id, InstrumentId, "instrument_id"))
         if self.position_delta and not self.instrument_id:
             raise ValueError("position delta requires instrument_id")
         if self.cash_delta == 0 and self.position_delta == 0:
@@ -74,8 +77,22 @@ class AccountLedger:
         for event in self._events:
             if event.account != account or event.position_delta == 0 or event.instrument_id is None:
                 continue
-            positions[event.instrument_id] = positions.get(event.instrument_id, Decimal("0")) + event.position_delta
+            instrument_id = str(event.instrument_id)
+            positions[instrument_id] = positions.get(instrument_id, Decimal("0")) + event.position_delta
         return {instrument: quantity for instrument, quantity in positions.items() if quantity != 0}
 
 
 __all__ = ["AccountEvent", "AccountEventKind", "AccountLedger"]
+
+
+def _required_text(value: object, label: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{label} cannot be empty")
+    return text
+
+
+def _id(value, id_type, label: str):
+    if isinstance(value, id_type):
+        return value
+    return id_type(_required_text(value, label))

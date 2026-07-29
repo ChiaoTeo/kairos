@@ -113,6 +113,6 @@ def _required_text(value: object, source: str) -> str:
 
 def _redact_secret(key: str, value: object) -> object:
     name = key.lower()
-    if any(part in name for part in ("secret", "key", "password", "token", "private")):
+    if any(part in name for part in ("secret", "key", "password", "token", "private", "passphrase")):
         return "<redacted>" if value not in (None, "") else value
     return value

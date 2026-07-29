@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from kairospy.core.account import AccountState, MarginScope
+from kairospy.core.reference import InstrumentId
 
 from .reservation import Reservation, ReservationBook
 
@@ -39,7 +40,7 @@ class MarginBuyingPowerModel:
         account_state: AccountState,
         *,
         currency: str,
-        instrument_id: str,
+        instrument_id: InstrumentId | str,
         notional: Decimal,
         leverage: Decimal = Decimal("1"),
     ) -> BuyingPowerCheck:
@@ -54,14 +55,15 @@ class MarginBuyingPowerModel:
             return BuyingPowerCheck(False, required, available, "insufficient available margin")
         return BuyingPowerCheck(True, required, available, "accepted by local margin model")
 
-    def _margin(self, account_state: AccountState, *, currency: str, instrument_id: str):
+    def _margin(self, account_state: AccountState, *, currency: str, instrument_id: InstrumentId | str):
+        instrument_key = str(instrument_id)
         instrument_margin = next(
             (
                 margin
                 for margin in account_state.margins
                 if margin.currency == currency
                 and margin.scope in {MarginScope.INSTRUMENT, MarginScope.POSITION}
-                and margin.instrument_id == instrument_id
+                and str(margin.instrument_id) == instrument_key
             ),
             None,
         )
@@ -97,7 +99,7 @@ def reserve_margin_order(
     reservation: Reservation,
     account_state: AccountState,
     *,
-    instrument_id: str,
+    instrument_id: InstrumentId | str,
     notional: Decimal,
     leverage: Decimal = Decimal("1"),
 ) -> BuyingPowerCheck:

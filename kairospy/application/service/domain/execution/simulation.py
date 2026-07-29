@@ -142,7 +142,7 @@ class SimulatedExecutionAdapter:
             self._reject_intent(intent, context, f"missing price field: {self.price_field}")
             return None
 
-        current = self.coordinator.ledger.positions(self.account.account).get(intent.instrument_id, Decimal("0"))
+        current = self.coordinator.ledger.positions(self.account.account).get(str(intent.instrument_id), Decimal("0"))
         delta = intent.target_quantity - current
         if delta == 0:
             context.intents.record(IntentEvent(intent.intent_id, IntentEventKind.ACCEPTED, context.now))
@@ -196,7 +196,7 @@ class SimulatedExecutionAdapter:
                 fee_amount=fee,
             )
         )
-        fill = SimulatedFill(order_id, intent.intent_id, intent.instrument_id, side, fill_quantity, fill_price, fee, context.now)
+        fill = SimulatedFill(order_id, str(intent.intent_id), str(intent.instrument_id), side, fill_quantity, fill_price, fee, context.now)
         intent_kind = IntentEventKind.SATISFIED if updated_order.status.terminal else IntentEventKind.PARTIALLY_FILLED
         context.intents.record(IntentEvent(intent.intent_id, intent_kind, context.now))
         return fill
@@ -222,7 +222,7 @@ class SimulatedExecutionAdapter:
             return {}
         values: dict[str, object] = {}
         for item in tuple(getattr(fields, "fields", ())):
-            if getattr(item, "subject_id", None) != intent.instrument_id and getattr(item, "market_id", None) != intent.market_id:
+            if getattr(item, "subject_id", None) != str(intent.instrument_id) and getattr(item, "market_id", None) != str(intent.market_id):
                 continue
             field = str(getattr(item, "field", ""))
             value = getattr(item, "value", None)
@@ -234,7 +234,7 @@ class SimulatedExecutionAdapter:
                 values.setdefault(alias, value)
         return values
 
-    def _next_order_id(self, intent_id: str) -> str:
+    def _next_order_id(self, intent_id: object) -> str:
         self._order_number += 1
         return f"{intent_id}-order-{self._order_number}"
 

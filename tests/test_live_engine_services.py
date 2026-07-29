@@ -252,7 +252,7 @@ def test_live_account_service_refreshes_from_broker_integration() -> None:
     assert snapshot.source is AccountSource.VENUE
     assert snapshot.balances[0].currency == "USDT"
     assert snapshot.open_orders[0].order_id == "venue-order-1"
-    assert coordinator.orders.get("external:binance:main:venue-order-1").venue_order_id == "venue-order-1"
+    assert coordinator.orders.get("external:binance:main:venue-order-1").order_venue_id == "venue-order-1"
     assert service.state(account.account).balances[0].total == Decimal("1000")  # type: ignore[union-attr]
 
 

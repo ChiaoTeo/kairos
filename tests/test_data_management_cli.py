@@ -5,10 +5,10 @@ import json
 from typer.testing import CliRunner
 
 from kairospy.infrastructure.data import DataStore
-from kairospy.surface.products.data import data_app
+from kairospy.surface.cli.commands.market import market_app
 
 
-def test_data_cli_lists_inspects_aliases_and_prunes(tmp_path, monkeypatch) -> None:
+def test_market_cli_lists_inspects_aliases_and_prunes(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _write_workspace_manifest(tmp_path)
     data_root = tmp_path / ".kairos" / "data"
@@ -22,19 +22,19 @@ def test_data_cli_lists_inspects_aliases_and_prunes(tmp_path, monkeypatch) -> No
         mode="replace",
     )
 
-    listed = CliRunner().invoke(data_app, ["list", "--format", "jsonl", "--output", "json"], catch_exceptions=False)
+    listed = CliRunner().invoke(market_app, ["list", "--format", "jsonl", "--output", "json"], catch_exceptions=False)
     inspected = CliRunner().invoke(
-        data_app,
+        market_app,
         ["inspect", "market.ohlcv.binance_spot_btc_usdt.1m", "--format", "jsonl", "--output", "json"],
         catch_exceptions=False,
     )
     aliased = CliRunner().invoke(
-        data_app,
+        market_app,
         ["alias", "market.ohlcv.binance_spot_btc_usdt.1m", "btc-bars", "--format", "jsonl"],
         catch_exceptions=False,
     )
     pruned = CliRunner().invoke(
-        data_app,
+        market_app,
         [
             "prune",
             "btc-bars",
@@ -56,8 +56,8 @@ def test_data_cli_lists_inspects_aliases_and_prunes(tmp_path, monkeypatch) -> No
     assert json.loads(aliased.output)["alias"] == "btc-bars"
     assert json.loads(pruned.output)["deleted_rows"] == 1
     operations = (tmp_path / ".kairos" / "state" / "operations.jsonl").read_text(encoding="utf-8").splitlines()
-    assert json.loads(operations[-2])["action"] == "data.alias"
-    assert json.loads(operations[-1])["action"] == "data.prune"
+    assert json.loads(operations[-2])["action"] == "market.alias"
+    assert json.loads(operations[-1])["action"] == "market.prune"
 
 
 def _write_workspace_manifest(root) -> None:

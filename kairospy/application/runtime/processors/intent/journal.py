@@ -31,8 +31,8 @@ class IntentJournalViewState:
     def view(self) -> IntentJournalView:
         summaries = tuple(
             IntentStateSummary(
-                intent_id=item.intent.intent_id,
-                instrument_id=getattr(item.intent, "instrument_id", None),
+                intent_id=str(item.intent.intent_id),
+                instrument_id=None if getattr(item.intent, "instrument_id", None) is None else str(getattr(item.intent, "instrument_id")),
                 status=item.status.value,
                 active=item.active,
                 updated_at=item.updated_at,

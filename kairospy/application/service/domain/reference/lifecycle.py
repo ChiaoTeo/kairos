@@ -5,40 +5,39 @@ from datetime import datetime
 from decimal import Decimal
 
 from kairospy.core.reference.catalog import ReferenceCatalog
-from kairospy.core.reference.identity import InstrumentId, ListingId, MarketId
+from kairospy.core.reference.identity import InstrumentId, MarketId
 from kairospy.core.reference.model import LifecycleEvent, LifecycleEventType
 
 
-class CorporateActionService:
+class ReferenceLifecycleService:
     def __init__(self, catalog: ReferenceCatalog) -> None:
         self.catalog = catalog
 
-    def apply_symbol_change(
+    def change_symbol(
         self,
         *,
-        listing_id: ListingId | str,
         market_id: MarketId | str,
         new_symbol: str,
         effective_at: datetime,
     ) -> LifecycleEvent:
-        listing = self.catalog.get_listing(listing_id, effective_at)
         market = self.catalog.get_market(market_id, effective_at)
-        old_symbol = listing.trading_symbol
+        listing = self.catalog.get_listing(market.listing_id, effective_at)
+        old_symbol = str(listing.trading_symbol)
         self.catalog.supersede_listing(replace(listing, trading_symbol=new_symbol, effective_from=effective_at), effective_at)
         self.catalog.supersede_market(replace(market, source_symbol=new_symbol, effective_from=effective_at), effective_at)
         return LifecycleEvent(
             LifecycleEventType.SYMBOL_CHANGED,
             effective_at,
-            instrument_id=listing.instrument_id,
-            listing_id=listing.listing_id,
+            instrument_id=market.instrument_id,
+            listing_id=market.listing_id,
             market_id=market.market_id,
-            venue=listing.venue,
+            venue=market.venue,
             source_symbol=new_symbol,
             previous={"symbol": old_symbol},
             current={"symbol": new_symbol},
         )
 
-    def split(
+    def record_split(
         self,
         *,
         instrument_id: InstrumentId | str,
@@ -56,7 +55,7 @@ class CorporateActionService:
             current={"ratio": str(value)},
         )
 
-    def dividend(
+    def record_dividend(
         self,
         *,
         instrument_id: InstrumentId | str,
@@ -80,5 +79,4 @@ class CorporateActionService:
             },
         )
 
-
-__all__ = ["CorporateActionService"]
+__all__ = ["ReferenceLifecycleService"]

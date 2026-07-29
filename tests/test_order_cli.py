@@ -4,7 +4,8 @@ import json
 
 from typer.testing import CliRunner
 
-from kairospy.surface.products.order import order_app
+import kairospy.surface.cli.commands.order as order_product
+from kairospy.surface.cli.commands.order import order_app
 
 
 def test_order_place_defaults_to_dry_run_and_writes_journal(tmp_path, monkeypatch) -> None:
@@ -170,6 +171,52 @@ def test_order_replace_defaults_to_dry_run(tmp_path, monkeypatch) -> None:
     assert payload["dry_run"] is True
     assert payload["request"]["order_id"] == "abc"
     assert payload["request"]["amount"] == "0.02"
+
+
+def test_order_history_reads_closed_orders_and_writes_journal(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_workspace_manifest(tmp_path)
+    account_root = tmp_path / ".kairos" / "accounts"
+    account_root.mkdir(parents=True)
+    (account_root / "binance_testnet.toml").write_text(
+        "\n".join(
+            [
+                "[account]",
+                'provider = "binance"',
+                'environment = "testnet"',
+                'venue = "binance"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeBroker:
+        def fetch_closed_orders(self, symbol=None, since=None, limit=None, params=None):
+            return ({"id": "closed-1", "symbol": symbol, "since": since, "limit": limit},)
+
+    monkeypatch.setattr(order_product._ORDERS, "_broker", lambda account: FakeBroker())
+
+    result = CliRunner().invoke(
+        order_app,
+        [
+            "history",
+            "--account",
+            "binance_testnet",
+            "--symbol",
+            "BTC/USDT",
+            "--since",
+            "2026-01-01T00:00:00+00:00",
+            "--limit",
+            "10",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["orders"][0]["id"] == "closed-1"
+    journal = tmp_path / ".kairos" / "orders" / "journals" / "binance_testnet.jsonl"
+    assert json.loads(journal.read_text(encoding="utf-8"))["action"] == "history"
 
 
 def _write_workspace_manifest(root) -> None:

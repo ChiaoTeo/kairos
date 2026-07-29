@@ -138,20 +138,20 @@ def massive_corporate_action_events(
         *massive_dividend_events(dividends, catalog=catalog, venue=venue),
         *massive_ticker_change_events(ticker_events, catalog=catalog, ticker=ticker, venue=venue),
     ]
-    return tuple(sorted(values, key=lambda item: (item.event_time, item.event_type.value, item.source_symbol or "")))
+    return tuple(sorted(values, key=lambda item: (item.event_time, item.event_type.value, str(item.source_symbol or ""))))
 
 
 def _resolve_equity_market(catalog: ReferenceCatalog, ticker: str, at: datetime, *, venue: str | None) -> MarketDefinition:
     candidates = [
         item for item in catalog.list_markets(at=at, venue=venue, market="equity")
-        if item.source_symbol.casefold() == ticker.casefold()
+        if str(item.source_symbol).casefold() == ticker.casefold()
     ]
     if not candidates:
         candidates = [
             item for item in catalog.markets()
-            if item.market == "equity"
-            and (venue is None or item.venue == venue)
-            and item.source_symbol.casefold() == ticker.casefold()
+            if str(item.market) == "equity"
+            and (venue is None or str(item.venue) == str(venue))
+            and str(item.source_symbol).casefold() == ticker.casefold()
             and item.effective_to == at
         ]
     if not candidates:

@@ -206,6 +206,43 @@ class CcxtDriver:
             if callable(close):
                 close()
 
+    def fetch_closed_orders(
+        self,
+        exchange_id: str,
+        symbol: str | None = None,
+        *,
+        since: object | None = None,
+        limit: int | None = None,
+        params: Mapping[str, object] | None = None,
+    ) -> Iterable[Mapping[str, object]]:
+        exchange = (self.exchange_factory or _default_exchange)(exchange_id)
+        try:
+            options = params or {}
+            method = getattr(exchange, "fetch_closed_orders", None)
+            if callable(method):
+                return tuple(
+                    method(
+                        symbol,
+                        since=_optional_millis(since),
+                        limit=limit,
+                        params=options,
+                    )
+                )
+            method = getattr(exchange, "fetch_orders", None)
+            if callable(method):
+                rows = method(
+                    symbol,
+                    since=_optional_millis(since),
+                    limit=limit,
+                    params=options,
+                )
+                return tuple(row for row in rows if row.get("status") not in {"open", "new"})
+            raise NotImplementedError(f"ccxt exchange {exchange_id} does not expose historical orders")
+        finally:
+            close = getattr(exchange, "close", None)
+            if callable(close):
+                close()
+
     def watch_balance(
         self,
         exchange_id: str,

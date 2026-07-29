@@ -247,8 +247,8 @@ def _source(
     return None
 
 
-def _key_part(value: str) -> str:
-    return "".join(character if character.isalnum() else "_" for character in value.lower()).strip("_")
+def _key_part(value: object) -> str:
+    return "".join(character if character.isalnum() else "_" for character in str(value).lower()).strip("_")
 
 
 __all__ = ["AccountCurrentViewState", "AccountCurrentView", "account_current_view_key"]

@@ -24,7 +24,8 @@ The project is organized around one product axis:
 Surface packages are intentionally thin: external callers should reach run behavior through `kairospy.application.system` and mode configuration through `kairospy.application.service.modes` instead of composing runtime internals directly.
 
 See [System Architecture Plan](docs/system-architecture-plan.md) for the planned migration toward system-owned trading runtime lifecycle management.
-See [Workspace, Configuration, and CLI Plan](docs/workspace-config-cli-plan.md) for the planned configuration, `.kairos`, run registry, account, order, reference, and data CLI model.
+See [Workspace, Configuration, and CLI Plan](docs/workspace-config-cli-plan.md) for the planned configuration, `.kairos`, run registry, account, order, reference, and market CLI model.
+See [Surface CLI Refactor Plan](docs/surface-cli-refactor-plan.md) for the clean-cut CLI refactor target without compatibility bridges or legacy aliases.
 
 ## Install For Development
 
@@ -42,22 +43,32 @@ The CLI currently exposes focused product surfaces:
 ```bash
 kairospy --help
 kairospy init my-project
+kairospy project status
 kairospy run validate examples/configs/binance_backtest.toml
 kairospy run start examples/configs/binance_backtest.toml
 kairospy run register hl-paper examples/configs/hyperliquid_paper.toml
 kairospy run start hl-paper
 kairospy run daemon status
-kairospy data download --symbol BTC/USDT
-kairospy data list
-kairospy data inspect market.ohlcv.binance_spot_btc_usdt.1m
-kairospy data read market.ohlcv.binance_spot_btc_usdt.1m
-kairospy data replay market.trades.binance_spot_btc_usdt --speed 0
-kairospy reference markets --active-only
-kairospy reference search BTC
+kairospy market download --symbol BTC/USDT
+kairospy market list
+kairospy market inspect market.ohlcv.binance_spot_btc_usdt.1m
+kairospy market read market.ohlcv.binance_spot_btc_usdt.1m
+kairospy market replay market.trades.binance_spot_btc_usdt --speed 0
+kairospy market watch --kind ticker --symbol BTC/USDT --limit 1
+kairospy reference markets list --active-only
+kairospy reference catalog search BTC
 kairospy account list
 kairospy order place --account binance_testnet_spot --symbol BTC/USDT --side buy --qty 0.01 --price 50000
-kairospy streams print --kind ticker --symbol BTC/USDT --limit 1
 ```
+
+The interactive surface uses the Typer command tree as its only navigation source. `kairospy app` and `kairospy shell` share the same session model:
+
+```bash
+kairospy app --command "reference assets" --command "list --type crypto"
+kairospy shell --command "reference assets list --type crypto"
+```
+
+Inside the interactive surface, command context is just the current Typer group path. For example, entering `reference assets` moves to `reference/assets`; entering `list --type crypto` there runs `kairospy reference assets list --type crypto`. Commands keep the same required options as the plain CLI, so order commands require explicit `--account`.
 
 Local project defaults are stored in `.kairos/kairos.toml`; create a project with `kairospy init project-name`.
 Reference catalogs and lifecycle events are persisted in SQLite at `.kairos/reference/reference.sqlite` by default.

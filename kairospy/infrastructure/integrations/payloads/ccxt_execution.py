@@ -41,7 +41,7 @@ def ccxt_order_update(
     return ExecutionUpdate(
         observed_at=_event_time(raw, at),
         kind=_event_kind(raw),
-        venue_order_id=ccxt_required_text(raw, "id", subject="ccxt order update"),
+        order_venue_id=ccxt_required_text(raw, "id", subject="ccxt order update"),
         context=context,
         instrument_id=None if market is None else market.instrument_id,
         market_id=None if market is None else market.market_id,
@@ -75,10 +75,10 @@ def ccxt_trade_update(
     at: datetime | None = None,
 ) -> ExecutionUpdate:
     occurred_at = _event_time(raw, at)
-    venue_order_id = str(raw.get("order") or raw.get("orderId") or "").strip()
-    if not venue_order_id:
+    order_venue_id = str(raw.get("order") or raw.get("orderId") or "").strip()
+    if not order_venue_id:
         raise ValueError("ccxt trade update requires order or orderId")
-    state = coordinator.orders.get_by_venue_order_id(venue_order_id)
+    state = coordinator.orders.get_by_order_venue_id(order_venue_id)
     if state.request.context != context:
         raise ValueError("ccxt trade context does not match order context")
     quantity = ccxt_decimal(raw.get("amount"))
@@ -94,8 +94,8 @@ def ccxt_trade_update(
     return ExecutionUpdate(
         observed_at=occurred_at,
         kind=OrderEventKind.PARTIALLY_FILLED,
-        venue_order_id=venue_order_id,
-        client_order_id=state.request.client_order_id,
+        order_venue_id=order_venue_id,
+        order_id=state.request.order_id,
         context=context,
         fill_quantity=quantity,
         fill_price=price,
@@ -123,9 +123,9 @@ def _import_active_order(
     price = ccxt_optional_decimal(raw.get("price"))
     order_type = ccxt_order_type(raw, price)
     market = _resolve_market(ccxt_required_text(raw, "symbol", subject="ccxt order update"), market_resolver)
-    return coordinator.orders.import_venue_open_order(
+    return coordinator.orders.import_order_venue_open_order(
         context=context,
-        venue_order_id=ccxt_required_text(raw, "id", subject="ccxt order update"),
+        order_venue_id=ccxt_required_text(raw, "id", subject="ccxt order update"),
         instrument_id=market.instrument_id,
         market_id=market.market_id,
         side=OrderSide(ccxt_required_text(raw, "side", subject="ccxt order update").lower()),

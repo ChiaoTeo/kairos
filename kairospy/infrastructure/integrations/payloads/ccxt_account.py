@@ -110,9 +110,9 @@ def import_ccxt_open_order(
     price = ccxt_optional_decimal(raw.get("price"))
     order_type = ccxt_order_type(raw, price)
     market = _resolve_market(ccxt_required_text(raw, "symbol", subject="ccxt order"), market_resolver)
-    return coordinator.orders.import_venue_open_order(
+    return coordinator.orders.import_order_venue_open_order(
         context=context,
-        venue_order_id=ccxt_required_text(raw, "id", subject="ccxt order"),
+        order_venue_id=ccxt_required_text(raw, "id", subject="ccxt order"),
         instrument_id=market.instrument_id,
         market_id=market.market_id,
         side=OrderSide(ccxt_required_text(raw, "side", subject="ccxt order").lower()),
@@ -278,6 +278,7 @@ def _open_quantity(raw: Mapping[str, object]) -> Decimal:
 
 
 def _quote_currency(symbol: str) -> str | None:
+    symbol = str(symbol)
     if "/" not in symbol:
         return None
     quote = symbol.split("/", 1)[1].split(":", 1)[0].strip()

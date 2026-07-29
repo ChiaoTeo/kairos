@@ -6,6 +6,8 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Mapping
 
+from kairospy.core.reference import AccountId, BrokerId, InstrumentId
+
 
 class Environment(StrEnum):
     BACKTEST = "backtest"
@@ -32,14 +34,13 @@ class MarginScope(StrEnum):
 
 @dataclass(frozen=True, slots=True, order=True)
 class AccountRef:
-    broker: str
-    account_id: str
+    broker: BrokerId | str
+    account_id: AccountId | str
     segment: str = ""
 
     def __post_init__(self) -> None:
-        for name in ("broker", "account_id"):
-            if not str(getattr(self, name)).strip():
-                raise ValueError(f"account {name} cannot be empty")
+        object.__setattr__(self, "broker", _id(self.broker, BrokerId, "broker"))
+        object.__setattr__(self, "account_id", _id(self.account_id, AccountId, "account_id"))
         if self.segment and not self.segment.strip():
             raise ValueError("account segment cannot be blank")
 
@@ -105,7 +106,7 @@ class MarginState:
     maintenance: Decimal
     source: AccountSource
     scope: MarginScope = MarginScope.ACCOUNT
-    instrument_id: str | None = None
+    instrument_id: InstrumentId | str | None = None
     available: Decimal | None = None
 
     def __post_init__(self) -> None:
@@ -117,11 +118,12 @@ class MarginState:
             raise ValueError("available margin cannot be negative")
         if self.scope is not MarginScope.ACCOUNT and not self.instrument_id:
             raise ValueError("instrument or position margin requires instrument_id")
+        object.__setattr__(self, "instrument_id", None if self.instrument_id is None else _id(self.instrument_id, InstrumentId, "instrument_id"))
 
 
 @dataclass(frozen=True, slots=True)
 class PositionSnapshot:
-    instrument_id: str
+    instrument_id: InstrumentId | str
     quantity: Decimal
     source: AccountSource
     average_price: Decimal | None = None
@@ -131,8 +133,7 @@ class PositionSnapshot:
     margin_currency: str | None = None
 
     def __post_init__(self) -> None:
-        if not self.instrument_id.strip():
-            raise ValueError("position instrument_id cannot be empty")
+        object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
         if self.quantity == 0:
             raise ValueError("zero positions should be omitted")
 
@@ -140,7 +141,7 @@ class PositionSnapshot:
 @dataclass(frozen=True, slots=True)
 class OpenOrderSnapshot:
     order_id: str
-    instrument_id: str
+    instrument_id: InstrumentId | str
     side: str
     quantity: Decimal
     source: AccountSource
@@ -148,7 +149,8 @@ class OpenOrderSnapshot:
     reserved_amount: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
-        if not self.order_id.strip() or not self.instrument_id.strip() or not self.side.strip():
+        object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
+        if not self.order_id.strip() or not self.side.strip():
             raise ValueError("open order identity fields cannot be empty")
         if self.quantity <= 0:
             raise ValueError("open order quantity must be positive")
@@ -175,6 +177,19 @@ class AccountSnapshot:
             raise ValueError("account snapshot cannot contain duplicate balance currencies")
         if self.observed_at is not None and self.observed_at.tzinfo is None:
             raise ValueError("account snapshot timestamp must be timezone-aware")
+
+
+def _required_text(value: object, label: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{label} cannot be empty")
+    return text
+
+
+def _id(value, id_type, label: str):
+    if isinstance(value, id_type):
+        return value
+    return id_type(_required_text(value, label))
 
 
 __all__ = [

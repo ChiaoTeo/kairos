@@ -227,8 +227,8 @@ class MarketStore:
             return previous
         self._observation_event_count += 1
         summary = MarketObservationSummary(
-            subject_type=observation.subject.subject_type,
-            subject_id=observation.subject.subject_id,
+            subject_type=str(observation.subject.subject_type),
+            subject_id=str(observation.subject.subject_id),
             kind=observation.kind,
             observed_at=observation.observed_at,
             available_at=observation.available_at,
@@ -275,8 +275,8 @@ class MarketStore:
             event_count=self._quote_event_count,
             quotes=tuple(
                 MarketQuoteSummary(
-                    market_id=quote.market_id,
-                    instrument_id=quote.instrument_id,
+                    market_id=_optional_id(quote.market_id),
+                    instrument_id=str(quote.instrument_id),
                     market_key=quote.market_key,
                     time=quote.time,
                     bid=quote.bid,
@@ -300,7 +300,7 @@ class MarketStore:
                     source=rate.source,
                     tenor=rate.tenor,
                     basis=rate.basis,
-                    market_id=rate.market_id,
+                    market_id=_optional_id(rate.market_id),
                 )
                 for rate in sorted(self._rates.values(), key=_rate_state_key)
             ),
@@ -345,7 +345,7 @@ def _observation_from_market_event(event: MarketEvent) -> MarketObservation:
 
 def _field_summaries_from_market_event(event: MarketEvent) -> tuple[MarketFieldSummary, ...]:
     value = event.value
-    market_id = getattr(value, "market_id", None)
+    market_id = _optional_id(getattr(value, "market_id", None))
     market_key = getattr(value, "market_key", None)
     interval = getattr(value, "timeframe", None)
     summaries: list[MarketFieldSummary] = []
@@ -354,8 +354,8 @@ def _field_summaries_from_market_event(event: MarketEvent) -> tuple[MarketFieldS
             continue
         summaries.append(
             MarketFieldSummary(
-                event.subject.subject_type,
-                event.subject.subject_id,
+                str(event.subject.subject_type),
+                str(event.subject.subject_id),
                 f"{type(value).__name__}.{name}",
                 event.observed_at,
                 field_value,
@@ -371,8 +371,8 @@ def _field_summaries_from_market_event(event: MarketEvent) -> tuple[MarketFieldS
 def _market_object_payload(value: object) -> dict[str, object]:
     if isinstance(value, Quote):
         return {
-            "instrument_id": value.instrument_id,
-            "market_id": value.market_id,
+            "instrument_id": str(value.instrument_id),
+            "market_id": _optional_id(value.market_id),
             "market_key": value.market_key,
             "bid": value.bid,
             "ask": value.ask,
@@ -384,8 +384,8 @@ def _market_object_payload(value: object) -> dict[str, object]:
         }
     if isinstance(value, OrderBookSnapshot):
         return {
-            "instrument_id": value.instrument_id,
-            "market_id": value.market_id,
+            "instrument_id": str(value.instrument_id),
+            "market_id": _optional_id(value.market_id),
             "market_key": value.market_key,
             "bid1": None if value.bid1 is None else value.bid1.price,
             "ask1": None if value.ask1 is None else value.ask1.price,
@@ -399,8 +399,8 @@ def _market_object_payload(value: object) -> dict[str, object]:
         }
     if isinstance(value, Bar):
         return {
-            "instrument_id": value.instrument_id,
-            "market_id": value.market_id,
+            "instrument_id": str(value.instrument_id),
+            "market_id": _optional_id(value.market_id),
             "market_key": value.market_key,
             "timeframe": value.timeframe,
             "open": value.open,
@@ -414,8 +414,8 @@ def _market_object_payload(value: object) -> dict[str, object]:
         }
     if isinstance(value, TradePrint):
         return {
-            "instrument_id": value.instrument_id,
-            "market_id": value.market_id,
+            "instrument_id": str(value.instrument_id),
+            "market_id": _optional_id(value.market_id),
             "market_key": value.market_key,
             "trade_id": value.trade_id,
             "side": value.side,
@@ -429,7 +429,7 @@ def _market_object_payload(value: object) -> dict[str, object]:
     if isinstance(value, RateObservation):
         return {
             "rate_id": value.rate_id,
-            "market_id": value.market_id,
+            "market_id": _optional_id(value.market_id),
             "rate": value.rate,
             "tenor": value.tenor,
             "basis": value.basis,
@@ -445,8 +445,8 @@ def _book_summary(book: OrderBookSnapshot) -> MarketBookSummary:
     bids = tuple((level.price, level.size) for level in book.bids)
     asks = tuple((level.price, level.size) for level in book.asks)
     return MarketBookSummary(
-        market_id=book.market_id,
-        instrument_id=book.instrument_id,
+        market_id=_optional_id(book.market_id),
+        instrument_id=str(book.instrument_id),
         market_key=book.market_key,
         time=book.time,
         bid1=None if not bids else bids[0][0],
@@ -481,19 +481,19 @@ def _quote_from_book(book: OrderBookSnapshot) -> Quote | None:
 
 
 def _bar_summary(bar: Bar) -> MarketBarSummary:
-    return MarketBarSummary(bar.market_id, bar.instrument_id, bar.market_key, bar.time, bar.timeframe, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.source)
+    return MarketBarSummary(_optional_id(bar.market_id), str(bar.instrument_id), bar.market_key, bar.time, bar.timeframe, bar.open, bar.high, bar.low, bar.close, bar.volume, bar.source)
 
 
 def _trade_summary(trade: TradePrint) -> MarketTradeSummary:
-    return MarketTradeSummary(trade.market_id, trade.instrument_id, trade.market_key, trade.time, trade.trade_id, trade.side, trade.price, trade.size, trade.cost, trade.source)
+    return MarketTradeSummary(_optional_id(trade.market_id), str(trade.instrument_id), trade.market_key, trade.time, trade.trade_id, trade.side, trade.price, trade.size, trade.cost, trade.source)
 
 
 def _quote_state_key(quote: Quote) -> str:
-    return quote.market_key or quote.market_id or quote.instrument_id
+    return quote.market_key or _optional_id(quote.market_id) or str(quote.instrument_id)
 
 
 def _rate_state_key(rate: RateObservation) -> str:
-    return rate.market_id or rate.rate_id
+    return _optional_id(rate.market_id) or rate.rate_id
 
 
 def _observation_state_key(observation: MarketObservation) -> str:
@@ -507,6 +507,10 @@ def _field_state_key(summary: MarketFieldSummary) -> str:
 
 def _key_part(value: object) -> str:
     return "".join(character if character.isalnum() else "_" for character in str(value).lower()).strip("_")
+
+
+def _optional_id(value: object | None) -> str | None:
+    return None if value is None else str(value)
 
 
 __all__ = ["MarketStore"]

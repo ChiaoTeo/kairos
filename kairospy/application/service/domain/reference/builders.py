@@ -18,19 +18,7 @@ from kairospy.core.reference import (
     MarketStatus,
     ReferenceCatalog,
 )
-from kairospy.core.reference.identity import reference_slug
-from kairospy.core.reference.products import (
-    asset_id_for_product,
-    currency_asset_id,
-    equity_asset_id,
-    equity_instrument_id,
-    equity_listing_id,
-    equity_market_id,
-    instrument_id_for_product,
-    instrument_product_for_market,
-    listing_id_for_market,
-    market_id_for_product,
-)
+from kairospy.core.reference.identity import AssetId, InstrumentId, ListingId, MarketId, reference_slug
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,35 +61,35 @@ def catalog_from_market_rows(rows: Iterable[Mapping[str, object]], *, effective_
     seen_listings: set[str] = set()
     seen_markets: set[str] = set()
     for row in rows:
-        product = instrument_product_for_market(row.get("market"))
+        market = _required_text(row.get("market"), "market")
         base = _optional_text(row.get("base"))
         quote = _optional_text(row.get("quote"))
-        base_asset_id = asset_id_for_product(product, base) if base else None
-        quote_asset_id = asset_id_for_product(product, quote, quote=True) if quote else None
+        base_asset_type = _asset_type_for_market(market, quote=False)
+        quote_asset_type = _asset_type_for_market(market, quote=True)
+        base_asset_id = _asset_id(base_asset_type, base) if base else None
+        quote_asset_id = _asset_id(quote_asset_type, quote) if quote else None
         for symbol, asset_id, asset_type in (
-            (base, base_asset_id, product.base_asset_type),
-            (quote, quote_asset_id, product.quote_asset_type),
+            (base, base_asset_id, base_asset_type),
+            (quote, quote_asset_id, quote_asset_type),
         ):
             if symbol and asset_id and str(asset_id) not in seen_assets:
                 catalog.add_asset(Asset(asset_id, asset_type, symbol, effective_from=effective_from))
                 seen_assets.add(str(asset_id))
 
         venue = _required_text(row.get("venue"), "venue")
-        market = _required_text(row.get("market"), "market")
         source_symbol = _required_text(row.get("source_symbol"), "source_symbol")
-        instrument_id = instrument_id_for_product(
-            product,
+        instrument_id = _instrument_id_for_market(
+            market,
             base=base,
             quote=quote,
             venue=venue,
-            market=market,
             source_symbol=source_symbol,
         )
         if str(instrument_id) not in seen_instruments:
             catalog.add_instrument(
                 InstrumentDefinition(
                     instrument_id,
-                    product.instrument_type,
+                    _instrument_type_for_market(market),
                     base_asset_id=base_asset_id,
                     quote_asset_id=quote_asset_id,
                     display_name=_display_name(base, quote, row),
@@ -110,7 +98,7 @@ def catalog_from_market_rows(rows: Iterable[Mapping[str, object]], *, effective_
             )
             seen_instruments.add(str(instrument_id))
 
-        listing_id = listing_id_for_market(venue=venue, market=market, source_symbol=source_symbol)
+        listing_id = _listing_id(venue=venue, market=market, source_symbol=source_symbol)
         status = _market_status(row)
         if str(listing_id) not in seen_listings:
             catalog.add_listing(
@@ -127,7 +115,7 @@ def catalog_from_market_rows(rows: Iterable[Mapping[str, object]], *, effective_
             )
             seen_listings.add(str(listing_id))
 
-        market_id = market_id_for_product(venue=venue, market=market, source_symbol=source_symbol)
+        market_id = _market_id(venue=venue, market=market, source_symbol=source_symbol)
         if str(market_id) not in seen_markets:
             catalog.add_market(
                 MarketDefinition(
@@ -176,12 +164,12 @@ def catalog_from_equity_rows(rows: Iterable[Mapping[str, object]], *, effective_
         name = _optional_text(row.get("name")) or ticker
         stable_key = _stable_key(row, ticker)
         entity_id = EntityId(f"entity:company:{stable_key}")
-        asset_id = equity_asset_id(stable_key)
-        instrument_id = equity_instrument_id(stable_key)
-        listing_id = equity_listing_id(venue=venue, stable_key=stable_key)
-        market_id = equity_market_id(venue=venue, stable_key=stable_key)
+        asset_id = _equity_asset_id(stable_key)
+        instrument_id = _equity_instrument_id(stable_key)
+        listing_id = _equity_listing_id(venue=venue, stable_key=stable_key)
+        market_id = _equity_market_id(venue=venue, stable_key=stable_key)
         currency = _optional_text(row.get("currency")) or "USD"
-        quote_asset_id = currency_asset_id(currency)
+        quote_asset_id = _currency_asset_id(currency)
 
         if str(entity_id) not in seen_entities:
             catalog.add_entity(Entity(entity_id, EntityType.COMPANY, name, effective_from=effective_from, metadata=_metadata(row)))
@@ -269,6 +257,93 @@ def _display_name(base: str | None, quote: str | None, row: Mapping[str, object]
     if base and quote:
         return f"{base}/{quote}"
     return _required_text(row.get("source_symbol"), "source_symbol")
+
+
+def _instrument_type_for_market(market: object) -> InstrumentType:
+    text = _normalized_market(market)
+    if text == "spot":
+        return InstrumentType.SPOT
+    if text in {"swap", "perp", "perpetual", "derivative"}:
+        return InstrumentType.PERPETUAL
+    if text in {"future", "futures"}:
+        return InstrumentType.FUTURE
+    if text in {"option", "options"}:
+        return InstrumentType.OPTION
+    if text == "equity":
+        return InstrumentType.EQUITY
+    return InstrumentType.OTHER
+
+
+def _asset_type_for_market(market: object, *, quote: bool) -> AssetType:
+    text = _normalized_market(market)
+    if text in {"spot", "swap", "perp", "perpetual", "future", "futures", "derivative"}:
+        return AssetType.CRYPTO
+    if text in {"option", "options"}:
+        return AssetType.FIAT if quote else AssetType.OTHER
+    if text == "equity":
+        return AssetType.FIAT if quote else AssetType.EQUITY
+    return AssetType.OTHER
+
+
+def _instrument_id_for_market(
+    market_type: object,
+    *,
+    base: str | None,
+    quote: str | None,
+    venue: object,
+    source_symbol: object,
+) -> InstrumentId:
+    segment = _instrument_identity_segment(market_type)
+    if base and quote:
+        return InstrumentId(f"instrument:{segment}:{reference_slug(base)}:{reference_slug(quote)}")
+    return InstrumentId(f"instrument:{segment}:{reference_slug(venue)}:{reference_slug(market_type)}:{reference_slug(source_symbol)}")
+
+
+def _instrument_identity_segment(market: object) -> str:
+    text = _normalized_market(market)
+    if text in {"swap", "perp"}:
+        return "perpetual"
+    if text == "futures":
+        return "future"
+    if text == "options":
+        return "option"
+    return reference_slug(text or "other")
+
+
+def _asset_id(asset_type: AssetType, symbol: str) -> AssetId:
+    return AssetId(f"asset:{asset_type.value}:{reference_slug(symbol)}")
+
+
+def _equity_asset_id(stable_key: str) -> AssetId:
+    return AssetId(f"asset:{AssetType.EQUITY.value}:{reference_slug(stable_key)}")
+
+
+def _currency_asset_id(currency: str) -> AssetId:
+    return AssetId(f"asset:{AssetType.FIAT.value}:{reference_slug(currency)}")
+
+
+def _equity_instrument_id(stable_key: str) -> InstrumentId:
+    return InstrumentId(f"instrument:equity:{reference_slug(stable_key)}")
+
+
+def _listing_id(*, venue: object, market: object, source_symbol: object) -> ListingId:
+    return ListingId(f"listing:{reference_slug(venue)}:{reference_slug(market)}:{reference_slug(source_symbol)}")
+
+
+def _equity_listing_id(*, venue: object, stable_key: str) -> ListingId:
+    return ListingId(f"listing:{reference_slug(venue)}:{reference_slug(stable_key)}")
+
+
+def _market_id(*, venue: object, market: object, source_symbol: object) -> MarketId:
+    return MarketId(f"market:{reference_slug(venue)}:{reference_slug(market)}:{reference_slug(source_symbol)}")
+
+
+def _equity_market_id(*, venue: object, stable_key: str) -> MarketId:
+    return MarketId(f"market:{reference_slug(venue)}:equity:{reference_slug(stable_key)}")
+
+
+def _normalized_market(value: object) -> str:
+    return str(value or "").strip().lower()
 
 
 def _market_status(row: Mapping[str, object]) -> MarketStatus:

@@ -60,6 +60,22 @@ class BinanceBroker:
             params=params,
         )
 
+    def fetch_closed_orders(
+        self,
+        symbol: str | None = None,
+        *,
+        since: object | None = None,
+        limit: int | None = None,
+        params: Mapping[str, object] | None = None,
+    ) -> Iterable[Mapping[str, object]]:
+        return self.driver.fetch_closed_orders(
+            self.exchange_id,
+            symbol,
+            since=since,
+            limit=limit,
+            params=params,
+        )
+
     def watch_balance(
         self,
         *,

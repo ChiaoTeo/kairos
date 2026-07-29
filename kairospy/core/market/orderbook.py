@@ -5,6 +5,8 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
+from kairospy.core.reference import InstrumentId, MarketId
+
 from .selectors import MarketSelectable
 
 
@@ -25,9 +27,9 @@ class PriceLevel:
 
 @dataclass(frozen=True, slots=True)
 class OrderBookSnapshot(MarketSelectable):
-    instrument_id: str
+    instrument_id: InstrumentId | str
     time: datetime
-    market_id: str | None = None
+    market_id: MarketId | str | None = None
     market_key: str | None = None
     bids: tuple[PriceLevel, ...] = ()
     asks: tuple[PriceLevel, ...] = ()
@@ -37,10 +39,8 @@ class OrderBookSnapshot(MarketSelectable):
     derivation: str = "direct"
 
     def __post_init__(self) -> None:
-        if not self.instrument_id.strip():
-            raise ValueError("order book instrument_id is required")
-        if self.market_id is not None and not self.market_id.strip():
-            raise ValueError("order book market_id cannot be blank")
+        object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
+        object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
         if self.market_key is not None and not self.market_key.strip():
             raise ValueError("order book market_key cannot be blank")
         if self.time.tzinfo is None:
@@ -82,18 +82,18 @@ class OrderBookChange:
 
 @dataclass(frozen=True, slots=True)
 class OrderBookDelta:
-    instrument_id: str
+    instrument_id: InstrumentId | str
     time: datetime
     changes: tuple[OrderBookChange, ...]
-    market_id: str | None = None
+    market_id: MarketId | str | None = None
     market_key: str | None = None
     nonce: object | None = None
     source: str = ""
     sequence: int | None = None
 
     def __post_init__(self) -> None:
-        if not self.instrument_id.strip():
-            raise ValueError("order book delta instrument_id is required")
+        object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
+        object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
         if self.time.tzinfo is None:
             raise ValueError("order book delta time must be timezone-aware")
         if self.sequence is not None and self.sequence < 1:
@@ -163,3 +163,16 @@ __all__ = [
     "PriceLevel",
     "apply_orderbook_update",
 ]
+
+
+def _required_text(value: object, label: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{label} cannot be empty")
+    return text
+
+
+def _id(value, id_type, label: str):
+    if isinstance(value, id_type):
+        return value
+    return id_type(_required_text(value, label))

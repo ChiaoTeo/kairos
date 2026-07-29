@@ -7,6 +7,8 @@ from enum import StrEnum
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
+from kairospy.core.reference import AccountId, InstrumentId, IntentId, MarketId, StrategyId
+
 
 class IntentKind(StrEnum):
     TARGET_POSITION = "target_position"
@@ -58,8 +60,8 @@ class IntentEventKind(StrEnum):
 
 @runtime_checkable
 class Intent(Protocol):
-    intent_id: str
-    strategy_id: str
+    intent_id: IntentId | str
+    strategy_id: StrategyId | str
     kind: object
     created_at: datetime | None
     reason: str
@@ -67,12 +69,12 @@ class Intent(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class TradeIntent(Intent):
-    intent_id: str
-    strategy_id: str
-    instrument_id: str
+    intent_id: IntentId | str
+    strategy_id: StrategyId | str
+    instrument_id: InstrumentId | str
     kind: IntentKind
-    market_id: str | None = None
-    account_id: str | None = None
+    market_id: MarketId | str | None = None
+    account_id: AccountId | str | None = None
     account_index: int | None = None
     created_at: datetime | None = None
     target_quantity: Decimal | None = None
@@ -81,12 +83,11 @@ class TradeIntent(Intent):
     reason: str = ""
 
     def __post_init__(self) -> None:
-        if not self.intent_id.strip() or not self.strategy_id.strip() or not self.instrument_id.strip():
-            raise ValueError("intent identity fields cannot be empty")
-        if self.market_id is not None and not self.market_id.strip():
-            raise ValueError("intent market_id cannot be blank")
-        if self.account_id is not None and not self.account_id.strip():
-            raise ValueError("intent account_id cannot be blank")
+        object.__setattr__(self, "intent_id", _id(self.intent_id, IntentId, "intent_id"))
+        object.__setattr__(self, "strategy_id", _id(self.strategy_id, StrategyId, "strategy_id"))
+        object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
+        object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
+        object.__setattr__(self, "account_id", None if self.account_id is None else _id(self.account_id, AccountId, "account_id"))
         if self.account_index is not None and self.account_index < 0:
             raise ValueError("intent account_index cannot be negative")
         if self.target_quantity is not None and self.target_quantity < 0:
@@ -101,15 +102,14 @@ class TradeIntent(Intent):
 
 @dataclass(frozen=True, slots=True)
 class IntentEvent:
-    intent_id: str
+    intent_id: IntentId | str
     kind: IntentEventKind
     occurred_at: datetime
     order_ids: tuple[str, ...] = ()
     reason: str = ""
 
     def __post_init__(self) -> None:
-        if not self.intent_id.strip():
-            raise ValueError("intent event intent_id cannot be empty")
+        object.__setattr__(self, "intent_id", _id(self.intent_id, IntentId, "intent_id"))
         if self.occurred_at.tzinfo is None:
             raise ValueError("intent event timestamp must be timezone-aware")
         object.__setattr__(self, "order_ids", tuple(str(item) for item in self.order_ids))
@@ -128,7 +128,7 @@ class IntentState:
         return self.status.active
 
     def apply(self, event: IntentEvent) -> "IntentState":
-        if event.intent_id != self.intent.intent_id:
+        if str(event.intent_id) != str(self.intent.intent_id):
             raise ValueError("intent event does not belong to this intent")
         return replace(
             self,
@@ -141,16 +141,16 @@ class IntentState:
 
 def target_position_intent(
     *,
-    strategy_id: str,
-    instrument_id: str,
-    market_id: str | None = None,
-    account_id: str | None = None,
+    strategy_id: StrategyId | str,
+    instrument_id: InstrumentId | str,
+    market_id: MarketId | str | None = None,
+    account_id: AccountId | str | None = None,
     account_index: int | None = None,
     target_quantity: Decimal,
     at: datetime | None = None,
     limit_price: Decimal | None = None,
     reason: str = "",
-    intent_id: str | None = None,
+    intent_id: IntentId | str | None = None,
 ) -> TradeIntent:
     return TradeIntent(
         intent_id=intent_id or f"intent-{uuid4()}",
@@ -223,3 +223,16 @@ __all__ = [
     "TradeIntent",
     "target_position_intent",
 ]
+
+
+def _required_text(value: object, label: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{label} cannot be empty")
+    return text
+
+
+def _id(value, id_type, label: str):
+    if isinstance(value, id_type):
+        return value
+    return id_type(_required_text(value, label))

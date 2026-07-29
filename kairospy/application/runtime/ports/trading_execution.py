@@ -31,7 +31,7 @@ class TradingExecutionPort(Protocol):
 
     def submit_order(
         self,
-        client_order_id: str,
+        order_id: str,
         *,
         at: datetime,
         params: Mapping[str, object] | None = None,
@@ -40,7 +40,7 @@ class TradingExecutionPort(Protocol):
 
     def cancel_order(
         self,
-        client_order_id: str,
+        order_id: str,
         *,
         at: datetime,
         params: Mapping[str, object] | None = None,

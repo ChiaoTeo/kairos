@@ -63,9 +63,12 @@ def listing_to_primitive(item: ListingDefinition) -> dict[str, object]:
     return {
         "listing_id": str(item.listing_id),
         "instrument_id": str(item.instrument_id),
-        "venue": item.venue,
-        "trading_symbol": item.trading_symbol,
-        "venue_instrument_id": item.venue_instrument_id,
+        "exchange_id": str(item.exchange_id),
+        "venue": str(item.venue),
+        "listing_symbol": str(item.listing_symbol),
+        "trading_symbol": str(item.trading_symbol),
+        "exchange_instrument_id": _optional_id(item.exchange_instrument_id),
+        "venue_instrument_id": _optional_id(item.venue_instrument_id),
         "currency_asset_id": _optional_id(item.currency_asset_id),
         "status": item.status.value,
         **_interval_fields(item),
@@ -78,9 +81,11 @@ def market_to_primitive(item: MarketDefinition) -> dict[str, object]:
         "market_id": str(item.market_id),
         "instrument_id": str(item.instrument_id),
         "listing_id": str(item.listing_id),
-        "venue": item.venue,
-        "market": item.market,
-        "source_symbol": item.source_symbol,
+        "exchange_id": str(item.exchange_id),
+        "venue": str(item.venue),
+        "market_type": str(item.market_type),
+        "market": str(item.market),
+        "source_symbol": str(item.source_symbol),
         "status": item.status.value,
         "price_tick": _optional_decimal(item.price_tick),
         "amount_tick": _optional_decimal(item.amount_tick),
@@ -101,8 +106,9 @@ def lifecycle_event_to_primitive(item: LifecycleEvent) -> dict[str, object]:
         "instrument_id": _optional_id(item.instrument_id),
         "listing_id": _optional_id(item.listing_id),
         "market_id": _optional_id(item.market_id),
-        "venue": item.venue,
-        "source_symbol": item.source_symbol,
+        "exchange_id": _optional_id(item.exchange_id),
+        "venue": _optional_id(item.venue),
+        "source_symbol": _optional_id(item.source_symbol),
         "previous": _encode(item.previous),
         "current": _encode(item.current),
     }
@@ -154,9 +160,9 @@ def listing_from_primitive(item: Mapping[str, object]) -> ListingDefinition:
     return ListingDefinition(
         ListingId(_required(item, "listing_id")),
         InstrumentId(_required(item, "instrument_id")),
-        _required(item, "venue"),
-        _required(item, "trading_symbol"),
-        venue_instrument_id=_optional_text(item.get("venue_instrument_id")),
+        _required_any(item, "exchange_id", "venue"),
+        _required_any(item, "listing_symbol", "trading_symbol"),
+        venue_instrument_id=_optional_text(item.get("exchange_instrument_id") or item.get("venue_instrument_id")),
         currency_asset_id=_optional_ref(item.get("currency_asset_id"), AssetId),
         status=MarketStatus(_required(item, "status")),
         effective_from=_time(_required(item, "effective_from")),
@@ -170,8 +176,8 @@ def market_from_primitive(item: Mapping[str, object]) -> MarketDefinition:
         MarketId(_required(item, "market_id")),
         InstrumentId(_required(item, "instrument_id")),
         ListingId(_required(item, "listing_id")),
-        _required(item, "venue"),
-        _required(item, "market"),
+        _required_any(item, "exchange_id", "venue"),
+        _required_any(item, "market_type", "market"),
         _required(item, "source_symbol"),
         status=MarketStatus(_required(item, "status")),
         price_tick=_optional_decimal_from_value(item.get("price_tick")),
@@ -194,7 +200,7 @@ def lifecycle_event_from_primitive(item: Mapping[str, object]) -> LifecycleEvent
         instrument_id=_optional_ref(item.get("instrument_id"), InstrumentId),
         listing_id=_optional_ref(item.get("listing_id"), ListingId),
         market_id=_optional_ref(item.get("market_id"), MarketId),
-        venue=_optional_text(item.get("venue")),
+        venue=_optional_text(item.get("exchange_id") or item.get("venue")),
         source_symbol=_optional_text(item.get("source_symbol")),
         previous=_mapping(item.get("previous")),
         current=_mapping(item.get("current")),
@@ -238,6 +244,15 @@ def _required(item: Mapping[str, object], key: str) -> str:
     if not text:
         raise ValueError(f"{key} is required")
     return text
+
+
+def _required_any(item: Mapping[str, object], *keys: str) -> str:
+    for key in keys:
+        value = item.get(key)
+        text = str(value).strip() if value is not None else ""
+        if text:
+            return text
+    raise ValueError(f"{' or '.join(keys)} is required")
 
 
 def _time(value: object) -> datetime:

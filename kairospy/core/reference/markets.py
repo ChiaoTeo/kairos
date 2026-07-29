@@ -4,15 +4,26 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .catalog import ReferenceCatalog
-from .identity import reference_slug
+from .identity import ExchangeId, InstrumentId, MarketId, MarketTypeId, SourceSymbol, reference_slug
 from .model import MarketDefinition
 
 
 @dataclass(frozen=True, slots=True)
 class SymbolRef:
-    symbol: str
-    venue: str | None = None
-    market: str | None = None
+    """User-facing symbol reference before catalog resolution.
+
+    It accepts compact symbols such as BTC/USDT and scoped symbols such as
+    binance:spot:BTC/USDT. It becomes tradable only after resolving to MarketRef.
+    """
+
+    symbol: SourceSymbol | str
+    venue: ExchangeId | str | None = None
+    market: MarketTypeId | str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "symbol", _id(self.symbol, SourceSymbol, "symbol"))
+        object.__setattr__(self, "venue", None if self.venue is None else _id(self.venue, ExchangeId, "venue"))
+        object.__setattr__(self, "market", None if self.market is None else _id(self.market, MarketTypeId, "market"))
 
     @classmethod
     def parse(
@@ -35,18 +46,31 @@ class SymbolRef:
 
 @dataclass(frozen=True, slots=True)
 class MarketRef:
-    market_id: str
-    instrument_id: str
+    """Resolved runtime market identity.
+
+    Runtime services use this compact view after catalog lookup. It carries
+    stable reference IDs plus the venue-native symbol needed by adapters.
+    """
+
+    market_id: MarketId | str
+    instrument_id: InstrumentId | str
     market_key: str
-    venue: str
-    market: str
-    source_symbol: str
+    venue: ExchangeId | str
+    market: MarketTypeId | str
+    source_symbol: SourceSymbol | str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "market_id", _id(self.market_id, MarketId, "market_id"))
+        object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
+        object.__setattr__(self, "venue", _id(self.venue, ExchangeId, "venue"))
+        object.__setattr__(self, "market", _id(self.market, MarketTypeId, "market"))
+        object.__setattr__(self, "source_symbol", _id(self.source_symbol, SourceSymbol, "source_symbol"))
 
     @classmethod
     def from_definition(cls, market: MarketDefinition) -> "MarketRef":
         return cls(
-            market_id=str(market.market_id),
-            instrument_id=str(market.instrument_id),
+            market_id=market.market_id,
+            instrument_id=market.instrument_id,
             market_key=_market_key(market.venue, market.market, market.source_symbol),
             venue=market.venue,
             market=market.market,
@@ -65,8 +89,8 @@ class MarketRef:
             else f"instrument:{reference_slug(market)}:{reference_slug(venue)}:{reference_slug(source_symbol)}"
         )
         return cls(
-            market_id=f"market:{reference_slug(venue)}:{reference_slug(market)}:{reference_slug(source_symbol)}",
-            instrument_id=instrument_id,
+            market_id=MarketId(f"market:{reference_slug(venue)}:{reference_slug(market)}:{reference_slug(source_symbol)}"),
+            instrument_id=InstrumentId(instrument_id),
             market_key=_market_key(venue, market, source_symbol),
             venue=venue,
             market=market,
@@ -75,13 +99,23 @@ class MarketRef:
 
     def identity_fields(self) -> dict[str, object]:
         return {
-            "market_id": self.market_id,
-            "instrument_id": self.instrument_id,
+            "market_id": str(self.market_id),
+            "instrument_id": str(self.instrument_id),
             "market_key": self.market_key,
-            "venue": self.venue,
-            "market": self.market,
-            "source_symbol": self.source_symbol,
+            "venue": str(self.venue),
+            "exchange_id": str(self.exchange_id),
+            "market": str(self.market),
+            "market_type": str(self.market_type),
+            "source_symbol": str(self.source_symbol),
         }
+
+    @property
+    def exchange_id(self) -> ExchangeId:
+        return self.venue
+
+    @property
+    def market_type(self) -> MarketTypeId:
+        return self.market
 
 
 class MarketResolver:
@@ -150,14 +184,14 @@ class MarketResolver:
         if self.catalog is not None and ref.venue and ref.market:
             if self.as_of is None:
                 raise RuntimeError("catalog-backed market resolver has no as_of")
-            definition = self.catalog.resolve_market(ref.symbol, venue=ref.venue, market=ref.market, at=self.as_of)
+            definition = self.catalog.resolve_market(str(ref.symbol), venue=str(ref.venue), market=str(ref.market), at=self.as_of)
             return self.add(MarketRef.from_definition(definition))
         if not ref.venue or not ref.market:
             raise KeyError(f"unknown market reference: {ref.symbol}")
-        return self.add(MarketRef.ephemeral(venue=ref.venue, market=ref.market, source_symbol=ref.symbol))
+        return self.add(MarketRef.ephemeral(venue=str(ref.venue), market=str(ref.market), source_symbol=str(ref.symbol)))
 
     def broker_symbol(self, value: object | MarketRef) -> str:
-        return self.resolve(value).source_symbol
+        return str(self.resolve(value).source_symbol)
 
     def snapshot(self) -> dict[str, object]:
         return {
@@ -166,10 +200,10 @@ class MarketResolver:
         }
 
     @staticmethod
-    def _key(value: object, *, venue: str | None, market: str | None) -> tuple[str | None, str | None, str]:
+    def _key(value: object, *, venue: object | None, market: object | None) -> tuple[str | None, str | None, str]:
         return (
-            venue.strip().lower() if venue else None,
-            market.strip().lower() if market else None,
+            str(venue).strip().lower() if venue else None,
+            str(market).strip().lower() if market else None,
             str(value).strip().lower(),
         )
 
@@ -183,6 +217,12 @@ def _required_text(value: object, name: str) -> str:
     if not text:
         raise ValueError(f"{name} cannot be empty")
     return text
+
+
+def _id(value, id_type, label: str):
+    if isinstance(value, id_type):
+        return value
+    return id_type(_required_text(value, label))
 
 
 def _split_symbol(symbol: str) -> tuple[str | None, str | None]:

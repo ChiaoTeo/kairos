@@ -345,7 +345,7 @@ Responsibilities:
 - Open run/account/order registries.
 - Provide consistent path defaults to all CLI products.
 
-Existing commands such as `run list`, `run daemon`, `data download`, `reference`, `account`, and `order` should receive their roots from this workspace object unless the user explicitly overrides them. `broker` should remain an internal adapter boundary, not a primary CLI product.
+Existing commands such as `project status`, `run list`, `run daemon`, `market download`, `reference`, `account`, and `order` should receive their roots from this workspace object unless the user explicitly overrides them. `broker` should remain an internal adapter boundary, not a primary CLI product.
 
 ## CLI Information Architecture
 
@@ -354,16 +354,24 @@ The CLI should be organized around product nouns, not file layout.
 Proposed top-level commands:
 
 ```text
-config       workspace manifest, profiles, effective config, diagnostics
-run          run specs, run instances, daemons, logs, status
+project      workspace init, status, doctor
+run          backtest, paper, live runs, daemons, logs, status
 account      configured accounts, balances, open orders, snapshots
 order        place, cancel, replace, list, inspect orders
-reference    reference catalogs and lifecycle data
-data         historical data download, inspect, read, replay, prune
-stream       live market/account stream utilities
-integration  provider and exchange diagnostics
+market       historical and live market data
+reference    instruments, venues, markets, symbol resolution
 strategy     strategy utilities
+config       workspace manifest, profiles, effective config, diagnostics
 ```
+
+The interactive app should derive its navigation from this same Typer command tree. Its current context is a command group path, not a separate product registry:
+
+```text
+home> reference assets
+reference/assets> list --type crypto
+```
+
+That sequence is equivalent to `kairospy reference assets list --type crypto`. Interactive commands must keep the same required arguments and options as the plain CLI; for example, order commands require explicit `--account` instead of hidden session injection.
 
 ### Config Commands
 
@@ -409,12 +417,36 @@ Accounts are system resources. Account config should live under `.kairos/account
 
 ```bash
 kairospy account list
-kairospy account create binance_live_spot --provider binance --environment live --market spot --currency USDT --credential-kind api_key_secret
+kairospy account schemas
+kairospy account schema okx
+
+kairospy account create binance_live_spot \
+  --provider binance \
+  --environment live \
+  --market spot \
+  --currency USDT \
+  --api-key "$BINANCE_API_KEY" \
+  --api-secret "$BINANCE_API_SECRET"
+
+kairospy account create okx_live_spot \
+  --provider okx \
+  --environment live \
+  --api-key "$OKX_API_KEY" \
+  --api-secret "$OKX_SECRET" \
+  --passphrase "$OKX_PASSPHRASE"
+
+kairospy account create hyperliquid_live_perp \
+  --provider hyperliquid \
+  --environment live \
+  --wallet-address "$HL_WALLET_ADDRESS" \
+  --private-key "$HL_PRIVATE_KEY"
+
 kairospy account show binance_testnet_spot
 kairospy account balance binance_testnet_spot
 kairospy account open-orders binance_testnet_spot
 kairospy account snapshot binance_testnet_spot
 kairospy account doctor binance_testnet_spot
+kairospy account delete binance_testnet_spot
 ```
 
 ### Order Commands
@@ -439,26 +471,28 @@ kairospy order place --account binance_live_spot --symbol BTC/USDT --side buy --
 `reference` owns both catalog maintenance and user-facing lookup for symbols, instruments, listings, and markets.
 
 ```bash
-kairospy reference search BTC
-kairospy reference show binance:spot:BTC/USDT
-kairospy reference resolve BTC/USDT --venue binance --market spot
-kairospy reference refresh --provider massive
-kairospy reference markets --active-only
+kairospy reference catalog search BTC
+kairospy reference catalog show binance:spot:BTC/USDT
+kairospy reference markets resolve BTC/USDT --venue binance --market spot
+kairospy reference sync massive
+kairospy reference markets list --active-only
 kairospy reference catalog status
 ```
 
-### Data Commands
+### Market Commands
 
-Historical data should keep using the workspace data root by default.
+Market commands own historical data downloads, local dataset inspection, replay, and public live market connectivity checks. Private account streams belong under `account`.
 
 ```bash
-kairospy data download --symbol BTC/USDT --exchange binance --timeframe 1m
-kairospy data list
-kairospy data inspect market.ohlcv.binance_spot_btc_usdt.1m
-kairospy data alias market.ohlcv.binance_spot_btc_usdt.1m btc-bars
-kairospy data read market.ohlcv.binance_spot_btc_usdt.1m --limit 10
-kairospy data replay market.trades.binance_spot_btc_usdt --speed 0
-kairospy data prune market.ohlcv.binance_spot_btc_usdt.1m --start 2024-01-01T00:00:00+00:00 --end 2025-01-01T00:00:00+00:00
+kairospy market download --symbol BTC/USDT --exchange binance --timeframe 1m
+kairospy market list
+kairospy market inspect market.ohlcv.binance_spot_btc_usdt.1m
+kairospy market alias market.ohlcv.binance_spot_btc_usdt.1m btc-bars
+kairospy market read market.ohlcv.binance_spot_btc_usdt.1m --limit 10
+kairospy market replay market.trades.binance_spot_btc_usdt --speed 0
+kairospy market watch --kind ticker --symbol BTC/USDT --exchange binance --limit 1
+kairospy market doctor --exchange binance
+kairospy market prune market.ohlcv.binance_spot_btc_usdt.1m --start 2024-01-01T00:00:00+00:00 --end 2025-01-01T00:00:00+00:00
 ```
 
 ## Safety Model
@@ -501,7 +535,7 @@ configs/workspace/defaults.toml
 Then provide a setup command:
 
 ```bash
-kairospy init project-name
+kairospy project init project-name
 kairospy config profile create local --from configs/profiles/local.example.toml
 ```
 
@@ -516,7 +550,7 @@ kairospy config profile create local --from configs/profiles/local.example.toml
 ### Phase 2: Add Workspace Resolver
 
 - Add `KairosWorkspace`.
-- Route `run`, `data`, `reference`, `account`, and `order` commands through it.
+- Route `project`, `run`, `market`, `reference`, `account`, and `order` commands through it.
 - Remove hard-coded `.kairos/runs` defaults from command bodies where possible.
 - Add `kairospy config paths` and `kairospy config doctor`.
 

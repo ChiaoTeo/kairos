@@ -27,7 +27,8 @@ class RuntimeContext(Context):
     emitted_intents: list[Intent] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        if not self.strategy_id.strip():
+        object.__setattr__(self, "strategy_id", str(self.strategy_id).strip())
+        if not self.strategy_id:
             raise ValueError("strategy_id is required")
         object.__setattr__(self, "state", MappingProxyType(dict(self.state)))
 
@@ -45,7 +46,7 @@ class RuntimeContext(Context):
         return None if self.event is None else self.event.time
 
     def intent(self, intent: Intent) -> None:
-        if intent.strategy_id != self.strategy_id:
+        if str(intent.strategy_id) != self.strategy_id:
             raise ValueError("intent strategy_id does not match runtime strategy")
         at = self.now or datetime.now(timezone.utc)
         self.intents.record_intent(intent, at=at)
@@ -92,7 +93,7 @@ class RuntimeContext(Context):
         resolved = MarketResolver(default_venue=venue, default_market=market).resolve(instrument, venue=venue, market=market)
         quotes = self.views.get("market.quotes", None)
         for item in reversed(tuple(getattr(quotes, "quotes", ()))):
-            if getattr(item, "instrument_id", None) == resolved.instrument_id or getattr(item, "market_id", None) == resolved.market_id:
+            if getattr(item, "instrument_id", None) == str(resolved.instrument_id) or getattr(item, "market_id", None) == str(resolved.market_id):
                 return item
         return None
 

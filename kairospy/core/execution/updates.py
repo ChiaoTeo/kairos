@@ -8,17 +8,18 @@ from typing import Mapping
 
 from kairospy.core.account import AccountContext
 from kairospy.core.order import OrderEventKind, OrderSide, OrderType
+from kairospy.core.reference import InstrumentId, MarketId
 
 
 @dataclass(frozen=True, slots=True)
 class ExecutionUpdate:
     observed_at: datetime
     kind: OrderEventKind
-    venue_order_id: str = ""
-    client_order_id: str | None = None
+    order_venue_id: str = ""
+    order_id: str | None = None
     context: AccountContext | None = None
-    instrument_id: str | None = None
-    market_id: str | None = None
+    instrument_id: InstrumentId | str | None = None
+    market_id: MarketId | str | None = None
     side: OrderSide | None = None
     quantity: Decimal | None = None
     order_type: OrderType | None = None
@@ -40,6 +41,8 @@ class ExecutionUpdate:
             raise ValueError("execution update observed_at must be timezone-aware")
         if not isinstance(self.kind, OrderEventKind):
             object.__setattr__(self, "kind", OrderEventKind(self.kind))
+        object.__setattr__(self, "instrument_id", None if self.instrument_id is None else _id(self.instrument_id, InstrumentId, "instrument_id"))
+        object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
         if self.quantity is not None and self.quantity <= 0:
             raise ValueError("execution update quantity must be positive")
         if self.fill_quantity is not None and self.fill_quantity <= 0:
@@ -54,3 +57,16 @@ class ExecutionUpdate:
 
 
 __all__ = ["ExecutionUpdate"]
+
+
+def _required_text(value: object, label: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{label} cannot be empty")
+    return text
+
+
+def _id(value, id_type, label: str):
+    if isinstance(value, id_type):
+        return value
+    return id_type(_required_text(value, label))
