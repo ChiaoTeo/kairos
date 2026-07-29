@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .account import BacktestAccountService, BacktestAccountServiceView
+from .account import BacktestAccountService
 from .config import (
     BacktestConfigurationError,
     BacktestRunResult,
@@ -14,7 +14,6 @@ from .metrics import BacktestMetrics, MetricsModel
 
 __all__ = [
     "BacktestAccountService",
-    "BacktestAccountServiceView",
     "BacktestConfigurationError",
     "BacktestExecutionService",
     "BacktestMarketDataService",

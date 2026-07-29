@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.services import MarketDataSubscriptionSpec
+from kairospy.application.runtime.ports import MarketDataSubscriptionSpec
 from kairospy.application.service.modes.live import (
     LiveAccountService,
     LiveExecutionService,
@@ -326,8 +326,8 @@ def _live_kernel(
             LiveTargetPositionStrategy(instrument_id=market.instrument_id, market_id=market.market_id, limit_price=limit_price),
             data=market_data,
             account=account_service,
-            execution=coordinator,
-            providers=(execution,),
+            trading_execution=execution,
+            execution_coordinator=coordinator,
         ),
         broker,
     )

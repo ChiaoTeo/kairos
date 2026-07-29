@@ -7,18 +7,23 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from kairospy.application.service.modes.paper import configured_paper
+from kairospy.application.system import TradingSystemLauncher
+from kairospy.infrastructure.integrations import HyperliquidMarketDataConnector
 from kairospy.surface.products.run import run_app
 
 
 def test_configured_paper_runs_new_engine(tmp_path) -> None:
     config_path = _write_paper_project(tmp_path)
 
-    result = configured_paper(config_path).run()
+    result = TradingSystemLauncher().run_configured_paper(configured_paper(config_path))
 
     assert result.mode.value == "paper"
     assert result.runtime.event_count == 2
     assert len(result.fills) == 1
     assert result.account_view.cash == result.final_equity
+    run_directory = tmp_path / ".kairos" / "runs" / "paper" / "paper-1"
+    assert (run_directory / "account" / "current.json").exists()
+    assert (run_directory / "account" / "equity.jsonl").read_text(encoding="utf-8").strip()
 
 
 def test_run_paper_command_uses_new_config_runner(tmp_path) -> None:
@@ -34,22 +39,57 @@ def test_run_paper_command_uses_new_config_runner(tmp_path) -> None:
 def test_configured_paper_can_stream_market_data_from_integration_feed(tmp_path) -> None:
     config_path = _write_streaming_paper_project(tmp_path)
 
-    result = configured_paper(config_path, market_feed_factory=lambda venue: FakePaperFeed()).run()
+    result = TradingSystemLauncher().run_configured_paper(configured_paper(config_path, market_feed_factory=lambda venue: FakePaperFeed()))
 
     assert result.mode.value == "paper"
     assert result.runtime.event_count == 2
     assert len(result.fills) == 1
     assert result.account_view.cash == result.final_equity
+    run_directory = tmp_path / ".kairos" / "runs" / "paper" / "paper-streaming-1"
+    assert (run_directory / "account" / "current.json").exists()
 
 
 def test_configured_paper_selects_account_id_for_streaming_feed(tmp_path) -> None:
     config_path = _write_streaming_paper_project(tmp_path, extra_accounts=True, account_id="alt")
 
     configured = configured_paper(config_path, market_feed_factory=lambda venue: FakePaperFeed())
-    result = configured.run()
+    result = TradingSystemLauncher().run_configured_paper(configured)
 
     assert result.account.account.account_id == "alt"
     assert configured.normalized_config["account"]["cash"] == 500
+
+
+def test_configured_paper_supports_hyperliquid_default_market_feed(tmp_path) -> None:
+    config_path = _write_streaming_paper_project(
+        tmp_path,
+        venue="hyperliquid",
+        market="swap",
+        symbol="BTC/USDC:USDC",
+        quote_currency="USDC",
+    )
+
+    configured = configured_paper(config_path)
+
+    assert isinstance(configured.market_data.feed, HyperliquidMarketDataConnector)
+    assert configured.normalized_config["paper"]["source"] == "hyperliquid:swap:BTC/USDC:USDC"
+
+
+def test_configured_paper_can_run_hyperliquid_streaming_feed(tmp_path) -> None:
+    config_path = _write_streaming_paper_project(
+        tmp_path,
+        venue="hyperliquid",
+        market="swap",
+        symbol="BTC/USDC:USDC",
+        quote_currency="USDC",
+    )
+
+    configured = configured_paper(config_path, market_feed_factory=lambda venue: FakePaperFeed())
+    result = TradingSystemLauncher().run_configured_paper(configured)
+
+    assert result.mode.value == "paper"
+    assert result.runtime.event_count == 2
+    assert len(result.fills) == 1
+    assert result.account_view.cash == result.final_equity
 
 
 class FakePaperFeed:
@@ -149,9 +189,19 @@ def _write_paper_project(root: Path) -> Path:
     return config_path
 
 
-def _write_streaming_paper_project(root: Path, *, extra_accounts: bool = False, account_id: str | None = None) -> Path:
-    market_id = "market:binance:spot:btc_usdt"
-    instrument_id = "instrument:spot:btc:usdt"
+def _write_streaming_paper_project(
+    root: Path,
+    *,
+    extra_accounts: bool = False,
+    account_id: str | None = None,
+    venue: str = "binance",
+    market: str = "spot",
+    symbol: str = "BTC/USDT",
+    quote_currency: str = "USDT",
+) -> Path:
+    normalized_symbol = symbol.replace("/", "_").replace(":", "_").lower()
+    market_id = f"market:{venue}:{market}:{normalized_symbol}"
+    instrument_id = f"instrument:{market}:btc:{quote_currency.lower()}"
     (root / "strategy_mod.py").write_text(
         "\n".join([
             "from decimal import Decimal",
@@ -190,25 +240,25 @@ def _write_streaming_paper_project(root: Path, *, extra_accounts: bool = False, 
             f'market_id = "{market_id}"',
             "",
             "[accounts.main]",
-            'venue = "binance"',
+            f'venue = "{venue}"',
             "cash = 1000",
-            'currency = "USDT"',
+            f'currency = "{quote_currency}"',
     ]
     if extra_accounts:
         lines.extend([
             "",
             "[accounts.alt]",
             "index = 1",
-            'venue = "binance"',
+            f'venue = "{venue}"',
             "cash = 500",
-            'currency = "USDT"',
+            f'currency = "{quote_currency}"',
         ])
     lines.extend([
             "",
             "[paper]",
-            'venue = "binance"',
-            'market = "spot"',
-            'symbol = "BTC/USDT"',
+            f'venue = "{venue}"',
+            f'market = "{market}"',
+            f'symbol = "{symbol}"',
             'price_field = "ask"',
     ])
     if account_id is not None:

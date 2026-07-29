@@ -7,7 +7,7 @@ from decimal import Decimal
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
 from kairospy.application.service.domain.market import MarketDataResolver, MarketDataSpec
 from kairospy.application.service.modes.backtest import BacktestMarketDataService
-from kairospy.application.runtime.services import MarketDataSubscriptionSpec
+from kairospy.application.runtime.ports import MarketDataSubscriptionSpec
 from kairospy.core.market import MarketEvent, Quote
 from kairospy.core.reference import MarketResolver
 from kairospy.infrastructure.data import DataStore
@@ -39,7 +39,7 @@ async def _collect(source: object) -> list[object]:
     return [event async for event in source.events()]
 
 
-def test_store_backed_market_data_service_feeds_runtime_projection(tmp_path) -> None:
+def test_store_backed_market_data_service_feeds_runtime_view_state(tmp_path) -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     service = BacktestMarketDataService(
         DataStore(tmp_path, storage_format="jsonl"),
@@ -77,6 +77,5 @@ def test_store_backed_market_data_service_feeds_runtime_projection(tmp_path) -> 
     session = kernel.start()
     session.process(events[0])
 
-    assert kernel.views.require("market.service").subscription_count == 1
     assert kernel.views.require("market.subscriptions").active_count == 1
     assert kernel.views.require("market.quotes").quotes[0].ask == Decimal("101")

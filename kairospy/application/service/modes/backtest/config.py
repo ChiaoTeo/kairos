@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from decimal import Decimal
 from enum import StrEnum
-import importlib
-import json
 from pathlib import Path
-import sys
 from typing import Mapping
 
-from kairospy.application.runtime import RuntimeMode, RuntimeRunSpec, RuntimeRunner
-from kairospy.application.runtime.services.account import account_current_view_key
+from kairospy.application.runtime import RuntimeMode
+from kairospy.application.runtime.run import RuntimeRunResult
+from kairospy.application.runtime.processors.account import account_current_view_key
 from kairospy.application.service.domain.account import SimulatedAccount
 from kairospy.application.service.domain.execution import (
     BasisPointSlippageModel,
@@ -19,13 +16,24 @@ from kairospy.application.service.domain.execution import (
 )
 from kairospy.application.service.domain.market import IterableMarketEventSource, MarketDataResolver, MarketDataSpec
 from kairospy.application.strategy import Strategy
-from kairospy.config import ConfigError, load_run_config
 from kairospy.core.account import AccountContext
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.reference import MarketResolver
 from kairospy.infrastructure.data import DataStore
 
 from .account import BacktestAccountService
+from ..common import (
+    AccountPerformanceMixin,
+    jsonable as common_jsonable,
+    load_required_run_config,
+    load_strategy as common_load_strategy,
+    optional_int as common_optional_int,
+    read_jsonl as common_read_jsonl,
+    resolve_path as common_resolve_path,
+    slippage_model as common_slippage_model,
+    strategy_params as common_strategy_params,
+    table as common_table,
+)
 from .execution import BacktestExecutionService
 from .market import BacktestMarketDataService
 from .metrics import MetricsModel, closed_trades_from_fills, equity_point_from_account_view
@@ -41,7 +49,7 @@ class BacktestSourceKind(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
-class BacktestRunResult:
+class BacktestRunResult(AccountPerformanceMixin):
     run_id: str
     mode: RuntimeMode
     runtime: object
@@ -54,31 +62,6 @@ class BacktestRunResult:
     equity_curve: tuple[object, ...] = ()
     trades: tuple[object, ...] = ()
     metrics: Mapping[str, object] = field(default_factory=dict)
-
-    @property
-    def initial_equity(self) -> Decimal:
-        value = getattr(self.account_view, "initial_equity", None)
-        if value is not None:
-            return Decimal(str(value))
-        value = getattr(self.account_view, "cash", None)
-        return Decimal("0") if value is None else Decimal(str(value))
-
-    @property
-    def final_equity(self) -> Decimal:
-        value = getattr(self.account_view, "equity", None)
-        return Decimal("0") if value is None else Decimal(str(value))
-
-    @property
-    def net_profit(self) -> Decimal:
-        value = getattr(self.account_view, "net_profit", None)
-        return self.final_equity - self.initial_equity if value is None else Decimal(str(value))
-
-    @property
-    def total_return(self) -> Decimal:
-        value = getattr(self.account_view, "total_return", None)
-        if value is not None:
-            return Decimal(str(value))
-        return Decimal("0") if self.initial_equity == 0 else self.net_profit / self.initial_equity
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,19 +78,7 @@ class ConfiguredBacktest:
     execution: BacktestExecutionService
     coordinator: ExecutionCoordinator
 
-    def run(self) -> BacktestRunResult:
-        runtime = RuntimeRunner.run_sync(
-            RuntimeRunSpec(
-                run_id=self.run_id,
-                mode=RuntimeMode.BACKTEST,
-                strategy=self.strategy,
-                source=self.source,
-                data=self.data,
-                account=self.account,
-                execution=self.coordinator,
-                providers=(self.execution,),
-            )
-        )
+    def build_result(self, runtime: RuntimeRunResult) -> BacktestRunResult:
         account_view = runtime.views.get(account_current_view_key(self.account.account.context), None)
         fills = self.execution.fills
         equity_curve = tuple(
@@ -140,14 +111,7 @@ class ConfiguredBacktest:
 
 
 def configured_backtest(config_path: Path) -> ConfiguredBacktest:
-    try:
-        run_config = load_run_config(config_path)
-        run_config.require_mode(RuntimeMode.BACKTEST.value)
-    except ConfigError as error:
-        raise BacktestConfigurationError(str(error)) from error
-    if run_config.strategy is None:
-        raise BacktestConfigurationError("run.strategy is required")
-
+    run_config = load_required_run_config(config_path, mode=RuntimeMode.BACKTEST, error_type=BacktestConfigurationError)
     values = run_config.values
     strategy_params = _strategy_params(values)
     backtest = _table(values.get("backtest"), "backtest")
@@ -238,37 +202,11 @@ def _event_source(
 
 
 def _load_strategy(ref: str, *, root: Path, params: Mapping[str, object]) -> Strategy:
-    if ":" not in ref:
-        raise BacktestConfigurationError("run.strategy must be module:callable")
-    module_name, attr_name = ref.split(":", 1)
-    project_root = _project_root(root)
-    inserted = False
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-        inserted = True
-    if inserted:
-        sys.modules.pop(module_name, None)
-    try:
-        module = importlib.import_module(module_name)
-    finally:
-        if inserted:
-            try:
-                sys.path.remove(str(project_root))
-            except ValueError:
-                pass
-    factory = getattr(module, attr_name)
-    strategy = factory(**dict(params)) if callable(factory) else factory
-    if not hasattr(strategy, "strategy_id"):
-        raise BacktestConfigurationError(f"strategy factory did not return a Strategy: {ref}")
-    return strategy
+    return common_load_strategy(ref, root=root, params=params, error_type=BacktestConfigurationError)
 
 
 def _strategy_params(values: Mapping[str, object]) -> Mapping[str, object]:
-    strategy = _table(values.get("strategy"), "strategy") if values.get("strategy") is not None else {}
-    params = strategy.get("params", {})
-    if not isinstance(params, Mapping):
-        raise BacktestConfigurationError("[strategy.params] must be a table")
-    return params
+    return common_strategy_params(values, BacktestConfigurationError)
 
 
 def _data_root(backtest: Mapping[str, object], *, root: Path) -> Path:
@@ -288,8 +226,7 @@ def _fill_model(backtest: Mapping[str, object]) -> ImmediateFillModel:
 
 
 def _slippage_model(execution: Mapping[str, object]) -> BasisPointSlippageModel | None:
-    bps = execution.get("slippage_bps")
-    return None if bps is None else BasisPointSlippageModel(Decimal(str(bps)))
+    return common_slippage_model(execution)
 
 
 def _run_directory(backtest: Mapping[str, object], *, root: Path, run_id: str) -> Path:
@@ -330,68 +267,23 @@ def _normalized_config(
 
 
 def _table(value: object, name: str) -> Mapping[str, object]:
-    if value is None:
-        return {}
-    if not isinstance(value, Mapping):
-        raise BacktestConfigurationError(f"[{name}] must be a table")
-    return value
+    return common_table(value, name, BacktestConfigurationError)
 
 
 def _resolve_path(value: object, *, root: Path, source: str) -> Path:
-    if value is None:
-        raise BacktestConfigurationError(f"{source} is required")
-    path = Path(str(value)).expanduser()
-    if not path.is_absolute():
-        path = root / path
-    return path.resolve()
+    return common_resolve_path(value, root=root, source=source, error_type=BacktestConfigurationError)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    with path.open("r", encoding="utf-8") as file:
-        for line in file:
-            text = line.strip()
-            if not text:
-                continue
-            value = json.loads(text)
-            if not isinstance(value, dict):
-                raise BacktestConfigurationError(f"event row must be a JSON object: {path}")
-            rows.append(value)
-    if not rows:
-        raise BacktestConfigurationError(f"event file has no rows: {path}")
-    return rows
+    return common_read_jsonl(path, BacktestConfigurationError)
 
 
 def _optional_int(value: object, source: str) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        raise BacktestConfigurationError(f"{source} must be an integer")
-    parsed = int(value)
-    if parsed < 1:
-        raise BacktestConfigurationError(f"{source} must be positive")
-    return parsed
-
-
-def _project_root(root: Path) -> Path:
-    for directory in (root, *root.parents):
-        if (directory / "pyproject.toml").exists() or (directory / "kairos.toml").exists():
-            return directory
-    return root
+    return common_optional_int(value, source, BacktestConfigurationError, positive=True)
 
 
 def _jsonable(value: object) -> object:
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, StrEnum):
-        return value.value
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
-    if isinstance(value, Mapping):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (tuple, list)):
-        return [_jsonable(item) for item in value]
-    return value
+    return common_jsonable(value)
 
 
 __all__ = [

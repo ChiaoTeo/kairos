@@ -17,7 +17,6 @@ from .operations import (
 )
 from .provider import EquityProviderRefreshService, InstrumentProviderRefreshService, ReferenceDataRefreshService
 from .refresh import ReferenceRefreshResult, ReferenceRefreshService
-from .service import ReferenceCatalogService
 from .store import ReferenceStore
 from .serde import lifecycle_event_to_primitive, market_to_primitive
 from .transition import ReferenceCatalogTransition, apply_catalog_snapshot
@@ -27,7 +26,6 @@ __all__ = [
     "CorporateActionService",
     "EquityProviderRefreshService",
     "InstrumentProviderRefreshService",
-    "ReferenceCatalogService",
     "ReferenceCatalogTransition",
     "ReferenceDataRefreshService",
     "ReferenceProviderRefreshResult",

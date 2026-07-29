@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from .events import RuntimeDomain, RuntimeEnvelope, RuntimePayload, system_envelope
-from .lines import RuntimeEventLine, RuntimeLine, close_event_line
+from .lines import MergedRuntimeEventLine, RuntimeEventLine, RuntimeLine, close_event_line
 
 __all__ = [
+    "MergedRuntimeEventLine",
     "RuntimeDomain",
     "RuntimeEnvelope",
     "RuntimeEventLine",

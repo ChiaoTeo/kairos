@@ -9,12 +9,12 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.runtime.model import RuntimeMode
 from kairospy.application.service.modes.backtest import BacktestConfigurationError, ConfiguredBacktest, configured_backtest
-from kairospy.application.service.system.run import RunAccountJournal
+from kairospy.application.system import TradingSystemLauncher
 
 
 backtest_app = typer.Typer(no_args_is_help=True, help="Backtest commands")
+_TRADING_LAUNCHER = TradingSystemLauncher()
 
 
 @backtest_app.command("run")
@@ -25,7 +25,7 @@ def run(
         configured = configured_backtest(config_path)
     except BacktestConfigurationError as error:
         raise typer.BadParameter(str(error)) from error
-    result = configured.run()
+    result = _TRADING_LAUNCHER.run_configured_backtest(configured)
     summary = {"run_id": configured.run_id, **backtest_result_summary(result)}
     artifact = BacktestArtifactWriter(configured.run_directory, configured.run_id)
     artifact.write(configured, result, summary)
@@ -47,7 +47,6 @@ class BacktestArtifactWriter:
         _write_jsonl(self.directory / "trades.jsonl", getattr(result, "trades", ()))
         _write_jsonl(self.directory / "intent_states.jsonl", getattr(getattr(result, "runtime", None), "intent_states", ()))
         (self.directory / "report.md").write_text(_report_markdown(configured, summary), encoding="utf-8")
-        RunAccountJournal(self.directory, run_id=self.run_id, mode=RuntimeMode.BACKTEST.value).record_backtest_result(result)
 
 
 def backtest_result_summary(result: object) -> dict[str, object]:

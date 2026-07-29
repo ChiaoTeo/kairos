@@ -6,7 +6,7 @@ import time
 
 from typer.testing import CliRunner
 
-from kairospy.application.service.system.run import RunDaemonService, RunRegistry
+from kairospy.application.system.run import RunDaemonService, RunRegistry
 from kairospy.surface.products.run import run_app
 
 

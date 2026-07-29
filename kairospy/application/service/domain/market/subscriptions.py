@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha1
 from types import MappingProxyType
 from typing import Mapping, Sequence
 
-from kairospy.application.runtime.services import DataSubscription
 from kairospy.core.market import MarketSelector, market_selector
 from kairospy.core.reference import MarketRef
 
@@ -88,26 +88,19 @@ class MarketSubscriptionRegistry:
         return tuple(self._subscriptions[key] for key in sorted(self._subscriptions))
 
 
-def data_subscription_from_market(subscription: MarketSubscription) -> DataSubscription:
-    from kairospy.application.runtime.services import MarketDataSubscriptionSpec
-
-    spec = MarketDataSubscriptionSpec(
-        subscription.spec.market_ref,
-        subscription.spec.selectors,
-        identity=subscription.spec.identity,
-        params=subscription.spec.params,
-    )
-    return DataSubscription(spec.key, spec)
-
-
 def _subscription_key(spec: MarketSubscriptionSpec) -> str:
-    runtime = data_subscription_from_market(MarketSubscription("", spec))
-    return runtime.key
+    selectors_key = sha1("|".join(selector.key for selector in spec.selectors).encode("utf-8")).hexdigest()[:12]
+    identity = spec.identity or "default"
+    return f"data.{spec.market_ref.market_key}.{_key_part(identity)}.{selectors_key}"
+
+
+def _key_part(value: object) -> str:
+    text = str(value).strip().lower()
+    return "".join(character if character.isalnum() else "_" for character in text).strip("_") or "default"
 
 
 __all__ = [
     "MarketSubscription",
     "MarketSubscriptionRegistry",
     "MarketSubscriptionSpec",
-    "data_subscription_from_market",
 ]

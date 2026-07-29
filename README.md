@@ -12,15 +12,18 @@ The project is organized around one product axis:
 - `kairospy.core.account`: account identity, balances, positions, snapshots, account state derivation, and ledgers.
 - `kairospy.core.reference`: provider-neutral asset, instrument, listing, market, lifecycle, participant, identity, resolver handle, product, catalog, and universe models.
 - `kairospy.application.service.domain`: user-facing domain use cases for account, market data, reference data, and execution primitives.
-- `kairospy.application.service.engine`: mode-specific runtime assembly for backtest, paper, and live engines.
-- `kairospy.application.service.system`: operational services for run registries, daemon control, artifacts, and account journals.
+- `kairospy.application.service.runtime`: runtime-facing service implementations for account, market data, execution, and reference ports.
+- `kairospy.application.service.modes`: mode-specific runtime assembly for backtest, paper, and live runs.
+- `kairospy.application.system`: operational services for accounts, run registries, daemon control, artifacts, and account journals.
 - `kairospy.core.intent` and `kairospy.core.order`: strategy intent and order state models.
 - `kairospy.core.views`: shared view schema, envelope, registry, and store primitives.
 - `kairospy.infrastructure.data`: durable datasets, stores, queries, sinks, and stream feeds.
 - `kairospy.infrastructure.integrations`: external systems and provider payload adapters such as ccxt, Binance, Hyperliquid, IBKR, and Massive.
 - `kairospy.surface`: CLI and user-facing product APIs.
 
-Surface packages are intentionally thin: external callers should reach runtime behavior through `kairospy.application.service.*` instead of composing runtime internals directly.
+Surface packages are intentionally thin: external callers should reach run behavior through `kairospy.application.system` and mode configuration through `kairospy.application.service.modes` instead of composing runtime internals directly.
+
+See [System Architecture Plan](docs/system-architecture-plan.md) for the planned migration toward system-owned trading runtime lifecycle management.
 
 ## Install For Development
 
@@ -57,11 +60,10 @@ Strategies receive stable strategy events and emit intents; runtime does not sub
 ```python
 from pathlib import Path
 
-from kairospy.application.service.engine.backtest import configured_backtest
+from kairospy.application.system import TradingSystemLauncher
 
 
-configured = configured_backtest(Path("examples/configs/binance_backtest.toml"))
-result = configured.run()
+result = TradingSystemLauncher().run_backtest_config(Path("examples/configs/binance_backtest.toml"))
 
 print(result.runtime.strategy_id, result.final_equity)
 ```

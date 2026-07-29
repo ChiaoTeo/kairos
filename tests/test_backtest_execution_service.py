@@ -71,8 +71,8 @@ def test_backtest_execution_service_fills_target_position_from_market_fields(tmp
         TargetPositionStrategy(instrument_id=market.instrument_id, market_id=market.market_id),
         data=data,
         account=account_service,
-        execution=coordinator,
-        providers=(execution,),
+        trading_execution=execution,
+        execution_coordinator=coordinator,
     )
     session = kernel.start()
     assert kernel.views.require("account.current.backtest.backtest.main").cash == Decimal("1000")

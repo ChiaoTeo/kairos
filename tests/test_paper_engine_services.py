@@ -95,8 +95,8 @@ def test_paper_services_stream_market_data_and_simulate_execution() -> None:
         PaperTargetPositionStrategy(instrument_id=market.instrument_id, market_id=market.market_id),
         data=market_data,
         account=account,
-        execution=coordinator,
-        providers=(execution,),
+        trading_execution=execution,
+        execution_coordinator=coordinator,
     )
 
     runtime_result = asyncio.run(kernel.run())
@@ -109,5 +109,4 @@ def test_paper_services_stream_market_data_and_simulate_execution() -> None:
     account_view = kernel.views.require("account.current.paper.paper.paper_main")
     assert account_view.cash == Decimal("2999")
     assert account_view.positions[0].quantity == Decimal("1")
-    assert kernel.views.require("market.service").source == "paper-test-feed"
     assert kernel.views.require("order.current").state.latest_order.status == "filled"

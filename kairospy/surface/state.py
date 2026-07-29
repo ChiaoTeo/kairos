@@ -8,7 +8,7 @@ from typing import Mapping
 from kairospy.config import KairosConfig, load_config
 
 try:
-    from kairospy.application.service.system.run import list_run_daemons
+    from kairospy.application.system.run import list_run_daemons
 except ModuleNotFoundError:
     list_run_daemons = None
 

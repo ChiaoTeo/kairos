@@ -4,7 +4,8 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.service.domain.reference import ReferenceCatalogService, ReferenceStore, refresh_instrument_provider
+from kairospy.application.service.domain.reference import ReferenceStore, refresh_instrument_provider
+from kairospy.application.service.runtime.reference import ReferenceCatalogService
 
 
 class NoopStrategy:
@@ -43,7 +44,7 @@ class FakeReferenceProvider:
         )
 
 
-def test_reference_provider_refresh_feeds_runtime_projection(tmp_path) -> None:
+def test_reference_provider_refresh_feeds_runtime_view_state(tmp_path) -> None:
     as_of = datetime(2026, 1, 1, tzinfo=timezone.utc)
     store = ReferenceStore(tmp_path / "reference")
 

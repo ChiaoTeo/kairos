@@ -35,7 +35,7 @@ class NoopStrategy:
         return None
 
 
-def test_account_baseline_event_updates_account_projection() -> None:
+def test_account_baseline_event_updates_account_view_state() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     account = SimulatedAccount("paper-main", Decimal("0"), cash_currency="USDT", broker="paper", environment=Environment.PAPER)
     coordinator = ExecutionCoordinator()

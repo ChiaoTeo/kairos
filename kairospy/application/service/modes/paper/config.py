@@ -2,30 +2,39 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from decimal import Decimal
-import importlib
-import json
 from pathlib import Path
-import sys
 from typing import Mapping
 
-from kairospy.application.runtime import RuntimeMode, RuntimeRunSpec, RuntimeRunner
-from kairospy.application.runtime.services import MarketDataSubscriptionSpec
-from kairospy.application.runtime.services.account import account_current_view_key
+from kairospy.application.runtime import RuntimeMode
+from kairospy.application.runtime.ports import MarketDataSubscriptionSpec
+from kairospy.application.runtime.processors.account import account_current_view_key
+from kairospy.application.runtime.run import RuntimeRunResult
 from kairospy.application.service.domain.account import SimulatedAccount
 from kairospy.application.service.domain.execution import BasisPointSlippageModel, ImmediateFillModel, PercentageCommissionModel
 from kairospy.application.service.domain.market import IterableMarketEventSource
-from kairospy.application.service.system.run.accounts import AccountRegistry, RuntimeAccount
+from kairospy.application.system.accounts import SystemAccount
 from kairospy.application.strategy import Strategy
-from kairospy.config import ConfigError, load_run_config
 from kairospy.core.account import AccountContext, Environment
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.market import Quote
 from kairospy.core.reference import MarketResolver
-from kairospy.infrastructure.integrations import BinanceMarketDataConnector, CcxtDriver, OkxMarketDataConnector
 from kairospy.infrastructure.integrations.protocols import LiveMarketDataFeed
 
 from .account import PaperAccountService
+from ..common import (
+    AccountPerformanceMixin,
+    configured_account as common_configured_account,
+    default_market_feed as common_default_market_feed,
+    load_required_run_config,
+    load_strategy as common_load_strategy,
+    params_table as common_params_table,
+    read_jsonl as common_read_jsonl,
+    required_text as common_required_text,
+    resolve_path as common_resolve_path,
+    slippage_model as common_slippage_model,
+    strategy_params as common_strategy_params,
+    table as common_table,
+)
 from .execution import PaperExecutionService
 from .market import PaperMarketDataService
 
@@ -38,7 +47,7 @@ MarketFeedFactory = Callable[[str], LiveMarketDataFeed]
 
 
 @dataclass(frozen=True, slots=True)
-class PaperRunResult:
+class PaperRunResult(AccountPerformanceMixin):
     run_id: str
     mode: RuntimeMode
     runtime: object
@@ -50,31 +59,6 @@ class PaperRunResult:
     fills: tuple[object, ...] = ()
     trades: tuple[object, ...] = ()
     metrics: Mapping[str, object] = field(default_factory=dict)
-
-    @property
-    def initial_equity(self) -> Decimal:
-        value = getattr(self.account_view, "initial_equity", None)
-        if value is not None:
-            return Decimal(str(value))
-        value = getattr(self.account_view, "cash", None)
-        return Decimal("0") if value is None else Decimal(str(value))
-
-    @property
-    def final_equity(self) -> Decimal:
-        value = getattr(self.account_view, "equity", None)
-        return Decimal("0") if value is None else Decimal(str(value))
-
-    @property
-    def net_profit(self) -> Decimal:
-        value = getattr(self.account_view, "net_profit", None)
-        return self.final_equity - self.initial_equity if value is None else Decimal(str(value))
-
-    @property
-    def total_return(self) -> Decimal:
-        value = getattr(self.account_view, "total_return", None)
-        if value is not None:
-            return Decimal(str(value))
-        return Decimal("0") if self.initial_equity == 0 else self.net_profit / self.initial_equity
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,19 +74,7 @@ class ConfiguredPaper:
     execution: PaperExecutionService
     coordinator: ExecutionCoordinator
 
-    def run(self) -> PaperRunResult:
-        runtime = RuntimeRunner.run_sync(
-            RuntimeRunSpec(
-                run_id=self.run_id,
-                mode=RuntimeMode.PAPER,
-                strategy=self.strategy,
-                source=self.market_data,
-                data=self.market_data,
-                account=self.account,
-                execution=self.coordinator,
-                providers=(self.execution,),
-            )
-        )
+    def build_result(self, runtime: RuntimeRunResult) -> PaperRunResult:
         account_view = runtime.views.get(account_current_view_key(self.account.account.context), None)
         return PaperRunResult(
             run_id=self.run_id,
@@ -120,13 +92,7 @@ class ConfiguredPaper:
 
 
 def configured_paper(config_path: Path, *, market_feed_factory: MarketFeedFactory | None = None) -> ConfiguredPaper:
-    try:
-        run_config = load_run_config(config_path)
-        run_config.require_mode(RuntimeMode.PAPER.value)
-    except ConfigError as error:
-        raise PaperConfigurationError(str(error)) from error
-    if run_config.strategy is None:
-        raise PaperConfigurationError("run.strategy is required")
+    run_config = load_required_run_config(config_path, mode=RuntimeMode.PAPER, error_type=PaperConfigurationError)
     paper = _table(run_config.values.get("paper"), "paper")
     execution_config = _table(run_config.values.get("execution"), "execution") if run_config.values.get("execution") is not None else {}
     account_config = _configured_account(run_config.accounts.values(), mode_config=paper, default_venue=str(paper.get("venue", "paper")))
@@ -192,74 +158,33 @@ def configured_paper(config_path: Path, *, market_feed_factory: MarketFeedFactor
 
 
 def _load_strategy(ref: str, *, root: Path, params: Mapping[str, object]) -> Strategy:
-    if ":" not in ref:
-        raise PaperConfigurationError("run.strategy must be module:callable")
-    module_name, attr_name = ref.split(":", 1)
-    inserted = False
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-        inserted = True
-    if inserted:
-        sys.modules.pop(module_name, None)
-    try:
-        module = importlib.import_module(module_name)
-    finally:
-        if inserted:
-            try:
-                sys.path.remove(str(root))
-            except ValueError:
-                pass
-    strategy = getattr(module, attr_name)(**dict(params))
-    if not hasattr(strategy, "strategy_id"):
-        raise PaperConfigurationError(f"strategy factory did not return a Strategy: {ref}")
-    return strategy
+    return common_load_strategy(ref, root=root, params=params, error_type=PaperConfigurationError)
 
 
 def _strategy_params(values: Mapping[str, object]) -> Mapping[str, object]:
-    strategy = _table(values.get("strategy"), "strategy") if values.get("strategy") is not None else {}
-    params = strategy.get("params", {})
-    if not isinstance(params, Mapping):
-        raise PaperConfigurationError("[strategy.params] must be a table")
-    return params
+    return common_strategy_params(values, PaperConfigurationError)
 
 
 def _slippage_model(execution: Mapping[str, object]) -> BasisPointSlippageModel | None:
-    bps = execution.get("slippage_bps")
-    return None if bps is None else BasisPointSlippageModel(Decimal(str(bps)))
+    return common_slippage_model(execution)
 
 
-def _configured_account(accounts: object, *, mode_config: Mapping[str, object], default_venue: str) -> RuntimeAccount:
-    registry = AccountRegistry.from_config(accounts)  # type: ignore[arg-type]
-    if registry.accounts:
-        try:
-            return registry.resolve(
-                venue=default_venue,
-                account=_account_selector(mode_config.get("account"), "paper.account"),
-                account_id=_optional_text(mode_config.get("account_id"), "paper.account_id"),
-                account_index=_optional_int(mode_config.get("account_index"), "paper.account_index"),
-            )
-        except ValueError as error:
-            raise PaperConfigurationError(str(error)) from error
-    raise PaperConfigurationError("[accounts] table is required for paper runs")
+def _configured_account(accounts: object, *, mode_config: Mapping[str, object], default_venue: str) -> SystemAccount:
+    return common_configured_account(
+        accounts,
+        venue=default_venue,
+        mode_config=mode_config,
+        mode_label="paper",
+        error_type=PaperConfigurationError,
+    )
 
 
 def _default_market_feed(venue: str) -> LiveMarketDataFeed:
-    normalized = venue.strip().lower()
-    if normalized == "binance":
-        return BinanceMarketDataConnector(CcxtDriver())
-    if normalized in {"okx", "okex"}:
-        return OkxMarketDataConnector()
-    raise PaperConfigurationError(f"unsupported paper market data venue: {venue}")
+    return common_default_market_feed(venue, mode_label="paper", error_type=PaperConfigurationError)
 
 
 def _params_table(value: object, *, default: Mapping[str, object] | None = None) -> Mapping[str, object]:
-    values = dict(default or {})
-    if value is None:
-        return values
-    if not isinstance(value, Mapping):
-        raise PaperConfigurationError("paper params must be a table")
-    values.update(value)
-    return values
+    return common_params_table(value, default=default, source="paper", error_type=PaperConfigurationError)
 
 
 def _run_directory(paper: Mapping[str, object], *, root: Path, run_id: str) -> Path:
@@ -268,71 +193,19 @@ def _run_directory(paper: Mapping[str, object], *, root: Path, run_id: str) -> P
 
 
 def _table(value: object, name: str) -> Mapping[str, object]:
-    if value is None:
-        return {}
-    if not isinstance(value, Mapping):
-        raise PaperConfigurationError(f"[{name}] must be a table")
-    return value
+    return common_table(value, name, PaperConfigurationError)
 
 
 def _resolve_path(value: object, *, root: Path, source: str) -> Path:
-    if value is None:
-        raise PaperConfigurationError(f"{source} is required")
-    path = Path(str(value)).expanduser()
-    if not path.is_absolute():
-        path = root / path
-    return path.resolve()
+    return common_resolve_path(value, root=root, source=source, error_type=PaperConfigurationError)
 
 
 def _required_text(value: object, source: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        raise PaperConfigurationError(f"{source} is required")
-    return text
-
-
-def _optional_text(value: object, source: str) -> str | None:
-    if value is None:
-        return None
-    return _required_text(value, source)
-
-
-def _optional_int(value: object, source: str) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        raise PaperConfigurationError(f"{source} must be an integer")
-    try:
-        parsed = int(value)
-    except Exception as error:
-        raise PaperConfigurationError(f"{source} must be an integer") from error
-    if parsed < 0:
-        raise PaperConfigurationError(f"{source} cannot be negative")
-    return parsed
-
-
-def _account_selector(value: object, source: str) -> int | str | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        raise PaperConfigurationError(f"{source} must be an account id or integer account index")
-    if isinstance(value, int):
-        return value
-    return _required_text(value, source)
+    return common_required_text(value, source, PaperConfigurationError)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    with path.open("r", encoding="utf-8") as file:
-        for line in file:
-            if line.strip():
-                value = json.loads(line)
-                if not isinstance(value, dict):
-                    raise PaperConfigurationError(f"event row must be a JSON object: {path}")
-                rows.append(value)
-    if not rows:
-        raise PaperConfigurationError(f"event file has no rows: {path}")
-    return rows
+    return common_read_jsonl(path, PaperConfigurationError)
 
 
 __all__ = ["ConfiguredPaper", "PaperConfigurationError", "PaperRunResult", "configured_paper"]

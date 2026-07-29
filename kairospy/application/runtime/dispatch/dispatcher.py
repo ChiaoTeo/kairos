@@ -28,6 +28,9 @@ class RuntimeDispatcher:
         frame.last_event = event
         context = self.context.bind(event)
         hook = hook_for(event)
+        if hook is None:
+            frame.callbacks.append(Callback("runtime", event.sequence, ()))
+            return
         if hook == "on_intent":
             if not isinstance(event.payload, Intent):
                 raise TypeError("intent runtime envelope payload must implement Intent")
@@ -72,14 +75,16 @@ class RuntimeDispatcher:
             raise RuntimeError("runtime session is already finished")
 
 
-def hook_for(event: RuntimeEnvelope) -> str:
+def hook_for(event: RuntimeEnvelope) -> str | None:
+    if event.domain == "market":
+        return "on_data"
     if event.domain == "clock":
         return "on_clock"
     if event.domain == "system":
         return "on_system"
     if event.domain == "intent":
         return "on_intent"
-    return "on_data"
+    return None
 
 
 __all__ = ["RuntimeDispatcher", "hook_for"]

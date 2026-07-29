@@ -142,7 +142,7 @@ def _service(
     *,
     exchange_name: ExchangeName,
     market: str,
-) -> MarketDataService:
+) -> MarketDataPort:
     return BacktestMarketDataService(
         store(root, storage_format),
         resolver=MarketDataResolver(default_venue=exchange_name.value, default_market=market),

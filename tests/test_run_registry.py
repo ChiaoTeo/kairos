@@ -4,7 +4,7 @@ import json
 
 from typer.testing import CliRunner
 
-from kairospy.application.service.system.run import RunRegistry, list_run_daemons
+from kairospy.application.system.run import RunRegistry, list_run_daemons
 from kairospy.surface.products.run import run_app
 
 

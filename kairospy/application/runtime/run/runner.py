@@ -17,12 +17,6 @@ class RuntimeRunner:
             intents=spec.intents,
             controls=spec.controls,
             views=spec.views,
-            data=spec.data,
-            account=spec.account,
-            reference=spec.reference,
-            execution=spec.execution,
-            providers=spec.providers,
-            components=spec.components,
         )
         return RuntimeRunSession(
             run_id=spec.run_id,

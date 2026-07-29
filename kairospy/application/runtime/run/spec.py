@@ -6,10 +6,7 @@ from typing import Mapping
 
 from kairospy.application.runtime.model import RuntimeMode
 from kairospy.application.runtime.protocol import RuntimeEnvelope, RuntimeEventLine
-from kairospy.application.runtime.services import AccountService, MarketDataService, ReferenceService
-from kairospy.application.runtime.services.component import RuntimeComponentProvider, RuntimeViewPublisher
 from kairospy.application.strategy import ControlJournal, Strategy
-from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentJournal
 from kairospy.core.views import ViewStore
 
@@ -24,12 +21,6 @@ class RuntimeRunSpec:
     intents: IntentJournal | None = None
     controls: ControlJournal | None = None
     views: ViewStore | None = None
-    data: MarketDataService | None = None
-    account: AccountService | None = None
-    reference: ReferenceService | None = None
-    execution: ExecutionCoordinator | None = None
-    providers: tuple[RuntimeComponentProvider, ...] = ()
-    components: tuple[RuntimeViewPublisher, ...] = ()
     pre_events: tuple[RuntimeEnvelope, ...] = ()
     started_at: datetime | None = None
 

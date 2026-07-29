@@ -4,16 +4,11 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.application.runtime.orchestration.pipeline import RuntimeServicePipeline
+from kairospy.application.runtime.orchestration.pipeline import RuntimePortPipeline
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
+from kairospy.application.runtime.processors.system import runtime_processors
 from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.application.runtime.services import (
-    AccountServiceProjectionProvider,
-    DataSubscription,
-    MarketDataProjectionProvider,
-    MarketDataSubscriptionSpec,
-    ReferenceServiceProjectionProvider,
-)
+from kairospy.application.runtime.ports import DataSubscription, MarketDataSubscriptionSpec
 from kairospy.application.service.modes.backtest import BacktestExecutionService
 from kairospy.core.account import AccountBalance, AccountContext, AccountRef, AccountSnapshot, AccountSource, AccountState, Environment
 from kairospy.core.execution import ExecutionCoordinator, cash_order_request
@@ -119,16 +114,13 @@ class FakeAccountService:
         return {}
 
 
-def test_market_projection_publishes_business_views() -> None:
+def test_market_view_state_publishes_business_views() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     views = ViewStore()
     data = FakeMarketDataService()
-    pipeline = RuntimeServicePipeline(
+    pipeline = RuntimePortPipeline(
         views=views,
-        strategy_id="s",
-        intents=IntentJournal(),
-        data=data,
-        providers=(MarketDataProjectionProvider(data),),
+        processors=runtime_processors(strategy_id="s", intents=IntentJournal(), data=data),
     )
     event = RuntimeEnvelope(
         "market",
@@ -154,15 +146,12 @@ def test_market_projection_publishes_business_views() -> None:
     assert views.require("market.observations").observations[0].kind == "quote"
 
 
-def test_account_service_provider_publishes_current_account_view() -> None:
+def test_account_port_publishes_current_account_view() -> None:
     views = ViewStore()
     account = FakeAccountService()
-    pipeline = RuntimeServicePipeline(
+    pipeline = RuntimePortPipeline(
         views=views,
-        strategy_id="s",
-        intents=IntentJournal(),
-        account=account,
-        providers=(AccountServiceProjectionProvider(account),),
+        processors=runtime_processors(strategy_id="s", intents=IntentJournal(), account=account),
     )
 
     pipeline.publish()
@@ -187,24 +176,21 @@ class FakeReferenceService:
         return ()
 
 
-def test_reference_service_provider_publishes_catalog_view() -> None:
+def test_reference_port_publishes_catalog_view() -> None:
     views = ViewStore()
     reference = FakeReferenceService()
-    pipeline = RuntimeServicePipeline(
+    pipeline = RuntimePortPipeline(
         views=views,
-        strategy_id="s",
-        intents=IntentJournal(),
-        reference=reference,
-        providers=(ReferenceServiceProjectionProvider(reference),),
+        processors=runtime_processors(strategy_id="s", intents=IntentJournal(), reference=reference),
     )
 
     pipeline.publish()
 
     assert views.require("reference.catalog").market_count == 0
-    assert views.registry.require("reference.catalog").evidence == "runtime reference catalog projection"
+    assert views.registry.require("reference.catalog").evidence == "runtime reference catalog view state"
 
 
-def test_kernel_wraps_runtime_services_as_component_providers() -> None:
+def test_kernel_wires_runtime_ports_to_view_states() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     context = AccountContext(AccountRef("paper", "main"), Environment.PAPER)
     execution = ExecutionCoordinator()
@@ -224,8 +210,8 @@ def test_kernel_wraps_runtime_services_as_component_providers() -> None:
         data=FakeMarketDataService(),
         account=FakeAccountService(),
         reference=FakeReferenceService(),
-        execution=execution,
-        providers=(BacktestExecutionService(execution),),
+        trading_execution=BacktestExecutionService(execution),
+        execution_coordinator=execution,
     )
     kernel.start()
 
@@ -250,11 +236,13 @@ def test_system_risk_execution_and_order_views_are_business_panels() -> None:
         at=now,
     )
     views = ViewStore()
-    pipeline = RuntimeServicePipeline(
+    pipeline = RuntimePortPipeline(
         views=views,
-        strategy_id="s",
-        intents=IntentJournal(),
-        providers=(BacktestExecutionService(execution),),
+        processors=runtime_processors(
+            strategy_id="s",
+            intents=IntentJournal(),
+            execution_coordinator=execution,
+        ),
     )
 
     pipeline.on_event(RuntimeEnvelope("system", "risk.limit_warn", now, 1, {"limit": "gross"}))

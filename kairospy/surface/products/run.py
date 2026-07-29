@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
-from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-import importlib
 import json
 import shlex
 import sys
@@ -13,16 +11,17 @@ from typing import Mapping, TextIO
 
 import typer
 
-from kairospy.application.runtime import RuntimeEnvelope, RuntimeLine, RuntimeMode, RuntimeRunSpec, RuntimeRunner
-from kairospy.application.service.modes.backtest import BacktestConfigurationError, configured_backtest
-from kairospy.application.service.modes.live import LiveConfigurationError, configured_live
-from kairospy.application.service.modes.paper import PaperConfigurationError, configured_paper
-from kairospy.application.service.system.run import RunDaemonService, RunRegistry
-from kairospy.application.strategy import Strategy
+from kairospy.application.runtime import RuntimeMode
+from kairospy.application.service.modes.backtest import BacktestConfigurationError
+from kairospy.application.service.modes.live import LiveConfigurationError
+from kairospy.application.service.modes.paper import PaperConfigurationError
+from kairospy.application.system import TradingSystemLauncher
+from kairospy.application.system.run import RunDaemonService, RunRegistry
 from kairospy.config import load_run_config
 
 
 run_app = typer.Typer(no_args_is_help=True, help="Run commands")
+_TRADING_LAUNCHER = TradingSystemLauncher()
 
 
 class OutputFormat(StrEnum):
@@ -61,15 +60,10 @@ def events(
     mode: RuntimeMode = typer.Option(RuntimeMode.BACKTEST, "--mode"),
     output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format"),
 ) -> None:
-    strategy = _load_strategy(strategy_path)
-    result = RuntimeRunner.run_sync(
-        RuntimeRunSpec(
-            run_id=run_id,
-            mode=mode,
-            strategy=strategy,
-            source=RuntimeLine(_read_event_jsonl(events_path)),
-        )
-    )
+    try:
+        result = _TRADING_LAUNCHER.run_events(strategy_path=strategy_path, events_path=events_path, run_id=run_id, mode=mode)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
     _echo_run_result(result, output_format=output_format)
 
 
@@ -79,7 +73,7 @@ def backtest(
     output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format"),
 ) -> None:
     try:
-        result = configured_backtest(config_path).run()
+        result = _TRADING_LAUNCHER.run_backtest_config(config_path)
     except BacktestConfigurationError as error:
         raise typer.BadParameter(str(error)) from error
     _echo_run_result(result, output_format=output_format)
@@ -91,7 +85,7 @@ def paper(
     output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format"),
 ) -> None:
     try:
-        result = configured_paper(config_path).run()
+        result = _TRADING_LAUNCHER.run_paper_config(config_path)
     except PaperConfigurationError as error:
         raise typer.BadParameter(str(error)) from error
     _echo_run_result(result, output_format=output_format)
@@ -103,7 +97,7 @@ def live(
     output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format"),
 ) -> None:
     try:
-        result = configured_live(config_path).run()
+        result = _TRADING_LAUNCHER.run_live_config(config_path)
     except LiveConfigurationError as error:
         raise typer.BadParameter(str(error)) from error
     _echo_run_result(result, output_format=output_format)
@@ -245,45 +239,6 @@ class RunShellSession:
     def _write(self, text: str) -> None:
         self.stdout.write(text + "\n")
         self.stdout.flush()
-
-
-def _load_strategy(path: str) -> Strategy:
-    if ":" not in path:
-        raise typer.BadParameter("strategy must use module:callable")
-    module_name, callable_name = path.split(":", 1)
-    module = importlib.import_module(module_name)
-    factory = getattr(module, callable_name)
-    strategy = factory() if callable(factory) else factory
-    if not hasattr(strategy, "strategy_id"):
-        raise typer.BadParameter("strategy object must expose strategy_id")
-    return strategy
-
-
-def _read_event_jsonl(path: Path) -> tuple[RuntimeEnvelope, ...]:
-    if not path.exists():
-        raise typer.BadParameter(f"events file does not exist: {path}")
-    events: list[RuntimeEnvelope] = []
-    for index, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip():
-            continue
-        row = json.loads(line)
-        if not isinstance(row, Mapping):
-            raise typer.BadParameter(f"event row {index} must be a JSON object")
-        events.append(_event_from_mapping(row, fallback_sequence=index))
-    return tuple(events)
-
-
-def _event_from_mapping(row: Mapping[str, object], *, fallback_sequence: int) -> RuntimeEnvelope:
-    raw_time = row.get("time")
-    if not isinstance(raw_time, str):
-        raise typer.BadParameter("event time must be an ISO-8601 string")
-    return RuntimeEnvelope(
-        domain=str(row.get("domain") or row.get("stream") or "data"),
-        kind=str(row.get("kind") or "event"),
-        time=datetime.fromisoformat(raw_time),
-        sequence=int(row.get("sequence") or fallback_sequence),
-        payload=row.get("payload", {key: value for key, value in row.items() if key not in {"domain", "stream", "kind", "time", "sequence"}}),
-    )
 
 
 def _echo_run_result(result: object, *, output_format: OutputFormat) -> None:

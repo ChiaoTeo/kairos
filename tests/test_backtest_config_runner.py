@@ -6,7 +6,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from kairospy.application.service.modes.backtest import configured_backtest
-from kairospy.application.service.system.run import RunAccountJournal
+from kairospy.application.system import TradingSystemLauncher
 from kairospy.surface.products.backtest import backtest_app
 from kairospy.surface.products.run import run_app
 
@@ -15,8 +15,7 @@ def test_configured_backtest_runs_new_engine_and_writes_account_journal(tmp_path
     config_path = _write_backtest_project(tmp_path)
 
     configured = configured_backtest(config_path)
-    result = configured.run()
-    RunAccountJournal(configured.run_directory, run_id=configured.run_id, mode="backtest").record_backtest_result(result)
+    result = TradingSystemLauncher().run_configured_backtest(configured)
 
     assert result.runtime.event_count == 2
     assert len(result.fills) == 1
@@ -25,7 +24,7 @@ def test_configured_backtest_runs_new_engine_and_writes_account_journal(tmp_path
     assert result.final_equity == result.account_view.equity
     current = json.loads((configured.run_directory / "account" / "current.json").read_text(encoding="utf-8"))
     assert current["run_id"] == "bt-1"
-    assert current["fills"] == 1
+    assert current["equity"] == str(result.final_equity)
 
 
 def test_backtest_run_command_uses_new_config_runner(tmp_path) -> None:

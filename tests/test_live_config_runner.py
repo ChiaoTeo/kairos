@@ -4,6 +4,7 @@ from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 
 from kairospy.application.service.modes.live import configured_live
+from kairospy.application.system import TradingSystemLauncher
 
 
 class FakeLiveFeed:
@@ -87,13 +88,15 @@ def test_configured_live_runs_with_injected_integrations(tmp_path) -> None:
         market_feed_factory=lambda venue: FakeLiveFeed(),
         broker_factory=lambda venue, credential: FakeBroker(),
     )
-    result = configured.run()
+    result = TradingSystemLauncher().run_configured_live(configured)
 
     assert result.mode.value == "live"
     assert result.runtime.event_count == 2
     assert result.runtime.strategy_id == "live-strategy"
     assert configured.market_data.view().subscription_count == 1
     assert (tmp_path / ".kairos" / "runs" / "live" / "live-1" / "live_state.json").exists()
+    assert (tmp_path / ".kairos" / "runs" / "live" / "live-1" / "account" / "current.json").exists()
+    assert (tmp_path / ".kairos" / "runs" / "live" / "live-1" / "account" / "equity.jsonl").read_text(encoding="utf-8").strip()
 
 
 def test_configured_live_restores_runtime_state(tmp_path) -> None:
@@ -103,7 +106,7 @@ def test_configured_live_restores_runtime_state(tmp_path) -> None:
         market_feed_factory=lambda venue: FakeLiveFeed(),
         broker_factory=lambda venue, credential: FakeBroker(),
     )
-    configured.run()
+    TradingSystemLauncher().run_configured_live(configured)
 
     restored = configured_live(
         config_path,
@@ -123,7 +126,7 @@ def test_configured_live_selects_account_index_when_venue_has_multiple_accounts(
         market_feed_factory=lambda venue: FakeLiveFeed(),
         broker_factory=lambda venue, credential: FakeBroker(),
     )
-    result = configured.run()
+    result = TradingSystemLauncher().run_configured_live(configured)
 
     assert result.account.account.account_id == "alt"
     assert configured.normalized_config["account"]["account_id"] == "alt"

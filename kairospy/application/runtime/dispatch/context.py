@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Mapping, Sequence
 
 from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.application.runtime.services import DataSubscription, MarketDataService, MarketDataSubscriptionSpec
+from kairospy.application.runtime.ports import DataSubscription, MarketDataPort, MarketDataSubscriptionSpec
 from kairospy.application.strategy import Context, ControlFactory, ControlJournal
 from kairospy.core.intent import Intent, IntentJournal, TradeIntent, target_position_intent
 from kairospy.core.market import MarketSelector
@@ -21,7 +21,7 @@ class RuntimeContext(Context):
     event: RuntimeEnvelope | None = None
     state: Mapping[str, object] = field(default_factory=dict)
     intents: IntentJournal = field(default_factory=IntentJournal)
-    data: MarketDataService | None = None
+    data: MarketDataPort | None = None
     views: ViewStore = field(default_factory=ViewStore)
     controls: ControlJournal = field(default_factory=ControlJournal)
     emitted_intents: list[Intent] = field(default_factory=list)
@@ -59,7 +59,7 @@ class RuntimeContext(Context):
         identity: str | None = None,
     ) -> DataSubscription:
         if self.data is None:
-            raise RuntimeError("runtime context has no data service")
+            raise RuntimeError("runtime context has no data port")
         return self.data.subscribe(MarketDataSubscriptionSpec(market, selectors, identity=identity))
 
     def subscribe_market_data(
@@ -79,7 +79,7 @@ class RuntimeContext(Context):
 
     def unsubscribe(self, subscription: object) -> None:
         if self.data is None:
-            raise RuntimeError("runtime context has no data service")
+            raise RuntimeError("runtime context has no data port")
         self.data.unsubscribe(subscription if isinstance(subscription, str) else getattr(subscription, "key", str(subscription)))
 
     def view(self, key: str, default: object = None) -> object:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from .components import execution_coordinator_components
 from .result import SimulatedClosedTrade, SimulatedEquityPoint
 from .simulation import (
     BasisPointSlippageModel,
@@ -30,5 +29,4 @@ __all__ = [
     "SimulatedEquityPoint",
     "SlippageModel",
     "JsonExecutionStateStore",
-    "execution_coordinator_components",
 ]

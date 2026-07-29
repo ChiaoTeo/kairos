@@ -40,7 +40,6 @@ from .subscriptions import (
     MarketSubscription,
     MarketSubscriptionRegistry,
     MarketSubscriptionSpec,
-    data_subscription_from_market,
 )
 
 __all__ = [
@@ -74,7 +73,6 @@ __all__ = [
     "TradeRecord",
     "bar_record",
     "bind_market_data",
-    "data_subscription_from_market",
     "event_time",
     "iso_time",
     "market_data_id",

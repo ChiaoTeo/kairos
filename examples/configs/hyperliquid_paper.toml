@@ -3,6 +3,10 @@ id = "hyperliquid-paper"
 mode = "paper"
 strategy = "examples.strategies.hyperliquid:OneShotLong"
 
+[strategy.params]
+symbol = "hyperliquid:swap:BTC/USDC:USDC"
+quantity = "0.01"
+
 [paper]
 events = "../events/hyperliquid_ticker.jsonl"
 runs_root = "../.kairos/runs"

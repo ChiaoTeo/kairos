@@ -3,29 +3,40 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from decimal import Decimal
-import importlib
 from pathlib import Path
-import sys
 from typing import Mapping
 
-from kairospy.application.runtime import RuntimeMode, RuntimeRunSpec, RuntimeRunner
-from kairospy.application.runtime.services import MarketDataSubscriptionSpec
-from kairospy.application.runtime.services.account import account_current_view_key
-from kairospy.application.service.system.run.accounts import AccountRegistry, RuntimeAccount
+from kairospy.application.runtime import RuntimeMode
+from kairospy.application.runtime.ports import MarketDataSubscriptionSpec
+from kairospy.application.runtime.processors.account import account_current_view_key
+from kairospy.application.runtime.run import RuntimeRunResult
+from kairospy.application.system.accounts import SystemAccount
+from kairospy.application.system.run.state import JsonLiveRuntimeStateStore, LiveRuntimeStateStore
 from kairospy.application.strategy import Strategy
-from kairospy.config import ConfigError, load_run_config
 from kairospy.core.account import AccountContext, AccountRef, Environment
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.market import Quote
 from kairospy.core.reference import MarketResolver
-from kairospy.infrastructure.integrations import BinanceBroker, BinanceMarketDataConnector, CcxtDriver, OkxBroker, OkxMarketDataConnector
 from kairospy.infrastructure.integrations.payloads import CcxtAccountPayloadAdapter
 from kairospy.infrastructure.integrations.protocols import BrokerClient, LiveMarketDataFeed
 
 from .account import LiveAccountService
+from ..common import (
+    AccountPerformanceMixin,
+    bool_value as common_bool_value,
+    configured_account as common_configured_account,
+    default_broker as common_default_broker,
+    default_market_feed as common_default_market_feed,
+    int_value as common_int_value,
+    load_required_run_config,
+    load_strategy as common_load_strategy,
+    params_table as common_params_table,
+    required_text as common_required_text,
+    strategy_params as common_strategy_params,
+    table as common_table,
+)
 from .execution import LiveExecutionService, LiveTradingSafetyPolicy
 from .market import LiveMarketDataService
-from .state import JsonLiveRuntimeStateStore, LiveRuntimeStateStore
 
 
 class LiveConfigurationError(ValueError):
@@ -37,7 +48,7 @@ MarketFeedFactory = Callable[[str], LiveMarketDataFeed]
 
 
 @dataclass(frozen=True, slots=True)
-class LiveRunResult:
+class LiveRunResult(AccountPerformanceMixin):
     run_id: str
     mode: RuntimeMode
     runtime: object
@@ -60,24 +71,10 @@ class ConfiguredLive:
     execution: LiveExecutionService
     coordinator: ExecutionCoordinator
     normalized_config: Mapping[str, object]
+    run_directory: Path
     state_store: LiveRuntimeStateStore | None = None
 
-    def run(self) -> LiveRunResult:
-        self._restore_state()
-        self.account.refresh()
-        runtime = RuntimeRunner.run_sync(
-            RuntimeRunSpec(
-                run_id=self.run_id,
-                mode=RuntimeMode.LIVE,
-                strategy=self.strategy,
-                source=self.market_data,
-                data=self.market_data,
-                account=self.account,
-                execution=self.coordinator,
-                providers=(self.execution,),
-            )
-        )
-        self._save_state()
+    def build_result(self, runtime: RuntimeRunResult) -> LiveRunResult:
         account_view = runtime.views.get(account_current_view_key(self.account.account), None)
         return LiveRunResult(
             run_id=self.run_id,
@@ -89,6 +86,13 @@ class ConfiguredLive:
             account=self.account.account,
             account_view=account_view,
         )
+
+    def prepare(self) -> None:
+        self._restore_state()
+        self.account.refresh()
+
+    def complete(self) -> None:
+        self._save_state()
 
     def _restore_state(self) -> None:
         if self.state_store is None:
@@ -108,13 +112,7 @@ def configured_live(
     market_feed_factory: MarketFeedFactory | None = None,
     broker_factory: BrokerFactory | None = None,
 ) -> ConfiguredLive:
-    try:
-        run_config = load_run_config(config_path)
-        run_config.require_mode(RuntimeMode.LIVE.value)
-    except ConfigError as error:
-        raise LiveConfigurationError(str(error)) from error
-    if run_config.strategy is None:
-        raise LiveConfigurationError("run.strategy is required")
+    run_config = load_required_run_config(config_path, mode=RuntimeMode.LIVE, error_type=LiveConfigurationError)
     live = _table(run_config.values.get("live"), "live")
     venue = _required_text(live.get("venue"), "live.venue")
     market = str(live.get("market", "spot"))
@@ -126,7 +124,8 @@ def configured_live(
     broker = (broker_factory or _default_broker)(venue, account_config.credential)
     account = AccountContext(AccountRef(venue, account_config.account_id, market), Environment.LIVE)
     coordinator = ExecutionCoordinator(broker=broker, broker_symbol_resolver=market_resolver.broker_symbol)
-    state_store = JsonLiveRuntimeStateStore(_state_path(live, root=run_config.root, run_id=run_config.run_id))
+    state_path = _state_path(live, root=run_config.root, run_id=run_config.run_id)
+    state_store = JsonLiveRuntimeStateStore(state_path)
     market_data = LiveMarketDataService(feed=feed, source_name=str(live.get("source_name") or f"{venue}-live"))
     market_data.subscribe(MarketDataSubscriptionSpec(market_ref, (Quote,), params=_params_table(live.get("stream"), default={"type": market})))
     account_service = LiveAccountService(
@@ -162,53 +161,27 @@ def configured_live(
             "live": dict(live),
             "account": {"account_id": account_config.account_id, "venue": venue, "currency": account_config.currency},
         },
+        run_directory=state_path.parent,
         state_store=state_store,
     )
 
 
 def _load_strategy(ref: str, *, root: Path, params: Mapping[str, object]) -> Strategy:
-    if ":" not in ref:
-        raise LiveConfigurationError("run.strategy must be module:callable")
-    module_name, attr_name = ref.split(":", 1)
-    inserted = False
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-        inserted = True
-    if inserted:
-        sys.modules.pop(module_name, None)
-    try:
-        module = importlib.import_module(module_name)
-    finally:
-        if inserted:
-            try:
-                sys.path.remove(str(root))
-            except ValueError:
-                pass
-    factory = getattr(module, attr_name)
-    strategy = factory(**dict(params)) if callable(factory) else factory
-    if not hasattr(strategy, "strategy_id"):
-        raise LiveConfigurationError(f"strategy factory did not return a Strategy: {ref}")
-    return strategy
+    return common_load_strategy(ref, root=root, params=params, error_type=LiveConfigurationError)
 
 
 def _strategy_params(values: Mapping[str, object]) -> Mapping[str, object]:
-    strategy = _table(values.get("strategy"), "strategy") if values.get("strategy") is not None else {}
-    params = strategy.get("params", {})
-    if not isinstance(params, Mapping):
-        raise LiveConfigurationError("[strategy.params] must be a table")
-    return params
+    return common_strategy_params(values, LiveConfigurationError)
 
 
-def _configured_account(accounts: object, *, venue: str, mode_config: Mapping[str, object]) -> RuntimeAccount:
-    try:
-        return AccountRegistry.from_config(accounts).resolve(  # type: ignore[arg-type]
-            venue=venue,
-            account=_account_selector(mode_config.get("account"), "live.account"),
-            account_id=_optional_text(mode_config.get("account_id"), "live.account_id"),
-            account_index=_optional_int(mode_config.get("account_index"), "live.account_index"),
-        )
-    except ValueError as error:
-        raise LiveConfigurationError(str(error)) from error
+def _configured_account(accounts: object, *, venue: str, mode_config: Mapping[str, object]) -> SystemAccount:
+    return common_configured_account(
+        accounts,
+        venue=venue,
+        mode_config=mode_config,
+        mode_label="live",
+        error_type=LiveConfigurationError,
+    )
 
 
 def _safety_policy(raw: object) -> LiveTradingSafetyPolicy:
@@ -222,31 +195,15 @@ def _safety_policy(raw: object) -> LiveTradingSafetyPolicy:
 
 
 def _default_market_feed(venue: str) -> LiveMarketDataFeed:
-    normalized = venue.strip().lower()
-    if normalized == "binance":
-        return BinanceMarketDataConnector(CcxtDriver())
-    if normalized in {"okx", "okex"}:
-        return OkxMarketDataConnector()
-    raise LiveConfigurationError(f"unsupported live market data venue: {venue}")
+    return common_default_market_feed(venue, mode_label="live", error_type=LiveConfigurationError)
 
 
 def _default_broker(venue: str, credential: str | None) -> BrokerClient:
-    normalized = venue.strip().lower()
-    if normalized == "binance":
-        return BinanceBroker(CcxtDriver())
-    if normalized in {"okx", "okex"}:
-        return OkxBroker.from_credential(credential)
-    raise LiveConfigurationError(f"unsupported live broker venue: {venue}")
+    return common_default_broker(venue, credential, mode_label="live", error_type=LiveConfigurationError)
 
 
 def _params_table(value: object, *, default: Mapping[str, object] | None = None) -> Mapping[str, object]:
-    values = dict(default or {})
-    if value is None:
-        return values
-    if not isinstance(value, Mapping):
-        raise LiveConfigurationError("live params must be a table")
-    values.update(value)
-    return values
+    return common_params_table(value, default=default, source="live", error_type=LiveConfigurationError)
 
 
 def _state_path(live: Mapping[str, object], *, root: Path, run_id: str) -> Path:
@@ -260,52 +217,19 @@ def _state_path(live: Mapping[str, object], *, root: Path, run_id: str) -> Path:
 
 
 def _table(value: object, name: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise LiveConfigurationError(f"[{name}] must be a table")
-    return value
+    return common_table(value, name, LiveConfigurationError, allow_none=False)
 
 
 def _required_text(value: object, source: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        raise LiveConfigurationError(f"{source} is required")
-    return text
-
-
-def _optional_text(value: object, source: str) -> str | None:
-    if value is None:
-        return None
-    return _required_text(value, source)
-
-
-def _optional_int(value: object, source: str) -> int | None:
-    if value is None:
-        return None
-    return _int_value(value, source)
-
-
-def _account_selector(value: object, source: str) -> int | str | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        raise LiveConfigurationError(f"{source} must be an account id or integer account index")
-    if isinstance(value, int):
-        return value
-    return _required_text(value, source)
+    return common_required_text(value, source, LiveConfigurationError)
 
 
 def _bool_value(value: object, source: str) -> bool:
-    if not isinstance(value, bool):
-        raise LiveConfigurationError(f"{source} must be a boolean")
-    return value
+    return common_bool_value(value, source, LiveConfigurationError)
 
 
 def _int_value(value: object, source: str) -> int:
-    if not isinstance(value, int):
-        raise LiveConfigurationError(f"{source} must be an integer")
-    if value < 0:
-        raise LiveConfigurationError(f"{source} cannot be negative")
-    return value
+    return common_int_value(value, source, LiveConfigurationError)
 
 
 __all__ = ["ConfiguredLive", "LiveConfigurationError", "LiveRunResult", "configured_live"]
