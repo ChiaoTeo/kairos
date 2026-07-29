@@ -249,6 +249,16 @@ def test_surface_has_no_second_command_group_abstraction() -> None:
     assert offenders == []
 
 
+def test_surface_commands_use_shared_output_format() -> None:
+    commands_root = ROOT / "kairospy" / "surface" / "cli" / "commands"
+    offenders = []
+    for path in commands_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "class OutputFormat" in text:
+            offenders.append(str(path.relative_to(ROOT)))
+    assert offenders == []
+
+
 def test_surface_does_not_use_workspace_internals_directly() -> None:
     surface_root = ROOT / "kairospy" / "surface"
     forbidden = (

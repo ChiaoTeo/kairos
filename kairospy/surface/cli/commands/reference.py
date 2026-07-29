@@ -29,6 +29,7 @@ from kairospy.application.system.facade.reference import (
     workspace_cli_format,
 )
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, ProviderName, exchange, provider, reference_store
+from kairospy.surface.cli.options import OutputFormat
 from kairospy.surface.rendering.terminal import write_jsonl
 
 
@@ -60,12 +61,6 @@ class ReferenceKind(StrEnum):
     market = "market"
     event = "event"
     all = "all"
-
-
-class OutputFormat(StrEnum):
-    auto = "auto"
-    json = "json"
-    text = "text"
 
 
 @assets_app.command("add")

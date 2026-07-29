@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterable
 from enum import Enum
-import json
 import sys
 from typing import Mapping, TextIO
 
@@ -11,7 +10,9 @@ import typer
 
 from kairospy.application.system.facade.market import MarketDataFacade
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, StorageFormat
+from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.rendering.terminal import write_jsonl
+from kairospy.surface.rendering.writer import write_result
 
 
 class HistoricalKind(str, Enum):
@@ -21,11 +22,6 @@ class HistoricalKind(str, Enum):
 class WriteMode(str, Enum):
     append = "append"
     replace = "replace"
-
-
-class OutputFormat(str, Enum):
-    json = "json"
-    text = "text"
 
 
 market_app = typer.Typer(no_args_is_help=True, help="Market data commands")
@@ -79,40 +75,26 @@ def download(
 
 @market_app.command("list")
 def list_datasets(
+    ctx: typer.Context,
     root: str | None = typer.Option(None, "--root"),
     storage_format: StorageFormat | None = typer.Option(None, "--format"),
-    output_format: OutputFormat = typer.Option(OutputFormat.text, "--output"),
+    output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
     payload = _MARKET_DATA.list_datasets(root=root, storage_format=storage_format)
-    datasets = payload["datasets"]
-    aliases = payload["aliases"]
-    if output_format is OutputFormat.json:
-        _echo(payload)
-        return
-    if not datasets:
-        typer.echo(f"Datasets\n  none\n  root {payload['root']}")
-        return
-    lines = ["Datasets"]
-    lines.extend(f"  {item}" for item in datasets)
-    if aliases:
-        lines.append("Aliases")
-        lines.extend(f"  {name} -> {target}" for name, target in aliases.items())
-    typer.echo("\n".join(lines))
+    write_result(payload, output=resolve_output(ctx, output_format), text=_render_datasets)
 
 
 @market_app.command("inspect")
 def inspect_dataset(
+    ctx: typer.Context,
     dataset: str = typer.Argument(...),
     root: str | None = typer.Option(None, "--root"),
     storage_format: StorageFormat | None = typer.Option(None, "--format"),
     sample: int = typer.Option(3, "--sample"),
-    output_format: OutputFormat = typer.Option(OutputFormat.json, "--output"),
+    output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
     payload = _MARKET_DATA.inspect_dataset(dataset=dataset, root=root, storage_format=storage_format, sample=sample)
-    if output_format is OutputFormat.json:
-        _echo(payload)
-        return
-    typer.echo(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json))
 
 
 @market_app.command("alias")
@@ -127,18 +109,16 @@ def alias_dataset(
 
 @market_app.command("prune")
 def prune(
+    ctx: typer.Context,
     dataset: str = typer.Argument(...),
     start: str = typer.Option(..., "--start"),
     end: str = typer.Option(..., "--end"),
     root: str | None = typer.Option(None, "--root"),
     storage_format: StorageFormat | None = typer.Option(None, "--format"),
-    output_format: OutputFormat = typer.Option(OutputFormat.json, "--output"),
+    output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
     result = _MARKET_DATA.prune(dataset=dataset, start=start, end=end, root=root, storage_format=storage_format)
-    if output_format is OutputFormat.json:
-        _echo(result)
-        return
-    typer.echo(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    write_result(result, output=resolve_output(ctx, output_format, default=OutputFormat.json))
 
 
 @market_app.command("read")
@@ -311,12 +291,27 @@ def stream_events(
 
 
 def _echo(payload: Mapping[str, object]) -> None:
-    typer.echo(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+    write_result(payload, output=OutputFormat.json)
+
+
+def _render_datasets(result: object) -> str:
+    if not isinstance(result, Mapping):
+        raise TypeError("market renderer expected mapping payload")
+    datasets = result["datasets"]
+    aliases = result["aliases"]
+    if not datasets:
+        return f"Datasets\n  none\n  root {result['root']}"
+    lines = ["Datasets"]
+    if isinstance(datasets, list):
+        lines.extend(f"  {item}" for item in datasets)
+    if isinstance(aliases, Mapping) and aliases:
+        lines.append("Aliases")
+        lines.extend(f"  {name} -> {target}" for name, target in aliases.items())
+    return "\n".join(lines)
 
 
 __all__ = [
     "HistoricalKind",
-    "OutputFormat",
     "StreamKind",
     "WriteMode",
     "market_app",
