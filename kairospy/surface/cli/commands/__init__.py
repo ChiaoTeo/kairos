@@ -8,6 +8,7 @@ from kairospy.surface.cli.commands.project import project_app
 from kairospy.surface.cli.commands.reference import reference_app
 from kairospy.surface.cli.commands.run import run_app
 from kairospy.surface.cli.commands.strategy import strategy_app
+from kairospy.surface.cli.commands.timeline import timeline_app
 
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "reference_app",
     "run_app",
     "strategy_app",
+    "timeline_app",
 ]

@@ -90,8 +90,6 @@ class TradeIntent(Intent):
         object.__setattr__(self, "account_id", None if self.account_id is None else _id(self.account_id, AccountId, "account_id"))
         if self.account_index is not None and self.account_index < 0:
             raise ValueError("intent account_index cannot be negative")
-        if self.target_quantity is not None and self.target_quantity < 0:
-            raise ValueError("target_quantity cannot be negative")
         if self.quantity is not None and self.quantity <= 0:
             raise ValueError("quantity must be positive")
         if self.limit_price is not None and self.limit_price <= 0:

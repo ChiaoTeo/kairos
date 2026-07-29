@@ -1,0 +1,27 @@
+[run]
+id = "binance-spot-btc-sma-backtest"
+mode = "backtest"
+strategy = "examples.strategies.btc_sma_backtest:strategy"
+
+[strategy.params]
+fast_window = 5
+slow_window = 20
+target_quantity = "0.01"
+
+[account]
+cash = 10000
+currency = "USDT"
+fee_rate = "0.001"
+
+[backtest]
+runs_root = ".kairos/runs"
+storage_format = "parquet"
+price_field = "close"
+
+[backtest.market]
+start = "2026-07-28T00:00:00+00:00"
+end = "2026-07-28T02:00:00+00:00"
+on_missing = "download"
+
+[execution]
+slippage_bps = "1"

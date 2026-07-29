@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.service.modes.live import configured_live
+from kairospy.application.service.modes.live import LiveConfigurationError, configured_live
 from kairospy.application.system import TradingSystemLauncher
 
 
@@ -158,8 +158,20 @@ def test_configured_live_selects_account_ref(tmp_path) -> None:
     assert configured.normalized_config["account"]["account_id"] == "alt"
 
 
-def _write_live_project(root: Path, *, account_ref: str = "main") -> Path:
-    _write_account("main", credential="env:fake")
+def test_configured_live_rejects_paper_account_ref(tmp_path) -> None:
+    config_path = _write_live_project(tmp_path, account_environment="paper")
+
+    with pytest.raises(LiveConfigurationError, match="live runs require a live account"):
+        configured_live(
+            config_path,
+            market_feed_factory=lambda venue: FakeLiveFeed(),
+            broker_factory=lambda venue, credential: FakeBroker(),
+            account_resolver=_resolver(config_path),
+        )
+
+
+def _write_live_project(root: Path, *, account_ref: str = "main", account_environment: str = "live") -> Path:
+    _write_account("main", credential="env:fake", environment=account_environment)
     if account_ref != "main":
         _write_account(account_ref, credential="env:fake-alt", index=1)
     (root / "strategy_mod.py").write_text(
@@ -207,7 +219,7 @@ def _live_config_lines(*, account_ref: str) -> list[str]:
     return lines
 
 
-def _write_account(account_id: str, *, credential: str, index: int = 0) -> None:
+def _write_account(account_id: str, *, credential: str, index: int = 0, environment: str = "live") -> None:
     account_root = Path.cwd() / ".kairos" / "accounts"
     account_root.mkdir(parents=True, exist_ok=True)
     (account_root / f"{account_id}.toml").write_text(
@@ -217,7 +229,7 @@ def _write_account(account_id: str, *, credential: str, index: int = 0) -> None:
                 f'id = "{account_id}"',
                 f"index = {index}",
                 'provider = "binance"',
-                'environment = "live"',
+                f'environment = "{environment}"',
                 'venue = "binance"',
                 'market = "spot"',
                 'currency = "USDT"',

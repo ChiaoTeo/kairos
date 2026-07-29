@@ -21,7 +21,9 @@ class RunArtifactWriter:
         self._write_jsonl("equity.jsonl", getattr(result, "equity_curve", ()))
         self._write_jsonl("fills.jsonl", getattr(result, "fills", ()))
         self._write_jsonl("trades.jsonl", getattr(result, "trades", ()))
-        self._write_jsonl("intent_states.jsonl", getattr(getattr(result, "runtime", None), "intent_states", ()))
+        self._write_jsonl("intent_states.jsonl", _intent_states(result))
+        self._write_jsonl("decision_trace.jsonl", getattr(result, "decision_trace", ()))
+        self._write_jsonl("risk_snapshots.jsonl", getattr(result, "risk_snapshots", ()))
         return summary
 
     def summary(self, result: object) -> Mapping[str, object]:
@@ -36,6 +38,8 @@ class RunArtifactWriter:
                 "intent_count": getattr(runtime, "intent_count", None),
                 "fills": len(tuple(getattr(result, "fills", ()) or ())),
                 "closed_trades": len(tuple(getattr(result, "trades", ()) or ())),
+                "decision_trace_count": len(tuple(getattr(result, "decision_trace", ()) or ())),
+                "risk_snapshot_count": len(tuple(getattr(result, "risk_snapshots", ()) or ())),
                 "initial_equity": getattr(result, "initial_equity", None),
                 "final_equity": getattr(result, "final_equity", None),
                 "net_profit": getattr(result, "net_profit", None),
@@ -66,6 +70,21 @@ def _jsonable(value: object) -> object:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return value
+
+
+def _intent_states(result: object) -> tuple[object, ...]:
+    runtime = getattr(result, "runtime", None)
+    existing = getattr(runtime, "intent_states", None)
+    if existing is not None:
+        return tuple(existing)
+    intents = getattr(result, "intents", None)
+    list_intents = getattr(intents, "list", None)
+    if not callable(list_intents):
+        return ()
+    strategy_id = getattr(runtime, "strategy_id", None)
+    if strategy_id is None:
+        return tuple(list_intents())
+    return tuple(list_intents(strategy_id=strategy_id))
 
 
 __all__ = ["RunArtifactWriter"]

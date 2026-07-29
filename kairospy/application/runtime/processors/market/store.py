@@ -430,9 +430,11 @@ def _market_object_payload(value: object) -> dict[str, object]:
         return {
             "rate_id": value.rate_id,
             "market_id": _optional_id(value.market_id),
+            "instrument_id": _optional_id(value.instrument_id),
             "rate": value.rate,
             "tenor": value.tenor,
             "basis": value.basis,
+            "mark_price": value.mark_price,
             "source": value.source,
             "derivation": value.derivation,
         }

@@ -24,7 +24,7 @@ class RuntimePortPipeline:
         self.processors.publish_views(self.views, as_of=event.time)
 
     def on_intents(self, intents: tuple[object, ...], context: object, hook: str) -> None:
-        if not intents:
+        if not intents and not tuple(getattr(context, "emitted_traces", ()) or ()):
             return
         self.processors.on_intents(intents, context, hook)
         self.processors.publish_views(self.views, as_of=getattr(context, "now", None))

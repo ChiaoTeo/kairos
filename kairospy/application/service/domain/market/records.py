@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, TypeAlias, TypedDict
 
-from kairospy.core.market import Bar, OrderBookSnapshot, PriceLevel, Quote, TradePrint
+from kairospy.core.market import Bar, OrderBookSnapshot, PriceLevel, Quote, RateObservation, TradePrint
 from kairospy.core.reference import MarketRef
 
 
@@ -59,6 +59,14 @@ class BarRecord(MarketRecord, total=False):
     low: str | None
     close: str | None
     volume: str | None
+
+
+class RateRecord(MarketRecord, total=False):
+    rate_id: str
+    rate: str
+    tenor: str | None
+    basis: str
+    mark_price: str | None
 
 
 def ohlcv_record(
@@ -221,6 +229,26 @@ def bar_record(bar: Bar, *, venue: str, market: str, source_symbol: str) -> BarR
     }
 
 
+def funding_rate_record(rate: RateObservation, *, venue: str, market: str, source_symbol: str) -> RateRecord:
+    return {
+        "time": rate.time.isoformat(),
+        "kind": "funding_rate",
+        **_identity_fields(
+            None if rate.market_id is None else str(rate.market_id),
+            _instrument_id(venue, market, source_symbol) if rate.instrument_id is None else str(rate.instrument_id),
+            None,
+            venue,
+            market,
+            source_symbol,
+        ),
+        "rate_id": rate.rate_id,
+        "rate": _decimal_text(rate.rate),
+        "tenor": rate.tenor,
+        "basis": rate.basis or "funding_rate",
+        "mark_price": _optional_decimal_text(rate.mark_price),
+    }
+
+
 def event_time(value: object) -> datetime:
     if value is None:
         raise ValueError("market record timestamp is required")
@@ -298,15 +326,21 @@ def _identity_fields(
     }
 
 
+def _instrument_id(venue: str, market: str, source_symbol: str) -> str:
+    return str(MarketRef.ephemeral(venue=venue, market=market, source_symbol=source_symbol).instrument_id)
+
+
 __all__ = [
     "BarRecord",
     "MarketRecord",
     "MarketRecordValue",
     "OrderBookRecord",
     "QuoteRecord",
+    "RateRecord",
     "TradeRecord",
     "bar_record",
     "event_time",
+    "funding_rate_record",
     "iso_time",
     "ohlcv_record",
     "order_book_record",

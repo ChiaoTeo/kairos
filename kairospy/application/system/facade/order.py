@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Mapping
 
+from kairospy.application.system.facade.context import workspace as resolve_workspace
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, broker
 from kairospy.application.system.workspace import AccountRecord, KairosWorkspace
 from kairospy.config import ConfigError
@@ -137,7 +138,7 @@ class OrderFacade:
 
 
 def _account(account_id: str) -> tuple[KairosWorkspace, AccountRecord]:
-    workspace = KairosWorkspace.resolve()
+    workspace = resolve_workspace()
     try:
         return workspace, workspace.accounts.get(account_id)
     except ConfigError as error:

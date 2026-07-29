@@ -30,6 +30,7 @@ from .protocol import (
     system_envelope,
 )
 from .run import RuntimeEnvelopePump, RuntimeRunner, RuntimeRunSession, RuntimeRunSpec
+from .sources import ClockEventSource, ClockTick, IntervalClockSource, RealtimeClockSource
 from .ports import (
     AccountPort,
     DataSubscription,
@@ -76,6 +77,10 @@ __all__ = [
     "RuntimeSystemViewState",
     "SystemEventViewState",
     "Callback",
+    "ClockEventSource",
+    "ClockTick",
+    "IntervalClockSource",
+    "RealtimeClockSource",
     "close_event_line",
     "system_envelope",
 ]

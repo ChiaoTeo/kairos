@@ -5,8 +5,8 @@ from typing import Mapping
 import typer
 
 from kairospy.application.system.facade.project import ProjectFacade
-from kairospy.surface.cli.options import OutputFormat, resolve_output
-from kairospy.surface.rendering.writer import write_result
+from kairospy.surface.cli.options import OutputFormat
+from kairospy.surface.cli.output import write_cli_result
 
 
 project_app = typer.Typer(no_args_is_help=True, help="Project workspace commands")
@@ -30,7 +30,7 @@ def status(
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     payload = _PROJECTS.status()
-    write_result(payload, output=resolve_output(ctx, output_format), text=_render_status)
+    write_cli_result(ctx, payload, output_format=output_format, text=_render_status)
 
 
 @project_app.command("doctor")
@@ -40,7 +40,7 @@ def doctor(
 ) -> None:
     payload = _PROJECTS.doctor()
     issues = payload["issues"]
-    write_result(payload, output=resolve_output(ctx, output_format), text=_render_doctor)
+    write_cli_result(ctx, payload, output_format=output_format, text=_render_doctor)
     if issues:
         raise typer.Exit(2)
 

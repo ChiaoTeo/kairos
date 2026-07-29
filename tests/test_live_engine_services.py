@@ -17,7 +17,8 @@ from kairospy.core.account import AccountContext, AccountRef, AccountSource, Env
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentStatus, target_position_intent
 from kairospy.core.market import Quote
-from kairospy.core.reference import MarketResolver
+from kairospy.core.reference import MarketResolver, SourceSymbol
+from kairospy.infrastructure.integrations.drivers import CcxtDriver
 
 
 class LiveTargetPositionStrategy:
@@ -60,8 +61,10 @@ class LiveTargetPositionStrategy:
 class FakeLiveFeed:
     def __init__(self, row: Mapping[str, object] | tuple[Mapping[str, object], ...]) -> None:
         self.rows = row if isinstance(row, tuple) else (row,)
+        self.symbols: list[object] = []
 
     async def watch_ticker(self, symbol: str, *, params: Mapping[str, object] | None = None) -> AsyncIterator[Mapping[str, object]]:
+        self.symbols.append(symbol)
         for row in self.rows:
             yield row
 
@@ -72,6 +75,7 @@ class FakeLiveFeed:
         limit: int | None = None,
         params: Mapping[str, object] | None = None,
     ) -> AsyncIterator[Mapping[str, object]]:
+        self.symbols.append(symbol)
         if False:
             yield {}
 
@@ -83,6 +87,7 @@ class FakeLiveFeed:
         limit: int = 50,
         params: Mapping[str, object] | None = None,
     ) -> AsyncIterator[Mapping[str, object]]:
+        self.symbols.append(symbol)
         if False:
             yield {}
 
@@ -156,19 +161,46 @@ class FakeLiveAccountStream:
             yield {}
 
 
+class _FakeAsyncExchange:
+    def __init__(self) -> None:
+        self.symbols: list[object] = []
+
+    async def load_markets(self) -> Mapping[str, object]:
+        return {}
+
+    async def watch_ticker(self, symbol: str, params: Mapping[str, object] | None = None) -> Mapping[str, object]:
+        self.symbols.append(symbol)
+        return {"symbol": symbol, "timestamp": 1760000000000, "bid": "100", "ask": "101"}
+
+    async def close(self) -> None:
+        return None
+
+
 def test_live_market_service_streams_from_integration_feed() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     market = MarketResolver(default_venue="binance", default_market="spot").resolve("ETH/USDT")
-    service = LiveMarketDataService(feed=FakeLiveFeed({"timestamp": int(now.timestamp() * 1000), "bid": "2000", "ask": "2001"}), source_name="binance-live")
+    feed = FakeLiveFeed({"timestamp": int(now.timestamp() * 1000), "bid": "2000", "ask": "2001"})
+    service = LiveMarketDataService(feed=feed, source_name="binance-live")
     service.subscribe(service_spec := MarketDataSubscriptionSpec(market, (Quote,)))
 
     event = asyncio.run(_first(service.events()))
 
     assert service_spec.key in {subscription.key for subscription in service.subscriptions()}
+    assert feed.symbols == ["ETH/USDT"]
     assert event.domain == "market"
     assert event.kind == "quote"
     assert event.payload.value.ask == Decimal("2001")  # type: ignore[union-attr]
     assert service.view().source == "binance-live"
+
+
+def test_ccxt_driver_normalizes_reference_symbol_for_live_ticker() -> None:
+    exchange = _FakeAsyncExchange()
+    driver = CcxtDriver(async_exchange_factory=lambda exchange_id: exchange)
+
+    event = asyncio.run(_first(driver.watch_ticker("binance", SourceSymbol("ETH/USDT"), params={"max_events": 1})))  # type: ignore[arg-type]
+
+    assert event["symbol"] == "ETH/USDT"
+    assert exchange.symbols == ["ETH/USDT"]
 
 
 def test_live_market_service_stops_streaming_when_stop_requested() -> None:

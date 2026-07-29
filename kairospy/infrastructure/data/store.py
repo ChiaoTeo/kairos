@@ -9,6 +9,7 @@ from typing import Iterable, Literal, Mapping, TypeAlias
 from pandas import DataFrame
 
 from .ids import DataId, normalize_alias, normalize_data_id
+from .partitioning import PartitionSpec, is_partition_path_part, partition_field_path_parts, partition_path_parts, time_partition_parts_between
 from .query import DataQuery, OutputFormat
 
 
@@ -65,7 +66,7 @@ class DataStore:
         values: list[DataId] = []
         for path in (*self.datasets_root.rglob("data.parquet"), *self.datasets_root.rglob("data.jsonl")):
             try:
-                values.append(DataId(".".join(path.parent.relative_to(self.datasets_root).parts)))
+                values.append(_data_id_from_data_path(path, root=self.datasets_root))
             except ValueError:
                 continue
         return tuple(sorted(set(values), key=str))
@@ -78,13 +79,22 @@ class DataStore:
             for path in sorted(self.aliases_root.glob("*.ref"))
         }
 
-    def write(self, dataset: object, rows: Iterable[DataRowInput], *, mode: str = "append") -> Path:
+    def write(
+        self,
+        dataset: object,
+        rows: Iterable[DataRowInput],
+        *,
+        mode: str = "append",
+        partition: PartitionSpec | None = None,
+    ) -> Path:
         if mode not in {"append", "replace"}:
             raise ValueError("write mode must be append or replace")
         data_id = self.resolve(dataset)
         incoming = [_normalize_row(row) for row in rows]
         if not incoming:
             raise ValueError("write requires at least one row")
+        if partition is not None and partition.is_partitioned:
+            return self._write_partitioned(data_id, incoming, mode=mode, partition=partition)
         existing: list[DataRow] = [] if mode == "replace" else self._read_all(data_id)
         combined = sorted([*existing, *incoming], key=lambda row: row["time"])
         path = self.data_path(data_id)
@@ -131,6 +141,7 @@ class DataStore:
         columns: Iterable[str] | None = None,
         limit: int | None = None,
         output: str | OutputFormat = OutputFormat.ROWS,
+        partition: PartitionSpec | None = None,
     ) -> list[DataRow]:
         query = DataQuery.from_values(start=start, end=end, columns=columns, limit=limit, output=output)
         if query.output is not OutputFormat.ROWS:
@@ -138,7 +149,7 @@ class DataStore:
         lower = _optional_time(query.start)
         upper = _optional_time(query.end)
         rows = []
-        for row in self._read_all(self.resolve(dataset)):
+        for row in self._read_all(self.resolve(dataset), start=lower, end=upper, partition=partition):
             row_time = _parse_time(row["time"])
             if lower is not None and row_time < lower:
                 continue
@@ -158,22 +169,25 @@ class DataStore:
         names.update(alias for alias in self.aliases() if fnmatchcase(alias, text))
         return {name: self.read(name, **query) for name in sorted(names)}
 
-    def delete_window(self, dataset: object, *, start: object, end: object) -> DataWriteResult:
+    def delete_window(self, dataset: object, *, start: object, end: object, partition: PartitionSpec | None = None) -> DataWriteResult:
         data_id = self.resolve(dataset)
         lower = _parse_time(start)
         upper = _parse_time(end)
         if lower >= upper:
             raise ValueError("delete_window requires start before end")
-        kept: list[DataRow] = []
         deleted = 0
-        for row in self._read_all(data_id):
-            row_time = _parse_time(row["time"])
-            if lower <= row_time < upper:
-                deleted += 1
-            else:
-                kept.append(row)
-        _write_rows(self.data_path(data_id), kept, self.storage_format)
-        return {"dataset": str(data_id), "deleted_rows": deleted, "remaining_rows": len(kept)}
+        remaining = 0
+        for path in self._existing_data_paths(data_id, start=lower, end=upper, partition=partition):
+            kept: list[DataRow] = []
+            for row in [_normalize_row(row) for row in _read_rows(path)]:
+                row_time = _parse_time(row["time"])
+                if lower <= row_time < upper:
+                    deleted += 1
+                else:
+                    kept.append(row)
+            remaining += len(kept)
+            _write_rows(path, kept, self.storage_format)
+        return {"dataset": str(data_id), "deleted_rows": deleted, "remaining_rows": remaining}
 
     def replace_window(
         self,
@@ -210,22 +224,97 @@ class DataStore:
             "remaining_rows": len(combined),
         }
 
-    def _read_all(self, dataset: object) -> list[DataRow]:
-        path = self._existing_data_path(dataset)
-        if path is None:
+    def _read_all(
+        self,
+        dataset: object,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        partition: PartitionSpec | None = None,
+    ) -> list[DataRow]:
+        paths = self._existing_data_paths(dataset, start=start, end=end, partition=partition)
+        if not paths:
             return []
-        return [_normalize_row(row) for row in _read_rows(path)]
+        rows = [row for path in paths for row in [_normalize_row(row) for row in _read_rows(path)]]
+        return sorted(rows, key=lambda row: row["time"])
 
     def _existing_data_path(self, dataset: object) -> Path | None:
-        preferred = self.data_path(dataset)
+        paths = self._existing_data_paths(dataset)
+        return paths[0] if paths else None
+
+    def _existing_data_paths(
+        self,
+        dataset: object,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        partition: PartitionSpec | None = None,
+    ) -> tuple[Path, ...]:
+        data_id = self.resolve(dataset)
+        directory = self.path(data_id)
+        preferred = self.data_path(data_id)
         if preferred.exists():
-            return preferred
+            return (preferred,)
+        partition_paths = self._partition_data_paths(data_id, start=start, end=end, partition=partition)
+        existing = tuple(path for path in partition_paths if path.exists())
+        if existing:
+            return existing
+        if not directory.exists():
+            return ()
+        discovered = []
+        for path in (*directory.rglob("data.parquet"), *directory.rglob("data.jsonl")):
+            if path == preferred:
+                continue
+            discovered.append(path)
+        return tuple(sorted(discovered))
+
+    def _partition_data_paths(
+        self,
+        dataset: object,
+        *,
+        start: datetime | None,
+        end: datetime | None,
+        partition: PartitionSpec | None,
+    ) -> tuple[Path, ...]:
+        if partition is None or not partition.is_partitioned:
+            return ()
+        base = self.path(dataset)
+        paths: list[Path] = []
+        if partition.time_grain == "none":
+            paths.append(base.joinpath(*partition_path_parts(partition, datetime.now(timezone.utc))) / f"data.{self.storage_format}")
+            return tuple(paths)
+        parts = time_partition_parts_between(partition, start=start, end=end)
+        if not parts:
+            return tuple(sorted(base.rglob(f"data.{self.storage_format}"))) if base.exists() else ()
+        field_parts = partition_field_path_parts(partition)
+        return tuple(base.joinpath(*field_parts, part) / f"data.{self.storage_format}" for part in parts)
+
+    def _write_partitioned(self, data_id: DataId, incoming: list[DataRow], *, mode: str, partition: PartitionSpec) -> Path:
+        flat_path = self.data_path(data_id)
+        if mode == "append" and flat_path.exists():
+            incoming = [*[_normalize_row(row) for row in _read_rows(flat_path)], *incoming]
+            flat_path.unlink()
+        if mode == "replace":
+            self._delete_dataset_files(data_id)
+        buckets: dict[tuple[str, ...], list[DataRow]] = {}
+        for row in incoming:
+            parts = partition_path_parts(partition, _parse_time(row["time"]))
+            buckets.setdefault(parts, []).append(row)
+        written: list[Path] = []
+        for parts, rows in sorted(buckets.items()):
+            path = self.path(data_id).joinpath(*parts) / f"data.{self.storage_format}"
+            existing = [] if mode == "replace" else [_normalize_row(row) for row in _read_rows(path)] if path.exists() else []
+            combined = sorted([*existing, *rows], key=lambda row: row["time"])
+            _write_rows(path, combined, self.storage_format)
+            written.append(path)
+        return written[0]
+
+    def _delete_dataset_files(self, dataset: object) -> None:
         directory = self.path(dataset)
-        for name in ("data.parquet", "data.jsonl"):
-            path = directory / name
-            if path.exists():
-                return path
-        return None
+        if not directory.exists():
+            return
+        for path in (*directory.rglob("data.parquet"), *directory.rglob("data.jsonl")):
+            path.unlink()
 
 
 def _write_rows(path: Path, rows: Iterable[DataRowInput], storage_format: str) -> None:
@@ -342,3 +431,10 @@ def _dataframe(rows: list[DataRow]) -> "DataFrame":
     except ImportError as error:
         raise RuntimeError("DataStore.read requires pandas") from error
     return pd.DataFrame.from_records(rows)
+
+
+def _data_id_from_data_path(path: Path, *, root: Path) -> DataId:
+    parts = list(path.parent.relative_to(root).parts)
+    while parts and is_partition_path_part(parts[-1]):
+        parts.pop()
+    return DataId(".".join(parts))

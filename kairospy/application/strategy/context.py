@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Protocol, Sequence
+from typing import Mapping, Protocol, Sequence, overload
 
 from kairospy.core.intent import Intent, TradeIntent
 from kairospy.core.market import MarketSelector
@@ -21,6 +21,14 @@ class Context(Protocol):
     ) -> None:
         ...
 
+    def trace(
+        self,
+        name: str,
+        payload: Mapping[str, object],
+    ) -> None:
+        ...
+
+    @overload
     def subscribe(
         self,
         market: MarketRef,
@@ -30,11 +38,12 @@ class Context(Protocol):
     ) -> object:
         ...
 
-    def subscribe_market_data(
+    @overload
+    def subscribe(
         self,
-        instrument: object,
+        instrument: object | MarketRef,
         *,
-        selectors: Sequence[MarketSelector | type],
+        selectors: Sequence[MarketSelector | type] | None = None,
         venue: str | None = None,
         market: str | None = None,
         identity: str | None = None,

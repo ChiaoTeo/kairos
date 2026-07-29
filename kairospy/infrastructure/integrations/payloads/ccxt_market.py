@@ -5,14 +5,16 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from kairospy.core.market import Bar, MarketEvent, MarketSubject, OrderBookSnapshot, PriceLevel, Quote, TradePrint
+from kairospy.core.market import Bar, MarketEvent, MarketSubject, OrderBookSnapshot, PriceLevel, Quote, RateObservation, TradePrint
 from kairospy.application.service.domain.market.records import (
     BarRecord,
     OrderBookRecord,
     QuoteRecord,
+    RateRecord,
     TradeRecord,
     bar_record,
     event_time,
+    funding_rate_record,
     order_book_record,
     ticker_record,
     trade_print_record,
@@ -74,6 +76,21 @@ def ccxt_trade_print(raw: Mapping[str, object], *, market: MarketRef) -> TradePr
         size=_optional_decimal(raw.get("amount")),
         cost=_optional_decimal(raw.get("cost")),
         source=market.venue,
+    )
+
+
+def ccxt_funding_rate_observation(raw: Mapping[str, object], *, market: MarketRef) -> RateObservation:
+    row = _normalized_funding_rate(raw)
+    return RateObservation(
+        rate_id=str(market.market_id),
+        time=_market_time(row),
+        rate=_decimal(row["rate"]),
+        source=market.venue,
+        tenor=None if row.get("tenor") is None else str(row["tenor"]),
+        basis="funding_rate",
+        market_id=market.market_id,
+        instrument_id=market.instrument_id,
+        mark_price=_optional_decimal(row.get("markPrice")),
     )
 
 
@@ -162,6 +179,27 @@ def ccxt_trade_update(raw: Mapping[str, object], *, market: MarketRef) -> Market
     )
 
 
+def ccxt_funding_rate_record(raw: Mapping[str, object], *, market: MarketRef) -> RateRecord:
+    return funding_rate_record(
+        ccxt_funding_rate_observation(raw, market=market),
+        venue=market.venue,
+        market=market.market,
+        source_symbol=market.source_symbol,
+    )
+
+
+def ccxt_funding_rate_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
+    rate = ccxt_funding_rate_observation(raw, market=market)
+    return MarketEvent(
+        MarketSubject("market", market.market_id),
+        rate.time,
+        rate,
+        source=market.venue,
+        available_at=rate.time,
+        metadata=_market_metadata(market, raw=dict(raw), mark_price=rate.mark_price),
+    )
+
+
 def ephemeral_market_ref(*, venue: str, market: str, source_symbol: str) -> MarketRef:
     return MarketRef.ephemeral(venue=venue, market=market, source_symbol=source_symbol)
 
@@ -221,6 +259,24 @@ def _normalized_ticker(raw: Mapping[str, object]) -> Mapping[str, object]:
     return value
 
 
+def _normalized_funding_rate(raw: Mapping[str, object]) -> Mapping[str, object]:
+    value = dict(raw)
+    info = value.get("info") if isinstance(value.get("info"), Mapping) else {}
+    rate = _first_not_none(value.get("fundingRate"), value.get("rate"), info.get("fundingRate"))
+    timestamp = _first_not_none(value.get("timestamp"), value.get("fundingTimestamp"), info.get("fundingTime"), info.get("time"))
+    mark_price = _first_not_none(value.get("markPrice"), value.get("mark_price"), info.get("markPrice"))
+    if rate is None:
+        raise ValueError(f"funding rate row is missing rate: {raw!r}")
+    if timestamp is None:
+        raise ValueError(f"funding rate row is missing timestamp: {raw!r}")
+    value["rate"] = rate
+    value["timestamp"] = timestamp
+    if mark_price is not None:
+        value["markPrice"] = mark_price
+    value.setdefault("tenor", "8h")
+    return value
+
+
 def _info_price(raw: Mapping[str, object]) -> object | None:
     info = raw.get("info")
     return info.get("price") if isinstance(info, Mapping) else None
@@ -247,6 +303,9 @@ __all__ = [
     "ccxt_ohlcv_bar",
     "ccxt_ohlcv_record",
     "ccxt_ohlcv_update",
+    "ccxt_funding_rate_observation",
+    "ccxt_funding_rate_record",
+    "ccxt_funding_rate_update",
     "ccxt_order_book_record",
     "ccxt_order_book_snapshot",
     "ccxt_order_book_update",

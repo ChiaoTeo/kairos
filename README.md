@@ -26,6 +26,7 @@ Surface packages are intentionally thin: external callers should reach run behav
 See [System Architecture Plan](docs/system-architecture-plan.md) for the planned migration toward system-owned trading runtime lifecycle management.
 See [Workspace, Configuration, and CLI Plan](docs/workspace-config-cli-plan.md) for the planned configuration, `.kairos`, run registry, account, order, reference, and market CLI model.
 See [Surface CLI Refactor Plan](docs/surface-cli-refactor-plan.md) for the clean-cut CLI refactor target without compatibility bridges or legacy aliases.
+See [Market Dataset IDs](docs/market-dataset-id.md) for canonical market data identity rules.
 
 ## Install For Development
 
@@ -51,9 +52,10 @@ kairospy run start hl-paper
 kairospy run daemon status
 kairospy market download --symbol BTC/USDT
 kairospy market list
-kairospy market inspect market.ohlcv.binance_spot_btc_usdt.1m
-kairospy market read market.ohlcv.binance_spot_btc_usdt.1m
-kairospy market replay market.trades.binance_spot_btc_usdt --speed 0
+kairospy market inspect market.ohlcv.binance.spot.btc_usdt.1m
+kairospy market read market.ohlcv.binance.spot.btc_usdt.1m
+kairospy market replay market.trades.binance.spot.btc_usdt --speed 0
+kairospy market persist market.trades.binance.spot.btc_usdt --limit 100
 kairospy market watch --kind ticker --symbol BTC/USDT --limit 1
 kairospy reference markets list --active-only
 kairospy reference catalog search BTC

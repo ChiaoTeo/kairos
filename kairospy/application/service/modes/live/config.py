@@ -53,6 +53,8 @@ class LiveRunResult(AccountPerformanceMixin):
     account_view: object | None
     fills: tuple[object, ...] = ()
     trades: tuple[object, ...] = ()
+    decision_trace: tuple[object, ...] = ()
+    risk_snapshots: tuple[object, ...] = ()
     metrics: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -85,8 +87,9 @@ def configured_live(
     market_feed_factory: MarketFeedFactory | None = None,
     broker_factory: BrokerFactory | None = None,
     account_resolver: AccountResolver | None = None,
+    strategy_ref: str | None = None,
 ) -> ConfiguredLive:
-    run_config = load_required_run_config(config_path, mode=RuntimeMode.LIVE, error_type=LiveConfigurationError)
+    run_config = load_required_run_config(config_path, mode=RuntimeMode.LIVE, error_type=LiveConfigurationError, strategy_ref=strategy_ref)
     live = _table(run_config.values.get("live"), "live")
     venue = _required_text(live.get("venue"), "live.venue")
     market = str(live.get("market", "spot"))
@@ -137,13 +140,18 @@ def _strategy_params(values: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _configured_account(account_ref: str | None, *, account_resolver: AccountResolver | None, venue: str) -> ConfiguredAccount:
-    return common_configured_account_ref(
+    account = common_configured_account_ref(
         account_ref,
         account_resolver=account_resolver,
         venue=venue,
         mode_label="live",
         error_type=LiveConfigurationError,
     )
+    if account.environment and account.environment not in {"live", "testnet"}:
+        raise LiveConfigurationError(
+            f"account {account.account_id!r} has environment {account.environment!r}; live runs require a live account"
+        )
+    return account
 
 
 def _safety_policy(raw: object) -> LiveTradingSafetyPolicy:

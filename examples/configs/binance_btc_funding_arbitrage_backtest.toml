@@ -1,0 +1,31 @@
+[run]
+id = "binance-btc-funding-arbitrage-backtest"
+mode = "backtest"
+strategy = "examples.strategies.binance_funding_arbitrage:strategy"
+
+[strategy.params]
+symbol = "BTC/USDT"
+target_notional = "1000"
+entry_funding_rate = "0.000001"
+exit_funding_rate = "0"
+max_basis = "0.002"
+estimated_round_trip_fee_rate = "0"
+min_net_funding_rate = "0"
+
+[account]
+cash = 10000
+currency = "USDT"
+fee_rate = "0.0004"
+
+[backtest]
+runs_root = ".kairos/runs"
+storage_format = "parquet"
+price_field = "close"
+
+[backtest.market]
+start = "2026-07-28T00:00:00+00:00"
+end = "2026-07-29T00:00:00+00:00"
+on_missing = "download"
+
+[execution]
+slippage_bps = "1"

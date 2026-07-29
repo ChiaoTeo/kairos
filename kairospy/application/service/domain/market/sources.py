@@ -194,6 +194,8 @@ def _market_value_from_row(
             source=source,
             basis=str(row.get("basis") or kind),
             market_id=market_id,
+            instrument_id=None if row.get("instrument_id") is None else str(row["instrument_id"]),
+            mark_price=_optional_decimal(row.get("mark_price") or row.get("price")),
         )
     return None
 

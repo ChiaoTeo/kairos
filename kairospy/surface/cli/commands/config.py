@@ -6,8 +6,8 @@ from typing import Mapping
 import typer
 
 from kairospy.application.system.facade.config import ConfigFacade
-from kairospy.surface.cli.options import OutputFormat, resolve_output
-from kairospy.surface.rendering.writer import write_result
+from kairospy.surface.cli.options import OutputFormat
+from kairospy.surface.cli.output import write_cli_result
 
 
 config_app = typer.Typer(no_args_is_help=True, help="Workspace configuration commands")
@@ -22,7 +22,7 @@ def paths(
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     payload = _CONFIG.paths()
-    write_result(payload, output=resolve_output(ctx, output_format), text=_render_paths)
+    write_cli_result(ctx, payload, output_format=output_format, text=_render_paths)
 
 
 @config_app.command("show")
@@ -43,7 +43,7 @@ def manifest(
 
 def _show_manifest(ctx: typer.Context, output_format: OutputFormat | None) -> None:
     payload = _CONFIG.manifest()
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json))
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
 @config_app.command("doctor")
@@ -53,7 +53,7 @@ def doctor(
 ) -> None:
     payload = _CONFIG.doctor()
     issues = payload["issues"]
-    write_result(payload, output=resolve_output(ctx, output_format), text=_render_doctor)
+    write_cli_result(ctx, payload, output_format=output_format, text=_render_doctor)
     if issues:
         raise typer.Exit(2)
 
@@ -73,7 +73,7 @@ def explain(
         payload = _CONFIG.explain(run=run, config_path=config_path)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json), text=_render_explain)
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_explain)
 
 
 @config_app.command("operations")
@@ -83,11 +83,7 @@ def operations(
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     payload = _CONFIG.operations(limit=limit)
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json), text=_render_operations)
-
-
-def _echo(payload: Mapping[str, object]) -> None:
-    write_result(payload, output=OutputFormat.json)
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_operations)
 
 
 @profile_app.command("list")
@@ -96,27 +92,35 @@ def profile_list(
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     payload = _CONFIG.list_profiles()
-    write_result(payload, output=resolve_output(ctx, output_format), text=_render_profiles)
+    write_cli_result(ctx, payload, output_format=output_format, text=_render_profiles)
 
 
 @profile_app.command("use")
-def profile_use(name: str = typer.Argument(...)) -> None:
+def profile_use(
+    ctx: typer.Context,
+    name: str = typer.Argument(...),
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
     try:
-        _echo(_CONFIG.use_profile(name))
+        payload = _CONFIG.use_profile(name)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
+    write_cli_result(ctx, payload, output_format=output_format, text=_render_profile_use)
 
 
 @profile_app.command("create")
 def profile_create(
+    ctx: typer.Context,
     name: str = typer.Argument(...),
     source: Path | None = typer.Option(None, "--from", help="Template TOML to copy"),
     force: bool = typer.Option(False, "--force"),
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     try:
-        _echo(_CONFIG.create_profile(name=name, source=source, force=force))
+        payload = _CONFIG.create_profile(name=name, source=source, force=force)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
+    write_cli_result(ctx, payload, output_format=output_format, text=_render_profile_create)
 
 
 def _render_paths(result: object) -> str:
@@ -191,6 +195,26 @@ def _render_profiles(result: object) -> str:
             marker = "*" if item["selected"] else " "
             lines.append(f" {marker} {item['name']}  {item['path']}")
     return "\n".join(lines)
+
+
+def _render_profile_use(result: object) -> str:
+    payload = _payload(result)
+    return "\n".join([
+        "Profile Selected",
+        f"  name       {payload['profile']}",
+        f"  path       {payload['path']}",
+        f"  selection  {payload['selection']}",
+    ])
+
+
+def _render_profile_create(result: object) -> str:
+    payload = _payload(result)
+    return "\n".join([
+        "Profile Created",
+        f"  name    {payload['profile']}",
+        f"  path    {payload['path']}",
+        f"  source  {payload['source'] or ''}",
+    ])
 
 
 def _payload(result: object) -> Mapping[str, object]:

@@ -16,6 +16,7 @@ from .identity import (
     ReferenceId,
     SourceSymbol,
     StrategyId,
+    reference_slug,
 )
 from .markets import MarketRef, MarketResolver, SymbolRef
 from .model import (
@@ -107,4 +108,5 @@ __all__ = [
     "resolve_broker",
     "resolve_exchange",
     "resolve_provider",
+    "reference_slug",
 ]

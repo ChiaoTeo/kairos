@@ -74,7 +74,7 @@ class AppSession:
 
     def run(self) -> None:
         self._write(self.banner())
-        self._write(self.screen())
+        self._write_screen()
         while True:
             try:
                 line = input(self.prompt())
@@ -90,28 +90,28 @@ class AppSession:
     def handle(self, line: str) -> bool:
         parts = shlex.split(line.strip())
         if not parts:
-            self._write(self.screen())
+            self._write_screen()
             return False
         command = parts[0]
         if command in {"quit", "exit", "q"}:
             return True
         if command in {"help", "?", "menu"}:
-            self._write(self.screen())
+            self._write_screen()
             return False
         if command in {"home", "products"}:
             self._open_home()
-            self._write(self.screen())
+            self._write_screen()
             return False
         if command in {"back", "b", ".."}:
             if not self.context_path:
-                self._write(self.screen())
+                self._write_screen()
                 return False
             self._set_context_path(self.context_path[:-1])
-            self._write(self.screen())
+            self._write_screen()
             return False
         if command in {"refresh", "r"}:
             self.context.refresh()
-            self._write(self.screen())
+            self._write_screen()
             return False
         matched_context, rest = match_group_context(
             self.command_root,
@@ -123,12 +123,12 @@ class AppSession:
             self._set_context_path(matched_context)
             if rest:
                 return self._handle_in_context(rest)
-            self._write(self.screen())
+            self._write_screen()
             return False
         if not self.context_path:
             if resolve_token(command, names=self._root_names()) is None:
                 self._write(f"Unknown product: {command}")
-                self._write(self.screen())
+                self._write_screen()
                 return False
         return self._handle_in_context(parts)
 
@@ -136,8 +136,16 @@ class AppSession:
         product = self.product
         if not self.context_path or product is None:
             return False
-        self._execute_raw(parts)
+        self._execute_raw(self._resolve_context_command(parts))
         return False
+
+    def _resolve_context_command(self, parts: list[str]) -> list[str]:
+        if not parts:
+            return parts
+        child_name = resolve_token(parts[0], names=child_names(self.command_root, self.context_path))
+        if child_name is None:
+            return parts
+        return [child_name, *parts[1:]]
 
     def _open_home(self) -> None:
         self._set_context_path(())
@@ -151,12 +159,14 @@ class AppSession:
         if not self.context_path or product is None:
             return
         exit_code, output = self.command_executor([*self.context_path, *parts])
+        self._write(_command_output_header((*self.context_path, *parts)))
         if output:
             self.stdout.write(output)
             if not output.endswith("\n"):
                 self.stdout.write("\n")
         if exit_code:
             self._write(f"Command exited with status {exit_code}")
+        self._write(_COMMAND_OUTPUT_FOOTER)
 
     def _root_views(self) -> tuple[CommandView, ...]:
         return tuple(
@@ -190,6 +200,10 @@ class AppSession:
         self.stdout.write(text + "\n")
         self.stdout.flush()
 
+    def _write_screen(self) -> None:
+        self._write(_SCREEN_SEPARATOR)
+        self._write(self.screen())
+
 
 def _missing_executor(argv: list[str]) -> tuple[int, str]:
     return 2, f"no command executor configured for: {' '.join(argv)}"
@@ -216,6 +230,12 @@ def _label(path: tuple[str, ...]) -> str:
     return " ".join(part.replace("-", " ").title() for part in path)
 
 
+def _command_output_header(argv: tuple[str, ...]) -> str:
+    return f"--- kairospy {' '.join(argv)}"
+
+
+_COMMAND_OUTPUT_FOOTER = "---"
+_SCREEN_SEPARATOR = "-" * 72
 _ROOT_COMMANDS_EXCLUDED_FROM_PRODUCTS = {"shell", "app", "tui"}
 
 

@@ -4,7 +4,6 @@ from .account import BacktestAccountService
 from .config import (
     BacktestConfigurationError,
     BacktestRunResult,
-    BacktestSourceKind,
     ConfiguredBacktest,
     configured_backtest,
 )
@@ -19,7 +18,6 @@ __all__ = [
     "BacktestMarketDataService",
     "BacktestMetrics",
     "BacktestRunResult",
-    "BacktestSourceKind",
     "ConfiguredBacktest",
     "HistoricalMarketDataClient",
     "MarketDataServiceView",

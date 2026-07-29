@@ -11,6 +11,8 @@ from typer.testing import CliRunner
 from kairospy.application.runtime import RuntimeMode
 from kairospy.application.system.control.daemon import RunAlreadyActiveError, RunDaemonService
 from kairospy.application.system.control.registry import RunRegistry
+from kairospy.infrastructure.data import DataStore
+from kairospy.surface.cli import app
 from kairospy.surface.cli.commands.run import run_app
 
 
@@ -58,6 +60,57 @@ def test_run_daemon_start_foreground_command_runs_config(tmp_path) -> None:
     assert payload["run_instance_id"]
     assert payload["result"]["event_count"] == 2
     assert (root / "backtest" / "bt-1" / "summary.json").exists()
+
+
+def test_run_daemon_start_uses_workspace_default_text_format(tmp_path) -> None:
+    config_path = _write_backtest_project(tmp_path)
+    (tmp_path / ".kairos" / "kairos.toml").write_text(
+        "[project]\nname = \"test\"\n[cli]\nformat = \"text\"\n",
+        encoding="utf-8",
+    )
+    root = tmp_path / "daemon-runs"
+
+    result = CliRunner().invoke(
+        app,
+        ["run", "daemon", "start", "--foreground", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert result.output.startswith("Run backtest:bt-1\n")
+    assert "  phase     stopped\n" in result.output
+    assert "  events    2\n" in result.output
+
+
+def test_run_daemon_start_format_option_overrides_workspace_default(tmp_path) -> None:
+    config_path = _write_backtest_project(tmp_path)
+    (tmp_path / ".kairos" / "kairos.toml").write_text(
+        "[project]\nname = \"test\"\n[cli]\nformat = \"text\"\n",
+        encoding="utf-8",
+    )
+    root = tmp_path / "daemon-runs"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "run",
+            "daemon",
+            "start",
+            "--foreground",
+            "--root",
+            str(root),
+            "--mode",
+            "backtest",
+            "--config",
+            str(config_path),
+            "--format",
+            "json",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["phase"] == "stopped"
 
 
 def test_run_workspace_commands_explain_status_logs_artifacts_and_stop(tmp_path) -> None:
@@ -108,6 +161,29 @@ def test_run_daemon_start_background_command_launches_config(tmp_path) -> None:
     assert len(records) == 1
     assert records[0].to_dict()["run_instance_id"] == payload["run_instance_id"]
     assert records[0].phase == "stopped"
+
+
+def test_run_daemon_start_background_command_accepts_registered_target(tmp_path) -> None:
+    config_path = _write_backtest_project(tmp_path)
+    root = tmp_path / "daemon-runs"
+
+    register = CliRunner().invoke(run_app, ["register", "paper-printer", str(config_path)], catch_exceptions=False)
+    result = CliRunner().invoke(
+        run_app,
+        ["daemon", "start", "paper-printer", "--root", str(root)],
+        catch_exceptions=False,
+    )
+
+    assert register.exit_code == 0
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["phase"] == "starting"
+    assert payload["run_id"] == "bt-1"
+    summary_path = root / "backtest" / "bt-1" / "summary.json"
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not summary_path.exists():
+        time.sleep(0.05)
+    assert json.loads(summary_path.read_text(encoding="utf-8"))["event_count"] == 2
 
 
 def test_run_daemon_start_background_only_describes_target_before_spawning(tmp_path, monkeypatch) -> None:
@@ -303,20 +379,34 @@ class _FakeRunResult:
 
 
 def _write_backtest_project(root: Path) -> Path:
+    (root / ".kairos").mkdir(parents=True, exist_ok=True)
+    (root / ".kairos" / "kairos.toml").write_text("[project]\nname = \"test\"\n", encoding="utf-8")
     market_id = "market:binance:spot:btc_usdt"
     instrument_id = "instrument:spot:btc:usdt"
     (root / "strategy_mod.py").write_text(
         "\n".join([
             "from decimal import Decimal",
             "from kairospy.application.strategy import StrategyBase",
+            "from kairospy.core.market import Bar",
             "from kairospy.core.intent import target_position_intent",
+            "from kairospy.core.reference import MarketRef",
             "",
             "class ConfiguredStrategy(StrategyBase):",
             "    strategy_id = 'configured-strategy'",
             "    def __init__(self, instrument_id, market_id):",
             "        self.instrument_id = instrument_id",
             "        self.market_id = market_id",
+            "        self.market_ref = MarketRef(",
+            "            market_id=market_id,",
+            "            instrument_id=instrument_id,",
+            "            market_key='binance_spot_btc_usdt',",
+            "            venue='binance',",
+            "            market='spot',",
+            "            source_symbol='BTC/USDT',",
+            "        )",
             "        self.entered = False",
+            "    def on_start(self, context):",
+            "        context.subscribe(self.market_ref, selectors=(Bar.select(interval='1m'),), identity=self.strategy_id)",
             "    def on_data(self, context, signal):",
             "        if self.entered:",
             "            return None",
@@ -333,22 +423,27 @@ def _write_backtest_project(root: Path) -> Path:
         ]),
         encoding="utf-8",
     )
-    (root / "events.jsonl").write_text(
-        json.dumps(
+    DataStore(root / ".kairos" / "data", storage_format="jsonl").write(
+        "market.ohlcv.binance.spot.btc_usdt.1m",
+        (
             {
                 "time": "2026-01-01T00:00:00+00:00",
-                "kind": "quote",
+                "kind": "bar",
                 "venue": "binance",
                 "market": "spot",
+                "source_symbol": "BTC/USDT",
                 "market_id": market_id,
                 "instrument_id": instrument_id,
                 "market_key": "binance_spot_btc_usdt",
-                "bid": "100",
-                "ask": "101",
-            }
-        )
-        + "\n",
-        encoding="utf-8",
+                "timeframe": "1m",
+                "open": "101",
+                "high": "101",
+                "low": "101",
+                "close": "101",
+                "volume": "1",
+            },
+        ),
+        mode="replace",
     )
     config_path = root / "run.toml"
     config_path.write_text(
@@ -367,12 +462,14 @@ def _write_backtest_project(root: Path) -> Path:
             'currency = "USDT"',
             "",
             "[backtest]",
-            'events = "events.jsonl"',
             'runs_root = "runs"',
             'storage_format = "jsonl"',
-            'venue = "binance"',
-            'market = "spot"',
-            'price_field = "ask"',
+            'price_field = "close"',
+            "",
+            "[backtest.market]",
+            'start = "2026-01-01T00:00:00+00:00"',
+            'end = "2026-01-01T00:01:00+00:00"',
+            'on_missing = "error"',
         ])
         + "\n",
         encoding="utf-8",

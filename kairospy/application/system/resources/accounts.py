@@ -34,16 +34,7 @@ class BacktestAccountResources:
         account_config = self.account.account
         account_view = runtime.views.get(account_current_view_key(account_config.context), None)
         fills = self.execution.fills
-        equity_curve = tuple(
-            item
-            for item in (
-                equity_point_from_account_view(
-                    None if runtime.runtime.last_event is None else runtime.runtime.last_event.time,
-                    account_view,
-                ),
-            )
-            if item is not None
-        )
+        equity_curve = _equity_curve(runtime)
         trades = closed_trades_from_fills(fills)
         metrics = MetricsModel().evaluate(equity_curve, trades, initial_equity=account_config.initial_cash)
         return BacktestRunResult(
@@ -58,6 +49,8 @@ class BacktestAccountResources:
             fills=fills,
             equity_curve=equity_curve,
             trades=trades,
+            decision_trace=_decision_trace(runtime),
+            risk_snapshots=_risk_snapshots(runtime),
             metrics=metrics,
         )
 
@@ -86,6 +79,55 @@ class BacktestAccountResources:
         return cls(account_service, execution)
 
 
+def _equity_curve(runtime: RuntimeRunResult) -> tuple[object, ...]:
+    account_keys = tuple(key for key in runtime.views.envelopes() if key.startswith("account.current."))
+    account_view = runtime.views.get(account_keys[0], None) if account_keys else None
+    return tuple(
+        item
+        for item in (
+            equity_point_from_account_view(
+                None if runtime.runtime.last_event is None else runtime.runtime.last_event.time,
+                account_view,
+            ),
+        )
+        if item is not None
+    )
+
+
+def _decision_trace(runtime: RuntimeRunResult) -> tuple[object, ...]:
+    view = runtime.views.get("strategy.decision_trace", None)
+    return tuple(getattr(view, "records", ()) or ())
+
+
+def _risk_snapshots(runtime: RuntimeRunResult) -> tuple[object, ...]:
+    view = runtime.views.get("account.risk_snapshots", None)
+    return tuple(getattr(view, "snapshots", ()) or ())
+
+
+def _risk_equity_curve(runtime: RuntimeRunResult) -> tuple[object, ...]:
+    return tuple(
+        item
+        for item in (
+            equity_point_from_account_view(getattr(snapshot, "time", None), _RiskEquityView(snapshot))
+            for snapshot in _risk_snapshots(runtime)
+        )
+        if item is not None
+    )
+
+
+class _RiskEquityView:
+    def __init__(self, snapshot: object) -> None:
+        self.equity = getattr(snapshot, "equity", None)
+        self.cash = getattr(snapshot, "cash", None)
+        self.positions = tuple(_RiskPositionView(position) for position in tuple(getattr(snapshot, "positions", ()) or ()))
+
+
+class _RiskPositionView:
+    def __init__(self, position: object) -> None:
+        self.instrument_id = getattr(position, "instrument_id", "")
+        self.quantity = getattr(position, "quantity", 0)
+
+
 @dataclass(frozen=True, slots=True)
 class PaperAccountResources:
     account: PaperAccountService
@@ -106,6 +148,8 @@ class PaperAccountResources:
             account_view=account_view,
             fills=fills,
             trades=(),
+            decision_trace=_decision_trace(runtime),
+            risk_snapshots=_risk_snapshots(runtime),
             metrics={},
         )
 
@@ -117,10 +161,10 @@ class PaperAccountResources:
             account_config.account_id,
             account_config.cash,
             cash_currency=account_config.currency,
-            broker=str(paper.get("venue", "paper")),
+            broker=str(paper.get("venue") or account_config.venue or "paper"),
             environment=Environment.PAPER,
             fee_rate=account_config.fee_rate,
-            price_field=str(paper.get("price_field", "ask")),
+            price_field=str(configured.execution_config.get("price_field") or paper.get("price_field", "ask")),
         )
         coordinator = ExecutionCoordinator()
         account_service = PaperAccountService(account, coordinator)
@@ -129,7 +173,13 @@ class PaperAccountResources:
             account=account.context,
             cash_currency=account.cash_currency,
             price_field=account.price_field,
-            fill_model=ImmediateFillModel(volume_field=None if paper.get("volume_field") is None else str(paper["volume_field"])),
+            fill_model=ImmediateFillModel(
+                volume_field=(
+                    None
+                    if (configured.execution_config.get("volume_field") or paper.get("volume_field")) is None
+                    else str(configured.execution_config.get("volume_field") or paper["volume_field"])
+                )
+            ),
             slippage_model=slippage_model(configured.execution_config),
             commission_model=PercentageCommissionModel(account.fee_rate),
         )
@@ -154,6 +204,8 @@ class LiveAccountResources:
             controls=runtime.controls,
             account=account_context,
             account_view=account_view,
+            decision_trace=_decision_trace(runtime),
+            risk_snapshots=_risk_snapshots(runtime),
         )
 
     @classmethod

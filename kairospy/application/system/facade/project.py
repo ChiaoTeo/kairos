@@ -3,13 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from kairospy.application.system import RunControl
-from kairospy.application.system.workspace import KairosWorkspace, OperationJournal
-from kairospy.config import load_config
+from kairospy.application.system.facade.context import current_cwd, workspace as resolve_workspace, workspace_config
+from kairospy.application.system.workspace import OperationJournal
 
 
 class ProjectFacade:
     def init(self, project_name: str, *, force: bool = False) -> str:
         project_root = Path(project_name).expanduser()
+        if not project_root.is_absolute():
+            project_root = (current_cwd() or Path.cwd()).joinpath(project_root)
+        project_root = project_root.resolve()
         kairos_root = project_root / ".kairos"
         config_path = kairos_root / "kairos.toml"
         if config_path.exists() and not force:
@@ -26,7 +29,7 @@ class ProjectFacade:
         return str(project_root)
 
     def status(self) -> dict[str, object]:
-        workspace = KairosWorkspace.resolve()
+        workspace = resolve_workspace()
         return {
             "root": str(workspace.root),
             "manifest": str(workspace.manifest_path) if workspace.manifest_path is not None else None,
@@ -38,7 +41,7 @@ class ProjectFacade:
         }
 
     def doctor(self) -> dict[str, object]:
-        workspace = KairosWorkspace.resolve()
+        workspace = resolve_workspace()
         issues: list[str] = []
         if workspace.manifest_path is None:
             issues.append(".kairos/kairos.toml was not found; using built-in defaults")
@@ -48,7 +51,7 @@ class ProjectFacade:
         return {"valid": not issues, "issues": issues, "workspace": workspace.to_dict()}
 
     def surface_snapshot(self, *, stale_after_seconds: float = 5.0) -> dict[str, object]:
-        config = load_config()
+        config = workspace_config()
         runs = tuple(
             status.to_dict()
             for status in RunControl(config.resolve_path(".kairos/runs")).list(

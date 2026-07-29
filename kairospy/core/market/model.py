@@ -168,14 +168,19 @@ class RateObservation(MarketSelectable):
     tenor: str | None = None
     basis: str = ""
     market_id: MarketId | str | None = None
+    instrument_id: InstrumentId | str | None = None
+    mark_price: Decimal | None = None
     derivation: str = "direct"
 
     def __post_init__(self) -> None:
         if not self.rate_id.strip():
             raise ValueError("rate_id is required")
         object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
+        object.__setattr__(self, "instrument_id", None if self.instrument_id is None else _id(self.instrument_id, InstrumentId, "instrument_id"))
         if self.time.tzinfo is None:
             raise ValueError("rate observation time must be timezone-aware")
+        if self.mark_price is not None and self.mark_price <= 0:
+            raise ValueError("rate observation mark_price must be positive")
         if not self.derivation.strip():
             raise ValueError("rate observation derivation is required")
 
@@ -192,6 +197,8 @@ class RateObservation(MarketSelectable):
             "tenor": self.tenor,
             "basis": self.basis,
             "market_id": None if self.market_id is None else str(self.market_id),
+            "instrument_id": None if self.instrument_id is None else str(self.instrument_id),
+            "mark_price": self.mark_price,
         }
         return MarketObservation(
             self.subject,

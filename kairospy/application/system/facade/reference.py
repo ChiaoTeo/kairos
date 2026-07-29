@@ -15,7 +15,7 @@ from kairospy.application.service.domain.reference.serde import (
     listing_to_primitive,
     market_to_primitive,
 )
-from kairospy.application.system.workspace import KairosWorkspace
+from kairospy.application.system.facade.context import workspace as resolve_workspace
 from kairospy.core.reference import AssetType, Broker, Exchange, MarketStatus, Provider
 from kairospy.core.reference import brokers as reference_brokers
 from kairospy.core.reference import exchanges as reference_exchanges
@@ -24,7 +24,7 @@ from kairospy.core.reference import providers as reference_providers
 
 def workspace_cli_format() -> str | None:
     try:
-        cli = KairosWorkspace.resolve().manifest.values.get("cli")
+        cli = resolve_workspace().manifest.values.get("cli")
     except Exception:
         return None
     if not isinstance(cli, dict):

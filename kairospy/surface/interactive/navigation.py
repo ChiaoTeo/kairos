@@ -63,6 +63,9 @@ def match_group_context(
         matched, rest = _match_child_context(root, current_path, parts)
         if matched is not None:
             return matched, rest
+        current_names = child_names(root, current_path)
+        if parts[0].isdigit() or resolve_token(parts[0], names=current_names) is not None:
+            return None, parts
     root_name = resolve_token(parts[0], names=root_names)
     if root_name is None:
         return None, parts
@@ -84,7 +87,10 @@ def _match_child_context(
     rest = parts
     matched = fallback if _is_group_path(root, path) else None
     while rest and _is_group_path(root, path):
-        candidate = (*path, rest[0])
+        child_name = resolve_token(rest[0], names=child_names(root, path))
+        if child_name is None:
+            break
+        candidate = (*path, child_name)
         if not _is_group_path(root, candidate):
             break
         path = candidate

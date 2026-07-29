@@ -4,10 +4,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import MappingProxyType
-from typing import Mapping, Sequence
+from typing import Mapping, Sequence, overload
 
 from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.application.runtime.ports import DataSubscription, MarketDataPort, MarketDataSubscriptionSpec
+from kairospy.application.service.domain.market import parse_market_dataset_id
 from kairospy.application.strategy import Context, ControlFactory, ControlJournal
 from kairospy.core.intent import Intent, IntentJournal, TradeIntent, target_position_intent
 from kairospy.core.market import MarketSelector
@@ -25,6 +26,7 @@ class RuntimeContext(Context):
     views: ViewStore = field(default_factory=ViewStore)
     controls: ControlJournal = field(default_factory=ControlJournal)
     emitted_intents: list[Intent] = field(default_factory=list)
+    emitted_traces: list[Mapping[str, object]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "strategy_id", str(self.strategy_id).strip())
@@ -35,6 +37,7 @@ class RuntimeContext(Context):
     def bind(self, event: RuntimeEnvelope | None) -> "RuntimeContext":
         self.event = event
         self.emitted_intents.clear()
+        self.emitted_traces.clear()
         return self
 
     @property
@@ -52,31 +55,66 @@ class RuntimeContext(Context):
         self.intents.record_intent(intent, at=at)
         self.emitted_intents.append(intent)
 
+    def trace(self, name: str, payload: Mapping[str, object]) -> None:
+        label = str(name).strip()
+        if not label:
+            raise ValueError("trace name is required")
+        self.emitted_traces.append(
+            {
+                "name": label,
+                "time": self.now,
+                "strategy_id": self.strategy_id,
+                "payload": dict(payload),
+            }
+        )
+
+    @overload
     def subscribe(
         self,
-        market: MarketRef,
+        instrument: MarketRef,
         *,
         selectors: Sequence[MarketSelector | type],
         identity: str | None = None,
     ) -> DataSubscription:
-        if self.data is None:
-            raise RuntimeError("runtime context has no data port")
-        return self.data.subscribe(MarketDataSubscriptionSpec(market, selectors, identity=identity))
+        ...
 
-    def subscribe_market_data(
+    @overload
+    def subscribe(
         self,
-        instrument: object,
+        instrument: object | MarketRef,
         *,
         selectors: Sequence[MarketSelector | type],
         venue: str | None = None,
         market: str | None = None,
         identity: str | None = None,
     ) -> DataSubscription:
-        return self.subscribe(
-            MarketResolver(default_venue=venue, default_market=market).resolve(instrument, venue=venue, market=market),
-            selectors=selectors,
-            identity=identity,
-        )
+        ...
+
+    def subscribe(
+        self,
+        instrument: object | MarketRef,
+        *,
+        selectors: Sequence[MarketSelector | type] | None = None,
+        venue: str | None = None,
+        market: str | None = None,
+        identity: str | None = None,
+    ) -> DataSubscription:
+        if self.data is None:
+            raise RuntimeError("runtime context has no data port")
+        if selectors is None and isinstance(instrument, str) and instrument.startswith("market."):
+            dataset = parse_market_dataset_id(instrument)
+            return self.data.subscribe(
+                MarketDataSubscriptionSpec(
+                    dataset.market_ref,
+                    (dataset.selector,),
+                    identity=identity,
+                    dataset_id=dataset.dataset_id,
+                )
+            )
+        if selectors is None:
+            raise ValueError("data subscription selectors are required unless subscribing by dataset id")
+        market_ref = MarketResolver(default_venue=venue, default_market=market).resolve(instrument, venue=venue, market=market)
+        return self.data.subscribe(MarketDataSubscriptionSpec(market_ref, selectors, identity=identity))
 
     def unsubscribe(self, subscription: object) -> None:
         if self.data is None:

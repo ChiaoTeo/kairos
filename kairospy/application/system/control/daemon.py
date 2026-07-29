@@ -78,9 +78,10 @@ class RunDaemonService:
         mode: RuntimeMode | str,
         config_path: str | Path,
         run_id: str | None = None,
+        strategy_ref: str | None = None,
     ) -> RunDaemonResult:
         runtime_mode = mode if isinstance(mode, RuntimeMode) else RuntimeMode(str(mode))
-        target = self._targets.resolve(runtime_mode, Path(config_path))
+        target = _resolve_target(self._targets, runtime_mode, Path(config_path), strategy_ref=strategy_ref)
         actual_run_id = run_id or target.run_id
         identity = _identity(actual_run_id, runtime_mode, process_id=os.environ.get(_RUN_INSTANCE_ID_ENV))
         group_directory = self.root / runtime_mode.value / actual_run_id
@@ -96,7 +97,7 @@ class RunDaemonService:
             phase="starting",
             reason="started",
             identity=identity,
-            context={"config_file": str(Path(config_path)), "configured_run_directory": configured_run_directory},
+            context={"config_file": str(Path(config_path)), "configured_run_directory": configured_run_directory, "strategy_ref": strategy_ref},
             mirrors=mirror,
         )
         self._store.record_event(directory, "status", phase="starting", reason="started")
@@ -106,7 +107,7 @@ class RunDaemonService:
                 phase="running",
                 reason="running",
                 identity=identity,
-                context={"config_file": str(Path(config_path)), "configured_run_directory": configured_run_directory},
+                context={"config_file": str(Path(config_path)), "configured_run_directory": configured_run_directory, "strategy_ref": strategy_ref},
                 mirrors=mirror,
             )
             self._store.record_event(directory, "status", phase="running", reason="running")
@@ -123,7 +124,7 @@ class RunDaemonService:
                 phase="stopped",
                 reason="target completed",
                 identity=identity,
-                context={"config_file": str(Path(config_path)), "configured_run_directory": configured_run_directory},
+                context={"config_file": str(Path(config_path)), "configured_run_directory": configured_run_directory, "strategy_ref": strategy_ref},
                 result=summary,
                 mirrors=mirror,
             )
@@ -153,6 +154,7 @@ class RunDaemonService:
         mode: RuntimeMode | str,
         config_path: str | Path,
         run_id: str | None = None,
+        strategy_ref: str | None = None,
     ) -> RunDaemonResult:
         runtime_mode = mode if isinstance(mode, RuntimeMode) else RuntimeMode(str(mode))
         target = self._targets.describe(runtime_mode, Path(config_path))
@@ -168,6 +170,7 @@ class RunDaemonService:
             "config_file": str(Path(config_path)),
             "configured_run_directory": target.run_directory,
             "launch": "background",
+            "strategy_ref": strategy_ref,
         }
         args = [
             sys.executable,
@@ -186,6 +189,8 @@ class RunDaemonService:
         ]
         if run_id is not None:
             args.extend(("--run-id", run_id))
+        if strategy_ref is not None:
+            args.extend(("--strategy", strategy_ref))
         self._store.write_state(directory, phase="starting", reason="background launch requested", identity=identity, context=context, mirrors=(group_directory,))
         self._store.record_event(directory, "start_requested", phase="starting", reason="background launch requested", args=args, log_file=str(log_path))
         with log_path.open("ab") as output:
@@ -224,22 +229,22 @@ class _RunTargetResolver:
             run_directory=str(_configured_run_directory(mode, mode_config, root=run_config.root, run_id=run_config.run_id)),
         )
 
-    def resolve(self, mode: RuntimeMode, config_path: Path) -> _RunDaemonTarget:
+    def resolve(self, mode: RuntimeMode, config_path: Path, *, strategy_ref: str | None = None) -> _RunDaemonTarget:
         if mode is RuntimeMode.BACKTEST:
             try:
-                configured = configured_backtest(config_path)
+                configured = configured_backtest(config_path, strategy_ref=strategy_ref)
             except BacktestConfigurationError:
                 raise
             return _RunDaemonTarget(configured, lambda: self.launcher.run_configured_backtest(configured))
         if mode is RuntimeMode.PAPER:
             try:
-                configured = configured_paper(config_path, account_resolver=self.launcher._account_resolver(config_path))
+                configured = configured_paper(config_path, account_resolver=self.launcher._account_resolver(config_path), strategy_ref=strategy_ref)
             except PaperConfigurationError:
                 raise
             return _RunDaemonTarget(configured, lambda: self.launcher.run_configured_paper(configured))
         if mode is RuntimeMode.LIVE:
             try:
-                configured = configured_live(config_path, account_resolver=self.launcher._account_resolver(config_path))
+                configured = configured_live(config_path, account_resolver=self.launcher._account_resolver(config_path), strategy_ref=strategy_ref)
             except LiveConfigurationError:
                 raise
             return _RunDaemonTarget(configured, lambda: self.launcher.run_configured_live(configured))
@@ -328,6 +333,16 @@ def _control_stop_requested(directory: Path) -> bool:
     return str(command.get("desired_state") or "").strip().lower() == "stopped"
 
 
+def _resolve_target(targets: object, mode: RuntimeMode, config_path: Path, *, strategy_ref: str | None) -> _RunDaemonTarget:
+    resolve = getattr(targets, "resolve")
+    try:
+        return resolve(mode, config_path, strategy_ref=strategy_ref)
+    except TypeError:
+        if strategy_ref is not None:
+            raise
+        return resolve(mode, config_path)
+
+
 def _target_with_instance_directory(target: _RunDaemonTarget, directory: Path, launcher: TradingSystemLauncher) -> _RunDaemonTarget:
     configured = target.configured
     if isinstance(configured, ConfiguredBacktest):
@@ -353,6 +368,8 @@ def _run_summary(run_id: str, mode: RuntimeMode, result: object) -> dict[str, ob
             "intent_count": getattr(runtime, "intent_count", None),
             "fills": len(tuple(getattr(result, "fills", ()) or ())),
             "closed_trades": len(tuple(getattr(result, "trades", ()) or ())),
+            "decision_trace_count": len(tuple(getattr(result, "decision_trace", ()) or ())),
+            "risk_snapshot_count": len(tuple(getattr(result, "risk_snapshots", ()) or ())),
             "initial_equity": getattr(result, "initial_equity", None),
             "final_equity": getattr(result, "final_equity", None),
             "net_profit": getattr(result, "net_profit", None),

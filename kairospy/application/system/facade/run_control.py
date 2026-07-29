@@ -19,8 +19,9 @@ class RunControl:
         mode: RuntimeMode | str,
         config_path: str | Path,
         run_id: str | None = None,
+        strategy_ref: str | None = None,
     ) -> RunDaemonResult:
-        return self._daemon.run_foreground(mode=mode, config_path=config_path, run_id=run_id)
+        return self._daemon.run_foreground(mode=mode, config_path=config_path, run_id=run_id, strategy_ref=strategy_ref)
 
     def start_background(
         self,
@@ -28,8 +29,9 @@ class RunControl:
         mode: RuntimeMode | str,
         config_path: str | Path,
         run_id: str | None = None,
+        strategy_ref: str | None = None,
     ) -> RunDaemonResult:
-        return self._daemon.start_background(mode=mode, config_path=config_path, run_id=run_id)
+        return self._daemon.start_background(mode=mode, config_path=config_path, run_id=run_id, strategy_ref=strategy_ref)
 
     def request_stop(self, *, mode: RuntimeMode | str, run_id: str, reason: str, actor: str = "cli") -> Path:
         runtime_mode = mode.value if isinstance(mode, RuntimeMode) else str(mode)

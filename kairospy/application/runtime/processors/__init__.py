@@ -28,6 +28,7 @@ from .order import OrderCurrentView, OrderCurrentViewState
 from .reference import ReferenceCatalogSummaryView, ReferenceCatalogViewState
 from .risk import RiskEventView, RiskEventViewState
 from .system import RuntimeProcessors, RuntimeSystemViewState, StrategyRunView, SystemEventView, SystemEventViewState, SystemProcessor, runtime_processors
+from .trace import DecisionTraceRecord, DecisionTraceView, RiskSnapshot, RiskSnapshotsView, TraceProcessor
 
 __all__ = [
     "AccountCurrentView",
@@ -66,10 +67,15 @@ __all__ = [
     "RiskEventViewState",
     "RuntimeProcessors",
     "RuntimeSystemViewState",
+    "DecisionTraceRecord",
+    "DecisionTraceView",
+    "RiskSnapshot",
+    "RiskSnapshotsView",
     "StrategyRunView",
     "SystemProcessor",
     "SystemEventView",
     "SystemEventViewState",
     "TradingIntentProcessor",
+    "TraceProcessor",
     "runtime_processors",
 ]

@@ -55,15 +55,17 @@ class CcxtDriver:
         limit: int = 1000,
         params: Mapping[str, object] | None = None,
     ) -> Iterable[Mapping[str, object]]:
+        symbol = _symbol_text(symbol)
         options = dict(params or {})
         max_pages = int(options.pop("max_pages", 1 if until is None else 1000))
         since_ms = _optional_millis(since)
         until_ms = _optional_millis(until)
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
+            _configure_exchange_market(exchange, exchange_id, options)
             pages = 0
             while pages < max_pages:
-                rows = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since_ms, limit=limit, params=options)
+                rows = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since_ms, limit=limit, params=_exchange_params(options))
                 if not rows:
                     break
                 pages += 1
@@ -86,6 +88,57 @@ class CcxtDriver:
             if callable(close):
                 close()
 
+    def fetch_funding_rate(
+        self,
+        exchange_id: str,
+        symbol: str,
+        *,
+        since: object | None = None,
+        until: object | None = None,
+        limit: int = 1000,
+        params: Mapping[str, object] | None = None,
+    ) -> Iterable[Mapping[str, object]]:
+        symbol = _symbol_text(symbol)
+        options = dict(params or {})
+        max_pages = int(options.pop("max_pages", 1 if until is None else 1000))
+        since_ms = _optional_millis(since)
+        until_ms = _optional_millis(until)
+        exchange = (self.exchange_factory or _default_exchange)(exchange_id)
+        try:
+            _configure_exchange_market(exchange, exchange_id, options)
+            method = getattr(exchange, "fetch_funding_rate_history", None)
+            if not callable(method):
+                method = getattr(exchange, "fetchFundingRateHistory", None)
+            if not callable(method):
+                raise NotImplementedError(f"ccxt exchange {exchange_id} does not expose funding rate history")
+            pages = 0
+            while pages < max_pages:
+                rows = method(symbol, since=since_ms, limit=limit, params=_exchange_params(options))
+                if not rows:
+                    break
+                pages += 1
+                last_time = None
+                yielded = 0
+                for item in rows:
+                    row = dict(item)
+                    event_time = _funding_timestamp(row)
+                    if event_time is None:
+                        continue
+                    last_time = event_time
+                    if until_ms is not None and event_time >= until_ms:
+                        return
+                    yield row
+                    yielded += 1
+                if until_ms is None or yielded == 0 or last_time is None:
+                    break
+                since_ms = last_time + 1
+                if len(rows) < limit:
+                    break
+        finally:
+            close = getattr(exchange, "close", None)
+            if callable(close):
+                close()
+
     def fetch_ticker(
         self,
         exchange_id: str,
@@ -93,6 +146,7 @@ class CcxtDriver:
         *,
         params: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
+        symbol = _symbol_text(symbol)
         options = dict(params or {})
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
@@ -109,7 +163,7 @@ class CcxtDriver:
         *,
         params: Mapping[str, object] | None = None,
     ) -> AsyncIterator[Mapping[str, object]]:
-        return self._poll(exchange_id, "ticker", symbol, dict(params or {}))
+        return self._poll(exchange_id, "ticker", _symbol_text(symbol), dict(params or {}))
 
     def watch_order_book(
         self,
@@ -122,7 +176,7 @@ class CcxtDriver:
         options = dict(params or {})
         if limit is not None:
             options["limit"] = limit
-        return self._poll(exchange_id, "orderbook", symbol, options)
+        return self._poll(exchange_id, "orderbook", _symbol_text(symbol), options)
 
     def watch_trades(
         self,
@@ -136,7 +190,7 @@ class CcxtDriver:
         options = dict(params or {})
         options.setdefault("since", since)
         options.setdefault("limit", limit)
-        return self._poll(exchange_id, "trades", symbol, options)
+        return self._poll(exchange_id, "trades", _symbol_text(symbol), options)
 
     def create_order(
         self,
@@ -149,6 +203,7 @@ class CcxtDriver:
         price: object | None = None,
         params: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
+        symbol = _symbol_text(symbol)
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
             return exchange.create_order(symbol, type, side, amount, price, params or {})
@@ -165,6 +220,7 @@ class CcxtDriver:
         symbol: str | None = None,
         params: Mapping[str, object] | None = None,
     ) -> Mapping[str, object]:
+        symbol = _optional_symbol_text(symbol)
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
             return exchange.cancel_order(id, symbol, params or {})
@@ -191,6 +247,7 @@ class CcxtDriver:
         limit: int | None = None,
         params: Mapping[str, object] | None = None,
     ) -> Iterable[Mapping[str, object]]:
+        symbol = _optional_symbol_text(symbol)
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
             return tuple(
@@ -215,6 +272,7 @@ class CcxtDriver:
         limit: int | None = None,
         params: Mapping[str, object] | None = None,
     ) -> Iterable[Mapping[str, object]]:
+        symbol = _optional_symbol_text(symbol)
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
             options = params or {}
@@ -263,7 +321,7 @@ class CcxtDriver:
         options = dict(params or {})
         options.setdefault("since", since)
         options.setdefault("limit", limit)
-        return self._poll_account(exchange_id, "orders", symbol, options)
+        return self._poll_account(exchange_id, "orders", _optional_symbol_text(symbol), options)
 
     def watch_my_trades(
         self,
@@ -277,7 +335,7 @@ class CcxtDriver:
         options = dict(params or {})
         options.setdefault("since", since)
         options.setdefault("limit", limit)
-        return self._poll_account(exchange_id, "my_trades", symbol, options)
+        return self._poll_account(exchange_id, "my_trades", _optional_symbol_text(symbol), options)
 
     async def _poll(
         self,
@@ -453,6 +511,17 @@ def _ignore_cancelled_loop_exception(previous_handler: object) -> Callable[[asyn
     return handle
 
 
+def _symbol_text(symbol: object) -> str:
+    value = str(symbol).strip()
+    if not value:
+        raise ValueError("ccxt symbol cannot be empty")
+    return value
+
+
+def _optional_symbol_text(symbol: object | None) -> str | None:
+    return None if symbol is None else _symbol_text(symbol)
+
+
 async def _watch_ticker(exchange: Any, symbol: str, params: Mapping[str, object]) -> Mapping[str, Any]:
     watch = getattr(exchange, "watch_ticker", None)
     if not callable(watch):
@@ -563,6 +632,25 @@ def _market_type(exchange_id: str, params: Mapping[str, object]) -> str:
     return "spot"
 
 
+def _configure_exchange_market(exchange: Any, exchange_id: str, params: Mapping[str, object]) -> None:
+    market_type = _ccxt_market_type(exchange_id, _market_type(exchange_id, params))
+    options = getattr(exchange, "options", None)
+    if isinstance(options, dict) and market_type is not None:
+        options.setdefault("defaultType", market_type)
+        options["defaultType"] = market_type
+
+
+def _ccxt_market_type(exchange_id: str, market_type: str) -> str | None:
+    normalized = market_type.strip().lower()
+    if exchange_id == "binance" and normalized in {"swap", "perp", "perpetual", "future", "futures"}:
+        return "future"
+    if normalized in {"swap", "perp", "perpetual"}:
+        return "swap"
+    if normalized == "futures":
+        return "future"
+    return normalized or None
+
+
 def _market_record(exchange_id: str, default_market: str, market: object) -> Mapping[str, object]:
     row = dict(market) if isinstance(market, Mapping) else {"symbol": str(market)}
     symbol = str(row.get("symbol") or row.get("id") or "").strip()
@@ -624,11 +712,23 @@ def _millis(value: object) -> int:
     return int(parsed.astimezone(timezone.utc).timestamp() * 1000)
 
 
+def _funding_timestamp(row: Mapping[str, object]) -> int | None:
+    value = row.get("timestamp") or row.get("fundingTimestamp")
+    if value is not None:
+        return int(value)
+    info = row.get("info")
+    if isinstance(info, Mapping):
+        for key in ("fundingTime", "fundingTimestamp", "time"):
+            if info.get(key) is not None:
+                return int(info[key])
+    return None
+
+
 def _exchange_params(params: Mapping[str, object]) -> dict[str, object]:
     return {
         key: value
         for key, value in params.items()
-        if key not in {"poll_seconds", "max_events", "since", "limit", "require_ws"}
+        if key not in {"market", "type", "poll_seconds", "max_events", "since", "limit", "require_ws"}
     }
 
 

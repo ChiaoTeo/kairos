@@ -26,10 +26,10 @@ from kairospy.application.system.facade.reference import (
     refresh_instrument_provider,
     refresh_instrument_provider_with_delist_schedule,
     sync_lifecycle_events,
-    workspace_cli_format,
 )
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, ProviderName, exchange, provider, reference_store
-from kairospy.surface.cli.options import OutputFormat
+from kairospy.application.system.facade.context import ProjectNotFound
+from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.rendering.terminal import write_jsonl
 
 
@@ -127,18 +127,27 @@ def show_asset(
 
 
 @participants_app.command("brokers")
-def brokers(output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format")) -> None:
-    _write_entity_rows(_broker_rows(), output_format=output_format, columns=_BROKER_COLUMNS)
+def brokers(
+    ctx: typer.Context,
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
+    _write_entity_rows(ctx, _broker_rows(), output_format=output_format, columns=_BROKER_COLUMNS)
 
 
 @participants_app.command("exchanges")
-def exchanges(output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format")) -> None:
-    _write_entity_rows(_exchange_rows(), output_format=output_format, columns=_EXCHANGE_COLUMNS)
+def exchanges(
+    ctx: typer.Context,
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
+    _write_entity_rows(ctx, _exchange_rows(), output_format=output_format, columns=_EXCHANGE_COLUMNS)
 
 
 @participants_app.command("providers")
-def providers(output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format")) -> None:
-    _write_entity_rows(_provider_rows(), output_format=output_format, columns=_PROVIDER_COLUMNS)
+def providers(
+    ctx: typer.Context,
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
+    _write_entity_rows(ctx, _provider_rows(), output_format=output_format, columns=_PROVIDER_COLUMNS)
 
 
 @sync_app.command("binance")
@@ -705,20 +714,27 @@ def _with_metadata_fields(row: dict[str, object], metadata: object) -> dict[str,
     return {key: value for key, value in row.items() if value is not None}
 
 
-def _write_entity_rows(rows: tuple[dict[str, object], ...], *, output_format: OutputFormat, columns: tuple[str, ...]) -> None:
-    if _effective_output_format(output_format) is OutputFormat.json:
+def _write_entity_rows(
+    ctx: typer.Context,
+    rows: tuple[dict[str, object], ...],
+    *,
+    output_format: OutputFormat | None,
+    columns: tuple[str, ...],
+) -> None:
+    output = _effective_output_format(ctx, output_format)
+    if output in {OutputFormat.json, OutputFormat.jsonl}:
         write_jsonl(rows, sys.stdout)
         return
     typer.echo(_render_table(rows, columns))
 
 
-def _effective_output_format(output_format: OutputFormat) -> OutputFormat:
-    if output_format is not OutputFormat.auto:
+def _effective_output_format(ctx: typer.Context, output_format: OutputFormat | None) -> OutputFormat:
+    if output_format is not None and output_format is not OutputFormat.auto:
         return output_format
-    value = workspace_cli_format()
-    if value == OutputFormat.json.value:
-        return OutputFormat.json
-    return OutputFormat.text
+    try:
+        return resolve_output(ctx, output_format, default=OutputFormat.text)
+    except ProjectNotFound:
+        return OutputFormat.text
 
 
 def _render_table(rows: tuple[dict[str, object], ...], columns: tuple[str, ...]) -> str:

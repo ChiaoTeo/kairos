@@ -90,9 +90,10 @@ class StreamingMarketDataService(MarketSubscriptionState, MarketDataPort):
         if self.feed is None:
             return
         model = getattr(selector, "model", None)
+        source_symbol = str(spec.market.source_symbol)
         if model is Quote:
             method = getattr(self.feed, "watch_ticker_updates", None)
-            stream = method(spec.market.source_symbol, params=spec.params) if callable(method) else self.feed.watch_ticker(spec.market.source_symbol, params=spec.params)
+            stream = method(source_symbol, params=spec.params) if callable(method) else self.feed.watch_ticker(source_symbol, params=spec.params)
             async for item in stream:
                 if self._should_stop():
                     break
@@ -103,9 +104,9 @@ class StreamingMarketDataService(MarketSubscriptionState, MarketDataPort):
             depth = getattr(selector, "depth", None)
             method = getattr(self.feed, "watch_order_book_updates", None)
             stream = (
-                method(spec.market.source_symbol, limit=depth, params=spec.params)
+                method(source_symbol, limit=depth, params=spec.params)
                 if callable(method)
-                else self.feed.watch_order_book(spec.market.source_symbol, limit=depth, params=spec.params)
+                else self.feed.watch_order_book(source_symbol, limit=depth, params=spec.params)
             )
             async for item in stream:
                 if self._should_stop():
@@ -115,7 +116,7 @@ class StreamingMarketDataService(MarketSubscriptionState, MarketDataPort):
             return
         if model is TradePrint:
             method = getattr(self.feed, "watch_trades_updates", None)
-            stream = method(spec.market.source_symbol, params=spec.params) if callable(method) else self.feed.watch_trades(spec.market.source_symbol, params=spec.params)
+            stream = method(source_symbol, params=spec.params) if callable(method) else self.feed.watch_trades(source_symbol, params=spec.params)
             async for item in stream:
                 if self._should_stop():
                     break

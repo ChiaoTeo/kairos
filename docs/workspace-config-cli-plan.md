@@ -486,13 +486,14 @@ Market commands own historical data downloads, local dataset inspection, replay,
 ```bash
 kairospy market download --symbol BTC/USDT --exchange binance --timeframe 1m
 kairospy market list
-kairospy market inspect market.ohlcv.binance_spot_btc_usdt.1m
-kairospy market alias market.ohlcv.binance_spot_btc_usdt.1m btc-bars
-kairospy market read market.ohlcv.binance_spot_btc_usdt.1m --limit 10
-kairospy market replay market.trades.binance_spot_btc_usdt --speed 0
+kairospy market inspect market.ohlcv.binance.spot.btc_usdt.1m
+kairospy market alias market.ohlcv.binance.spot.btc_usdt.1m btc-bars
+kairospy market read market.ohlcv.binance.spot.btc_usdt.1m --limit 10
+kairospy market replay market.trades.binance.spot.btc_usdt --speed 0
+kairospy market persist market.trades.binance.spot.btc_usdt --limit 100
 kairospy market watch --kind ticker --symbol BTC/USDT --exchange binance --limit 1
 kairospy market doctor --exchange binance
-kairospy market prune market.ohlcv.binance_spot_btc_usdt.1m --start 2024-01-01T00:00:00+00:00 --end 2025-01-01T00:00:00+00:00
+kairospy market prune market.ohlcv.binance.spot.btc_usdt.1m --start 2024-01-01T00:00:00+00:00 --end 2025-01-01T00:00:00+00:00
 ```
 
 ## Safety Model

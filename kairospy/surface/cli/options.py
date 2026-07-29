@@ -6,6 +6,8 @@ from pathlib import Path
 
 import typer
 
+from kairospy.application.system.facade.context import profile_cli_format, workspace_cli_format
+
 
 class OutputFormat(StrEnum):
     auto = "auto"
@@ -16,7 +18,7 @@ class OutputFormat(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class RootOptions:
-    workspace: Path | None = None
+    cwd: Path | None = None
     profile: str | None = None
     output: OutputFormat | None = None
     verbose: bool = False
@@ -38,7 +40,41 @@ def resolve_output(
         return explicit
     output = root_options(ctx).output
     if output is None or output is OutputFormat.auto:
-        return default
+        profile_default = _profile_output()
+        workspace_default = _workspace_output()
+        return profile_default or workspace_default or default
+    return output
+
+
+def _profile_output() -> OutputFormat | None:
+    try:
+        value = profile_cli_format()
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    if value is None:
+        return None
+    try:
+        output = OutputFormat(value)
+    except ValueError as error:
+        raise typer.BadParameter(f"unsupported profile cli.format: {value}") from error
+    if output is OutputFormat.auto:
+        return None
+    return output
+
+
+def _workspace_output() -> OutputFormat | None:
+    try:
+        value = workspace_cli_format()
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    if value is None:
+        return None
+    try:
+        output = OutputFormat(value)
+    except ValueError as error:
+        raise typer.BadParameter(f"unsupported workspace cli.format: {value}") from error
+    if output is OutputFormat.auto:
+        return None
     return output
 
 

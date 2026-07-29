@@ -22,6 +22,7 @@ from kairospy.infrastructure.integrations.payloads.ccxt_market import (
     ccxt_market_type,
     ccxt_ohlcv_record,
     ccxt_ohlcv_update,
+    ccxt_funding_rate_record,
     ccxt_order_book_record,
     ccxt_order_book_update,
     ccxt_ticker_record,
@@ -129,6 +130,27 @@ class BinanceMarketDataConnector:
             params=params,
         )
         return (ccxt_ohlcv_update(row, market=market_ref, timeframe=timeframe) for row in rows)
+
+    def fetch_funding_rate(
+        self,
+        symbol: str,
+        *,
+        since: object | None = None,
+        until: object | None = None,
+        limit: int = 1000,
+        params: Mapping[str, object] | None = None,
+    ) -> Iterable[Mapping[str, object]]:
+        funding_params = {"type": "swap", **dict(params or {})}
+        market_ref = _market_ref(self.exchange_id, symbol, funding_params)
+        rows = self.driver.fetch_funding_rate(
+            self.exchange_id,
+            symbol,
+            since=since,
+            until=until,
+            limit=limit,
+            params=funding_params,
+        )
+        return (ccxt_funding_rate_record(row, market=market_ref) for row in rows)
 
     def watch_ticker(
         self,
@@ -239,8 +261,8 @@ class BinanceMarketDataConnector:
         )
 
 
-def _market_ref(exchange_id: str, symbol: str, params: Mapping[str, object] | None) -> MarketRef:
-    return ephemeral_market_ref(venue=exchange_id, market=ccxt_market_type(exchange_id, params), source_symbol=symbol)
+def _market_ref(exchange_id: str, symbol: object, params: Mapping[str, object] | None) -> MarketRef:
+    return ephemeral_market_ref(venue=exchange_id, market=ccxt_market_type(exchange_id, params), source_symbol=str(symbol))
 
 
 async def _ticker_records(events, market):

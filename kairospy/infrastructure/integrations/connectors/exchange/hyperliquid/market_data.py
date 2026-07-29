@@ -243,15 +243,15 @@ class HyperliquidMarketDataConnector:
         )
 
 
-def _ccxt_symbol(symbol: str) -> str:
-    value = symbol.strip()
+def _ccxt_symbol(symbol: object) -> str:
+    value = str(symbol).strip()
     if "/" in value:
         return value
     return f"{value.upper()}/USDC:USDC"
 
 
-def _market_ref(exchange_id: str, symbol: str, params: Mapping[str, object] | None) -> MarketRef:
-    return ephemeral_market_ref(venue=exchange_id, market=ccxt_market_type(exchange_id, params), source_symbol=symbol)
+def _market_ref(exchange_id: str, symbol: object, params: Mapping[str, object] | None) -> MarketRef:
+    return ephemeral_market_ref(venue=exchange_id, market=ccxt_market_type(exchange_id, params), source_symbol=str(symbol))
 
 
 async def _ticker_records(events, market):

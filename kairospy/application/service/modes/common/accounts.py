@@ -24,6 +24,7 @@ class ConfiguredAccount:
     currency: str
     fee_rate: Decimal = Decimal("0")
     credential: str | None = None
+    environment: str = ""
 
 
 class AccountConfigRegistry:
@@ -45,6 +46,7 @@ class AccountConfigRegistry:
                 account.venue,
                 account.cash,
                 account.currency,
+                environment="",
                 fee_rate=account.fee_rate,
                 credential=account.credential,
             )
@@ -129,7 +131,7 @@ def configured_account_ref(
     account_ref: str | None,
     *,
     account_resolver: AccountResolver | None,
-    venue: str,
+    venue: str | None,
     mode_label: str,
     error_type: type[ConfigErrorT],
 ) -> ConfiguredAccount:
@@ -141,7 +143,7 @@ def configured_account_ref(
         account = account_resolver(account_ref)
     except Exception as error:
         raise error_type(str(error)) from error
-    if account.venue != venue:
+    if venue is not None and account.venue != venue:
         raise error_type(f"account {account.account_id!r} is configured for venue {account.venue!r}, not {venue!r}")
     return account
 

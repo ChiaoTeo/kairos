@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 import json
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from kairospy.application.system.facade.context import workspace as resolve_workspace
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, broker
-from kairospy.application.system.workspace import AccountRecord, KairosWorkspace
+from kairospy.application.system.workspace import AccountRecord
 from kairospy.config import ConfigError
 
 
@@ -58,7 +60,7 @@ PROVIDER_ALIASES = {
 
 class AccountFacade:
     def list_accounts(self) -> dict[str, object]:
-        store = KairosWorkspace.resolve().accounts
+        store = resolve_workspace().accounts
         accounts = [account.to_dict() for account in store.list()]
         return {"accounts": accounts, "count": len(accounts), "root": str(store.root)}
 
@@ -77,6 +79,8 @@ class AccountFacade:
         venue: str | None,
         market: str | None,
         currency: str,
+        cash: str | None,
+        fee_rate: str,
         credential_kind: str | None,
         credential: str | None,
         api_key: str | None,
@@ -89,8 +93,13 @@ class AccountFacade:
         credential_values: Sequence[str] | None,
         force: bool,
     ) -> str:
-        workspace = KairosWorkspace.resolve()
+        workspace = resolve_workspace()
         provider_schema = _provider_schema(provider)
+        environment_value = environment.strip().lower()
+        parsed_cash = None if cash is None else _non_negative_decimal(cash, "cash")
+        parsed_fee_rate = _non_negative_decimal(fee_rate, "fee_rate")
+        include_simulated_fields = environment_value != "live"
+        include_fee_rate = include_simulated_fields or parsed_fee_rate != 0
         account_values = _pairs(field_values)
         credential_field_values = {
             **_provided_credential_values(
@@ -103,6 +112,12 @@ class AccountFacade:
             ),
             **_pairs(credential_values),
         }
+        resolved_credential_kind = _credential_kind(
+            environment=environment_value,
+            explicit=credential_kind,
+            default=provider_schema.credential_kind,
+            credential_values=credential_field_values,
+        )
         path = workspace.accounts_root / f"{account_id}.toml"
         if path.exists() and not force:
             raise ValueError(f"account already exists: {path}")
@@ -115,8 +130,10 @@ class AccountFacade:
                 venue=venue or provider_schema.venue,
                 market=market or provider_schema.default_market,
                 currency=currency,
+                cash=parsed_cash if parsed_cash is not None else (Decimal("100000") if include_simulated_fields else None),
+                fee_rate=parsed_fee_rate if include_fee_rate else None,
                 credential=credential,
-                credential_kind=credential_kind or provider_schema.credential_kind,
+                credential_kind=resolved_credential_kind,
                 credential_fields=provider_schema.credential_fields,
                 credential_values=credential_field_values,
                 account_values=account_values,
@@ -137,7 +154,7 @@ class AccountFacade:
         return str(path)
 
     def delete(self, account_id: str, *, force: bool) -> str:
-        workspace = KairosWorkspace.resolve()
+        workspace = resolve_workspace()
         account = _account(account_id)
         path = account.source_path or workspace.accounts_root / f"{account_id}.toml"
         if path.parent != workspace.accounts_root:
@@ -169,7 +186,7 @@ class AccountFacade:
         return {"account": account.account_id, "orders": orders, "count": len(orders)}
 
     def snapshot(self, account_id: str, *, symbol: str | None, params: Mapping[str, object] | None) -> dict[str, object]:
-        workspace = KairosWorkspace.resolve()
+        workspace = resolve_workspace()
         account = _account(account_id)
         client = self._broker(account)
         payload = {
@@ -211,7 +228,7 @@ class AccountFacade:
 
 def _account(account_id: str) -> AccountRecord:
     try:
-        return KairosWorkspace.resolve().accounts.get(account_id)
+        return resolve_workspace().accounts.get(account_id)
     except ConfigError as error:
         raise ValueError(str(error)) from error
 
@@ -270,6 +287,20 @@ def _provided_credential_values(
     return {key: value for key, value in values.items() if value is not None}
 
 
+def _credential_kind(
+    *,
+    environment: str,
+    explicit: str | None,
+    default: str,
+    credential_values: Mapping[str, str],
+) -> str | None:
+    if explicit is not None:
+        return explicit
+    if environment in {"live", "testnet"} or credential_values:
+        return default
+    return None
+
+
 def _pairs(values: Sequence[str] | None) -> dict[str, str]:
     pairs: dict[str, str] = {}
     for item in values or ():
@@ -291,6 +322,8 @@ def _account_template(
     venue: str,
     market: str | None,
     currency: str,
+    cash: Decimal | None,
+    fee_rate: Decimal | None,
     credential: str | None,
     credential_kind: str | None,
     credential_fields: Sequence[str],
@@ -307,6 +340,10 @@ def _account_template(
     if market is not None:
         lines.append(f'market = "{market}"')
     lines.append(f'currency = "{currency}"')
+    if cash is not None:
+        lines.append(f'cash = "{cash}"')
+    if fee_rate is not None:
+        lines.append(f'fee_rate = "{fee_rate}"')
     if credential is not None:
         lines.append(f'credential = "{_toml_escape(credential)}"')
     for key, value in sorted(account_values.items()):
@@ -329,6 +366,16 @@ def _append_jsonl(path: Path, payload: Mapping[str, object]) -> None:
 
 def _toml_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _non_negative_decimal(value: object, source: str) -> Decimal:
+    try:
+        parsed = Decimal(str(value))
+    except Exception as error:
+        raise ValueError(f"{source} must be decimal-compatible") from error
+    if parsed < 0:
+        raise ValueError(f"{source} cannot be negative")
+    return parsed
 
 
 def _jsonable(value: object) -> object:

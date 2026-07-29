@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .bindings import DataBinder, DataMode, MarketDataBinding, bind_market_data, market_data_id_from_symbol
+from .datasets import MarketDataset, market_dataset_id, parse_market_dataset_id
 from .identity import market_data_id, market_stream_name
 from .operations import HistoricalMarketDataClient, MarketDataOperationsService
 from .planning import (
@@ -52,6 +53,7 @@ __all__ = [
     "MarketDataBinding",
     "MarketDataOperationsService",
     "MarketDataResolver",
+    "MarketDataset",
     "MarketDataSpec",
     "MarketRecord",
     "MarketRecordValue",
@@ -76,8 +78,10 @@ __all__ = [
     "event_time",
     "iso_time",
     "market_data_id",
+    "market_dataset_id",
     "market_data_id_from_symbol",
     "market_stream_name",
+    "parse_market_dataset_id",
     "ohlcv_record",
     "order_book_record",
     "orderbook_record",

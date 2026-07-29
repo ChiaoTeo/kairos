@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from enum import StrEnum
 from pathlib import Path
 from typing import Mapping
 
 from kairospy.application.runtime import RuntimeMode
-from kairospy.application.service.domain.market import IterableMarketEventSource, MarketDataResolver, MarketDataSpec
+from kairospy.application.service.domain.market import MarketDataResolver
+from kairospy.application.service.runtime.market import ReplayMarketDataPolicy
 from kairospy.application.strategy import Strategy
 from kairospy.core.account import AccountContext
 from kairospy.core.reference import MarketResolver
@@ -18,8 +18,6 @@ from ..common import (
     jsonable as common_jsonable,
     load_required_run_config,
     load_strategy as common_load_strategy,
-    optional_int as common_optional_int,
-    read_jsonl as common_read_jsonl,
     resolve_path as common_resolve_path,
     strategy_params as common_strategy_params,
     table as common_table,
@@ -29,11 +27,6 @@ from .market import BacktestMarketDataService
 
 class BacktestConfigurationError(ValueError):
     pass
-
-
-class BacktestSourceKind(StrEnum):
-    EVENTS = "events"
-    DATASET = "dataset"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +42,8 @@ class BacktestRunResult(AccountPerformanceMixin):
     fills: tuple[object, ...] = ()
     equity_curve: tuple[object, ...] = ()
     trades: tuple[object, ...] = ()
+    decision_trace: tuple[object, ...] = ()
+    risk_snapshots: tuple[object, ...] = ()
     metrics: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -65,19 +60,17 @@ class BacktestAccountConfig:
 class ConfiguredBacktest:
     run_id: str
     strategy: Strategy
-    source: IterableMarketEventSource
-    source_kind: BacktestSourceKind
-    source_value: str
     run_directory: Path
     normalized_config: Mapping[str, object]
     data: BacktestMarketDataService
     account_config: BacktestAccountConfig
+    market_policy: ReplayMarketDataPolicy
     backtest_config: Mapping[str, object]
     execution_config: Mapping[str, object]
 
 
-def configured_backtest(config_path: Path) -> ConfiguredBacktest:
-    run_config = load_required_run_config(config_path, mode=RuntimeMode.BACKTEST, error_type=BacktestConfigurationError)
+def configured_backtest(config_path: Path, *, strategy_ref: str | None = None) -> ConfiguredBacktest:
+    run_config = load_required_run_config(config_path, mode=RuntimeMode.BACKTEST, error_type=BacktestConfigurationError, strategy_ref=strategy_ref)
     values = run_config.values
     strategy_params = _strategy_params(values)
     backtest = _table(values.get("backtest"), "backtest")
@@ -91,20 +84,18 @@ def configured_backtest(config_path: Path) -> ConfiguredBacktest:
         price_field=str(backtest.get("price_field", "close")),
     )
     market_resolver = MarketResolver(
-        default_venue=str(backtest.get("venue", "simulated")),
-        default_market=str(backtest.get("market", "spot")),
+        default_venue=_default_text(backtest.get("venue"), "simulated"),
+        default_market=_default_text(backtest.get("market"), "spot"),
     )
+    market_policy = _market_policy(backtest)
     data = BacktestMarketDataService(
         DataStore(_data_root(backtest, root=run_config.root), storage_format=_storage_format(backtest)),
         resolver=MarketDataResolver(market_resolver),
+        policy=market_policy,
     )
-    source, source_kind, source_value = _event_source(backtest, data, root=run_config.root)
     return ConfiguredBacktest(
         run_id=run_config.run_id,
         strategy=_load_strategy(run_config.strategy, root=run_config.root, params=strategy_params),
-        source=source,
-        source_kind=source_kind,
-        source_value=source_value,
         run_directory=_run_directory(backtest, root=run_config.root, run_id=run_config.run_id),
         normalized_config=_normalized_config(
             run_id=run_config.run_id,
@@ -113,47 +104,35 @@ def configured_backtest(config_path: Path) -> ConfiguredBacktest:
             backtest=backtest,
             execution=execution_config,
             account=account_config,
-            source_kind=source_kind,
-            source_value=source_value,
             data=data,
+            market_policy=market_policy,
         ),
         data=data,
         account_config=account_config,
+        market_policy=market_policy,
         backtest_config=backtest,
         execution_config=execution_config,
     )
 
 
-def _event_source(
-    backtest: Mapping[str, object],
-    data: BacktestMarketDataService,
-    *,
-    root: Path,
-) -> tuple[IterableMarketEventSource, BacktestSourceKind, str]:
-    stream = str(backtest.get("stream") or "backtest")
+def _market_policy(backtest: Mapping[str, object]) -> ReplayMarketDataPolicy:
     if backtest.get("events") is not None:
-        path = _resolve_path(backtest["events"], root=root, source="backtest.events")
-        return IterableMarketEventSource(stream if stream != "backtest" else path.stem, _read_jsonl(path)), BacktestSourceKind.EVENTS, str(path)
-    dataset = backtest.get("dataset")
-    if dataset is None:
-        raise BacktestConfigurationError("backtest.events or backtest.dataset is required")
-    spec = MarketDataSpec(
-        symbol=str(backtest.get("symbol") or dataset),
-        kind=str(backtest.get("kind") or "ohlcv"),
-        venue=None if backtest.get("venue") is None else str(backtest["venue"]),
-        market=None if backtest.get("market") is None else str(backtest["market"]),
-        timeframe=None if backtest.get("timeframe") is None else str(backtest["timeframe"]),
-        start=backtest.get("start"),
-        end=backtest.get("end"),
-        limit=_optional_int(backtest.get("limit"), "backtest.limit"),
-        dataset=str(dataset),
-        stream=stream if stream != "backtest" else None,
-    )
-    resolved = data.resolve(spec)
-    rows = data.read(spec)
-    if not rows:
-        raise BacktestConfigurationError(f"backtest dataset has no rows: {resolved.dataset_id}")
-    return IterableMarketEventSource(resolved.stream_name, rows), BacktestSourceKind.DATASET, resolved.dataset_id
+        raise BacktestConfigurationError("backtest.events is no longer supported; use strategy context.subscribe(...) with [backtest.market]")
+    if backtest.get("dataset") is not None:
+        raise BacktestConfigurationError("backtest.dataset is no longer supported; use strategy context.subscribe(...) with [backtest.market]")
+    market = _table(backtest.get("market"), "backtest.market", allow_none=False)
+    if market.get("start") is None:
+        raise BacktestConfigurationError("backtest.market.start is required")
+    if market.get("end") is None:
+        raise BacktestConfigurationError("backtest.market.end is required")
+    try:
+        return ReplayMarketDataPolicy(
+            start=market["start"],
+            end=market["end"],
+            on_missing=str(market.get("on_missing") or "error"),
+        )
+    except ValueError as error:
+        raise BacktestConfigurationError(str(error)) from error
 
 
 def _load_strategy(ref: str, *, root: Path, params: Mapping[str, object]) -> Strategy:
@@ -190,19 +169,21 @@ def _normalized_config(
     backtest: Mapping[str, object],
     execution: Mapping[str, object],
     account: BacktestAccountConfig,
-    source_kind: BacktestSourceKind,
-    source_value: str,
     data: BacktestMarketDataService,
+    market_policy: ReplayMarketDataPolicy,
 ) -> Mapping[str, object]:
     return {
         "run": {"id": run_id, "mode": RuntimeMode.BACKTEST.value, "strategy": strategy},
         "strategy": {"params": dict(strategy_params)},
         "backtest": {
             **{str(key): _jsonable(value) for key, value in backtest.items()},
-            "source_kind": source_kind.value,
-            "source": source_value,
             "data_root": str(data.store.root),
             "storage_format": data.store.storage_format,
+            "market": {
+                "start": market_policy.start,
+                "end": market_policy.end,
+                "on_missing": market_policy.on_missing,
+            },
         },
         "account": {
             "cash": account.cash,
@@ -214,20 +195,16 @@ def _normalized_config(
     }
 
 
-def _table(value: object, name: str) -> Mapping[str, object]:
-    return common_table(value, name, BacktestConfigurationError)
+def _table(value: object, name: str, *, allow_none: bool = True) -> Mapping[str, object]:
+    return common_table(value, name, BacktestConfigurationError, allow_none=allow_none)
+
+
+def _default_text(value: object, default: str) -> str:
+    return value if isinstance(value, str) and value.strip() else default
 
 
 def _resolve_path(value: object, *, root: Path, source: str) -> Path:
     return common_resolve_path(value, root=root, source=source, error_type=BacktestConfigurationError)
-
-
-def _read_jsonl(path: Path) -> list[dict[str, object]]:
-    return common_read_jsonl(path, BacktestConfigurationError)
-
-
-def _optional_int(value: object, source: str) -> int | None:
-    return common_optional_int(value, source, BacktestConfigurationError, positive=True)
 
 
 def _jsonable(value: object) -> object:
@@ -238,7 +215,6 @@ __all__ = [
     "BacktestAccountConfig",
     "BacktestConfigurationError",
     "BacktestRunResult",
-    "BacktestSourceKind",
     "ConfiguredBacktest",
     "configured_backtest",
 ]

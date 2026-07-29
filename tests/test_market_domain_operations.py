@@ -5,6 +5,8 @@ from collections.abc import Iterable, Mapping
 
 import pytest
 
+from kairospy.application.runtime.dispatch.context import RuntimeContext
+from kairospy.application.runtime.ports import DataSubscription, MarketDataSubscriptionSpec
 from kairospy.application.service.domain.market import MarketDataOperationsService, MarketDataSpec
 from kairospy.infrastructure.data import DataStore
 
@@ -43,8 +45,27 @@ def test_market_data_operations_download_read_and_ensure(tmp_path) -> None:
     rows = service.read(spec)
 
     assert path.exists()
-    assert resolved.dataset_id == "market.ohlcv.binance_spot_btc_usdt.1m"
+    assert resolved.dataset_id == "market.ohlcv.binance.spot.btc_usdt.1m"
     assert rows[0]["close"] == "100.5"
+    assert path == tmp_path / "datasets" / "market" / "ohlcv" / "binance" / "spot" / "btc_usdt" / "1m" / "date=2026-01-01" / "data.jsonl"
+
+
+def test_market_data_operations_partitions_hourly_bars_by_month(tmp_path) -> None:
+    service = MarketDataOperationsService(DataStore(tmp_path, storage_format="jsonl"))
+    spec = MarketDataSpec("BTC/USDT", "ohlcv", venue="binance", market="spot", timeframe="1h")
+
+    path = service.download(spec, FakeHistoricalClient(), mode="replace")
+
+    assert path == tmp_path / "datasets" / "market" / "ohlcv" / "binance" / "spot" / "btc_usdt" / "1h" / "month=2026-01" / "data.jsonl"
+    assert service.read(spec)[0]["timeframe"] == "1h"
+
+
+def test_market_data_operations_rejects_noncanonical_dataset_id(tmp_path) -> None:
+    service = MarketDataOperationsService(DataStore(tmp_path, storage_format="jsonl"))
+    spec = MarketDataSpec("BTC/USDT", "ohlcv", dataset="market.ohlcv.binance_spot_btc_usdt.1m")
+
+    with pytest.raises(ValueError, match="canonical"):
+        service.read(spec)
 
 
 def test_market_data_operations_requires_client_for_empty_dataset(tmp_path) -> None:
@@ -66,3 +87,31 @@ def test_market_data_operations_persists_stream_rows(tmp_path) -> None:
 
     assert count == 1
     assert service.read(spec)[0]["price"] == "100"
+
+
+def test_runtime_context_subscribes_by_market_dataset_id() -> None:
+    port = RecordingMarketDataPort()
+    context = RuntimeContext(strategy_id="strategy-a", data=port)
+
+    subscription = context.subscribe("market.ohlcv.binance.spot.btc_usdt.1m")
+
+    assert subscription.spec.dataset_id == "market.ohlcv.binance.spot.btc_usdt.1m"
+    assert subscription.spec.market.market_key == "binance_spot_btc_usdt"
+    assert subscription.spec.selectors[0].interval == "1m"
+    assert subscription.key.startswith("data.market_ohlcv_binance_spot_btc_usdt_1m")
+
+
+class RecordingMarketDataPort:
+    def __init__(self) -> None:
+        self.items: list[DataSubscription] = []
+
+    def subscribe(self, spec: MarketDataSubscriptionSpec) -> DataSubscription:
+        subscription = DataSubscription(spec.key, spec)
+        self.items.append(subscription)
+        return subscription
+
+    def unsubscribe(self, subscription: DataSubscription | str) -> None:
+        return None
+
+    def subscriptions(self) -> tuple[DataSubscription, ...]:
+        return tuple(self.items)

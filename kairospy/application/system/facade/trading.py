@@ -14,8 +14,10 @@ from kairospy.application.service.modes.live.account import LiveAccountService
 from kairospy.application.service.modes.live.config import BrokerFactory, ConfiguredLive, LiveConfigurationError, LiveRunResult, MarketFeedFactory as LiveMarketFeedFactory, configured_live
 from kairospy.application.service.modes.paper.config import ConfiguredPaper, PaperConfigurationError, PaperRunResult, MarketFeedFactory as PaperMarketFeedFactory, configured_paper
 from kairospy.application.service.modes.common import ConfiguredAccount
-from kairospy.application.system.artifacts.logging import RunOutputLog
+from kairospy.application.service.domain.market import MarketDataSpec
+from kairospy.application.system.artifacts.logging import RunOutputLog, write_run_log_section
 from kairospy.application.system.artifacts.writer import RunArtifactWriter
+from kairospy.application.system.facade.resources import DriverName, ExchangeName, exchange
 from kairospy.application.system.host.resources import TradingRuntimeResources, TradingRunSpec
 from kairospy.application.system.host.runtime_host import TradingSystem
 from kairospy.application.system.resources.accounts import BacktestAccountResources, LiveAccountResources, PaperAccountResources
@@ -38,6 +40,7 @@ class TradingSystemLauncher:
         return self.run_configured_backtest(configured)
 
     def run_configured_backtest(self, configured: ConfiguredBacktest) -> BacktestRunResult:
+        self._configure_backtest_market_downloads(configured)
         account_resources = BacktestAccountResources.from_configured(configured)
         runtime = self._run_configured(
             run_id=configured.run_id,
@@ -46,15 +49,25 @@ class TradingSystemLauncher:
             run_directory=configured.run_directory,
             normalized_config=configured.normalized_config,
             resources=TradingRuntimeResources(
-                source=configured.source,
+                source=configured.data,
                 data=configured.data,
                 account=account_resources.account,
                 trading_execution=account_resources.execution,
             ),
         )
         result = account_resources.build_result(configured, runtime)
+        self._write_account_status(configured.run_directory, result)
         self._write_artifacts(configured.run_directory, result, configured.normalized_config)
         return result
+
+    def _configure_backtest_market_downloads(self, configured: ConfiguredBacktest) -> None:
+        if configured.market_policy.on_missing != "download":
+            return
+
+        def factory(spec: MarketDataSpec):
+            return exchange(_exchange_name(spec.venue), DriverName.ccxt)
+
+        configured.data.set_historical_client_factory(factory)
 
     def run_paper_config(
         self,
@@ -85,6 +98,7 @@ class TradingSystemLauncher:
             ),
         )
         result = resources.build_result(configured, runtime)
+        self._write_account_status(configured.run_directory, result)
         self._write_artifacts(configured.run_directory, result, configured.normalized_config)
         return result
 
@@ -124,6 +138,7 @@ class TradingSystemLauncher:
             ),
         )
         result = account_resources.build_result(configured, runtime)
+        self._write_account_status(configured.run_directory, result)
         self._write_artifacts(configured.run_directory, result, configured.normalized_config)
         return result
 
@@ -162,8 +177,19 @@ class TradingSystemLauncher:
         resources: TradingRuntimeResources,
         lifecycle: object | None = None,
     ) -> RuntimeRunResult:
+        write_run_log_section(
+            run_directory,
+            "Run Environment",
+            {
+                "run_id": run_id,
+                "mode": mode.value,
+                "run_directory": run_directory,
+                "strategy_id": getattr(strategy, "strategy_id", None),
+            },
+        )
+        write_run_log_section(run_directory, "System Status", {"phase": "starting"})
         with RunOutputLog(run_directory):
-            return TradingSystem(
+            result = TradingSystem(
                 TradingRunSpec(
                     run_id=run_id,
                     mode=mode,
@@ -174,6 +200,16 @@ class TradingSystemLauncher:
                     lifecycle=lifecycle,
                 )
             ).run()
+        write_run_log_section(
+            run_directory,
+            "System Status",
+            {
+                "phase": "stopped",
+                "events": getattr(result.runtime, "event_count", None),
+                "intents": getattr(result.runtime, "intent_count", None),
+            },
+        )
+        return result
 
     def _load_strategy(self, path: str) -> Strategy:
         if ":" not in path:
@@ -188,6 +224,20 @@ class TradingSystemLauncher:
 
     def _write_artifacts(self, run_directory: Path, result: object, normalized_config: Mapping[str, object]) -> None:
         RunArtifactWriter(run_directory).write(result=result, normalized_config=normalized_config)
+
+    def _write_account_status(self, run_directory: Path, result: object) -> None:
+        account_view = getattr(result, "account_view", None)
+        write_run_log_section(
+            run_directory,
+            "Account Status",
+            {
+                "cash": getattr(account_view, "cash", None),
+                "equity": getattr(account_view, "equity", None),
+                "initial_equity": getattr(account_view, "initial_equity", None),
+                "net_profit": getattr(account_view, "net_profit", None),
+                "total_return": getattr(account_view, "total_return", None),
+            },
+        )
 
     def _read_event_jsonl(self, path: Path) -> tuple[RuntimeEnvelope, ...]:
         if not path.exists():
@@ -249,6 +299,7 @@ def _configured_account_from_record(account: AccountRecord) -> ConfiguredAccount
         account.venue or account.provider,
         _decimal_value(account.values.get("cash", "100000")),
         str(account.values.get("currency", "USD")),
+        environment=str(account.environment),
         fee_rate=_decimal_value(account.values.get("fee_rate", "0")),
         credential=account.credential,
     )
@@ -262,6 +313,16 @@ def _int_value(value: object) -> int:
     if isinstance(value, bool):
         raise ValueError("account index must be an integer")
     return int(value)
+
+
+def _exchange_name(value: object) -> ExchangeName:
+    text = str(value).strip().lower()
+    if text == "okex":
+        text = "okx"
+    try:
+        return ExchangeName(text)
+    except ValueError as error:
+        raise ValueError(f"unsupported market data exchange: {value}") from error
 
 
 __all__ = ["TradingConfigurationError", "TradingSystemLauncher"]

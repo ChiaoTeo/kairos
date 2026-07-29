@@ -4,7 +4,7 @@ from enum import Enum
 from pathlib import Path
 
 from kairospy.application.service.domain.reference import ReferenceStore
-from kairospy.application.system.workspace import KairosWorkspace
+from kairospy.application.system.facade.context import workspace as resolve_workspace
 from kairospy.infrastructure.data import DataStore
 from kairospy.infrastructure.integrations import (
     BinanceBroker,
@@ -40,14 +40,14 @@ class ProviderName(str, Enum):
 
 
 def data_store(root: str | Path | None, storage_format: StorageFormat | None) -> DataStore:
-    workspace = KairosWorkspace.resolve()
+    workspace = resolve_workspace()
     resolved_root = workspace.manifest.resolve_path(root) if root is not None else workspace.data_root
     resolved_format = storage_format.value if storage_format is not None else workspace.manifest.storage_format
     return DataStore(resolved_root, storage_format=resolved_format)
 
 
 def reference_store(root: str | Path | None) -> ReferenceStore:
-    workspace = KairosWorkspace.resolve()
+    workspace = resolve_workspace()
     resolved_root = workspace.manifest.resolve_path(root) if root is not None else workspace.reference_root
     return ReferenceStore(resolved_root)
 

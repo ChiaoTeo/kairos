@@ -123,6 +123,21 @@ class RunConfig:
         base = Path(root).expanduser().resolve() if root is not None else Path.cwd().resolve()
         return cls(source_path, base, values)
 
+    def with_run_strategy(self, strategy: str) -> "RunConfig":
+        if not isinstance(strategy, str) or not strategy.strip():
+            raise ConfigError("run.strategy must be a non-empty string")
+        values = {str(key): value for key, value in self.values.items()}
+        run = values.get("run")
+        if run is None:
+            run_values: dict[str, Any] = {}
+        elif isinstance(run, Mapping):
+            run_values = dict(run)
+        else:
+            raise ConfigError("[run] must be a table")
+        run_values["strategy"] = strategy.strip()
+        values["run"] = run_values
+        return RunConfig(self.path, self.root, values)
+
     @property
     def mode(self) -> str:
         raw = self._table("run").get("mode")
@@ -231,7 +246,7 @@ class RunConfig:
         if mode not in VALID_RUN_MODES:
             issues.append("run.mode must be one of: backtest, paper, live")
         if "data" in self.values:
-            issues.append("[data] is not valid run config; strategy code declares market data with context.subscribe_market_data")
+            issues.append("[data] is not valid run config; strategy code declares market data with context.subscribe")
         accounts = self.values.get("accounts")
         if accounts is not None:
             issues.append("[accounts] is not valid run config; configure accounts in .kairos/accounts and reference them with account.ref")

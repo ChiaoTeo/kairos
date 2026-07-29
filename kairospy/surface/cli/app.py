@@ -5,9 +5,12 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Sequence, TextIO
 
+import click
 import typer
+from typer._click.exceptions import ClickException as TyperClickException
 from typer.main import get_command
 
+from kairospy.application.system.facade.context import ProjectNotFound, set_cli_context
 from kairospy.surface.cli.commands import (
     account_app,
     config_app,
@@ -17,6 +20,7 @@ from kairospy.surface.cli.commands import (
     reference_app,
     run_app,
     strategy_app,
+    timeline_app,
 )
 from kairospy.surface.cli.options import OutputFormat, RootOptions
 
@@ -30,18 +34,20 @@ app.add_typer(market_app, name="market")
 app.add_typer(reference_app, name="reference")
 app.add_typer(strategy_app, name="strategy")
 app.add_typer(config_app, name="config")
+app.add_typer(timeline_app, name="timeline")
 
 
 @app.callback()
 def main_options(
     ctx: typer.Context,
-    workspace: Path | None = typer.Option(None, "--workspace"),
+    cwd: Path | None = typer.Option(None, "-C", "--cwd", help="Run as if Kairos was started in this directory."),
     profile: str | None = typer.Option(None, "--profile"),
     output: OutputFormat | None = typer.Option(None, "--output"),
     verbose: bool = typer.Option(False, "--verbose"),
 ) -> None:
+    set_cli_context(cwd=cwd, profile=profile)
     ctx.obj = RootOptions(
-        workspace=workspace,
+        cwd=cwd,
         profile=profile,
         output=output,
         verbose=verbose,
@@ -90,8 +96,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if len(sys.argv) == 1 and sys.stdin.isatty() and sys.stdout.isatty():
             _shell()
             return 0
-        app()
-        return 0
+        return execute_argv(sys.argv[1:], sys.stdout)
     return execute_argv(argv, sys.stdout)
 
 
@@ -111,7 +116,16 @@ def _invoke_app(argv: Sequence[str], stdout: TextIO) -> int:
     command = get_command(app)
     try:
         with redirect_stdout(stdout), redirect_stderr(stdout):
-            command.main(args=list(argv), prog_name="kairospy")
+            command.main(args=list(argv), prog_name="kairospy", standalone_mode=False)
+    except TyperClickException as error:
+        error.show(file=stdout)
+        return error.exit_code
+    except click.ClickException as error:
+        error.show(file=stdout)
+        return error.exit_code
+    except ProjectNotFound as error:
+        stdout.write(str(error) + "\n")
+        return 2
     except SystemExit as error:
         code = error.code
         return code if isinstance(code, int) else 1

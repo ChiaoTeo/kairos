@@ -5,7 +5,7 @@ from datetime import datetime
 
 from kairospy.application.runtime.ports import AccountJournalSink, AccountPort, MarketDataPort, ReferencePort, TradingExecutionPort
 from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.application.runtime.processors.account import AccountProcessor
+from kairospy.application.runtime.processors.account import AccountProcessor, EquityCurveProcessor, FundingProcessor
 from kairospy.application.runtime.processors.execution import ExecutionProcessor, TradingIntentProcessor
 from kairospy.application.runtime.processors.intent import IntentProcessor
 from kairospy.application.runtime.processors.journal import AccountJournalProcessor
@@ -13,6 +13,7 @@ from kairospy.application.runtime.processors.market import MarketProcessor
 from kairospy.application.runtime.processors.order import OrderProcessor
 from kairospy.application.runtime.processors.reference import ReferenceProcessor
 from kairospy.application.runtime.processors.risk import RiskProcessor
+from kairospy.application.runtime.processors.trace import TraceProcessor
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentJournal
 from kairospy.core.views import ViewStore
@@ -26,12 +27,15 @@ class RuntimeProcessors:
     intent: IntentProcessor
     risk: RiskProcessor
     market: MarketProcessor | None = None
+    funding: FundingProcessor | None = None
+    equity: EquityCurveProcessor | None = None
     account: AccountProcessor | None = None
     reference: ReferenceProcessor | None = None
     execution: ExecutionProcessor | None = None
     order: OrderProcessor | None = None
     trading_intent: TradingIntentProcessor | None = None
     account_journal: AccountJournalProcessor | None = None
+    trace: TraceProcessor | None = None
 
     def on_event(self, event: RuntimeEnvelope) -> None:
         self.system.on_event(event)
@@ -39,6 +43,10 @@ class RuntimeProcessors:
         self.risk.on_event(event)
         if self.market is not None:
             self.market.on_event(event)
+        if self.funding is not None:
+            self.funding.on_event(event)
+        if self.equity is not None:
+            self.equity.on_event(event)
         if self.account is not None:
             self.account.on_event(event)
         if self.reference is not None:
@@ -49,10 +57,16 @@ class RuntimeProcessors:
             self.order.on_event(event)
         if self.trading_intent is not None:
             self.trading_intent.on_event(event)
+        if self.trace is not None:
+            self.trace.on_event(event)
 
     def on_intents(self, intents: tuple[object, ...], context: object, hook: str) -> None:
         if self.trading_intent is not None:
             self.trading_intent.on_intents(intents, context, hook)
+        if self.equity is not None:
+            self.equity.on_intents(context)
+        if self.trace is not None:
+            self.trace.on_intents(intents, context, hook)
 
     def register_views(self, views: ViewStore) -> None:
         self.system.register_views(views)
@@ -60,6 +74,8 @@ class RuntimeProcessors:
         self.risk.register_views(views)
         if self.market is not None:
             self.market.register_views(views)
+        if self.equity is not None:
+            self.equity.register_views(views)
         if self.account is not None:
             self.account.register_views(views)
         if self.reference is not None:
@@ -68,6 +84,8 @@ class RuntimeProcessors:
             self.execution.register_views(views)
         if self.order is not None:
             self.order.register_views(views)
+        if self.trace is not None:
+            self.trace.register_views(views)
 
     def publish_views(self, views: ViewStore, *, as_of: datetime | None = None) -> None:
         self.system.publish_views(views, as_of=as_of)
@@ -75,6 +93,8 @@ class RuntimeProcessors:
         self.risk.publish_views(views, as_of=as_of)
         if self.market is not None:
             self.market.publish_views(views, as_of=as_of)
+        if self.equity is not None:
+            self.equity.publish_views(views, as_of=as_of)
         if self.account is not None:
             self.account.publish_views(views, as_of=as_of)
         if self.reference is not None:
@@ -85,6 +105,8 @@ class RuntimeProcessors:
             self.order.publish_views(views, as_of=as_of)
         if self.account_journal is not None:
             self.account_journal.publish_views(views, as_of=as_of)
+        if self.trace is not None:
+            self.trace.publish_views(views, as_of=as_of)
 
 
 def runtime_processors(
@@ -99,11 +121,16 @@ def runtime_processors(
     account_journal: AccountJournalSink | None = None,
 ) -> RuntimeProcessors:
     account_processor = None if account is None else AccountProcessor(account)
+    funding_processor = _funding_processor(account, execution_coordinator)
+    equity_processor = _equity_processor(account, execution_coordinator)
+    trace_processor = _trace_processor(account, execution_coordinator)
     return RuntimeProcessors(
         system=SystemProcessor(strategy_id=strategy_id),
         intent=IntentProcessor(strategy_id=strategy_id, intents=intents),
         risk=RiskProcessor(),
         market=None if data is None else MarketProcessor(data),
+        funding=funding_processor,
+        equity=equity_processor,
         account=account_processor,
         reference=None if reference is None else ReferenceProcessor(reference),
         execution=None if execution_coordinator is None else ExecutionProcessor(execution_coordinator),
@@ -118,7 +145,44 @@ def runtime_processors(
             if account_journal is None or account_processor is None
             else AccountJournalProcessor(account_journal, account_view_keys=tuple(state.key for state in account_processor.states))
         ),
+        trace=trace_processor,
     )
+
+
+def _funding_processor(account: AccountPort | None, coordinator: ExecutionCoordinator | None) -> FundingProcessor | None:
+    if account is None or coordinator is None:
+        return None
+    accounts = account.accounts()
+    if len(accounts) != 1:
+        return None
+    context = accounts[0]
+    if getattr(context.environment, "value", str(context.environment)) != "backtest":
+        return None
+    service_account = getattr(account, "account", None)
+    settlement_currency = str(getattr(service_account, "cash_currency", "") or "USD")
+    return FundingProcessor(account=context, coordinator=coordinator, settlement_currency=settlement_currency)
+
+
+def _equity_processor(account: AccountPort | None, coordinator: ExecutionCoordinator | None) -> EquityCurveProcessor | None:
+    if account is None or coordinator is None:
+        return None
+    accounts = account.accounts()
+    if len(accounts) != 1:
+        return None
+    service_account = getattr(account, "account", None)
+    cash_currency = str(getattr(service_account, "cash_currency", "") or "USD")
+    return EquityCurveProcessor(account=accounts[0], coordinator=coordinator, cash_currency=cash_currency)
+
+
+def _trace_processor(account: AccountPort | None, coordinator: ExecutionCoordinator | None) -> TraceProcessor:
+    if account is None or coordinator is None:
+        return TraceProcessor()
+    accounts = account.accounts()
+    if len(accounts) != 1:
+        return TraceProcessor()
+    service_account = getattr(account, "account", None)
+    cash_currency = str(getattr(service_account, "cash_currency", "") or "USD")
+    return TraceProcessor(account=accounts[0], coordinator=coordinator, cash_currency=cash_currency)
 
 
 __all__ = ["RuntimeProcessors", "runtime_processors"]

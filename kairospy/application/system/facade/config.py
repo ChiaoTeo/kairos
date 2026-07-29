@@ -4,16 +4,16 @@ import json
 from pathlib import Path
 from typing import Mapping
 
-from kairospy.application.system.workspace import KairosWorkspace
+from kairospy.application.system.facade.context import current_profile_name, workspace as resolve_workspace
 from kairospy.config import load_run_config
 
 
 class ConfigFacade:
     def paths(self) -> dict[str, object]:
-        return KairosWorkspace.resolve().to_dict()
+        return resolve_workspace().to_dict()
 
     def manifest(self) -> dict[str, object]:
-        workspace = KairosWorkspace.resolve()
+        workspace = resolve_workspace()
         return {
             "workspace": workspace.to_dict(),
             "manifest": {
@@ -23,7 +23,7 @@ class ConfigFacade:
         }
 
     def doctor(self) -> dict[str, object]:
-        workspace = KairosWorkspace.resolve()
+        workspace = resolve_workspace()
         issues: list[str] = []
         if workspace.manifest_path is None:
             issues.append(".kairos/kairos.toml was not found; using built-in defaults")
@@ -44,7 +44,7 @@ class ConfigFacade:
             raise ValueError("config explain requires --run or --config")
         if run is not None and config_path is not None:
             raise ValueError("use either --run or --config, not both")
-        workspace = KairosWorkspace.resolve()
+        workspace = resolve_workspace()
         path = workspace.run_index.resolve_config_path(run) if run is not None else config_path
         run_config = load_run_config(path)
         account_ref = run_config.account_ref
@@ -70,16 +70,16 @@ class ConfigFacade:
         }
 
     def operations(self, *, limit: int | None) -> dict[str, object]:
-        workspace = KairosWorkspace.resolve()
+        workspace = resolve_workspace()
         rows = _read_jsonl(workspace.operations_path)
         if limit is not None:
             rows = rows[-limit:]
         return {"operations": rows, "count": len(rows), "path": str(workspace.operations_path)}
 
     def list_profiles(self) -> dict[str, object]:
-        workspace = KairosWorkspace.resolve()
+        workspace = resolve_workspace()
         root = workspace.workspace_root / "profiles"
-        selected = _selected_profile(workspace.state_root / "selection.json")
+        selected = current_profile_name(workspace)
         profiles = [
             {"name": path.stem, "path": str(path), "selected": path.stem == selected}
             for path in sorted(root.glob("*.toml"))
@@ -87,7 +87,7 @@ class ConfigFacade:
         return {"profiles": profiles, "count": len(profiles), "root": str(root), "selected": selected}
 
     def use_profile(self, name: str) -> dict[str, object]:
-        workspace = KairosWorkspace.resolve()
+        workspace = resolve_workspace()
         path = workspace.workspace_root / "profiles" / f"{name}.toml"
         if not path.exists():
             raise ValueError(f"profile does not exist: {path}")
@@ -98,7 +98,7 @@ class ConfigFacade:
         return {"profile": name, "path": str(path), "selection": str(selection_path)}
 
     def create_profile(self, *, name: str, source: Path | None, force: bool) -> dict[str, object]:
-        workspace = KairosWorkspace.resolve()
+        workspace = resolve_workspace()
         path = workspace.workspace_root / "profiles" / f"{name}.toml"
         if path.exists() and not force:
             raise ValueError(f"profile already exists: {path}")

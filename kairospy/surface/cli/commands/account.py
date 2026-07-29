@@ -6,8 +6,8 @@ from typing import Mapping
 import typer
 
 from kairospy.application.system.facade.account import AccountFacade
-from kairospy.surface.cli.options import OutputFormat, resolve_output
-from kairospy.surface.rendering.writer import write_result
+from kairospy.surface.cli.options import OutputFormat
+from kairospy.surface.cli.output import write_cli_result
 
 
 account_app = typer.Typer(no_args_is_help=True, help="Configured account commands")
@@ -20,7 +20,7 @@ def list_accounts(
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     payload = _ACCOUNTS.list_accounts()
-    write_result(payload, output=resolve_output(ctx, output_format), text=_render_accounts)
+    write_cli_result(ctx, payload, output_format=output_format, text=_render_accounts)
 
 
 @account_app.command("schemas")
@@ -29,7 +29,7 @@ def schemas(
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     payload = _ACCOUNTS.schemas()
-    write_result(payload, output=resolve_output(ctx, output_format), text=_render_schemas)
+    write_cli_result(ctx, payload, output_format=output_format, text=_render_schemas)
 
 
 @account_app.command("schema")
@@ -42,7 +42,7 @@ def schema(
         payload = _ACCOUNTS.schema(provider)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format), text=_render_schema)
+    write_cli_result(ctx, payload, output_format=output_format, text=_render_schema)
 
 
 @account_app.command("create")
@@ -53,6 +53,8 @@ def create_account(
     venue: str | None = typer.Option(None, "--venue"),
     market: str | None = typer.Option(None, "--market"),
     currency: str = typer.Option("USD", "--currency"),
+    cash: str | None = typer.Option(None, "--cash", help="Initial simulated cash; only written for non-live accounts"),
+    fee_rate: str = typer.Option("0", "--fee-rate", help="Commission rate charged on filled notional, for example 0.001"),
     credential_kind: str | None = typer.Option(None, "--credential-kind"),
     credential: str | None = typer.Option(None, "--credential", help="Credential reference, for example env:okx_live"),
     api_key: str | None = typer.Option(None, "--api-key"),
@@ -73,6 +75,8 @@ def create_account(
             venue=venue,
             market=market,
             currency=currency,
+            cash=cash,
+            fee_rate=fee_rate,
             credential_kind=credential_kind,
             credential=credential,
             api_key=api_key,
@@ -114,7 +118,7 @@ def show_account(
         payload = _ACCOUNTS.show(account_id, reveal_secrets=reveal_secrets)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json), text=_render_show)
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_show)
 
 
 @account_app.command("balance")
@@ -128,7 +132,7 @@ def balance(
         payload = _ACCOUNTS.balance(account_id, params=_params(params_json))
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json))
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
 @account_app.command("open-orders")
@@ -144,7 +148,7 @@ def open_orders(
         payload = _ACCOUNTS.open_orders(account_id, symbol=symbol, limit=limit, params=_params(params_json))
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json))
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
 @account_app.command("snapshot")
@@ -159,7 +163,7 @@ def snapshot(
         payload = _ACCOUNTS.snapshot(account_id, symbol=symbol, params=_params(params_json))
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json))
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
 @account_app.command("doctor")
@@ -172,7 +176,7 @@ def doctor(
         payload = _ACCOUNTS.doctor(account_id)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format), text=_render_doctor)
+    write_cli_result(ctx, payload, output_format=output_format, text=_render_doctor)
     if payload["issues"]:
         raise typer.Exit(2)
 
@@ -189,10 +193,6 @@ def _params(value: str | None) -> Mapping[str, object] | None:
     return payload
 
 
-def _echo(payload: Mapping[str, object]) -> None:
-    write_result(payload, output=OutputFormat.json)
-
-
 def _render_accounts(result: object) -> str:
     payload = _payload(result)
     accounts = payload["accounts"]
@@ -200,14 +200,23 @@ def _render_accounts(result: object) -> str:
         return f"Accounts\n  none\n  root {payload['root']}"
     if not isinstance(accounts, list):
         raise TypeError("account list renderer expected account list")
-    lines = ["Accounts"]
+    rows = []
     for account in accounts:
         if isinstance(account, Mapping):
-            lines.append(
-                f"  {account['account_id']}  {account['provider']}:{account['environment']}  "
-                f"venue={account['venue']} market={account['market']}"
+            rows.append(
+                (
+                    _display(account.get("account_id")),
+                    _display(account.get("provider")),
+                    _display(account.get("environment")),
+                    _display(account.get("venue")),
+                    _display(account.get("market")),
+                    _display(_account_value(account, "currency")),
+                    _simulated_value(account, "cash"),
+                    _simulated_value(account, "fee_rate"),
+                    _credential_label(account),
+                )
             )
-    return "\n".join(lines)
+    return "\n".join(["Accounts", *_table(("ID", "PROVIDER", "ENV", "VENUE", "MARKET", "CCY", "CASH", "FEE", "CREDENTIAL"), rows)])
 
 
 def _render_schemas(result: object) -> str:
@@ -265,6 +274,50 @@ def _payload(result: object) -> Mapping[str, object]:
     if not isinstance(result, Mapping):
         raise TypeError("account renderer expected mapping payload")
     return result
+
+
+def _table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> list[str]:
+    widths = [len(header) for header in headers]
+    for row in rows:
+        for index, value in enumerate(row):
+            widths[index] = max(widths[index], len(value))
+    lines = [
+        "  " + "  ".join(header.ljust(widths[index]) for index, header in enumerate(headers)),
+        "  " + "  ".join("-" * width for width in widths),
+    ]
+    lines.extend("  " + "  ".join(value.ljust(widths[index]) for index, value in enumerate(row)) for row in rows)
+    return lines
+
+
+def _account_value(account: Mapping[str, object], key: str) -> object:
+    values = account.get("values")
+    if isinstance(values, Mapping) and key in values:
+        return values[key]
+    return account.get(key)
+
+
+def _simulated_value(account: Mapping[str, object], key: str) -> str:
+    environment = str(account.get("environment") or "").strip().lower()
+    value = _account_value(account, key)
+    if environment == "live" and value in (None, ""):
+        return "-"
+    return _display(value)
+
+
+def _credential_label(account: Mapping[str, object]) -> str:
+    credential = account.get("credential")
+    if isinstance(credential, str) and credential.strip():
+        return credential.strip()
+    credential_values = account.get("credential_values")
+    if isinstance(credential_values, Mapping) and credential_values:
+        return "inline"
+    return "-"
+
+
+def _display(value: object) -> str:
+    if value is None or value == "":
+        return "-"
+    return str(value)
 
 
 __all__ = ["account_app"]

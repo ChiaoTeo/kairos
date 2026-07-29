@@ -51,6 +51,8 @@ class PaperRunResult(AccountPerformanceMixin):
     account_view: object | None
     fills: tuple[object, ...] = ()
     trades: tuple[object, ...] = ()
+    decision_trace: tuple[object, ...] = ()
+    risk_snapshots: tuple[object, ...] = ()
     metrics: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -73,11 +75,17 @@ def configured_paper(
     *,
     market_feed_factory: MarketFeedFactory | None = None,
     account_resolver: AccountResolver | None = None,
+    strategy_ref: str | None = None,
 ) -> ConfiguredPaper:
-    run_config = load_required_run_config(config_path, mode=RuntimeMode.PAPER, error_type=PaperConfigurationError)
+    run_config = load_required_run_config(config_path, mode=RuntimeMode.PAPER, error_type=PaperConfigurationError, strategy_ref=strategy_ref)
     paper = _table(run_config.values.get("paper"), "paper")
+    market_config = _table(run_config.values.get("market"), "market") if run_config.values.get("market") is not None else {}
     execution_config = _table(run_config.values.get("execution"), "execution") if run_config.values.get("execution") is not None else {}
-    account_config = _configured_account(run_config.account_ref, account_resolver=account_resolver, default_venue=str(paper.get("venue", "paper")))
+    account_config = _configured_account(
+        run_config.account_ref,
+        account_resolver=account_resolver,
+        venue=None if (market_config.get("venue") or paper.get("venue")) is None else str(market_config.get("venue") or paper.get("venue")),
+    )
     source: IterableMarketEventSource | None
     source_value: str
     source_config: Mapping[str, object]
@@ -89,16 +97,21 @@ def configured_paper(
         source_config = {"source": source_value}
         market_data = PaperMarketDataService(source, source_name=str(paper.get("source_name") or source_path.stem))
     else:
-        venue = _required_text(paper.get("venue"), "paper.venue")
-        market = str(paper.get("market", "spot"))
-        symbol = _required_text(paper.get("symbol"), "paper.symbol")
-        market_ref = MarketResolver(default_venue=venue, default_market=market).resolve(symbol)
+        venue = _required_text(market_config.get("venue") or paper.get("venue"), "market.venue")
+        market = str(market_config.get("market") or paper.get("market") or "spot")
+        symbol = market_config.get("symbol") or paper.get("symbol")
         feed = (market_feed_factory or _default_market_feed)(venue)
         source = None
-        source_value = f"{venue}:{market}:{symbol}"
-        source_config = {"source": source_value, "venue": venue, "market": market, "symbol": symbol}
+        source_value = f"{venue}:{market}" if symbol is None else f"{venue}:{market}:{symbol}"
+        source_config = {"source": source_value, "venue": venue, "market": market}
+        if symbol is not None:
+            market_ref = MarketResolver(default_venue=venue, default_market=market).resolve(symbol)
+            source_config = {**source_config, "symbol": symbol}
+        else:
+            market_ref = None
         market_data = PaperMarketDataService(feed=feed, source_name=str(paper.get("source_name") or f"{venue}-paper"))
-        market_data.subscribe(MarketDataSubscriptionSpec(market_ref, (Quote,), params=_params_table(paper.get("stream"), default={"type": market})))
+        if market_ref is not None:
+            market_data.subscribe(MarketDataSubscriptionSpec(market_ref, (Quote,), params=_params_table(paper.get("stream"), default={"type": market})))
     return ConfiguredPaper(
         run_id=run_config.run_id,
         strategy=_load_strategy(run_config.strategy, root=run_config.root, params=_strategy_params(run_config.values)),
@@ -108,8 +121,9 @@ def configured_paper(
         normalized_config={
             "run": {"id": run_config.run_id, "mode": RuntimeMode.PAPER.value, "strategy": run_config.strategy},
             "strategy": {"params": dict(_strategy_params(run_config.values))},
-            "paper": {**dict(paper), **source_config},
-            "account": {"cash": account_config.cash, "currency": account_config.currency},
+            "paper": dict(paper),
+            "market": {**dict(market_config), **source_config},
+            "account": {"cash": account_config.cash, "currency": account_config.currency, "fee_rate": account_config.fee_rate},
             "execution": dict(execution_config),
         },
         account_config=account_config,
@@ -127,14 +141,19 @@ def _strategy_params(values: Mapping[str, object]) -> Mapping[str, object]:
     return common_strategy_params(values, PaperConfigurationError)
 
 
-def _configured_account(account_ref: str | None, *, account_resolver: AccountResolver | None, default_venue: str) -> ConfiguredAccount:
-    return common_configured_account_ref(
+def _configured_account(account_ref: str | None, *, account_resolver: AccountResolver | None, venue: str | None) -> ConfiguredAccount:
+    account = common_configured_account_ref(
         account_ref,
         account_resolver=account_resolver,
-        venue=default_venue,
+        venue=venue,
         mode_label="paper",
         error_type=PaperConfigurationError,
     )
+    if account.environment and account.environment not in {"paper", "sandbox", "simulation", "testnet"}:
+        raise PaperConfigurationError(
+            f"account {account.account_id!r} has environment {account.environment!r}; paper runs require a simulated account"
+        )
+    return account
 
 
 def _default_market_feed(venue: str) -> LiveMarketDataFeed:

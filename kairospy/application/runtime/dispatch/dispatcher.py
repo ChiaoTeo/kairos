@@ -76,7 +76,7 @@ class RuntimeDispatcher:
 
 
 def hook_for(event: RuntimeEnvelope) -> str | None:
-    if event.domain == "market":
+    if event.domain in {"market", "data"}:
         return "on_data"
     if event.domain == "clock":
         return "on_clock"

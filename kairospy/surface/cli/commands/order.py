@@ -6,8 +6,8 @@ from typing import Mapping
 import typer
 
 from kairospy.application.system.facade.order import OrderFacade
-from kairospy.surface.cli.options import OutputFormat, resolve_output
-from kairospy.surface.rendering.writer import write_result
+from kairospy.surface.cli.options import OutputFormat
+from kairospy.surface.cli.output import write_cli_result
 
 
 order_app = typer.Typer(no_args_is_help=True, help="Order commands")
@@ -27,7 +27,7 @@ def open_orders(
         payload = _ORDERS.open_orders(account_id=account_id, symbol=symbol, limit=limit, params=_params(params_json))
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json))
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
 @order_app.command("list")
@@ -57,7 +57,7 @@ def history_orders(
         payload = _ORDERS.history(account_id=account_id, symbol=symbol, since=since, limit=limit, params=_params(params_json))
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json))
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
 @order_app.command("place")
@@ -88,7 +88,7 @@ def place_order(
         )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json))
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
 @order_app.command("cancel")
@@ -113,7 +113,7 @@ def cancel_order(
         )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json))
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
 @order_app.command("replace")
@@ -146,7 +146,7 @@ def replace_order(
         )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json))
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
 @order_app.command("show")
@@ -160,7 +160,7 @@ def show_order(
         payload = _ORDERS.show(account_id=account_id, order_id=order_id)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_result(payload, output=resolve_output(ctx, output_format, default=OutputFormat.json))
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
 @order_app.command("inspect")

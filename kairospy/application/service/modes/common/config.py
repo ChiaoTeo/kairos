@@ -1,24 +1,31 @@
 from __future__ import annotations
 
-import importlib
 import json
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
-import sys
 from typing import Mapping, TypeVar
 
 from kairospy.application.runtime import RuntimeMode
 from kairospy.application.service.domain.execution import BasisPointSlippageModel
 from kairospy.application.strategy import Strategy
+from kairospy.application.strategy.entrypoint import load_strategy_entrypoint
 from kairospy.config import ConfigError, RunConfig, load_run_config
 
 ConfigErrorT = TypeVar("ConfigErrorT", bound=Exception)
 
 
-def load_required_run_config(config_path: Path, *, mode: RuntimeMode, error_type: type[ConfigErrorT]) -> RunConfig:
+def load_required_run_config(
+    config_path: Path,
+    *,
+    mode: RuntimeMode,
+    error_type: type[ConfigErrorT],
+    strategy_ref: str | None = None,
+) -> RunConfig:
     try:
         run_config = load_run_config(config_path)
+        if strategy_ref is not None:
+            run_config = run_config.with_run_strategy(strategy_ref)
         run_config.require_mode(mode.value)
     except ConfigError as error:
         raise error_type(str(error)) from error
@@ -44,29 +51,7 @@ def strategy_params(values: Mapping[str, object], error_type: type[ConfigErrorT]
 
 
 def load_strategy(ref: str, *, root: Path, params: Mapping[str, object], error_type: type[ConfigErrorT]) -> Strategy:
-    if ":" not in ref:
-        raise error_type("run.strategy must be module:callable")
-    module_name, attr_name = ref.split(":", 1)
-    project_root = _project_root(root)
-    inserted = False
-    if str(project_root) not in sys.path:
-        sys.path.insert(0, str(project_root))
-        inserted = True
-    if inserted:
-        sys.modules.pop(module_name, None)
-    try:
-        module = importlib.import_module(module_name)
-    finally:
-        if inserted:
-            try:
-                sys.path.remove(str(project_root))
-            except ValueError:
-                pass
-    factory = getattr(module, attr_name)
-    strategy = factory(**dict(params)) if callable(factory) else factory
-    if not hasattr(strategy, "strategy_id"):
-        raise error_type(f"strategy factory did not return a Strategy: {ref}")
-    return strategy
+    return load_strategy_entrypoint(ref, root=root, params=params, error_type=error_type).strategy
 
 
 def resolve_path(value: object, *, root: Path, source: str, error_type: type[ConfigErrorT]) -> Path:
@@ -180,13 +165,6 @@ def jsonable(value: object) -> object:
     if isinstance(value, (tuple, list)):
         return [jsonable(item) for item in value]
     return value
-
-
-def _project_root(root: Path) -> Path:
-    for directory in (root, *root.parents):
-        if (directory / "pyproject.toml").exists() or (directory / ".kairos" / "kairos.toml").exists():
-            return directory
-    return root
 
 
 __all__ = [

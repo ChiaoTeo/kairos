@@ -118,7 +118,7 @@ Root options are truly global process preferences:
 ```python
 @dataclass(frozen=True, slots=True)
 class RootOptions:
-    workspace: Path | None
+    cwd: Path | None
     profile: str | None
     output: OutputFormat
     verbose: bool = False
@@ -150,13 +150,13 @@ Recommended shape:
 @app.callback()
 def main(
     ctx: typer.Context,
-    workspace: Path | None = typer.Option(None, "--workspace"),
+    cwd: Path | None = typer.Option(None, "-C", "--cwd"),
     profile: str | None = typer.Option(None, "--profile"),
     output: OutputFormat = typer.Option(OutputFormat.text, "--output"),
     verbose: bool = typer.Option(False, "--verbose"),
 ) -> None:
     ctx.obj = RootOptions(
-        workspace=workspace,
+        cwd=cwd,
         profile=profile,
         output=output,
         verbose=verbose,

@@ -1,0 +1,20 @@
+[run]
+id = "paper-printer"
+mode = "paper"
+strategy = "examples.strategies.printer:strategy"
+
+[account]
+ref = "paper"
+
+[strategy.params]
+instrument = "BTC/USDT"
+venue = "binance"
+market = "spot"
+
+[market]
+venue = "binance"
+market = "spot"
+
+[execution]
+dry_run = true
+price_field = "ask"

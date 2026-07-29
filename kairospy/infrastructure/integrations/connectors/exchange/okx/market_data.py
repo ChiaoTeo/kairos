@@ -120,12 +120,14 @@ class OkxMarketDataConnector:
         )
 
     def fetch_quote(self, market: MarketRef, *, params: Mapping[str, object] | None = None) -> Mapping[str, object]:
-        raw = _fetch_okx_ticker(market.source_symbol)
-        return ccxt_ticker_record(raw, market=_market_ref(self.exchange_id, market.source_symbol, params))
+        symbol = str(market.source_symbol)
+        raw = _fetch_okx_ticker(symbol)
+        return ccxt_ticker_record(raw, market=_market_ref(self.exchange_id, symbol, params))
 
     def fetch_quote_update(self, market: MarketRef, *, params: Mapping[str, object] | None = None) -> MarketEvent:
-        raw = _fetch_okx_ticker(market.source_symbol)
-        return ccxt_ticker_update(raw, market=_market_ref(self.exchange_id, market.source_symbol, params))
+        symbol = str(market.source_symbol)
+        raw = _fetch_okx_ticker(symbol)
+        return ccxt_ticker_update(raw, market=_market_ref(self.exchange_id, symbol, params))
 
     def watch_order_book(
         self,
@@ -211,8 +213,8 @@ class OkxMarketDataConnector:
         return await sink.consume(self.watch_trades(symbol, since=since, limit=trade_limit, params=params), limit=limit)
 
 
-def _market_ref(exchange_id: str, symbol: str, params: Mapping[str, object] | None) -> MarketRef:
-    return ephemeral_market_ref(venue=exchange_id, market=ccxt_market_type(exchange_id, params), source_symbol=symbol)
+def _market_ref(exchange_id: str, symbol: object, params: Mapping[str, object] | None) -> MarketRef:
+    return ephemeral_market_ref(venue=exchange_id, market=ccxt_market_type(exchange_id, params), source_symbol=str(symbol))
 
 
 async def _ticker_records(events, market):

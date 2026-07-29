@@ -1,0 +1,4 @@
+available_at,observed_at,symbol,headline,sentiment,provider
+2026-01-01T00:01:00+00:00,2026-01-01T00:00:30+00:00,BTC/USDT,Spot ETF inflows accelerate,0.74,example-news
+2026-01-01T00:04:00+00:00,2026-01-01T00:03:40+00:00,BTC/USDT,Exchange outage risk fades,0.58,example-news
+2026-01-01T00:07:00+00:00,2026-01-01T00:06:20+00:00,BTC/USDT,Large holder transfers increase caution,-0.41,example-news
