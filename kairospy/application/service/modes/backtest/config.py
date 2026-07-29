@@ -28,6 +28,7 @@ from kairospy.infrastructure.data import DataStore
 from .account import BacktestAccountService
 from .execution import BacktestExecutionService
 from .market import BacktestMarketDataService
+from .metrics import MetricsModel, closed_trades_from_fills, equity_point_from_account_view
 
 
 class BacktestConfigurationError(ValueError):
@@ -50,6 +51,7 @@ class BacktestRunResult:
     account: AccountContext
     account_view: object | None
     fills: tuple[object, ...] = ()
+    equity_curve: tuple[object, ...] = ()
     trades: tuple[object, ...] = ()
     metrics: Mapping[str, object] = field(default_factory=dict)
 
@@ -107,6 +109,19 @@ class ConfiguredBacktest:
             )
         )
         account_view = runtime.views.get(account_current_view_key(self.account.account.context), None)
+        fills = self.execution.fills
+        equity_curve = tuple(
+            item
+            for item in (
+                equity_point_from_account_view(
+                    None if runtime.runtime.last_event is None else runtime.runtime.last_event.time,
+                    account_view,
+                ),
+            )
+            if item is not None
+        )
+        trades = closed_trades_from_fills(fills)
+        metrics = MetricsModel().evaluate(equity_curve, trades, initial_equity=self.account.account.initial_cash)
         result = BacktestRunResult(
             run_id=self.run_id,
             mode=RuntimeMode.BACKTEST,
@@ -116,9 +131,10 @@ class ConfiguredBacktest:
             controls=runtime.controls,
             account=self.account.account.context,
             account_view=account_view,
-            fills=self.execution.fills,
-            trades=(),
-            metrics={},
+            fills=fills,
+            equity_curve=equity_curve,
+            trades=trades,
+            metrics=metrics,
         )
         return result
 

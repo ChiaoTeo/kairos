@@ -1,15 +1,37 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
 
-from kairospy.application.strategy import DataContext
-from kairospy.infrastructure.data import DataStore
 from kairospy.core.market import Quote
 from kairospy.core.reference import MarketResolver
-from kairospy.application.service.domains.market import MarketSubscriptionRegistry, bind_market_data, plan_market_streams
-from kairospy.application.service.domains.reference import catalog_from_market_rows
-from kairospy.application.service.domains.reference import ReferenceStore
+from kairospy.application.service.domain.market import MarketSubscriptionRegistry, bind_market_data, plan_market_streams
+from kairospy.application.service.domain.reference import ReferenceStore, catalog_from_market_rows
+
+
+@dataclass(frozen=True, slots=True)
+class ExampleBinding:
+    dataset: str | None
+    stream: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ExampleAttachedData:
+    name: str
+    binding: ExampleBinding
+
+
+class ExampleDataBinder:
+    def attach(
+        self,
+        name: str,
+        *,
+        dataset: str | None = None,
+        stream: str | None = None,
+        mode: str = "history",
+    ) -> ExampleAttachedData:
+        return ExampleAttachedData(name, ExampleBinding(dataset, stream))
 
 
 def main() -> None:
@@ -32,14 +54,14 @@ def main() -> None:
     )
 
     with TemporaryDirectory() as temporary:
-        store = ReferenceStore(f"{temporary}/reference")
+        store = ReferenceStore(f"{temporary}/reference.sqlite")
         store.save_catalog(catalog)
         persisted_catalog = store.load_catalog()
 
         resolver = MarketResolver(persisted_catalog, as_of=as_of)
         market = resolver.resolve("BTC/USDT", venue="binance", market="spot")
 
-        data = DataContext(DataStore(f"{temporary}/data", storage_format="jsonl"))
+        data = ExampleDataBinder()
         bars = bind_market_data(data, resolver, market).ohlcv("1m", mode="both")
 
         subscriptions = MarketSubscriptionRegistry()

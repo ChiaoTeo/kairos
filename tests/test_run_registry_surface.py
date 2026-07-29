@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from io import StringIO
 import json
 
 from typer.testing import CliRunner
 
+from kairospy.config import KairosConfig
+from kairospy.surface.app import AppSession
 from kairospy.surface.products.run import run_app
+from kairospy.surface.state import SurfaceContext
 
 
 def test_run_list_reads_rewritten_runtime_artifact_registry(tmp_path) -> None:
@@ -40,3 +44,15 @@ def test_run_daemon_status_uses_artifact_registry(tmp_path) -> None:
 
     assert result.exit_code == 0
     assert json.loads(result.output)["runs"][0]["run_id"] == "bt-1"
+
+
+def test_app_run_workspace_prompt_has_default_run_state(tmp_path) -> None:
+    session = AppSession(
+        stdout=StringIO(),
+        context=SurfaceContext(config=KairosConfig(source_path=None, root=tmp_path, values={})),
+    )
+
+    assert session.prompt() == "kairos/app> "
+    assert session.handle("1") is False
+
+    assert session.prompt() == "kairos/app/run> "

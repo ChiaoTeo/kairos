@@ -9,6 +9,7 @@ from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.application.runtime.services import AccountService
 from kairospy.application.service.domain.account import (
     LiveAccountStreamGateway,
+    LivePrivateStreamState,
     LivePrivateStreamCollector,
     account_snapshot_envelope,
     bootstrap_account,
@@ -57,6 +58,7 @@ class LiveAccountService(AccountService):
         max_balance_events: int = 0,
         max_order_events: int = 0,
         max_trade_events: int = 0,
+        private_stream_state: LivePrivateStreamState | None = None,
     ) -> None:
         if account.environment not in {Environment.LIVE, Environment.TESTNET}:
             raise ValueError("live account service requires a live or testnet account")
@@ -72,6 +74,7 @@ class LiveAccountService(AccountService):
         self.max_balance_events = max_balance_events
         self.max_order_events = max_order_events
         self.max_trade_events = max_trade_events
+        self.private_stream_state = private_stream_state or LivePrivateStreamState()
         self._sequence = 0
         self._snapshot: AccountSnapshot | None = None
         if snapshot is not None:
@@ -93,6 +96,7 @@ class LiveAccountService(AccountService):
             self.parser,
             self._account_event,
             self._incident_event,
+            self.private_stream_state,
         )
         for event in await collector.collect(
             snapshot,

@@ -3,12 +3,19 @@ from __future__ import annotations
 from decimal import Decimal
 from tempfile import TemporaryDirectory
 
-from kairospy.application.strategy import DataContext, StrategyContext
+from kairospy.application.runtime import RuntimeMode, RuntimeRunner, RuntimeRunSpec
+from kairospy.application.runtime.services.account import account_current_view_key
+from kairospy.application.service.domain.account import SimulatedAccount
+from kairospy.application.service.domain.market import IterableMarketEventSource, MarketDataResolver
+from kairospy.application.service.modes.backtest import (
+    BacktestAccountService,
+    BacktestExecutionService,
+    BacktestMarketDataService,
+)
+from kairospy.application.strategy import Signal, StrategyBase, StrategyContext
+from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.reference import MarketResolver
 from kairospy.infrastructure.data import DataStore
-from kairospy.application.mode.backtest import BacktestEngine, SimulatedAccount
-from kairospy.application.service.domains.market import IterableEventSource
-from kairospy.application.strategy import StrategyBase, StrategySignal
 
 
 class BuyAndHoldBtc(StrategyBase):
@@ -17,16 +24,15 @@ class BuyAndHoldBtc(StrategyBase):
     def __init__(self) -> None:
         self.entered = False
 
-    def on_market(self, context: StrategyContext, signal: StrategySignal):
+    def on_data(self, context: StrategyContext, signal: Signal) -> None:
         if self.entered or not signal.changed("market", "bar"):
-            return ()
-        context.target_position("BTC/USDT", Decimal("1"), intent_id="enter-btc")
+            return
+        context.target_position("binance:spot:BTC/USDT", Decimal("1"), intent_id="enter-btc")
         self.entered = True
-        return ()
 
 
 def main() -> None:
-    source = IterableEventSource(
+    source = IterableMarketEventSource(
         "example.binance.spot.btc_usdt.1m",
         [
             {
@@ -63,18 +69,38 @@ def main() -> None:
     )
 
     with TemporaryDirectory() as directory:
-        result = BacktestEngine(
-            BuyAndHoldBtc(),
-            DataContext(DataStore(directory, storage_format="jsonl")),
-            SimulatedAccount("demo", Decimal("1000"), cash_currency="USDT"),
-            market_resolver=MarketResolver(default_venue="binance", default_market="spot"),
-        ).run(source)
+        account = SimulatedAccount("demo", Decimal("1000"), cash_currency="USDT", broker="backtest")
+        coordinator = ExecutionCoordinator()
+        account_service = BacktestAccountService(account, coordinator)
+        execution_service = BacktestExecutionService(
+            coordinator,
+            account=account.context,
+            cash_currency=account.cash_currency,
+            price_field=account.price_field,
+        )
+        data_service = BacktestMarketDataService(
+            DataStore(directory, storage_format="jsonl"),
+            resolver=MarketDataResolver(MarketResolver(default_venue="binance", default_market="spot")),
+        )
+        result = RuntimeRunner.run_sync(
+            RuntimeRunSpec(
+                run_id="demo",
+                mode=RuntimeMode.BACKTEST,
+                strategy=BuyAndHoldBtc(),
+                source=source,
+                data=data_service,
+                account=account_service,
+                execution=coordinator,
+                providers=(execution_service,),
+            )
+        )
+        account_view = result.views.require(account_current_view_key(account.context))
 
     print("strategy:", result.runtime.strategy_id)
     print("events:", result.runtime.event_count)
-    print("intents:", len(result.runtime.intents))
-    print("fills:", len(result.fills))
-    print("final_equity:", result.equity_curve[-1].equity if result.equity_curve else None)
+    print("intents:", result.runtime.intent_count)
+    print("fills:", len(execution_service.fills))
+    print("final_equity:", account_view.equity)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
 from kairospy.application.runtime.services import MarketDataSubscriptionSpec
-from kairospy.application.service.engine.live import (
+from kairospy.application.service.modes.live import (
     LiveAccountService,
     LiveExecutionService,
     LiveMarketDataService,
@@ -58,11 +58,12 @@ class LiveTargetPositionStrategy:
 
 
 class FakeLiveFeed:
-    def __init__(self, row: Mapping[str, object]) -> None:
-        self.row = row
+    def __init__(self, row: Mapping[str, object] | tuple[Mapping[str, object], ...]) -> None:
+        self.rows = row if isinstance(row, tuple) else (row,)
 
     async def watch_ticker(self, symbol: str, *, params: Mapping[str, object] | None = None) -> AsyncIterator[Mapping[str, object]]:
-        yield self.row
+        for row in self.rows:
+            yield row
 
     async def watch_order_book(
         self,
@@ -170,6 +171,28 @@ def test_live_market_service_streams_from_integration_feed() -> None:
     assert service.view().source == "binance-live"
 
 
+def test_live_market_service_stops_streaming_when_stop_requested() -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    market = MarketResolver(default_venue="binance", default_market="spot").resolve("ETH/USDT")
+    service = LiveMarketDataService(
+        feed=FakeLiveFeed(
+            (
+                {"timestamp": int(now.timestamp() * 1000), "bid": "2000", "ask": "2001"},
+                {"timestamp": int(now.timestamp() * 1000), "bid": "2002", "ask": "2003"},
+            )
+        ),
+        source_name="binance-live",
+    )
+    service.subscribe(MarketDataSubscriptionSpec(market, (Quote,)))
+    stop_after_first = {"seen": 0}
+    service.set_stop_requested(lambda: stop_after_first["seen"] >= 1)
+
+    events = asyncio.run(_collect_with_counter(service.events(), stop_after_first))
+
+    assert len(events) == 1
+    assert events[0].payload.value.ask == Decimal("2001")  # type: ignore[union-attr]
+
+
 def test_live_execution_service_rejects_by_default() -> None:
     kernel, broker = _live_kernel(limit_price=Decimal("101"))
 
@@ -177,7 +200,7 @@ def test_live_execution_service_rejects_by_default() -> None:
 
     assert broker.created == []
     assert kernel.intents.get("live-intent-1").status is IntentStatus.REJECTED
-    assert kernel.views.require("order.current").execution.latest_order is None
+    assert kernel.views.require("order.current").state.latest_order is None
 
 
 def test_live_execution_service_submits_limit_order_when_enabled() -> None:
@@ -199,7 +222,7 @@ def test_live_execution_service_submits_limit_order_when_enabled() -> None:
         }
     ]
     assert kernel.intents.get("live-intent-1").status is IntentStatus.ORDERING
-    assert kernel.views.require("order.current").execution.latest_order.status == "acknowledged"
+    assert kernel.views.require("order.current").state.latest_order.status == "acknowledged"
 
 
 def test_live_account_service_refreshes_from_broker_integration() -> None:
@@ -265,6 +288,14 @@ async def _collect(events: AsyncIterator[object], count: int) -> tuple[object, .
         if len(values) >= count:
             await events.aclose()
             break
+    return tuple(values)
+
+
+async def _collect_with_counter(events: AsyncIterator[object], counter: dict[str, int]) -> tuple[object, ...]:
+    values = []
+    async for event in events:
+        values.append(event)
+        counter["seen"] += 1
     return tuple(values)
 
 

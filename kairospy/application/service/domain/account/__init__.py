@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .baseline import account_baseline_event
 from .bootstrap import AccountBootstrapGateway, AccountBootstrapParser, AccountBootstrapResult, bootstrap_account
 from .live_stream import (
     LiveAccountStreamGateway,
@@ -16,6 +17,7 @@ from .reconciliation import (
     account_snapshot_envelope,
     compare_account_state,
 )
+from .snapshot_gateway import SnapshotAccountGateway
 from .simulated import SimulatedAccount
 
 __all__ = [
@@ -30,8 +32,10 @@ __all__ = [
     "LivePrivateStreamCollector",
     "LivePrivateStreamPayloadAdapter",
     "LivePrivateStreamState",
+    "SnapshotAccountGateway",
     "SimulatedAccount",
     "account_snapshot_envelope",
+    "account_baseline_event",
     "bootstrap_account",
     "classify_balance_delta",
     "compare_account_state",

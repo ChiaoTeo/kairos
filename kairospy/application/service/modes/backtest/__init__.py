@@ -10,6 +10,7 @@ from .config import (
 )
 from .execution import BacktestExecutionService
 from .market import BacktestMarketDataService, HistoricalMarketDataClient, MarketDataServiceView
+from .metrics import BacktestMetrics, MetricsModel
 
 __all__ = [
     "BacktestAccountService",
@@ -17,10 +18,12 @@ __all__ = [
     "BacktestConfigurationError",
     "BacktestExecutionService",
     "BacktestMarketDataService",
+    "BacktestMetrics",
     "BacktestRunResult",
     "BacktestSourceKind",
     "ConfiguredBacktest",
     "HistoricalMarketDataClient",
     "MarketDataServiceView",
+    "MetricsModel",
     "configured_backtest",
 ]

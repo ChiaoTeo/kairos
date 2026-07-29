@@ -107,7 +107,7 @@ kairospy run daemon start \
 
 ## OKX Live Configuration
 
-The live OKX path is configured through `service.operations.run` and defaults to read-only execution:
+The live OKX path is configured through the run service/system boundary and defaults to read-only execution:
 
 ```bash
 export OKX_MAIN_API_KEY=...

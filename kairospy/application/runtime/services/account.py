@@ -124,7 +124,7 @@ class AccountCurrentProjection:
         payload = self._last_payload
         payload_state = _payload_account_state(payload)
         payload_snapshot = _payload_snapshot(payload)
-        state = payload_state or state
+        state = payload_state or (None if payload_snapshot is not None else state)
         snapshot = payload_snapshot or snapshot
         balances = _balances(state, snapshot)
         margins = _margins(state, snapshot)
@@ -154,7 +154,7 @@ class AccountCurrentProjection:
             initial_equity=self._initial_equity,
             net_profit=net_profit,
             total_return=total_return,
-            metadata=None if self._last_event is None else dict(self._last_event.metadata),
+            metadata=None if self._last_event is None else dict(getattr(self._last_event, "metadata", {}) or {}),
         )
 
 

@@ -1,10 +1,14 @@
 [run]
+id = "okx-paper"
 mode = "paper"
 strategy = "examples.strategies.okx:OneShotLong"
 
 [paper]
+events = "../events/okx_ticker.jsonl"
+runs_root = "../.kairos/runs"
 venue = "okx"
 market = "spot"
+price_field = "ask"
 
 [accounts.okx_main]
 index = 0

@@ -14,8 +14,10 @@ from typing import Mapping, TextIO
 import typer
 
 from kairospy.application.runtime import RuntimeEnvelope, RuntimeLine, RuntimeMode, RuntimeRunSpec, RuntimeRunner
-from kairospy.application.service.engine.backtest import BacktestConfigurationError, configured_backtest
-from kairospy.application.service.system.run import RunRegistry
+from kairospy.application.service.modes.backtest import BacktestConfigurationError, configured_backtest
+from kairospy.application.service.modes.live import LiveConfigurationError, configured_live
+from kairospy.application.service.modes.paper import PaperConfigurationError, configured_paper
+from kairospy.application.service.system.run import RunDaemonService, RunRegistry
 from kairospy.application.strategy import Strategy
 from kairospy.config import load_run_config
 
@@ -83,17 +85,70 @@ def backtest(
     _echo_run_result(result, output_format=output_format)
 
 
+@run_app.command("paper")
+def paper(
+    config_path: Path = typer.Option(..., "--config"),
+    output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format"),
+) -> None:
+    try:
+        result = configured_paper(config_path).run()
+    except PaperConfigurationError as error:
+        raise typer.BadParameter(str(error)) from error
+    _echo_run_result(result, output_format=output_format)
+
+
+@run_app.command("live")
+def live(
+    config_path: Path = typer.Option(..., "--config"),
+    output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format"),
+) -> None:
+    try:
+        result = configured_live(config_path).run()
+    except LiveConfigurationError as error:
+        raise typer.BadParameter(str(error)) from error
+    _echo_run_result(result, output_format=output_format)
+
+
 @run_app.command("daemon")
 def daemon(
     action: str = typer.Argument("status"),
     root: Path = typer.Option(Path(".kairos/runs"), "--root"),
     run_id: str | None = typer.Option(None, "--run-id"),
     mode: RuntimeMode | None = typer.Option(None, "--mode"),
+    config_path: Path | None = typer.Option(None, "--config"),
+    foreground: bool = typer.Option(False, "--foreground/--background"),
     output_format: OutputFormat = typer.Option(OutputFormat.auto, "--format"),
 ) -> None:
+    registry = RunRegistry(root)
+    if action == "start":
+        if mode is None or config_path is None:
+            raise typer.BadParameter("daemon start requires --mode and --config")
+        service = RunDaemonService(root)
+        result = (
+            service.run_foreground(mode=mode, config_path=config_path, run_id=run_id)
+            if foreground
+            else service.start_background(mode=mode, config_path=config_path, run_id=run_id)
+        )
+        _echo({
+            "run_id": result.run_id,
+            "mode": result.mode,
+            "run_instance_id": result.run_instance_id,
+            "phase": result.phase,
+            "directory": str(result.directory),
+            "state_file": str(result.state_path),
+            "summary_file": str(result.summary_path),
+            "result": dict(result.result),
+        })
+        return
+    if action == "stop":
+        if mode is None or run_id is None:
+            raise typer.BadParameter("daemon stop requires --mode and --run-id")
+        path = registry.request_stop(mode=mode.value, run_id=run_id, reason="requested by cli")
+        _echo({"command_file": str(path), "mode": mode.value, "run_id": run_id, "desired_state": "stopped"})
+        return
     if action != "status":
         raise typer.BadParameter(f"daemon action {action!r} is not supported by the rewritten runtime registry")
-    records = RunRegistry(root).list(mode=None if mode is None else mode.value, run_id=run_id)
+    records = registry.list(mode=None if mode is None else mode.value, run_id=run_id)
     _echo_registry(records, output_format=output_format)
 
 
@@ -136,6 +191,9 @@ def shell(
 class RunShellSession:
     def __init__(self, *, stdout: TextIO | None = None) -> None:
         self.stdout = stdout or sys.stdout
+        self.mode = RuntimeMode.BACKTEST
+        self.run_id: str | None = None
+        self.run_choices: list[dict[str, object]] = []
 
     def banner(self) -> str:
         return "Kairos run workspace."
@@ -152,6 +210,8 @@ class RunShellSession:
             "  config explain <path>",
             "  events --strategy module:callable --events events.jsonl",
             "  backtest --config run.toml",
+            "  paper --config run.toml",
+            "  live --config run.toml",
             "  list",
             "  quit",
         ])
@@ -169,7 +229,7 @@ class RunShellSession:
             return False
         if command == "config" and len(parts) >= 3:
             return self._invoke([command, parts[1], parts[2]])
-        if command in {"events", "backtest", "list", "daemon"}:
+        if command in {"events", "backtest", "paper", "live", "list", "daemon"}:
             return self._invoke(parts)
         self._write(f"Unknown run shell command: {command}")
         return False

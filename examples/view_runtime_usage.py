@@ -5,13 +5,13 @@ from decimal import Decimal
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from kairospy.application.strategy import DataContext, StrategyContext
+from kairospy.application.runtime import RuntimeMode, RuntimeRunner, RuntimeRunSpec
+from kairospy.application.service.domain.market import IterableMarketEventSource, MarketDataResolver
+from kairospy.application.service.modes.backtest import BacktestMarketDataService
+from kairospy.application.strategy import Signal, StrategyBase, StrategyContext
 from kairospy.core.reference import MarketResolver
+from kairospy.core.views import ViewFieldSchema, ViewSchema, ViewStore
 from kairospy.infrastructure.data import DataStore
-from kairospy.application.runtime.kernel import RuntimeKernel
-from kairospy.application.runtime.projection.market import MarketCurrentProjection
-from kairospy.application.service.domains.market import DataViewEventSource
-from kairospy.application.strategy import StrategyBase, StrategySignal, ViewFieldSchema, ViewSchema, ViewStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,9 +32,9 @@ class ViewReadingStrategy(StrategyBase):
     def on_start(self, context: StrategyContext):
         regime = context.views.require("project.regime")
         context.views.put("strategy.counter", StrategyCounterView(0, regime.name))
-        return ()
+        return None
 
-    def on_market(self, context: StrategyContext, signal: StrategySignal):
+    def on_data(self, context: StrategyContext, signal: Signal):
         current = context.views.require("strategy.counter")
         fields = context.views.require("market.fields")
         last_close = _latest_market_field(fields, "Bar.close")
@@ -44,13 +44,12 @@ class ViewReadingStrategy(StrategyBase):
             as_of=signal.time,
             available_time=signal.time,
         )
-        return ()
+        return None
 
 
 def main() -> None:
     with TemporaryDirectory() as temporary:
-        store = DataStore(temporary, storage_format="jsonl")
-        store.write(
+        source = IterableMarketEventSource(
             "market.ohlcv.binance.btc_usdt.1m",
             [
                 {
@@ -85,10 +84,10 @@ def main() -> None:
                 },
             ],
         )
-
-        data = DataContext(store)
-        bars = data.attach("bars", dataset="market.ohlcv.binance.btc_usdt.1m")
-
+        data = BacktestMarketDataService(
+            DataStore(temporary, storage_format="jsonl"),
+            resolver=MarketDataResolver(MarketResolver(default_venue="binance", default_market="spot")),
+        )
         views = ViewStore()
         views.register(
             ViewSchema(
@@ -114,27 +113,28 @@ def main() -> None:
         )
         views.put_runtime("project.regime", ProjectRegimeView("risk-on"))
 
-        runtime = RuntimeKernel(
-            ViewReadingStrategy(),
-            data,
-            views=views,
-            components=(MarketCurrentProjection(),),
-            market_resolver=MarketResolver(default_venue="binance", default_market="spot"),
+        result = RuntimeRunner.run_sync(
+            RuntimeRunSpec(
+                run_id="view-runtime-example",
+                mode=RuntimeMode.BACKTEST,
+                strategy=ViewReadingStrategy(),
+                source=source,
+                data=data,
+                views=views,
+            )
         )
-        result = runtime.run(DataViewEventSource(bars))
-        snapshot = runtime.views.snapshot()
+        snapshot = result.views.snapshot()
 
-        print("strategy:", result.strategy_id)
-        print("market events:", result.event_count)
+        print("strategy:", result.runtime.strategy_id)
+        print("market events:", result.runtime.event_count)
         print("context hash:", snapshot["context_hash"])
         print()
 
-        _print_view("system.strategy", runtime.views.require("system.strategy"))
-        _print_view("system.dataflow", runtime.views.require("system.dataflow"))
-        _print_view("market.fields", runtime.views.require("market.fields"))
-        _print_view("market.bars", runtime.views.require("market.bars"))
-        _print_view("market.current", runtime.views.require("market.current"))
-        _print_view("strategy.counter", runtime.views.require("strategy.counter"))
+        _print_view("system.strategy", result.views.require("system.strategy"))
+        _print_view("system.events", result.views.require("system.events"))
+        _print_view("market.fields", result.views.require("market.fields"))
+        _print_view("market.bars", result.views.require("market.bars"))
+        _print_view("strategy.counter", result.views.require("strategy.counter"))
 
 
 def _latest_market_field(view: Any, field: str) -> object:

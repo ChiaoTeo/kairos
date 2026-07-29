@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .components import execution_coordinator_components
+from .result import SimulatedClosedTrade, SimulatedEquityPoint
 from .simulation import (
     BasisPointSlippageModel,
     CommissionModel,
@@ -13,6 +14,7 @@ from .simulation import (
     SimulatedFill,
     SlippageModel,
 )
+from .state import JsonExecutionStateStore
 
 __all__ = [
     "BasisPointSlippageModel",
@@ -24,6 +26,9 @@ __all__ = [
     "PercentageCommissionModel",
     "SimulatedExecutionAdapter",
     "SimulatedFill",
+    "SimulatedClosedTrade",
+    "SimulatedEquityPoint",
     "SlippageModel",
+    "JsonExecutionStateStore",
     "execution_coordinator_components",
 ]

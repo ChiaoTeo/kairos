@@ -10,7 +10,7 @@ from typing import Mapping
 import typer
 
 from kairospy.application.runtime.model import RuntimeMode
-from kairospy.application.service.engine.backtest import BacktestConfigurationError, ConfiguredBacktest, configured_backtest
+from kairospy.application.service.modes.backtest import BacktestConfigurationError, ConfiguredBacktest, configured_backtest
 from kairospy.application.service.system.run import RunAccountJournal
 
 

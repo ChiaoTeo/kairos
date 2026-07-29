@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from kairospy.application.strategy import StrategyContext
 from kairospy.core.market import Quote
-from kairospy.application.strategy import StrategyBase, StrategySignal
+from kairospy.application.strategy import Signal, StrategyBase
 
 
 class OneShotLong(StrategyBase):
@@ -17,14 +17,14 @@ class OneShotLong(StrategyBase):
 
     def on_start(self, context: StrategyContext):
         context.subscribe_market_data(self.symbol, selectors=(Quote.select("bid", "ask", basis="ticker"),))
-        return ()
+        return None
 
-    def on_market(self, context: StrategyContext, signal: StrategySignal):
+    def on_data(self, context: StrategyContext, signal: Signal):
         if self.entered or not signal.changed("market", "ticker"):
-            return ()
+            return None
         context.target_position(self.symbol, self.quantity, account=0, intent_id="enter")
         self.entered = True
-        return ()
+        return None
 
 
 class LiveLimitLong(StrategyBase):
@@ -37,14 +37,14 @@ class LiveLimitLong(StrategyBase):
 
     def on_start(self, context: StrategyContext):
         context.subscribe_market_data(self.symbol, selectors=(Quote.select("bid", "ask", basis="ticker"),))
-        return ()
+        return None
 
-    def on_market(self, context: StrategyContext, signal: StrategySignal):
+    def on_data(self, context: StrategyContext, signal: Signal):
         if self.entered or not signal.changed("market", "ticker"):
-            return ()
+            return None
         ask = _latest_field(context, "Quote.ask")
         if ask is None:
-            return ()
+            return None
         context.target_position(
             self.symbol,
             self.quantity,
@@ -53,7 +53,7 @@ class LiveLimitLong(StrategyBase):
             intent_id="enter-live-limit",
         )
         self.entered = True
-        return ()
+        return None
 
 
 class SpotBalanceHold(StrategyBase):
@@ -72,19 +72,19 @@ class SpotBalanceHold(StrategyBase):
 
     def on_start(self, context: StrategyContext):
         context.subscribe_market_data(self.symbol, selectors=(Quote.select("bid", "ask", basis="ticker"),))
-        return ()
+        return None
 
-    def on_market(self, context: StrategyContext, signal: StrategySignal):
+    def on_data(self, context: StrategyContext, signal: Signal):
         if self.checked or not signal.changed("market", "ticker"):
-            return ()
+            return None
         ask = _latest_field(context, "Quote.ask")
         if ask is None:
-            return ()
+            return None
         current = _spot_balance_total(context, _base_currency(self.symbol))
         missing = self.quantity - current
         self.checked = True
         if missing <= self.tolerance:
-            return ()
+            return None
         context.target_position(
             self.symbol,
             missing,
@@ -92,7 +92,7 @@ class SpotBalanceHold(StrategyBase):
             limit_price=Decimal(str(ask)),
             intent_id="hold-spot-balance",
         )
-        return ()
+        return None
 
 
 def _latest_field(context: StrategyContext, field: str) -> object | None:

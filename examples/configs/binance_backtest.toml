@@ -4,7 +4,7 @@ mode = "backtest"
 strategy = "examples.strategies.sma:SmaCrossBacktest"
 
 [strategy.params]
-symbol = "BTC/USDT"
+symbol = "binance:spot:BTC/USDT"
 quantity = "0.01"
 fast_window = 20
 slow_window = 50
@@ -16,6 +16,11 @@ timeframe = "1m"
 data_root = "../.kairos/data"
 runs_root = "../.kairos/runs"
 storage_format = "jsonl"
+dataset = "market.ohlcv.binance_spot_btc_usdt.1m"
+stream = "market.ohlcv.binance.btc_usdt.1m"
+symbol = "BTC/USDT"
+kind = "ohlcv"
+timeframe = "1m"
 venue = "binance"
 market = "spot"
 price_field = "close"

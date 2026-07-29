@@ -14,7 +14,7 @@ from kairospy.application.runtime.services import (
     MarketDataSubscriptionSpec,
     ReferenceServiceProjectionProvider,
 )
-from kairospy.application.service.engine.backtest import BacktestExecutionService
+from kairospy.application.service.modes.backtest import BacktestExecutionService
 from kairospy.core.account import AccountBalance, AccountContext, AccountRef, AccountSnapshot, AccountSource, AccountState, Environment
 from kairospy.core.execution import ExecutionCoordinator, cash_order_request
 from kairospy.core.intent import IntentJournal
@@ -263,4 +263,4 @@ def test_system_risk_execution_and_order_views_are_business_panels() -> None:
     assert views.require("system.events").last_name == "risk.limit_warn"
     assert views.require("risk.events").last_payload == {"limit": "gross"}
     assert views.require("execution.current").total_orders == 1
-    assert views.require("order.current").execution.latest_order.client_order_id == "order-1"
+    assert views.require("order.current").state.latest_order.client_order_id == "order-1"

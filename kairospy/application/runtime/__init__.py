@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .execution import RuntimeContext
+from .dispatch import RuntimeContext, RuntimeDispatcher
 from .model import RuntimeMode
 from .orchestration.kernel import RuntimeKernel
 from .orchestration.session import RuntimeSession
@@ -56,6 +56,7 @@ __all__ = [
     "ReferenceService",
     "ReferenceServiceProjectionProvider",
     "RuntimeContext",
+    "RuntimeDispatcher",
     "ExecutionCurrentProjection",
     "IntentJournalProjection",
     "MarketProjection",

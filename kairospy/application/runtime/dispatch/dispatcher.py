@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from kairospy.application.runtime.execution.context import RuntimeContext
+from kairospy.application.runtime.dispatch.context import RuntimeContext
 from kairospy.application.runtime.orchestration.state import RuntimeFrame, RuntimeRunResult, Callback
 from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.application.strategy import Strategy
 from kairospy.core.intent import Intent, IntentJournal
 
 
-class RuntimeEngine:
+class RuntimeDispatcher:
     def __init__(
         self,
         *,
@@ -82,4 +82,4 @@ def hook_for(event: RuntimeEnvelope) -> str:
     return "on_data"
 
 
-__all__ = ["RuntimeEngine", "hook_for"]
+__all__ = ["RuntimeDispatcher", "hook_for"]

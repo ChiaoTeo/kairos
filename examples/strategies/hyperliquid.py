@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from kairospy.application.strategy import StrategyContext
 from kairospy.core.market import Quote
-from kairospy.application.strategy import StrategyBase, StrategySignal
+from kairospy.application.strategy import Signal, StrategyBase
 
 
 class OneShotLong(StrategyBase):
@@ -17,11 +17,11 @@ class OneShotLong(StrategyBase):
 
     def on_start(self, context: StrategyContext):
         context.subscribe_market_data(self.symbol, selectors=(Quote.select("bid", "ask", basis="ticker"),))
-        return ()
+        return None
 
-    def on_market(self, context: StrategyContext, signal: StrategySignal):
+    def on_data(self, context: StrategyContext, signal: Signal):
         if self.entered or not signal.changed("market", "ticker"):
-            return ()
+            return None
         context.target_position(self.symbol, self.quantity, account=0, intent_id="enter")
         self.entered = True
-        return ()
+        return None

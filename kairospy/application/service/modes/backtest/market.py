@@ -7,35 +7,51 @@ from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.application.runtime.protocol.lines import RuntimeEventLine, close_event_line
 from kairospy.application.runtime.services import DataSubscription, MarketDataService, MarketDataSubscriptionSpec
 from kairospy.core.views import ViewFieldSchema, ViewSchema
+from kairospy.infrastructure.data import DataStore
+
+from kairospy.application.service.domain.market import HistoricalMarketDataClient, MarketDataOperationsService, MarketDataResolver, MarketDataSpec
+from kairospy.application.service.domain.market.sources import IterableMarketEventSource
 
 
 @dataclass(frozen=True, slots=True)
-class PaperMarketDataServiceView:
+class MarketDataServiceView:
     source: str
     subscription_count: int = 0
     subscriptions: tuple[DataSubscription, ...] = ()
 
 
-class PaperMarketDataService(MarketDataService):
+class BacktestMarketDataService(MarketDataOperationsService, MarketDataService):
     key = "market.service"
     schema = ViewSchema(
         key,
         "system",
         fields=(
-            ViewFieldSchema("source", "paper market data source", "runtime state", "paper market data service"),
-            ViewFieldSchema("subscription_count", "active subscription count", "runtime state", "paper market data service"),
-            ViewFieldSchema("subscriptions", "active subscription specs", "runtime state", "paper market data service"),
+            ViewFieldSchema("source", "market service backing source", "runtime state", "market data service"),
+            ViewFieldSchema("subscription_count", "active subscription count", "runtime state", "market data service"),
+            ViewFieldSchema("subscriptions", "active subscription specs", "runtime state", "market data service"),
         ),
         mutability="runtime_writable",
-        evidence="runtime paper market data service",
+        evidence="runtime market data service",
     )
 
-    def __init__(self, source: RuntimeEventLine, *, source_name: str = "paper") -> None:
+    def __init__(
+        self,
+        store: DataStore,
+        *,
+        resolver: MarketDataResolver | None = None,
+        source: RuntimeEventLine | None = None,
+    ) -> None:
+        super().__init__(store, resolver=resolver)
         self.source = source
-        self.source_name = source_name
         self._subscriptions: dict[str, DataSubscription] = {}
 
+    def source_from_store(self, spec: MarketDataSpec) -> IterableMarketEventSource:
+        resolved = self.resolve(spec)
+        return IterableMarketEventSource(resolved.stream_name, self.read(spec))
+
     async def events(self) -> AsyncIterator[RuntimeEnvelope]:
+        if self.source is None:
+            return
         events = self.source.events()
         try:
             async for event in events:
@@ -58,9 +74,17 @@ class PaperMarketDataService(MarketDataService):
     def on_event(self, event: RuntimeEnvelope) -> None:
         return None
 
-    def view(self) -> PaperMarketDataServiceView:
+    def view(self) -> MarketDataServiceView:
         subscriptions = self.subscriptions()
-        return PaperMarketDataServiceView(self.source_name, len(subscriptions), subscriptions)
+        return MarketDataServiceView(
+            source=type(self.store).__name__,
+            subscription_count=len(subscriptions),
+            subscriptions=subscriptions,
+        )
 
 
-__all__ = ["PaperMarketDataService", "PaperMarketDataServiceView"]
+__all__ = [
+    "HistoricalMarketDataClient",
+    "BacktestMarketDataService",
+    "MarketDataServiceView",
+]

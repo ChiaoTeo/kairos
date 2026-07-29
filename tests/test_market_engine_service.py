@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
 from kairospy.application.service.domain.market import MarketDataResolver, MarketDataSpec
-from kairospy.application.service.engine.backtest import BacktestMarketDataService
+from kairospy.application.service.modes.backtest import BacktestMarketDataService
 from kairospy.application.runtime.services import MarketDataSubscriptionSpec
 from kairospy.core.market import MarketEvent, Quote
 from kairospy.core.reference import MarketResolver

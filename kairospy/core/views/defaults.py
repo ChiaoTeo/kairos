@@ -26,9 +26,9 @@ def default_view_registry() -> ViewRegistry:
                 "system.data",
                 "system",
                 fields=(
-                    ViewFieldSchema("bindings", "data bindings", "binding time", "DataContext"),
+                    ViewFieldSchema("bindings", "data bindings", "binding time", "market data service"),
                 ),
-                evidence="data context snapshot",
+                evidence="market data service snapshot",
             ),
             ViewSchema(
                 "system.intents",

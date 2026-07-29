@@ -8,24 +8,19 @@ The project is organized around one product axis:
 - `kairospy.application.runtime`: strategy event loop, runtime data pipeline, event lines, projection scheduling, runtime views, and run profiles.
 - `kairospy.core`: stable trading domains.
 - `kairospy.core.market`: provider-neutral market observations, quote/book/bar/trade/rate models, subscription specifications, and row encoders.
-- `kairospy.application.service.domains.market`: user-facing market data specs, resolution, historical read/download coordination, live persistence, and replay.
 - `kairospy.core.execution`: intent-to-order-to-fill behavior, execution state, local ledger updates, and simulated/live execution adapters.
 - `kairospy.core.account`: account identity, balances, positions, snapshots, account state derivation, and ledgers.
 - `kairospy.core.reference`: provider-neutral asset, instrument, listing, market, lifecycle, participant, identity, resolver handle, product, catalog, and universe models.
-- `kairospy.application.service.domains.account`, `kairospy.application.service.domains.market`, and `kairospy.application.service.domains.reference`: domain use-case orchestration for account, market data, and reference data.
-- `kairospy.application.service.modes.backtest`: backtest mode config assembly.
-- `kairospy.application.service.operations.run`: run and daemon operational assembly across modes.
+- `kairospy.application.service.domain`: user-facing domain use cases for account, market data, reference data, and execution primitives.
+- `kairospy.application.service.engine`: mode-specific runtime assembly for backtest, paper, and live engines.
+- `kairospy.application.service.system`: operational services for run registries, daemon control, artifacts, and account journals.
 - `kairospy.core.intent` and `kairospy.core.order`: strategy intent and order state models.
 - `kairospy.core.views`: shared view schema, envelope, registry, and store primitives.
-- `kairospy.application.mode`: run modes that compose strategy, runtime, core, data, and integrations.
-- `kairospy.application.mode.backtest`: historical simulation entry points, simulated account configuration, results, and metrics.
-- `kairospy.application.mode.paper`: non-production runtime entry points built from the same runtime and execution primitives as backtest.
-- `kairospy.application.mode.live`: live gateway protocols, account reconciliation, private stream collection, and live engine orchestration.
 - `kairospy.infrastructure.data`: durable datasets, stores, queries, sinks, and stream feeds.
 - `kairospy.infrastructure.integrations`: external systems and provider payload adapters such as ccxt, Binance, Hyperliquid, IBKR, and Massive.
 - `kairospy.surface`: CLI and user-facing product APIs.
 
-Old top-level domain and mode packages are intentionally not part of the layout; use `kairospy.core.*` and `kairospy.application.mode.*`.
+Surface packages are intentionally thin: external callers should reach runtime behavior through `kairospy.application.service.*` instead of composing runtime internals directly.
 
 ## Install For Development
 
@@ -42,6 +37,9 @@ The CLI currently exposes focused product surfaces:
 
 ```bash
 kairospy --help
+kairospy backtest run --config examples/configs/binance_backtest.toml
+kairospy run paper --config examples/configs/hyperliquid_paper.toml
+kairospy run daemon status
 kairospy data download --symbol BTC/USDT
 kairospy data read market.ohlcv.binance_spot_btc_usdt.1m
 kairospy data replay market.trades.binance_spot_btc_usdt --speed 0
@@ -57,47 +55,20 @@ Reference catalogs and lifecycle events are persisted in SQLite at `.kairos/refe
 Strategies receive stable strategy events and emit intents; runtime does not submit orders. Execution adapters convert intents into simulated fills or live orders.
 
 ```python
-from decimal import Decimal
-from tempfile import TemporaryDirectory
+from pathlib import Path
 
-from kairospy.application.mode.backtest import BacktestEngine, SimulatedAccount
-from kairospy.application.strategy import DataContext
-from kairospy.core.reference import MarketResolver
-from kairospy.infrastructure.data import DataStore
-from kairospy.application.service.domains.market import IterableEventSource
-from kairospy.application.strategy import StrategyBase, StrategyContext
+from kairospy.application.service.engine.backtest import configured_backtest
 
 
-class TargetBtc(StrategyBase):
-    strategy_id = "target-btc"
+configured = configured_backtest(Path("examples/configs/binance_backtest.toml"))
+result = configured.run()
 
-    def on_market(self, context: StrategyContext, event):
-        context.target_position("BTC/USDT", Decimal("1"), intent_id="enter")
-        return ()
-
-
-source = IterableEventSource(
-    "market.ohlcv.example",
-    [{"time": "2026-01-01T00:00:00+00:00", "kind": "bar", "market_id": "market:simulated:spot:btc_usdt", "instrument_id": "instrument:spot:btc:usdt", "market_key": "simulated_spot_btc_usdt", "close": "100"}],
-)
-
-with TemporaryDirectory() as temporary:
-    market_resolver = MarketResolver(default_venue="simulated", default_market="spot")
-    result = BacktestEngine(
-        TargetBtc(),
-        DataContext(DataStore(temporary, storage_format="jsonl")),
-        SimulatedAccount("strategy-a", Decimal("1000"), cash_currency="USDT"),
-        market_resolver=market_resolver,
-    ).run(source)
+print(result.runtime.strategy_id, result.final_equity)
 ```
 
 Live runs require an explicit account payload adapter from an integration package, for example `CcxtAccountPayloadAdapter`. This keeps live orchestration provider-neutral while provider parsing and ingestion remain in `kairospy.infrastructure.integrations`.
 
-## Architecture
 
-See [docs/architecture.md](docs/architecture.md) for the package boundary rules and runtime flow.
-See [docs/runtime_layers.md](docs/runtime_layers.md) for the target layering inside `kairospy.application.runtime`.
-See [docs/migration_audit.md](docs/migration_audit.md) for the legacy-domain deletion and replacement map.
 
 Useful checks:
 

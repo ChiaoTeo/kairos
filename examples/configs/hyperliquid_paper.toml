@@ -1,6 +1,14 @@
 [run]
+id = "hyperliquid-paper"
 mode = "paper"
 strategy = "examples.strategies.hyperliquid:OneShotLong"
+
+[paper]
+events = "../events/hyperliquid_ticker.jsonl"
+runs_root = "../.kairos/runs"
+venue = "hyperliquid"
+market = "swap"
+price_field = "ask"
 
 [accounts.hyperliquid_main]
 index = 0

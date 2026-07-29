@@ -8,7 +8,7 @@ from typing import Mapping
 from kairospy.config import KairosConfig, load_config
 
 try:
-    from kairospy.application.service.runtime import list_run_daemons
+    from kairospy.application.service.system.run import list_run_daemons
 except ModuleNotFoundError:
     list_run_daemons = None
 
@@ -85,7 +85,7 @@ class SurfaceContext:
             runs = tuple(
                 _run_summary(status.to_dict())
                 for status in list_run_daemons(
-                    root=config.resolve_path(".kairos/runtime"),
+                    root=config.resolve_path(".kairos/runs"),
                     stale_after_seconds=self.stale_after_seconds,
                 )
             )

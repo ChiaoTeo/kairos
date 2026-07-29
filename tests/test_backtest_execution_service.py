@@ -7,7 +7,7 @@ from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
 from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.application.service.domain.account import SimulatedAccount
 from kairospy.application.service.domain.market import MarketDataResolver
-from kairospy.application.service.engine.backtest import BacktestAccountService, BacktestExecutionService, BacktestMarketDataService
+from kairospy.application.service.modes.backtest import BacktestAccountService, BacktestExecutionService, BacktestMarketDataService
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentStatus, target_position_intent
 from kairospy.core.market import MarketEvent, MarketSubject, Quote
@@ -106,7 +106,7 @@ def test_backtest_execution_service_fills_target_position_from_market_fields(tmp
     assert coordinator.ledger.cash(account.account)["USDT"] == Decimal("798")
     assert execution.fills[0].price == Decimal("101")
     assert kernel.views.require("execution.current").total_orders == 1
-    assert kernel.views.require("order.current").execution.latest_order.status == "filled"
+    assert kernel.views.require("order.current").state.latest_order.status == "filled"
     account_view = kernel.views.require("account.current.backtest.backtest.main")
     assert account_view.cash == Decimal("798")
     assert account_view.positions[0].quantity == Decimal("2")

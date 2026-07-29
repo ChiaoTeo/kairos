@@ -2,56 +2,72 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import time
 
 from typer.testing import CliRunner
 
-from kairospy.application.service.modes.backtest import configured_backtest
-from kairospy.application.service.system.run import RunAccountJournal
-from kairospy.surface.products.backtest import backtest_app
+from kairospy.application.service.system.run import RunDaemonService, RunRegistry
 from kairospy.surface.products.run import run_app
 
 
-def test_configured_backtest_runs_new_engine_and_writes_account_journal(tmp_path) -> None:
+def test_run_daemon_service_runs_backtest_foreground_and_writes_state(tmp_path) -> None:
     config_path = _write_backtest_project(tmp_path)
+    root = tmp_path / "daemon-runs"
 
-    configured = configured_backtest(config_path)
-    result = configured.run()
-    RunAccountJournal(configured.run_directory, run_id=configured.run_id, mode="backtest").record_backtest_result(result)
+    result = RunDaemonService(root).run_foreground(mode="backtest", config_path=config_path)
 
-    assert result.runtime.event_count == 2
-    assert len(result.fills) == 1
-    assert len(result.equity_curve) == 1
-    assert result.metrics.net_profit == result.net_profit
-    assert result.final_equity == result.account_view.equity
-    current = json.loads((configured.run_directory / "account" / "current.json").read_text(encoding="utf-8"))
-    assert current["run_id"] == "bt-1"
-    assert current["fills"] == 1
+    assert result.phase == "stopped"
+    assert result.run_instance_id
+    assert result.result["event_count"] == 2
+    assert (root / "backtest" / "bt-1" / "state.json").exists()
+    assert (root / "backtest" / "bt-1" / "events.jsonl").exists()
+    current = json.loads((root / "backtest" / "bt-1" / "current.json").read_text(encoding="utf-8"))
+    assert current["run_instance_id"] == result.run_instance_id
+    assert (root / "backtest" / "bt-1" / "runs" / result.run_instance_id / "state.json").exists()
+    record = RunRegistry(root).list(mode="backtest", run_id="bt-1")[0].to_dict()
+    assert record["phase"] == "stopped"
+    assert record["heartbeat_at"] is not None
+    assert record["result"]["event_count"] == 2
+    assert record["context"]["config_file"] == str(config_path)
 
 
-def test_backtest_run_command_uses_new_config_runner(tmp_path) -> None:
+def test_run_daemon_start_foreground_command_runs_config(tmp_path) -> None:
     config_path = _write_backtest_project(tmp_path)
+    root = tmp_path / "daemon-runs"
 
-    result = CliRunner().invoke(backtest_app, ["--config", str(config_path)], catch_exceptions=False)
+    result = CliRunner().invoke(
+        run_app,
+        ["daemon", "start", "--foreground", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
+        catch_exceptions=False,
+    )
 
     assert result.exit_code == 0
-    assert '"run_id": "bt-1"' in result.output
-    assert '"fills": 1' in result.output
-    run_directory = tmp_path / "runs" / "backtest" / "bt-1"
-    assert (run_directory / "summary.json").exists()
-    assert (run_directory / "account" / "current.json").exists()
-    assert (run_directory / "equity.jsonl").read_text(encoding="utf-8").strip()
-    assert json.loads((run_directory / "metrics.json").read_text(encoding="utf-8"))["net_profit"] == "-202"
-    assert json.loads((run_directory / "summary.json").read_text(encoding="utf-8"))["event_count"] == 2
+    payload = json.loads(result.output)
+    assert payload["phase"] == "stopped"
+    assert payload["run_instance_id"]
+    assert payload["result"]["event_count"] == 2
+    assert (root / "backtest" / "bt-1" / "summary.json").exists()
 
 
-def test_run_backtest_command_uses_new_config_runner(tmp_path) -> None:
+def test_run_daemon_start_background_command_launches_config(tmp_path) -> None:
     config_path = _write_backtest_project(tmp_path)
+    root = tmp_path / "daemon-runs"
 
-    result = CliRunner().invoke(run_app, ["backtest", "--config", str(config_path), "--format", "json"], catch_exceptions=False)
+    result = CliRunner().invoke(
+        run_app,
+        ["daemon", "start", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
+        catch_exceptions=False,
+    )
 
     assert result.exit_code == 0
-    assert '"run_id": "bt-1"' in result.output
-    assert '"event_count": 2' in result.output
+    payload = json.loads(result.output)
+    assert payload["phase"] == "starting"
+    assert payload["run_instance_id"]
+    summary_path = root / "backtest" / "bt-1" / "summary.json"
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not summary_path.exists():
+        time.sleep(0.05)
+    assert json.loads(summary_path.read_text(encoding="utf-8"))["event_count"] == 2
 
 
 def _write_backtest_project(root: Path) -> Path:

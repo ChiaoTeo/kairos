@@ -4,7 +4,7 @@ mode = "backtest"
 strategy = "examples.strategies.sma:SmaCrossBacktest"
 
 [strategy.params]
-symbol = "BTC/USDC:USDC"
+symbol = "hyperliquid:swap:BTC/USDC:USDC"
 quantity = "0.01"
 fast_window = 3
 slow_window = 5
@@ -16,6 +16,11 @@ timeframe = "1m"
 data_root = "../.kairos/data"
 runs_root = "../.kairos/runs"
 storage_format = "jsonl"
+dataset = "market.ohlcv.hyperliquid_swap_btc_usdc_usdc.1m"
+stream = "market.ohlcv.hyperliquid.btc_usdc_usdc.1m"
+symbol = "BTC/USDC:USDC"
+kind = "ohlcv"
+timeframe = "1m"
 venue = "hyperliquid"
 market = "swap"
 price_field = "close"

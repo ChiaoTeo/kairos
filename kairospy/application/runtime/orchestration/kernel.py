@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from kairospy.application.runtime.execution.context import RuntimeContext
-from kairospy.application.runtime.execution.engine import RuntimeEngine
+from kairospy.application.runtime.dispatch.context import RuntimeContext
+from kairospy.application.runtime.dispatch.dispatcher import RuntimeDispatcher
 from kairospy.application.runtime.orchestration.pipeline import RuntimeServicePipeline
 from kairospy.application.runtime.orchestration.session import RuntimeSession
 from kairospy.application.runtime.orchestration.state import RuntimeFrame, RuntimeRunResult, Callback
@@ -49,7 +49,7 @@ class RuntimeKernel:
         self.data = data
         self.account = account
         self.reference = reference
-        self.execution = execution
+        self.execution_coordinator = execution
         self.providers = (
             *((MarketDataProjectionProvider(self.data),) if self.data is not None else ()),
             *((AccountServiceProjectionProvider(self.account),) if self.account is not None else ()),
@@ -74,7 +74,7 @@ class RuntimeKernel:
             data=self.data,
             views=self.views,
         )
-        self.engine = RuntimeEngine(
+        self.dispatcher = RuntimeDispatcher(
             strategy=self.strategy,
             intents=self.intents,
             context=self.context,
@@ -82,9 +82,9 @@ class RuntimeKernel:
 
     def start(self) -> RuntimeSession:
         frame = RuntimeFrame()
-        self.engine.start(frame)
+        self.dispatcher.start(frame)
         self.services.publish()
-        return RuntimeSession(self.engine, self.services, frame)
+        return RuntimeSession(self.dispatcher, self.services, frame)
 
     async def run(self, source: RuntimeEventLine | None = None) -> RuntimeRunResult:
         line = source or self.data or self.account

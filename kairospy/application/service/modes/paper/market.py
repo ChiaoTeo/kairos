@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Mapping
+from typing import Callable, Mapping
 
 from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.application.runtime.protocol.lines import RuntimeEventLine, close_event_line
@@ -20,40 +20,42 @@ from kairospy.infrastructure.integrations.protocols import LiveMarketDataFeed
 
 
 @dataclass(frozen=True, slots=True)
-class LiveMarketDataServiceView:
+class PaperMarketDataServiceView:
     source: str
     subscription_count: int = 0
     subscriptions: tuple[DataSubscription, ...] = ()
 
 
-class LiveMarketDataService(MarketDataService):
+class PaperMarketDataService(MarketDataService):
     key = "market.service"
     schema = ViewSchema(
         key,
         "system",
         fields=(
-            ViewFieldSchema("source", "live market data source", "runtime state", "live market data service"),
-            ViewFieldSchema("subscription_count", "active subscription count", "runtime state", "live market data service"),
-            ViewFieldSchema("subscriptions", "active subscription specs", "runtime state", "live market data service"),
+            ViewFieldSchema("source", "paper market data source", "runtime state", "paper market data service"),
+            ViewFieldSchema("subscription_count", "active subscription count", "runtime state", "paper market data service"),
+            ViewFieldSchema("subscriptions", "active subscription specs", "runtime state", "paper market data service"),
         ),
         mutability="runtime_writable",
-        evidence="runtime live market data service",
+        evidence="runtime paper market data service",
     )
 
-    def __init__(
-        self,
-        source: RuntimeEventLine | None = None,
-        *,
-        feed: LiveMarketDataFeed | None = None,
-        source_name: str = "live",
-    ) -> None:
+    @classmethod
+    def from_feed(cls, feed: LiveMarketDataFeed, *, source_name: str = "paper-live-feed") -> "PaperMarketDataService":
+        return cls(feed=feed, source_name=source_name)
+
+    def __init__(self, source: RuntimeEventLine | None = None, *, feed: LiveMarketDataFeed | None = None, source_name: str = "paper") -> None:
         if source is None and feed is None:
-            raise ValueError("live market data service requires a runtime source or integration feed")
+            raise ValueError("paper market data service requires a runtime source or integration feed")
         self.source = source
         self.feed = feed
         self.source_name = source_name
         self._subscriptions: dict[str, DataSubscription] = {}
         self._sequence = 0
+        self._stop_requested: Callable[[], bool] | None = None
+
+    def set_stop_requested(self, stop_requested: Callable[[], bool] | None) -> None:
+        self._stop_requested = stop_requested
 
     async def events(self) -> AsyncIterator[RuntimeEnvelope]:
         if self.feed is not None and self._subscriptions:
@@ -84,15 +86,15 @@ class LiveMarketDataService(MarketDataService):
     def on_event(self, event: RuntimeEnvelope) -> None:
         return None
 
-    def view(self) -> LiveMarketDataServiceView:
+    def view(self) -> PaperMarketDataServiceView:
         subscriptions = self.subscriptions()
-        return LiveMarketDataServiceView(self.source_name, len(subscriptions), subscriptions)
+        return PaperMarketDataServiceView(self.source_name, len(subscriptions), subscriptions)
 
     async def _feed_events(self) -> AsyncIterator[RuntimeEnvelope]:
         iterators = [self._subscription_events(subscription).__aiter__() for subscription in self.subscriptions()]
         tasks = {asyncio.create_task(iterator.__anext__()): iterator for iterator in iterators}
         try:
-            while tasks:
+            while tasks and not self._should_stop():
                 done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
                     iterator = tasks.pop(task)
@@ -121,6 +123,8 @@ class LiveMarketDataService(MarketDataService):
             method = getattr(self.feed, "watch_ticker_updates", None)
             stream = method(spec.market.source_symbol, params=spec.params) if callable(method) else self.feed.watch_ticker(spec.market.source_symbol, params=spec.params)
             async for item in stream:
+                if self._should_stop():
+                    break
                 event = item if isinstance(item, MarketEvent) else ccxt_ticker_update(_mapping(item), market=spec.market)
                 yield self._envelope("quote", event)
             return
@@ -133,6 +137,8 @@ class LiveMarketDataService(MarketDataService):
                 else self.feed.watch_order_book(spec.market.source_symbol, limit=depth, params=spec.params)
             )
             async for item in stream:
+                if self._should_stop():
+                    break
                 event = item if isinstance(item, MarketEvent) else ccxt_order_book_update(_mapping(item), market=spec.market)
                 yield self._envelope("orderbook", event)
             return
@@ -140,10 +146,15 @@ class LiveMarketDataService(MarketDataService):
             method = getattr(self.feed, "watch_trades_updates", None)
             stream = method(spec.market.source_symbol, params=spec.params) if callable(method) else self.feed.watch_trades(spec.market.source_symbol, params=spec.params)
             async for item in stream:
+                if self._should_stop():
+                    break
                 event = item if isinstance(item, MarketEvent) else ccxt_trade_update(_mapping(item), market=spec.market)
                 yield self._envelope("trade", event)
             return
-        raise ValueError(f"unsupported live market selector model: {getattr(model, '__name__', model)!r}")
+        raise ValueError(f"unsupported paper market selector model: {getattr(model, '__name__', model)!r}")
+
+    def _should_stop(self) -> bool:
+        return False if self._stop_requested is None else bool(self._stop_requested())
 
     def _envelope(self, kind: str, event: MarketEvent) -> RuntimeEnvelope:
         self._sequence += 1
@@ -155,8 +166,8 @@ class LiveMarketDataService(MarketDataService):
 
 def _mapping(value: object) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
-        raise TypeError("live market data feed emitted a non-mapping payload")
+        raise TypeError("paper market data feed emitted a non-mapping payload")
     return value
 
 
-__all__ = ["LiveMarketDataService", "LiveMarketDataServiceView"]
+__all__ = ["PaperMarketDataService", "PaperMarketDataServiceView"]

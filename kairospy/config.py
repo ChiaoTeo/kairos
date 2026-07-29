@@ -268,6 +268,9 @@ class RunConfig:
         elif mode == "paper":
             if isinstance(account, Mapping) and str(account.get("environment", "paper")).strip() not in {"paper"}:
                 issues.append("account.environment must be paper-compatible for paper runs")
+            paper = self.values.get("paper")
+            if isinstance(paper, Mapping):
+                issues.extend(_account_selector_issues(paper, "paper"))
             if isinstance(execution, Mapping):
                 issues.extend(_execution_issues(execution, mode=mode))
         elif broker is not None and not isinstance(broker, Mapping):
@@ -520,6 +523,30 @@ def _live_issues(live: Mapping[str, Any]) -> list[str]:
     for key in ("stream", "balance_params", "order_params"):
         if key in live and not isinstance(live[key], Mapping):
             issues.append(f"live.{key} must be a table")
+    issues.extend(_account_selector_issues(live, "live"))
+    return issues
+
+
+def _account_selector_issues(values: Mapping[str, Any], section: str) -> list[str]:
+    issues: list[str] = []
+    if "account" in values:
+        value = values["account"]
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            issues.append(f"{section}.account must be an account id or integer account index")
+        elif isinstance(value, str) and not value.strip():
+            issues.append(f"{section}.account must be a non-empty string or integer account index")
+        elif isinstance(value, int) and value < 0:
+            issues.append(f"{section}.account cannot be negative")
+    if "account_id" in values and not _valid_optional_text(values.get("account_id")):
+        issues.append(f"{section}.account_id must be a non-empty string")
+    if "account_index" in values:
+        try:
+            value = _int(values["account_index"], f"{section}.account_index")
+        except ConfigError as error:
+            issues.append(str(error))
+        else:
+            if value < 0:
+                issues.append(f"{section}.account_index cannot be negative")
     return issues
 
 

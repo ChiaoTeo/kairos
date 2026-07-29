@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .bindings import DataBinder, DataMode, MarketDataBinding, bind_market_data, market_data_id_from_symbol
 from .identity import market_data_id, market_stream_name
+from .operations import HistoricalMarketDataClient, MarketDataOperationsService
 from .planning import (
     STREAM_BAR,
     STREAM_MARKET_CONTEXT,
@@ -47,8 +48,10 @@ __all__ = [
     "BarRecord",
     "DataBinder",
     "DataMode",
+    "HistoricalMarketDataClient",
     "IterableMarketEventSource",
     "MarketDataBinding",
+    "MarketDataOperationsService",
     "MarketDataResolver",
     "MarketDataSpec",
     "MarketRecord",

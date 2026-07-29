@@ -7,7 +7,7 @@ from decimal import Decimal
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
 from kairospy.application.runtime.protocol import RuntimeEnvelope, RuntimeLine
 from kairospy.application.service.domain.account import SimulatedAccount
-from kairospy.application.service.engine.paper import PaperAccountService, PaperExecutionService, PaperMarketDataService
+from kairospy.application.service.modes.paper import PaperAccountService, PaperExecutionService, PaperMarketDataService
 from kairospy.core.account import Environment
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentStatus, target_position_intent
@@ -110,4 +110,4 @@ def test_paper_services_stream_market_data_and_simulate_execution() -> None:
     assert account_view.cash == Decimal("2999")
     assert account_view.positions[0].quantity == Decimal("1")
     assert kernel.views.require("market.service").source == "paper-test-feed"
-    assert kernel.views.require("order.current").execution.latest_order.status == "filled"
+    assert kernel.views.require("order.current").state.latest_order.status == "filled"

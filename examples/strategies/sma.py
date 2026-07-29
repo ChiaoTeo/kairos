@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from kairospy.application.strategy import StrategyContext
 from kairospy.core.market import Bar
-from kairospy.application.strategy import StrategyBase, StrategySignal
+from kairospy.application.strategy import Signal, StrategyBase
 
 
 class SmaCrossBacktest(StrategyBase):
@@ -39,17 +39,17 @@ class SmaCrossBacktest(StrategyBase):
             market=self.market,
             selectors=(Bar.select("close", interval=self.timeframe),),
         )
-        return ()
+        return None
 
-    def on_market(self, context: StrategyContext, signal: StrategySignal):
+    def on_data(self, context: StrategyContext, signal: Signal):
         if not signal.changed("market", "bar"):
-            return ()
+            return None
         close = _latest_close(context)
         if close is None:
-            return ()
+            return None
         self.closes.append(close)
         if len(self.closes) < self.slow_window:
-            return ()
+            return None
 
         fast = _mean(self.closes[-self.fast_window:])
         slow = _mean(self.closes[-self.slow_window:])
@@ -59,7 +59,7 @@ class SmaCrossBacktest(StrategyBase):
         elif fast <= slow and self.positioned:
             self.positioned = False
             context.target_position(self.symbol, Decimal("0"), intent_id=f"flat-{len(self.closes)}")
-        return ()
+        return None
 
 
 def _latest_close(context: StrategyContext) -> Decimal | None:
