@@ -109,7 +109,7 @@ class RunConfig:
             raise ConfigError(f"invalid TOML in run config {config_path}: {error}") from error
         if not isinstance(values, Mapping):
             raise ConfigError(f"run config root must be a TOML table: {config_path}")
-        return cls(config_path, config_path.parent, values)
+        return cls(config_path, Path.cwd().resolve(), values)
 
     @classmethod
     def from_values(
@@ -120,7 +120,7 @@ class RunConfig:
         path: str | Path | None = None,
     ) -> "RunConfig":
         source_path = Path(path).expanduser().resolve() if path is not None else None
-        base = Path(root).expanduser().resolve() if root is not None else (source_path.parent if source_path else Path.cwd())
+        base = Path(root).expanduser().resolve() if root is not None else Path.cwd().resolve()
         return cls(source_path, base, values)
 
     @property

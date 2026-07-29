@@ -6,6 +6,8 @@ The examples use the current application boundary:
 - Python runs go through `TradingSystemLauncher`.
 - Strategies live in `examples/strategies/` and are referenced from TOML with `module:callable`.
 - Runtime internals are intentionally not assembled by example code.
+- Relative paths in run configs are resolved from the workspace, normally the directory where the command is run.
+- Run artifacts are written under `.kairos/runs` in the current working directory unless a config explicitly sets `runs_root` or `state_path`.
 
 ## Quick Smoke Tests
 
@@ -27,10 +29,10 @@ Run the top-level sample backtest config:
 uv run kairos run backtest --config configs/runs/backtest.example.toml
 ```
 
-Run the committed Hyperliquid paper smoke test. This uses `examples/events/hyperliquid_ticker.jsonl`, so it does not require network access:
+Run the committed Hyperliquid replay smoke test. This uses `examples/events/hyperliquid_ticker.jsonl`, so it does not require network access:
 
 ```bash
-uv run kairos run paper --config examples/configs/hyperliquid_paper.toml
+uv run kairos run paper --config examples/configs/hyperliquid_paper_replay.toml
 ```
 
 ## Live Market Paper
@@ -38,7 +40,7 @@ uv run kairos run paper --config examples/configs/hyperliquid_paper.toml
 Run Hyperliquid paper against the public websocket feed:
 
 ```bash
-uv run kairos run paper --config configs/runs/hyperliquid-paper.example.toml
+uv run kairos run paper --config examples/configs/hyperliquid_paper.toml
 ```
 
 This is paper trading only: account state and fills are simulated locally, and no Hyperliquid API key is required.

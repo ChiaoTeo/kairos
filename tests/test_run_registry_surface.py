@@ -18,6 +18,7 @@ def test_run_list_reads_rewritten_runtime_artifact_registry(tmp_path) -> None:
         json.dumps({"run_id": "bt-1", "mode": "backtest", "event_count": 2}) + "\n",
         encoding="utf-8",
     )
+    (directory / "run.log").write_text("strategy output\n", encoding="utf-8")
 
     result = CliRunner().invoke(run_app, ["list", "--root", str(tmp_path), "--format", "json"], catch_exceptions=False)
 
@@ -26,6 +27,11 @@ def test_run_list_reads_rewritten_runtime_artifact_registry(tmp_path) -> None:
     assert payload["count"] == 1
     assert payload["runs"][0]["run_id"] == "bt-1"
     assert payload["runs"][0]["mode"] == "backtest"
+    assert payload["runs"][0]["log_file"] == str(directory / "run.log")
+
+    text = CliRunner().invoke(run_app, ["list", "--root", str(tmp_path), "--format", "text"], catch_exceptions=False)
+
+    assert str(directory / "run.log") in text.output
 
 
 def test_run_daemon_status_uses_artifact_registry(tmp_path) -> None:

@@ -3,8 +3,15 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 
+import pytest
+
 from kairospy.application.service.modes.live import configured_live
 from kairospy.application.system import TradingSystemLauncher
+
+
+@pytest.fixture(autouse=True)
+def _workspace(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
 
 
 class FakeLiveFeed:
@@ -179,6 +186,7 @@ def _live_config_lines(*, extra_accounts: bool, account_index: int | None) -> li
             'venue = "binance"',
             'market = "spot"',
             'symbol = "BTC/USDT"',
+            'state_path = ".kairos/runs/live/live-1/live_state.json"',
     ])
     if account_index is not None:
         lines.append(f"account_index = {account_index}")

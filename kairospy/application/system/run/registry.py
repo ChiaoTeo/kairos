@@ -21,6 +21,7 @@ class RunRecord:
         return {
             "run_id": self.run_id,
             "mode": self.mode,
+            "directory": str(self.directory),
             "phase": self.phase,
             "status": self.status,
             "desired_state": self.desired_state,

@@ -13,8 +13,7 @@ market = "spot"
 timeframe = "1m"
 
 [backtest]
-data_root = "../.kairos/data"
-runs_root = "../.kairos/runs"
+data_root = "examples/.kairos/data"
 storage_format = "jsonl"
 dataset = "market.ohlcv.binance_spot_btc_usdt.1m"
 stream = "market.ohlcv.binance.btc_usdt.1m"

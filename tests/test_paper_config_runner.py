@@ -4,12 +4,19 @@ from collections.abc import AsyncIterator, Mapping
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from kairospy.application.service.modes.paper import configured_paper
 from kairospy.application.system import TradingSystemLauncher
+from kairospy.application.system.run import RunRegistry
 from kairospy.infrastructure.integrations import HyperliquidMarketDataConnector
 from kairospy.surface.products.run import run_app
+
+
+@pytest.fixture(autouse=True)
+def _workspace(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
 
 
 def test_configured_paper_runs_new_engine(tmp_path) -> None:
@@ -22,8 +29,12 @@ def test_configured_paper_runs_new_engine(tmp_path) -> None:
     assert len(result.fills) == 1
     assert result.account_view.cash == result.final_equity
     run_directory = tmp_path / ".kairos" / "runs" / "paper" / "paper-1"
+    assert json.loads((run_directory / "summary.json").read_text(encoding="utf-8"))["event_count"] == 2
+    assert "paper strategy saw quote" in (run_directory / "run.log").read_text(encoding="utf-8")
     assert (run_directory / "account" / "current.json").exists()
     assert (run_directory / "account" / "equity.jsonl").read_text(encoding="utf-8").strip()
+    records = RunRegistry(tmp_path / ".kairos" / "runs").list(mode="paper", run_id="paper-1")
+    assert len(records) == 1
 
 
 def test_run_paper_command_uses_new_config_runner(tmp_path) -> None:
@@ -32,8 +43,27 @@ def test_run_paper_command_uses_new_config_runner(tmp_path) -> None:
     result = CliRunner().invoke(run_app, ["paper", "--config", str(config_path), "--format", "json"], catch_exceptions=False)
 
     assert result.exit_code == 0
+    assert "paper strategy saw quote" in result.output
     assert '"mode": "paper"' in result.output
     assert '"event_count": 2' in result.output
+
+
+def test_configured_paper_default_runs_root_uses_current_working_directory(tmp_path, monkeypatch) -> None:
+    config_root = tmp_path / "configs"
+    config_root.mkdir()
+    config_path = _write_paper_project(config_root, runs_root=False)
+    (config_root / "__init__.py").write_text("", encoding="utf-8")
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        .replace('strategy = "strategy_mod:PaperStrategy"', 'strategy = "configs.strategy_mod:PaperStrategy"')
+        .replace('events = "events.jsonl"', 'events = "configs/events.jsonl"'),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    configured = configured_paper(config_path)
+
+    assert configured.run_directory == tmp_path / ".kairos" / "runs" / "paper" / "paper-1"
 
 
 def test_configured_paper_can_stream_market_data_from_integration_feed(tmp_path) -> None:
@@ -46,6 +76,7 @@ def test_configured_paper_can_stream_market_data_from_integration_feed(tmp_path)
     assert len(result.fills) == 1
     assert result.account_view.cash == result.final_equity
     run_directory = tmp_path / ".kairos" / "runs" / "paper" / "paper-streaming-1"
+    assert json.loads((run_directory / "summary.json").read_text(encoding="utf-8"))["run_id"] == "paper-streaming-1"
     assert (run_directory / "account" / "current.json").exists()
 
 
@@ -92,6 +123,21 @@ def test_configured_paper_can_run_hyperliquid_streaming_feed(tmp_path) -> None:
     assert result.account_view.cash == result.final_equity
 
 
+def test_configured_paper_accepts_live_ticker_without_timestamp(tmp_path) -> None:
+    config_path = _write_streaming_paper_project(
+        tmp_path,
+        venue="hyperliquid",
+        market="swap",
+        symbol="BTC/USDC:USDC",
+        quote_currency="USDC",
+    )
+
+    result = TradingSystemLauncher().run_configured_paper(configured_paper(config_path, market_feed_factory=lambda venue: FakeTimestamplessFeed()))
+
+    assert result.runtime.event_count == 2
+    assert result.runtime.last_event.time.tzinfo is not None
+
+
 class FakePaperFeed:
     async def watch_ticker(self, symbol: str, *, params: Mapping[str, object] | None = None) -> AsyncIterator[Mapping[str, object]]:
         yield {"timestamp": 1767225600000, "bid": "100", "ask": "101"}
@@ -118,7 +164,12 @@ class FakePaperFeed:
             yield {}
 
 
-def _write_paper_project(root: Path) -> Path:
+class FakeTimestamplessFeed(FakePaperFeed):
+    async def watch_ticker(self, symbol: str, *, params: Mapping[str, object] | None = None) -> AsyncIterator[Mapping[str, object]]:
+        yield {"last": "101", "close": "101", "info": {"price": "101"}}
+
+
+def _write_paper_project(root: Path, *, runs_root: bool = True) -> Path:
     market_id = "market:binance:spot:btc_usdt"
     instrument_id = "instrument:spot:btc:usdt"
     (root / "strategy_mod.py").write_text(
@@ -133,6 +184,7 @@ def _write_paper_project(root: Path) -> Path:
             "        self.market_id = market_id",
             "        self.entered = False",
             "    def on_data(self, context, signal):",
+            "        print('paper strategy saw quote')",
             "        if self.entered:",
             "            return None",
             "        self.entered = True",
@@ -162,9 +214,7 @@ def _write_paper_project(root: Path) -> Path:
         + "\n",
         encoding="utf-8",
     )
-    config_path = root / "paper.toml"
-    config_path.write_text(
-        "\n".join([
+    lines = [
             "[run]",
             'id = "paper-1"',
             'mode = "paper"',
@@ -182,10 +232,11 @@ def _write_paper_project(root: Path) -> Path:
             "[paper]",
             'events = "events.jsonl"',
             'price_field = "ask"',
-        ])
-        + "\n",
-        encoding="utf-8",
-    )
+    ]
+    if runs_root:
+        lines.append('runs_root = ".kairos/runs"')
+    config_path = root / "paper.toml"
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return config_path
 
 
@@ -260,6 +311,7 @@ def _write_streaming_paper_project(
             f'market = "{market}"',
             f'symbol = "{symbol}"',
             'price_field = "ask"',
+            'runs_root = ".kairos/runs"',
     ])
     if account_id is not None:
         lines.append(f'account_id = "{account_id}"')

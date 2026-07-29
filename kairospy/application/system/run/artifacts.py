@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+from dataclasses import fields, is_dataclass
+from decimal import Decimal
+from enum import StrEnum
+import json
+from pathlib import Path
+from typing import Mapping
+
+
+class RunArtifactWriter:
+    def __init__(self, directory: str | Path) -> None:
+        self.directory = Path(directory)
+
+    def write(self, *, result: object, normalized_config: Mapping[str, object]) -> Mapping[str, object]:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        summary = self.summary(result)
+        self._write_json("summary.json", summary)
+        self._write_json("config.normalized.json", normalized_config)
+        self._write_json("metrics.json", getattr(result, "metrics", {}))
+        return summary
+
+    def summary(self, result: object) -> Mapping[str, object]:
+        runtime = getattr(result, "runtime", None)
+        mode = getattr(result, "mode", None)
+        return _jsonable(
+            {
+                "run_id": getattr(result, "run_id", None),
+                "mode": getattr(mode, "value", mode),
+                "strategy_id": getattr(runtime, "strategy_id", None),
+                "event_count": getattr(runtime, "event_count", None),
+                "intent_count": getattr(runtime, "intent_count", None),
+                "fills": len(tuple(getattr(result, "fills", ()) or ())),
+                "closed_trades": len(tuple(getattr(result, "trades", ()) or ())),
+                "initial_equity": getattr(result, "initial_equity", None),
+                "final_equity": getattr(result, "final_equity", None),
+                "net_profit": getattr(result, "net_profit", None),
+                "total_return": getattr(result, "total_return", None),
+                "metrics": getattr(result, "metrics", {}),
+            }
+        )
+
+    def _write_json(self, filename: str, value: object) -> None:
+        (self.directory / filename).write_text(json.dumps(_jsonable(value), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _jsonable(value: object) -> object:
+    if is_dataclass(value):
+        return {field.name: _jsonable(getattr(value, field.name)) for field in fields(value)}
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, StrEnum):
+        return value.value
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return value
+
+
+__all__ = ["RunArtifactWriter"]

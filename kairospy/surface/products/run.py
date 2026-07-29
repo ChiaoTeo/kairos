@@ -268,17 +268,26 @@ def _echo(payload: Mapping[str, object]) -> None:
 
 
 def _echo_registry(records: tuple[object, ...], *, output_format: OutputFormat) -> None:
-    payload = {"runs": records, "count": len(records)}
+    items = [_record_payload(record) for record in records]
+    payload = {"runs": items, "count": len(items)}
     if _use_json_output(output_format):
         _echo(payload)
         return
-    if not records:
+    if not items:
         typer.echo("Runs\n  none")
         return
     lines = ["Runs"]
-    for record in records:
-        lines.append(f"  {record.mode}:{record.run_id}  {record.directory}")
+    for item in items:
+        detail = f"  log {item['log_file']}" if item.get("log_file") else ""
+        lines.append(f"  {item['mode']}:{item['run_id']}  {item['directory']}{detail}")
     typer.echo("\n".join(lines))
+
+
+def _record_payload(record: object) -> Mapping[str, object]:
+    method = getattr(record, "to_dict", None)
+    if callable(method):
+        return method()
+    return record if isinstance(record, Mapping) else {"record": record}
 
 
 def _use_json_output(output_format: OutputFormat) -> bool:

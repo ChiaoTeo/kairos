@@ -75,6 +75,8 @@ class StreamingMarketDataService(MarketSubscriptionState, MarketDataPort):
         finally:
             for task in tasks:
                 task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks.keys(), return_exceptions=True)
             for iterator in iterators:
                 await close_event_line(iterator)
 

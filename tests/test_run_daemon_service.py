@@ -4,10 +4,16 @@ import json
 from pathlib import Path
 import time
 
+import pytest
 from typer.testing import CliRunner
 
 from kairospy.application.system.run import RunDaemonService, RunRegistry
 from kairospy.surface.products.run import run_app
+
+
+@pytest.fixture(autouse=True)
+def _workspace(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
 
 
 def test_run_daemon_service_runs_backtest_foreground_and_writes_state(tmp_path) -> None:

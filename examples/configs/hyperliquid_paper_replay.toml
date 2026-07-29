@@ -1,5 +1,5 @@
 [run]
-id = "hyperliquid-paper"
+id = "hyperliquid-paper-replay"
 mode = "paper"
 strategy = "examples.strategies.hyperliquid:OneShotLong"
 
@@ -8,13 +8,10 @@ symbol = "hyperliquid:swap:BTC/USDC:USDC"
 quantity = "0.01"
 
 [paper]
+events = "examples/events/hyperliquid_ticker.jsonl"
 venue = "hyperliquid"
 market = "swap"
-symbol = "BTC/USDC:USDC"
 price_field = "ask"
-
-[paper.stream]
-type = "swap"
 
 [accounts.hyperliquid_main]
 index = 0

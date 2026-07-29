@@ -3,12 +3,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from kairospy.application.service.modes.backtest import configured_backtest
 from kairospy.application.system import TradingSystemLauncher
 from kairospy.surface.products.backtest import backtest_app
 from kairospy.surface.products.run import run_app
+
+
+@pytest.fixture(autouse=True)
+def _workspace(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
 
 
 def test_configured_backtest_runs_new_engine_and_writes_account_journal(tmp_path) -> None:

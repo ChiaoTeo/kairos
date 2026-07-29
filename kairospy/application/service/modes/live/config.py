@@ -209,7 +209,7 @@ def _params_table(value: object, *, default: Mapping[str, object] | None = None)
 def _state_path(live: Mapping[str, object], *, root: Path, run_id: str) -> Path:
     value = live.get("state_path")
     if value is None:
-        return root / ".kairos" / "runs" / RuntimeMode.LIVE.value / run_id / "live_state.json"
+        return Path(".kairos/runs").resolve() / RuntimeMode.LIVE.value / run_id / "live_state.json"
     path = Path(str(value)).expanduser()
     if not path.is_absolute():
         path = root / path

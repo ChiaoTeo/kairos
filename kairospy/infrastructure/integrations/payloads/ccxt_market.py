@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -36,13 +37,14 @@ def ccxt_ohlcv_bar(values: list[Any] | tuple[Any, ...], *, market: MarketRef, ti
 
 
 def ccxt_ticker_quote(raw: Mapping[str, object], *, market: MarketRef) -> Quote:
+    ticker = _normalized_ticker(raw)
     return Quote(
         instrument_id=market.instrument_id,
         market_id=market.market_id,
         market_key=market.market_key,
-        time=event_time(raw.get("timestamp")),
-        bid=_optional_decimal(raw.get("bid")),
-        ask=_optional_decimal(raw.get("ask")),
+        time=_market_time(ticker, fallback_to_now=True),
+        bid=_optional_decimal(ticker.get("bid")),
+        ask=_optional_decimal(ticker.get("ask")),
         source=market.venue,
     )
 
@@ -52,7 +54,7 @@ def ccxt_order_book_snapshot(raw: Mapping[str, object], *, market: MarketRef) ->
         instrument_id=market.instrument_id,
         market_id=market.market_id,
         market_key=market.market_key,
-        time=event_time(raw.get("timestamp")),
+        time=_market_time(raw),
         bids=_levels(raw.get("bids")),
         asks=_levels(raw.get("asks")),
         nonce=raw.get("nonce"),
@@ -65,7 +67,7 @@ def ccxt_trade_print(raw: Mapping[str, object], *, market: MarketRef) -> TradePr
         instrument_id=market.instrument_id,
         market_id=market.market_id,
         market_key=market.market_key,
-        time=event_time(raw.get("timestamp")),
+        time=_market_time(raw),
         trade_id=None if raw.get("id") is None else str(raw.get("id")),
         side=None if raw.get("side") is None else str(raw.get("side")),
         price=_optional_decimal(raw.get("price")),
@@ -97,7 +99,7 @@ def ccxt_ohlcv_update(values: list[Any] | tuple[Any, ...], *, market: MarketRef,
 
 
 def ccxt_ticker_record(raw: Mapping[str, object], *, market: MarketRef) -> QuoteRecord:
-    return ticker_record(venue=market.venue, market=market.market, instrument=market, ticker=raw)
+    return ticker_record(venue=market.venue, market=market.market, instrument=market, ticker=_normalized_ticker(raw))
 
 
 def ccxt_ticker_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
@@ -192,6 +194,43 @@ def _optional_decimal(value: object | None) -> Decimal | None:
 
 def _decimal(value: object) -> Decimal:
     return Decimal(str(value))
+
+
+def _market_time(raw: Mapping[str, object], *, fallback_to_now: bool = False) -> datetime:
+    value = raw.get("timestamp")
+    if value is not None:
+        return event_time(value)
+    value = raw.get("datetime") or raw.get("time") or raw.get("transactTime")
+    if isinstance(value, str) and value.strip():
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    if fallback_to_now:
+        return datetime.now(timezone.utc)
+    return event_time(None)
+
+
+def _normalized_ticker(raw: Mapping[str, object]) -> Mapping[str, object]:
+    value = dict(raw)
+    price = _first_not_none(value.get("last"), value.get("close"), value.get("markPrice"), value.get("indexPrice"), _info_price(value))
+    if value.get("bid") is None and price is not None:
+        value["bid"] = price
+    if value.get("ask") is None and price is not None:
+        value["ask"] = price
+    if value.get("timestamp") is None:
+        value["timestamp"] = int(_market_time(value, fallback_to_now=True).timestamp() * 1000)
+    return value
+
+
+def _info_price(raw: Mapping[str, object]) -> object | None:
+    info = raw.get("info")
+    return info.get("price") if isinstance(info, Mapping) else None
+
+
+def _first_not_none(*values: object) -> object | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
 
 
 def _market_metadata(market: MarketRef, **values: object) -> dict[str, object]:

@@ -210,7 +210,9 @@ def _strategy_params(values: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _data_root(backtest: Mapping[str, object], *, root: Path) -> Path:
-    return _resolve_path(backtest.get("data_root", ".kairos/data"), root=root, source="backtest.data_root")
+    if backtest.get("data_root") is None:
+        return Path(".kairos/data").resolve()
+    return _resolve_path(backtest["data_root"], root=root, source="backtest.data_root")
 
 
 def _storage_format(backtest: Mapping[str, object]) -> str:
@@ -230,7 +232,7 @@ def _slippage_model(execution: Mapping[str, object]) -> BasisPointSlippageModel 
 
 
 def _run_directory(backtest: Mapping[str, object], *, root: Path, run_id: str) -> Path:
-    runs_root = _resolve_path(backtest.get("runs_root", ".kairos/runs"), root=root, source="backtest.runs_root")
+    runs_root = Path(".kairos/runs").resolve() if backtest.get("runs_root") is None else _resolve_path(backtest["runs_root"], root=root, source="backtest.runs_root")
     return runs_root / RuntimeMode.BACKTEST.value / run_id
 
 

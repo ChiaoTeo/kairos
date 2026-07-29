@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .artifacts import RunArtifactWriter
+from .logging import RunOutputLog
 from .registry import RunRecord, RunRegistry, list_run_daemons
 from .state import JsonLiveRuntimeStateStore, LiveRuntimeStateSnapshot, LiveRuntimeStateStore
 
@@ -20,5 +22,7 @@ __all__ = [
     "JsonLiveRuntimeStateStore",
     "LiveRuntimeStateSnapshot",
     "LiveRuntimeStateStore",
+    "RunArtifactWriter",
+    "RunOutputLog",
     "list_run_daemons",
 ]

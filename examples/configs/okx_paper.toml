@@ -4,8 +4,7 @@ mode = "paper"
 strategy = "examples.strategies.okx:OneShotLong"
 
 [paper]
-events = "../events/okx_ticker.jsonl"
-runs_root = "../.kairos/runs"
+events = "examples/events/okx_ticker.jsonl"
 venue = "okx"
 market = "spot"
 price_field = "ask"

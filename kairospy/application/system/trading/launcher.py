@@ -11,6 +11,7 @@ from kairospy.application.runtime.run import RuntimeRunResult
 from kairospy.application.service.modes.backtest import BacktestRunResult, ConfiguredBacktest, configured_backtest
 from kairospy.application.service.modes.live.config import BrokerFactory, ConfiguredLive, LiveRunResult, MarketFeedFactory as LiveMarketFeedFactory, configured_live
 from kairospy.application.service.modes.paper.config import ConfiguredPaper, PaperRunResult, MarketFeedFactory as PaperMarketFeedFactory, configured_paper
+from kairospy.application.system.run import RunArtifactWriter, RunOutputLog
 from kairospy.application.strategy import Strategy
 
 from .spec import TradingRuntimeResources, TradingRunSpec
@@ -35,7 +36,9 @@ class TradingSystemLauncher:
                 trading_execution=configured.execution,
             ),
         )
-        return configured.build_result(runtime)
+        result = configured.build_result(runtime)
+        self._write_artifacts(configured.run_directory, result, configured.normalized_config)
+        return result
 
     def run_paper_config(
         self,
@@ -59,7 +62,9 @@ class TradingSystemLauncher:
                 trading_execution=configured.execution,
             ),
         )
-        return configured.build_result(runtime)
+        result = configured.build_result(runtime)
+        self._write_artifacts(configured.run_directory, result, configured.normalized_config)
+        return result
 
     def run_live_config(
         self,
@@ -87,7 +92,9 @@ class TradingSystemLauncher:
                 trading_execution=configured.execution,
             ),
         )
-        return configured.build_result(runtime)
+        result = configured.build_result(runtime)
+        self._write_artifacts(configured.run_directory, result, configured.normalized_config)
+        return result
 
     def run_events(
         self,
@@ -124,17 +131,18 @@ class TradingSystemLauncher:
         resources: TradingRuntimeResources,
         lifecycle: object | None = None,
     ) -> RuntimeRunResult:
-        return TradingSystem(
-            TradingRunSpec(
-                run_id=run_id,
-                mode=mode,
-                strategy=strategy,
-                run_directory=run_directory,
-                normalized_config=normalized_config,
-                resources=resources,
-                lifecycle=lifecycle,
-            )
-        ).run()
+        with RunOutputLog(run_directory):
+            return TradingSystem(
+                TradingRunSpec(
+                    run_id=run_id,
+                    mode=mode,
+                    strategy=strategy,
+                    run_directory=run_directory,
+                    normalized_config=normalized_config,
+                    resources=resources,
+                    lifecycle=lifecycle,
+                )
+            ).run()
 
     def _load_strategy(self, path: str) -> Strategy:
         if ":" not in path:
@@ -146,6 +154,9 @@ class TradingSystemLauncher:
         if not hasattr(strategy, "strategy_id"):
             raise ValueError("strategy object must expose strategy_id")
         return strategy
+
+    def _write_artifacts(self, run_directory: Path, result: object, normalized_config: Mapping[str, object]) -> None:
+        RunArtifactWriter(run_directory).write(result=result, normalized_config=normalized_config)
 
     def _read_event_jsonl(self, path: Path) -> tuple[RuntimeEnvelope, ...]:
         if not path.exists():

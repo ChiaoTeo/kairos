@@ -13,8 +13,7 @@ market = "swap"
 timeframe = "1m"
 
 [backtest]
-data_root = "../.kairos/data"
-runs_root = "../.kairos/runs"
+data_root = "examples/.kairos/data"
 storage_format = "jsonl"
 dataset = "market.ohlcv.hyperliquid_swap_btc_usdc_usdc.1m"
 stream = "market.ohlcv.hyperliquid.btc_usdc_usdc.1m"

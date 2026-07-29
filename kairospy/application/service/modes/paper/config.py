@@ -188,7 +188,7 @@ def _params_table(value: object, *, default: Mapping[str, object] | None = None)
 
 
 def _run_directory(paper: Mapping[str, object], *, root: Path, run_id: str) -> Path:
-    runs_root = _resolve_path(paper.get("runs_root", ".kairos/runs"), root=root, source="paper.runs_root")
+    runs_root = Path(".kairos/runs").resolve() if paper.get("runs_root") is None else _resolve_path(paper["runs_root"], root=root, source="paper.runs_root")
     return runs_root / RuntimeMode.PAPER.value / run_id
 
 
