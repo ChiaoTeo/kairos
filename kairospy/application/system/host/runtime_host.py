@@ -5,11 +5,11 @@ import asyncio
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
 from kairospy.application.runtime.ports import AccountPort, TradingExecutionPort
 from kairospy.application.runtime.run import RuntimeRunResult, RuntimeRunSession
-from kairospy.application.system.run.journals import RunAccountJournal
+from kairospy.application.system.artifacts.journals.account import RunAccountJournal
 from kairospy.core.execution import ExecutionCoordinator
 
 from .lifecycle import NoopTradingLifecycle
-from .spec import TradingRuntimeResources, TradingRunSpec
+from .resources import TradingRuntimeResources, TradingRunSpec
 
 
 class TradingSystem:

@@ -9,8 +9,5 @@ venue = "okx"
 market = "spot"
 price_field = "ask"
 
-[accounts.okx_main]
-index = 0
-venue = "okx"
-cash = "10000"
-currency = "USDT"
+[account]
+ref = "okx_paper_spot"

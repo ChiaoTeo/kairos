@@ -5,7 +5,7 @@ from pathlib import Path
 
 import typer
 
-from kairospy.config import load_config
+from kairospy.application.system.workspace import KairosWorkspace
 from kairospy.infrastructure.data import DataStore
 from kairospy.infrastructure.integrations import (
     BinanceBroker,
@@ -42,15 +42,15 @@ class ProviderName(str, Enum):
 
 
 def store(root: str | Path | None, storage_format: StorageFormat | None) -> DataStore:
-    config = load_config()
-    resolved_root = config.resolve_path(root) if root is not None else config.data_root
-    resolved_format = storage_format.value if storage_format is not None else config.storage_format
+    workspace = KairosWorkspace.resolve()
+    resolved_root = workspace.manifest.resolve_path(root) if root is not None else workspace.data_root
+    resolved_format = storage_format.value if storage_format is not None else workspace.manifest.storage_format
     return DataStore(resolved_root, storage_format=resolved_format)
 
 
 def reference_store(root: str | Path | None) -> ReferenceStore:
-    config = load_config()
-    resolved_root = config.resolve_path(root) if root is not None else config.reference_root
+    workspace = KairosWorkspace.resolve()
+    resolved_root = workspace.manifest.resolve_path(root) if root is not None else workspace.reference_root
     return ReferenceStore(resolved_root)
 
 

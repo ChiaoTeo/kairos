@@ -7,7 +7,8 @@ The examples use the current application boundary:
 - Strategies live in `examples/strategies/` and are referenced from TOML with `module:callable`.
 - Runtime internals are intentionally not assembled by example code.
 - Relative paths in run configs are resolved from the workspace, normally the directory where the command is run.
-- Run artifacts are written under `.kairos/runs` in the current working directory unless a config explicitly sets `runs_root` or `state_path`.
+- Direct run artifacts are written under `.kairos/runs/<mode>/<run_id>` in the current working directory unless a config explicitly sets `runs_root` or `state_path`.
+- Daemon-managed runs use `.kairos/runs/<mode>/<run_id>` as a run group and write each launch under `instances/<run_instance_id>`.
 
 ## Quick Smoke Tests
 
@@ -88,7 +89,7 @@ export OKX_MAIN_API_KEY=...
 export OKX_MAIN_SECRET=...
 export OKX_MAIN_PASSWORD=...
 
-uv run kairos broker preflight --config examples/configs/okx_live.toml
+uv run kairos run validate examples/configs/okx_live.toml
 uv run kairos run live --config examples/configs/okx_live.toml
 ```
 

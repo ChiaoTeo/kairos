@@ -17,15 +17,19 @@ from .config import (
     strategy_params,
     table,
 )
-from .accounts import configured_account
+from .accounts import AccountConfigRegistry, AccountResolver, ConfiguredAccount, configured_account, configured_account_ref
 from .integrations import default_broker, default_market_feed
 from .results import AccountPerformanceMixin
 
 __all__ = [
     "AccountPerformanceMixin",
+    "AccountConfigRegistry",
+    "AccountResolver",
+    "ConfiguredAccount",
     "account_selector",
     "bool_value",
     "configured_account",
+    "configured_account_ref",
     "default_broker",
     "default_market_feed",
     "int_value",

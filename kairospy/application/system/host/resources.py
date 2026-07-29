@@ -8,7 +8,7 @@ from kairospy.application.runtime import RuntimeMode
 from kairospy.application.runtime.ports import AccountPort, MarketDataPort, ReferencePort, TradingExecutionPort
 from kairospy.application.runtime.protocol import RuntimeEventLine
 from kairospy.application.strategy import Strategy
-from kairospy.application.system.connections import ConnectionManager
+from kairospy.application.system.resources.connections import ConnectionManager
 
 from .lifecycle import TradingLifecycle
 

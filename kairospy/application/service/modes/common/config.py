@@ -184,7 +184,7 @@ def jsonable(value: object) -> object:
 
 def _project_root(root: Path) -> Path:
     for directory in (root, *root.parents):
-        if (directory / "pyproject.toml").exists() or (directory / "kairos.toml").exists():
+        if (directory / "pyproject.toml").exists() or (directory / ".kairos" / "kairos.toml").exists():
             return directory
     return root
 

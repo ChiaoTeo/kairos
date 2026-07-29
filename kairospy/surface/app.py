@@ -39,12 +39,14 @@ class ProductDescriptor:
 
 
 PRODUCTS: tuple[ProductDescriptor, ...] = (
-    ProductDescriptor("run", "Run", "runs, daemons, account views, PnL, positions", ProductMaturity.WORKSPACE),
+    ProductDescriptor("run", "Run", "run specs, daemons, status, and artifacts", ProductMaturity.WORKSPACE),
+    ProductDescriptor("account", "Account", "configured accounts, balances, open orders, snapshots", ProductMaturity.RAW),
+    ProductDescriptor("order", "Order", "order placement, cancellation, inspection, and journals", ProductMaturity.RAW),
+    ProductDescriptor("config", "Config", "workspace manifest, profiles, effective config, diagnostics", ProductMaturity.RAW),
     ProductDescriptor("backtest", "Backtest", "historical strategy runs and artifacts", ProductMaturity.RAW),
     ProductDescriptor("data", "Data", "historical datasets and lake operations", ProductMaturity.RAW),
     ProductDescriptor("streams", "Streams", "live market data streams", ProductMaturity.RAW),
     ProductDescriptor("reference", "Reference", "instruments, markets, lifecycle catalogs", ProductMaturity.PANEL),
-    ProductDescriptor("broker", "Broker", "broker and account inspection", ProductMaturity.RAW),
     ProductDescriptor("strategy", "Strategy", "strategy utilities", ProductMaturity.RAW),
     ProductDescriptor("integrations", "Integrations", "provider and exchange checks", ProductMaturity.RAW),
 )

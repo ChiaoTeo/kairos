@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
+import json
 from pathlib import Path
 
 import pytest
@@ -87,6 +88,18 @@ class FakeBroker:
         )
 
 
+class FakeBrokerWithoutOpenOrders(FakeBroker):
+    def fetch_open_orders(
+        self,
+        symbol: str | None = None,
+        *,
+        since: object | None = None,
+        limit: int | None = None,
+        params: Mapping[str, object] | None = None,
+    ) -> tuple[Mapping[str, object], ...]:
+        return ()
+
+
 def test_configured_live_runs_with_injected_integrations(tmp_path) -> None:
     config_path = _write_live_project(tmp_path)
 
@@ -94,6 +107,7 @@ def test_configured_live_runs_with_injected_integrations(tmp_path) -> None:
         config_path,
         market_feed_factory=lambda venue: FakeLiveFeed(),
         broker_factory=lambda venue, credential: FakeBroker(),
+        account_resolver=_resolver(config_path),
     )
     result = TradingSystemLauncher().run_configured_live(configured)
 
@@ -112,26 +126,31 @@ def test_configured_live_restores_runtime_state(tmp_path) -> None:
         config_path,
         market_feed_factory=lambda venue: FakeLiveFeed(),
         broker_factory=lambda venue, credential: FakeBroker(),
+        account_resolver=_resolver(config_path),
     )
     TradingSystemLauncher().run_configured_live(configured)
 
     restored = configured_live(
         config_path,
         market_feed_factory=lambda venue: FakeLiveFeed(),
-        broker_factory=lambda venue, credential: FakeBroker(),
+        broker_factory=lambda venue, credential: FakeBrokerWithoutOpenOrders(),
+        account_resolver=_resolver(config_path),
     )
-    restored._restore_state()
+    TradingSystemLauncher().run_configured_live(restored)
 
-    assert restored.coordinator.orders.get("external:binance:main:spot:venue-open-1").venue_order_id == "venue-open-1"
+    state = json.loads((tmp_path / ".kairos" / "runs" / "live" / "live-1" / "live_state.json").read_text(encoding="utf-8"))
+    orders = state["execution"]["orders"]
+    assert any(order["venue_order_id"] == "venue-open-1" for order in orders)
 
 
-def test_configured_live_selects_account_index_when_venue_has_multiple_accounts(tmp_path) -> None:
-    config_path = _write_live_project(tmp_path, extra_accounts=True, account_index=1)
+def test_configured_live_selects_account_ref(tmp_path) -> None:
+    config_path = _write_live_project(tmp_path, account_ref="alt")
 
     configured = configured_live(
         config_path,
         market_feed_factory=lambda venue: FakeLiveFeed(),
         broker_factory=lambda venue, credential: FakeBroker(),
+        account_resolver=_resolver(config_path),
     )
     result = TradingSystemLauncher().run_configured_live(configured)
 
@@ -139,7 +158,10 @@ def test_configured_live_selects_account_index_when_venue_has_multiple_accounts(
     assert configured.normalized_config["account"]["account_id"] == "alt"
 
 
-def _write_live_project(root: Path, *, extra_accounts: bool = False, account_index: int | None = None) -> Path:
+def _write_live_project(root: Path, *, account_ref: str = "main") -> Path:
+    _write_account("main", credential="env:fake")
+    if account_ref != "main":
+        _write_account(account_ref, credential="env:fake-alt", index=1)
     (root / "strategy_mod.py").write_text(
         "\n".join([
             "from kairospy.application.strategy import StrategyBase",
@@ -152,34 +174,23 @@ def _write_live_project(root: Path, *, extra_accounts: bool = False, account_ind
     )
     config_path = root / "live.toml"
     config_path.write_text(
-        "\n".join(_live_config_lines(extra_accounts=extra_accounts, account_index=account_index))
+        "\n".join(_live_config_lines(account_ref=account_ref))
         + "\n",
         encoding="utf-8",
     )
     return config_path
 
 
-def _live_config_lines(*, extra_accounts: bool, account_index: int | None) -> list[str]:
+def _live_config_lines(*, account_ref: str) -> list[str]:
     lines = [
             "[run]",
             'id = "live-1"',
             'mode = "live"',
             'strategy = "strategy_mod:LiveStrategy"',
             "",
-            "[accounts.main]",
-            'venue = "binance"',
-            'currency = "USDT"',
-            'credential = "env:fake"',
+            "[account]",
+            f'ref = "{account_ref}"',
     ]
-    if extra_accounts:
-        lines.extend([
-            "",
-            "[accounts.alt]",
-            "index = 1",
-            'venue = "binance"',
-            'currency = "USDT"',
-            'credential = "env:fake-alt"',
-        ])
     lines.extend([
             "",
             "[live]",
@@ -188,11 +199,35 @@ def _live_config_lines(*, extra_accounts: bool, account_index: int | None) -> li
             'symbol = "BTC/USDT"',
             'state_path = ".kairos/runs/live/live-1/live_state.json"',
     ])
-    if account_index is not None:
-        lines.append(f"account_index = {account_index}")
     lines.extend([
             "",
             "[live.safety]",
             "trading_enabled = false",
     ])
     return lines
+
+
+def _write_account(account_id: str, *, credential: str, index: int = 0) -> None:
+    account_root = Path.cwd() / ".kairos" / "accounts"
+    account_root.mkdir(parents=True, exist_ok=True)
+    (account_root / f"{account_id}.toml").write_text(
+        "\n".join(
+            [
+                "[account]",
+                f'id = "{account_id}"',
+                f"index = {index}",
+                'provider = "binance"',
+                'environment = "live"',
+                'venue = "binance"',
+                'market = "spot"',
+                'currency = "USDT"',
+                f'credential = "{credential}"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _resolver(config_path: Path):
+    return TradingSystemLauncher()._account_resolver(config_path)

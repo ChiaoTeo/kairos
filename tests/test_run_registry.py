@@ -4,7 +4,7 @@ import json
 
 from typer.testing import CliRunner
 
-from kairospy.application.system.run import RunRegistry, list_run_daemons
+from kairospy.application.system.control.registry import RunRegistry, list_run_daemons
 from kairospy.surface.products.run import run_app
 
 
@@ -39,7 +39,7 @@ def test_run_daemon_stop_command_writes_command_file(tmp_path) -> None:
 
 def test_run_registry_uses_current_instance_for_stop_command(tmp_path) -> None:
     group = tmp_path / "live" / "run-1"
-    instance = group / "runs" / "instance-1"
+    instance = group / "instances" / "instance-1"
     instance.mkdir(parents=True)
     (group / "current.json").write_text(
         json.dumps({"run_id": "run-1", "mode": "live", "run_instance_id": "instance-1", "directory": str(instance)}),

@@ -18,6 +18,10 @@ class RunArtifactWriter:
         self._write_json("summary.json", summary)
         self._write_json("config.normalized.json", normalized_config)
         self._write_json("metrics.json", getattr(result, "metrics", {}))
+        self._write_jsonl("equity.jsonl", getattr(result, "equity_curve", ()))
+        self._write_jsonl("fills.jsonl", getattr(result, "fills", ()))
+        self._write_jsonl("trades.jsonl", getattr(result, "trades", ()))
+        self._write_jsonl("intent_states.jsonl", getattr(getattr(result, "runtime", None), "intent_states", ()))
         return summary
 
     def summary(self, result: object) -> Mapping[str, object]:
@@ -42,6 +46,10 @@ class RunArtifactWriter:
 
     def _write_json(self, filename: str, value: object) -> None:
         (self.directory / filename).write_text(json.dumps(_jsonable(value), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    def _write_jsonl(self, filename: str, values: object) -> None:
+        rows = tuple(values or ())
+        (self.directory / filename).write_text("".join(json.dumps(_jsonable(row), sort_keys=True) + "\n" for row in rows), encoding="utf-8")
 
 
 def _jsonable(value: object) -> object:

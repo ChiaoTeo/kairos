@@ -1,27 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
 from typing import Mapping
 
 from kairospy.application.runtime import RuntimeMode
-from kairospy.application.runtime.run import RuntimeRunResult
-from kairospy.application.runtime.processors.account import account_current_view_key
-from kairospy.application.service.domain.account import SimulatedAccount
-from kairospy.application.service.domain.execution import (
-    BasisPointSlippageModel,
-    ImmediateFillModel,
-    PercentageCommissionModel,
-)
 from kairospy.application.service.domain.market import IterableMarketEventSource, MarketDataResolver, MarketDataSpec
 from kairospy.application.strategy import Strategy
 from kairospy.core.account import AccountContext
-from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.reference import MarketResolver
 from kairospy.infrastructure.data import DataStore
 
-from .account import BacktestAccountService
 from ..common import (
     AccountPerformanceMixin,
     jsonable as common_jsonable,
@@ -30,13 +21,10 @@ from ..common import (
     optional_int as common_optional_int,
     read_jsonl as common_read_jsonl,
     resolve_path as common_resolve_path,
-    slippage_model as common_slippage_model,
     strategy_params as common_strategy_params,
     table as common_table,
 )
-from .execution import BacktestExecutionService
 from .market import BacktestMarketDataService
-from .metrics import MetricsModel, closed_trades_from_fills, equity_point_from_account_view
 
 
 class BacktestConfigurationError(ValueError):
@@ -65,6 +53,15 @@ class BacktestRunResult(AccountPerformanceMixin):
 
 
 @dataclass(frozen=True, slots=True)
+class BacktestAccountConfig:
+    account_id: str
+    cash: Decimal
+    currency: str
+    fee_rate: Decimal
+    price_field: str
+
+
+@dataclass(frozen=True, slots=True)
 class ConfiguredBacktest:
     run_id: str
     strategy: Strategy
@@ -74,40 +71,9 @@ class ConfiguredBacktest:
     run_directory: Path
     normalized_config: Mapping[str, object]
     data: BacktestMarketDataService
-    account: BacktestAccountService
-    execution: BacktestExecutionService
-    coordinator: ExecutionCoordinator
-
-    def build_result(self, runtime: RuntimeRunResult) -> BacktestRunResult:
-        account_view = runtime.views.get(account_current_view_key(self.account.account.context), None)
-        fills = self.execution.fills
-        equity_curve = tuple(
-            item
-            for item in (
-                equity_point_from_account_view(
-                    None if runtime.runtime.last_event is None else runtime.runtime.last_event.time,
-                    account_view,
-                ),
-            )
-            if item is not None
-        )
-        trades = closed_trades_from_fills(fills)
-        metrics = MetricsModel().evaluate(equity_curve, trades, initial_equity=self.account.account.initial_cash)
-        result = BacktestRunResult(
-            run_id=self.run_id,
-            mode=RuntimeMode.BACKTEST,
-            runtime=runtime.runtime,
-            views=runtime.views,
-            intents=runtime.intents,
-            controls=runtime.controls,
-            account=self.account.account.context,
-            account_view=account_view,
-            fills=fills,
-            equity_curve=equity_curve,
-            trades=trades,
-            metrics=metrics,
-        )
-        return result
+    account_config: BacktestAccountConfig
+    backtest_config: Mapping[str, object]
+    execution_config: Mapping[str, object]
 
 
 def configured_backtest(config_path: Path) -> ConfiguredBacktest:
@@ -117,15 +83,13 @@ def configured_backtest(config_path: Path) -> ConfiguredBacktest:
     backtest = _table(values.get("backtest"), "backtest")
     execution_config = _table(values.get("execution"), "execution") if values.get("execution") is not None else {}
     account_defaults = run_config.account_defaults
-    account_config = SimulatedAccount(
-        run_config.run_id,
-        account_defaults.cash,
-        cash_currency=account_defaults.currency,
+    account_config = BacktestAccountConfig(
+        account_id=run_config.run_id,
+        cash=account_defaults.cash,
+        currency=account_defaults.currency,
         fee_rate=account_defaults.fee_rate,
         price_field=str(backtest.get("price_field", "close")),
     )
-    coordinator = ExecutionCoordinator()
-    account_service = BacktestAccountService(account_config, coordinator)
     market_resolver = MarketResolver(
         default_venue=str(backtest.get("venue", "simulated")),
         default_market=str(backtest.get("market", "spot")),
@@ -135,15 +99,6 @@ def configured_backtest(config_path: Path) -> ConfiguredBacktest:
         resolver=MarketDataResolver(market_resolver),
     )
     source, source_kind, source_value = _event_source(backtest, data, root=run_config.root)
-    execution = BacktestExecutionService(
-        coordinator,
-        account=account_config.context,
-        cash_currency=account_config.cash_currency,
-        price_field=account_config.price_field,
-        fill_model=_fill_model(backtest),
-        slippage_model=_slippage_model(execution_config),
-        commission_model=PercentageCommissionModel(account_config.fee_rate),
-    )
     return ConfiguredBacktest(
         run_id=run_config.run_id,
         strategy=_load_strategy(run_config.strategy, root=run_config.root, params=strategy_params),
@@ -163,9 +118,9 @@ def configured_backtest(config_path: Path) -> ConfiguredBacktest:
             data=data,
         ),
         data=data,
-        account=account_service,
-        execution=execution,
-        coordinator=coordinator,
+        account_config=account_config,
+        backtest_config=backtest,
+        execution_config=execution_config,
     )
 
 
@@ -222,15 +177,6 @@ def _storage_format(backtest: Mapping[str, object]) -> str:
     return value
 
 
-def _fill_model(backtest: Mapping[str, object]) -> ImmediateFillModel:
-    volume_field = backtest.get("volume_field")
-    return ImmediateFillModel(volume_field=None if volume_field is None else str(volume_field))
-
-
-def _slippage_model(execution: Mapping[str, object]) -> BasisPointSlippageModel | None:
-    return common_slippage_model(execution)
-
-
 def _run_directory(backtest: Mapping[str, object], *, root: Path, run_id: str) -> Path:
     runs_root = Path(".kairos/runs").resolve() if backtest.get("runs_root") is None else _resolve_path(backtest["runs_root"], root=root, source="backtest.runs_root")
     return runs_root / RuntimeMode.BACKTEST.value / run_id
@@ -243,7 +189,7 @@ def _normalized_config(
     strategy_params: Mapping[str, object],
     backtest: Mapping[str, object],
     execution: Mapping[str, object],
-    account: SimulatedAccount,
+    account: BacktestAccountConfig,
     source_kind: BacktestSourceKind,
     source_value: str,
     data: BacktestMarketDataService,
@@ -259,8 +205,8 @@ def _normalized_config(
             "storage_format": data.store.storage_format,
         },
         "account": {
-            "cash": account.initial_cash,
-            "currency": account.cash_currency,
+            "cash": account.cash,
+            "currency": account.currency,
             "fee_rate": account.fee_rate,
             "price_field": account.price_field,
         },
@@ -289,6 +235,7 @@ def _jsonable(value: object) -> object:
 
 
 __all__ = [
+    "BacktestAccountConfig",
     "BacktestConfigurationError",
     "BacktestRunResult",
     "BacktestSourceKind",

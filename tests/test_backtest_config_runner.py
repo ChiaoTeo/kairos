@@ -7,7 +7,7 @@ import pytest
 from typer.testing import CliRunner
 
 from kairospy.application.service.modes.backtest import configured_backtest
-from kairospy.application.system import TradingSystemLauncher
+from kairospy.application.system import TradingConfigurationError, TradingSystemLauncher
 from kairospy.surface.products.backtest import backtest_app
 from kairospy.surface.products.run import run_app
 
@@ -57,6 +57,46 @@ def test_run_backtest_command_uses_new_config_runner(tmp_path) -> None:
     assert result.exit_code == 0
     assert '"run_id": "bt-1"' in result.output
     assert '"event_count": 2' in result.output
+
+
+def test_run_backtest_config_wraps_recipe_configuration_errors(tmp_path) -> None:
+    config_path = tmp_path / "invalid.toml"
+    config_path.write_text(
+        "\n".join([
+            "[run]",
+            'id = "bad"',
+            'mode = "backtest"',
+            'strategy = "missing:factory"',
+        ])
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TradingConfigurationError):
+        TradingSystemLauncher().run_backtest_config(config_path)
+
+
+def test_run_backtest_config_does_not_wrap_strategy_runtime_value_error(tmp_path) -> None:
+    config_path = _write_backtest_project(tmp_path)
+    (tmp_path / "strategy_mod.py").write_text(
+        "\n".join([
+            "from kairospy.application.strategy import StrategyBase",
+            "",
+            "class ConfiguredStrategy(StrategyBase):",
+            "    strategy_id = 'configured-strategy'",
+            "    def __init__(self, instrument_id, market_id):",
+            "        pass",
+            "    def on_data(self, context, signal):",
+            "        raise ValueError('strategy runtime failed')",
+        ])
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as error:
+        TradingSystemLauncher().run_backtest_config(config_path)
+    assert not isinstance(error.value, TradingConfigurationError)
+    assert str(error.value) == "strategy runtime failed"
 
 
 def _write_backtest_project(root: Path) -> Path:

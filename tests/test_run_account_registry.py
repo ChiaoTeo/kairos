@@ -4,15 +4,15 @@ from decimal import Decimal
 
 import pytest
 
-from kairospy.application.system.accounts import AccountRegistry, SystemAccount
+from kairospy.application.service.modes.common.accounts import AccountConfigRegistry, ConfiguredAccount
 
 
-def test_account_registry_resolves_by_index_or_id_with_venue_guard() -> None:
-    registry = AccountRegistry(
+def test_account_config_registry_resolves_by_index_or_id_with_venue_guard() -> None:
+    registry = AccountConfigRegistry(
         (
-            SystemAccount("main", 0, "binance", Decimal("1000"), "USDT"),
-            SystemAccount("alt", 1, "binance", Decimal("500"), "USDT"),
-            SystemAccount("okx-main", 2, "okx", Decimal("200"), "USDT"),
+            ConfiguredAccount("main", 0, "binance", Decimal("1000"), "USDT"),
+            ConfiguredAccount("alt", 1, "binance", Decimal("500"), "USDT"),
+            ConfiguredAccount("okx-main", 2, "okx", Decimal("200"), "USDT"),
         )
     )
 

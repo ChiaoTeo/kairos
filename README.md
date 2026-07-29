@@ -24,6 +24,7 @@ The project is organized around one product axis:
 Surface packages are intentionally thin: external callers should reach run behavior through `kairospy.application.system` and mode configuration through `kairospy.application.service.modes` instead of composing runtime internals directly.
 
 See [System Architecture Plan](docs/system-architecture-plan.md) for the planned migration toward system-owned trading runtime lifecycle management.
+See [Workspace, Configuration, and CLI Plan](docs/workspace-config-cli-plan.md) for the planned configuration, `.kairos`, run registry, account, order, reference, and data CLI model.
 
 ## Install For Development
 
@@ -40,17 +41,25 @@ The CLI currently exposes focused product surfaces:
 
 ```bash
 kairospy --help
-kairospy backtest run --config examples/configs/binance_backtest.toml
-kairospy run paper --config examples/configs/hyperliquid_paper.toml
+kairospy init my-project
+kairospy run validate examples/configs/binance_backtest.toml
+kairospy run start examples/configs/binance_backtest.toml
+kairospy run register hl-paper examples/configs/hyperliquid_paper.toml
+kairospy run start hl-paper
 kairospy run daemon status
 kairospy data download --symbol BTC/USDT
+kairospy data list
+kairospy data inspect market.ohlcv.binance_spot_btc_usdt.1m
 kairospy data read market.ohlcv.binance_spot_btc_usdt.1m
 kairospy data replay market.trades.binance_spot_btc_usdt --speed 0
 kairospy reference markets --active-only
+kairospy reference search BTC
+kairospy account list
+kairospy order place --account binance_testnet_spot --symbol BTC/USDT --side buy --qty 0.01 --price 50000
 kairospy streams print --kind ticker --symbol BTC/USDT --limit 1
 ```
 
-Project defaults can be supplied with `kairos.toml`; see [kairospy/config.py](kairospy/config.py).
+Local project defaults are stored in `.kairos/kairos.toml`; create a project with `kairospy init project-name`.
 Reference catalogs and lifecycle events are persisted in SQLite at `.kairos/reference/reference.sqlite` by default.
 
 ## Python Runtime Shape

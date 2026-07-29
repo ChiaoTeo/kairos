@@ -106,9 +106,14 @@ def render_reference_summary(summary: Mapping[str, object]) -> str:
 def render_reference_commands() -> str:
     return "\n".join([
         "Reference Panel",
+        "  search <query>                       search instruments, listings, markets, assets",
+        "  show <id>                            show one reference identifier",
+        "  resolve <symbol> --venue <venue>      resolve tradable market identity",
         "  list [filters]                       list catalog markets",
         "  markets [filters]                    stream matching market rows",
         "  events [--limit n]                    stream lifecycle events",
+        "  catalog status                       summarize catalog cache",
+        "  refresh --provider massive [options] refresh provider catalog",
         "  refresh hyperliquid [options]         refresh Hyperliquid catalog",
         "  refresh-binance [options]             refresh Binance catalog",
         "  refresh-massive-equities [options]    refresh equity catalog",

@@ -12,14 +12,79 @@ from kairospy.application.service.domain.reference import (
     refresh_instrument_provider_with_delist_schedule,
     sync_lifecycle_events,
 )
-from kairospy.application.service.domain.reference.serde import lifecycle_event_to_primitive, market_to_primitive
+from kairospy.application.service.domain.reference.serde import (
+    asset_to_primitive,
+    instrument_to_primitive,
+    lifecycle_event_to_primitive,
+    listing_to_primitive,
+    market_to_primitive,
+)
 from kairospy.surface.runtime import DriverName, ExchangeName, ProviderName, exchange, provider, reference_store
 from kairospy.surface.ui.terminal import write_jsonl
 
 
 reference_app = typer.Typer(no_args_is_help=True, help="Reference catalog commands")
 refresh_app = typer.Typer(no_args_is_help=True, help="Refresh reference catalogs from providers")
+catalog_app = typer.Typer(no_args_is_help=True, help="Reference catalog inspection commands")
 reference_app.add_typer(refresh_app, name="refresh")
+reference_app.add_typer(catalog_app, name="catalog")
+
+
+@refresh_app.callback(invoke_without_command=True)
+def refresh(
+    ctx: typer.Context,
+    provider_name: str | None = typer.Option(None, "--provider"),
+    root: str | None = typer.Option(None, "--root"),
+    venue: str | None = typer.Option(None, "--venue"),
+    market: str | None = typer.Option(None, "--market"),
+    as_of: str | None = typer.Option(None, "--as-of"),
+) -> None:
+    if ctx.invoked_subcommand is not None:
+        return
+    if provider_name is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit()
+    at = _time(as_of)
+    provider_key = provider_name.strip().lower()
+    if provider_key == "massive":
+        result = refresh_equity_provider(
+            reference_store(root),
+            provider(ProviderName.massive, DriverName.massive),
+            as_of=at,
+            venue=venue,
+            params={"asset_class": "equity"},
+        ).refresh
+        write_jsonl((
+            {
+                "time": at.isoformat(),
+                "provider": provider_key,
+                "market": market or "equity",
+                "previous_markets": len(result.previous_markets),
+                "current_markets": len(result.current_markets),
+                "events": len(result.events),
+            },
+        ), sys.stdout)
+        return
+    if provider_key == "hyperliquid":
+        result = refresh_instrument_provider(
+            reference_store(root),
+            exchange(ExchangeName.hyperliquid, DriverName.ccxt),
+            as_of=at,
+            venue=ExchangeName.hyperliquid.value,
+            market=market,
+        ).refresh
+        write_jsonl((
+            {
+                "time": at.isoformat(),
+                "provider": provider_key,
+                "market": market or "all",
+                "previous_markets": len(result.previous_markets),
+                "current_markets": len(result.current_markets),
+                "events": len(result.events),
+            },
+        ), sys.stdout)
+        return
+    raise typer.BadParameter(f"unsupported reference provider: {provider_name}")
 
 
 @refresh_app.command("hyperliquid")
@@ -200,6 +265,98 @@ def events(
     write_jsonl(rows, sys.stdout)
 
 
+@reference_app.command("search")
+def search(
+    query: str = typer.Argument(...),
+    root: str | None = typer.Option(None, "--root"),
+    as_of: str | None = typer.Option(None, "--as-of"),
+    limit: int = typer.Option(50, "--limit"),
+) -> None:
+    at = _time(as_of)
+    needle = query.casefold()
+    catalog = reference_store(root).load_catalog()
+    rows: list[dict[str, object]] = []
+    for item in catalog.list_markets(at=at):
+        if _matches(needle, str(item.market_id), str(item.instrument_id), str(item.listing_id), item.venue, item.market, item.source_symbol):
+            rows.append({"kind": "market", **market_to_primitive(item)})
+    for item in catalog.active_listings(at=at):
+        if _matches(needle, str(item.listing_id), str(item.instrument_id), item.venue, item.trading_symbol, item.venue_instrument_id):
+            rows.append({"kind": "listing", **listing_to_primitive(item)})
+    for item in catalog.instruments():
+        if item.active_at(at) and _matches(needle, str(item.instrument_id), item.display_name, str(item.base_asset_id), str(item.quote_asset_id)):
+            rows.append({"kind": "instrument", **instrument_to_primitive(item)})
+    for item in catalog.assets():
+        if item.active_at(at) and _matches(needle, str(item.asset_id), item.symbol, item.name):
+            rows.append({"kind": "asset", **asset_to_primitive(item)})
+    write_jsonl(rows[:limit], sys.stdout)
+
+
+@reference_app.command("resolve")
+def resolve(
+    symbol: str = typer.Argument(...),
+    venue: str = typer.Option(..., "--venue"),
+    market: str | None = typer.Option(None, "--market"),
+    root: str | None = typer.Option(None, "--root"),
+    as_of: str | None = typer.Option(None, "--as-of"),
+) -> None:
+    at = _time(as_of)
+    try:
+        item = reference_store(root).load_catalog().resolve_market(symbol, venue=venue, market=market, at=at)
+    except KeyError as error:
+        raise typer.BadParameter(str(error)) from error
+    write_jsonl((market_to_primitive(item),), sys.stdout)
+
+
+@reference_app.command("show")
+def show(
+    identifier: str = typer.Argument(...),
+    root: str | None = typer.Option(None, "--root"),
+    as_of: str | None = typer.Option(None, "--as-of"),
+) -> None:
+    at = _time(as_of)
+    catalog = reference_store(root).load_catalog()
+    rows: list[dict[str, object]] = []
+    market_item = catalog.maybe_get_market(identifier, at)
+    if market_item is not None:
+        rows.append({"kind": "market", **market_to_primitive(market_item)})
+    listing_item = catalog.maybe_get_listing(identifier, at)
+    if listing_item is not None:
+        rows.append({"kind": "listing", **listing_to_primitive(listing_item)})
+    instrument_item = catalog.maybe_get_instrument(identifier, at)
+    if instrument_item is not None:
+        rows.append({"kind": "instrument", **instrument_to_primitive(instrument_item)})
+    asset_item = catalog.maybe_get_asset(identifier, at)
+    if asset_item is not None:
+        rows.append({"kind": "asset", **asset_to_primitive(asset_item)})
+    if not rows:
+        raise typer.BadParameter(f"unknown reference identifier: {identifier}")
+    write_jsonl(rows, sys.stdout)
+
+
+@catalog_app.command("status")
+def catalog_status(
+    root: str | None = typer.Option(None, "--root"),
+    as_of: str | None = typer.Option(None, "--as-of"),
+) -> None:
+    at = _time(as_of)
+    store = reference_store(root)
+    catalog = store.load_catalog()
+    payload = {
+        "root": str(store.root),
+        "database": str(store.database_path),
+        "exists": store.database_path.exists(),
+        "as_of": at.isoformat(),
+        "entities": len(catalog.entities()),
+        "assets": len(catalog.assets()),
+        "instruments": len(catalog.instruments()),
+        "listings": len(catalog.listings()),
+        "markets": len(catalog.markets()),
+        "active_markets": len(catalog.list_markets(at=at, active_only=True)),
+        "events": len(store.load_events()),
+    }
+    write_jsonl((payload,), sys.stdout)
+
+
 def _write_markets(
     *,
     root: str | None,
@@ -231,6 +388,10 @@ def _time(value: str | None) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise typer.BadParameter("time must be timezone-aware")
     return parsed.astimezone(timezone.utc)
+
+
+def _matches(needle: str, *values: object) -> bool:
+    return any(isinstance(value, str) and needle in value.casefold() for value in values)
 
 
 __all__ = ["reference_app"]

@@ -2,25 +2,62 @@ from __future__ import annotations
 
 import shlex
 import sys
+from pathlib import Path
 from typing import Sequence, TextIO
 
 import typer
 from typer.testing import CliRunner
 
-from kairospy.surface.products import backtest_app, broker_app, data_app, integrations_app, reference_app, run_app, strategy_app, streams_app
+from kairospy.application.system.workspace import OperationJournal
+from kairospy.surface.products import (
+    account_app,
+    backtest_app,
+    config_app,
+    data_app,
+    integrations_app,
+    order_app,
+    reference_app,
+    run_app,
+    strategy_app,
+    streams_app,
+)
 from kairospy.surface.products.run import RunShellSession
 from kairospy.surface.state import SurfaceContext, render_run_strip, render_surface_overview
 
 
 app = typer.Typer(no_args_is_help=True, help="KairosPy strategy runtime toolkit")
+app.add_typer(account_app, name="account")
 app.add_typer(backtest_app, name="backtest")
+app.add_typer(config_app, name="config")
 app.add_typer(data_app, name="data")
 app.add_typer(streams_app, name="streams")
 app.add_typer(integrations_app, name="integrations")
+app.add_typer(order_app, name="order")
 app.add_typer(reference_app, name="reference")
-app.add_typer(broker_app, name="broker")
 app.add_typer(strategy_app, name="strategy")
 app.add_typer(run_app, name="run")
+
+
+@app.command("init")
+def init(
+    project_name: str = typer.Argument(...),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    project_root = Path(project_name).expanduser()
+    kairos_root = project_root / ".kairos"
+    config_path = kairos_root / "kairos.toml"
+    if config_path.exists() and not force:
+        raise typer.BadParameter(f"Kairos project already exists: {config_path}")
+    kairos_root.mkdir(parents=True, exist_ok=True)
+    for directory in ("accounts", "state", "runs", "data", "reference", "orders/journals"):
+        (kairos_root / directory).mkdir(parents=True, exist_ok=True)
+    config_path.write_text(_workspace_manifest(project_root.name), encoding="utf-8")
+    OperationJournal(kairos_root / "state" / "operations.jsonl").append(
+        "project.init",
+        target={"project": project_root.name},
+        payload={"root": project_root, "manifest": config_path},
+    )
+    typer.echo(str(project_root))
 
 
 @app.command("shell")
@@ -99,6 +136,26 @@ def _execute_product_command(argv: list[str]) -> tuple[int, str]:
     return int(result.exit_code), result.output
 
 
+def _workspace_manifest(project_name: str) -> str:
+    return "\n".join(
+        [
+            "schema_version = 1",
+            "",
+            "[project]",
+            f'name = "{project_name}"',
+            'timezone = "UTC"',
+            "",
+            "[data]",
+            'storage_format = "parquet"',
+            "",
+            "[cli]",
+            'format = "text"',
+            "run_control = true",
+            "",
+        ]
+    )
+
+
 class ProductShellSession:
     def __init__(self, *, stdout: TextIO | None = None) -> None:
         self.stdout = stdout or sys.stdout
@@ -131,14 +188,16 @@ class ProductShellSession:
                 runs,
                 "\n".join([
                     "Products",
-                    "1  run          manage runs, daemons, accounts, PnL, positions",
-                    "2  backtest     historical strategy runs and artifacts",
-                    "3  data         historical datasets",
-                    "4  streams      live market data streams",
-                    "5  reference    instruments, markets, lifecycle catalogs",
-                    "6  broker       broker/account inspection",
-                    "7  strategy     strategy utilities",
-                    "8  integrations provider and exchange checks",
+                    "1  run          manage run specs, daemons, status, and artifacts",
+                    "2  account      configured accounts and account inspection",
+                    "3  order        order placement, cancellation, and journals",
+                    "4  config       workspace configuration and diagnostics",
+                    "5  backtest     historical strategy runs and artifacts",
+                    "6  data         historical datasets",
+                    "7  streams      live market data streams",
+                    "8  reference    instruments, markets, lifecycle catalogs",
+                    "9  strategy     strategy utilities",
+                    "10 integrations provider and exchange checks",
                     "r  refresh",
                     "q  quit",
                 ]),
@@ -193,19 +252,23 @@ class ProductShellSession:
         product = {
             "1": "run",
             "run": "run",
-            "2": "backtest",
+            "2": "account",
+            "account": "account",
+            "3": "order",
+            "order": "order",
+            "4": "config",
+            "config": "config",
+            "5": "backtest",
             "backtest": "backtest",
-            "3": "data",
+            "6": "data",
             "data": "data",
-            "4": "streams",
+            "7": "streams",
             "streams": "streams",
-            "5": "reference",
+            "8": "reference",
             "reference": "reference",
-            "6": "broker",
-            "broker": "broker",
-            "7": "strategy",
+            "9": "strategy",
             "strategy": "strategy",
-            "8": "integrations",
+            "10": "integrations",
             "integrations": "integrations",
         }.get(command)
         if product is None:

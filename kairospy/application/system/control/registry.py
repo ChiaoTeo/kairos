@@ -21,6 +21,7 @@ class RunRecord:
         return {
             "run_id": self.run_id,
             "mode": self.mode,
+            "run_instance_id": self.run_instance_id,
             "directory": str(self.directory),
             "phase": self.phase,
             "status": self.status,
@@ -40,6 +41,11 @@ class RunRecord:
     @property
     def phase(self) -> str:
         return str(self.state.get("phase") or self.summary.get("phase") or "stopped")
+
+    @property
+    def run_instance_id(self) -> str | None:
+        value = self.state.get("run_instance_id") or self.state.get("process_id")
+        return value if isinstance(value, str) and value.strip() else None
 
     @property
     def status(self) -> str:
@@ -120,7 +126,7 @@ class RunRegistry:
             return path if path.is_absolute() else (self.root / mode / run_id / path)
         instance_id = current.get("run_instance_id")
         if isinstance(instance_id, str) and instance_id.strip():
-            return self.root / mode / run_id / "runs" / instance_id
+            return self.root / mode / run_id / "instances" / instance_id
         return None
 
     def _record(self, directory: Path) -> RunRecord:
@@ -167,7 +173,7 @@ def _is_mirrored_group_directory(path: Path) -> bool:
     if not (path / "current.json").exists():
         return False
     state = _read_json(path / "state.json")
-    return "mirrored_from" in state or (path / "runs").exists()
+    return "mirrored_from" in state or (path / "instances").exists()
 
 
 def list_run_daemons(

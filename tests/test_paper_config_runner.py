@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from kairospy.application.service.modes.paper import configured_paper
 from kairospy.application.system import TradingSystemLauncher
-from kairospy.application.system.run import RunRegistry
+from kairospy.application.system.control.registry import RunRegistry
 from kairospy.infrastructure.integrations import HyperliquidMarketDataConnector
 from kairospy.surface.products.run import run_app
 
@@ -22,7 +22,7 @@ def _workspace(tmp_path, monkeypatch) -> None:
 def test_configured_paper_runs_new_engine(tmp_path) -> None:
     config_path = _write_paper_project(tmp_path)
 
-    result = TradingSystemLauncher().run_configured_paper(configured_paper(config_path))
+    result = TradingSystemLauncher().run_configured_paper(configured_paper(config_path, account_resolver=_resolver(config_path)))
 
     assert result.mode.value == "paper"
     assert result.runtime.event_count == 2
@@ -61,7 +61,7 @@ def test_configured_paper_default_runs_root_uses_current_working_directory(tmp_p
     )
     monkeypatch.chdir(tmp_path)
 
-    configured = configured_paper(config_path)
+    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
 
     assert configured.run_directory == tmp_path / ".kairos" / "runs" / "paper" / "paper-1"
 
@@ -69,7 +69,9 @@ def test_configured_paper_default_runs_root_uses_current_working_directory(tmp_p
 def test_configured_paper_can_stream_market_data_from_integration_feed(tmp_path) -> None:
     config_path = _write_streaming_paper_project(tmp_path)
 
-    result = TradingSystemLauncher().run_configured_paper(configured_paper(config_path, market_feed_factory=lambda venue: FakePaperFeed()))
+    result = TradingSystemLauncher().run_configured_paper(
+        configured_paper(config_path, market_feed_factory=lambda venue: FakePaperFeed(), account_resolver=_resolver(config_path))
+    )
 
     assert result.mode.value == "paper"
     assert result.runtime.event_count == 2
@@ -83,7 +85,7 @@ def test_configured_paper_can_stream_market_data_from_integration_feed(tmp_path)
 def test_configured_paper_selects_account_id_for_streaming_feed(tmp_path) -> None:
     config_path = _write_streaming_paper_project(tmp_path, extra_accounts=True, account_id="alt")
 
-    configured = configured_paper(config_path, market_feed_factory=lambda venue: FakePaperFeed())
+    configured = configured_paper(config_path, market_feed_factory=lambda venue: FakePaperFeed(), account_resolver=_resolver(config_path))
     result = TradingSystemLauncher().run_configured_paper(configured)
 
     assert result.account.account.account_id == "alt"
@@ -99,7 +101,7 @@ def test_configured_paper_supports_hyperliquid_default_market_feed(tmp_path) -> 
         quote_currency="USDC",
     )
 
-    configured = configured_paper(config_path)
+    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
 
     assert isinstance(configured.market_data.feed, HyperliquidMarketDataConnector)
     assert configured.normalized_config["paper"]["source"] == "hyperliquid:swap:BTC/USDC:USDC"
@@ -114,7 +116,7 @@ def test_configured_paper_can_run_hyperliquid_streaming_feed(tmp_path) -> None:
         quote_currency="USDC",
     )
 
-    configured = configured_paper(config_path, market_feed_factory=lambda venue: FakePaperFeed())
+    configured = configured_paper(config_path, market_feed_factory=lambda venue: FakePaperFeed(), account_resolver=_resolver(config_path))
     result = TradingSystemLauncher().run_configured_paper(configured)
 
     assert result.mode.value == "paper"
@@ -132,7 +134,9 @@ def test_configured_paper_accepts_live_ticker_without_timestamp(tmp_path) -> Non
         quote_currency="USDC",
     )
 
-    result = TradingSystemLauncher().run_configured_paper(configured_paper(config_path, market_feed_factory=lambda venue: FakeTimestamplessFeed()))
+    result = TradingSystemLauncher().run_configured_paper(
+        configured_paper(config_path, market_feed_factory=lambda venue: FakeTimestamplessFeed(), account_resolver=_resolver(config_path))
+    )
 
     assert result.runtime.event_count == 2
     assert result.runtime.last_event.time.tzinfo is not None
@@ -214,20 +218,19 @@ def _write_paper_project(root: Path, *, runs_root: bool = True) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    _write_account("main", venue="paper", cash=1000, currency="USDT")
     lines = [
             "[run]",
             'id = "paper-1"',
             'mode = "paper"',
             'strategy = "strategy_mod:PaperStrategy"',
             "",
+            "[account]",
+            'ref = "main"',
+            "",
             "[strategy.params]",
             f'instrument_id = "{instrument_id}"',
             f'market_id = "{market_id}"',
-            "",
-            "[accounts.main]",
-            'venue = "paper"',
-            "cash = 1000",
-            'currency = "USDT"',
             "",
             "[paper]",
             'events = "events.jsonl"',
@@ -253,6 +256,10 @@ def _write_streaming_paper_project(
     normalized_symbol = symbol.replace("/", "_").replace(":", "_").lower()
     market_id = f"market:{venue}:{market}:{normalized_symbol}"
     instrument_id = f"instrument:{market}:btc:{quote_currency.lower()}"
+    selected_account = account_id or "main"
+    _write_account("main", venue=venue, cash=1000, currency=quote_currency)
+    if extra_accounts:
+        _write_account("alt", venue=venue, cash=500, currency=quote_currency, index=1)
     (root / "strategy_mod.py").write_text(
         "\n".join([
             "from decimal import Decimal",
@@ -286,24 +293,13 @@ def _write_streaming_paper_project(
             'mode = "paper"',
             'strategy = "strategy_mod:PaperStrategy"',
             "",
+            "[account]",
+            f'ref = "{selected_account}"',
+            "",
             "[strategy.params]",
             f'instrument_id = "{instrument_id}"',
             f'market_id = "{market_id}"',
-            "",
-            "[accounts.main]",
-            f'venue = "{venue}"',
-            "cash = 1000",
-            f'currency = "{quote_currency}"',
     ]
-    if extra_accounts:
-        lines.extend([
-            "",
-            "[accounts.alt]",
-            "index = 1",
-            f'venue = "{venue}"',
-            "cash = 500",
-            f'currency = "{quote_currency}"',
-        ])
     lines.extend([
             "",
             "[paper]",
@@ -313,10 +309,33 @@ def _write_streaming_paper_project(
             'price_field = "ask"',
             'runs_root = ".kairos/runs"',
     ])
-    if account_id is not None:
-        lines.append(f'account_id = "{account_id}"')
     config_path.write_text(
         "\n".join(lines) + "\n",
         encoding="utf-8",
     )
     return config_path
+
+
+def _write_account(account_id: str, *, venue: str, cash: int, currency: str, index: int = 0) -> None:
+    account_root = Path.cwd() / ".kairos" / "accounts"
+    account_root.mkdir(parents=True, exist_ok=True)
+    (account_root / f"{account_id}.toml").write_text(
+        "\n".join(
+            [
+                "[account]",
+                f'id = "{account_id}"',
+                f"index = {index}",
+                f'venue = "{venue}"',
+                f'provider = "{venue}"',
+                'environment = "paper"',
+                f"cash = {cash}",
+                f'currency = "{currency}"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _resolver(config_path: Path):
+    return TradingSystemLauncher()._account_resolver(config_path)

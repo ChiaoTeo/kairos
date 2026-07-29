@@ -27,10 +27,12 @@ def _placeholder_app(label: str, error: ModuleNotFoundError) -> typer.Typer:
     return app
 
 
+account_app = _product_app("account", "account_app", "Account")
 backtest_app = _product_app("backtest", "backtest_app", "Backtest")
-broker_app = _product_app("broker", "broker_app", "Broker")
+config_app = _product_app("config", "config_app", "Config")
 data_app = _product_app("data", "data_app", "Data")
 integrations_app = _product_app("integrations", "integrations_app", "Integrations")
+order_app = _product_app("order", "order_app", "Order")
 reference_app = _product_app("reference", "reference_app", "Reference")
 run_app = _product_app("run", "run_app", "Run")
 strategy_app = _product_app("strategy", "strategy_app", "Strategy")
@@ -38,10 +40,12 @@ streams_app = _product_app("streams", "streams_app", "Streams")
 
 
 __all__ = [
+    "account_app",
     "backtest_app",
-    "broker_app",
+    "config_app",
     "data_app",
     "integrations_app",
+    "order_app",
     "reference_app",
     "run_app",
     "strategy_app",

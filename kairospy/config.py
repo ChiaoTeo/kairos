@@ -151,6 +151,12 @@ class RunConfig:
         return _text(raw, "account.environment")
 
     @property
+    def account_ref(self) -> str | None:
+        account = self._table("account", required=False)
+        raw = account.get("ref")
+        return _optional_text(raw, "account.ref") or None
+
+    @property
     def execution_dry_run(self) -> bool | None:
         execution = self._table("execution", required=False)
         if "dry_run" not in execution:
@@ -228,43 +234,31 @@ class RunConfig:
             issues.append("[data] is not valid run config; strategy code declares market data with context.subscribe_market_data")
         accounts = self.values.get("accounts")
         if accounts is not None:
-            if not isinstance(accounts, Mapping):
-                issues.append("[accounts] must be a table")
-            else:
-                issues.extend(_accounts_issues(accounts, mode=mode))
+            issues.append("[accounts] is not valid run config; configure accounts in .kairos/accounts and reference them with account.ref")
         account = self.values.get("account")
         if account is not None:
             if not isinstance(account, Mapping):
                 issues.append("[account] must be a table")
             else:
                 issues.extend(_account_issues(account, mode=mode))
-        elif mode in {"paper", "live"} and not isinstance(accounts, Mapping):
-            issues.append("[accounts] table is required for paper/live runs")
+        if mode in {"paper", "live"}:
+            if not isinstance(account, Mapping) or not _valid_optional_text(account.get("ref")):
+                issues.append("[account] table with account.ref is required for paper/live runs")
         broker = self.values.get("broker")
         execution = self.values.get("execution")
         credentials = self.values.get("credentials")
         live = self.values.get("live")
+        if broker is not None:
+            issues.append("[broker] is not valid run config; configure broker/provider via .kairos/accounts")
+        if credentials is not None:
+            issues.append("[credentials] is not valid run config; configure credentials via .kairos/accounts")
         if mode == "live":
-            if isinstance(accounts, Mapping):
-                if not isinstance(live, Mapping):
-                    issues.append("[live] table is required for live runs")
-                else:
-                    issues.extend(_live_issues(live))
-            if isinstance(account, Mapping):
-                if not isinstance(broker, Mapping):
-                    issues.append("[broker] table is required for legacy live runs")
-                elif not _valid_optional_text(broker.get("provider")):
-                    issues.append("broker.provider is required for legacy live runs")
-                if not _valid_optional_text(account.get("id")):
-                    issues.append("account.id is required for legacy live runs")
-                elif str(account.get("environment", "")).strip() != "live":
-                    issues.append("account.environment must be live for live runs")
-                if not isinstance(execution, Mapping):
-                    issues.append("[execution] table is required for legacy live runs")
-                else:
-                    issues.extend(_execution_issues(execution, mode=mode))
-                if not isinstance(credentials, Mapping) or not credentials:
-                    issues.append("[credentials] table is required for legacy live runs")
+            if not isinstance(live, Mapping):
+                issues.append("[live] table is required for live runs")
+            else:
+                issues.extend(_live_issues(live))
+            if isinstance(execution, Mapping):
+                issues.extend(_execution_issues(execution, mode=mode))
         elif mode == "paper":
             if isinstance(account, Mapping) and str(account.get("environment", "paper")).strip() not in {"paper"}:
                 issues.append("account.environment must be paper-compatible for paper runs")
@@ -273,12 +267,8 @@ class RunConfig:
                 issues.extend(_account_selector_issues(paper, "paper"))
             if isinstance(execution, Mapping):
                 issues.extend(_execution_issues(execution, mode=mode))
-        elif broker is not None and not isinstance(broker, Mapping):
-            issues.append("[broker] must be a table")
         elif execution is not None and not isinstance(execution, Mapping):
             issues.append("[execution] must be a table")
-        elif credentials is not None and not isinstance(credentials, Mapping):
-            issues.append("[credentials] must be a table")
         elif live is not None and not isinstance(live, Mapping):
             issues.append("[live] must be a table")
         return RunConfigValidationReport(self.path, not issues, tuple(issues))
@@ -306,9 +296,8 @@ class RunConfig:
             "run": dict(self._table("run", required=False)),
             "mode": self._optional_mode(),
             "strategy": self._optional_strategy(),
-            "accounts": {key: account for key, account in self.accounts.items()},
             "account": dict(self._table("account", required=False)),
-            "broker": dict(self._table("broker", required=False)),
+            "account_ref": self.account_ref,
             "execution": dict(self._table("execution", required=False)),
         }
 
@@ -337,23 +326,23 @@ class RunConfig:
 
 
 def find_config_path(start: str | Path | None = None) -> Path | None:
-    project_config = find_project_config(start)
-    if project_config is not None:
-        return project_config
-    user_config = Path.home() / ".kairos" / CONFIG_FILENAME
-    return user_config if user_config.exists() else None
+    return find_manifest_path(start)
 
 
-def find_project_config(start: str | Path | None = None) -> Path | None:
+def find_manifest_path(start: str | Path | None = None) -> Path | None:
     current = Path.cwd() if start is None else Path(start)
     current = current.expanduser().resolve()
     if current.is_file():
         current = current.parent
     for directory in (current, *current.parents):
-        candidate = directory / CONFIG_FILENAME
+        candidate = directory / ".kairos" / CONFIG_FILENAME
         if candidate.exists():
             return candidate
     return None
+
+
+def find_project_config(start: str | Path | None = None) -> Path | None:
+    return find_manifest_path(start)
 
 
 def load_config(path: str | Path | None = None) -> KairosConfig:
@@ -362,7 +351,8 @@ def load_config(path: str | Path | None = None) -> KairosConfig:
         return KairosConfig(source_path=None, root=Path.cwd(), values={})
     with source_path.open("rb") as file:
         values = tomllib.load(file)
-    return KairosConfig(source_path=source_path, root=source_path.parent, values=values)
+    root = source_path.parent.parent if source_path.parent.name == ".kairos" else source_path.parent
+    return KairosConfig(source_path=source_path, root=root, values=values)
 
 
 def load_run_config(path: str | Path) -> RunConfig:
@@ -406,6 +396,8 @@ def _int(value: object, source: str) -> int:
 
 def _account_issues(account: Mapping[str, Any], *, mode: str) -> list[str]:
     issues: list[str] = []
+    if "ref" in account and not _valid_optional_text(account.get("ref")):
+        issues.append("account.ref must be a non-empty string")
     for key in ("cash", "fee_rate"):
         if key in account:
             try:
@@ -578,6 +570,7 @@ __all__ = [
     "VALID_ACCOUNT_ENVIRONMENTS",
     "VALID_RUN_MODES",
     "find_config_path",
+    "find_manifest_path",
     "find_project_config",
     "load_config",
     "load_run_config",

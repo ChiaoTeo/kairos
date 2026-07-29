@@ -7,23 +7,18 @@ from typing import Mapping
 
 from kairospy.application.runtime import RuntimeMode
 from kairospy.application.runtime.ports import MarketDataSubscriptionSpec
-from kairospy.application.runtime.processors.account import account_current_view_key
-from kairospy.application.runtime.run import RuntimeRunResult
-from kairospy.application.service.domain.account import SimulatedAccount
-from kairospy.application.service.domain.execution import BasisPointSlippageModel, ImmediateFillModel, PercentageCommissionModel
 from kairospy.application.service.domain.market import IterableMarketEventSource
-from kairospy.application.system.accounts import SystemAccount
 from kairospy.application.strategy import Strategy
-from kairospy.core.account import AccountContext, Environment
-from kairospy.core.execution import ExecutionCoordinator
+from kairospy.core.account import AccountContext
 from kairospy.core.market import Quote
 from kairospy.core.reference import MarketResolver
 from kairospy.infrastructure.integrations.protocols import LiveMarketDataFeed
 
-from .account import PaperAccountService
 from ..common import (
     AccountPerformanceMixin,
-    configured_account as common_configured_account,
+    AccountResolver,
+    ConfiguredAccount,
+    configured_account_ref as common_configured_account_ref,
     default_market_feed as common_default_market_feed,
     load_required_run_config,
     load_strategy as common_load_strategy,
@@ -31,11 +26,9 @@ from ..common import (
     read_jsonl as common_read_jsonl,
     required_text as common_required_text,
     resolve_path as common_resolve_path,
-    slippage_model as common_slippage_model,
     strategy_params as common_strategy_params,
     table as common_table,
 )
-from .execution import PaperExecutionService
 from .market import PaperMarketDataService
 
 
@@ -69,42 +62,22 @@ class ConfiguredPaper:
     source_value: str
     run_directory: Path
     normalized_config: Mapping[str, object]
+    account_config: ConfiguredAccount
+    paper_config: Mapping[str, object]
+    execution_config: Mapping[str, object]
     market_data: PaperMarketDataService
-    account: PaperAccountService
-    execution: PaperExecutionService
-    coordinator: ExecutionCoordinator
-
-    def build_result(self, runtime: RuntimeRunResult) -> PaperRunResult:
-        account_view = runtime.views.get(account_current_view_key(self.account.account.context), None)
-        return PaperRunResult(
-            run_id=self.run_id,
-            mode=RuntimeMode.PAPER,
-            runtime=runtime.runtime,
-            views=runtime.views,
-            intents=runtime.intents,
-            controls=runtime.controls,
-            account=self.account.account.context,
-            account_view=account_view,
-            fills=self.execution.fills,
-            trades=(),
-            metrics={},
-        )
 
 
-def configured_paper(config_path: Path, *, market_feed_factory: MarketFeedFactory | None = None) -> ConfiguredPaper:
+def configured_paper(
+    config_path: Path,
+    *,
+    market_feed_factory: MarketFeedFactory | None = None,
+    account_resolver: AccountResolver | None = None,
+) -> ConfiguredPaper:
     run_config = load_required_run_config(config_path, mode=RuntimeMode.PAPER, error_type=PaperConfigurationError)
     paper = _table(run_config.values.get("paper"), "paper")
     execution_config = _table(run_config.values.get("execution"), "execution") if run_config.values.get("execution") is not None else {}
-    account_config = _configured_account(run_config.accounts.values(), mode_config=paper, default_venue=str(paper.get("venue", "paper")))
-    account_config = SimulatedAccount(
-        account_config.account_id,
-        account_config.cash,
-        cash_currency=account_config.currency,
-        broker=str(paper.get("venue", "paper")),
-        environment=Environment.PAPER,
-        fee_rate=account_config.fee_rate,
-        price_field=str(paper.get("price_field", "ask")),
-    )
+    account_config = _configured_account(run_config.account_ref, account_resolver=account_resolver, default_venue=str(paper.get("venue", "paper")))
     source: IterableMarketEventSource | None
     source_value: str
     source_config: Mapping[str, object]
@@ -126,17 +99,6 @@ def configured_paper(config_path: Path, *, market_feed_factory: MarketFeedFactor
         source_config = {"source": source_value, "venue": venue, "market": market, "symbol": symbol}
         market_data = PaperMarketDataService(feed=feed, source_name=str(paper.get("source_name") or f"{venue}-paper"))
         market_data.subscribe(MarketDataSubscriptionSpec(market_ref, (Quote,), params=_params_table(paper.get("stream"), default={"type": market})))
-    coordinator = ExecutionCoordinator()
-    account = PaperAccountService(account_config, coordinator)
-    execution = PaperExecutionService(
-        coordinator,
-        account=account_config.context,
-        cash_currency=account_config.cash_currency,
-        price_field=account_config.price_field,
-        fill_model=ImmediateFillModel(volume_field=None if paper.get("volume_field") is None else str(paper["volume_field"])),
-        slippage_model=_slippage_model(execution_config),
-        commission_model=PercentageCommissionModel(account_config.fee_rate),
-    )
     return ConfiguredPaper(
         run_id=run_config.run_id,
         strategy=_load_strategy(run_config.strategy, root=run_config.root, params=_strategy_params(run_config.values)),
@@ -147,13 +109,13 @@ def configured_paper(config_path: Path, *, market_feed_factory: MarketFeedFactor
             "run": {"id": run_config.run_id, "mode": RuntimeMode.PAPER.value, "strategy": run_config.strategy},
             "strategy": {"params": dict(_strategy_params(run_config.values))},
             "paper": {**dict(paper), **source_config},
-            "account": {"cash": account_config.initial_cash, "currency": account_config.cash_currency},
+            "account": {"cash": account_config.cash, "currency": account_config.currency},
             "execution": dict(execution_config),
         },
+        account_config=account_config,
+        paper_config=paper,
+        execution_config=execution_config,
         market_data=market_data,
-        account=account,
-        execution=execution,
-        coordinator=coordinator,
     )
 
 
@@ -165,15 +127,11 @@ def _strategy_params(values: Mapping[str, object]) -> Mapping[str, object]:
     return common_strategy_params(values, PaperConfigurationError)
 
 
-def _slippage_model(execution: Mapping[str, object]) -> BasisPointSlippageModel | None:
-    return common_slippage_model(execution)
-
-
-def _configured_account(accounts: object, *, mode_config: Mapping[str, object], default_venue: str) -> SystemAccount:
-    return common_configured_account(
-        accounts,
+def _configured_account(account_ref: str | None, *, account_resolver: AccountResolver | None, default_venue: str) -> ConfiguredAccount:
+    return common_configured_account_ref(
+        account_ref,
+        account_resolver=account_resolver,
         venue=default_venue,
-        mode_config=mode_config,
         mode_label="paper",
         error_type=PaperConfigurationError,
     )

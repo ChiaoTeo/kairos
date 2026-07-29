@@ -12,9 +12,9 @@ KairosPy currently has clear low-level boundaries:
 - `kairospy.application.service.modes` parses mode-specific configuration and assembles backtest, paper, and live runs.
 - `kairospy.application.system` owns operational run artifacts such as account registries, daemon state, run registry, and account journals.
 
-The remaining issue is that mode configuration objects still directly construct `RuntimeRunSpec` with runtime services and operational sinks. This makes `RuntimeRunSpec` act as a broad dependency injection container instead of a runtime execution contract.
+Earlier migrations moved runtime startup behind `TradingSystemLauncher`, but the system package is still shaped by the order features were added. Mode recipes still know some operational system types, and `application.system` mixes facade, runtime hosting, run control, account identity, and artifact persistence in broad folders.
 
-The target architecture should move long-lived resource ownership and run lifecycle orchestration into `application.system`.
+The target architecture should make those responsibilities explicit and keep long-lived resource ownership and run lifecycle orchestration in `application.system`.
 
 ## References
 
@@ -33,6 +33,26 @@ The direction is consistent with established trading frameworks:
 4. `system` owns trading runtime assembly, connection lifecycle, state restore/save, journals, daemon records, and stop handling.
 5. Backtest, paper, and live should share one system run path, with mode-specific resource factories.
 6. Surface APIs should call system-level launchers instead of assembling runtime internals.
+
+## Current Structural Problem
+
+`application.system` has started to own the right responsibilities, but the current package shape is not orthogonal enough:
+
+- `system.run` mixes run identity, daemon supervision, output logging, persisted artifacts, live runtime state, and account journals.
+- `system.trading` mixes the public launcher, internal runtime host, lifecycle hooks, and runtime resource specifications.
+- `service.modes` no longer imports `application.system`; account selection is currently treated as mode configuration parsing, while startup, artifacts, and live state resource construction stay in system.
+- Daemon foreground execution and direct foreground execution both run through `TradingSystemLauncher`, but daemon status writing remains a separate procedural flow.
+- Several files are named after implementation mechanics (`spec.py`, `system.py`, `state.py`) instead of the system capability they provide.
+
+The symptom is a folder tree that looks like a grab bag. The deeper issue is that `system` currently combines five separate axes without naming them clearly:
+
+1. **Facade**: user-facing entry points for starting or inspecting a trading run.
+2. **Runtime host**: construction and lifecycle of `RuntimeKernel` / `RuntimeRunSession`.
+3. **Run control**: daemon/background launch, stop commands, state, current instance, heartbeat.
+4. **Artifacts**: logs, summaries, normalized config, metrics, journals.
+5. **Resources**: account identity, credentials, connection lifecycle, resumable state stores, and runtime port bundles.
+
+The next migration should separate these axes before adding more Hyperliquid paper/live behavior.
 
 ## Dependency Direction
 
@@ -118,47 +138,106 @@ System owns the lifecycle of a trading node/run:
 
 This is the layer that should know the difference between a one-shot backtest, a paper run with live market data, and a live run with private account streams.
 
+## System Facade Decision
+
+`system` should be the external facade. `service` should not be exposed as the product API.
+
+Rationale:
+
+- A caller wants to run, stop, list, inspect, and recover trading processes. Those are system behaviors, not service behaviors.
+- Services are capability implementations: market data, account, execution, reference. They are dependencies of a run, not the owner of a run.
+- `surface`, CLI, tests, and future app/workspace code should depend on one stable facade: `kairospy.application.system`.
+
+The public API should remain narrow:
+
+```python
+from kairospy.application.system import TradingSystemLauncher
+```
+
+Additional public facades can be added only when there is a separate external workflow:
+
+```python
+from kairospy.application.system import RunControl
+from kairospy.application.system import AccountDirectory
+```
+
+Do not export internal runtime-host types from `application.system.__all__`.
+
+## Resource Model Decision
+
+Account identity, credentials metadata, connection lifecycle, and resumable state should be treated as system resources.
+
+This matches how mature trading systems separate concerns:
+
+- [NautilusTrader](https://github.com/nautechsystems/nautilus_trader) describes Python as the control plane for strategy logic, configuration, and orchestration, with modular adapters for venues. That implies external venues and orchestration-time state are assembled outside the deterministic strategy runtime.
+- [Hummingbot architecture](https://hummingbot.org/blog/hummingbot-architecture---part-1/) centers the system around a clock that drives connectors and strategies. Its market connectors own exchange/network operations and account/order tracking, while strategies consume those capabilities.
+- [Hummingbot GitHub](https://github.com/hummingbot/hummingbot) describes exchange connectors as standardized REST/WebSocket interfaces, including venues that require API keys or wallet keys. That makes credentials and connections operational resources.
+- [Freqtrade](https://github.com/freqtrade/freqtrade) presents the bot as an exchange-connected process controlled by API/UI, and its [REST API docs](https://www.freqtrade.io/en/2023.6/rest-api/) expose bot control, system info, trade inspection, and WebSocket messages as operational concerns outside the strategy code.
+
+For KairosPy this means:
+
+- Account config is a resource: it selects account identity, venue, credentials, initial cash, currency, and fee defaults.
+- Connections are resources: they have lifecycle, health, stop behavior, and eventually reconnect policy.
+- Live runtime state is a resource: it is resumable operational state owned by the system, not by the deterministic runtime.
+- Runtime port bundles are host resources: they are the narrowed capabilities handed from system host to `RuntimeKernel`.
+- Artifacts are not resources: they are outputs/sinks produced by a run.
+
 ## Proposed Package Structure
 
 ```text
 kairospy/application/system/
-  accounts/
-    registry.py
+  __init__.py
 
-  connections/
-    __init__.py
-    manager.py
-    health.py
+  facade/
+    trading.py          # public launcher/facade implementation
+    run_control.py      # optional future facade for list/stop/start daemon
+
+  host/
+    runtime_host.py     # owns RuntimeKernel/RuntimeRunSession construction
+    lifecycle.py        # prepare/complete hooks
+    resources.py        # system-owned runtime resource bundle
+
+  control/
+    daemon.py           # foreground/background process control
+    registry.py         # run discovery/list/stop command lookup
+    state.py            # run state, current instance, heartbeat payloads
+
+  artifacts/
+    writer.py           # summary/config/metrics writer
+    logging.py          # stdout/stderr tee
+    journals/
+      account.py        # persisted account journal sink
 
   resources/
-    __init__.py
-    spec.py
-    factory.py
-
-  run/
-    __init__.py
-    daemon.py
-    registry.py
-    session.py
-    state.py
-    journals/
-      account.py
-
-  trading/
-    __init__.py
-    result.py
-    spec.py
-    system.py
-    launcher.py
+    connections.py      # connection lifecycle abstraction
+    live_state.py       # resumable live execution/private-stream state
+    accounts.py         # concrete paper/live account and execution resource bundles
 ```
 
-Initial implementation can keep some modules small. The point is to establish ownership boundaries before adding more live connectivity.
+This is the target shape, not a request to move every file at once. Initial implementation can keep compatibility shims if needed, but new code should follow the target vocabulary.
+
+Mapping from current files:
+
+| Current | Target | Reason |
+| --- | --- | --- |
+| `trading/launcher.py` | `facade/trading.py` | Launcher is external facade, not a trading subdomain. |
+| `trading/system.py` | `host/runtime_host.py` | It hosts runtime; naming it `system.py` hides its specific role. |
+| `trading/spec.py` | `host/resources.py` plus host run request type | Resource bundles are host internals. |
+| `trading/lifecycle.py` | `host/lifecycle.py` | Lifecycle hooks are runtime-host behavior. |
+| `run/daemon.py` | `control/daemon.py` | Daemon is run control, not artifact persistence. |
+| `run/registry.py` | `control/registry.py` | Registry is run discovery/control state. |
+| `run/state.py` | `resources/live_state.py` | Live restoration state is a run resource; daemon state belongs under control when extracted. |
+| `run/artifacts.py` | `artifacts/writer.py` | Summary/config/metrics are artifacts. |
+| `run/logging.py` | `artifacts/logging.py` | Output capture is an artifact concern. |
+| `run/journals/account.py` | `artifacts/journals/account.py` | Account journal is persisted run artifact. |
+| `accounts/registry.py` | removed for now | Account selection moved to mode config parsing; move credential lookup to system resources later only when workspace/account requirements are concrete. |
+| `connections/manager.py` | `resources/connections.py` | Connections are resources because they must be started, stopped, and inspected by the system. |
 
 ## Core Types
 
 ### `TradingRuntimeResources`
 
-`TradingRuntimeResources` is the system-owned bundle of runtime capabilities.
+`TradingRuntimeResources` is the runtime-host bundle of capabilities passed into `RuntimeKernel`.
 
 ```python
 @dataclass(frozen=True, slots=True)
@@ -171,7 +250,7 @@ class TradingRuntimeResources:
     connections: ConnectionManager | None
 ```
 
-The object is intentionally system-level, but it should expose only stable external capabilities. Runtime processor bundles, account journals, and state stores are assembled inside system.
+The object is intentionally host-level, but it should expose only stable external capabilities. Runtime processor bundles, account journals, and state stores are assembled inside system.
 
 ### `TradingRunSpec`
 
@@ -297,34 +376,151 @@ The manager should own WebSocket/background tasks. Runtime services should expos
 
 ## State And Journals
 
-`RunAccountJournal` belongs in `application.system.run.journals` because it writes run artifacts.
+`RunAccountJournal` lives in `application.system.artifacts.journals` because it writes run artifacts.
 
 `AccountJournalProcessor` belongs in `application.runtime.processors` because recording account views is runtime-internal behavior.
 
 `AccountJournalSink` belongs in `application.runtime.ports` because runtime only needs a sink contract.
 
-Live runtime state stores should move from mode services to `application.system.run.state` because restore/save is run lifecycle behavior.
+Live runtime state stores currently live in `application.system.resources.live_state` because restore/save is a resumable run resource. This keeps the old broad `system.run` package out of the implementation tree.
+
+In the target package shape:
+
+- The concrete `RunAccountJournal` lives in `application.system.artifacts.journals`.
+- Runtime should depend only on `AccountJournalSink`.
+- `AccountJournalProcessor` should remain in `application.runtime.processors`.
+- Live restoration state should be owned by the runtime host lifecycle. Its concrete JSON file store may live under `system.host` or `system.artifacts` depending on whether the file is treated as resumable operational state or an inspectable artifact.
+
+## Planning Rules
+
+Use these rules before moving code:
+
+1. A module under `system.facade` may import `service.modes`, `system.host`, `system.control`, and `system.artifacts`.
+2. A module under `system.host` may import `runtime`, runtime ports, `system.resources`, and artifact sinks. It should not import CLI/surface modules.
+3. A module under `system.control` may import facade launchers when it needs to start a foreground child target, but daemon bookkeeping should be independent of trading host internals.
+4. A module under `system.artifacts` should not import `service.modes`; it serializes already-produced runtime/results data.
+5. A module under `service.modes` must not import `application.system`. It may parse account selectors from config, but concrete system resources must be created by system.
+6. `runtime` must never import `system`.
+
+These rules are more important than the exact folder names. A move is only useful if it improves these dependency directions.
+
+## Migration Plan
+
+### Phase 1: Name The Axes Without Changing Behavior
+
+- Add target packages without compatibility re-export modules: `facade`, `host`, `control`, `artifacts`.
+- Move `RunArtifactWriter`, `RunOutputLog`, and `RunAccountJournal` under `system.artifacts`.
+- Move `TradingSystem`, `TradingRunSpec`, `TradingRuntimeResources`, and lifecycle hooks under `system.host`.
+- Keep `application.system.TradingSystemLauncher` as the only public trading run facade.
+- Delete old import paths instead of keeping compatibility shims. Internal callers must import concrete modules under the new axes.
+
+### Phase 2: Refine Resource Ownership
+
+- Keep connection lifecycle and resumable live state under `system.resources`.
+- Keep concrete account/execution construction in mode-specific system resource bundles. Current mode recipes may parse account config, but should move toward account requirements rather than concrete account service construction when workspace-level account ownership becomes clearer.
+- Make `ConfiguredPaper` / `ConfiguredLive` recipes describe account requirements and resource settings, while the system facade performs operational account lookup when credentials and workspace state matter.
+- `LiveRuntimeStateStore` creation belongs in system facade/host; mode config should only describe the desired state path.
+
+### Phase 3: Consolidate Run Control
+
+- Introduce a small `RunControl` class that owns `start_background`, `run_foreground`, `request_stop`, and `list`.
+- Move daemon helper functions into focused collaborators:
+  - `RunIdentityFactory`
+  - `RunStateStore`
+  - `RunCommandStore`
+  - `RunProcessLauncher`
+- Keep behavior simple. Do not introduce an actor framework or async supervisor until real reconnect/heartbeat requirements force it.
+
+### Phase 4: Connection Ownership
+
+- Add concrete connection managers only when paper/live need long-lived supervision beyond the current stream iterator.
+- Paper and live should share market feed connection lifecycle code.
+- Live can add private stream/broker lifecycle later without changing runtime contracts.
+
+### Phase 5: Tighten Tests Around Boundaries
+
+- Add architecture tests for forbidden imports:
+  - `service.modes` should not import `application.system.host`, `application.system.control`, or `application.system.artifacts`.
+  - `system.artifacts` should not import `service.modes`.
+  - `runtime` should not import `application.system`.
+- Add behavior tests around foreground paper:
+  - run records are created under workspace `.kairos/runs`.
+  - `run.log` captures strategy stdout.
+  - stop command is honored for live paper streams.
+
+### Run Directory Layout
+
+Direct config runs write artifacts to the configured run directory:
+
+```text
+<runs_root>/<mode>/<run_id>/
+```
+
+Daemon-managed runs use that path as a run group and isolate each launch under a run instance:
+
+```text
+<runs_root>/<mode>/<run_id>/
+  current.json
+  state.json
+  summary.json
+  events.jsonl
+  run.lock
+  instances/
+    <run_instance_id>/
+      state.json
+      summary.json
+      events.jsonl
+      command.json
+      daemon.log
+      run.log
+      normalized_config.json
+      account/
+      live_state.json
+```
+
+The group files are pointers and mirrors for status/list commands. The instance directory owns the real launch artifacts, stop command, account journal, and live restore state.
 
 ## Current Migration State
 
 ### Done
 
-- `application.system.trading.spec.TradingRuntimeResources` exposes only stable runtime capabilities.
-- `application.system.trading.spec.TradingRunSpec` describes system-owned runtime assembly.
-- `application.system.trading.system.TradingSystem` owns kernel/session construction, account journals, lifecycle hooks, and connection start/stop.
-- `application.system.trading.launcher.TradingSystemLauncher` is the common entry point for config runs and JSONL event runs.
+- `application.system.host.resources.TradingRuntimeResources` exposes only stable runtime capabilities.
+- `application.system.host.resources.TradingRunSpec` describes system-owned runtime assembly.
+- `application.system.host.runtime_host.TradingSystem` owns kernel/session construction, account journals, lifecycle hooks, and connection start/stop.
+- `application.system.facade.trading.TradingSystemLauncher` is the common entry point for config runs and JSONL event runs.
 - `application.system` lazily exports `TradingSystemLauncher` as the public facade.
-- `ConfiguredBacktest`, `ConfiguredPaper`, and `ConfiguredLive` are mode recipes: they parse config and assemble resources, but they do not start system.
-- Mode recipes expose `build_result(runtime)` for mode-specific result assembly.
-- `JsonLiveRuntimeStateStore` lives in `application.system.run.state`.
-- `ConnectionManager` lives in `application.system.connections`.
+- `application.system.facade.trading.TradingSystemLauncher` is the implementation of the trading run facade.
+- `application.system.facade.run_control.RunControl` is the public facade for daemon start, foreground run, stop requests, and run listing.
+- `application.system.host` owns runtime host, host resources, and lifecycle hooks.
+- `application.system.control` owns daemon process control and run registry.
+- `RunDaemonService` keeps foreground/background lifecycle orchestration while `_RunTargetResolver` owns config target resolution and `_RunDaemonStore` owns daemon state/current/summary/event writes.
+- Background daemon start uses a lightweight target descriptor for run id and configured run directory; only the foreground worker resolves the full configured target and constructs runtime resources.
+- Background daemon launch passes the parent-created run instance id into the foreground worker, so registry state has one active/completed instance per launch instead of a stale launch placeholder plus a worker instance.
+- Daemon start claims a run group under an exclusive `run.lock`, rejects a second fresh active instance for the same `mode/run_id`, and permits a new instance after the current one stops, fails, or is abandoned as stale.
+- Daemon artifacts are isolated under `<runs_root>/<mode>/<run_id>/instances/<run_instance_id>`; group-level `current.json`, `state.json`, `summary.json`, and `events.jsonl` are status mirrors.
+- `application.system.artifacts` owns run summaries, output logs, and account journals.
+- `RunArtifactWriter` owns common run artifact files including summary, normalized config, metrics, equity, fills, trades, and intent states.
+- `application.system.trading` and `application.system.run` compatibility entry points were removed.
+- `ConfiguredBacktest`, `ConfiguredPaper`, and `ConfiguredLive` are mode recipes: they parse config and expose mode requirements, but they do not start system or construct runtime account/execution resources.
+- `JsonLiveRuntimeStateStore` lives in `application.system.resources.live_state`.
+- `ConfiguredLive` exposes `state_path`; `TradingSystemLauncher` constructs the live state store and performs restore/save through a system lifecycle object.
+- `ConfiguredBacktest` exposes account/backtest/execution config values; `BacktestAccountResources.from_configured(...)` constructs the simulated account, backtest account service, execution service, and coordinator before runtime hosting.
+- `ConfiguredPaper` exposes account/paper/execution config values; `PaperAccountResources.from_configured(...)` constructs the paper account and execution services before runtime hosting.
+- `ConfiguredLive` exposes account/live/execution config values; `LiveAccountResources.from_configured(...)` constructs the live broker, account service, execution service, and coordinator before runtime hosting.
+- Backtest/paper/live run result assembly that depends on account runtime resources lives with `BacktestAccountResources` / `PaperAccountResources` / `LiveAccountResources`, not in mode recipes.
+- `ConnectionManager` lives in `application.system.resources.connections`.
+- `service.modes` no longer imports `application.system`; account config selection lives in `application.service.modes.common.accounts` until resource requirements become concrete enough to move without adding a generic factory.
 - `RuntimeRunSpec` remains narrow and does not expose business service dependencies or processor injection.
-- Surface run commands call `application.system` launchers.
+- Surface run startup commands call `application.system` launchers and catch `TradingConfigurationError` for recipe/resource configuration failures; strategy/runtime failures propagate as execution errors. Surface does not import mode recipe modules, mode-specific configuration errors, or `application.system.control` internals.
 - Daemon foreground runs call the same system launchers used by surface.
 
 ### Remaining
 
-- Move more result assembly into `application.system.trading.result` only if meaningful duplication appears.
+- Move account selection and credential lookup further out of mode recipes, so recipes describe account requirements and system resources perform resolution.
+- Continue reducing `TradingSystemLauncher` by extracting live lifecycle and artifact orchestration only if concrete duplication appears.
+- Continue keeping `RunControl` thin; deeper daemon lifecycle, registry, and process launch collaborators stay under `system.control` until duplication or external workflows require more public API.
+- Avoid introducing a generic account resource factory until the three mode-specific resource bundles show real duplication that a named abstraction can remove.
+- Move more result assembly into `application.system.facade` or a host result assembler only if meaningful duplication appears.
 - Add concrete `PaperConnectionManager` / `LiveConnectionManager` when real stream supervision moves out of services.
 - Prefer adding dependencies to `TradingSystemLauncher.__init__` before adding more module-level launcher functions.
 
