@@ -59,6 +59,16 @@ class BtcSmaBacktestStrategy(StrategyBase):
             return None
 
         self.in_position = target > 0
+        context.trace(
+            "sma_cross",
+            {
+                "action": "target_position",
+                "instrument_id": str(self.market.instrument_id),
+                "target_quantity": str(target),
+                "fast_sma": str(fast),
+                "slow_sma": str(slow),
+            },
+        )
         context.intent(
             target_position_intent(
                 strategy_id=self.strategy_id,

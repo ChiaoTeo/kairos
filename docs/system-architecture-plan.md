@@ -374,21 +374,25 @@ Future implementations:
 
 The manager should own WebSocket/background tasks. Runtime services should expose data through ports but not supervise reconnect loops themselves.
 
-## State And Journals
+## State And Outputs
 
-`RunAccountJournal` lives in `application.system.artifacts.journals` because it writes run artifacts.
+`RunOutput` lives in `application.system.artifacts.output` because system owns run instance output coordination.
 
-`AccountJournalProcessor` belongs in `application.runtime.processors` because recording account views is runtime-internal behavior.
+`AccountCurrentProjector` and `TimelineProjector` live in `application.system.projectors` because they turn runtime views and steps into system-managed outputs.
 
-`AccountJournalSink` belongs in `application.runtime.ports` because runtime only needs a sink contract.
+`RunProjectionCatalog` and `RunProjectionService` also live in `application.system.projectors`. They are the read-side facade for run instance projections: surface/CLI asks this service what datasets exist and how to load them, instead of hard-coding artifact filenames or decoding timeline view snapshots itself.
+
+Runtime does not receive artifact output objects. It emits runtime lifecycle facts through `RuntimeStep`, and system projectors decide how those steps and views are persisted.
 
 Live runtime state stores currently live in `application.system.resources.live_state` because restore/save is a resumable run resource. This keeps the old broad `system.run` package out of the implementation tree.
 
 In the target package shape:
 
-- The concrete `RunAccountJournal` lives in `application.system.artifacts.journals`.
-- Runtime should depend only on `AccountJournalSink`.
-- `AccountJournalProcessor` should remain in `application.runtime.processors`.
+- The concrete `RunOutput` lives in `application.system.artifacts.output`.
+- The low-level `RunInstanceStore` lives in `infrastructure.artifacts`.
+- Runtime must not receive `RunOutput` or any artifact sink.
+- System projectors, projection catalog, and projection read service should remain under `application.system.projectors`.
+- Surface should depend on the projection service for run instance inspection; it should not own run artifact filename contracts.
 - Live restoration state should be owned by the runtime host lifecycle. Its concrete JSON file store may live under `system.host` or `system.artifacts` depending on whether the file is treated as resumable operational state or an inspectable artifact.
 
 ## Planning Rules
@@ -396,7 +400,7 @@ In the target package shape:
 Use these rules before moving code:
 
 1. A module under `system.facade` may import `service.modes`, `system.host`, `system.control`, and `system.artifacts`.
-2. A module under `system.host` may import `runtime`, runtime ports, `system.resources`, and artifact sinks. It should not import CLI/surface modules.
+2. A module under `system.host` may import `runtime`, runtime ports, `system.resources`, and run output coordination. It should not import CLI/surface modules.
 3. A module under `system.control` may import facade launchers when it needs to start a foreground child target, but daemon bookkeeping should be independent of trading host internals.
 4. A module under `system.artifacts` should not import `service.modes`; it serializes already-produced runtime/results data.
 5. A module under `service.modes` must not import `application.system`. It may parse account selectors from config, but concrete system resources must be created by system.
@@ -409,7 +413,7 @@ These rules are more important than the exact folder names. A move is only usefu
 ### Phase 1: Name The Axes Without Changing Behavior
 
 - Add target packages without compatibility re-export modules: `facade`, `host`, `control`, `artifacts`.
-- Move `RunArtifactWriter`, `RunOutputLog`, and `RunAccountJournal` under `system.artifacts`.
+- Move `RunOutputLog` and `RunOutput` under `system.artifacts`.
 - Move `TradingSystem`, `TradingRunSpec`, `TradingRuntimeResources`, and lifecycle hooks under `system.host`.
 - Keep `application.system.TradingSystemLauncher` as the only public trading run facade.
 - Delete old import paths instead of keeping compatibility shims. Internal callers must import concrete modules under the new axes.
@@ -498,8 +502,8 @@ The group files are pointers and mirrors for status/list commands. The instance 
 - Background daemon launch passes the parent-created run instance id into the foreground worker, so registry state has one active/completed instance per launch instead of a stale launch placeholder plus a worker instance.
 - Daemon start claims a run group under an exclusive `run.lock`, rejects a second fresh active instance for the same `mode/run_id`, and permits a new instance after the current one stops, fails, or is abandoned as stale.
 - Daemon artifacts are isolated under `<runs_root>/<mode>/<run_id>/instances/<run_instance_id>`; group-level `current.json`, `state.json`, `summary.json`, and `events.jsonl` are status mirrors.
-- `application.system.artifacts` owns run summaries, output logs, and account journals.
-- `RunArtifactWriter` owns common run artifact files including summary, normalized config, metrics, equity, fills, trades, and intent states.
+- `application.system.artifacts` owns run summaries and output logs.
+- `RunOutput` owns common run artifact files including summary, normalized config, metrics, optional legacy JSONL, current state snapshots, and runtime history records.
 - `application.system.trading` and `application.system.run` compatibility entry points were removed.
 - `ConfiguredBacktest`, `ConfiguredPaper`, and `ConfiguredLive` are mode recipes: they parse config and expose mode requirements, but they do not start system or construct runtime account/execution resources.
 - `JsonLiveRuntimeStateStore` lives in `application.system.resources.live_state`.
@@ -529,7 +533,7 @@ The group files are pointers and mirrors for status/list commands. The instance 
 The migration is complete when:
 
 - `ConfiguredBacktest`, `ConfiguredPaper`, and `ConfiguredLive` no longer construct or call `TradingSystem`.
-- `RunAccountJournal` is only referenced by system-level factories or specs.
+- `RunOutput` is only referenced by system-level artifacts, projectors, factories, or specs.
 - `JsonLiveRuntimeStateStore` is not under `application.service.modes`.
 - `RuntimeRunSpec` no longer exposes concrete runtime service dependencies.
 - No module under `application.runtime` imports `application.system`.
@@ -540,7 +544,8 @@ Useful checks:
 
 ```bash
 rg -n "RuntimeRunSpec\\(" kairospy tests
-rg -n "RunAccountJournal|JsonLiveRuntimeStateStore" kairospy tests
+rg -n "RunOutput|JsonLiveRuntimeStateStore" kairospy tests
+rg -n "application.system|RunOutput|append_history|update_current" kairospy/application/runtime
 rg -n "application.system" kairospy/application/runtime
 uv run pytest
 ```

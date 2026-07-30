@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 from kairospy.application.service.modes.backtest import BacktestConfigurationError, configured_backtest
 from kairospy.application.system import TradingConfigurationError, TradingSystemLauncher
 from kairospy.infrastructure.data import DataStore
+from kairospy.surface.timeline.loader import TimelineDataLoader
 from kairospy.surface.cli.commands.run import run_app
 
 
@@ -19,7 +20,7 @@ def _workspace(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
 
 
-def test_configured_backtest_runs_new_engine_and_writes_account_journal(tmp_path) -> None:
+def test_configured_backtest_runs_new_engine_and_writes_account_current(tmp_path) -> None:
     config_path = _write_backtest_project(tmp_path)
 
     configured = configured_backtest(config_path)
@@ -86,22 +87,61 @@ def test_run_backtest_command_writes_run_artifacts(tmp_path) -> None:
     assert "Run Environment" in log_text
     assert "System Status" in log_text
     assert "Account Status" in log_text
-    equity_rows = [json.loads(line) for line in (run_directory / "equity.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert len(equity_rows) == 2
+    for legacy_name in (
+        "equity.jsonl",
+        "fills.jsonl",
+        "trades.jsonl",
+        "intent_states.jsonl",
+        "decision_trace.jsonl",
+        "risk_snapshots.jsonl",
+    ):
+        assert not (run_directory / legacy_name).exists()
     timeline_rows = [json.loads(line) for line in (run_directory / "timeline.jsonl").read_text(encoding="utf-8").splitlines()]
     assert timeline_rows
-    assert {row["trigger"] for row in timeline_rows} >= {"interval", "intent_created"}
+    assert {row["trigger"] for row in timeline_rows} >= {"interval", "intent_created", "intent_completed", "fill"}
     assert "context_hash" in timeline_rows[0]
     assert "system.strategy" in timeline_rows[0]["views"]
     assert "account.risk_snapshots" in timeline_rows[-1]["views"]
+    assert "execution.fills" in timeline_rows[-1]["views"]
+    timeline_data = TimelineDataLoader(run_directory).load()
+    assert len(timeline_data["records"]["equity"]) == 2
+    assert len(timeline_data["records"]["fills"]) == 1
+    assert len(timeline_data["records"]["intents"]) == 1
+    assert timeline_data["records"]["fills"][0]["market_id"] == "market:binance:spot:btc_usdt"
+    assert timeline_data["records"]["intents"][0]["intent_id"] == "intent-1"
+    assert timeline_data["records"]["intents"][0]["status"] == "satisfied"
     assert json.loads((run_directory / "metrics.json").read_text(encoding="utf-8"))["net_profit"] == "0"
     assert json.loads((run_directory / "summary.json").read_text(encoding="utf-8"))["event_count"] == 2
-    intent_states = [json.loads(line) for line in (run_directory / "intent_states.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert len(intent_states) == 1
-    assert intent_states[0]["intent"]["intent_id"]["value"] == "intent-1"
-    assert intent_states[0]["status"] == "satisfied"
     current = json.loads((group_directory / "current.json").read_text(encoding="utf-8"))
     assert current["run_instance_id"] == payload["run_instance_id"]
+
+
+def test_decision_trace_artifact_requires_explicit_strategy_trace(tmp_path) -> None:
+    config_path = _write_backtest_project(tmp_path)
+
+    result = CliRunner().invoke(run_app, ["start", str(config_path), "--format", "json"], catch_exceptions=False)
+
+    run_directory = Path(json.loads(result.output)["directory"])
+    assert not (run_directory / "decision_trace.jsonl").exists()
+    timeline_rows = [json.loads(line) for line in (run_directory / "timeline.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert {row["trigger"] for row in timeline_rows} >= {"intent_created", "intent_completed", "fill"}
+    assert "decision" not in {row["trigger"] for row in timeline_rows}
+    assert TimelineDataLoader(run_directory).load()["records"]["decisionTrace"] == []
+
+
+def test_explicit_strategy_trace_writes_decision_trace_and_timeline_decision(tmp_path) -> None:
+    config_path = _write_backtest_project(tmp_path, emit_trace=True)
+
+    result = CliRunner().invoke(run_app, ["start", str(config_path), "--format", "json"], catch_exceptions=False)
+
+    run_directory = Path(json.loads(result.output)["directory"])
+    assert not (run_directory / "decision_trace.jsonl").exists()
+    decision_rows = TimelineDataLoader(run_directory).load()["records"]["decisionTrace"]
+    assert len(decision_rows) == 1
+    assert decision_rows[0]["name"] == "entry_signal"
+    assert decision_rows[0]["payload"]["action"] == "target_position"
+    timeline_rows = [json.loads(line) for line in (run_directory / "timeline.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert "decision" in {row["trigger"] for row in timeline_rows}
 
 
 def test_run_backtest_command_accepts_strategy_runtime_override(tmp_path) -> None:
@@ -257,6 +297,7 @@ def _write_backtest_project(
     on_missing: str = "error",
     fee_rate: str | None = None,
     subscribe_by_dataset: bool = False,
+    emit_trace: bool = False,
 ) -> Path:
     (root / ".kairos").mkdir(parents=True, exist_ok=True)
     (root / ".kairos" / "kairos.toml").write_text("[project]\nname = \"test\"\n", encoding="utf-8")
@@ -294,6 +335,18 @@ def _write_backtest_project(
             "        if self.entered:",
             "            return None",
             "        self.entered = True",
+            *(
+                [
+                    "        context.trace('entry_signal', {",
+                    "            'action': 'target_position',",
+                    "            'instrument_id': self.instrument_id,",
+                    "            'target_quantity': '2',",
+                    "            'reason': 'first_bar_entry',",
+                    "        })",
+                ]
+                if emit_trace
+                else []
+            ),
             "        context.intent(target_position_intent(",
             "            strategy_id=self.strategy_id,",
             "            instrument_id=self.instrument_id,",

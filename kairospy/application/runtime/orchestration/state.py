@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from kairospy.application.runtime.protocol.events import RuntimeEnvelope
+from kairospy.core.views import ViewStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,6 +23,18 @@ class RuntimeRunResult:
     last_event: RuntimeEnvelope | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeStep:
+    kind: str
+    as_of: datetime | None
+    event: RuntimeEnvelope | None = None
+    intents: tuple[object, ...] = ()
+    traces: tuple[object, ...] = ()
+    context: object | None = None
+    hook: str = ""
+    views: ViewStore | None = None
+
+
 @dataclass(slots=True)
 class RuntimeFrame:
     callbacks: list[Callback] = field(default_factory=list)
@@ -29,4 +43,4 @@ class RuntimeFrame:
     finished: bool = False
 
 
-__all__ = ["RuntimeFrame", "RuntimeRunResult", "Callback"]
+__all__ = ["RuntimeFrame", "RuntimeRunResult", "RuntimeStep", "Callback"]

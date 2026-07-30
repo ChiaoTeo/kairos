@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from kairospy.application.system.projectors import RunProjectionService
 from kairospy.surface.timeline.loader import TimelineDataLoader
 
 
@@ -99,6 +100,26 @@ def test_timeline_loader_derives_records_from_sampled_views(tmp_path) -> None:
                             ]
                         },
                     },
+                    "execution.fills": {
+                        "schema_version": "1",
+                        "payload_hash": "fills-1",
+                        "payload": {
+                            "fills": [
+                                {
+                                    "order_id": "order-1",
+                                    "intent_id": "intent-1",
+                                    "market_id": "market:binance:spot:btc_usdt",
+                                    "instrument_id": "instrument:spot:btc:usdt",
+                                    "side": "buy",
+                                    "quantity": "1",
+                                    "price": "101",
+                                    "fee": "0.1",
+                                    "notional": "101",
+                                    "occurred_at": "2026-01-01T00:00:00+00:00",
+                                }
+                            ]
+                        },
+                    },
                 },
             }
         ],
@@ -111,11 +132,36 @@ def test_timeline_loader_derives_records_from_sampled_views(tmp_path) -> None:
     assert data["records"]["equity"][0]["equity"] == "1000"
     assert data["records"]["riskSnapshots"][0]["account_id"] == "main"
     assert data["records"]["decisionTrace"][0]["name"] == "decision"
+    assert data["records"]["fills"][0]["order_id"] == "order-1"
     assert data["records"]["intents"][0]["intent_id"] == "intent-1"
     assert data["records"]["trades"][0]["source"] == "ohlcv"
     assert data["series"]["equity"][0]["cash"] == "1000"
     assert data["series"]["risk"][0]["positionCount"] == 0
     assert data["series"]["markets"][0]["close"] == "101"
+
+
+def test_run_projection_service_lists_and_loads_projection_data(tmp_path) -> None:
+    instance = tmp_path / ".kairos" / "runs" / "backtest" / "bt-1" / "instances" / "i-1"
+    instance.mkdir(parents=True)
+    _write_jsonl(
+        instance / "timeline.jsonl",
+        [
+            {
+                "time": "2026-01-01T00:00:00+00:00",
+                "sequence": 1,
+                "trigger": "interval",
+                "event": {"domain": "market", "kind": "bar", "summary": "bar btc"},
+                "context_hash": "hash-1",
+                "views": {},
+            }
+        ],
+    )
+
+    service = RunProjectionService(instance)
+
+    assert "run.timeline" in {spec.name for spec in service.list_datasets()}
+    assert service.load("run.timeline")[0]["trigger"] == "interval"
+    assert TimelineDataLoader(instance).load() == service.load_timeline_view()
 
 
 def test_timeline_loader_derives_market_views_and_multi_account_equity(tmp_path) -> None:

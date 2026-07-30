@@ -16,7 +16,7 @@ from kairospy.application.service.modes.paper.config import ConfiguredPaper, Pap
 from kairospy.application.service.modes.common import ConfiguredAccount
 from kairospy.application.service.domain.market import MarketDataSpec
 from kairospy.application.system.artifacts.logging import RunOutputLog, write_run_log_section
-from kairospy.application.system.artifacts.writer import RunArtifactWriter
+from kairospy.application.system.artifacts.output import RunOutput
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, exchange
 from kairospy.application.system.host.resources import TradingRuntimeResources, TradingRunSpec
 from kairospy.application.system.host.runtime_host import TradingSystem
@@ -223,7 +223,7 @@ class TradingSystemLauncher:
         return strategy
 
     def _write_artifacts(self, run_directory: Path, result: object, normalized_config: Mapping[str, object]) -> None:
-        RunArtifactWriter(run_directory).write(result=result, normalized_config=normalized_config)
+        RunOutput(run_directory).write_result(result=result, normalized_config=normalized_config)
 
     def _write_account_status(self, run_directory: Path, result: object) -> None:
         account_view = getattr(result, "account_view", None)

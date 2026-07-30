@@ -62,14 +62,24 @@ def test_system_implementation_uses_orthogonal_packages() -> None:
         ROOT / "kairospy" / "application" / "system" / "host" / "resources.py",
         ROOT / "kairospy" / "application" / "system" / "control" / "daemon.py",
         ROOT / "kairospy" / "application" / "system" / "control" / "registry.py",
-        ROOT / "kairospy" / "application" / "system" / "artifacts" / "writer.py",
         ROOT / "kairospy" / "application" / "system" / "artifacts" / "logging.py",
-        ROOT / "kairospy" / "application" / "system" / "artifacts" / "journals" / "account.py",
+        ROOT / "kairospy" / "application" / "system" / "artifacts" / "output.py",
+        ROOT / "kairospy" / "application" / "system" / "projectors" / "__init__.py",
+        ROOT / "kairospy" / "application" / "system" / "projectors" / "account.py",
+        ROOT / "kairospy" / "application" / "system" / "projectors" / "catalog.py",
+        ROOT / "kairospy" / "application" / "system" / "projectors" / "run.py",
+        ROOT / "kairospy" / "application" / "system" / "projectors" / "service.py",
+        ROOT / "kairospy" / "application" / "system" / "projectors" / "timeline.py",
         ROOT / "kairospy" / "application" / "system" / "resources" / "accounts.py",
         ROOT / "kairospy" / "application" / "system" / "resources" / "connections.py",
         ROOT / "kairospy" / "application" / "system" / "resources" / "live_state.py",
     )
     assert [str(path.relative_to(ROOT)) for path in expected_packages if not path.exists()] == []
+    expected_infrastructure = (
+        ROOT / "kairospy" / "infrastructure" / "artifacts" / "__init__.py",
+        ROOT / "kairospy" / "infrastructure" / "artifacts" / "store.py",
+    )
+    assert [str(path.relative_to(ROOT)) for path in expected_infrastructure if not path.exists()] == []
 
 
 def test_runtime_does_not_import_system_layer() -> None:

@@ -3,17 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from kairospy.application.runtime.ports import AccountJournalSink, AccountPort, MarketDataPort, ReferencePort, TradingExecutionPort
+from kairospy.application.runtime.ports import AccountPort, MarketDataPort, ReferencePort, TradingExecutionPort
 from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.application.runtime.processors.account import AccountProcessor, EquityCurveProcessor, FundingProcessor
 from kairospy.application.runtime.processors.execution import ExecutionProcessor, TradingIntentProcessor
 from kairospy.application.runtime.processors.intent import IntentProcessor
-from kairospy.application.runtime.processors.journal import AccountJournalProcessor
 from kairospy.application.runtime.processors.market import MarketProcessor
 from kairospy.application.runtime.processors.order import OrderProcessor
 from kairospy.application.runtime.processors.reference import ReferenceProcessor
 from kairospy.application.runtime.processors.risk import RiskProcessor
-from kairospy.application.runtime.processors.timeline import TimelineProcessor
 from kairospy.application.runtime.processors.trace import TraceProcessor
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentJournal
@@ -35,9 +33,7 @@ class RuntimeProcessors:
     execution: ExecutionProcessor | None = None
     order: OrderProcessor | None = None
     trading_intent: TradingIntentProcessor | None = None
-    account_journal: AccountJournalProcessor | None = None
     trace: TraceProcessor | None = None
-    timeline: TimelineProcessor | None = None
 
     def on_event(self, event: RuntimeEnvelope) -> None:
         self.system.on_event(event)
@@ -61,8 +57,6 @@ class RuntimeProcessors:
             self.trading_intent.on_event(event)
         if self.trace is not None:
             self.trace.on_event(event)
-        if self.timeline is not None:
-            self.timeline.on_event(event)
 
     def on_intents(self, intents: tuple[object, ...], context: object, hook: str) -> None:
         if self.trading_intent is not None:
@@ -71,8 +65,6 @@ class RuntimeProcessors:
             self.equity.on_intents(context)
         if self.trace is not None:
             self.trace.on_intents(intents, context, hook)
-        if self.timeline is not None:
-            self.timeline.on_intents(intents, context, hook)
 
     def register_views(self, views: ViewStore) -> None:
         self.system.register_views(views)
@@ -109,12 +101,8 @@ class RuntimeProcessors:
             self.execution.publish_views(views, as_of=as_of)
         if self.order is not None:
             self.order.publish_views(views, as_of=as_of)
-        if self.account_journal is not None:
-            self.account_journal.publish_views(views, as_of=as_of)
         if self.trace is not None:
             self.trace.publish_views(views, as_of=as_of)
-        if self.timeline is not None:
-            self.timeline.publish_views(views, as_of=as_of)
 
 
 def runtime_processors(
@@ -126,9 +114,6 @@ def runtime_processors(
     reference: ReferencePort | None = None,
     trading_execution: TradingExecutionPort | None = None,
     execution_coordinator: ExecutionCoordinator | None = None,
-    account_journal: AccountJournalSink | None = None,
-    timeline_journal: object | None = None,
-    timeline_sample_interval: object = "1m",
 ) -> RuntimeProcessors:
     account_processor = None if account is None else AccountProcessor(account)
     funding_processor = _funding_processor(account, execution_coordinator)
@@ -143,24 +128,18 @@ def runtime_processors(
         equity=equity_processor,
         account=account_processor,
         reference=None if reference is None else ReferenceProcessor(reference),
-        execution=None if execution_coordinator is None else ExecutionProcessor(execution_coordinator),
+        execution=(
+            None
+            if execution_coordinator is None
+            else ExecutionProcessor(execution_coordinator, fills_source=trading_execution)
+        ),
         order=None if execution_coordinator is None else OrderProcessor(execution_coordinator),
         trading_intent=(
             TradingIntentProcessor(trading_execution)
             if trading_execution is not None and callable(getattr(trading_execution, "execute_intent", None))
             else None
         ),
-        account_journal=(
-            None
-            if account_journal is None or account_processor is None
-            else AccountJournalProcessor(account_journal, account_view_keys=tuple(state.key for state in account_processor.states))
-        ),
         trace=trace_processor,
-        timeline=(
-            None
-            if timeline_journal is None
-            else TimelineProcessor(timeline_journal, sample_interval=timeline_sample_interval)
-        ),
     )
 
 

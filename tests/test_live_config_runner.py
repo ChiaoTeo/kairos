@@ -117,7 +117,7 @@ def test_configured_live_runs_with_injected_integrations(tmp_path) -> None:
     assert configured.market_data.view().subscription_count == 1
     assert (tmp_path / ".kairos" / "runs" / "live" / "live-1" / "live_state.json").exists()
     assert (tmp_path / ".kairos" / "runs" / "live" / "live-1" / "account" / "current.json").exists()
-    assert (tmp_path / ".kairos" / "runs" / "live" / "live-1" / "account" / "equity.jsonl").read_text(encoding="utf-8").strip()
+    assert not (tmp_path / ".kairos" / "runs" / "live" / "live-1" / "account" / "equity.jsonl").exists()
 
 
 def test_configured_live_restores_runtime_state(tmp_path) -> None:

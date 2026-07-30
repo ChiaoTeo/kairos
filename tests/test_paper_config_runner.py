@@ -33,7 +33,7 @@ def test_configured_paper_runs_new_engine(tmp_path) -> None:
     assert json.loads((run_directory / "summary.json").read_text(encoding="utf-8"))["event_count"] == 2
     assert "paper strategy saw quote" in (run_directory / "run.log").read_text(encoding="utf-8")
     assert (run_directory / "account" / "current.json").exists()
-    assert (run_directory / "account" / "equity.jsonl").read_text(encoding="utf-8").strip()
+    assert not (run_directory / "account" / "equity.jsonl").exists()
     records = RunRegistry(tmp_path / ".kairos" / "runs").list(mode="paper", run_id="paper-1")
     assert len(records) == 1
 

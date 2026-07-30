@@ -6,9 +6,9 @@ from kairospy.application.runtime.dispatch.context import RuntimeContext
 from kairospy.application.runtime.dispatch.dispatcher import RuntimeDispatcher
 from kairospy.application.runtime.orchestration.pipeline import RuntimePortPipeline
 from kairospy.application.runtime.orchestration.session import RuntimeSession
-from kairospy.application.runtime.orchestration.state import RuntimeFrame, RuntimeRunResult, Callback
+from kairospy.application.runtime.orchestration.state import RuntimeFrame, RuntimeRunResult, RuntimeStep, Callback
 from kairospy.application.runtime.protocol import MergedRuntimeEventLine, RuntimeEventLine
-from kairospy.application.runtime.ports import AccountJournalSink, AccountPort, MarketDataPort, ReferencePort, TradingExecutionPort
+from kairospy.application.runtime.ports import AccountPort, MarketDataPort, ReferencePort, TradingExecutionPort
 from kairospy.application.runtime.processors.system import RuntimeProcessors, runtime_processors
 from kairospy.application.strategy import ControlJournal, Strategy
 from kairospy.core.execution import ExecutionCoordinator
@@ -30,9 +30,6 @@ class RuntimeKernel:
         reference: ReferencePort | None = None,
         trading_execution: TradingExecutionPort | None = None,
         execution_coordinator: ExecutionCoordinator | None = None,
-        account_journal: AccountJournalSink | None = None,
-        timeline_journal: object | None = None,
-        timeline_sample_interval: object = "1m",
         processors: RuntimeProcessors | None = None,
     ) -> None:
         if not strategy.strategy_id.strip():
@@ -47,9 +44,6 @@ class RuntimeKernel:
         self.reference = reference
         self.trading_execution = trading_execution
         self.execution_coordinator = execution_coordinator
-        self.account_journal = account_journal
-        self.timeline_journal = timeline_journal
-        self.timeline_sample_interval = timeline_sample_interval
         self.processors = processors or self._processors()
         self.pipeline = RuntimePortPipeline(
             views=self.views,
@@ -90,9 +84,6 @@ class RuntimeKernel:
             reference=self.reference,
             trading_execution=self.trading_execution,
             execution_coordinator=self.execution_coordinator,
-            account_journal=self.account_journal,
-            timeline_journal=self.timeline_journal,
-            timeline_sample_interval=self.timeline_sample_interval,
         )
 
     def _event_line(self, source: RuntimeEventLine | None = None) -> RuntimeEventLine | None:
@@ -112,6 +103,7 @@ __all__ = [
     "RuntimeKernel",
     "RuntimeFrame",
     "RuntimeRunResult",
+    "RuntimeStep",
     "RuntimeSession",
     "Callback",
 ]
