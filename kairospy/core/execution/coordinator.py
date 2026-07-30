@@ -11,6 +11,7 @@ from kairospy.core.account import (
     AccountEventKind,
     AccountContext,
     AccountLedger,
+    AccountRef,
     AccountSnapshot,
     AccountState,
     derive_account_state,
@@ -79,12 +80,14 @@ class ExecutionCoordinator:
         ledger: AccountLedger | None = None,
         reservations: ReservationBook | None = None,
         broker: BrokerGateway | None = None,
+        broker_resolver: Callable[[AccountRef], BrokerGateway | None] | None = None,
         broker_symbol_resolver: Callable[[object], str] | None = None,
     ) -> None:
         self.orders = orders or OrderJournal()
         self.ledger = ledger or AccountLedger()
         self.reservations = reservations or ReservationBook()
         self.broker = broker
+        self.broker_resolver = broker_resolver
         self.broker_symbol_resolver = broker_symbol_resolver or (lambda instrument_id: instrument_id)
 
     def plan_order(
@@ -157,10 +160,11 @@ class ExecutionCoordinator:
         if at.tzinfo is None:
             raise ValueError("submit timestamp must be timezone-aware")
         state = self.orders.record(OrderEvent(order_id, OrderEventKind.SUBMITTED, at))
-        if self.broker is None:
+        broker = self._broker_for(state.request.context.account)
+        if broker is None:
             return state
         try:
-            response = self.broker.create_order(
+            response = broker.create_order(
                 self.broker_symbol(state.request.market_id or state.request.instrument_id),
                 side=state.request.side.value,
                 type=state.request.order_type.value,
@@ -204,14 +208,15 @@ class ExecutionCoordinator:
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
         state = self.request_cancel(order_id, at=at)
-        if self.broker is None:
+        broker = self._broker_for(state.request.context.account)
+        if broker is None:
             return state
         if not state.order_venue_id:
             return self.orders.record(
                 OrderEvent(order_id, OrderEventKind.UNKNOWN, at, reason="missing venue order id for cancel")
             )
         try:
-            response = self.broker.cancel_order(
+            response = broker.cancel_order(
                 state.order_venue_id,
                 symbol=self.broker_symbol(state.request.market_id or state.request.instrument_id),
                 params=params,
@@ -222,6 +227,12 @@ class ExecutionCoordinator:
         if status in {"canceled", "cancelled"}:
             return self.cancel_confirmed(order_id, at=at)
         return state
+
+    def _broker_for(self, account: AccountRef) -> BrokerGateway | None:
+        if self.broker_resolver is None:
+            return self.broker
+        selected = self.broker_resolver(account)
+        return selected or self.broker
 
     def cancel_confirmed(self, order_id: str, *, at: datetime) -> OrderState:
         state = self.orders.record(OrderEvent(order_id, OrderEventKind.CANCELED, at))

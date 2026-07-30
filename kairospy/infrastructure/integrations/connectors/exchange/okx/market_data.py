@@ -10,6 +10,7 @@ from typing import AsyncIterator, Iterable, Mapping
 from kairospy.core.market import MarketEvent
 from kairospy.core.reference import MarketDefinition, MarketRef, ReferenceCatalog
 from kairospy.infrastructure.data import DataSink
+from kairospy.infrastructure.integrations.credentials import credential_value
 from kairospy.infrastructure.integrations.drivers import CcxtDriver
 from kairospy.infrastructure.integrations.payloads.ccxt_market import (
     ccxt_market_type,
@@ -355,31 +356,7 @@ def _okx_config(credential: str | None = None) -> dict[str, object]:
 
 
 def _credential_env(credential: str | None, suffix: str, *fallbacks: str) -> str | None:
-    prefix = _credential_env_prefix(credential)
-    if prefix is not None:
-        value = os.environ.get(f"{prefix}_{suffix}")
-        if value:
-            return value
-    for name in fallbacks:
-        value = os.environ.get(name)
-        if value:
-            return value
-    return None
-
-
-def _credential_env_prefix(credential: str | None) -> str | None:
-    if credential is None:
-        return None
-    value = credential.strip()
-    if not value.startswith("env:"):
-        return None
-    name = value.split(":", 1)[1].strip()
-    if not name:
-        return None
-    normalized = "".join(char.upper() if char.isalnum() else "_" for char in name)
-    while "__" in normalized:
-        normalized = normalized.replace("__", "_")
-    return normalized.strip("_") or None
+    return credential_value(credential, suffix, *fallbacks)
 
 
 def _okx_exchange(exchange_id: str, *, credential: str | None = None):

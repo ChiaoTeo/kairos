@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from kairospy.application.runtime.ports import DataSubscription, MarketDataSubscriptionSpec
+from kairospy.application.ports import DataSubscription, MarketDataSubscriptionSpec
 
 
 @dataclass(frozen=True, slots=True)

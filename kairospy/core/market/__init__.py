@@ -44,6 +44,7 @@ from .views import (
     QuoteWindow,
     RateWindow,
     TradeWindow,
+    market_window_schema,
 )
 
 __all__ = [
@@ -89,6 +90,7 @@ __all__ = [
     "RateWindow",
     "TradePrint",
     "TradeWindow",
+    "market_window_schema",
     "apply_orderbook_update",
     "market_selector",
 ]

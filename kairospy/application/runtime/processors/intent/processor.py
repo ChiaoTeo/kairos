@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.application.protocol import RuntimeEnvelope
 from kairospy.core.intent import IntentJournal
 from kairospy.core.views import ViewStore
 

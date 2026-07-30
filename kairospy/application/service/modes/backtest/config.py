@@ -5,7 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Mapping
 
-from kairospy.application.runtime import RuntimeMode
+from kairospy.application.modes import RuntimeMode
 from kairospy.application.service.domain.market import MarketDataResolver
 from kairospy.application.service.runtime.market import ReplayMarketDataPolicy
 from kairospy.application.strategy import Strategy
@@ -16,7 +16,7 @@ from kairospy.infrastructure.data import DataStore
 from ..common import (
     AccountPerformanceMixin,
     jsonable as common_jsonable,
-    load_required_run_config,
+    load_required_launch_config,
     load_strategy as common_load_strategy,
     resolve_path as common_resolve_path,
     strategy_params as common_strategy_params,
@@ -30,8 +30,8 @@ class BacktestConfigurationError(ValueError):
 
 
 @dataclass(frozen=True, slots=True)
-class BacktestRunResult(AccountPerformanceMixin):
-    run_id: str
+class BacktestLaunchResult(AccountPerformanceMixin):
+    launch_id: str
     mode: RuntimeMode
     runtime: object
     views: object
@@ -58,9 +58,9 @@ class BacktestAccountConfig:
 
 @dataclass(frozen=True, slots=True)
 class ConfiguredBacktest:
-    run_id: str
+    launch_id: str
     strategy: Strategy
-    run_directory: Path
+    launch_directory: Path
     normalized_config: Mapping[str, object]
     data: BacktestMarketDataService
     account_config: BacktestAccountConfig
@@ -70,15 +70,15 @@ class ConfiguredBacktest:
 
 
 def configured_backtest(config_path: Path, *, strategy_ref: str | None = None) -> ConfiguredBacktest:
-    run_config = load_required_run_config(config_path, mode=RuntimeMode.BACKTEST, error_type=BacktestConfigurationError, strategy_ref=strategy_ref)
-    values = run_config.values
+    launch_config = load_required_launch_config(config_path, mode=RuntimeMode.BACKTEST, error_type=BacktestConfigurationError, strategy_ref=strategy_ref)
+    values = launch_config.values
     strategy_params = _strategy_params(values)
     backtest = _table(values.get("backtest"), "backtest")
     timeline_config = _table(values.get("timeline"), "timeline") if values.get("timeline") is not None else {}
     execution_config = _table(values.get("execution"), "execution") if values.get("execution") is not None else {}
-    account_defaults = run_config.account_defaults
+    account_defaults = launch_config.account_defaults
     account_config = BacktestAccountConfig(
-        account_id=run_config.run_id,
+        account_id=launch_config.launch_id,
         cash=account_defaults.cash,
         currency=account_defaults.currency,
         fee_rate=account_defaults.fee_rate,
@@ -90,17 +90,17 @@ def configured_backtest(config_path: Path, *, strategy_ref: str | None = None) -
     )
     market_policy = _market_policy(backtest)
     data = BacktestMarketDataService(
-        DataStore(_data_root(backtest, root=run_config.root), storage_format=_storage_format(backtest)),
+        DataStore(_data_root(backtest, root=launch_config.root), storage_format=_storage_format(backtest)),
         resolver=MarketDataResolver(market_resolver),
         policy=market_policy,
     )
     return ConfiguredBacktest(
-        run_id=run_config.run_id,
-        strategy=_load_strategy(run_config.strategy, root=run_config.root, params=strategy_params),
-        run_directory=_run_directory(backtest, root=run_config.root, run_id=run_config.run_id),
+        launch_id=launch_config.launch_id,
+        strategy=_load_strategy(launch_config.strategy, root=launch_config.root, params=strategy_params),
+        launch_directory=_launch_directory(backtest, root=launch_config.root, launch_id=launch_config.launch_id),
         normalized_config=_normalized_config(
-            run_id=run_config.run_id,
-            strategy=run_config.strategy,
+            launch_id=launch_config.launch_id,
+            strategy=launch_config.strategy,
             strategy_params=strategy_params,
             backtest=backtest,
             execution=execution_config,
@@ -158,14 +158,14 @@ def _storage_format(backtest: Mapping[str, object]) -> str:
     return value
 
 
-def _run_directory(backtest: Mapping[str, object], *, root: Path, run_id: str) -> Path:
-    runs_root = Path(".kairos/runs").resolve() if backtest.get("runs_root") is None else _resolve_path(backtest["runs_root"], root=root, source="backtest.runs_root")
-    return runs_root / RuntimeMode.BACKTEST.value / run_id
+def _launch_directory(backtest: Mapping[str, object], *, root: Path, launch_id: str) -> Path:
+    launches_root = Path(".kairos/launches").resolve() if backtest.get("launches_root") is None else _resolve_path(backtest["launches_root"], root=root, source="backtest.launches_root")
+    return launches_root / RuntimeMode.BACKTEST.value / launch_id
 
 
 def _normalized_config(
     *,
-    run_id: str,
+    launch_id: str,
     strategy: str,
     strategy_params: Mapping[str, object],
     backtest: Mapping[str, object],
@@ -176,7 +176,7 @@ def _normalized_config(
     timeline: Mapping[str, object],
 ) -> Mapping[str, object]:
     return {
-        "run": {"id": run_id, "mode": RuntimeMode.BACKTEST.value, "strategy": strategy},
+        "launch": {"id": launch_id, "mode": RuntimeMode.BACKTEST.value, "strategy": strategy},
         "strategy": {"params": dict(strategy_params)},
         "backtest": {
             **{str(key): _jsonable(value) for key, value in backtest.items()},
@@ -218,7 +218,7 @@ def _jsonable(value: object) -> object:
 __all__ = [
     "BacktestAccountConfig",
     "BacktestConfigurationError",
-    "BacktestRunResult",
+    "BacktestLaunchResult",
     "ConfiguredBacktest",
     "configured_backtest",
 ]

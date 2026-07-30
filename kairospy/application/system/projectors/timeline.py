@@ -5,8 +5,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Mapping
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.application.system.artifacts.output import RunOutput
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.system.artifacts.output import LaunchOutput
 from kairospy.core.market import Bar, MarketEvent, OptionGreeks, Quote, RateObservation, TradePrint
 from kairospy.core.views import ViewStore
 
@@ -20,7 +20,7 @@ class TimelineTrigger:
 
 
 class TimelineProjector:
-    def __init__(self, output: RunOutput, *, sample_interval: str | timedelta | None = "1m") -> None:
+    def __init__(self, output: LaunchOutput, *, sample_interval: str | timedelta | None = "1m") -> None:
         self.output = output
         self.sample_interval = _sample_interval(sample_interval)
         self._pending: list[TimelineTrigger] = []

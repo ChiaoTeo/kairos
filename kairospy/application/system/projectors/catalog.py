@@ -12,11 +12,11 @@ class ProjectionSpec:
     record_key: str | None = None
 
 
-RUN_PROJECTIONS: tuple[ProjectionSpec, ...] = (
-    ProjectionSpec("run.summary", "snapshot", "Run summary", "summary.json"),
-    ProjectionSpec("run.metrics", "snapshot", "Run metrics", "metrics.json"),
-    ProjectionSpec("run.config", "snapshot", "Normalized run config", "config.normalized.json"),
-    ProjectionSpec("run.timeline", "history", "Run timeline", "timeline.jsonl", "timelineRecords"),
+LAUNCH_PROJECTIONS: tuple[ProjectionSpec, ...] = (
+    ProjectionSpec("launch.summary", "snapshot", "Launch summary", "summary.json"),
+    ProjectionSpec("launch.metrics", "snapshot", "Launch metrics", "metrics.json"),
+    ProjectionSpec("launch.config", "snapshot", "Normalized launch config", "config.normalized.json"),
+    ProjectionSpec("launch.timeline", "history", "Launch timeline", "timeline.jsonl", "timelineRecords"),
     ProjectionSpec("timeline.decision_trace", "derived-history", "Decision trace", "decision_trace.jsonl", "decisionTrace"),
     ProjectionSpec("timeline.risk_snapshots", "derived-history", "Risk snapshots", "risk_snapshots.jsonl", "riskSnapshots"),
     ProjectionSpec("timeline.equity", "derived-history", "Equity history", "equity.jsonl", "equity"),
@@ -27,8 +27,8 @@ RUN_PROJECTIONS: tuple[ProjectionSpec, ...] = (
 )
 
 
-class RunProjectionCatalog:
-    def __init__(self, specs: tuple[ProjectionSpec, ...] = RUN_PROJECTIONS) -> None:
+class LaunchProjectionCatalog:
+    def __init__(self, specs: tuple[ProjectionSpec, ...] = LAUNCH_PROJECTIONS) -> None:
         self._specs = specs
         self._by_name = {spec.name: spec for spec in specs}
 
@@ -39,10 +39,10 @@ class RunProjectionCatalog:
         try:
             return self._by_name[name]
         except KeyError as error:
-            raise ValueError(f"unknown run projection: {name}") from error
+            raise ValueError(f"unknown launch projection: {name}") from error
 
     def history(self) -> tuple[ProjectionSpec, ...]:
         return tuple(spec for spec in self._specs if spec.record_key is not None)
 
 
-__all__ = ["ProjectionSpec", "RUN_PROJECTIONS", "RunProjectionCatalog"]
+__all__ = ["ProjectionSpec", "LAUNCH_PROJECTIONS", "LaunchProjectionCatalog"]

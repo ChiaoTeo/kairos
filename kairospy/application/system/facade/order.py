@@ -5,13 +5,18 @@ import json
 from pathlib import Path
 from typing import Mapping
 
+from kairospy.application.modes import RuntimeMode
 from kairospy.application.system.facade.context import workspace as resolve_workspace
+from kairospy.application.launch.facade import LaunchFacade
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, broker
 from kairospy.application.system.workspace import AccountRecord, KairosWorkspace
 from kairospy.config import ConfigError
 
 
 class OrderFacade:
+    def __init__(self, launches: LaunchFacade | None = None) -> None:
+        self._launches = launches or LaunchFacade()
+
     def open_orders(
         self,
         *,
@@ -66,6 +71,42 @@ class OrderFacade:
         _write_journal(workspace, account, "place", request, payload)
         return payload
 
+    def submit_runtime(
+        self,
+        *,
+        launch: str | None,
+        mode: RuntimeMode | None,
+        launch_id: str | None,
+        root: Path | None,
+        account_id: str | None,
+        symbol: str,
+        side: str,
+        type_: str,
+        amount: str,
+        price: str | None,
+        params: Mapping[str, object],
+        wait: bool,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        return self._launches.submit_command(
+            target=launch,
+            root=root,
+            launch_id=launch_id,
+            mode=mode,
+            kind="order.submit",
+            payload={
+                "account": account_id,
+                "symbol": symbol,
+                "side": side,
+                "type": type_,
+                "amount": amount,
+                "price": price,
+                "params": dict(params),
+            },
+            wait=wait,
+            timeout_seconds=timeout_seconds,
+        )
+
     def cancel(
         self,
         *,
@@ -87,6 +128,36 @@ class OrderFacade:
         payload = {"dry_run": False, "request": request, "result": result}
         _write_journal(workspace, account, "cancel", request, payload)
         return payload
+
+    def cancel_runtime(
+        self,
+        *,
+        launch: str | None,
+        mode: RuntimeMode | None,
+        launch_id: str | None,
+        root: Path | None,
+        account_id: str | None,
+        order_id: str,
+        symbol: str | None,
+        params: Mapping[str, object],
+        wait: bool,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        return self._launches.submit_command(
+            target=launch,
+            root=root,
+            launch_id=launch_id,
+            mode=mode,
+            kind="order.cancel",
+            payload={
+                "account": account_id,
+                "order_id": order_id,
+                "symbol": symbol,
+                "params": dict(params),
+            },
+            wait=wait,
+            timeout_seconds=timeout_seconds,
+        )
 
     def replace(
         self,
@@ -132,6 +203,29 @@ class OrderFacade:
         if not matches:
             raise ValueError(f"order was not found in local journal: {order_id}")
         return {"account": account.account_id, "order_id": order_id, "journal": str(journal), "records": matches, "count": len(matches)}
+
+    def status_runtime(
+        self,
+        *,
+        launch: str | None,
+        mode: RuntimeMode | None,
+        launch_id: str | None,
+        root: Path | None,
+        account_id: str | None,
+        order_id: str,
+        wait: bool,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        return self._launches.submit_command(
+            target=launch,
+            root=root,
+            launch_id=launch_id,
+            mode=mode,
+            kind="order.status",
+            payload={"account": account_id, "order_id": order_id},
+            wait=wait,
+            timeout_seconds=timeout_seconds,
+        )
 
     def _broker(self, account: AccountRecord):
         return broker(_exchange(account), DriverName.ccxt, credential=account.credential)

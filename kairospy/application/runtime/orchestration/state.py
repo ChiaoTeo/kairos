@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Mapping
 
-from kairospy.application.runtime.protocol.events import RuntimeEnvelope
+from kairospy.application.ports import AccountPort, MarketDataPort, ReferencePort, TradingExecutionPort
+from kairospy.application.protocol.events import RuntimeEnvelope
+from kairospy.application.strategy import ControlJournal
+from kairospy.core.intent import IntentJournal
 from kairospy.core.views import ViewStore
 
 
@@ -15,7 +19,7 @@ class Callback:
 
 
 @dataclass(frozen=True, slots=True)
-class RuntimeRunResult:
+class RuntimeLaunchResult:
     strategy_id: str
     event_count: int
     callbacks: tuple[Callback, ...]
@@ -43,4 +47,27 @@ class RuntimeFrame:
     finished: bool = False
 
 
-__all__ = ["RuntimeFrame", "RuntimeRunResult", "RuntimeStep", "Callback"]
+@dataclass(frozen=True, slots=True)
+class RuntimeStores:
+    strategy_state: Mapping[str, object] = field(default_factory=dict)
+    intents: IntentJournal = field(default_factory=IntentJournal)
+    controls: ControlJournal = field(default_factory=ControlJournal)
+    views: ViewStore = field(default_factory=ViewStore)
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimePorts:
+    data: MarketDataPort | None = None
+    account: AccountPort | None = None
+    reference: ReferencePort | None = None
+    trading_execution: TradingExecutionPort | None = None
+
+
+__all__ = [
+    "RuntimeFrame",
+    "RuntimePorts",
+    "RuntimeLaunchResult",
+    "RuntimeStores",
+    "RuntimeStep",
+    "Callback",
+]

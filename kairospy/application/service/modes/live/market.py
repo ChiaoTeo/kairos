@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.application.runtime.protocol.lines import RuntimeEventLine
+from kairospy.application.protocol.lines import RuntimeEventLine
 from kairospy.application.service.runtime.market import RuntimeMarketDataServiceView, StreamingMarketDataService
 from kairospy.infrastructure.integrations.protocols import LiveMarketDataFeed
 

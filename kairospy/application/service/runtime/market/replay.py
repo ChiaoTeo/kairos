@@ -4,12 +4,12 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Callable, Iterable, Literal, Mapping
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.application.runtime.ports import DataSubscription, MarketDataPort, MarketDataSubscriptionSpec
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.ports import DataSubscription, MarketDataPort, MarketDataSubscriptionSpec
 from kairospy.application.service.domain.market import MarketDataOperationsService, MarketDataResolver, MarketDataSpec
 from kairospy.application.service.domain.market.datasets import parse_market_dataset_id
 from kairospy.application.service.domain.market.operations import HistoricalMarketDataClient
-from kairospy.application.service.domain.market.sources import IterableMarketEventSource, parse_event_time, runtime_envelope_from_row
+from kairospy.application.service.domain.market.sources import IterableMarketEventSource, market_event_from_row, parse_event_time
 from kairospy.core.market import Bar, OrderBookSnapshot, Quote, RateObservation, TradePrint
 from kairospy.infrastructure.data import DataStore
 
@@ -17,6 +17,15 @@ from .common import MarketSubscriptionState, RuntimeMarketDataServiceView
 
 
 BacktestMissingDataAction = Literal["error", "download", "skip"]
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeIterableMarketEventSource:
+    source: IterableMarketEventSource
+
+    async def events(self) -> AsyncIterator[RuntimeEnvelope]:
+        for sequence, row in enumerate(self.source.rows, start=1):
+            yield runtime_envelope_from_row(row, sequence=sequence, stream=self.source.stream)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,9 +64,9 @@ class ReplayMarketDataService(MarketDataOperationsService, MarketSubscriptionSta
     ) -> None:
         self.historical_client_factory = factory
 
-    def source_from_store(self, spec: MarketDataSpec) -> IterableMarketEventSource:
+    def source_from_store(self, spec: MarketDataSpec) -> RuntimeIterableMarketEventSource:
         resolved = self.resolve(spec)
-        return IterableMarketEventSource(resolved.stream_name, self.read(spec))
+        return RuntimeIterableMarketEventSource(IterableMarketEventSource(resolved.stream_name, self.read(spec)))
 
     def subscribe(self, spec: MarketDataSubscriptionSpec) -> DataSubscription:
         subscription = super().subscribe(spec)
@@ -163,4 +172,20 @@ def _kind_from_selector(selector: object) -> str:
     raise ValueError(f"unsupported backtest market selector model: {getattr(model, '__name__', model)!r}")
 
 
-__all__ = ["ReplayMarketDataPolicy", "ReplayMarketDataService", "RuntimeMarketDataServiceView"]
+def runtime_envelope_from_row(row: Mapping[str, object], *, sequence: int, stream: str) -> RuntimeEnvelope:
+    if "time" not in row:
+        raise ValueError("event rows require a time field")
+    event_time = parse_event_time(row["time"])
+    kind = str(row.get("kind") or "event")
+    domain = str(row.get("domain") or "market")
+    payload = market_event_from_row(row, sequence=sequence, stream=stream) if domain == "market" else dict(row)
+    return RuntimeEnvelope(domain, kind, event_time, sequence, payload or dict(row))
+
+
+__all__ = [
+    "ReplayMarketDataPolicy",
+    "ReplayMarketDataService",
+    "RuntimeIterableMarketEventSource",
+    "RuntimeMarketDataServiceView",
+    "runtime_envelope_from_row",
+]

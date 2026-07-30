@@ -15,18 +15,18 @@ from .loader import TimelineDataLoader, find_latest_instance, list_instances
 
 
 def serve_timeline(
-    run_root: Path,
+    launch_root: Path,
     *,
     selected_instance_path: Path | None = None,
     mode: str | None = None,
-    run_id: str | None = None,
+    launch_id: str | None = None,
     host: str = "127.0.0.1",
     port: int = 8765,
     open_browser: bool = True,
     static_root: Path | None = None,
 ) -> dict[str, object]:
-    root = run_root.expanduser().resolve()
-    default_instance = _default_instance(root, selected_instance_path=selected_instance_path, mode=mode, run_id=run_id)
+    root = launch_root.expanduser().resolve()
+    default_instance = _default_instance(root, selected_instance_path=selected_instance_path, mode=mode, launch_id=launch_id)
     selected_port = _available_port(host, port)
     server = _TimelineServer(
         (host, selected_port),
@@ -37,9 +37,9 @@ def serve_timeline(
         webbrowser.open(url)
     try:
         print(f"Timeline Viewer {url}")
-        print(f"Run root {root}")
+        print(f"Launch root {root}")
         if default_instance is not None:
-            print(f"Default run instance {default_instance}")
+            print(f"Default launch instance {default_instance}")
         print("Press Ctrl-C to stop.")
         server.serve_forever()
     except KeyboardInterrupt:
@@ -171,12 +171,12 @@ def _default_instance(
     *,
     selected_instance_path: Path | None,
     mode: str | None,
-    run_id: str | None,
+    launch_id: str | None,
 ) -> Path | None:
     if selected_instance_path is not None:
         return selected_instance_path.expanduser().resolve()
     try:
-        return find_latest_instance(root, mode=mode, run_id=run_id)
+        return find_latest_instance(root, mode=mode, launch_id=launch_id)
     except ValueError:
         return None
 
@@ -196,7 +196,7 @@ def _resolve_timeline_path(root: Path, default_instance: Path | None, raw_path: 
         raise ValueError("timeline path is required")
     candidate = Path(raw_path).expanduser().resolve()
     if not _is_relative_to(candidate, root):
-        raise ValueError(f"run instance is outside run root: {candidate}")
+        raise ValueError(f"launch instance is outside launch root: {candidate}")
     return candidate
 
 

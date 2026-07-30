@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from kairospy.core.account import AccountContext, AccountRef, Environment
+from kairospy.core.account import AccountBookKind, AccountContext, AccountRef, Environment
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +13,7 @@ class SimulatedAccount:
     cash_currency: str = "USD"
     broker: str = "simulated"
     environment: Environment = Environment.BACKTEST
+    book: AccountBookKind | str = AccountBookKind.DEFAULT
     fee_rate: Decimal = Decimal("0")
     price_field: str = "close"
 
@@ -28,7 +29,7 @@ class SimulatedAccount:
 
     @property
     def context(self) -> AccountContext:
-        return AccountContext(AccountRef(self.broker, self.account_id), self.environment)
+        return AccountContext(AccountRef(self.broker, self.account_id, self.book), self.environment)
 
 
 __all__ = ["SimulatedAccount"]

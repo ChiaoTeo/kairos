@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import Generic, Protocol, TypeVar
 
 from kairospy.core.reference import ExchangeId, InstrumentId, MarketId, MarketRef, MarketResolver, MarketTypeId, SourceSymbol
+from kairospy.core.views import ViewFieldSchema, ViewSchema
 
 from .model import Bar, OptionGreeks, Quote, RateObservation, TradePrint
 from .orderbook import OrderBookSnapshot
@@ -211,6 +212,22 @@ class MarketSubscriptionsView:
     subscriptions: tuple[MarketSubscriptionSummary, ...] = ()
 
 
+def market_window_schema(key: str, kind: str) -> ViewSchema:
+    return ViewSchema(
+        key,
+        "system",
+        fields=(
+            ViewFieldSchema("subject_type", "market window subject type", "runtime state", "market event window state"),
+            ViewFieldSchema("subject_id", "market window subject identity", "runtime state", "market event window state"),
+            ViewFieldSchema("items", f"{kind} window items", "event time", "market event window state"),
+            ViewFieldSchema("event_count", f"{kind} event count", "runtime sequence", "market event window state"),
+            ViewFieldSchema("updated_at", f"latest {kind} event time", "event time", "market event window state"),
+        ),
+        mutability="runtime_writable",
+        evidence=f"runtime market {kind} window state",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class MarketViewReader:
     source: MarketViewSource
@@ -384,4 +401,5 @@ __all__ = [
     "QuoteWindow",
     "RateWindow",
     "TradeWindow",
+    "market_window_schema",
 ]

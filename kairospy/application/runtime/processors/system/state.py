@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from kairospy.application.runtime.ports import AccountPort, MarketDataPort, ReferencePort, TradingExecutionPort
-from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.application.protocol import RuntimeEnvelope
 from kairospy.application.runtime.processors.account import AccountProcessor, EquityCurveProcessor, FundingProcessor
 from kairospy.application.runtime.processors.execution import ExecutionProcessor, TradingIntentProcessor
 from kairospy.application.runtime.processors.intent import IntentProcessor
@@ -13,7 +12,7 @@ from kairospy.application.runtime.processors.order import OrderProcessor
 from kairospy.application.runtime.processors.reference import ReferenceProcessor
 from kairospy.application.runtime.processors.risk import RiskProcessor
 from kairospy.application.runtime.processors.trace import TraceProcessor
-from kairospy.core.execution import ExecutionCoordinator
+from kairospy.application.service.runtime.services import RuntimeApplicationServices
 from kairospy.core.intent import IntentJournal
 from kairospy.core.views import ViewStore
 
@@ -109,74 +108,52 @@ def runtime_processors(
     *,
     strategy_id: str,
     intents: IntentJournal,
-    data: MarketDataPort | None = None,
-    account: AccountPort | None = None,
-    reference: ReferencePort | None = None,
-    trading_execution: TradingExecutionPort | None = None,
-    execution_coordinator: ExecutionCoordinator | None = None,
+    services: RuntimeApplicationServices | None = None,
 ) -> RuntimeProcessors:
-    account_processor = None if account is None else AccountProcessor(account)
-    funding_processor = _funding_processor(account, execution_coordinator)
-    equity_processor = _equity_processor(account, execution_coordinator)
-    trace_processor = _trace_processor(account, execution_coordinator)
+    services = services or RuntimeApplicationServices()
+    account_processor = None if services.account is None or services.account.views is None else AccountProcessor(services.account)
+    funding_processor = _funding_processor(services)
+    equity_processor = _equity_processor(services)
+    trace_processor = _trace_processor(services)
     return RuntimeProcessors(
         system=SystemProcessor(strategy_id=strategy_id),
         intent=IntentProcessor(strategy_id=strategy_id, intents=intents),
         risk=RiskProcessor(),
-        market=None if data is None else MarketProcessor(data),
+        market=None if services.market is None else MarketProcessor(services.market),
         funding=funding_processor,
         equity=equity_processor,
         account=account_processor,
-        reference=None if reference is None else ReferenceProcessor(reference),
+        reference=None if services.reference is None else ReferenceProcessor(services.reference),
         execution=(
             None
-            if execution_coordinator is None
-            else ExecutionProcessor(execution_coordinator, fills_source=trading_execution)
+            if services.execution is None or services.execution.projection is None or services.execution.updates is None
+            else ExecutionProcessor(
+                service=services.execution,
+            )
         ),
-        order=None if execution_coordinator is None else OrderProcessor(execution_coordinator),
-        trading_intent=(
-            TradingIntentProcessor(trading_execution)
-            if trading_execution is not None and callable(getattr(trading_execution, "execute_intent", None))
-            else None
-        ),
+        order=None if services.execution is None or services.execution.projection is None else OrderProcessor(services.execution),
+        trading_intent=None if services.execution is None or services.execution.trading_intents is None else TradingIntentProcessor(services.execution),
         trace=trace_processor,
     )
 
 
-def _funding_processor(account: AccountPort | None, coordinator: ExecutionCoordinator | None) -> FundingProcessor | None:
-    if account is None or coordinator is None:
+def _funding_processor(services: RuntimeApplicationServices) -> FundingProcessor | None:
+    if services.account is None or services.account.projection is None:
         return None
-    accounts = account.accounts()
-    if len(accounts) != 1:
-        return None
-    context = accounts[0]
+    context = services.account.account
     if getattr(context.environment, "value", str(context.environment)) != "backtest":
         return None
-    service_account = getattr(account, "account", None)
-    settlement_currency = str(getattr(service_account, "cash_currency", "") or "USD")
-    return FundingProcessor(account=context, coordinator=coordinator, settlement_currency=settlement_currency)
+    return FundingProcessor(service=services.account)
 
 
-def _equity_processor(account: AccountPort | None, coordinator: ExecutionCoordinator | None) -> EquityCurveProcessor | None:
-    if account is None or coordinator is None:
+def _equity_processor(services: RuntimeApplicationServices) -> EquityCurveProcessor | None:
+    if services.account is None or services.account.projection is None:
         return None
-    accounts = account.accounts()
-    if len(accounts) != 1:
-        return None
-    service_account = getattr(account, "account", None)
-    cash_currency = str(getattr(service_account, "cash_currency", "") or "USD")
-    return EquityCurveProcessor(account=accounts[0], coordinator=coordinator, cash_currency=cash_currency)
+    return EquityCurveProcessor(service=services.account)
 
 
-def _trace_processor(account: AccountPort | None, coordinator: ExecutionCoordinator | None) -> TraceProcessor:
-    if account is None or coordinator is None:
-        return TraceProcessor()
-    accounts = account.accounts()
-    if len(accounts) != 1:
-        return TraceProcessor()
-    service_account = getattr(account, "account", None)
-    cash_currency = str(getattr(service_account, "cash_currency", "") or "USD")
-    return TraceProcessor(account=accounts[0], coordinator=coordinator, cash_currency=cash_currency)
+def _trace_processor(services: RuntimeApplicationServices) -> TraceProcessor:
+    return TraceProcessor(service=None if services.account is None or services.account.projection is None else services.account)
 
 
 __all__ = ["RuntimeProcessors", "runtime_processors"]

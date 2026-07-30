@@ -5,7 +5,7 @@ from .config import (
     bool_value,
     int_value,
     jsonable,
-    load_required_run_config,
+    load_required_launch_config,
     load_strategy,
     optional_int,
     optional_text,
@@ -17,7 +17,7 @@ from .config import (
     strategy_params,
     table,
 )
-from .accounts import AccountConfigRegistry, AccountResolver, ConfiguredAccount, configured_account, configured_account_ref
+from .accounts import AccountConfigRegistry, AccountResolver, ConfiguredAccount, ConfiguredCredential, configured_account, configured_account_ref
 from .integrations import default_broker, default_market_feed
 from .results import AccountPerformanceMixin
 
@@ -26,6 +26,7 @@ __all__ = [
     "AccountConfigRegistry",
     "AccountResolver",
     "ConfiguredAccount",
+    "ConfiguredCredential",
     "account_selector",
     "bool_value",
     "configured_account",
@@ -34,7 +35,7 @@ __all__ = [
     "default_market_feed",
     "int_value",
     "jsonable",
-    "load_required_run_config",
+    "load_required_launch_config",
     "load_strategy",
     "optional_int",
     "optional_text",

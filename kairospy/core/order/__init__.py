@@ -12,8 +12,11 @@ from .model import (
     OrderStatus,
     OrderType,
 )
+from .views import ORDER_CURRENT_SCHEMA, OrderCurrentView, OrderViewKeys
 
 __all__ = [
+    "ORDER_CURRENT_SCHEMA",
+    "OrderCurrentView",
     "OrderJournal",
     "OrderEvent",
     "OrderEventKind",
@@ -25,4 +28,5 @@ __all__ = [
     "OrderState",
     "OrderStatus",
     "OrderType",
+    "OrderViewKeys",
 ]

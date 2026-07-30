@@ -6,32 +6,32 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Mapping, TypeVar
 
-from kairospy.application.runtime import RuntimeMode
+from kairospy.application.modes import RuntimeMode
 from kairospy.application.service.domain.execution import BasisPointSlippageModel
 from kairospy.application.strategy import Strategy
 from kairospy.application.strategy.entrypoint import load_strategy_entrypoint
-from kairospy.config import ConfigError, RunConfig, load_run_config
+from kairospy.config import ConfigError, LaunchConfig, load_launch_config
 
 ConfigErrorT = TypeVar("ConfigErrorT", bound=Exception)
 
 
-def load_required_run_config(
+def load_required_launch_config(
     config_path: Path,
     *,
     mode: RuntimeMode,
     error_type: type[ConfigErrorT],
     strategy_ref: str | None = None,
-) -> RunConfig:
+) -> LaunchConfig:
     try:
-        run_config = load_run_config(config_path)
+        launch_config = load_launch_config(config_path)
         if strategy_ref is not None:
-            run_config = run_config.with_run_strategy(strategy_ref)
-        run_config.require_mode(mode.value)
+            launch_config = launch_config.with_launch_strategy(strategy_ref)
+        launch_config.require_mode(mode.value)
     except ConfigError as error:
         raise error_type(str(error)) from error
-    if run_config.strategy is None:
-        raise error_type("run.strategy is required")
-    return run_config
+    if launch_config.strategy is None:
+        raise error_type("launch.strategy is required")
+    return launch_config
 
 
 def table(value: object, name: str, error_type: type[ConfigErrorT], *, allow_none: bool = True) -> Mapping[str, object]:
@@ -172,7 +172,7 @@ __all__ = [
     "bool_value",
     "int_value",
     "jsonable",
-    "load_required_run_config",
+    "load_required_launch_config",
     "load_strategy",
     "optional_int",
     "optional_text",

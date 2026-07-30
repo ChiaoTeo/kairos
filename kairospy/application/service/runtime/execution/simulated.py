@@ -4,7 +4,9 @@ from collections.abc import AsyncIterator, Mapping
 from datetime import datetime
 from decimal import Decimal
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.launch import LaunchAccountDirectory
+from kairospy.application.ports import TradingExecutionPort
 from kairospy.application.service.domain.execution import (
     CommissionModel,
     FillModel,
@@ -18,7 +20,7 @@ from kairospy.core.intent import TradeIntent
 from kairospy.core.order import OrderRequest, OrderState
 
 
-class SimulatedExecutionService:
+class SimulatedExecutionService(TradingExecutionPort):
     def __init__(
         self,
         coordinator: ExecutionCoordinator,
@@ -30,9 +32,11 @@ class SimulatedExecutionService:
         slippage_model: SlippageModel | None = None,
         commission_model: CommissionModel | None = None,
         mode_label: str = "simulated",
+        directory: LaunchAccountDirectory | None = None,
     ) -> None:
         self.coordinator = coordinator
         self.account = account
+        self.directory = directory
         self.cash_currency = cash_currency
         self.price_field = price_field
         self.fill_model = fill_model
@@ -41,6 +45,7 @@ class SimulatedExecutionService:
         self.mode_label = mode_label
         self._fills: list[SimulatedFill] = []
         self._adapter: SimulatedExecutionAdapter | None = None
+        self._adapters: dict[AccountContext, SimulatedExecutionAdapter] = {}
 
     @property
     def fills(self) -> tuple[SimulatedFill, ...]:
@@ -51,7 +56,7 @@ class SimulatedExecutionService:
             yield
 
     def execute_intent(self, intent: TradeIntent, context: object, *, hook: str = "") -> SimulatedFill | None:
-        fill = self._require_adapter().execute_intent(intent, context)  # type: ignore[arg-type]
+        fill = self._adapter_for(intent).execute_intent(intent, context)  # type: ignore[arg-type]
         if fill is not None:
             self._fills.append(fill)
         return fill
@@ -112,6 +117,35 @@ class SimulatedExecutionService:
             commission_model=self.commission_model,
         )
         return self._adapter
+
+    def _adapter_for(self, intent: TradeIntent) -> SimulatedExecutionAdapter:
+        account = self._resolve_account(intent)
+        if account is None:
+            return self._require_adapter()
+        if account in self._adapters:
+            return self._adapters[account]
+        adapter = SimulatedExecutionAdapter(
+            account=account,
+            cash_currency=self.cash_currency,
+            price_field=self.price_field,
+            coordinator=self.coordinator,
+            fill_model=self.fill_model,
+            slippage_model=self.slippage_model,
+            commission_model=self.commission_model,
+        )
+        self._adapters[account] = adapter
+        return adapter
+
+    def _resolve_account(self, intent: TradeIntent) -> AccountContext | None:
+        directory = self.directory
+        if directory is None:
+            return self.account
+        return directory.resolve_context(
+            account_id=getattr(intent, "account_id", None),
+            account_index=getattr(intent, "account_index", None),
+            book=getattr(intent, "account_book", None),
+            default=self.account,
+        )
 
 
 __all__ = ["SimulatedExecutionService"]

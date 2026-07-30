@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .account import PaperAccountService
-from .config import ConfiguredPaper, PaperConfigurationError, PaperRunResult, configured_paper
+from .config import ConfiguredPaper, PaperConfigurationError, PaperLaunchResult, configured_paper
 from .execution import PaperExecutionService
 from .market import PaperMarketDataService, PaperMarketDataServiceView
 
@@ -12,6 +12,6 @@ __all__ = [
     "PaperExecutionService",
     "PaperMarketDataService",
     "PaperMarketDataServiceView",
-    "PaperRunResult",
+    "PaperLaunchResult",
     "configured_paper",
 ]

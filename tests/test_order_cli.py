@@ -8,7 +8,7 @@ import kairospy.surface.cli.commands.order as order_product
 from kairospy.surface.cli.commands.order import order_app
 
 
-def test_order_place_defaults_to_dry_run_and_writes_journal(tmp_path, monkeypatch) -> None:
+def test_order_place_defaults_to_dry_launch_and_writes_journal(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _write_workspace_manifest(tmp_path)
     account_root = tmp_path / ".kairos" / "accounts"
@@ -127,6 +127,105 @@ def test_order_show_reads_local_order_journal(tmp_path, monkeypatch) -> None:
     payload = json.loads(result.output)
     assert payload["count"] == 1
     assert payload["records"][0]["request"]["order_id"] == "abc"
+
+
+def test_order_place_with_launch_uses_system_command_channel(monkeypatch) -> None:
+    calls = []
+
+    class FakeLaunches:
+        def submit_command(self, **kwargs):
+            calls.append(kwargs)
+            return {"kind": kwargs["kind"], "command_id": "command-1"}
+
+    monkeypatch.setattr(order_product._ORDERS, "_launches", FakeLaunches())
+
+    result = CliRunner().invoke(
+        order_app,
+        [
+            "place",
+            "--launch",
+            "live-main",
+            "--account",
+            "main",
+            "--symbol",
+            "BTC/USDT",
+            "--side",
+            "buy",
+            "--qty",
+            "0.01",
+            "--price",
+            "50000",
+            "--format",
+            "json",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["kind"] == "order.submit"
+    assert calls == [
+        {
+            "target": "live-main",
+            "root": None,
+            "launch_id": None,
+            "mode": None,
+            "kind": "order.submit",
+            "payload": {
+                "account": "main",
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "type": "limit",
+                "amount": "0.01",
+                "price": "50000",
+                "params": {},
+            },
+            "wait": False,
+            "timeout_seconds": 5.0,
+        }
+    ]
+
+
+def test_order_cancel_with_launch_uses_system_command_channel(monkeypatch) -> None:
+    calls = []
+
+    class FakeLaunches:
+        def submit_command(self, **kwargs):
+            calls.append(kwargs)
+            return {"kind": kwargs["kind"], "command_id": "command-1"}
+
+    monkeypatch.setattr(order_product._ORDERS, "_launches", FakeLaunches())
+
+    result = CliRunner().invoke(
+        order_app,
+        ["cancel", "--launch", "live-main", "--account", "main", "--order-id", "order-1", "--format", "json"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["kind"] == "order.cancel"
+    assert calls[0]["payload"]["order_id"] == "order-1"
+
+
+def test_order_show_with_launch_uses_system_command_channel(monkeypatch) -> None:
+    calls = []
+
+    class FakeLaunches:
+        def submit_command(self, **kwargs):
+            calls.append(kwargs)
+            return {"kind": kwargs["kind"], "command_id": "command-1", "response": {"status": "accepted"}}
+
+    monkeypatch.setattr(order_product._ORDERS, "_launches", FakeLaunches())
+
+    result = CliRunner().invoke(
+        order_app,
+        ["show", "--launch", "live-main", "--account", "main", "--order-id", "order-1", "--format", "json"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["kind"] == "order.status"
+    assert calls[0]["wait"] is True
+    assert calls[0]["payload"]["order_id"] == "order-1"
 
 
 def test_order_replace_defaults_to_dry_run(tmp_path, monkeypatch) -> None:

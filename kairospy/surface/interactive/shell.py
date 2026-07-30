@@ -17,6 +17,13 @@ from kairospy.surface.rendering.text import (
     render_context_screen,
     render_home_screen,
 )
+from kairospy.surface.interactive.account import AccountCreateWizard, account_create_direct_argv, is_account_create_argv
+from kairospy.surface.interactive.system import (
+    InteractiveSystemSession,
+    parse_system_entry,
+    render_system_result,
+    system_help_text,
+)
 
 
 CommandExecutor = Callable[[list[str]], tuple[int, str]]
@@ -44,6 +51,8 @@ class AppSession:
         self.command_executor = command_executor or _missing_executor
         self.command_root = command_root or _default_command_root()
         self.context_path: tuple[str, ...] = ()
+        self.system_session: InteractiveSystemSession | None = None
+        self.account_create_wizard: AccountCreateWizard | None = None
         self.context.set_product("home")
 
     @property
@@ -60,6 +69,10 @@ class AppSession:
         return "Kairos app. Navigate Typer command contexts; commands keep the same argv semantics as the plain CLI."
 
     def prompt(self) -> str:
+        if self.account_create_wizard is not None:
+            return "kairos/app/account/create> "
+        if self.system_session is not None:
+            return "kairos/app/system> "
         if not self.context_path:
             return "kairos/app> "
         return f"kairos/app/{'/'.join(self.context_path)}> "
@@ -89,12 +102,19 @@ class AppSession:
 
     def handle(self, line: str) -> bool:
         parts = shlex.split(line.strip())
+        if self.account_create_wizard is not None:
+            return self._handle_account_create_wizard(line)
         if not parts:
             self._write_screen()
             return False
+        if self.system_session is not None:
+            return self._handle_system(parts, line)
         command = parts[0]
         if command in {"quit", "exit", "q"}:
             return True
+        if command == "system":
+            self._enter_system(parts[1:])
+            return False
         if command in {"help", "?", "menu"}:
             self._write_screen()
             return False
@@ -136,8 +156,75 @@ class AppSession:
         product = self.product
         if not self.context_path or product is None:
             return False
-        self._execute_raw(self._resolve_context_command(parts))
+        resolved_parts = self._resolve_context_command(parts)
+        argv = [*self.context_path, *resolved_parts]
+        direct_argv = account_create_direct_argv(argv)
+        if direct_argv is not None:
+            self._execute_raw(direct_argv[len(self.context_path):])
+            return False
+        if is_account_create_argv(argv):
+            self._enter_account_create_wizard()
+            return False
+        self._execute_raw(resolved_parts)
         return False
+
+    def _enter_account_create_wizard(self) -> None:
+        self.account_create_wizard = AccountCreateWizard()
+        self._set_context_path(("account",))
+        self._write(self.account_create_wizard.start())
+
+    def _handle_account_create_wizard(self, line: str) -> bool:
+        assert self.account_create_wizard is not None
+        message = self.account_create_wizard.handle(line)
+        self._write(message)
+        if self.account_create_wizard.complete:
+            self.account_create_wizard = None
+            self.context.refresh()
+            self._write_screen()
+        return False
+
+    def _handle_system(self, parts: list[str], line: str) -> bool:
+        command = parts[0]
+        if command in {"quit", "q"}:
+            self._exit_system()
+            return True
+        if command in {"exit", "exit-system", "back", "b", ".."}:
+            self._exit_system()
+            self._write_screen()
+            return False
+        if command in {"help", "?", "menu"}:
+            self._write(system_help_text())
+            return False
+        assert self.system_session is not None
+        try:
+            self._write(self.system_session.handle(line))
+        except ValueError as error:
+            self._write(f"error: {error}")
+        return False
+
+    def _enter_system(self, parts: list[str]) -> None:
+        try:
+            entry = parse_system_entry(parts)
+            self.system_session = InteractiveSystemSession(**entry)
+        except ValueError as error:
+            self._write(f"error: {error}")
+            self._write("usage: system [--launch-id LAUNCH]")
+            return
+        self._set_context_path(())
+        self.context.set_product("system")
+        self._write("Entered system mode. Type `help` for commands, `exit-system` to return.")
+
+    def _exit_system(self) -> None:
+        session = self.system_session
+        if session is None:
+            return
+        try:
+            result = session.finish()
+            self._write(render_system_result(result))
+        finally:
+            session.close()
+            self.system_session = None
+            self.context.set_product("home")
 
     def _resolve_context_command(self, parts: list[str]) -> list[str]:
         if not parts:
@@ -236,7 +323,7 @@ def _command_output_header(argv: tuple[str, ...]) -> str:
 
 _COMMAND_OUTPUT_FOOTER = "---"
 _SCREEN_SEPARATOR = "-" * 72
-_ROOT_COMMANDS_EXCLUDED_FROM_PRODUCTS = {"shell", "app", "tui"}
+_ROOT_COMMANDS_EXCLUDED_FROM_PRODUCTS = {"shell", "app", "tui", "system"}
 
 
 __all__ = [

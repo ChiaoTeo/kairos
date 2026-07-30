@@ -6,23 +6,23 @@ from pathlib import Path
 from typing import Mapping, TextIO
 
 
-class RunOutputLog(AbstractContextManager["RunOutputLog"]):
+class LaunchOutputLog(AbstractContextManager["LaunchOutputLog"]):
     def __init__(
         self,
-        run_directory: str | Path,
+        launch_directory: str | Path,
         *,
-        filename: str = "run.log",
+        filename: str = "launch.log",
         stdout: TextIO | None = None,
         stderr: TextIO | None = None,
     ) -> None:
-        self.path = Path(run_directory) / filename
+        self.path = Path(launch_directory) / filename
         self.stdout = stdout
         self.stderr = stderr
         self._file: TextIO | None = None
         self._stdout_redirect: redirect_stdout[TextIO] | None = None
         self._stderr_redirect: redirect_stderr[TextIO] | None = None
 
-    def __enter__(self) -> "RunOutputLog":
+    def __enter__(self) -> "LaunchOutputLog":
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = self.path.open("a", encoding="utf-8")
         out = _TeeTextIO(self._file, self.stdout) if self.stdout is not None else self._file
@@ -67,15 +67,15 @@ class _TeeTextIO:
         return self.stream.encoding
 
 
-def write_run_log_section(
-    run_directory: str | Path,
+def write_launch_log_section(
+    launch_directory: str | Path,
     title: str,
     values: Mapping[str, object],
     *,
-    filename: str = "run.log",
+    filename: str = "launch.log",
     stdout: TextIO | None = None,
 ) -> None:
-    path = Path(run_directory) / filename
+    path = Path(launch_directory) / filename
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "",
@@ -100,4 +100,4 @@ def _format_value(value: object) -> str:
     return str(value)
 
 
-__all__ = ["RunOutputLog", "write_run_log_section"]
+__all__ = ["LaunchOutputLog", "write_launch_log_section"]

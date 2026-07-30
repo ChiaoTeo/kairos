@@ -2,11 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from uuid import uuid4
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.core.account import AccountContext, AccountEvent, AccountEventKind
-from kairospy.core.execution import ExecutionCoordinator
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.service.runtime import RuntimeAccountService
 from kairospy.core.market import MarketEvent, RateObservation
 from kairospy.core.reference import MarketId, reference_slug
 
@@ -15,15 +13,12 @@ class FundingProcessor:
     def __init__(
         self,
         *,
-        account: AccountContext,
-        coordinator: ExecutionCoordinator,
-        settlement_currency: str,
+        service: RuntimeAccountService,
     ) -> None:
-        if not settlement_currency.strip():
+        if not service.settlement_currency.strip():
             raise ValueError("funding processor settlement_currency is required")
-        self.account = account
-        self.coordinator = coordinator
-        self.settlement_currency = settlement_currency
+        self.service = service
+        self.settlement_currency = service.settlement_currency
         self._applied: set[tuple[str, datetime]] = set()
 
     def on_event(self, event: RuntimeEnvelope) -> None:
@@ -36,7 +31,7 @@ class FundingProcessor:
         mark_price = rate.mark_price
         if mark_price is None:
             return
-        position = self.coordinator.ledger.positions(self.account.account).get(instrument_id, Decimal("0"))
+        position = self.service.positions().get(instrument_id, Decimal("0"))
         if position == 0 or rate.rate == 0:
             return
         key = (str(rate.market_id or rate.rate_id), rate.time)
@@ -45,17 +40,12 @@ class FundingProcessor:
         cash_delta = -(position * mark_price * rate.rate)
         if cash_delta == 0:
             return
-        self.coordinator.ledger.record(
-            AccountEvent(
-                uuid4(),
-                self.account.account,
-                AccountEventKind.FUNDING,
-                rate.time,
-                self.settlement_currency,
-                cash_delta=cash_delta,
-                instrument_id=instrument_id,
-                reference_id=f"funding:{rate.market_id or rate.rate_id}:{rate.time.isoformat()}",
-            )
+        self.service.record_funding(
+            occurred_at=rate.time,
+            currency=self.settlement_currency,
+            cash_delta=cash_delta,
+            instrument_id=instrument_id,
+            reference_id=f"funding:{rate.market_id or rate.rate_id}:{rate.time.isoformat()}",
         )
         self._applied.add(key)
 

@@ -12,6 +12,7 @@ from .model import (
     AccountRef,
     AccountSnapshot,
     AccountSource,
+    LiabilitySnapshot,
     MarginState,
     OpenOrderSnapshot,
     PositionSnapshot,
@@ -33,6 +34,7 @@ class AccountState:
     observed_at: datetime | None
     source: AccountSource
     stale: bool = False
+    liabilities: tuple[LiabilitySnapshot, ...] = ()
 
     def balance(self, currency: str) -> AccountBalance | None:
         return next((item for item in self.balances if item.currency == currency), None)
@@ -55,6 +57,7 @@ def derive_account_state(
     if venue is not None:
         balances = {item.currency: item for item in venue.balances}
         margins = venue.margins
+        liabilities = venue.liabilities
         positions = {item.instrument_id: item for item in venue.positions}
         open_orders = {item.order_id: item for item in venue.open_orders}
         observed_at = venue.observed_at
@@ -62,6 +65,7 @@ def derive_account_state(
     else:
         balances = {}
         margins = ()
+        liabilities = ()
         positions = {}
         open_orders = {}
         observed_at = None
@@ -107,6 +111,7 @@ def derive_account_state(
         observed_at,
         source,
         stale,
+        tuple(liabilities),
     )
 
 

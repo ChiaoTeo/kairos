@@ -7,9 +7,9 @@ export interface TimelinePoint {
 
 export interface TimelineInstance {
   path: string;
-  runId: string | null;
+  launchId: string | null;
   mode: string | null;
-  runInstanceId: string | null;
+  launchInstanceId: string | null;
   strategyId: string | null;
   timeRange: { start: string | null; end: string | null };
   counts: Record<string, number>;
@@ -17,8 +17,8 @@ export interface TimelineInstance {
 
 export interface TimelineInstanceRow {
   mode: string | null;
-  run_id: string | null;
-  run_instance_id: string | null;
+  launch_id: string | null;
+  launch_instance_id: string | null;
   strategy_id: string | null;
   updated_at: number;
   directory: string;

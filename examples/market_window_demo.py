@@ -10,11 +10,14 @@ from decimal import Decimal
 from typing import Sequence
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.ports import DataSubscription, MarketDataSubscriptionSpec
-from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.application.runtime.orchestration.state import RuntimePorts
+from kairospy.application.ports import DataSubscription, MarketDataSubscriptionSpec
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.application.service.modes.live import LiveMarketDataService
 from kairospy.application.service.runtime.market.common import MarketSubscriptionState
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, exchange
+from kairospy.core.intent import IntentJournal
 from kairospy.core.market import Bar, MarketEvent, MarketSelector, MarketSubject, OrderBookSnapshot, PriceLevel, Quote, RateObservation, TradePrint
 from kairospy.core.reference import MarketRef, MarketResolver
 
@@ -209,7 +212,12 @@ async def run_demo(args: argparse.Namespace) -> None:
         data.set_stop_requested(lambda: strategy.event_count >= args.events)
     else:
         data = SyntheticRealtimeMarketData(market=market, ticks=args.ticks, interval_seconds=args.interval)
-    kernel = RuntimeKernel(strategy, data=data)
+    intents = IntentJournal()
+    kernel = RuntimeKernel(
+        strategy,
+        ports=RuntimePorts(data=data),
+        services=RuntimeApplicationServices.from_dependencies(RuntimeServiceDependencies(intents=intents, data=data)),
+    )
     await kernel.run()
     print("window index:")
     summaries = kernel.views.require("market.windows").windows

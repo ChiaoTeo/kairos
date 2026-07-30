@@ -1,4 +1,4 @@
-[run]
+[launch]
 id = "binance-btc-funding-arbitrage-backtest"
 mode = "backtest"
 strategy = "examples.strategies.binance_funding_arbitrage:strategy"
@@ -18,7 +18,7 @@ currency = "USDT"
 fee_rate = "0.0004"
 
 [backtest]
-runs_root = ".kairos/runs"
+launches_root = ".kairos/launches"
 storage_format = "parquet"
 price_field = "close"
 

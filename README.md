@@ -1,103 +1,216 @@
 # KairosPy
 
-KairosPy is a strategy runtime for trading systems. Strategy authors write against stable strategy events, views, and intents; KairosPy composes core trading domains with backtest, paper, and live modes plus external provider integrations.
+![KairosPy](https://capsule-render.vercel.app/api?type=waving&height=220&color=0:0EA5E9,50:22C55E,100:F59E0B&text=KairosPy&fontAlign=50&fontAlignY=38&fontSize=56&fontColor=ffffff&desc=Strategy%20runtime%20%7C%20Backtesting%20%7C%20Paper%20trading%20%7C%20Timeline%20viewer&descAlign=50&descAlignY=60)
 
-The project is organized around one product axis:
+![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Typer](https://img.shields.io/badge/CLI-Typer-0F172A?style=for-the-badge)
+![React](https://img.shields.io/badge/Viewer-React%2019-61DAFB?style=for-the-badge&logo=react&logoColor=0F172A)
+![Vite](https://img.shields.io/badge/Build-Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white)
+![Tests](https://img.shields.io/badge/Tests-pytest-0A9EDC?style=for-the-badge&logo=pytest&logoColor=white)
 
-- `kairospy.application.strategy`: strategy author API, stable strategy events, strategy context, controls, and strategy-facing views.
-- `kairospy.application.runtime`: strategy event loop, runtime data pipeline, event lines, projection scheduling, runtime views, and run profiles.
-- `kairospy.core`: stable trading domains.
-- `kairospy.core.market`: provider-neutral market observations, quote/book/bar/trade/rate models, subscription specifications, and row encoders.
-- `kairospy.core.execution`: intent-to-order-to-fill behavior, execution state, local ledger updates, and simulated/live execution adapters.
-- `kairospy.core.account`: account identity, balances, positions, snapshots, account state derivation, and ledgers.
-- `kairospy.core.reference`: provider-neutral asset, instrument, listing, market, lifecycle, participant, identity, resolver handle, product, catalog, and universe models.
-- `kairospy.application.service.domain`: user-facing domain use cases for account, market data, reference data, and execution primitives.
-- `kairospy.application.service.runtime`: runtime-facing service implementations for account, market data, execution, and reference ports.
-- `kairospy.application.service.modes`: mode-specific runtime assembly for backtest, paper, and live runs.
-- `kairospy.application.system`: operational services for accounts, run registries, daemon control, artifacts, and account journals.
-- `kairospy.core.intent` and `kairospy.core.order`: strategy intent and order state models.
-- `kairospy.core.views`: shared view schema, envelope, registry, and store primitives.
-- `kairospy.infrastructure.data`: durable datasets, stores, queries, sinks, and stream feeds.
-- `kairospy.infrastructure.integrations`: external systems and provider payload adapters such as ccxt, Binance, Hyperliquid, IBKR, and Massive.
-- `kairospy.surface`: CLI and user-facing product APIs.
+KairosPy 是一个面向量化交易实验的 Python 工具包，提供策略运行、回测、纸交易、账户/订单/行情投影、交易所集成和时间线可视化能力。
 
-Surface packages are intentionally thin: external callers should reach run behavior through `kairospy.application.system` and mode configuration through `kairospy.application.service.modes` instead of composing runtime internals directly.
+## ✨ 功能亮点
 
-See [System Architecture Plan](docs/system-architecture-plan.md) for the planned migration toward system-owned trading runtime lifecycle management.
-See [Workspace, Configuration, and CLI Plan](docs/workspace-config-cli-plan.md) for the planned configuration, `.kairos`, run registry, account, order, reference, and market CLI model.
-See [Surface CLI Refactor Plan](docs/surface-cli-refactor-plan.md) for the clean-cut CLI refactor target without compatibility bridges or legacy aliases.
-See [Market Dataset IDs](docs/market-dataset-id.md) for canonical market data identity rules.
+- 🚀 **策略运行时**：通过 `kairospy` / `kairos` CLI 启动、停止、查看和诊断 launch。
+- 📈 **回测与纸交易**：内置 backtest、paper、live 等运行模式的配置入口。
+- 🧾 **账户与订单视图**：围绕 account、order、execution、risk、trace 等领域组织状态投影。
+- 🔌 **交易所与数据集成**：包含 Binance、CCXT、Massive 等 integration scaffold。
+- 🖥️ **时间线查看器**：React + lightweight-charts 构建的运行时间线 UI。
+- 🧪 **测试覆盖**：使用 pytest 覆盖 CLI、运行时、市场、账户、执行和参考数据模块。
 
-## Install For Development
+## 🧭 架构速览
+
+```mermaid
+flowchart LR
+    CLI["Typer CLI<br/>kairospy / kairos"] --> Launch["Launch Facade"]
+    Launch --> Runtime["Runtime Orchestration"]
+    Runtime --> Strategy["Strategy Entrypoint"]
+    Runtime --> Services["Market / Account / Execution Services"]
+    Services --> Core["Core Domain Models"]
+    Services --> Integrations["Exchange & Data Integrations"]
+    Runtime --> Artifacts["Artifacts & Timeline Data"]
+    Artifacts --> Viewer["React Timeline Viewer"]
+```
+
+## 📦 安装
+
+项目使用 Python 3.11+。推荐用 `uv` 管理依赖：
 
 ```bash
-uv sync
-.venv/bin/pytest tests/test_*_minimal.py -q
+uv sync --group dev
 ```
 
-The current minimal suite covers runtime, data, integrations, account/execution interaction, backtest, paper, live context, strategy events/views, market observations, reference catalog, and architecture boundaries.
-
-## CLI
-
-The CLI currently exposes focused product surfaces:
+按需安装可选能力：
 
 ```bash
-kairospy --help
-kairospy init my-project
-kairospy project status
-kairospy run validate examples/configs/binance_backtest.toml
-kairospy run start examples/configs/binance_backtest.toml
-kairospy run register hl-paper examples/configs/hyperliquid_paper.toml
-kairospy run start hl-paper
-kairospy run daemon status
-kairospy market download --symbol BTC/USDT
-kairospy market list
-kairospy market inspect market.ohlcv.binance.spot.btc_usdt.1m
-kairospy market read market.ohlcv.binance.spot.btc_usdt.1m
-kairospy market replay market.trades.binance.spot.btc_usdt --speed 0
-kairospy market persist market.trades.binance.spot.btc_usdt --limit 100
-kairospy market watch --kind ticker --symbol BTC/USDT --limit 1
-kairospy reference markets list --active-only
-kairospy reference catalog search BTC
-kairospy account list
-kairospy order place --account binance_testnet_spot --symbol BTC/USDT --side buy --qty 0.01 --price 50000
+uv sync --extra crypto --extra query --extra tui --group dev
 ```
 
-The interactive surface uses the Typer command tree as its only navigation source. `kairospy app` and `kairospy shell` share the same session model:
+如果你更习惯 pip，也可以在虚拟环境中安装本地包：
 
 ```bash
-kairospy app --command "reference assets" --command "list --type crypto"
-kairospy shell --command "reference assets list --type crypto"
+python -m pip install -e ".[crypto,query,tui]"
+python -m pip install pytest
 ```
 
-Inside the interactive surface, command context is just the current Typer group path. For example, entering `reference assets` moves to `reference/assets`; entering `list --type crypto` there runs `kairospy reference assets list --type crypto`. Commands keep the same required options as the plain CLI, so order commands require explicit `--account`.
+## ⚡ 快速开始
 
-Local project defaults are stored in `.kairos/kairos.toml`; create a project with `kairospy init project-name`.
-Reference catalogs and lifecycle events are persisted in SQLite at `.kairos/reference/reference.sqlite` by default.
-
-## Python Runtime Shape
-
-Strategies receive stable strategy events and emit intents; runtime does not submit orders. Execution adapters convert intents into simulated fills or live orders.
-
-```python
-from pathlib import Path
-
-from kairospy.application.system import TradingSystemLauncher
-
-
-result = TradingSystemLauncher().run_backtest_config(Path("examples/configs/binance_backtest.toml"))
-
-print(result.runtime.strategy_id, result.final_equity)
-```
-
-Live runs require an explicit account payload adapter from an integration package, for example `CcxtAccountPayloadAdapter`. This keeps live orchestration provider-neutral while provider parsing and ingestion remain in `kairospy.infrastructure.integrations`.
-
-
-
-Useful checks:
+查看 CLI 帮助：
 
 ```bash
-.venv/bin/python -m compileall -q kairospy
-.venv/bin/pytest tests/test_architecture_boundaries_minimal.py -q
-.venv/bin/pytest tests/test_*_minimal.py -q
+uv run kairospy --help
+uv run kairos --help
 ```
+
+校验一个回测配置：
+
+```bash
+uv run kairospy launch diagnose validate examples/configs/binance_spot_btc_sma_backtest.toml
+```
+
+解释 launch 配置：
+
+```bash
+uv run kairospy launch diagnose explain examples/configs/binance_spot_btc_sma_backtest.toml
+```
+
+启动回测：
+
+```bash
+uv run kairospy launch run start examples/configs/binance_spot_btc_sma_backtest.toml
+```
+
+查看运行状态和日志：
+
+```bash
+uv run kairospy launch run status
+uv run kairospy launch observe logs --limit 100
+```
+
+启动内置 system runtime 管理账户和调试下单：
+
+```bash
+uv run kairospy launch system up
+uv run kairospy system account trade-status
+uv run kairospy system account trade-acquire main
+uv run kairospy system account trade-release main
+```
+
+打开时间线查看器：
+
+```bash
+uv run kairospy timeline open --latest binance-spot-btc-sma-backtest
+```
+
+## 账户引用与交易锁
+
+通过 `kairospy account create` 创建的账户会写入 `.kairos/accounts/<account>.toml`。paper/live launch 可以在配置中引用这些账户：
+
+```toml
+[accounts.main]
+ref = "main"
+books = ["spot"]
+trade = true
+
+[accounts.shadow]
+ref = "main"
+books = ["spot"]
+trade = false
+```
+
+账户可以被多个 launch 重复引用，但同一账户同一时间只有一个 launch 可以持有交易锁并下单。`trade = false` 表示只读引用：可以读取账户数据，但不会申请交易锁，也不会被标记为可下单。
+
+内置 system runtime 的 launch id 固定为 `kairos-system`。它启动后会加载 workspace 中的全部账户，并尝试占有当前未被锁定的可交易账户；被其他 launch 锁定的账户仍可读取状态，但 system 下单前会重新检查账户锁，只有锁归当前 system instance 时才允许交易。
+
+live 账户可以配置多个具名 credential：
+
+```bash
+uv run kairospy account create main --provider binance --environment live --credential-role readonly --api-key ... --api-secret ...
+uv run kairospy credential create binance_read --provider binance --api-key ... --api-secret ...
+uv run kairospy credential create binance_trade --provider binance --api-key ... --api-secret ...
+uv run kairospy account credential-add main readonly --ref binance_read
+uv run kairospy account credential-add main trade --ref binance_trade
+```
+
+```toml
+[credentials.readonly]
+ref = "binance_read"
+
+[credentials.trade]
+ref = "binance_trade"
+```
+
+如果账户只有 `readonly` key，live launch 会使用它读取账户数据，但不会把该账户标记为可交易，也不会支持下单。添加 key 时，`account credential-add` 默认会校验 role 和账户身份；确实只想先写入配置时可以使用 `--no-check`。
+
+API key 不通过环境变量注入。`credential create` 会写入 `.kairos/credentials/<credential_id>.toml`，账户配置只保存 credential id 引用。`account create` 直接传 `--api-key`/`--api-secret` 时也会创建同名 credential 文件，并在账户里写入 `[credentials.readonly]` 或 `[credentials.trade]`；可以用 `--credential <credential_id>` 指定 credential id。
+
+## 🧪 示例配置
+
+`examples/configs/` 中包含几类可参考配置：
+
+| 文件 | 用途 |
+| --- | --- |
+| `binance_spot_btc_sma_backtest.toml` | BTC/USDT SMA 现货策略回测 |
+| `binance_btc_funding_arbitrage_backtest.toml` | BTC 资金费率套利回测 |
+| `binance_hot_funding_arbitrage_backtest.toml` | 多币种资金费率套利回测 |
+| `news_factor_backtest.toml` | 新闻因子策略回测 |
+| `paper-printer.toml` | Binance spot 纸交易配置 |
+
+## 🖼️ 时间线前端
+
+前端查看器位于 `view/`，使用 React 19、Vite、Tailwind CSS 和 `lightweight-charts`：
+
+```bash
+cd view
+npm install
+npm run dev
+```
+
+构建静态资源：
+
+```bash
+cd view
+npm run build
+```
+
+构建后的资源会用于 `kairospy timeline open` 提供的本地查看体验。
+
+## 🗂️ 项目结构
+
+```text
+kairospy/
+  application/        # CLI facade、launch、runtime orchestration、strategy entrypoint
+  core/               # account、execution、intent、market、order、reference 等领域模型
+  infrastructure/     # artifacts、data store、exchange/data provider integrations
+  surface/            # CLI、interactive shell、timeline server 与渲染层
+examples/
+  configs/            # launch 配置示例
+  strategies/         # 策略示例
+tests/                # pytest 测试
+view/                 # React/Vite 时间线查看器
+```
+
+## 🛠️ 开发命令
+
+运行测试：
+
+```bash
+uv run pytest
+```
+
+运行单个测试文件：
+
+```bash
+uv run pytest tests/test_backtest_config_launcher.py
+```
+
+查看项目入口：
+
+```bash
+uv run kairospy shell
+```
+
+## 📌 说明
+
+这是一个仍在演进中的交易策略运行工具包。真实交易前，请务必先使用 backtest / paper 模式验证策略、账户配置、数据源和风控逻辑。

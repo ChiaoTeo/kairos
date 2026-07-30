@@ -6,16 +6,20 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.ports import MarketDataSubscriptionSpec
+from kairospy.application.runtime.orchestration.state import RuntimePorts, RuntimeStores
+from kairospy.application.launch import LaunchAccountBinding, LaunchAccountDirectory
+from kairospy.application.ports import MarketDataSubscriptionSpec
+from kairospy.application.service.domain.account.routing import account_book_route
 from kairospy.application.service.modes.live import (
     LiveAccountService,
     LiveExecutionService,
     LiveMarketDataService,
     LiveTradingSafetyPolicy,
 )
-from kairospy.core.account import AccountContext, AccountRef, AccountSource, Environment
+from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.core.account import AccountBookKind, AccountContext, AccountRef, AccountSource, Environment
 from kairospy.core.execution import ExecutionCoordinator
-from kairospy.core.intent import IntentStatus, target_position_intent
+from kairospy.core.intent import IntentJournal, IntentStatus, target_position_intent
 from kairospy.core.market import OptionGreeks, Quote
 from kairospy.core.reference import MarketResolver, SourceSymbol
 from kairospy.infrastructure.integrations.drivers import CcxtDriver
@@ -105,6 +109,8 @@ class FakeLiveFeed:
 class FakeBroker:
     def __init__(self, *, open_orders: tuple[Mapping[str, object], ...] = ()) -> None:
         self.created: list[dict[str, object]] = []
+        self.balance_params: list[Mapping[str, object] | None] = []
+        self.order_params: list[Mapping[str, object] | None] = []
         self.open_orders = open_orders
 
     def create_order(
@@ -130,6 +136,7 @@ class FakeBroker:
         return {"id": id, "status": "canceled"}
 
     def fetch_balance(self, *, params: Mapping[str, object] | None = None) -> Mapping[str, object]:
+        self.balance_params.append(params)
         return {"free": {"USDT": "1000"}, "used": {"USDT": "0"}, "total": {"USDT": "1000"}}
 
     def fetch_open_orders(
@@ -140,11 +147,16 @@ class FakeBroker:
         limit: int | None = None,
         params: Mapping[str, object] | None = None,
     ) -> tuple[Mapping[str, object], ...]:
+        self.order_params.append(params)
         return self.open_orders
 
 
 class FakeLiveAccountStream:
+    def __init__(self) -> None:
+        self.balance_calls = 0
+
     async def watch_balance(self, *, params: Mapping[str, object] | None = None) -> AsyncIterator[Mapping[str, object]]:
+        self.balance_calls += 1
         yield {
             "free": {"USDT": "1010"},
             "used": {"USDT": "0"},
@@ -338,6 +350,138 @@ def test_live_account_service_refreshes_from_broker_integration() -> None:
     assert service.state(account.account).balances[0].total == Decimal("1000")  # type: ignore[union-attr]
 
 
+def test_account_book_route_maps_binance_books_to_ccxt_params() -> None:
+    spot = account_book_route(AccountRef("binance", "main", AccountBookKind.SPOT), provider="binance")
+    funding = account_book_route(AccountRef("binance", "main", AccountBookKind.FUNDING), provider="binance")
+    futures = account_book_route(AccountRef("binance", "main", AccountBookKind.USD_M_FUTURES), provider="binance")
+
+    assert spot.balance_params["type"] == "spot"
+    assert spot.order_params["defaultType"] == "spot"
+    assert funding.balance_params["type"] == "funding"
+    assert funding.can_trade is False
+    assert futures.order_params["defaultType"] == "future"
+
+
+def test_live_account_service_refreshes_each_enabled_book_with_routed_params() -> None:
+    spot = AccountContext(AccountRef("binance", "main", AccountBookKind.SPOT), Environment.LIVE)
+    funding = AccountContext(AccountRef("binance", "main", AccountBookKind.FUNDING), Environment.LIVE)
+    directory = LaunchAccountDirectory((LaunchAccountBinding("account1", 0, (spot, funding)),))
+    routes = (
+        account_book_route(spot.account, provider="binance"),
+        account_book_route(funding.account, provider="binance"),
+    )
+    broker = FakeBroker(
+        open_orders=(
+            {
+                "id": "venue-order-1",
+                "symbol": "ETH/USDT",
+                "side": "buy",
+                "type": "limit",
+                "amount": "2",
+                "filled": "0",
+                "remaining": "2",
+                "price": "100",
+            },
+        )
+    )
+    service = LiveAccountService(spot, ExecutionCoordinator(), broker=broker, directory=directory, routes=routes)
+
+    snapshots = service.refresh_all(observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    assert [snapshot.context for snapshot in snapshots] == [spot, funding]
+    assert broker.balance_params == [
+        {"type": "spot", "defaultType": "spot"},
+        {"type": "funding"},
+    ]
+    assert broker.order_params == [{"type": "spot", "defaultType": "spot"}]
+    assert service.snapshot(funding.account).context == funding  # type: ignore[union-attr]
+
+
+def test_live_execution_routes_target_position_to_intent_account_book_params() -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    spot = AccountContext(AccountRef("binance", "main", AccountBookKind.SPOT), Environment.LIVE)
+    swap = AccountContext(AccountRef("binance", "main", AccountBookKind.USD_M_FUTURES), Environment.LIVE)
+    directory = LaunchAccountDirectory((LaunchAccountBinding("account1", 0, (spot, swap), ref="binance_main"),))
+    routes = (
+        account_book_route(spot.account, provider="binance"),
+        account_book_route(swap.account, provider="binance"),
+    )
+    broker = FakeBroker()
+    coordinator = ExecutionCoordinator(broker=broker, broker_symbol_resolver=lambda symbol: "ETH/USDT")
+    service = LiveExecutionService(
+        coordinator,
+        account=spot,
+        safety_policy=LiveTradingSafetyPolicy(trading_enabled=True, require_limit_orders=True),
+        directory=directory,
+        routes=routes,
+    )
+    context = _IntentContext(now)
+    intent = target_position_intent(
+        strategy_id="live-strategy",
+        instrument_id="binance:usd_m_futures:ETH/USDT",
+        market_id="binance:usd_m_futures:ETH/USDT",
+        account_id="account1",
+        account_book=AccountBookKind.USD_M_FUTURES,
+        target_quantity=Decimal("1"),
+        limit_price=Decimal("100"),
+        at=now,
+        intent_id="live-book-intent",
+    )
+    context.intents.record_intent(intent, at=now)
+
+    assert service.execute_intent(intent, context) is True
+
+    assert broker.created[0]["params"] == {"type": "future", "defaultType": "future"}
+    assert coordinator.orders.get("live-book-intent-live-order").request.context == swap
+
+
+def test_live_execution_routes_target_position_to_distinct_account_broker() -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    binance_spot = AccountContext(AccountRef("binance", "main", AccountBookKind.SPOT), Environment.LIVE)
+    okx_swap = AccountContext(AccountRef("okx", "hedge", "swap"), Environment.LIVE)
+    directory = LaunchAccountDirectory(
+        (
+            LaunchAccountBinding("cash", 0, (binance_spot,), ref="binance_main"),
+            LaunchAccountBinding("hedge", 1, (okx_swap,), ref="okx_hedge"),
+        )
+    )
+    binance_broker = FakeBroker()
+    okx_broker = FakeBroker()
+    coordinator = ExecutionCoordinator(
+        broker=binance_broker,
+        broker_resolver=lambda account: {
+            binance_spot.account: binance_broker,
+            okx_swap.account: okx_broker,
+        }.get(account),
+        broker_symbol_resolver=lambda symbol: "ETH/USDT",
+    )
+    service = LiveExecutionService(
+        coordinator,
+        account=binance_spot,
+        safety_policy=LiveTradingSafetyPolicy(trading_enabled=True, require_limit_orders=True),
+        directory=directory,
+        routes=(account_book_route(binance_spot.account, provider="binance"), account_book_route(okx_swap.account, provider="okx")),
+    )
+    context = _IntentContext(now)
+    intent = target_position_intent(
+        strategy_id="live-strategy",
+        instrument_id="okx:swap:ETH/USDT",
+        market_id="okx:swap:ETH/USDT",
+        account_id="hedge",
+        account_book="swap",
+        target_quantity=Decimal("1"),
+        limit_price=Decimal("100"),
+        at=now,
+        intent_id="live-okx-intent",
+    )
+    context.intents.record_intent(intent, at=now)
+
+    assert service.execute_intent(intent, context) is True
+
+    assert binance_broker.created == []
+    assert okx_broker.created[0]["params"] == {"type": "swap", "defaultType": "swap"}
+
+
 def test_live_account_service_streams_private_balance_updates() -> None:
     account = AccountContext(AccountRef("binance", "main"), Environment.LIVE)
     coordinator = ExecutionCoordinator()
@@ -354,6 +498,34 @@ def test_live_account_service_streams_private_balance_updates() -> None:
     assert [event.domain for event in events] == ["account", "account"]
     assert service.snapshot(account.account).balances[0].total == Decimal("1010")  # type: ignore[union-attr]
     assert coordinator.ledger.cash(account.account)["USDT"] == Decimal("10")
+
+
+def test_live_account_service_streams_private_updates_for_each_account_book() -> None:
+    spot = AccountContext(AccountRef("binance", "main", AccountBookKind.SPOT), Environment.LIVE)
+    swap = AccountContext(AccountRef("okx", "hedge", "swap"), Environment.LIVE)
+    directory = LaunchAccountDirectory((LaunchAccountBinding("cash", 0, (spot,)), LaunchAccountBinding("hedge", 1, (swap,))))
+    spot_stream = FakeLiveAccountStream()
+    swap_stream = FakeLiveAccountStream()
+    service = LiveAccountService(
+        spot,
+        ExecutionCoordinator(),
+        broker=FakeBroker(),
+        directory=directory,
+        routes=(account_book_route(spot.account, provider="binance"), account_book_route(swap.account, provider="okx")),
+        stream_resolver=lambda account: {
+            spot.account: spot_stream,
+            swap.account: swap_stream,
+        }.get(account),
+        max_balance_events=1,
+    )
+
+    events = asyncio.run(_collect(service.events(), 4))
+
+    assert [event.domain for event in events] == ["account", "account", "account", "account"]
+    assert spot_stream.balance_calls == 1
+    assert swap_stream.balance_calls == 1
+    assert service.snapshot(spot.account).balances[0].total == Decimal("1010")  # type: ignore[union-attr]
+    assert service.snapshot(swap.account).balances[0].total == Decimal("1010")  # type: ignore[union-attr]
 
 
 async def _first(events: AsyncIterator[object]) -> object:
@@ -381,6 +553,22 @@ async def _collect_with_counter(events: AsyncIterator[object], counter: dict[str
     return tuple(values)
 
 
+class _IntentContext:
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+        self.intents = IntentJournal()
+
+    def view(self, key: str, default: object = None) -> object:
+        return default
+
+    @property
+    def market(self) -> object:
+        return object()
+
+    def latest_data(self, *, domain: str | None = None, kind: str | None = None) -> object | None:
+        return None
+
+
 def _live_kernel(
     *,
     limit_price: Decimal | None,
@@ -403,13 +591,23 @@ def _live_kernel(
         snapshot_provider=account_service.snapshot,
         safety_policy=safety_policy,
     )
+    intents = IntentJournal()
     return (
         RuntimeKernel(
             LiveTargetPositionStrategy(instrument_id=market.instrument_id, market_id=market.market_id, limit_price=limit_price),
-            data=market_data,
-            account=account_service,
-            trading_execution=execution,
-            execution_coordinator=coordinator,
+            ports=RuntimePorts(data=market_data, account=account_service, trading_execution=execution),
+            stores=RuntimeStores(intents=intents),
+            services=RuntimeApplicationServices.from_dependencies(
+                RuntimeServiceDependencies(
+                    intents=intents,
+                    data=market_data,
+                    account_snapshot_store=account_service,
+                    account=account_service,
+                    trading_execution=execution,
+                    execution=coordinator,
+                    fills_source=execution,
+                )
+            ),
         ),
         broker,
     )

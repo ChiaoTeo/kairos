@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.application.runtime.orchestration.pipeline import RuntimePortPipeline
+from kairospy.application.runtime.orchestration.pipeline import RuntimeProjectionPipeline
 from kairospy.application.runtime.processors.system import runtime_processors
+from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.application.system.projectors import TimelineProjector
 from kairospy.core.account import AccountContext, AccountRef, Environment
 from kairospy.core.execution import ExecutionCoordinator, FillReport, cash_order_request
@@ -17,15 +18,19 @@ def test_timeline_projector_order_triggers_follow_execution_state_deltas() -> No
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     context = AccountContext(AccountRef("paper", "main"), Environment.PAPER)
     execution = ExecutionCoordinator()
+    intents = IntentJournal()
+    services = RuntimeApplicationServices.from_dependencies(
+        RuntimeServiceDependencies(intents=intents, execution=execution)
+    )
     output = MemoryTimelineOutput()
     projector = TimelineProjector(output, sample_interval="off")  # type: ignore[arg-type]
     views = ViewStore()
-    pipeline = RuntimePortPipeline(
+    pipeline = RuntimeProjectionPipeline(
         views=views,
         processors=runtime_processors(
             strategy_id="s",
-            intents=IntentJournal(),
-            execution_coordinator=execution,
+            intents=intents,
+            services=services,
         ),
     )
 

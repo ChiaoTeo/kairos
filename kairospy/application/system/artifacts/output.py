@@ -3,23 +3,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping
 
-from kairospy.infrastructure.artifacts import RunInstanceStore, jsonable
+from kairospy.infrastructure.artifacts import LaunchInstanceStore, jsonable
 
 
-class RunOutput:
+class LaunchOutput:
     def __init__(
         self,
-        run_directory: str | Path,
+        launch_directory: str | Path,
         *,
-        run_id: str | None = None,
+        launch_id: str | None = None,
         mode: str | None = None,
         write_legacy_jsonl: bool = False,
-        store: RunInstanceStore | None = None,
+        store: LaunchInstanceStore | None = None,
     ) -> None:
-        self.run_id = run_id
+        self.launch_id = launch_id
         self.mode = mode
         self.write_legacy_jsonl = write_legacy_jsonl
-        self.store = store if store is not None else RunInstanceStore(run_directory)
+        self.store = store if store is not None else LaunchInstanceStore(launch_directory)
 
     def write_result(self, *, result: object, normalized_config: Mapping[str, object]) -> Mapping[str, object]:
         summary = self.summary(result)
@@ -41,7 +41,7 @@ class RunOutput:
         mode = getattr(result, "mode", None)
         return jsonable(
             {
-                "run_id": getattr(result, "run_id", None),
+                "launch_id": getattr(result, "launch_id", None),
                 "mode": getattr(mode, "value", mode),
                 "strategy_id": getattr(runtime, "strategy_id", None),
                 "event_count": getattr(runtime, "event_count", None),
@@ -63,15 +63,15 @@ class RunOutput:
 
     def update_current(self, namespace: str, payload: Mapping[str, object]) -> None:
         current = self.store.namespace(namespace).json("current").read()
-        current.update({"run_id": self.run_id, "mode": self.mode, **payload})
+        current.update({"launch_id": self.launch_id, "mode": self.mode, **payload})
         self.store.namespace(namespace).json("current").write(current)
         if not self.write_legacy_jsonl or namespace != "account":
             return
         account_view = payload.get("account_view")
         account = self.store.namespace("account")
-        account.jsonl("equity").append(_equity_row(account_view, run_id=self.run_id, mode=self.mode))
-        account.jsonl("positions").replace(_position_rows(account_view, run_id=self.run_id, mode=self.mode))
-        account.jsonl("orders").replace(_order_rows(account_view, run_id=self.run_id, mode=self.mode))
+        account.jsonl("equity").append(_equity_row(account_view, launch_id=self.launch_id, mode=self.mode))
+        account.jsonl("positions").replace(_position_rows(account_view, launch_id=self.launch_id, mode=self.mode))
+        account.jsonl("orders").replace(_order_rows(account_view, launch_id=self.launch_id, mode=self.mode))
 
 
 def _intent_states(result: object) -> tuple[object, ...]:
@@ -89,9 +89,9 @@ def _intent_states(result: object) -> tuple[object, ...]:
     return tuple(list_intents(strategy_id=strategy_id))
 
 
-def _equity_row(account_view: object, *, run_id: str | None, mode: str | None) -> dict[str, object]:
+def _equity_row(account_view: object, *, launch_id: str | None, mode: str | None) -> dict[str, object]:
     return {
-        "run_id": run_id,
+        "launch_id": launch_id,
         "mode": mode,
         "time": getattr(account_view, "last_event_time", None),
         "equity": getattr(account_view, "equity", None),
@@ -102,12 +102,12 @@ def _equity_row(account_view: object, *, run_id: str | None, mode: str | None) -
     }
 
 
-def _position_rows(account_view: object, *, run_id: str | None, mode: str | None) -> list[dict[str, object]]:
+def _position_rows(account_view: object, *, launch_id: str | None, mode: str | None) -> list[dict[str, object]]:
     if account_view is None:
         return []
     return [
         {
-            "run_id": run_id,
+            "launch_id": launch_id,
             "mode": mode,
             "time": getattr(account_view, "last_event_time", None),
             **jsonable(position),
@@ -116,11 +116,11 @@ def _position_rows(account_view: object, *, run_id: str | None, mode: str | None
     ]
 
 
-def _order_rows(account_view: object, *, run_id: str | None, mode: str | None) -> list[dict[str, object]]:
+def _order_rows(account_view: object, *, launch_id: str | None, mode: str | None) -> list[dict[str, object]]:
     if account_view is None:
         return []
     orders = [*tuple(getattr(account_view, "open_orders", ())), *tuple(getattr(account_view, "pending_orders", ()))]
-    return [{"run_id": run_id, "mode": mode, **jsonable(order)} for order in orders]
+    return [{"launch_id": launch_id, "mode": mode, **jsonable(order)} for order in orders]
 
 
-__all__ = ["RunOutput"]
+__all__ = ["LaunchOutput"]

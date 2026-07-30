@@ -39,7 +39,7 @@ def load_strategy_entrypoint(
     error_type: type[Exception] = ValueError,
 ) -> StrategyEntrypoint:
     if ":" not in ref:
-        raise error_type("run.strategy must be module:callable")
+        raise error_type("launch.strategy must be module:callable")
     module_name, attribute_name = ref.split(":", 1)
     module = _import_module(module_name, root=root)
     try:

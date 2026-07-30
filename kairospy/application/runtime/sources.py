@@ -9,7 +9,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping, Protocol
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.application.protocol import RuntimeEnvelope
 from kairospy.application.service.domain.market.sources import parse_event_time
 
 

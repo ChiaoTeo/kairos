@@ -13,7 +13,7 @@ HTML = """<!doctype html>
       <header class="topbar">
         <div>
           <h1>Kairos Timeline</h1>
-          <p id="run-subtitle">Loading run data...</p>
+          <p id="launch-subtitle">Loading launch data...</p>
         </div>
         <div class="metrics" id="metrics"></div>
       </header>
@@ -265,7 +265,7 @@ function bindControls() {
 
 function renderAll() {
   const data = state.data;
-  $("run-subtitle").textContent = `${data.instance.mode || "-"} / ${data.instance.runId || "-"} / ${data.instance.runInstanceId || "-"}`;
+  $("launch-subtitle").textContent = `${data.instance.mode || "-"} / ${data.instance.launchId || "-"} / ${data.instance.launchInstanceId || "-"}`;
   $("metrics").innerHTML = [
     ["Final Equity", data.summary.final_equity],
     ["Net PnL", data.summary.net_profit],

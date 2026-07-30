@@ -5,12 +5,15 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.protocol import RuntimeEnvelope, RuntimeLine
+from kairospy.application.runtime.orchestration.state import RuntimePorts, RuntimeStores
+from kairospy.application.launch import LaunchAccountBinding, LaunchAccountDirectory
+from kairospy.application.protocol import RuntimeEnvelope, RuntimeLine
 from kairospy.application.service.domain.account import SimulatedAccount
 from kairospy.application.service.modes.paper import PaperAccountService, PaperExecutionService, PaperMarketDataService
-from kairospy.core.account import Environment
+from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.core.account import AccountBookKind, AccountContext, AccountRef, Environment
 from kairospy.core.execution import ExecutionCoordinator
-from kairospy.core.intent import IntentStatus, target_position_intent
+from kairospy.core.intent import IntentJournal, IntentStatus, target_position_intent
 from kairospy.core.market import MarketEvent, MarketSubject, Quote
 from kairospy.core.reference import MarketResolver
 
@@ -91,12 +94,22 @@ def test_paper_services_stream_market_data_and_simulate_execution() -> None:
         cash_currency="USDT",
         price_field="ask",
     )
+    intents = IntentJournal()
     kernel = RuntimeKernel(
         PaperTargetPositionStrategy(instrument_id=market.instrument_id, market_id=market.market_id),
-        data=market_data,
-        account=account,
-        trading_execution=execution,
-        execution_coordinator=coordinator,
+        ports=RuntimePorts(data=market_data, account=account, trading_execution=execution),
+        stores=RuntimeStores(intents=intents),
+        services=RuntimeApplicationServices.from_dependencies(
+            RuntimeServiceDependencies(
+                intents=intents,
+                data=market_data,
+                account_snapshot_store=account,
+                account=account,
+                trading_execution=execution,
+                execution=coordinator,
+                fills_source=execution,
+            )
+        ),
     )
 
     runtime_result = asyncio.run(kernel.run())
@@ -110,3 +123,76 @@ def test_paper_services_stream_market_data_and_simulate_execution() -> None:
     assert account_view.cash == Decimal("2999")
     assert account_view.positions[0].quantity == Decimal("1")
     assert kernel.views.require("order.current").state.latest_order.status == "filled"
+
+
+def test_paper_execution_routes_target_position_to_intent_account_book() -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    market = MarketResolver(default_venue="binance", default_market="spot").resolve("ETH/USDT")
+    account = SimulatedAccount("main", Decimal("5000"), cash_currency="USDT", broker="binance", environment=Environment.PAPER)
+    spot = AccountContext(AccountRef("binance", "main", AccountBookKind.SPOT), Environment.PAPER)
+    funding = AccountContext(AccountRef("binance", "main", AccountBookKind.FUNDING), Environment.PAPER)
+    directory = LaunchAccountDirectory((LaunchAccountBinding("account1", 0, (spot, funding), ref="binance_main"),))
+    coordinator = ExecutionCoordinator()
+    service = PaperExecutionService(coordinator, account=account.context, cash_currency="USDT", price_field="ask", directory=directory)
+    context = RuntimeContextWithQuote(now, market.market_id, Decimal("2001"))
+    intent = target_position_intent(
+        strategy_id="paper-strategy",
+        instrument_id=market.instrument_id,
+        market_id=market.market_id,
+        account_id="account1",
+        account_book=AccountBookKind.SPOT,
+        target_quantity=Decimal("1"),
+        at=now,
+        intent_id="paper-book-intent",
+    )
+    context.intents.record_intent(intent, at=now)
+
+    fill = service.execute_intent(intent, context)
+
+    assert fill is not None
+    assert coordinator.ledger.positions(spot.account)[market.instrument_id] == Decimal("1")
+    assert coordinator.ledger.positions(account.context.account).get(market.instrument_id, Decimal("0")) == Decimal("0")
+
+
+class RuntimeContextWithQuote:
+    def __init__(self, now: datetime, market_id: object, ask: Decimal) -> None:
+        self.now = now
+        self.intents = IntentJournal()
+        self.market = _MarketReader(now, market_id, ask)
+
+    def view(self, key: str, default: object = None) -> object:
+        return default
+
+    def latest_data(self, *, domain: str | None = None, kind: str | None = None) -> object | None:
+        return None
+
+
+class _MarketReader:
+    def __init__(self, now: datetime, market_id: object, ask: Decimal) -> None:
+        self._market_id = str(market_id)
+        self._quote = Quote(
+            instrument_id=str(market_id),
+            market_id=str(market_id),
+            market_key=str(market_id),
+            time=now,
+            bid=ask,
+            ask=ask,
+            source="test",
+        )
+
+    def quotes(self, subject: object) -> object:
+        return _Window(self._quote) if str(subject) == self._market_id else _Window(None)
+
+    def bars(self, subject: object) -> object:
+        return _Window(None)
+
+    def trades(self, subject: object) -> object:
+        return _Window(None)
+
+    def rates(self, subject: object) -> object:
+        return _Window(None)
+
+
+class _Window:
+    def __init__(self, latest: object | None) -> None:
+        self.latest = latest

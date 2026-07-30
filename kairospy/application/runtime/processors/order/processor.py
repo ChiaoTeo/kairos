@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.core.execution import ExecutionCoordinator
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.service.runtime import RuntimeExecutionService
 from kairospy.core.views import ViewStore
 
 from .current import OrderCurrentViewState
 
 
 class OrderProcessor:
-    def __init__(self, coordinator: ExecutionCoordinator) -> None:
-        self.state = OrderCurrentViewState(coordinator)
+    def __init__(self, service: RuntimeExecutionService) -> None:
+        self.state = OrderCurrentViewState(service)
 
     def on_event(self, event: RuntimeEnvelope) -> None:
         self.state.on_event(event)

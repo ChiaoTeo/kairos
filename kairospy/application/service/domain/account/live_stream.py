@@ -7,14 +7,13 @@ from decimal import Decimal, InvalidOperation
 from typing import Protocol
 from uuid import uuid4
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.core.account import AccountContext, AccountEvent, AccountEventKind, AccountSnapshot
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.order import OrderState
 
 
-AccountEventFactory = Callable[[datetime, AccountSnapshot], RuntimeEnvelope]
-IncidentEventFactory = Callable[[str, Exception, Mapping[str, object], datetime | None], RuntimeEnvelope]
+AccountEventFactory = Callable[[datetime, AccountSnapshot], object]
+IncidentEventFactory = Callable[[str, Exception, Mapping[str, object], datetime | None], object]
 
 
 class LiveAccountStreamGateway(Protocol):
@@ -147,8 +146,8 @@ class LivePrivateStreamCollector:
         max_balance_events: int,
         max_order_events: int,
         max_trade_events: int,
-    ) -> tuple[RuntimeEnvelope, ...]:
-        events: list[RuntimeEnvelope] = []
+    ) -> tuple[object, ...]:
+        events: list[object] = []
         if max_balance_events:
             async for raw in _take(self.gateway.watch_balance(params=balance_params), max_balance_events):
                 at = datetime.now(timezone.utc)

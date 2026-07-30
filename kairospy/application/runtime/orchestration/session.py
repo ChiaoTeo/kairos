@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from kairospy.application.runtime.dispatch.dispatcher import RuntimeDispatcher
-from kairospy.application.runtime.orchestration.pipeline import RuntimePortPipeline
-from kairospy.application.runtime.orchestration.state import RuntimeFrame, RuntimeRunResult, RuntimeStep
-from kairospy.application.runtime.protocol import RuntimeEnvelope, RuntimeEventLine, close_event_line
+from kairospy.application.runtime.orchestration.pipeline import RuntimeProjectionPipeline
+from kairospy.application.runtime.orchestration.state import RuntimeFrame, RuntimeLaunchResult, RuntimeStep
+from kairospy.application.protocol import RuntimeEnvelope, RuntimeEventLine, close_event_line
 from kairospy.core.views import ViewStore
 
 
 class RuntimeSession:
-    def __init__(self, dispatcher: RuntimeDispatcher, pipeline: RuntimePortPipeline, frame: RuntimeFrame) -> None:
+    def __init__(self, dispatcher: RuntimeDispatcher, pipeline: RuntimeProjectionPipeline, frame: RuntimeFrame) -> None:
         self.dispatcher = dispatcher
         self.pipeline = pipeline
         self.frame = frame
@@ -36,10 +36,10 @@ class RuntimeSession:
             )
         return tuple(steps)
 
-    def finish(self) -> RuntimeRunResult:
+    def finish(self) -> RuntimeLaunchResult:
         return self.dispatcher.finish(self.frame)
 
-    async def run(self, source: RuntimeEventLine) -> RuntimeRunResult:
+    async def run(self, source: RuntimeEventLine) -> RuntimeLaunchResult:
         events = source.events()
         try:
             async for event in events:

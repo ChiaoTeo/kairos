@@ -4,8 +4,11 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
+from kairospy.application.runtime.orchestration.state import RuntimePorts
 from kairospy.application.service.domain.reference import ReferenceStore, refresh_instrument_provider
+from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.application.service.runtime.reference import ReferenceCatalogService
+from kairospy.core.intent import IntentJournal
 from kairospy.core.reference import SourceSymbol
 
 
@@ -58,7 +61,13 @@ def test_reference_provider_refresh_feeds_runtime_view_state(tmp_path) -> None:
         params={"type": "spot"},
     )
     service = ReferenceCatalogService(store, default_venue="binance", default_market="spot")
-    kernel = RuntimeKernel(NoopStrategy(), reference=service)
+    kernel = RuntimeKernel(
+        NoopStrategy(),
+        ports=RuntimePorts(reference=service),
+        services=RuntimeApplicationServices.from_dependencies(
+            RuntimeServiceDependencies(intents=IntentJournal(), reference=service)
+        ),
+    )
 
     kernel.start()
 
@@ -68,4 +77,6 @@ def test_reference_provider_refresh_feeds_runtime_view_state(tmp_path) -> None:
     assert isinstance(resolved.source_symbol, SourceSymbol)
     assert str(resolved.source_symbol) == "BTC/USDT"
     assert kernel.views.require("reference.catalog").market_count == 1
+    assert kernel.views.require("reference.markets").markets[0].market_key == "binance_spot_btc_usdt"
+    assert kernel.context.reference.resolve("BTC/USDT", venue="binance", market="spot") == resolved
     assert kernel.views.require("reference.catalog").lifecycle_event_count == 1

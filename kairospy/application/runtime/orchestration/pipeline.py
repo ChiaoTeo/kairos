@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.application.protocol import RuntimeEnvelope
 from kairospy.application.runtime.processors.system import RuntimeProcessors
 from kairospy.core.views import ViewStore
 
 
-class RuntimePortPipeline:
+class RuntimeProjectionPipeline:
     def __init__(
         self,
         *,
@@ -30,4 +30,4 @@ class RuntimePortPipeline:
         self.processors.publish_views(self.views, as_of=getattr(context, "now", None))
 
 
-__all__ = ["RuntimePortPipeline"]
+__all__ = ["RuntimeProjectionPipeline"]

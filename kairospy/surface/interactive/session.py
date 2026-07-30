@@ -9,9 +9,9 @@ from kairospy.application.system.facade.project import ProjectFacade
 
 
 @dataclass(frozen=True, slots=True)
-class SurfaceRunSummary:
+class SurfaceLaunchSummary:
     mode: str
-    run_id: str
+    launch_id: str
     status: str
     phase: str
     heartbeat_age_seconds: float | None
@@ -33,15 +33,15 @@ class SurfaceSnapshot:
     current_product: str
     refreshed_at: datetime
     refresh_interval_seconds: float
-    runs: tuple[SurfaceRunSummary, ...]
+    launches: tuple[SurfaceLaunchSummary, ...]
 
     @property
-    def active_runs(self) -> tuple[SurfaceRunSummary, ...]:
-        return tuple(run for run in self.runs if run.active)
+    def active_launches(self) -> tuple[SurfaceLaunchSummary, ...]:
+        return tuple(launch for launch in self.launches if launch.active)
 
     @property
-    def stale_runs(self) -> tuple[SurfaceRunSummary, ...]:
-        return tuple(run for run in self.runs if run.status == "stale")
+    def stale_launches(self) -> tuple[SurfaceLaunchSummary, ...]:
+        return tuple(launch for launch in self.launches if launch.status == "stale")
 
 
 class SurfaceContext:
@@ -83,7 +83,7 @@ class SurfaceContext:
             current_product=self.product,
             refreshed_at=now,
             refresh_interval_seconds=self.refresh_interval_seconds,
-            runs=tuple(_run_summary(status) for status in payload["runs"] if isinstance(status, Mapping)),
+            launches=tuple(_launch_summary(status) for status in payload["launches"] if isinstance(status, Mapping)),
         )
         self._snapshot = snapshot
         return snapshot
@@ -97,50 +97,50 @@ def render_surface_overview(snapshot: SurfaceSnapshot) -> str:
         f"Kairos  {snapshot.project_name}",
         (
             f"view {snapshot.current_product} | "
-            f"runs {len(snapshot.active_runs)} active / {len(snapshot.runs)} total | "
+            f"launches {len(snapshot.active_launches)} active / {len(snapshot.launches)} total | "
             f"refresh {snapshot.refresh_interval_seconds:g}s"
         ),
         f"root    {snapshot.root}",
     ]
-    if snapshot.stale_runs:
-        stale = ", ".join(f"{run.mode}:{run.run_id}" for run in snapshot.stale_runs[:3])
-        extra = "" if len(snapshot.stale_runs) <= 3 else f" +{len(snapshot.stale_runs) - 3}"
+    if snapshot.stale_launches:
+        stale = ", ".join(f"{launch.mode}:{launch.launch_id}" for launch in snapshot.stale_launches[:3])
+        extra = "" if len(snapshot.stale_launches) <= 3 else f" +{len(snapshot.stale_launches) - 3}"
         lines.append(f"stale   {stale}{extra}")
     return "\n".join(lines)
 
 
-def render_run_strip(snapshot: SurfaceSnapshot, *, limit: int = 6) -> str:
-    if not snapshot.runs:
-        return "Recent Runs\n  no recorded runs"
-    runs = snapshot.runs[:limit]
-    run_id_width = min(max(18, *(len(run.run_id) for run in runs)), 28)
+def render_launch_strip(snapshot: SurfaceSnapshot, *, limit: int = 6) -> str:
+    if not snapshot.launches:
+        return "Recent Launches\n  no recorded launches"
+    launches = snapshot.launches[:limit]
+    launch_id_width = min(max(18, *(len(launch.launch_id) for launch in launches)), 28)
     lines = [
-        "Recent Runs",
-        f"  #  {'mode':<8}  {'run':<{run_id_width}}  {'status':<8}  {'age':<8}  detail",
-        f"  -  {'-' * 8}  {'-' * run_id_width}  {'-' * 8}  {'-' * 8}  ------",
+        "Recent Launches",
+        f"  #  {'mode':<8}  {'launch':<{launch_id_width}}  {'status':<8}  {'age':<8}  detail",
+        f"  -  {'-' * 8}  {'-' * launch_id_width}  {'-' * 8}  {'-' * 8}  ------",
     ]
-    for index, run in enumerate(runs, start=1):
-        detail = _run_detail(run)
+    for index, launch in enumerate(launches, start=1):
+        detail = _launch_detail(launch)
         age = "-"
-        if run.heartbeat_age_seconds is not None:
-            age = f"{run.heartbeat_age_seconds:.1f}s"
+        if launch.heartbeat_age_seconds is not None:
+            age = f"{launch.heartbeat_age_seconds:.1f}s"
         lines.append(
-            f"  {index:<2} {run.mode:<8}  {_clip(run.run_id, run_id_width):<{run_id_width}}  "
-            f"{run.status:<8}  {age:<8}  {detail}"
+            f"  {index:<2} {launch.mode:<8}  {_clip(launch.launch_id, launch_id_width):<{launch_id_width}}  "
+            f"{launch.status:<8}  {age:<8}  {detail}"
         )
-    if len(snapshot.runs) > limit:
-        lines.append(f"  +{len(snapshot.runs) - limit} more")
+    if len(snapshot.launches) > limit:
+        lines.append(f"  +{len(snapshot.launches) - limit} more")
     return "\n".join(lines)
 
 
-def _run_summary(payload: Mapping[str, object]) -> SurfaceRunSummary:
+def _launch_summary(payload: Mapping[str, object]) -> SurfaceLaunchSummary:
     context = payload.get("context")
     context = context if isinstance(context, Mapping) else {}
     result = payload.get("result")
     result = result if isinstance(result, Mapping) else {}
-    return SurfaceRunSummary(
+    return SurfaceLaunchSummary(
         mode=str(payload.get("mode") or ""),
-        run_id=str(payload.get("run_id") or ""),
+        launch_id=str(payload.get("launch_id") or ""),
         status=str(payload.get("status") or payload.get("phase") or "unknown"),
         phase=str(payload.get("phase") or "unknown"),
         heartbeat_age_seconds=_optional_float(payload.get("heartbeat_age_seconds")),
@@ -156,12 +156,12 @@ def _optional_float(value: object) -> float | None:
     return None
 
 
-def _run_detail(run: SurfaceRunSummary) -> str:
-    if run.strategy:
-        return run.strategy
-    if run.config_file:
-        return f"config:{Path(run.config_file).name}"
-    if run.log_file:
+def _launch_detail(launch: SurfaceLaunchSummary) -> str:
+    if launch.strategy:
+        return launch.strategy
+    if launch.config_file:
+        return f"config:{Path(launch.config_file).name}"
+    if launch.log_file:
         return "log"
     return ""
 
@@ -176,8 +176,8 @@ def _clip(value: str, width: int) -> str:
 
 __all__ = [
     "SurfaceContext",
-    "SurfaceRunSummary",
+    "SurfaceLaunchSummary",
     "SurfaceSnapshot",
-    "render_run_strip",
+    "render_launch_strip",
     "render_surface_overview",
 ]

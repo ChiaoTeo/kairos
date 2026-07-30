@@ -37,7 +37,7 @@ def child_names(root: CommandInfo, path: tuple[str, ...]) -> tuple[str, ...]:
     node = command_at(root, path)
     if not has_children(node):
         return ()
-    return tuple(node.commands)
+    return _ordered_child_names(path, tuple(node.commands))
 
 
 def resolve_token(token: str, *, names: tuple[str, ...]) -> str | None:
@@ -74,6 +74,36 @@ def match_group_context(
 
 def has_children(command: CommandInfo | None) -> bool:
     return hasattr(command, "commands")
+
+
+def _ordered_child_names(path: tuple[str, ...], names: tuple[str, ...]) -> tuple[str, ...]:
+    order = _CHILD_ORDER.get(path)
+    if order is None:
+        return names
+    rank = {name: index for index, name in enumerate(order)}
+    return tuple(sorted(names, key=lambda name: (rank.get(name, len(rank)), names.index(name))))
+
+
+_CHILD_ORDER = {
+    ("launch",): (
+        "config",
+        "register",
+        "unregister",
+        "specs",
+        "validate",
+        "explain",
+        "start",
+        "stop",
+        "status",
+        "logs",
+        "artifacts",
+        "events",
+        "list",
+        "system",
+        "daemon",
+        "instance",
+    ),
+}
 
 
 def _match_child_context(

@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-from typing import Mapping
-
 from kairospy.application.runtime.dispatch.context import RuntimeContext
 from kairospy.application.runtime.dispatch.dispatcher import RuntimeDispatcher
-from kairospy.application.runtime.orchestration.pipeline import RuntimePortPipeline
+from kairospy.application.runtime.orchestration.pipeline import RuntimeProjectionPipeline
 from kairospy.application.runtime.orchestration.session import RuntimeSession
-from kairospy.application.runtime.orchestration.state import RuntimeFrame, RuntimeRunResult, RuntimeStep, Callback
-from kairospy.application.runtime.protocol import MergedRuntimeEventLine, RuntimeEventLine
-from kairospy.application.runtime.ports import AccountPort, MarketDataPort, ReferencePort, TradingExecutionPort
+from kairospy.application.runtime.orchestration.state import (
+    RuntimeFrame,
+    RuntimePorts,
+    RuntimeLaunchResult,
+    RuntimeStores,
+    RuntimeStep,
+    Callback,
+)
+from kairospy.application.service.runtime.services import RuntimeApplicationServices
+from kairospy.application.protocol import MergedRuntimeEventLine, RuntimeEventLine
 from kairospy.application.runtime.processors.system import RuntimeProcessors, runtime_processors
-from kairospy.application.strategy import ControlJournal, Strategy
-from kairospy.core.execution import ExecutionCoordinator
-from kairospy.core.intent import IntentJournal
-from kairospy.core.views import ViewStore
+from kairospy.application.strategy import Strategy
 
 
 class RuntimeKernel:
@@ -21,31 +23,27 @@ class RuntimeKernel:
         self,
         strategy: Strategy,
         *,
-        state: Mapping[str, object] | None = None,
-        intents: IntentJournal | None = None,
-        controls: ControlJournal | None = None,
-        views: ViewStore | None = None,
-        data: MarketDataPort | None = None,
-        account: AccountPort | None = None,
-        reference: ReferencePort | None = None,
-        trading_execution: TradingExecutionPort | None = None,
-        execution_coordinator: ExecutionCoordinator | None = None,
+        ports: RuntimePorts | None = None,
+        stores: RuntimeStores | None = None,
+        services: RuntimeApplicationServices | None = None,
         processors: RuntimeProcessors | None = None,
     ) -> None:
         if not strategy.strategy_id.strip():
             raise ValueError("strategy_id is required")
         self.strategy = strategy
-        self.state = dict(state or {})
-        self.intents = intents or IntentJournal()
-        self.controls = controls or ControlJournal()
-        self.views = views or ViewStore()
-        self.data = data
-        self.account = account
-        self.reference = reference
-        self.trading_execution = trading_execution
-        self.execution_coordinator = execution_coordinator
+        self.ports = ports or RuntimePorts()
+        self.stores = stores or RuntimeStores()
+        self.services = services or RuntimeApplicationServices()
+        self.state = dict(self.stores.strategy_state)
+        self.intents = self.stores.intents
+        self.controls = self.stores.controls
+        self.views = self.stores.views
+        self.data = self.ports.data
+        self.account = self.ports.account
+        self.reference = self.ports.reference
+        self.trading_execution = self.ports.trading_execution
         self.processors = processors or self._processors()
-        self.pipeline = RuntimePortPipeline(
+        self.pipeline = RuntimeProjectionPipeline(
             views=self.views,
             processors=self.processors,
         )
@@ -69,7 +67,7 @@ class RuntimeKernel:
         self.pipeline.publish()
         return RuntimeSession(self.dispatcher, self.pipeline, frame)
 
-    async def run(self, source: RuntimeEventLine | None = None) -> RuntimeRunResult:
+    async def run(self, source: RuntimeEventLine | None = None) -> RuntimeLaunchResult:
         line = self._event_line(source)
         if line is None:
             raise ValueError("runtime event line is required")
@@ -79,11 +77,7 @@ class RuntimeKernel:
         return runtime_processors(
             strategy_id=self.strategy.strategy_id,
             intents=self.intents,
-            data=self.data,
-            account=self.account,
-            reference=self.reference,
-            trading_execution=self.trading_execution,
-            execution_coordinator=self.execution_coordinator,
+            services=self.services,
         )
 
     def _event_line(self, source: RuntimeEventLine | None = None) -> RuntimeEventLine | None:
@@ -102,7 +96,9 @@ class RuntimeKernel:
 __all__ = [
     "RuntimeKernel",
     "RuntimeFrame",
-    "RuntimeRunResult",
+    "RuntimePorts",
+    "RuntimeLaunchResult",
+    "RuntimeStores",
     "RuntimeStep",
     "RuntimeSession",
     "Callback",

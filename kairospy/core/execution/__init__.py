@@ -12,15 +12,31 @@ from .protocols import ExecutionIntentContext
 from .reservation import Reservation, ReservationBook, ReservationStatus
 from .state import ExecutionStateSnapshot
 from .updates import ExecutionUpdate
+from .views import (
+    EXECUTION_CURRENT_SCHEMA,
+    EXECUTION_FILLS_SCHEMA,
+    ExecutionCurrentView,
+    ExecutionFillSummary,
+    ExecutionFillsView,
+    ExecutionOrderSummary,
+    ExecutionViewKeys,
+)
 
 __all__ = [
+    "EXECUTION_CURRENT_SCHEMA",
+    "EXECUTION_FILLS_SCHEMA",
     "BrokerGateway",
     "BuyingPowerCheck",
     "CashBuyingPowerModel",
     "ExecutionCoordinator",
+    "ExecutionCurrentView",
+    "ExecutionFillSummary",
+    "ExecutionFillsView",
     "ExecutionIntentContext",
+    "ExecutionOrderSummary",
     "ExecutionUpdate",
     "ExecutionStateSnapshot",
+    "ExecutionViewKeys",
     "FillReport",
     "MarginBuyingPowerModel",
     "Reservation",

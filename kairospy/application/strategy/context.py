@@ -4,12 +4,12 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Mapping, Protocol, Sequence, overload
 
+from kairospy.core.account import AccountViewReader
 from kairospy.core.intent import Intent, TradeIntent
-from kairospy.core.market import MarketSelector
+from kairospy.core.market import MarketSelector, MarketViewReader
 from kairospy.core.reference import MarketRef
-from kairospy.core.reference import ExchangeId, MarketTypeId
+from kairospy.core.reference import ExchangeId, MarketTypeId, ReferenceViewReader
 from .control import ControlFactory
-from .views import StrategyMarketViews
 
 
 class Context(Protocol):
@@ -64,13 +64,18 @@ class Context(Protocol):
         quantity: Decimal | str | int | float,
         *,
         account: int | str | None = None,
+        book: object | None = None,
         limit_price: Decimal | str | int | float | None = None,
         reason: str = "",
         intent_id: str | None = None,
     ) -> TradeIntent:
         ...
 
-    def account(self, key: str | None = None) -> object:
+    def account(self, key: str | int | None = None) -> object:
+        ...
+
+    @property
+    def accounts(self) -> AccountViewReader:
         ...
 
     def view(self, key: str, default: object = None) -> object:
@@ -80,7 +85,11 @@ class Context(Protocol):
         ...
 
     @property
-    def market(self) -> StrategyMarketViews:
+    def market(self) -> MarketViewReader:
+        ...
+
+    @property
+    def reference(self) -> ReferenceViewReader:
         ...
 
     @property

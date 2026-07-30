@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kairospy.application.system import RunControl
+from kairospy.application.launch import LaunchControl
 from kairospy.application.system.facade.context import current_cwd, workspace as resolve_workspace, workspace_config
 from kairospy.application.system.workspace import OperationJournal
 
@@ -18,7 +18,7 @@ class ProjectFacade:
         if config_path.exists() and not force:
             raise ValueError(f"Kairos project already exists: {config_path}")
         kairos_root.mkdir(parents=True, exist_ok=True)
-        for directory in ("accounts", "state", "runs", "data", "reference", "orders/journals"):
+        for directory in ("accounts", "state", "launches", "data", "reference", "orders/journals"):
             (kairos_root / directory).mkdir(parents=True, exist_ok=True)
         config_path.write_text(_workspace_manifest(project_root.name), encoding="utf-8")
         OperationJournal(kairos_root / "state" / "operations.jsonl").append(
@@ -37,7 +37,7 @@ class ProjectFacade:
             "language": workspace.manifest.language,
             "workspace_root": str(workspace.workspace_root),
             "accounts": len(workspace.accounts.list()),
-            "runs": len(workspace.run_index.list()),
+            "launches": len(workspace.launch_index.list()),
             "market_datasets": _count_files(workspace.data_root, (".jsonl", ".json", ".parquet", ".csv")),
             "reference_root": str(workspace.reference_root),
         }
@@ -47,16 +47,16 @@ class ProjectFacade:
         issues: list[str] = []
         if workspace.manifest_path is None:
             issues.append(".kairos/kairos.toml was not found; using built-in defaults")
-        for path in (workspace.accounts_root, workspace.run_root, workspace.data_root, workspace.reference_root):
+        for path in (workspace.accounts_root, workspace.launch_root, workspace.data_root, workspace.reference_root):
             if not path.exists():
                 issues.append(f"workspace directory does not exist: {path}")
         return {"valid": not issues, "issues": issues, "workspace": workspace.to_dict()}
 
     def surface_snapshot(self, *, stale_after_seconds: float = 5.0) -> dict[str, object]:
         config = workspace_config()
-        runs = tuple(
+        launches = tuple(
             status.to_dict()
-            for status in RunControl(config.resolve_path(".kairos/runs")).list(
+            for status in LaunchControl(config.resolve_path(".kairos/launches")).list(
                 stale_after_seconds=stale_after_seconds,
             )
         )
@@ -67,7 +67,7 @@ class ProjectFacade:
             "root": config.root,
             "data_root": config.data_root,
             "reference_root": config.reference_root,
-            "runs": runs,
+            "launches": launches,
         }
 
 
@@ -86,7 +86,7 @@ def _workspace_manifest(project_name: str) -> str:
             "",
             "[cli]",
             'format = "text"',
-            "run_control = true",
+            "launch_control = true",
             "",
         ]
     )

@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.core.account import AccountContext, AccountSnapshot, AccountState
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.order import OrderState
@@ -13,7 +12,7 @@ from kairospy.core.order import OrderState
 from .bootstrap import AccountBootstrapGateway, AccountBootstrapParser, AccountBootstrapResult, bootstrap_account
 
 
-AccountEventFactory = Callable[[datetime, AccountSnapshot], RuntimeEnvelope]
+AccountEventFactory = Callable[[datetime, AccountSnapshot], object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +27,7 @@ class AccountDifference:
 class AccountReconciliationResult:
     bootstrap: AccountBootstrapResult
     differences: tuple[AccountDifference, ...]
-    event: RuntimeEnvelope
+    event: object
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,15 +137,10 @@ def compare_account_state(
     return tuple(differences)
 
 
-def account_snapshot_envelope(time: datetime, snapshot: AccountSnapshot, *, sequence: int = 1) -> RuntimeEnvelope:
-    return RuntimeEnvelope("account", "snapshot", time, sequence, snapshot)
-
-
 __all__ = [
     "AccountDifference",
     "AccountEventFactory",
     "AccountReconciliationResult",
     "AccountReconciliationService",
-    "account_snapshot_envelope",
     "compare_account_state",
 ]

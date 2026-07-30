@@ -109,7 +109,7 @@ def test_market_cli_prefetches_backtest_strategy_subscriptions(tmp_path, monkeyp
     assert rows[0]["close"] == "100.5"
 
 
-def test_market_cli_prefetch_dry_run_plans_without_downloading(tmp_path, monkeypatch) -> None:
+def test_market_cli_prefetch_dry_launch_plans_without_downloading(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _write_workspace_manifest(tmp_path)
     config_path = _write_backtest_project(tmp_path)
@@ -216,10 +216,10 @@ def _write_backtest_project(root) -> object:
         + "\n",
         encoding="utf-8",
     )
-    config_path = root / "run.toml"
+    config_path = root / "launch.toml"
     config_path.write_text(
         "\n".join([
-            "[run]",
+            "[launch]",
             'id = "bt-1"',
             'mode = "backtest"',
             'strategy = "strategy_mod:ConfiguredStrategy"',

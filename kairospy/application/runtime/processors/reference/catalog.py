@@ -1,55 +1,79 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from datetime import datetime, timezone
 
-from kairospy.application.runtime.ports import ReferencePort
-from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.core.views import ViewFieldSchema, ViewSchema
-
-
-@dataclass(frozen=True, slots=True)
-class ReferenceCatalogSummaryView:
-    entity_count: int = 0
-    asset_count: int = 0
-    instrument_count: int = 0
-    listing_count: int = 0
-    market_count: int = 0
-    lifecycle_event_count: int = 0
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.service.runtime import RuntimeReferenceService
+from kairospy.core.reference import (
+    REFERENCE_CATALOG_SCHEMA,
+    REFERENCE_LIFECYCLE_EVENTS_SCHEMA,
+    REFERENCE_MARKETS_SCHEMA,
+    ReferenceViewKeys,
+    reference_catalog_view,
+    reference_lifecycle_events_view,
+    reference_market_schema,
+    reference_market_view,
+    reference_markets_view,
+)
+from kairospy.core.views import ViewStore
 
 
 class ReferenceCatalogViewState:
-    key = "reference.catalog"
-    schema = ViewSchema(
-        key,
-        "system",
-        fields=(
-            ViewFieldSchema("entity_count", "known reference entity count", "runtime state", "reference port"),
-            ViewFieldSchema("asset_count", "known reference asset count", "runtime state", "reference port"),
-            ViewFieldSchema("instrument_count", "known reference instrument count", "runtime state", "reference port"),
-            ViewFieldSchema("listing_count", "known reference listing count", "runtime state", "reference port"),
-            ViewFieldSchema("market_count", "known reference market count", "runtime state", "reference port"),
-            ViewFieldSchema("lifecycle_event_count", "known reference lifecycle event count", "runtime state", "reference port"),
-        ),
-        mutability="runtime_writable",
-        evidence="runtime reference catalog view state",
-    )
+    key = ReferenceViewKeys.catalog
+    schema = REFERENCE_CATALOG_SCHEMA
+    schemas = (REFERENCE_CATALOG_SCHEMA, REFERENCE_MARKETS_SCHEMA, REFERENCE_LIFECYCLE_EVENTS_SCHEMA)
 
-    def __init__(self, port: ReferencePort) -> None:
-        self.port = port
+    def __init__(self, service: RuntimeReferenceService) -> None:
+        self.service = service
 
     def on_event(self, event: RuntimeEnvelope) -> None:
         return None
 
-    def view(self) -> ReferenceCatalogSummaryView:
-        catalog = self.port.catalog()
-        return ReferenceCatalogSummaryView(
-            entity_count=len(catalog.entities()),
-            asset_count=len(catalog.assets()),
-            instrument_count=len(catalog.instruments()),
-            listing_count=len(catalog.listings()),
-            market_count=len(catalog.markets()),
-            lifecycle_event_count=len(self.port.lifecycle_events()),
+    def register_views(self, views: ViewStore, *, as_of: datetime | None = None) -> None:
+        for schema in self.schemas:
+            if views.registry.get(schema.key) is None:
+                views.register(schema)
+        catalog = self.service.catalog()
+        for market in catalog.list_markets(at=_as_of(as_of)):
+            key = ReferenceViewKeys.market(reference_market_view(catalog, market, as_of=_as_of(as_of)).ref.market_key)
+            if views.registry.get(key) is None:
+                views.register(reference_market_schema(key))
+
+    def publish(self, views: ViewStore, *, as_of: datetime | None = None) -> None:
+        publish_as_of = _as_of(as_of)
+        catalog = self.service.catalog()
+        events = self.service.lifecycle_events()
+        self.register_views(views, as_of=publish_as_of)
+        views.put_runtime(
+            ReferenceViewKeys.catalog,
+            reference_catalog_view(catalog, lifecycle_events=events, as_of=publish_as_of),
+            as_of=publish_as_of,
+            available_time=publish_as_of,
         )
+        views.put_runtime(
+            ReferenceViewKeys.markets,
+            reference_markets_view(catalog, as_of=publish_as_of),
+            as_of=publish_as_of,
+            available_time=publish_as_of,
+        )
+        views.put_runtime(
+            ReferenceViewKeys.lifecycle_events,
+            reference_lifecycle_events_view(events),
+            as_of=publish_as_of,
+            available_time=publish_as_of,
+        )
+        for market in catalog.list_markets(at=publish_as_of):
+            resolved = reference_market_view(catalog, market, as_of=publish_as_of)
+            views.put_runtime(
+                ReferenceViewKeys.market(resolved.ref.market_key),
+                resolved,
+                as_of=publish_as_of,
+                available_time=publish_as_of,
+            )
 
 
-__all__ = ["ReferenceCatalogViewState", "ReferenceCatalogSummaryView"]
+def _as_of(value: datetime | None) -> datetime:
+    return datetime.now(timezone.utc) if value is None else value
+
+
+__all__ = ["ReferenceCatalogViewState"]

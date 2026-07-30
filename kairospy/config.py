@@ -13,7 +13,9 @@ DEFAULT_DATA_ROOT = ".kairos/data"
 DEFAULT_REFERENCE_ROOT = ".kairos/reference"
 DEFAULT_STORAGE_FORMAT = "parquet"
 VALID_STORAGE_FORMATS = frozenset({"parquet", "jsonl"})
-VALID_RUN_MODES = frozenset({"backtest", "paper", "live"})
+VALID_LAUNCH_MODES = frozenset({"backtest", "paper", "live"})
+SYSTEM_LAUNCH_ID = "kairos-system"
+RESERVED_LAUNCH_IDS = frozenset({SYSTEM_LAUNCH_ID})
 VALID_ACCOUNT_ENVIRONMENTS = frozenset({"backtest", "paper", "live", "sandbox", "simulation", "testnet"})
 DEFAULT_ACCOUNT_CASH = Decimal("100000")
 DEFAULT_ACCOUNT_CURRENCY = "USD"
@@ -112,29 +114,38 @@ class AccountConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class RunConfigValidationReport:
+class LaunchAccountConfig:
+    alias: str
+    ref: str
+    index: int
+    books: tuple[str, ...] = ()
+    trade: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchConfigValidationReport:
     path: Path | None
     valid: bool
     issues: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
-class RunConfig:
+class LaunchConfig:
     path: Path | None
     root: Path
     values: Mapping[str, Any]
 
     @classmethod
-    def load(cls, path: str | Path) -> "RunConfig":
+    def load(cls, path: str | Path) -> "LaunchConfig":
         config_path = Path(path).expanduser().resolve()
         if not config_path.exists():
-            raise ConfigError(f"run config does not exist: {config_path}")
+            raise ConfigError(f"launch config does not exist: {config_path}")
         try:
             values = tomllib.loads(config_path.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as error:
-            raise ConfigError(f"invalid TOML in run config {config_path}: {error}") from error
+            raise ConfigError(f"invalid TOML in launch config {config_path}: {error}") from error
         if not isinstance(values, Mapping):
-            raise ConfigError(f"run config root must be a TOML table: {config_path}")
+            raise ConfigError(f"launch config root must be a TOML table: {config_path}")
         return cls(config_path, Path.cwd().resolve(), values)
 
     @classmethod
@@ -144,46 +155,46 @@ class RunConfig:
         *,
         root: str | Path | None = None,
         path: str | Path | None = None,
-    ) -> "RunConfig":
+    ) -> "LaunchConfig":
         source_path = Path(path).expanduser().resolve() if path is not None else None
         base = Path(root).expanduser().resolve() if root is not None else Path.cwd().resolve()
         return cls(source_path, base, values)
 
-    def with_run_strategy(self, strategy: str) -> "RunConfig":
+    def with_launch_strategy(self, strategy: str) -> "LaunchConfig":
         if not isinstance(strategy, str) or not strategy.strip():
-            raise ConfigError("run.strategy must be a non-empty string")
+            raise ConfigError("launch.strategy must be a non-empty string")
         values = {str(key): value for key, value in self.values.items()}
-        run = values.get("run")
-        if run is None:
-            run_values: dict[str, Any] = {}
-        elif isinstance(run, Mapping):
-            run_values = dict(run)
+        launch = values.get("launch")
+        if launch is None:
+            launch_values: dict[str, Any] = {}
+        elif isinstance(launch, Mapping):
+            launch_values = dict(launch)
         else:
-            raise ConfigError("[run] must be a table")
-        run_values["strategy"] = strategy.strip()
-        values["run"] = run_values
-        return RunConfig(self.path, self.root, values)
+            raise ConfigError("[launch] must be a table")
+        launch_values["strategy"] = strategy.strip()
+        values["launch"] = launch_values
+        return LaunchConfig(self.path, self.root, values)
 
     @property
     def mode(self) -> str:
-        raw = self._table("run").get("mode")
-        return _text(raw, "run.mode")
+        raw = self._table("launch").get("mode")
+        return _text(raw, "launch.mode")
 
     @property
-    def run_id(self) -> str:
-        run = self._table("run")
-        raw = run.get("id")
+    def launch_id(self) -> str:
+        launch = self._table("launch")
+        raw = launch.get("id")
         if raw is not None:
-            return _text(raw, "run.id")
+            return _text(raw, "launch.id")
         if self.path is not None:
             return self.path.stem
-        return "kairos-run"
+        return "kairos-launch"
 
     @property
     def strategy(self) -> str | None:
-        run = self._table("run")
-        raw = run.get("strategy")
-        return _optional_text(raw, "run.strategy")
+        launch = self._table("launch")
+        raw = launch.get("strategy")
+        return _optional_text(raw, "launch.strategy")
 
     @property
     def account_environment(self) -> str:
@@ -227,6 +238,8 @@ class RunConfig:
         for fallback_index, (account_id, raw) in enumerate(table.items()):
             if not isinstance(raw, Mapping):
                 raise ConfigError(f"accounts.{account_id} must be a table")
+            if "ref" in raw:
+                continue
             parsed[str(account_id)] = AccountConfig(
                 account_id=str(account_id),
                 index=_int(raw.get("index", fallback_index), f"accounts.{account_id}.index"),
@@ -238,44 +251,71 @@ class RunConfig:
             )
         return dict(sorted(parsed.items(), key=lambda item: item[1].index))
 
+    @property
+    def launch_accounts(self) -> Mapping[str, LaunchAccountConfig]:
+        table = self._table("accounts", required=False)
+        parsed: dict[str, LaunchAccountConfig] = {}
+        for fallback_index, (alias, raw) in enumerate(table.items()):
+            if not isinstance(raw, Mapping):
+                raise ConfigError(f"accounts.{alias} must be a table")
+            if "ref" not in raw:
+                continue
+            books = raw.get("books")
+            parsed[str(alias)] = LaunchAccountConfig(
+                alias=str(alias),
+                ref=_text(raw.get("ref"), f"accounts.{alias}.ref"),
+                index=_int(raw.get("index", fallback_index), f"accounts.{alias}.index"),
+                books=_string_tuple(books, f"accounts.{alias}.books"),
+                trade=_bool(raw.get("trade", True), f"accounts.{alias}.trade"),
+            )
+        return dict(sorted(parsed.items(), key=lambda item: item[1].index))
+
     def validate(self) -> list[str]:
         return list(self.validation_report().issues)
 
-    def validation_report(self) -> RunConfigValidationReport:
+    def validation_report(self) -> LaunchConfigValidationReport:
         issues: list[str] = []
-        run = self.values.get("run")
-        if run is None:
-            issues.append("[run] table is required")
-        elif not isinstance(run, Mapping):
-            issues.append("[run] must be a table")
+        launch = self.values.get("launch")
+        if launch is None:
+            issues.append("[launch] table is required")
+        elif not isinstance(launch, Mapping):
+            issues.append("[launch] must be a table")
         mode = ""
-        if isinstance(run, Mapping):
-            if "id" in run:
+        if isinstance(launch, Mapping):
+            launch_id = ""
+            if "id" in launch:
                 try:
-                    _text(run.get("id"), "run.id")
+                    launch_id = _text(launch.get("id"), "launch.id")
                 except ConfigError as error:
                     issues.append(str(error))
-            raw_mode = run.get("mode")
+            raw_mode = launch.get("mode")
             try:
-                mode = _text(raw_mode, "run.mode")
+                mode = _text(raw_mode, "launch.mode")
             except ConfigError as error:
                 issues.append(str(error))
-            strategy = run.get("strategy")
+            if launch_id in RESERVED_LAUNCH_IDS and mode != "system":
+                issues.append(f"launch.id {launch_id!r} is reserved for the built-in system runtime")
+            strategy = launch.get("strategy")
             if strategy is not None:
                 try:
-                    strategy_value = _text(strategy, "run.strategy")
+                    strategy_value = _text(strategy, "launch.strategy")
                 except ConfigError as error:
                     issues.append(str(error))
                 else:
                     if ":" not in strategy_value:
-                        issues.append("run.strategy must be module:callable")
-        if mode not in VALID_RUN_MODES:
-            issues.append("run.mode must be one of: backtest, paper, live")
+                        issues.append("launch.strategy must be module:callable")
+        if mode not in VALID_LAUNCH_MODES:
+            issues.append("launch.mode must be one of: backtest, paper, live")
         if "data" in self.values:
-            issues.append("[data] is not valid run config; strategy code declares market data with context.subscribe")
+            issues.append("[data] is not valid launch config; strategy code declares market data with context.subscribe")
         accounts = self.values.get("accounts")
         if accounts is not None:
-            issues.append("[accounts] is not valid run config; configure accounts in .kairos/accounts and reference them with account.ref")
+            if not isinstance(accounts, Mapping):
+                issues.append("[accounts] must be a table")
+            elif _looks_like_launch_account_table(accounts):
+                issues.extend(_launch_accounts_issues(accounts))
+            else:
+                issues.append("[accounts] inline account definitions are not valid launch config; configure accounts in .kairos/accounts and reference them with accounts.<alias>.ref")
         account = self.values.get("account")
         if account is not None:
             if not isinstance(account, Mapping):
@@ -283,26 +323,28 @@ class RunConfig:
             else:
                 issues.extend(_account_issues(account, mode=mode))
         if mode in {"paper", "live"}:
-            if not isinstance(account, Mapping) or not _valid_optional_text(account.get("ref")):
-                issues.append("[account] table with account.ref is required for paper/live runs")
+            has_legacy_account_ref = isinstance(account, Mapping) and _valid_optional_text(account.get("ref"))
+            has_launch_accounts = isinstance(accounts, Mapping) and _looks_like_launch_account_table(accounts)
+            if not has_legacy_account_ref and not has_launch_accounts:
+                issues.append("[account] table with account.ref or [accounts.<alias>] with ref is required for paper/live launches")
         broker = self.values.get("broker")
         execution = self.values.get("execution")
         credentials = self.values.get("credentials")
         live = self.values.get("live")
         if broker is not None:
-            issues.append("[broker] is not valid run config; configure broker/provider via .kairos/accounts")
+            issues.append("[broker] is not valid launch config; configure broker/provider via .kairos/accounts")
         if credentials is not None:
-            issues.append("[credentials] is not valid run config; configure credentials via .kairos/accounts")
+            issues.append("[credentials] is not valid launch config; configure credentials via .kairos/accounts")
         if mode == "live":
             if not isinstance(live, Mapping):
-                issues.append("[live] table is required for live runs")
+                issues.append("[live] table is required for live launches")
             else:
                 issues.extend(_live_issues(live))
             if isinstance(execution, Mapping):
                 issues.extend(_execution_issues(execution, mode=mode))
         elif mode == "paper":
             if isinstance(account, Mapping) and str(account.get("environment", "paper")).strip() not in {"paper"}:
-                issues.append("account.environment must be paper-compatible for paper runs")
+                issues.append("account.environment must be paper-compatible for paper launches")
             paper = self.values.get("paper")
             if isinstance(paper, Mapping):
                 issues.extend(_account_selector_issues(paper, "paper"))
@@ -312,7 +354,7 @@ class RunConfig:
             issues.append("[execution] must be a table")
         elif live is not None and not isinstance(live, Mapping):
             issues.append("[live] must be a table")
-        return RunConfigValidationReport(self.path, not issues, tuple(issues))
+        return LaunchConfigValidationReport(self.path, not issues, tuple(issues))
 
     def require_valid(self) -> None:
         issues = self.validate()
@@ -322,10 +364,10 @@ class RunConfig:
     def require_mode(self, expected: str) -> None:
         self.require_valid()
         mode = expected
-        if mode not in VALID_RUN_MODES:
+        if mode not in VALID_LAUNCH_MODES:
             raise ConfigError("expected mode must be one of: backtest, paper, live")
         if self.mode != mode:
-            raise ConfigError(f"run config mode is {self.mode!r}, but command requires {mode!r}")
+            raise ConfigError(f"launch config mode is {self.mode!r}, but command requires {mode!r}")
 
     def explain(self) -> dict[str, object]:
         report = self.validation_report()
@@ -334,11 +376,15 @@ class RunConfig:
             "root": str(self.root),
             "valid": report.valid,
             "issues": list(report.issues),
-            "run": dict(self._table("run", required=False)),
+            "launch": dict(self._table("launch", required=False)),
             "mode": self._optional_mode(),
             "strategy": self._optional_strategy(),
             "account": dict(self._table("account", required=False)),
             "account_ref": self.account_ref,
+            "accounts": {
+                key: {"ref": value.ref, "index": value.index, "books": list(value.books), "trade": value.trade}
+                for key, value in self.launch_accounts.items()
+            },
             "execution": dict(self._table("execution", required=False)),
         }
 
@@ -353,17 +399,17 @@ class RunConfig:
         return value
 
     def _optional_mode(self) -> str | None:
-        run = self._table("run", required=False)
-        if "mode" not in run:
+        launch = self._table("launch", required=False)
+        if "mode" not in launch:
             return None
-        value = _text(run.get("mode"), "run.mode")
+        value = _text(launch.get("mode"), "launch.mode")
         return value
 
     def _optional_strategy(self) -> str | None:
-        run = self._table("run", required=False)
-        if "strategy" not in run:
+        launch = self._table("launch", required=False)
+        if "strategy" not in launch:
             return None
-        return _optional_text(run.get("strategy"), "run.strategy") or None
+        return _optional_text(launch.get("strategy"), "launch.strategy") or None
 
 
 def find_config_path(start: str | Path | None = None) -> Path | None:
@@ -396,8 +442,8 @@ def load_config(path: str | Path | None = None) -> KairosConfig:
     return KairosConfig(source_path=source_path, root=root, values=values)
 
 
-def load_run_config(path: str | Path) -> RunConfig:
-    return RunConfig.load(path)
+def load_launch_config(path: str | Path) -> LaunchConfig:
+    return LaunchConfig.load(path)
 
 
 def _text(value: object, source: str) -> str:
@@ -414,6 +460,24 @@ def _optional_text(value: object, source: str) -> str:
 
 def _valid_optional_text(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _string_tuple(value: object, source: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise ConfigError(f"{source} must not contain empty book names")
+        return (text,)
+    if not isinstance(value, list):
+        raise ConfigError(f"{source} must be a string or list of strings")
+    items: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise ConfigError(f"{source}[{index}] must be a non-empty string")
+        items.append(item.strip())
+    return tuple(items)
 
 
 def _normalize_language(value: str) -> str:
@@ -445,6 +509,12 @@ def _int(value: object, source: str) -> int:
     return parsed
 
 
+def _bool(value: object, source: str) -> bool:
+    if not isinstance(value, bool):
+        raise ConfigError(f"{source} must be a boolean")
+    return value
+
+
 def _account_issues(account: Mapping[str, Any], *, mode: str) -> list[str]:
     issues: list[str] = []
     if "ref" in account and not _valid_optional_text(account.get("ref")):
@@ -469,7 +539,7 @@ def _account_issues(account: Mapping[str, Any], *, mode: str) -> list[str]:
             if value not in VALID_ACCOUNT_ENVIRONMENTS:
                 issues.append("account.environment must be one of: backtest, paper, live, sandbox, simulation, testnet")
             if mode == "backtest" and value == "live":
-                issues.append("account.environment cannot be live for backtest runs")
+                issues.append("account.environment cannot be live for backtest launches")
     return issues
 
 
@@ -512,7 +582,46 @@ def _accounts_issues(accounts: Mapping[str, Any], *, mode: str) -> list[str]:
         if "credential" in raw and not _valid_optional_text(raw.get("credential")):
             issues.append(f"{source}.credential must be a non-empty string")
         if mode == "live" and not _valid_optional_text(raw.get("credential")):
-            issues.append(f"{source}.credential is required for live runs")
+            issues.append(f"{source}.credential is required for live launches")
+    return issues
+
+
+def _looks_like_launch_account_table(accounts: Mapping[str, Any]) -> bool:
+    return any(isinstance(raw, Mapping) and "ref" in raw for raw in accounts.values())
+
+
+def _launch_accounts_issues(accounts: Mapping[str, Any]) -> list[str]:
+    issues: list[str] = []
+    indexes: dict[int, str] = {}
+    if not accounts:
+        issues.append("[accounts] table must declare at least one launch account")
+    for fallback_index, (alias, raw) in enumerate(accounts.items()):
+        source = f"accounts.{alias}"
+        if not isinstance(raw, Mapping):
+            issues.append(f"{source} must be a table")
+            continue
+        if not str(alias).strip():
+            issues.append("accounts alias cannot be empty")
+        if not _valid_optional_text(raw.get("ref")):
+            issues.append(f"{source}.ref is required")
+        try:
+            index = _int(raw.get("index", fallback_index), f"{source}.index")
+        except ConfigError as error:
+            issues.append(str(error))
+        else:
+            if index < 0:
+                issues.append(f"{source}.index cannot be negative")
+            elif index in indexes:
+                issues.append(f"{source}.index duplicates accounts.{indexes[index]}.index")
+            else:
+                indexes[index] = str(alias)
+        if "books" in raw:
+            try:
+                _string_tuple(raw.get("books"), f"{source}.books")
+            except ConfigError as error:
+                issues.append(str(error))
+        if "trade" in raw and not isinstance(raw.get("trade"), bool):
+            issues.append(f"{source}.trade must be a boolean")
     return issues
 
 
@@ -599,11 +708,11 @@ def _execution_issues(execution: Mapping[str, Any], *, mode: str) -> list[str]:
         issues.append("execution.dry_run must be a boolean")
     if mode == "live":
         if not _valid_optional_text(execution.get("driver")):
-            issues.append("execution.driver is required for live runs")
+            issues.append("execution.driver is required for live launches")
         if execution.get("dry_run") is not False:
-            issues.append("execution.dry_run must be false for live runs")
+            issues.append("execution.dry_run must be false for live launches")
     if mode == "paper" and execution.get("dry_run") is False:
-        issues.append("execution.dry_run cannot be false for paper runs")
+        issues.append("execution.dry_run cannot be false for paper launches")
     return issues
 
 
@@ -618,14 +727,16 @@ __all__ = [
     "DEFAULT_PROJECT_LANGUAGE",
     "DEFAULT_PROJECT_TIMEZONE",
     "KairosConfig",
-    "RunConfig",
-    "RunConfigValidationReport",
+    "LaunchConfig",
+    "LaunchConfigValidationReport",
+    "RESERVED_LAUNCH_IDS",
+    "SYSTEM_LAUNCH_ID",
     "VALID_ACCOUNT_ENVIRONMENTS",
     "VALID_PROJECT_LANGUAGES",
-    "VALID_RUN_MODES",
+    "VALID_LAUNCH_MODES",
     "find_config_path",
     "find_manifest_path",
     "find_project_config",
     "load_config",
-    "load_run_config",
+    "load_launch_config",
 ]

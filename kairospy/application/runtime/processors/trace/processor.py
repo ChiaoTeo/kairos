@@ -4,59 +4,43 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Mapping
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.core.account import AccountContext
-from kairospy.core.execution import ExecutionCoordinator
-from kairospy.core.market import Bar, MarketEvent, OptionGreeks, Quote, RateObservation, TradePrint
-from kairospy.core.views import ViewFieldSchema, ViewSchema, ViewStore
-
-from .models import (
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.service.runtime import RuntimeAccountService
+from kairospy.application.views import (
+    DECISION_TRACE_SCHEMA,
+    RISK_SNAPSHOTS_SCHEMA,
     DecisionTraceRecord,
     DecisionTraceView,
     FundingRateSnapshot,
     RiskPositionSnapshot,
     RiskSnapshot,
     RiskSnapshotsView,
+    TraceViewKeys,
 )
+from kairospy.core.market import Bar, MarketEvent, OptionGreeks, Quote, RateObservation, TradePrint
+from kairospy.core.views import ViewStore
 
 
 class TraceProcessor:
-    decision_key = "strategy.decision_trace"
-    risk_key = "account.risk_snapshots"
+    decision_key = TraceViewKeys.decision_trace
+    risk_key = TraceViewKeys.risk_snapshots
 
     def __init__(
         self,
         *,
-        account: AccountContext | None = None,
-        coordinator: ExecutionCoordinator | None = None,
+        service: RuntimeAccountService | None = None,
         cash_currency: str = "USD",
     ) -> None:
-        self.account = account
-        self.coordinator = coordinator
-        self.cash_currency = cash_currency
+        self.service = service
+        self.account = None if service is None else service.account
+        self.cash_currency = cash_currency if service is None else service.cash_currency
         self._decision_records: list[DecisionTraceRecord] = []
         self._risk_snapshots: list[RiskSnapshot] = []
         self._marks: dict[str, Decimal] = {}
         self._funding_rates: dict[str, FundingRateSnapshot] = {}
         self._last_risk_marker: object | None = None
-        self.decision_schema = ViewSchema(
-            self.decision_key,
-            "system",
-            fields=(
-                ViewFieldSchema("records", "strategy decision trace records", "runtime state", "strategy trace hook"),
-            ),
-            mutability="runtime_writable",
-            evidence="strategy emitted decision trace records",
-        )
-        self.risk_schema = ViewSchema(
-            self.risk_key,
-            "system",
-            fields=(
-                ViewFieldSchema("snapshots", "account risk snapshots over time", "runtime state", "account ledger and market marks"),
-            ),
-            mutability="runtime_writable",
-            evidence="marked account risk snapshots",
-        )
+        self.decision_schema = DECISION_TRACE_SCHEMA
+        self.risk_schema = RISK_SNAPSHOTS_SCHEMA
 
     def on_event(self, event: RuntimeEnvelope) -> None:
         self._update_market_state(event.payload)
@@ -110,10 +94,10 @@ class TraceProcessor:
             )
 
     def _record_risk(self, at: datetime) -> None:
-        if self.account is None or self.coordinator is None:
+        if self.service is None or self.account is None:
             return
-        cash = self.coordinator.ledger.cash(self.account.account).get(self.cash_currency, Decimal("0"))
-        raw_positions = self.coordinator.ledger.positions(self.account.account)
+        cash = self.service.cash(self.cash_currency)
+        raw_positions = self.service.positions()
         positions: list[RiskPositionSnapshot] = []
         gross_notional = Decimal("0")
         net_notional = Decimal("0")

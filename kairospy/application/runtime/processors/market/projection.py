@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Callable, TypeVar
 
-from kairospy.application.runtime.ports import MarketDataPort
-from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.service.runtime import RuntimeMarketService
 from kairospy.core.market import (
     Bar,
     BarWindow,
@@ -62,10 +62,10 @@ class MarketProjectionState:
         ),
     )
 
-    def __init__(self, data: MarketDataPort | None = None, *, window_size: int = 100) -> None:
+    def __init__(self, service: RuntimeMarketService | None = None, *, window_size: int = 100) -> None:
         if window_size < 1:
             raise ValueError("market projection window_size must be positive")
-        self.data = data
+        self.service = service
         self.window_size = window_size
         self._quote_event_count = 0
         self._rate_event_count = 0
@@ -187,7 +187,7 @@ class MarketProjectionState:
 
     def subscriptions_view(self) -> MarketSubscriptionsView:
         subscriptions = ()
-        if self.data is not None:
+        if self.service is not None:
             subscriptions = tuple(
                 MarketSubscriptionSummary(
                     key=item.key,
@@ -199,7 +199,7 @@ class MarketProjectionState:
                     provider=item.spec.market.venue,
                     stream=item.spec.market.source_symbol,
                 )
-                for item in self.data.subscriptions()
+                for item in self.service.subscriptions()
             )
         return MarketSubscriptionsView(
             total_count=len(subscriptions),

@@ -76,6 +76,7 @@ class TradeIntent(Intent):
     market_id: MarketId | str | None = None
     account_id: AccountId | str | None = None
     account_index: int | None = None
+    account_book: str | None = None
     created_at: datetime | None = None
     target_quantity: Decimal | None = None
     quantity: Decimal | None = None
@@ -90,6 +91,7 @@ class TradeIntent(Intent):
         object.__setattr__(self, "account_id", None if self.account_id is None else _id(self.account_id, AccountId, "account_id"))
         if self.account_index is not None and self.account_index < 0:
             raise ValueError("intent account_index cannot be negative")
+        object.__setattr__(self, "account_book", None if self.account_book is None else _required_text(self.account_book, "account_book"))
         if self.quantity is not None and self.quantity <= 0:
             raise ValueError("quantity must be positive")
         if self.limit_price is not None and self.limit_price <= 0:
@@ -144,6 +146,7 @@ def target_position_intent(
     market_id: MarketId | str | None = None,
     account_id: AccountId | str | None = None,
     account_index: int | None = None,
+    account_book: object | None = None,
     target_quantity: Decimal,
     at: datetime | None = None,
     limit_price: Decimal | None = None,
@@ -158,6 +161,7 @@ def target_position_intent(
         market_id=market_id,
         account_id=account_id,
         account_index=account_index,
+        account_book=None if account_book is None else str(account_book),
         created_at=at,
         target_quantity=target_quantity,
         limit_price=limit_price,

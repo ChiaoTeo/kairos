@@ -11,8 +11,8 @@ from kairospy.application.runtime.sources import (
     RealtimeClockSource,
     RuntimeDataSource,
 )
-from kairospy.application.system.builder import RunBuilder
-from kairospy.application.system.environment import RunEnvironment, ensure_run_registered, resolve_config
+from kairospy.application.launch.builder import LaunchBuilder
+from kairospy.application.launch.environment import LaunchEnvironment, ensure_launch_registered, resolve_config
 
 __version__ = "0.1.0"
 
@@ -26,10 +26,10 @@ __all__ = [
     "IntervalClockSource",
     "IterableEventSource",
     "RealtimeClockSource",
-    "RunBuilder",
-    "RunEnvironment",
+    "LaunchBuilder",
+    "LaunchEnvironment",
     "RuntimeDataSource",
     "__version__",
-    "ensure_run_registered",
+    "ensure_launch_registered",
     "resolve_config",
 ]

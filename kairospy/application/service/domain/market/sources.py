@@ -6,8 +6,6 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Mapping
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.application.runtime.protocol.lines import close_event_line
 from kairospy.core.market import (
     Bar,
     MarketEvent,
@@ -33,9 +31,11 @@ class IterableMarketEventSource:
         object.__setattr__(self, "stream", stream)
         object.__setattr__(self, "rows", tuple(dict(row) for row in rows))
 
-    async def events(self) -> AsyncIterator[RuntimeEnvelope]:
+    async def events(self) -> AsyncIterator[MarketEvent]:
         for index, row in enumerate(self.rows, start=1):
-            yield runtime_envelope_from_row(row, sequence=index, stream=self.stream)
+            event = market_event_from_row(row, sequence=index, stream=self.stream)
+            if event is not None:
+                yield event
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,27 +50,26 @@ class AsyncIterableMarketEventSource:
         if self.limit is not None and self.limit < 0:
             raise ValueError("event source limit cannot be negative")
 
-    async def events(self) -> AsyncIterator[RuntimeEnvelope]:
+    async def events(self) -> AsyncIterator[MarketEvent]:
         index = 0
         rows = self.rows.__aiter__()
-        try:
-            async for row in rows:
-                if self.limit is not None and index >= self.limit:
-                    break
-                index += 1
-                yield runtime_envelope_from_row(row, sequence=index, stream=self.stream)
-        finally:
-            await close_event_line(rows)
+        async for row in rows:
+            if self.limit is not None and index >= self.limit:
+                break
+            index += 1
+            event = market_event_from_row(row, sequence=index, stream=self.stream)
+            if event is not None:
+                yield event
 
 
-def runtime_envelope_from_row(row: Mapping[str, object], *, sequence: int, stream: str) -> RuntimeEnvelope:
+def market_event_from_row(row: Mapping[str, object], *, sequence: int, stream: str) -> MarketEvent | None:
     if "time" not in row:
         raise ValueError("event rows require a time field")
     event_time = parse_event_time(row["time"])
-    kind = str(row.get("kind") or "event")
     domain = str(row.get("domain") or "market")
-    payload = _market_event_from_row(row, event_time=event_time, sequence=sequence, stream=stream) if domain == "market" else dict(row)
-    return RuntimeEnvelope(domain, kind, event_time, sequence, payload or dict(row))
+    if domain != "market":
+        return None
+    return _market_event_from_row(row, event_time=event_time, sequence=sequence, stream=stream)
 
 
 def _market_event_from_row(
@@ -265,6 +264,6 @@ def parse_event_time(value: object) -> datetime:
 __all__ = [
     "AsyncIterableMarketEventSource",
     "IterableMarketEventSource",
+    "market_event_from_row",
     "parse_event_time",
-    "runtime_envelope_from_row",
 ]

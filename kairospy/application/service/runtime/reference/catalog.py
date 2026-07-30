@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.application.protocol import RuntimeEnvelope
 from kairospy.core.reference import LifecycleEvent, MarketResolver, ReferenceCatalog
 
 from kairospy.application.service.domain.reference.store import ReferenceStore

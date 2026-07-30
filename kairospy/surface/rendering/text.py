@@ -70,7 +70,7 @@ def render_context_commands(command: CommandView) -> str:
     prefix = " ".join(command.argv_prefix)
     return _render_command_rows((
         ("<#>|<subcommand>", "open subcommand context"),
-        ("<command>", f"run `kairospy {prefix} <command>`"),
+        ("<command>", f"execute `kairospy {prefix} <command>`"),
         ("help", "show this context"),
         ("back", "return to parent context"),
         ("home", "return to products"),
@@ -80,7 +80,7 @@ def render_context_commands(command: CommandView) -> str:
 def render_leaf_commands(command: CommandView) -> str:
     prefix = " ".join(command.argv_prefix)
     return _render_command_rows((
-        ("<args>", f"run `kairospy {prefix} <args>`"),
+        ("<args>", f"execute `kairospy {prefix} <args>`"),
         ("help", "show command help"),
         ("back", "return to parent context"),
         ("home", "return to products"),

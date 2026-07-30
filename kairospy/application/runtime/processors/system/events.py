@@ -1,35 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
 from typing import Mapping
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.core.views import ViewFieldSchema, ViewSchema
-
-
-@dataclass(frozen=True, slots=True)
-class SystemEventView:
-    event_count: int = 0
-    last_name: str | None = None
-    last_event_time: datetime | None = None
-    last_payload: dict[str, object] | None = None
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.views import SYSTEM_EVENTS_SCHEMA, SystemEventView, SystemViewKeys
 
 
 class SystemEventViewState:
-    key = "system.events"
-    schema = ViewSchema(
-        key,
-        "system",
-        fields=(
-            ViewFieldSchema("event_count", "consumed system event count", "runtime sequence", "system event"),
-            ViewFieldSchema("last_name", "latest system event name", "event time", "system event"),
-            ViewFieldSchema("last_event_time", "latest system event time", "event time", "system event"),
-            ViewFieldSchema("last_payload", "latest system event payload", "event time", "system event"),
-        ),
-        mutability="runtime_writable",
-        evidence="runtime system event view state",
-    )
+    key = SystemViewKeys.events
+    schema = SYSTEM_EVENTS_SCHEMA
 
     def __init__(self) -> None:
         self._event_count = 0
@@ -57,4 +36,4 @@ def _payload_dict(payload: object) -> dict[str, object]:
     return {"type": type(payload).__name__}
 
 
-__all__ = ["SystemEventViewState", "SystemEventView"]
+__all__ = ["SystemEventViewState"]

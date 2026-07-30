@@ -1,25 +1,12 @@
 from __future__ import annotations
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.core.intent import IntentJournal
-from kairospy.core.views import ViewFieldSchema, ViewSchema
-
-from .models import IntentJournalView, IntentStateSummary
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.core.intent import IntentJournal, IntentJournalView, IntentStateSummary, IntentViewKeys, SYSTEM_INTENTS_SCHEMA
 
 
 class IntentJournalViewState:
-    key = "system.intents"
-    schema = ViewSchema(
-        key,
-        "system",
-        fields=(
-            ViewFieldSchema("total_count", "known strategy intent count", "runtime state", "IntentJournal"),
-            ViewFieldSchema("active_count", "active strategy intent count", "runtime state", "IntentJournal"),
-            ViewFieldSchema("states", "strategy intent state summaries", "runtime state", "IntentJournal"),
-        ),
-        mutability="runtime_writable",
-        evidence="intent journal view state",
-    )
+    key = IntentViewKeys.system_intents
+    schema = SYSTEM_INTENTS_SCHEMA
 
     def __init__(self, *, strategy_id: str, intents: IntentJournal) -> None:
         self.strategy_id = strategy_id

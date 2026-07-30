@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Mapping, Literal
 
 from kairospy.application.runtime.dispatch.context import RuntimeContext
-from kairospy.application.runtime.ports import DataSubscription, MarketDataSubscriptionSpec
+from kairospy.application.ports import DataSubscription, MarketDataSubscriptionSpec
 from kairospy.application.service.domain.market import MarketDataOperationsService, MarketDataResolver, MarketDataSpec, parse_market_dataset_id, replay_rows
 from kairospy.application.service.modes.backtest import BacktestConfigurationError, configured_backtest
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, StorageFormat, data_store, exchange
@@ -163,7 +163,7 @@ class MarketDataFacade:
                     }
                 )
         return {
-            "run_id": configured.run_id,
+            "launch_id": configured.launch_id,
             "config": str(Path(config_path)),
             "dry_run": dry_run,
             "count": len(downloads),

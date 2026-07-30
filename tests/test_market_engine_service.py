@@ -5,10 +5,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
+from kairospy.application.runtime.orchestration.state import RuntimePorts
 from kairospy.application.service.domain.market import MarketDataResolver, MarketDataSpec
 from kairospy.application.service.modes.backtest import BacktestMarketDataService
+from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.application.service.runtime.market import ReplayMarketDataPolicy
-from kairospy.application.runtime.ports import MarketDataSubscriptionSpec
+from kairospy.application.ports import MarketDataSubscriptionSpec
+from kairospy.core.intent import IntentJournal
 from kairospy.core.market import MarketEvent, Quote, RateObservation
 from kairospy.core.reference import MarketResolver
 from kairospy.infrastructure.data import DataStore
@@ -74,7 +77,13 @@ def test_store_backed_market_data_service_feeds_runtime_view_state(tmp_path) -> 
     assert events[0].payload.value.ask == Decimal("101")
 
     service.subscribe(MarketDataSubscriptionSpec(resolved.market_ref, (Quote,), identity="strategy-a"))
-    kernel = RuntimeKernel(EmptyStrategy(), data=service)
+    kernel = RuntimeKernel(
+        EmptyStrategy(),
+        ports=RuntimePorts(data=service),
+        services=RuntimeApplicationServices.from_dependencies(
+            RuntimeServiceDependencies(intents=IntentJournal(), data=service)
+        ),
+    )
     session = kernel.start()
     session.process(events[0])
 

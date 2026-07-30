@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from kairospy.application.runtime.ports import MarketDataPort
-from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.service.runtime import RuntimeMarketService
 from kairospy.core.views import ViewStore
 
 from .state import MarketViewState
@@ -11,8 +11,8 @@ from .projection import MarketProjectionState
 
 
 class MarketProcessor:
-    def __init__(self, port: MarketDataPort) -> None:
-        self.state = MarketViewState(MarketProjectionState(data=port))
+    def __init__(self, service: RuntimeMarketService) -> None:
+        self.state = MarketViewState(MarketProjectionState(service=service))
 
     def on_event(self, event: RuntimeEnvelope) -> None:
         self.state.on_event(event)

@@ -88,7 +88,7 @@ export function App() {
       <header className="flex items-start justify-between gap-4 rounded-lg border bg-card p-4 shadow-sm max-lg:grid">
         <section>
           <h1 className="text-xl font-semibold leading-tight">Timeline</h1>
-          <p className="mt-1 break-words text-sm text-muted-foreground">{data.instance.mode} / {data.instance.runId} / {data.instance.runInstanceId}</p>
+          <p className="mt-1 break-words text-sm text-muted-foreground">{data.instance.mode} / {data.instance.launchId} / {data.instance.launchInstanceId}</p>
         </section>
         <section className="grid min-w-[420px] grid-cols-4 gap-2 max-lg:min-w-0 max-md:grid-cols-2 max-sm:grid-cols-1">
           <Metric label="Final Equity" value={data.summary.final_equity} />
@@ -135,7 +135,7 @@ export function App() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-sm">
-                <Database data-icon="inline-start" /> Run Instances
+                <Database data-icon="inline-start" /> Launch Instances
               </CardTitle>
               <CardDescription>{instanceIndex.count} instances under {instanceIndex.root}</CardDescription>
             </CardHeader>
@@ -238,8 +238,8 @@ function InstanceButton({ instance, selected, onSelect }: { instance: TimelineIn
       type="button"
       variant={selected ? "default" : "outline"}
     >
-      <span className="truncate text-xs font-medium">{instance.mode ?? "-"} / {instance.run_id ?? "-"}</span>
-      <span className="mt-1 truncate text-xs text-muted-foreground">{instance.run_instance_id ?? "-"}</span>
+      <span className="truncate text-xs font-medium">{instance.mode ?? "-"} / {instance.launch_id ?? "-"}</span>
+      <span className="mt-1 truncate text-xs text-muted-foreground">{instance.launch_instance_id ?? "-"}</span>
       <span className="mt-2 flex flex-wrap gap-1">
         <Badge variant={selected ? "secondary" : "outline"}>timeline:{instance.timeline_count}</Badge>
         <Badge variant={selected ? "secondary" : "outline"}>trace:{instance.decision_trace_count}</Badge>
@@ -489,7 +489,7 @@ function EmptyState({ root }: { root?: string }) {
       <Card className="max-w-xl">
         <CardHeader>
           <CardTitle>No timeline instances</CardTitle>
-          <CardDescription>{root ? `No timeline-capable run instances under ${root}.` : "No timeline-capable run instances were found."}</CardDescription>
+          <CardDescription>{root ? `No timeline-capable launch instances under ${root}.` : "No timeline-capable launch instances were found."}</CardDescription>
         </CardHeader>
       </Card>
     </main>

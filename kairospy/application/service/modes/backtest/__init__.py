@@ -3,7 +3,7 @@ from __future__ import annotations
 from .account import BacktestAccountService
 from .config import (
     BacktestConfigurationError,
-    BacktestRunResult,
+    BacktestLaunchResult,
     ConfiguredBacktest,
     configured_backtest,
 )
@@ -17,7 +17,7 @@ __all__ = [
     "BacktestExecutionService",
     "BacktestMarketDataService",
     "BacktestMetrics",
-    "BacktestRunResult",
+    "BacktestLaunchResult",
     "ConfiguredBacktest",
     "HistoricalMarketDataClient",
     "MarketDataServiceView",

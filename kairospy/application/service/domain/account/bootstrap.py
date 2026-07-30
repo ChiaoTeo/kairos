@@ -64,13 +64,14 @@ def bootstrap_account(
     at: datetime | None = None,
     balance_params: Mapping[str, object] | None = None,
     order_params: Mapping[str, object] | None = None,
+    fetch_orders: bool = True,
 ) -> AccountBootstrapResult:
     observed_at = at or datetime.now(timezone.utc)
     if observed_at.tzinfo is None:
         raise ValueError("bootstrap timestamp must be timezone-aware")
 
     raw_balance = gateway.fetch_balance(params=balance_params)
-    raw_orders = tuple(gateway.fetch_open_orders(symbol, params=order_params))
+    raw_orders = tuple(gateway.fetch_open_orders(symbol, params=order_params)) if fetch_orders else ()
     snapshot = parser.snapshot(context, raw_balance, raw_orders, observed_at=observed_at)
     imported = tuple(
         parser.import_open_order(context, coordinator, order, observed_at=observed_at)

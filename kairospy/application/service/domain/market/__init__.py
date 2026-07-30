@@ -38,7 +38,7 @@ from .records import (
 )
 from .replay import RowWriter, replay_rows
 from .resolver import MarketDataResolver, ResolvedMarketData
-from .sources import AsyncIterableMarketEventSource, IterableMarketEventSource, parse_event_time, runtime_envelope_from_row
+from .sources import AsyncIterableMarketEventSource, IterableMarketEventSource, market_event_from_row, parse_event_time
 from .specs import MarketDataSpec
 from .subscriptions import (
     MarketSubscription,
@@ -86,6 +86,7 @@ __all__ = [
     "market_dataset_id",
     "market_data_id_from_symbol",
     "market_stream_name",
+    "market_event_from_row",
     "parse_market_dataset_id",
     "ohlcv_record",
     "order_book_record",
@@ -94,7 +95,6 @@ __all__ = [
     "parse_event_time",
     "plan_market_streams",
     "replay_rows",
-    "runtime_envelope_from_row",
     "selector_channel",
     "ticker_record",
     "trade_print_record",

@@ -1,4 +1,4 @@
-[run]
+[launch]
 id = "paper-printer"
 mode = "paper"
 strategy = "examples.strategies.printer:strategy"

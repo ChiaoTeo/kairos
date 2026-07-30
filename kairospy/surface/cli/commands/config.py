@@ -61,16 +61,16 @@ def doctor(
 @config_app.command("explain")
 def explain(
     ctx: typer.Context,
-    run: str | None = typer.Option(None, "--run", help="Registered run name"),
-    config_path: Path | None = typer.Option(None, "--config", help="Run config path"),
+    launch: str | None = typer.Option(None, "--launch", help="Registered launch name"),
+    config_path: Path | None = typer.Option(None, "--config", help="Launch config path"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
-    if run is None and config_path is None:
-        raise typer.BadParameter("config explain requires --run or --config")
-    if run is not None and config_path is not None:
-        raise typer.BadParameter("use either --run or --config, not both")
+    if launch is None and config_path is None:
+        raise typer.BadParameter("config explain requires --launch or --config")
+    if launch is not None and config_path is not None:
+        raise typer.BadParameter("use either --launch or --config, not both")
     try:
-        payload = _CONFIG.explain(run=run, config_path=config_path)
+        payload = _CONFIG.explain(launch=launch, config_path=config_path)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_explain)
@@ -131,11 +131,11 @@ def _render_paths(result: object) -> str:
         f"  manifest         {payload['manifest_path']}",
         f"  workspace_root   {payload['workspace_root']}",
         f"  state_root       {payload['state_root']}",
-        f"  run_root         {payload['run_root']}",
+        f"  launch_root         {payload['launch_root']}",
         f"  data_root        {payload['data_root']}",
         f"  reference_root   {payload['reference_root']}",
         f"  accounts_root    {payload['accounts_root']}",
-        f"  run_index        {payload['run_index_path']}",
+        f"  launch_index        {payload['launch_index_path']}",
     ])
 
 
@@ -144,11 +144,11 @@ def _render_doctor(result: object) -> str:
     lines = ["Config Doctor", f"  valid    {str(payload['valid']).lower()}"]
     lines.extend(f"  issue    {issue}" for issue in payload["issues"] if isinstance(issue, str))
     accounts = payload["accounts"]
-    runs = payload["runs"]
+    launches = payload["launches"]
     if isinstance(accounts, Mapping):
         lines.append(f"  accounts {accounts['count']} from {accounts['root']}")
-    if isinstance(runs, Mapping):
-        lines.append(f"  runs     {runs['count']} from {runs['path']}")
+    if isinstance(launches, Mapping):
+        lines.append(f"  launches     {launches['count']} from {launches['path']}")
     return "\n".join(lines)
 
 
@@ -161,7 +161,7 @@ def _render_explain(result: object) -> str:
     return "\n".join([
         "Effective Config",
         f"  target             {payload['target']}",
-        f"  run_config         {sources['run_config']}",
+        f"  launch_config         {sources['launch_config']}",
         f"  workspace_manifest {sources['workspace_manifest']}",
         f"  account.ref        {account_ref or ''}",
         f"  account.source     {sources['account'] or ''}",

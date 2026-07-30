@@ -7,7 +7,7 @@ from decimal import Decimal
 import pytest
 
 from kairospy.application.runtime.dispatch.context import RuntimeContext
-from kairospy.application.runtime.ports import DataSubscription, MarketDataSubscriptionSpec
+from kairospy.application.ports import DataSubscription, MarketDataSubscriptionSpec
 from kairospy.application.service.domain.market import IterableMarketEventSource, MarketDataOperationsService, MarketDataSpec
 from kairospy.core.market import OptionGreeks
 from kairospy.infrastructure.data import DataStore
@@ -112,8 +112,8 @@ def test_option_greeks_rows_replay_as_typed_market_events() -> None:
     event = asyncio.run(_first(source.events()))
 
     assert event.kind == "option_greeks"
-    assert isinstance(event.payload.value, OptionGreeks)
-    assert event.payload.value.implied_volatility == Decimal("0.6")
+    assert isinstance(event.value, OptionGreeks)
+    assert event.value.implied_volatility == Decimal("0.6")
 
 
 def test_runtime_context_subscribes_by_market_dataset_id() -> None:

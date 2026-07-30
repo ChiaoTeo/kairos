@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from kairospy.application.service.domain.execution import CommissionModel, FillModel, SlippageModel
+from kairospy.application.launch import LaunchAccountDirectory
 from kairospy.application.service.runtime.execution import SimulatedExecutionService
 from kairospy.core.account import AccountContext
 from kairospy.core.execution import ExecutionCoordinator
@@ -17,6 +18,7 @@ class PaperExecutionService(SimulatedExecutionService):
         fill_model: FillModel | None = None,
         slippage_model: SlippageModel | None = None,
         commission_model: CommissionModel | None = None,
+        directory: LaunchAccountDirectory | None = None,
     ) -> None:
         super().__init__(
             coordinator,
@@ -27,6 +29,7 @@ class PaperExecutionService(SimulatedExecutionService):
             slippage_model=slippage_model,
             commission_model=commission_model,
             mode_label="paper",
+            directory=directory,
         )
 
 

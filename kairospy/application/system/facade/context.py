@@ -20,7 +20,7 @@ class ProjectNotFound(ValueError):
         self.start = base.expanduser().resolve()
         super().__init__(
             f"No Kairos project found from {self.start}. "
-            f"Run `kairospy project init {self.start}` first."
+            f"Launch `kairospy project init {self.start}` first."
         )
 
 

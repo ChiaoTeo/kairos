@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 
-from kairospy.application.system.projectors import RunProjectionService
+from kairospy.application.system.projectors import LaunchProjectionService
 from kairospy.surface.timeline.loader import TimelineDataLoader
 
 
 def test_timeline_loader_derives_records_from_sampled_views(tmp_path) -> None:
-    instance = tmp_path / ".kairos" / "runs" / "backtest" / "bt-1" / "instances" / "i-1"
+    instance = tmp_path / ".kairos" / "launches" / "backtest" / "bt-1" / "instances" / "i-1"
     instance.mkdir(parents=True)
     _write_jsonl(
         instance / "timeline.jsonl",
@@ -144,8 +144,8 @@ def test_timeline_loader_derives_records_from_sampled_views(tmp_path) -> None:
     assert data["series"]["markets"][0]["close"] == "101"
 
 
-def test_run_projection_service_lists_and_loads_projection_data(tmp_path) -> None:
-    instance = tmp_path / ".kairos" / "runs" / "backtest" / "bt-1" / "instances" / "i-1"
+def test_launch_projection_service_lists_and_loads_projection_data(tmp_path) -> None:
+    instance = tmp_path / ".kairos" / "launches" / "backtest" / "bt-1" / "instances" / "i-1"
     instance.mkdir(parents=True)
     _write_jsonl(
         instance / "timeline.jsonl",
@@ -161,15 +161,15 @@ def test_run_projection_service_lists_and_loads_projection_data(tmp_path) -> Non
         ],
     )
 
-    service = RunProjectionService(instance)
+    service = LaunchProjectionService(instance)
 
-    assert "run.timeline" in {spec.name for spec in service.list_datasets()}
-    assert service.load("run.timeline")[0]["trigger"] == "interval"
+    assert "launch.timeline" in {spec.name for spec in service.list_datasets()}
+    assert service.load("launch.timeline")[0]["trigger"] == "interval"
     assert TimelineDataLoader(instance).load() == service.load_timeline_view()
 
 
 def test_timeline_loader_derives_market_views_and_multi_account_equity(tmp_path) -> None:
-    instance = tmp_path / ".kairos" / "runs" / "backtest" / "bt-2" / "instances" / "i-1"
+    instance = tmp_path / ".kairos" / "launches" / "backtest" / "bt-2" / "instances" / "i-1"
     instance.mkdir(parents=True)
     _write_jsonl(
         instance / "timeline.jsonl",

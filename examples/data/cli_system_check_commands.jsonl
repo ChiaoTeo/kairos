@@ -1,0 +1,2 @@
+{"command":"trace","time":"2026-01-01T00:00:00+00:00","args":{"name":"cli_system_check","payload":{"step":"start"}}}
+{"command":"control","time":"2026-01-01T00:00:01+00:00","args":{"kind":"pause","reason":"cli validation","request_id":"cli-pause-1"}}

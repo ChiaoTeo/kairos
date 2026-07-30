@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Mapping
 
 from kairospy.application.system.facade.context import current_profile_name, workspace as resolve_workspace
-from kairospy.config import load_run_config
+from kairospy.config import load_launch_config
 
 
 class ConfigFacade:
@@ -29,25 +29,25 @@ class ConfigFacade:
             issues.append(".kairos/kairos.toml was not found; using built-in defaults")
         accounts = workspace.accounts.list()
         for account in accounts:
-            if account.environment == "live" and not account.credential_values and not account.credential:
+            if account.environment == "live" and not account.credential_values and not account.credential and not account.credentials:
                 issues.append(f"live account {account.account_id} has no credential metadata")
         return {
             "valid": not issues,
             "issues": issues,
             "workspace": workspace.to_dict(),
             "accounts": {"count": len(accounts), "root": str(workspace.accounts.root)},
-            "runs": {"count": len(workspace.run_index.list()), "path": str(workspace.run_index.path)},
+            "launches": {"count": len(workspace.launch_index.list()), "path": str(workspace.launch_index.path)},
         }
 
-    def explain(self, *, run: str | None, config_path: Path | None) -> dict[str, object]:
-        if run is None and config_path is None:
-            raise ValueError("config explain requires --run or --config")
-        if run is not None and config_path is not None:
-            raise ValueError("use either --run or --config, not both")
+    def explain(self, *, launch: str | None, config_path: Path | None) -> dict[str, object]:
+        if launch is None and config_path is None:
+            raise ValueError("config explain requires --launch or --config")
+        if launch is not None and config_path is not None:
+            raise ValueError("use either --launch or --config, not both")
         workspace = resolve_workspace()
-        path = workspace.run_index.resolve_config_path(run) if run is not None else config_path
-        run_config = load_run_config(path)
-        account_ref = run_config.account_ref
+        path = workspace.launch_index.resolve_config_path(launch) if launch is not None else config_path
+        launch_config = load_launch_config(path)
+        account_ref = launch_config.account_ref
         account_source = None
         if account_ref:
             try:
@@ -55,15 +55,15 @@ class ConfigFacade:
             except Exception:
                 account_source = None
         return {
-            "target": run or str(config_path),
+            "target": launch or str(config_path),
             "workspace": {
                 "root": str(workspace.root),
                 "manifest": str(workspace.manifest_path) if workspace.manifest_path is not None else None,
             },
-            "run_config": run_config.explain(),
+            "launch_config": launch_config.explain(),
             "account_ref": account_ref,
             "sources": {
-                "run_config": str(run_config.path) if run_config.path is not None else None,
+                "launch_config": str(launch_config.path) if launch_config.path is not None else None,
                 "workspace_manifest": str(workspace.manifest_path) if workspace.manifest_path is not None else None,
                 "account": account_source,
             },

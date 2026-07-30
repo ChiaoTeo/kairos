@@ -5,11 +5,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.core.account import AccountContext, AccountSnapshot
+from kairospy.application.launch import LaunchAccountDirectory
+from kairospy.application.ports import TradingExecutionPort
+from kairospy.application.service.domain.account.routing import AccountBookRoute, account_book_route
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.core.account import AccountContext, AccountRef, AccountSnapshot
 from kairospy.core.execution import ExecutionCoordinator, ExecutionIntentContext
 from kairospy.core.intent import IntentEvent, IntentEventKind, IntentKind, TradeIntent
-from kairospy.core.order import OrderRequest, OrderSide, OrderState, OrderType
+from kairospy.core.order import OrderEvent, OrderEventKind, OrderRequest, OrderSide, OrderState, OrderType
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,19 +141,26 @@ class LiveExecutionAdapter:
 
 
 @dataclass(frozen=True, slots=True)
-class LiveExecutionService:
+class LiveExecutionService(TradingExecutionPort):
     coordinator: ExecutionCoordinator
     account: AccountContext | None = None
-    snapshot_provider: Callable[[], AccountSnapshot | None] | None = None
+    snapshot_provider: Callable[..., AccountSnapshot | None] | None = None
     safety_policy: LiveTradingSafetyPolicy | None = None
     order_params: Mapping[str, object] | None = None
+    directory: LaunchAccountDirectory | None = None
+    routes: tuple[AccountBookRoute, ...] = ()
 
     async def events(self) -> AsyncIterator[RuntimeEnvelope]:
         if False:
             yield
 
     def execute_intent(self, intent: TradeIntent, context: object, *, hook: str = "") -> bool:
-        return self._adapter().execute_intent(intent, context, order_params=self.order_params)  # type: ignore[arg-type]
+        account = self._resolve_account(intent)
+        if account is not None and not self._route(account.account).can_trade:
+            _reject_intent(context, intent, _not_tradable_reason(account.account))
+            return True
+        adapter = self._adapter(account)
+        return adapter.execute_intent(intent, context, order_params=self._order_params(account.account))  # type: ignore[arg-type]
 
     def plan_order(
         self,
@@ -164,6 +174,10 @@ class LiveExecutionService:
         venue_snapshot: AccountSnapshot | None = None,
         at: datetime,
     ) -> OrderState:
+        if not self._route(request.context.account).can_trade:
+            state = self.coordinator.orders.plan(request)
+            self.coordinator.orders.record(OrderEvent(state.order_id, OrderEventKind.REJECTED, at, reason=_not_tradable_reason(request.context.account)))
+            return self.coordinator.orders.get(state.order_id)
         return self.coordinator.plan_order(
             request,
             reserve_currency=reserve_currency,
@@ -182,6 +196,11 @@ class LiveExecutionService:
         at: datetime,
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
+        state = self.coordinator.orders.get(order_id)
+        if not self._route(state.request.context.account).can_trade:
+            return self.coordinator.orders.record(
+                OrderEvent(order_id, OrderEventKind.REJECTED, at, reason=_not_tradable_reason(state.request.context.account))
+            )
         return self.coordinator.submit_order(order_id, at=at, params=params)
 
     def cancel_order(
@@ -191,17 +210,52 @@ class LiveExecutionService:
         at: datetime,
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
+        state = self.coordinator.orders.get(order_id)
+        if not self._route(state.request.context.account).can_trade:
+            return self.coordinator.orders.record(
+                OrderEvent(order_id, OrderEventKind.REJECTED, at, reason=_not_tradable_reason(state.request.context.account))
+            )
         return self.coordinator.cancel_order(order_id, at=at, params=params)
 
-    def _adapter(self) -> LiveExecutionAdapter:
-        if self.account is None:
+    def _adapter(self, account: AccountContext | None = None) -> LiveExecutionAdapter:
+        selected = account or self.account
+        if selected is None:
             raise RuntimeError("live execution service requires an account before it can execute intents")
         return LiveExecutionAdapter(
-            account=self.account,
+            account=selected,
             coordinator=self.coordinator,
-            snapshot_provider=self.snapshot_provider,
+            snapshot_provider=lambda: self._snapshot(selected.account),
             safety_policy=self.safety_policy,
         )
+
+    def _resolve_account(self, intent: TradeIntent) -> AccountContext | None:
+        if self.directory is None:
+            return self.account
+        return self.directory.resolve_context(
+            account_id=getattr(intent, "account_id", None),
+            account_index=getattr(intent, "account_index", None),
+            book=getattr(intent, "account_book", None),
+            default=self.account,
+        )
+
+    def _snapshot(self, account: AccountRef) -> AccountSnapshot | None:
+        if self.snapshot_provider is None:
+            return None
+        try:
+            return self.snapshot_provider(account)
+        except TypeError:
+            return self.snapshot_provider()
+
+    def _order_params(self, account: AccountRef) -> Mapping[str, object] | None:
+        route = self._route(account)
+        values = {**dict(route.order_params), **dict(self.order_params or {})}
+        return values or None
+
+    def _route(self, account: AccountRef) -> AccountBookRoute:
+        for route in self.routes:
+            if route.book == account:
+                return route
+        return account_book_route(account)
 
 
 def _margin_plan_args(params: Mapping[str, object] | None, instrument_id: str) -> dict[str, object]:
@@ -220,6 +274,18 @@ def _margin_plan_args(params: Mapping[str, object] | None, instrument_id: str) -
         "margin_leverage": Decimal(str(leverage)),
         "margin_instrument_id": str(margin_instrument),
     }
+
+
+def _reject_intent(context: object, intent: TradeIntent, reason: str) -> None:
+    now = getattr(context, "now", None)
+    intents = getattr(context, "intents", None)
+    if now is None or intents is None:
+        return
+    intents.record(IntentEvent(intent.intent_id, IntentEventKind.REJECTED, now, reason=reason))
+
+
+def _not_tradable_reason(account: AccountRef) -> str:
+    return f"account {account.value} is not tradable with the selected credential"
 
 
 def _broker_order_params(params: Mapping[str, object] | None) -> Mapping[str, object] | None:

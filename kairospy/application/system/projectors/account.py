@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from kairospy.application.system.artifacts.output import RunOutput
+from kairospy.application.system.artifacts.output import LaunchOutput
 from kairospy.core.views import ViewStore
 
 
 class AccountCurrentProjector:
-    def __init__(self, output: RunOutput) -> None:
+    def __init__(self, output: LaunchOutput) -> None:
         self.output = output
         self._last_written: dict[str, object] = {}
 

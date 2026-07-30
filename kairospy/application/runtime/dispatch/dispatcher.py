@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from kairospy.application.runtime.dispatch.context import RuntimeContext
-from kairospy.application.runtime.orchestration.state import RuntimeFrame, RuntimeRunResult, Callback
-from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.application.runtime.orchestration.state import RuntimeFrame, RuntimeLaunchResult, Callback
+from kairospy.application.protocol import RuntimeEnvelope
 from kairospy.application.strategy import Strategy
 from kairospy.core.intent import Intent, IntentJournal
 
@@ -38,11 +38,11 @@ class RuntimeDispatcher:
             return
         self._call(frame, hook, context, event, event=event)
 
-    def finish(self, frame: RuntimeFrame) -> RuntimeRunResult:
+    def finish(self, frame: RuntimeFrame) -> RuntimeLaunchResult:
         self._ensure_active(frame)
         self._call(frame, "on_end", self.context.bind(frame.last_event))
         frame.finished = True
-        return RuntimeRunResult(
+        return RuntimeLaunchResult(
             strategy_id=self.strategy.strategy_id,
             event_count=frame.event_count,
             callbacks=tuple(frame.callbacks),

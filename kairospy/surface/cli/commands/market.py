@@ -444,7 +444,7 @@ def _render_check(result: object) -> str:
 def _render_prefetch(result: object) -> str:
     if not isinstance(result, Mapping):
         raise TypeError("market renderer expected mapping payload")
-    lines = [f"Market prefetch {'plan' if result.get('dry_run') else 'result'}: {result['run_id']}"]
+    lines = [f"Market prefetch {'plan' if result.get('dry_run') else 'result'}: {result['launch_id']}"]
     for item in result.get("plan", ()):
         if not isinstance(item, Mapping):
             continue

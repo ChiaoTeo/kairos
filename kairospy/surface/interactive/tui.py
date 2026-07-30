@@ -113,7 +113,7 @@ def _header(snapshot: SurfaceSnapshot):
     text.append("Kairos", style="bold cyan")
     text.append(f"  {snapshot.project_name}")
     text.append(f"\nview {snapshot.current_product}", style="white")
-    text.append(f" | runs {len(snapshot.active_runs)} active / {len(snapshot.runs)} total")
+    text.append(f" | launches {len(snapshot.active_launches)} active / {len(snapshot.launches)} total")
     text.append(f" | refresh {snapshot.refresh_interval_seconds:g}s")
     text.append(f"\n{snapshot.root}", style="dim")
     return Panel(text, border_style="cyan")

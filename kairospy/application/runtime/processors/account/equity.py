@@ -3,45 +3,26 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.service.runtime import RuntimeAccountService
 from kairospy.application.service.domain.execution import SimulatedEquityPoint
-from kairospy.core.account import AccountContext
-from kairospy.core.execution import ExecutionCoordinator
+from kairospy.application.views import ACCOUNT_EQUITY_CURVE_SCHEMA, AccountRuntimeViewKeys, EquityCurveView
 from kairospy.core.market import Bar, MarketEvent, Quote, RateObservation, TradePrint
-from kairospy.core.views import ViewFieldSchema, ViewSchema, ViewStore
-
-
-class EquityCurveView:
-    __slots__ = ("account", "points")
-
-    def __init__(self, account: AccountContext, points: tuple[SimulatedEquityPoint, ...]) -> None:
-        self.account = account
-        self.points = points
+from kairospy.core.views import ViewStore
 
 
 class EquityCurveProcessor:
-    key = "account.equity_curve"
+    key = AccountRuntimeViewKeys.equity_curve
 
     def __init__(
         self,
         *,
-        account: AccountContext,
-        coordinator: ExecutionCoordinator,
-        cash_currency: str,
+        service: RuntimeAccountService,
     ) -> None:
-        self.account = account
-        self.coordinator = coordinator
-        self.cash_currency = cash_currency
-        self.schema = ViewSchema(
-            self.key,
-            "system",
-            fields=(
-                ViewFieldSchema("account", "account identity", "runtime state", "account ledger"),
-                ViewFieldSchema("points", "marked equity curve points", "event time", "market and account state"),
-            ),
-            mutability="runtime_writable",
-            evidence="marked simulated account equity curve",
-        )
+        self.service = service
+        self.account = service.account
+        self.cash_currency = service.cash_currency
+        self.schema = ACCOUNT_EQUITY_CURVE_SCHEMA
         self._marks: dict[str, Decimal] = {}
         self._points: list[SimulatedEquityPoint] = []
         self._last_marker: object | None = None
@@ -66,8 +47,8 @@ class EquityCurveProcessor:
         return EquityCurveView(self.account, tuple(self._points))
 
     def record(self, at: datetime) -> None:
-        cash = self.coordinator.ledger.cash(self.account.account).get(self.cash_currency, Decimal("0"))
-        raw_positions = self.coordinator.ledger.positions(self.account.account)
+        cash = self.service.cash(self.cash_currency)
+        raw_positions = self.service.positions()
         positions = tuple(sorted((instrument, quantity) for instrument, quantity in raw_positions.items()))
         equity = cash + sum(quantity * self._marks[instrument] for instrument, quantity in positions if instrument in self._marks)
         marker = (at, equity, cash, positions)
@@ -99,4 +80,4 @@ def _mark_price(value: object) -> Decimal | None:
     return None
 
 
-__all__ = ["EquityCurveProcessor", "EquityCurveView"]
+__all__ = ["EquityCurveProcessor"]

@@ -16,6 +16,20 @@ AccountResolver = Callable[[str], "ConfiguredAccount"]
 
 
 @dataclass(frozen=True, slots=True)
+class ConfiguredCredential:
+    name: str
+    ref: str | None = None
+    kind: str | None = None
+    role: str = "readonly"
+
+    def can_read(self) -> bool:
+        return self.role in {"readonly", "trade"}
+
+    def can_trade(self) -> bool:
+        return self.role == "trade"
+
+
+@dataclass(frozen=True, slots=True)
 class ConfiguredAccount:
     account_id: str
     index: int
@@ -24,7 +38,33 @@ class ConfiguredAccount:
     currency: str
     fee_rate: Decimal = Decimal("0")
     credential: str | None = None
+    credential_role: str = "trade"
     environment: str = ""
+    credentials: tuple[ConfiguredCredential, ...] = ()
+
+    def read_credential_ref(self) -> str | None:
+        for credential in self.credentials:
+            if credential.role == "readonly" and credential.ref:
+                return credential.ref
+        for credential in self.credentials:
+            if credential.can_read() and credential.ref:
+                return credential.ref
+        if self.credential:
+            return self.credential
+        return None
+
+    def trade_credential_ref(self) -> str | None:
+        for credential in self.credentials:
+            if credential.can_trade() and credential.ref:
+                return credential.ref
+        if self.credential and self.credential_role == "trade":
+            return self.credential
+        return None
+
+    def has_trade_credential(self) -> bool:
+        if self.credentials:
+            return any(credential.can_trade() for credential in self.credentials)
+        return self.credential is None or self.credential_role == "trade"
 
 
 class AccountConfigRegistry:
@@ -115,7 +155,7 @@ def configured_account(
 ) -> ConfiguredAccount:
     registry = AccountConfigRegistry.from_config(accounts)  # type: ignore[arg-type]
     if require_accounts_table and not registry.accounts:
-        raise error_type(f"[accounts] table is required for {mode_label} runs")
+        raise error_type(f"[accounts] table is required for {mode_label} launches")
     try:
         return registry.resolve(
             venue=venue,
@@ -136,9 +176,9 @@ def configured_account_ref(
     error_type: type[ConfigErrorT],
 ) -> ConfiguredAccount:
     if account_ref is None:
-        raise error_type(f"account.ref is required for {mode_label} runs")
+        raise error_type(f"account.ref is required for {mode_label} launches")
     if account_resolver is None:
-        raise error_type(f"account resolver is required for {mode_label} runs")
+        raise error_type(f"account resolver is required for {mode_label} launches")
     try:
         account = account_resolver(account_ref)
     except Exception as error:
@@ -148,4 +188,4 @@ def configured_account_ref(
     return account
 
 
-__all__ = ["AccountConfigRegistry", "AccountResolver", "ConfiguredAccount", "configured_account", "configured_account_ref"]
+__all__ = ["AccountConfigRegistry", "AccountResolver", "ConfiguredAccount", "ConfiguredCredential", "configured_account", "configured_account_ref"]

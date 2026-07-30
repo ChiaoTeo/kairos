@@ -7,12 +7,14 @@ from typing import Any, Mapping
 from kairospy.config import DEFAULT_DATA_ROOT, DEFAULT_REFERENCE_ROOT, KairosConfig, find_manifest_path, load_config
 
 from .accounts import AccountStore
+from .account_locks import AccountLeaseManager
+from .credentials import CredentialStore
 from .operations import OperationJournal
-from .run_index import RunIndex
+from .launch_index import LaunchIndex
 
 
 DEFAULT_WORKSPACE_ROOT = ".kairos"
-DEFAULT_RUN_ROOT = ".kairos/runs"
+DEFAULT_RUN_ROOT = ".kairos/launches"
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,14 +24,18 @@ class KairosWorkspace:
     manifest: KairosConfig
     workspace_root: Path
     state_root: Path
-    run_root: Path
+    launch_root: Path
     data_root: Path
     reference_root: Path
     accounts_root: Path
-    run_index_path: Path
+    credentials_root: Path
+    account_locks_root: Path
+    launch_index_path: Path
     operations_path: Path
     accounts: AccountStore
-    run_index: RunIndex
+    credentials: CredentialStore
+    account_locks: AccountLeaseManager
+    launch_index: LaunchIndex
     operations: OperationJournal
 
     @classmethod
@@ -39,14 +45,18 @@ class KairosWorkspace:
         root = config.root.resolve()
         workspace_root = _path(config, "paths", "workspace_root", DEFAULT_WORKSPACE_ROOT)
         state_root = workspace_root / "state"
-        run_root = _path(config, "paths", "run_root", DEFAULT_RUN_ROOT)
+        launch_root = _path(config, "paths", "launch_root", DEFAULT_RUN_ROOT)
         data_root = _path(config, "paths", "lake_root", DEFAULT_DATA_ROOT)
         reference_root = _path(config, "paths", "reference_root", DEFAULT_REFERENCE_ROOT)
         accounts_root = _path(config, "paths", "accounts_root", str(workspace_root / "accounts"))
-        run_index_path = _path(config, "paths", "run_index", str(state_root / "run-index.json"))
+        credentials_root = _path(config, "paths", "credentials_root", str(workspace_root / "credentials"))
+        account_locks_root = _path(config, "paths", "account_locks_root", str(state_root / "account-locks"))
+        launch_index_path = _path(config, "paths", "launch_index", str(state_root / "launch-index.json"))
         operations_path = _path(config, "paths", "operations", str(state_root / "operations.jsonl"))
         account_store = AccountStore.load(accounts_root)
-        run_index = RunIndex(run_index_path, root=root)
+        credential_store = CredentialStore.load(credentials_root)
+        account_locks = AccountLeaseManager(account_locks_root)
+        launch_index = LaunchIndex(launch_index_path, root=root)
         operations = OperationJournal(operations_path)
         return cls(
             root=root,
@@ -54,14 +64,18 @@ class KairosWorkspace:
             manifest=config,
             workspace_root=workspace_root,
             state_root=state_root,
-            run_root=run_root,
+            launch_root=launch_root,
             data_root=data_root,
             reference_root=reference_root,
             accounts_root=accounts_root,
-            run_index_path=run_index_path,
+            credentials_root=credentials_root,
+            account_locks_root=account_locks_root,
+            launch_index_path=launch_index_path,
             operations_path=operations_path,
             accounts=account_store,
-            run_index=run_index,
+            credentials=credential_store,
+            account_locks=account_locks,
+            launch_index=launch_index,
             operations=operations,
         )
 
@@ -73,11 +87,13 @@ class KairosWorkspace:
             "language": self.manifest.language,
             "workspace_root": str(self.workspace_root),
             "state_root": str(self.state_root),
-            "run_root": str(self.run_root),
+            "launch_root": str(self.launch_root),
             "data_root": str(self.data_root),
             "reference_root": str(self.reference_root),
             "accounts_root": str(self.accounts_root),
-            "run_index_path": str(self.run_index_path),
+            "credentials_root": str(self.credentials_root),
+            "account_locks_root": str(self.account_locks_root),
+            "launch_index_path": str(self.launch_index_path),
             "operations_path": str(self.operations_path),
         }
 

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from io import StringIO
+
 from kairospy.surface.cli import app
+from typer.testing import CliRunner
 from kairospy.surface.interactive.navigation import match_group_context, resolve_token, root_command
 from kairospy.surface.interactive.shell import AppSession
 
@@ -10,8 +13,9 @@ def test_interactive_product_order_is_stable() -> None:
 
     assert [view.name for view in session._root_views()] == [
         "project",
-        "run",
+        "launch",
         "account",
+        "credential",
         "order",
         "market",
         "reference",
@@ -64,28 +68,39 @@ def test_navigation_context_unknown_numeric_does_not_fall_back_to_root_product()
 def test_navigation_resolves_root_numeric_tokens_from_filtered_products() -> None:
     session = AppSession()
 
-    assert resolve_token("6", names=session._root_names()) == "reference"
+    assert resolve_token("7", names=session._root_names()) == "reference"
     assert resolve_token("1", names=session._root_names()) == "project"
 
 
 def test_context_numeric_leaf_command_executes_resolved_command() -> None:
     calls: list[list[str]] = []
     session = AppSession(command_executor=lambda argv: calls.append(argv) or (0, ""))
-    session.handle("run")
+    session.handle("launch targets")
 
-    assert session.handle("13") is False
+    assert session.handle("4") is False
 
-    assert calls == [["run", "list"]]
+    assert calls == [["launch", "targets", "list"]]
+
+
+def test_launch_context_exposes_product_domains_not_internal_cli() -> None:
+    session = AppSession()
+    session.handle("launch")
+
+    names = [view.name for view in session._child_views(("launch",))]
+
+    assert names == ["system", "daemon", "targets", "run", "observe", "diagnose", "replay"]
+    assert "system" in names
+    assert "cli" not in names
 
 
 def test_context_numeric_leaf_command_preserves_arguments() -> None:
     calls: list[list[str]] = []
     session = AppSession(command_executor=lambda argv: calls.append(argv) or (0, ""))
-    session.handle("run")
+    session.handle("launch targets")
 
-    assert session.handle("13 --format json") is False
+    assert session.handle("4 --format json") is False
 
-    assert calls == [["run", "list", "--format", "json"]]
+    assert calls == [["launch", "targets", "list", "--format", "json"]]
 
 
 def test_config_context_numeric_leaf_command_executes_config_show() -> None:
@@ -97,3 +112,37 @@ def test_config_context_numeric_leaf_command_executes_config_show() -> None:
 
     assert session.context_path == ("config",)
     assert calls == [["config", "show"]]
+
+
+def test_shell_account_create_enters_interactive_wizard(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "demo"
+    CliRunner().invoke(app, ["project", "init", str(project)], catch_exceptions=False)
+    monkeypatch.chdir(project)
+    stdout = StringIO()
+    calls: list[list[str]] = []
+    session = AppSession(stdout=stdout, command_executor=lambda argv: calls.append(argv) or (0, ""))
+
+    assert session.handle("account create") is False
+    assert session.prompt() == "kairos/app/account/create> "
+    for line in ["okx_testnet", "okx", "testnet", "", "", "", "", "skip", "y"]:
+        assert session.handle(line) is False
+
+    path = project / ".kairos" / "accounts" / "okx_testnet.toml"
+    text = path.read_text(encoding="utf-8")
+    assert calls == []
+    assert session.account_create_wizard is None
+    assert 'provider = "okx"' in text
+    assert 'environment = "testnet"' in text
+    assert 'market = "spot"' in text
+    assert "created account:" in stdout.getvalue()
+
+
+def test_shell_account_create_direct_uses_command_executor() -> None:
+    calls: list[list[str]] = []
+    session = AppSession(command_executor=lambda argv: calls.append(argv) or (0, "created"))
+    session.handle("account")
+
+    assert session.handle("create --direct binance_paper --provider binance --environment paper") is False
+
+    assert session.account_create_wizard is None
+    assert calls == [["account", "create", "binance_paper", "--provider", "binance", "--environment", "paper"]]

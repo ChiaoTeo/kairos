@@ -4,20 +4,18 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Mapping
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.core.account import AccountBalance, AccountContext, AccountSnapshot, AccountSource
 
 
-def account_baseline_event(
+def account_baseline_snapshot(
     context: AccountContext,
     *,
-    sequence: int,
     at: datetime,
     currency: str,
     equity: Decimal | str | int | float,
     source: AccountSource = AccountSource.SIMULATED,
     metadata: Mapping[str, object] | None = None,
-) -> RuntimeEnvelope:
+) -> AccountSnapshot:
     value = Decimal(str(equity))
     snapshot = AccountSnapshot(
         context,
@@ -26,7 +24,7 @@ def account_baseline_event(
         source=source,
         raw=dict(metadata or {}),
     )
-    return RuntimeEnvelope("account", "baseline", at, sequence, snapshot)
+    return snapshot
 
 
-__all__ = ["account_baseline_event"]
+__all__ = ["account_baseline_snapshot"]

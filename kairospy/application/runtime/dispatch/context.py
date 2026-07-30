@@ -6,13 +6,14 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Mapping, Sequence, overload
 
-from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.application.runtime.ports import DataSubscription, MarketDataPort, MarketDataSubscriptionSpec
+from kairospy.application.protocol import RuntimeEnvelope
+from kairospy.application.ports import DataSubscription, MarketDataPort, MarketDataSubscriptionSpec
 from kairospy.application.service.domain.market import parse_market_dataset_id
-from kairospy.application.strategy import Context, ControlFactory, ControlJournal, StrategyMarketViews
+from kairospy.application.service.runtime import AccountQueryService
+from kairospy.application.strategy import Context, ControlFactory, ControlJournal
 from kairospy.core.intent import Intent, IntentJournal, TradeIntent, target_position_intent
-from kairospy.core.market import MarketSelector
-from kairospy.core.reference import ExchangeId, MarketRef, MarketResolver, MarketTypeId
+from kairospy.core.market import MarketSelector, MarketViewReader
+from kairospy.core.reference import ExchangeId, MarketRef, MarketResolver, MarketTypeId, ReferenceViewReader
 from kairospy.core.views import ViewStore
 
 
@@ -134,8 +135,16 @@ class RuntimeContext(Context):
         return self.views.require(key)
 
     @property
-    def market(self) -> StrategyMarketViews:
-        return StrategyMarketViews(self.views)
+    def market(self) -> MarketViewReader:
+        return MarketViewReader(self.views)
+
+    @property
+    def accounts(self) -> AccountQueryService:
+        return AccountQueryService(self.views)
+
+    @property
+    def reference(self) -> ReferenceViewReader:
+        return ReferenceViewReader(self.views)
 
     def target_position(
         self,
@@ -143,6 +152,7 @@ class RuntimeContext(Context):
         quantity: Decimal | str | int | float,
         *,
         account: int | str | None = None,
+        book: object | None = None,
         limit_price: Decimal | str | int | float | None = None,
         reason: str = "",
         intent_id: str | None = None,
@@ -151,13 +161,14 @@ class RuntimeContext(Context):
             raise ValueError("account must be an integer index or account id")
         account_index = account if isinstance(account, int) else None
         account_id = str(account) if account is not None and account_index is None else None
-        resolved = MarketResolver().resolve(instrument)
+        resolved = self._resolve_intent_market(instrument)
         intent = target_position_intent(
             strategy_id=self.strategy_id,
             instrument_id=resolved.instrument_id,
             market_id=resolved.market_id,
             account_id=account_id,
             account_index=account_index,
+            account_book=book,
             target_quantity=Decimal(str(quantity)),
             at=self.now,
             limit_price=None if limit_price is None else Decimal(str(limit_price)),
@@ -167,15 +178,18 @@ class RuntimeContext(Context):
         self.intent(intent)
         return intent
 
-    def account(self, key: str | None = None) -> object:
-        if key is not None:
-            return self.views.require(key)
-        account_keys = tuple(view_key for view_key in self.views.envelopes() if view_key.startswith("account.current."))
-        if not account_keys:
-            raise KeyError("no account view is available")
-        if len(account_keys) > 1:
-            raise ValueError("multiple account views are available; pass an account view key")
-        return self.views.require(account_keys[0])
+    def account(self, key: str | int | None = None) -> object:
+        if key is not None and self.accounts.has_account(key):
+            return self.accounts.account(key)
+        if isinstance(key, int):
+            raise KeyError(f"unknown account: {key}")
+        return self.accounts.current(key)
+
+    def _resolve_intent_market(self, instrument: object) -> MarketRef:
+        try:
+            return self.reference.resolve(instrument)
+        except (KeyError, ValueError):
+            return MarketResolver().resolve(instrument)
 
 
 __all__ = ["RuntimeContext"]

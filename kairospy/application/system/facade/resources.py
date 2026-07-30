@@ -71,7 +71,7 @@ def broker(exchange_name: ExchangeName, driver_name: DriverName, *, credential: 
     if driver_name is not DriverName.ccxt:
         raise ValueError("only ccxt driver is supported")
     if exchange_name is ExchangeName.binance:
-        return BinanceBroker(CcxtDriver())
+        return BinanceBroker.from_credential(credential)
     if exchange_name in (ExchangeName.okx, ExchangeName.okex):
         return OkxBroker.from_credential(credential)
     raise ValueError(f"unsupported broker exchange: {exchange_name.value}")

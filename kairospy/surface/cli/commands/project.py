@@ -55,7 +55,7 @@ def _render_status(result: object) -> str:
             f"  language         {payload['language']}",
             f"  workspace        {payload['workspace_root']}",
             f"  accounts         {payload['accounts']}",
-            f"  runs             {payload['runs']}",
+            f"  launches             {payload['launches']}",
             f"  market_datasets  {payload['market_datasets']}",
             f"  reference        {payload['reference_root']}",
     ])

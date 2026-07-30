@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+import kairospy.application.launch as launch
+import kairospy.application.runtime as runtime
 import kairospy.application.system as system
 
 
@@ -9,11 +12,66 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_system_facade_exports_launcher_without_trading_internals() -> None:
-    assert system.__all__ == ["RunAlreadyActiveError", "RunControl", "TradingConfigurationError", "TradingSystemLauncher"]
+    assert system.__all__ == []
     assert "TradingSystem" not in system.__all__
     assert "TradingRuntimeResources" not in system.__all__
-    assert "TradingRunSpec" not in system.__all__
+    assert "TradingLaunchSpec" not in system.__all__
     assert all(not name.startswith("run_") for name in system.__all__)
+
+
+def test_launch_package_exports_launch_lifecycle_api() -> None:
+    assert launch.__all__ == [
+        "LaunchAccountBinding",
+        "LaunchAccountDirectory",
+        "LaunchAlreadyActiveError",
+        "LaunchBuilder",
+        "LaunchControl",
+        "LaunchEnvironment",
+        "LaunchFacade",
+        "TradingConfigurationError",
+        "TradingSystemLauncher",
+    ]
+    assert "TradingSystem" not in launch.__all__
+    assert all(not name.startswith("run_") for name in launch.__all__)
+
+
+def test_runtime_package_does_not_export_service_container() -> None:
+    assert "RuntimeApplicationServices" not in runtime.__all__
+    assert not hasattr(runtime, "RuntimeApplicationServices")
+
+
+def test_launch_language_does_not_reintroduce_run_control_names() -> None:
+    roots = (
+        ROOT / "kairospy",
+        ROOT / "tests",
+        ROOT / "examples",
+        ROOT / "docs",
+        ROOT / "README.md",
+    )
+    forbidden = (
+        "run_control",
+        "--run-id",
+        "run_id",
+        "RuntimePortPipeline",
+        "launch cli",
+        "launch_cli_commands",
+        "open_cli_session",
+        'command("cli")',
+        "kairos-cli-launch",
+    )
+    offenders = []
+    for root in roots:
+        paths = (root,) if root.is_file() else root.rglob("*")
+        for path in paths:
+            if path.is_dir() or path.suffix not in {".py", ".md", ".toml", ".jsonl"}:
+                continue
+            if path == Path(__file__):
+                continue
+            text = path.read_text(encoding="utf-8")
+            for marker in forbidden:
+                if marker in text:
+                    offenders.append(f"{path.relative_to(ROOT)}:{marker}")
+    assert offenders == []
 
 
 def test_service_modes_do_not_import_system_trading_startup() -> None:
@@ -22,7 +80,7 @@ def test_service_modes_do_not_import_system_trading_startup() -> None:
         "application.system.trading",
         "TradingSystem",
         "TradingRuntimeResources",
-        "TradingRunSpec",
+        "TradingLaunchSpec",
     )
     offenders = []
     for path in service_modes.rglob("*.py"):
@@ -39,37 +97,66 @@ def test_system_implementation_uses_orthogonal_packages() -> None:
         ROOT / "kairospy" / "application" / "system" / "trading" / "system.py",
         ROOT / "kairospy" / "application" / "system" / "trading" / "spec.py",
         ROOT / "kairospy" / "application" / "system" / "trading" / "lifecycle.py",
-        ROOT / "kairospy" / "application" / "system" / "run" / "artifacts.py",
-        ROOT / "kairospy" / "application" / "system" / "run" / "logging.py",
-        ROOT / "kairospy" / "application" / "system" / "run" / "daemon.py",
-        ROOT / "kairospy" / "application" / "system" / "run" / "registry.py",
-        ROOT / "kairospy" / "application" / "system" / "run" / "state.py",
-        ROOT / "kairospy" / "application" / "system" / "run" / "__init__.py",
-        ROOT / "kairospy" / "application" / "system" / "run" / "journals" / "account.py",
-        ROOT / "kairospy" / "application" / "system" / "run" / "journals" / "__init__.py",
+        ROOT / "kairospy" / "application" / "system" / "launch" / "artifacts.py",
+        ROOT / "kairospy" / "application" / "system" / "launch" / "logging.py",
+        ROOT / "kairospy" / "application" / "system" / "launch" / "daemon.py",
+        ROOT / "kairospy" / "application" / "system" / "launch" / "registry.py",
+        ROOT / "kairospy" / "application" / "system" / "launch" / "state.py",
+        ROOT / "kairospy" / "application" / "system" / "launch" / "__init__.py",
+        ROOT / "kairospy" / "application" / "system" / "launch" / "journals" / "account.py",
+        ROOT / "kairospy" / "application" / "system" / "launch" / "journals" / "__init__.py",
         ROOT / "kairospy" / "application" / "system" / "trading" / "__init__.py",
         ROOT / "kairospy" / "application" / "system" / "accounts" / "__init__.py",
         ROOT / "kairospy" / "application" / "system" / "accounts" / "registry.py",
         ROOT / "kairospy" / "application" / "system" / "connections" / "__init__.py",
         ROOT / "kairospy" / "application" / "system" / "connections" / "manager.py",
         ROOT / "kairospy" / "application" / "system" / "host" / "live_state.py",
+        ROOT / "kairospy" / "application" / "system" / "builder.py",
+        ROOT / "kairospy" / "application" / "system" / "launch_environment.py",
+        ROOT / "kairospy" / "application" / "system" / "facade" / "launch.py",
+        ROOT / "kairospy" / "application" / "system" / "facade" / "trading.py",
+        ROOT / "kairospy" / "application" / "system" / "facade" / "launch_control.py",
+        ROOT / "kairospy" / "application" / "system" / "control" / "daemon.py",
+        ROOT / "kairospy" / "application" / "system" / "control" / "registry.py",
+        ROOT / "kairospy" / "application" / "system" / "host" / "runtime_host.py",
+        ROOT / "kairospy" / "application" / "system" / "host" / "resources.py",
+        ROOT / "kairospy" / "application" / "system" / "host" / "lifecycle.py",
+        ROOT / "kairospy" / "application" / "launch" / "artifacts" / "logging.py",
+        ROOT / "kairospy" / "application" / "launch" / "artifacts" / "output.py",
+        ROOT / "kairospy" / "application" / "launch" / "projectors" / "__init__.py",
+        ROOT / "kairospy" / "application" / "launch" / "projectors" / "account.py",
+        ROOT / "kairospy" / "application" / "launch" / "projectors" / "catalog.py",
+        ROOT / "kairospy" / "application" / "launch" / "projectors" / "launch.py",
+        ROOT / "kairospy" / "application" / "launch" / "projectors" / "service.py",
+        ROOT / "kairospy" / "application" / "launch" / "projectors" / "timeline.py",
+        ROOT / "kairospy" / "application" / "launch" / "session" / "__init__.py",
+        ROOT / "kairospy" / "application" / "launch" / "session" / "commands.py",
+        ROOT / "kairospy" / "application" / "launch" / "session" / "dispatcher.py",
     )
     assert [str(path.relative_to(ROOT)) for path in legacy_implementation_files if path.exists()] == []
 
     expected_packages = (
-        ROOT / "kairospy" / "application" / "system" / "facade" / "trading.py",
-        ROOT / "kairospy" / "application" / "system" / "host" / "runtime_host.py",
-        ROOT / "kairospy" / "application" / "system" / "host" / "resources.py",
-        ROOT / "kairospy" / "application" / "system" / "control" / "daemon.py",
-        ROOT / "kairospy" / "application" / "system" / "control" / "registry.py",
+        ROOT / "kairospy" / "application" / "launch" / "facade.py",
+        ROOT / "kairospy" / "application" / "launch" / "launcher.py",
+        ROOT / "kairospy" / "application" / "launch" / "builder.py",
+        ROOT / "kairospy" / "application" / "launch" / "environment.py",
+        ROOT / "kairospy" / "application" / "launch" / "control.py",
+        ROOT / "kairospy" / "application" / "launch" / "daemon.py",
+        ROOT / "kairospy" / "application" / "launch" / "registry.py",
+        ROOT / "kairospy" / "application" / "launch" / "host" / "runtime_host.py",
+        ROOT / "kairospy" / "application" / "launch" / "host" / "resources.py",
+        ROOT / "kairospy" / "application" / "launch" / "host" / "lifecycle.py",
         ROOT / "kairospy" / "application" / "system" / "artifacts" / "logging.py",
         ROOT / "kairospy" / "application" / "system" / "artifacts" / "output.py",
         ROOT / "kairospy" / "application" / "system" / "projectors" / "__init__.py",
         ROOT / "kairospy" / "application" / "system" / "projectors" / "account.py",
         ROOT / "kairospy" / "application" / "system" / "projectors" / "catalog.py",
-        ROOT / "kairospy" / "application" / "system" / "projectors" / "run.py",
+        ROOT / "kairospy" / "application" / "system" / "projectors" / "launch.py",
         ROOT / "kairospy" / "application" / "system" / "projectors" / "service.py",
         ROOT / "kairospy" / "application" / "system" / "projectors" / "timeline.py",
+        ROOT / "kairospy" / "application" / "system" / "session" / "__init__.py",
+        ROOT / "kairospy" / "application" / "system" / "session" / "commands.py",
+        ROOT / "kairospy" / "application" / "system" / "session" / "dispatcher.py",
         ROOT / "kairospy" / "application" / "system" / "resources" / "accounts.py",
         ROOT / "kairospy" / "application" / "system" / "resources" / "connections.py",
         ROOT / "kairospy" / "application" / "system" / "resources" / "live_state.py",
@@ -90,6 +177,92 @@ def test_runtime_does_not_import_system_layer() -> None:
         if "application.system" in text:
             offenders.append(str(path.relative_to(ROOT)))
     assert offenders == []
+
+
+def test_runtime_does_not_depend_on_execution_coordinator() -> None:
+    runtime_root = ROOT / "kairospy" / "application" / "runtime"
+    offenders = []
+    for path in runtime_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        if "ExecutionCoordinator" in text:
+            offenders.append(str(path.relative_to(ROOT)))
+    assert offenders == []
+
+
+def test_runtime_processors_do_not_depend_on_ports() -> None:
+    processors_root = ROOT / "kairospy" / "application" / "runtime" / "processors"
+    forbidden = (
+        "application.ports",
+        "AccountPort",
+        "MarketDataPort",
+        "ReferencePort",
+        "TradingExecutionPort",
+    )
+    offenders = []
+    for path in processors_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for marker in forbidden:
+            if re.search(rf"\b{re.escape(marker)}\b", text):
+                offenders.append(f"{path.relative_to(ROOT)}:{marker}")
+    assert offenders == []
+
+
+def test_shared_read_paths_do_not_import_runtime_processors() -> None:
+    checked_roots = (
+        ROOT / "kairospy" / "application" / "service",
+        ROOT / "kairospy" / "application" / "strategy",
+        ROOT / "kairospy" / "application" / "system" / "resources",
+        ROOT / "kairospy" / "surface" / "cli",
+    )
+    offenders = []
+    for root in checked_roots:
+        for path in root.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            if "application.runtime.processors" in text:
+                offenders.append(str(path.relative_to(ROOT)))
+    assert offenders == []
+
+
+def test_runtime_processors_do_not_define_shared_view_contracts() -> None:
+    processors_root = ROOT / "kairospy" / "application" / "runtime" / "processors"
+    forbidden_classes = (
+        "StrategyLaunchView",
+        "SystemEventView",
+        "RiskEventView",
+        "EquityCurveView",
+        "OrderCurrentView",
+        "IntentJournalView",
+        "DecisionTraceView",
+        "RiskSnapshotsView",
+        "ExecutionCurrentView",
+        "ExecutionFillsView",
+    )
+    offenders = []
+    for path in processors_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for name in forbidden_classes:
+            if re.search(rf"^class\s+{name}\b", text, flags=re.MULTILINE):
+                offenders.append(f"{path.relative_to(ROOT)}:{name}")
+    assert offenders == []
+
+
+def test_runtime_services_do_not_export_legacy_execution_projection_aliases() -> None:
+    services_root = ROOT / "kairospy" / "application" / "service" / "runtime"
+    forbidden = ("ExecutionCurrentProjection", "ExecutionFillsProjection")
+    offenders = []
+    for path in services_root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for marker in forbidden:
+            if marker in text:
+                offenders.append(f"{path.relative_to(ROOT)}:{marker}")
+    assert offenders == []
+
+
+def test_runtime_service_public_api_does_not_reexport_execution_view_contracts() -> None:
+    import kairospy.application.service.runtime as runtime_service
+
+    forbidden = {"ExecutionCurrentView", "ExecutionFillSummary", "ExecutionFillsView", "ExecutionOrderSummary"}
+    assert forbidden.isdisjoint(set(runtime_service.__all__))
 
 
 def test_system_artifacts_do_not_import_mode_recipes() -> None:
@@ -149,16 +322,16 @@ def test_mode_config_recipes_do_not_construct_runtime_account_resources() -> Non
     assert offenders == []
 
 
-def test_surface_uses_system_facade_for_run_startup() -> None:
+def test_surface_uses_system_facade_for_launch_startup() -> None:
     surface_files = (
-        ROOT / "kairospy" / "surface" / "cli" / "commands" / "run.py",
+        ROOT / "kairospy" / "surface" / "cli" / "commands" / "launch.py",
     )
     forbidden = (
         "RuntimeKernel",
-        "RuntimeRunSpec",
+        "RuntimeLaunchSpec",
         "TradingSystem(",
         "TradingRuntimeResources",
-        "TradingRunSpec",
+        "TradingLaunchSpec",
         "application.system.trading",
     )
     offenders = []
@@ -170,9 +343,9 @@ def test_surface_uses_system_facade_for_run_startup() -> None:
     assert offenders == []
 
 
-def test_surface_run_startup_does_not_import_mode_recipes() -> None:
+def test_surface_launch_startup_does_not_import_mode_recipes() -> None:
     surface_files = (
-        ROOT / "kairospy" / "surface" / "cli" / "commands" / "run.py",
+        ROOT / "kairospy" / "surface" / "cli" / "commands" / "launch.py",
     )
     offenders = []
     for path in surface_files:
@@ -287,13 +460,13 @@ def test_surface_does_not_use_workspace_internals_directly() -> None:
     assert offenders == []
 
 
-def test_run_control_uses_instances_directory_for_run_instances() -> None:
+def test_launch_control_uses_instances_directory_for_launch_instances() -> None:
     control_files = (
-        ROOT / "kairospy" / "application" / "system" / "control" / "daemon.py",
-        ROOT / "kairospy" / "application" / "system" / "control" / "registry.py",
+        ROOT / "kairospy" / "application" / "launch" / "daemon.py",
+        ROOT / "kairospy" / "application" / "launch" / "registry.py",
     )
     for path in control_files:
         text = path.read_text(encoding="utf-8")
         assert '"instances"' in text
-        assert '/ "runs" / instance_id' not in text
-        assert '/ "runs" / str(identity["process_id"])' not in text
+        assert '/ "launches" / instance_id' not in text
+        assert '/ "launches" / str(identity["process_id"])' not in text

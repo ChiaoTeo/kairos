@@ -169,11 +169,22 @@ def _account_context_from_dict(value: Mapping[str, object]) -> AccountContext:
 
 
 def _account_ref_to_dict(account: AccountRef) -> dict[str, object]:
-    return {"broker": str(account.broker), "account_id": str(account.account_id), "segment": account.segment}
+    return {
+        "broker": str(account.broker),
+        "account_id": str(account.account_id),
+        "book": str(account.book),
+        "qualifier": account.qualifier,
+        "segment": account.segment,
+    }
 
 
 def _account_ref_from_dict(value: Mapping[str, object]) -> AccountRef:
-    return AccountRef(str(value["broker"]), str(value["account_id"]), str(value.get("segment") or ""))
+    return AccountRef(
+        str(value["broker"]),
+        str(value["account_id"]),
+        str(value.get("book") or value.get("segment") or ""),
+        str(value.get("qualifier") or ""),
+    )
 
 
 def _items(value: object) -> tuple[Mapping[str, object], ...]:

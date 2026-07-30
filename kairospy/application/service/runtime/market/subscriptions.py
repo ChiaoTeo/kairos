@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.application.runtime.ports import DataSubscription, MarketDataSubscriptionSpec
+from kairospy.application.ports import DataSubscription, MarketDataSubscriptionSpec
 from kairospy.application.service.domain.market.subscriptions import MarketSubscription
 
 

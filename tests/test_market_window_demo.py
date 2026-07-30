@@ -14,7 +14,7 @@ def _demo_main():
     return module.main
 
 
-def test_market_window_demo_runs_synthetic_realtime_source(capsys) -> None:
+def test_market_window_demo_launches_synthetic_realtime_source(capsys) -> None:
     _demo_main()(["--source", "synthetic", "--ticks", "1", "--interval", "0"])
 
     output = capsys.readouterr().out

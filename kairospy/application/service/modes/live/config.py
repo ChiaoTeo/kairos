@@ -6,8 +6,9 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Mapping
 
-from kairospy.application.runtime import RuntimeMode
-from kairospy.application.runtime.ports import MarketDataSubscriptionSpec
+from kairospy.config import LaunchAccountConfig
+from kairospy.application.modes import RuntimeMode
+from kairospy.application.ports import MarketDataSubscriptionSpec
 from kairospy.application.strategy import Strategy
 from kairospy.core.account import AccountContext
 from kairospy.core.market import Quote
@@ -22,7 +23,7 @@ from ..common import (
     configured_account_ref as common_configured_account_ref,
     default_market_feed as common_default_market_feed,
     int_value as common_int_value,
-    load_required_run_config,
+    load_required_launch_config,
     load_strategy as common_load_strategy,
     params_table as common_params_table,
     required_text as common_required_text,
@@ -42,8 +43,8 @@ MarketFeedFactory = Callable[[str], LiveMarketDataFeed]
 
 
 @dataclass(frozen=True, slots=True)
-class LiveRunResult(AccountPerformanceMixin):
-    run_id: str
+class LiveLaunchResult(AccountPerformanceMixin):
+    launch_id: str
     mode: RuntimeMode
     runtime: object
     views: object
@@ -60,15 +61,17 @@ class LiveRunResult(AccountPerformanceMixin):
 
 @dataclass(frozen=True, slots=True)
 class ConfiguredLive:
-    run_id: str
+    launch_id: str
     strategy: Strategy
     market_data: LiveMarketDataService
     account_config: ConfiguredAccount
+    launch_account_configs: Mapping[str, ConfiguredAccount]
     live_config: Mapping[str, object]
     venue: str
     market: str
     symbol: str
     broker_factory: BrokerFactory | None
+    launch_accounts: Mapping[str, LaunchAccountConfig]
     balance_params: Mapping[str, object]
     order_params: Mapping[str, object]
     safety_policy: LiveTradingSafetyPolicy
@@ -77,7 +80,7 @@ class ConfiguredLive:
     max_order_events: int
     max_trade_events: int
     normalized_config: Mapping[str, object]
-    run_directory: Path
+    launch_directory: Path
     state_path: Path
 
 
@@ -89,31 +92,35 @@ def configured_live(
     account_resolver: AccountResolver | None = None,
     strategy_ref: str | None = None,
 ) -> ConfiguredLive:
-    run_config = load_required_run_config(config_path, mode=RuntimeMode.LIVE, error_type=LiveConfigurationError, strategy_ref=strategy_ref)
-    live = _table(run_config.values.get("live"), "live")
-    timeline_config = _table(run_config.values.get("timeline"), "timeline") if run_config.values.get("timeline") is not None else {}
+    launch_config = load_required_launch_config(config_path, mode=RuntimeMode.LIVE, error_type=LiveConfigurationError, strategy_ref=strategy_ref)
+    live = _table(launch_config.values.get("live"), "live")
+    timeline_config = _table(launch_config.values.get("timeline"), "timeline") if launch_config.values.get("timeline") is not None else {}
     venue = _required_text(live.get("venue"), "live.venue")
     market = str(live.get("market", "spot"))
     symbol = _required_text(live.get("symbol"), "live.symbol")
-    account_config = _configured_account(run_config.account_ref, account_resolver=account_resolver, venue=venue)
+    account_ref = launch_config.account_ref or _primary_launch_account_ref(launch_config.launch_accounts)
+    account_config = _configured_account(account_ref, account_resolver=account_resolver, venue=venue)
+    launch_account_configs = _configured_launch_accounts(launch_config.launch_accounts, account_resolver=account_resolver, venue=None)
     market_resolver = MarketResolver(default_venue=venue, default_market=market)
     market_ref = market_resolver.resolve(symbol)
     feed = (market_feed_factory or _default_market_feed)(venue)
-    state_path = _state_path(live, root=run_config.root, run_id=run_config.run_id)
+    state_path = _state_path(live, root=launch_config.root, launch_id=launch_config.launch_id)
     market_data = LiveMarketDataService(feed=feed, source_name=str(live.get("source_name") or f"{venue}-live"))
     market_data.subscribe(MarketDataSubscriptionSpec(market_ref, (Quote,), params=_params_table(live.get("stream"), default={"type": market})))
     balance_params = _params_table(live.get("balance_params"), default={"type": market})
     order_params = _params_table(live.get("order_params"), default={"type": market})
     return ConfiguredLive(
-        run_id=run_config.run_id,
-        strategy=_load_strategy(run_config.strategy, root=run_config.root, params=_strategy_params(run_config.values)),
+        launch_id=launch_config.launch_id,
+        strategy=_load_strategy(launch_config.strategy, root=launch_config.root, params=_strategy_params(launch_config.values)),
         market_data=market_data,
         account_config=account_config,
+        launch_account_configs=launch_account_configs,
         live_config=live,
         venue=venue,
         market=market,
         symbol=symbol,
         broker_factory=broker_factory,
+        launch_accounts=launch_config.launch_accounts,
         balance_params=balance_params,
         order_params=order_params,
         safety_policy=_safety_policy(live.get("safety")),
@@ -122,13 +129,14 @@ def configured_live(
         max_order_events=_int_value(live.get("max_order_events", 0), "live.max_order_events"),
         max_trade_events=_int_value(live.get("max_trade_events", 0), "live.max_trade_events"),
         normalized_config={
-            "run": {"id": run_config.run_id, "mode": RuntimeMode.LIVE.value, "strategy": run_config.strategy},
-            "strategy": {"params": dict(_strategy_params(run_config.values))},
+            "launch": {"id": launch_config.launch_id, "mode": RuntimeMode.LIVE.value, "strategy": launch_config.strategy},
+            "strategy": {"params": dict(_strategy_params(launch_config.values))},
             "live": dict(live),
-            "account": {"account_id": account_config.account_id, "venue": venue, "currency": account_config.currency},
+            "account": {"ref": account_ref, "account_id": account_config.account_id, "venue": venue, "currency": account_config.currency},
+            "accounts": {key: {"ref": value.ref, "index": value.index, "books": list(value.books), "trade": value.trade} for key, value in launch_config.launch_accounts.items()},
             "timeline": dict(timeline_config),
         },
-        run_directory=state_path.parent,
+        launch_directory=state_path.parent,
         state_path=state_path,
     )
 
@@ -141,7 +149,7 @@ def _strategy_params(values: Mapping[str, object]) -> Mapping[str, object]:
     return common_strategy_params(values, LiveConfigurationError)
 
 
-def _configured_account(account_ref: str | None, *, account_resolver: AccountResolver | None, venue: str) -> ConfiguredAccount:
+def _configured_account(account_ref: str | None, *, account_resolver: AccountResolver | None, venue: str | None) -> ConfiguredAccount:
     account = common_configured_account_ref(
         account_ref,
         account_resolver=account_resolver,
@@ -151,9 +159,25 @@ def _configured_account(account_ref: str | None, *, account_resolver: AccountRes
     )
     if account.environment and account.environment not in {"live", "testnet"}:
         raise LiveConfigurationError(
-            f"account {account.account_id!r} has environment {account.environment!r}; live runs require a live account"
+            f"account {account.account_id!r} has environment {account.environment!r}; live launches require a live account"
         )
     return account
+
+
+def _configured_launch_accounts(
+    accounts: Mapping[str, LaunchAccountConfig],
+    *,
+    account_resolver: AccountResolver | None,
+    venue: str | None,
+) -> Mapping[str, ConfiguredAccount]:
+    return {alias: _configured_account(config.ref, account_resolver=account_resolver, venue=venue) for alias, config in accounts.items()}
+
+
+def _primary_launch_account_ref(accounts: Mapping[str, object]) -> str | None:
+    if not accounts:
+        return None
+    first = next(iter(accounts.values()))
+    return str(getattr(first, "ref", "") or "") or None
 
 
 def _safety_policy(raw: object) -> LiveTradingSafetyPolicy:
@@ -174,10 +198,10 @@ def _params_table(value: object, *, default: Mapping[str, object] | None = None)
     return common_params_table(value, default=default, source="live", error_type=LiveConfigurationError)
 
 
-def _state_path(live: Mapping[str, object], *, root: Path, run_id: str) -> Path:
+def _state_path(live: Mapping[str, object], *, root: Path, launch_id: str) -> Path:
     value = live.get("state_path")
     if value is None:
-        return Path(".kairos/runs").resolve() / RuntimeMode.LIVE.value / run_id / "live_state.json"
+        return Path(".kairos/launches").resolve() / RuntimeMode.LIVE.value / launch_id / "live_state.json"
     path = Path(str(value)).expanduser()
     if not path.is_absolute():
         path = root / path
@@ -200,4 +224,4 @@ def _int_value(value: object, source: str) -> int:
     return common_int_value(value, source, LiveConfigurationError)
 
 
-__all__ = ["ConfiguredLive", "LiveConfigurationError", "LiveRunResult", "configured_live"]
+__all__ = ["ConfiguredLive", "LiveConfigurationError", "LiveLaunchResult", "configured_live"]

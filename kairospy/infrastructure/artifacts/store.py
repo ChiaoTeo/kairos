@@ -12,7 +12,7 @@ from typing import Iterable, Mapping
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
-class RunInstanceStore:
+class LaunchInstanceStore:
     def __init__(self, directory: str | Path) -> None:
         self.directory = Path(directory)
 
@@ -30,7 +30,7 @@ class RunInstanceStore:
         resolved_root = self.directory.resolve()
         resolved_path = path.resolve()
         if resolved_path != resolved_root and resolved_root not in resolved_path.parents:
-            raise ValueError(f"path escapes run instance directory: {relative_path}")
+            raise ValueError(f"path escapes launch instance directory: {relative_path}")
         return path
 
     def _path_for_namespace(self, name: str) -> Path:
@@ -94,15 +94,15 @@ class JsonlResource:
 def _safe_relative_path(value: str | Path) -> Path:
     path = Path(value)
     if path.is_absolute():
-        raise ValueError(f"run instance path must be relative: {value}")
+        raise ValueError(f"launch instance path must be relative: {value}")
     if any(part in {"", ".", ".."} for part in path.parts):
-        raise ValueError(f"invalid run instance path: {value}")
+        raise ValueError(f"invalid launch instance path: {value}")
     return path
 
 
 def _safe_name(value: str) -> str:
     if not _NAME_PATTERN.fullmatch(value):
-        raise ValueError(f"invalid run instance data name: {value!r}")
+        raise ValueError(f"invalid launch instance data name: {value!r}")
     return value
 
 
@@ -127,4 +127,4 @@ def jsonable(value: object) -> object:
     return value
 
 
-__all__ = ["DataNamespace", "JsonResource", "JsonlResource", "RunInstanceStore", "jsonable"]
+__all__ = ["DataNamespace", "JsonResource", "JsonlResource", "LaunchInstanceStore", "jsonable"]

@@ -5,18 +5,18 @@ import json
 from pathlib import Path
 from typing import Mapping
 
-from kairospy.application.system.projectors.catalog import ProjectionSpec, RunProjectionCatalog
+from kairospy.application.system.projectors.catalog import ProjectionSpec, LaunchProjectionCatalog
 
-CATALOG = RunProjectionCatalog()
+CATALOG = LaunchProjectionCatalog()
 HISTORY_PROJECTIONS = CATALOG.history()
 ARTIFACT_FILES = tuple(spec.resource for spec in HISTORY_PROJECTIONS)
 RECORD_KEYS_BY_FILE = {spec.resource: spec.record_key for spec in HISTORY_PROJECTIONS if spec.record_key is not None}
 
 
 @dataclass(frozen=True, slots=True)
-class RunProjectionService:
+class LaunchProjectionService:
     instance_path: Path
-    catalog: RunProjectionCatalog = CATALOG
+    catalog: LaunchProjectionCatalog = CATALOG
 
     def list_datasets(self) -> tuple[ProjectionSpec, ...]:
         return self.catalog.list()
@@ -24,7 +24,7 @@ class RunProjectionService:
     def load_timeline_view(self) -> dict[str, object]:
         root = self.instance_path.expanduser().resolve()
         if not root.exists() or not root.is_dir():
-            raise ValueError(f"run instance directory was not found: {root}")
+            raise ValueError(f"launch instance directory was not found: {root}")
         summary = _read_json(root / "summary.json")
         metrics = _read_json(root / "metrics.json")
         config = _read_json(root / "config.normalized.json")
@@ -39,9 +39,9 @@ class RunProjectionService:
         return {
             "instance": {
                 "path": str(root),
-                "runId": _first_string(state.get("run_id"), summary.get("run_id"), _run_id_from_path(root)),
+                "launchId": _first_string(state.get("launch_id"), summary.get("launch_id"), _launch_id_from_path(root)),
                 "mode": _first_string(state.get("mode"), summary.get("mode"), _mode_from_path(root)),
-                "runInstanceId": _first_string(state.get("run_instance_id"), root.name),
+                "launchInstanceId": _first_string(state.get("launch_instance_id"), root.name),
                 "strategyId": _first_string(summary.get("strategy_id"), _context_value(state, "strategy")),
                 "timeRange": _time_range(timeline),
                 "files": files,
@@ -72,41 +72,41 @@ class RunProjectionService:
         return records[spec.record_key] if isinstance(records, Mapping) else []
 
 
-def find_latest_instance(root: Path, *, mode: str | None = None, run_id: str | None = None) -> Path:
+def find_latest_instance(root: Path, *, mode: str | None = None, launch_id: str | None = None) -> Path:
     base = root.expanduser().resolve()
     candidates: list[Path] = []
-    pattern = "*/*/instances/*" if mode is None and run_id is None else None
+    pattern = "*/*/instances/*" if mode is None and launch_id is None else None
     if pattern is not None:
         candidates = [path for path in base.glob(pattern) if path.is_dir()]
-    elif mode is not None and run_id is not None:
-        candidates = [path for path in (base / mode / run_id / "instances").glob("*") if path.is_dir()]
+    elif mode is not None and launch_id is not None:
+        candidates = [path for path in (base / mode / launch_id / "instances").glob("*") if path.is_dir()]
     elif mode is not None:
         candidates = [path for path in (base / mode).glob("*/instances/*") if path.is_dir()]
     else:
-        candidates = [path for path in base.glob(f"*/{run_id}/instances/*") if path.is_dir()]
+        candidates = [path for path in base.glob(f"*/{launch_id}/instances/*") if path.is_dir()]
     candidates = [path for path in candidates if _has_timeline_file(path)]
     if not candidates:
         hint = f" under {base}"
         if mode is not None:
             hint += f" mode={mode}"
-        if run_id is not None:
-            hint += f" run_id={run_id}"
-        raise ValueError(f"no timeline-capable run instances found{hint}")
+        if launch_id is not None:
+            hint += f" launch_id={launch_id}"
+        raise ValueError(f"no timeline-capable launch instances found{hint}")
     return max(candidates, key=_mtime)
 
 
-def list_instances(root: Path, *, mode: str | None = None, run_id: str | None = None) -> list[dict[str, object]]:
+def list_instances(root: Path, *, mode: str | None = None, launch_id: str | None = None) -> list[dict[str, object]]:
     base = root.expanduser().resolve()
     if not base.exists():
         return []
-    if mode is None and run_id is None:
+    if mode is None and launch_id is None:
         candidates = [path for path in base.glob("*/*/instances/*") if path.is_dir()]
-    elif mode is not None and run_id is not None:
-        candidates = [path for path in (base / mode / run_id / "instances").glob("*") if path.is_dir()]
+    elif mode is not None and launch_id is not None:
+        candidates = [path for path in (base / mode / launch_id / "instances").glob("*") if path.is_dir()]
     elif mode is not None:
         candidates = [path for path in (base / mode).glob("*/instances/*") if path.is_dir()]
     else:
-        candidates = [path for path in base.glob(f"*/{run_id}/instances/*") if path.is_dir()]
+        candidates = [path for path in base.glob(f"*/{launch_id}/instances/*") if path.is_dir()]
     rows = []
     for path in sorted(candidates, key=_mtime, reverse=True):
         summary = _read_json(path / "summary.json")
@@ -115,8 +115,8 @@ def list_instances(root: Path, *, mode: str | None = None, run_id: str | None = 
         rows.append(
             {
                 "mode": _first_string(state.get("mode"), summary.get("mode"), _mode_from_path(path)),
-                "run_id": _first_string(state.get("run_id"), summary.get("run_id"), _run_id_from_path(path)),
-                "run_instance_id": _first_string(state.get("run_instance_id"), path.name),
+                "launch_id": _first_string(state.get("launch_id"), summary.get("launch_id"), _launch_id_from_path(path)),
+                "launch_instance_id": _first_string(state.get("launch_instance_id"), path.name),
                 "strategy_id": _first_string(summary.get("strategy_id"), _context_value(state, "strategy")),
                 "updated_at": _mtime(path),
                 "directory": str(path),
@@ -129,7 +129,7 @@ def list_instances(root: Path, *, mode: str | None = None, run_id: str | None = 
     return rows
 
 
-def _history_records(root: Path, catalog: RunProjectionCatalog) -> dict[str, list[dict[str, object]]]:
+def _history_records(root: Path, catalog: LaunchProjectionCatalog) -> dict[str, list[dict[str, object]]]:
     return {
         spec.record_key: _read_jsonl(root / spec.resource)
         for spec in catalog.history()
@@ -549,17 +549,17 @@ def _mtime(path: Path) -> float:
 
 def _mode_from_path(path: Path) -> str | None:
     parts = path.parts
-    if "runs" in parts:
-        index = parts.index("runs")
+    if "launches" in parts:
+        index = parts.index("launches")
         if len(parts) > index + 1:
             return parts[index + 1]
     return None
 
 
-def _run_id_from_path(path: Path) -> str | None:
+def _launch_id_from_path(path: Path) -> str | None:
     parts = path.parts
-    if "runs" in parts:
-        index = parts.index("runs")
+    if "launches" in parts:
+        index = parts.index("launches")
         if len(parts) > index + 2:
             return parts[index + 2]
     return None
@@ -577,4 +577,4 @@ def _context_value(state: Mapping[str, object], key: str) -> object:
     return context.get(key) if isinstance(context, Mapping) else None
 
 
-__all__ = ["RunProjectionService", "find_latest_instance", "list_instances"]
+__all__ = ["LaunchProjectionService", "find_latest_instance", "list_instances"]

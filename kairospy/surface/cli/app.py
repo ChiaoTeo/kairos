@@ -14,12 +14,14 @@ from kairospy.application.system.facade.context import ProjectNotFound, set_cli_
 from kairospy.surface.cli.commands import (
     account_app,
     config_app,
+    credential_app,
     market_app,
     order_app,
     project_app,
     reference_app,
-    run_app,
+    launch_app,
     strategy_app,
+    system_app,
     timeline_app,
 )
 from kairospy.surface.cli.options import OutputFormat, RootOptions
@@ -27,12 +29,14 @@ from kairospy.surface.cli.options import OutputFormat, RootOptions
 
 app = typer.Typer(no_args_is_help=True, help="KairosPy strategy runtime toolkit")
 app.add_typer(project_app, name="project")
-app.add_typer(run_app, name="run")
+app.add_typer(launch_app, name="launch")
 app.add_typer(account_app, name="account")
+app.add_typer(credential_app, name="credential")
 app.add_typer(order_app, name="order")
 app.add_typer(market_app, name="market")
 app.add_typer(reference_app, name="reference")
 app.add_typer(strategy_app, name="strategy")
+app.add_typer(system_app, name="system")
 app.add_typer(config_app, name="config")
 app.add_typer(timeline_app, name="timeline")
 
@@ -40,7 +44,7 @@ app.add_typer(timeline_app, name="timeline")
 @app.callback()
 def main_options(
     ctx: typer.Context,
-    cwd: Path | None = typer.Option(None, "-C", "--cwd", help="Run as if Kairos was started in this directory."),
+    cwd: Path | None = typer.Option(None, "-C", "--cwd", help="Launch as if Kairos was started in this directory."),
     profile: str | None = typer.Option(None, "--profile"),
     output: OutputFormat | None = typer.Option(None, "--output"),
     verbose: bool = typer.Option(False, "--verbose"),

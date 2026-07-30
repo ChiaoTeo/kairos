@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .events import RiskEventViewState, RiskEventView
+from .events import RiskEventViewState
 from .processor import RiskProcessor
 
-__all__ = ["RiskEventViewState", "RiskEventView", "RiskProcessor"]
+__all__ = ["RiskEventViewState", "RiskProcessor"]
