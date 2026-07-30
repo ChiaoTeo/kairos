@@ -377,7 +377,7 @@ def _write_market_section_paper_project(root: Path) -> Path:
             "class PaperStrategy(StrategyBase):",
             "    strategy_id = 'paper-strategy'",
             "    def on_start(self, context):",
-            "        context.subscribe('BTC/USDT', venue='binance', market='spot', selectors=(Quote,))",
+            "        context.subscribe('BTC/USDT', exchange='binance', market_type='spot', selectors=(Quote,))",
             "    def on_data(self, context, signal):",
             "        context.intent(target_position_intent(",
             "            strategy_id=self.strategy_id,",

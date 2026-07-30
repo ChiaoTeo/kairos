@@ -3,26 +3,7 @@ from __future__ import annotations
 from .account import AccountCurrentView, AccountCurrentViewState, account_current_view_key
 from .execution import ExecutionCurrentView, ExecutionCurrentViewState, ExecutionOrderSummary, TradingIntentProcessor
 from .intent import IntentJournalView, IntentJournalViewState, IntentStateSummary
-from .market import (
-    MarketBarSummary,
-    MarketBarsView,
-    MarketBookSummary,
-    MarketBooksView,
-    MarketFieldSummary,
-    MarketFieldsView,
-    MarketObservationSummary,
-    MarketObservationsView,
-    MarketQuoteSummary,
-    MarketQuotesView,
-    MarketRateSummary,
-    MarketRatesView,
-    MarketStore,
-    MarketSubscriptionSummary,
-    MarketSubscriptionsView,
-    MarketTradeSummary,
-    MarketTradesView,
-    MarketViewState,
-)
+from .market import MarketProjectionState, MarketViewState
 from .order import OrderCurrentView, OrderCurrentViewState
 from .reference import ReferenceCatalogSummaryView, ReferenceCatalogViewState
 from .risk import RiskEventView, RiskEventViewState
@@ -39,23 +20,7 @@ __all__ = [
     "IntentJournalView",
     "IntentJournalViewState",
     "IntentStateSummary",
-    "MarketBarSummary",
-    "MarketBarsView",
-    "MarketBookSummary",
-    "MarketBooksView",
-    "MarketFieldSummary",
-    "MarketFieldsView",
-    "MarketObservationSummary",
-    "MarketObservationsView",
-    "MarketQuoteSummary",
-    "MarketQuotesView",
-    "MarketRateSummary",
-    "MarketRatesView",
-    "MarketStore",
-    "MarketSubscriptionSummary",
-    "MarketSubscriptionsView",
-    "MarketTradeSummary",
-    "MarketTradesView",
+    "MarketProjectionState",
     "MarketViewState",
     "OrderCurrentView",
     "OrderCurrentViewState",

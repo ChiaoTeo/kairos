@@ -4,31 +4,47 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from kairospy.application.runtime.protocol import RuntimeEnvelope
-from kairospy.core.views import ViewSchema, ViewStore
+from kairospy.core.market import MarketViewKeys
+from kairospy.core.views import ViewFieldSchema, ViewSchema, ViewStore
 
-from .store import MarketStore
+from .projection import MarketProjectionState
 
 
 @dataclass(frozen=True, slots=True)
 class MarketViewState:
-    market: MarketStore
+    projection: MarketProjectionState
 
     @property
     def schemas(self) -> tuple[ViewSchema, ...]:
-        return self.market.schemas
+        return self.projection.schemas
 
     def on_event(self, event: RuntimeEnvelope) -> None:
-        self.market.apply_envelope(event)
+        self.projection.apply_envelope(event)
 
     def publish(self, views: ViewStore, *, as_of: datetime | None = None) -> None:
-        views.put_runtime("market.subscriptions", self.market.subscriptions_view(), as_of=as_of, available_time=as_of)
-        views.put_runtime("market.quotes", self.market.quotes_view(), as_of=as_of, available_time=as_of)
-        views.put_runtime("market.rates", self.market.rates_view(), as_of=as_of, available_time=as_of)
-        views.put_runtime("market.books", self.market.books_view(), as_of=as_of, available_time=as_of)
-        views.put_runtime("market.bars", self.market.bars_view(), as_of=as_of, available_time=as_of)
-        views.put_runtime("market.trades", self.market.trades_view(), as_of=as_of, available_time=as_of)
-        views.put_runtime("market.observations", self.market.observations_view(), as_of=as_of, available_time=as_of)
-        views.put_runtime("market.fields", self.market.fields_view(), as_of=as_of, available_time=as_of)
+        views.put_runtime(MarketViewKeys.subscriptions, self.projection.subscriptions_view(), as_of=as_of, available_time=as_of)
+        for key, kind, window in self.projection.window_views():
+            schema = _window_schema(key, kind)
+            if views.registry.get(key) is None:
+                views.register(schema)
+            views.put_runtime(key, window, as_of=as_of, available_time=as_of)
+        views.put_runtime(MarketViewKeys.windows, self.projection.windows_view(), as_of=as_of, available_time=as_of)
 
 
 __all__ = ["MarketViewState"]
+
+
+def _window_schema(key: str, kind: str) -> ViewSchema:
+    return ViewSchema(
+        key,
+        "system",
+        fields=(
+            ViewFieldSchema("subject_type", "market window subject type", "runtime state", "market event window state"),
+            ViewFieldSchema("subject_id", "market window subject identity", "runtime state", "market event window state"),
+            ViewFieldSchema("items", f"{kind} window items", "event time", "market event window state"),
+            ViewFieldSchema("event_count", f"{kind} event count", "runtime sequence", "market event window state"),
+            ViewFieldSchema("updated_at", f"latest {kind} event time", "event time", "market event window state"),
+        ),
+        mutability="runtime_writable",
+        evidence=f"runtime market {kind} window state",
+    )

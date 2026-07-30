@@ -9,10 +9,10 @@ from typing import Mapping, Sequence, overload
 from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.application.runtime.ports import DataSubscription, MarketDataPort, MarketDataSubscriptionSpec
 from kairospy.application.service.domain.market import parse_market_dataset_id
-from kairospy.application.strategy import Context, ControlFactory, ControlJournal
+from kairospy.application.strategy import Context, ControlFactory, ControlJournal, StrategyMarketViews
 from kairospy.core.intent import Intent, IntentJournal, TradeIntent, target_position_intent
 from kairospy.core.market import MarketSelector
-from kairospy.core.reference import MarketRef, MarketResolver
+from kairospy.core.reference import ExchangeId, MarketRef, MarketResolver, MarketTypeId
 from kairospy.core.views import ViewStore
 
 
@@ -71,7 +71,7 @@ class RuntimeContext(Context):
     @overload
     def subscribe(
         self,
-        instrument: MarketRef,
+        subject: MarketRef,
         *,
         selectors: Sequence[MarketSelector | type],
         identity: str | None = None,
@@ -81,28 +81,28 @@ class RuntimeContext(Context):
     @overload
     def subscribe(
         self,
-        instrument: object | MarketRef,
+        subject: object | MarketRef,
         *,
         selectors: Sequence[MarketSelector | type],
-        venue: str | None = None,
-        market: str | None = None,
+        exchange: ExchangeId | str | None = None,
+        market_type: MarketTypeId | str | None = None,
         identity: str | None = None,
     ) -> DataSubscription:
         ...
 
     def subscribe(
         self,
-        instrument: object | MarketRef,
+        subject: object | MarketRef,
         *,
         selectors: Sequence[MarketSelector | type] | None = None,
-        venue: str | None = None,
-        market: str | None = None,
+        exchange: ExchangeId | str | None = None,
+        market_type: MarketTypeId | str | None = None,
         identity: str | None = None,
     ) -> DataSubscription:
         if self.data is None:
             raise RuntimeError("runtime context has no data port")
-        if selectors is None and isinstance(instrument, str) and instrument.startswith("market."):
-            dataset = parse_market_dataset_id(instrument)
+        if selectors is None and isinstance(subject, str) and subject.startswith("market."):
+            dataset = parse_market_dataset_id(subject)
             return self.data.subscribe(
                 MarketDataSubscriptionSpec(
                     dataset.market_ref,
@@ -113,7 +113,13 @@ class RuntimeContext(Context):
             )
         if selectors is None:
             raise ValueError("data subscription selectors are required unless subscribing by dataset id")
-        market_ref = MarketResolver(default_venue=venue, default_market=market).resolve(instrument, venue=venue, market=market)
+        exchange_text = None if exchange is None else str(exchange)
+        market_type_text = None if market_type is None else str(market_type)
+        market_ref = MarketResolver(default_venue=exchange_text, default_market=market_type_text).resolve(
+            subject,
+            venue=exchange_text,
+            market=market_type_text,
+        )
         return self.data.subscribe(MarketDataSubscriptionSpec(market_ref, selectors, identity=identity))
 
     def unsubscribe(self, subscription: object) -> None:
@@ -127,13 +133,9 @@ class RuntimeContext(Context):
     def require_view(self, key: str) -> object:
         return self.views.require(key)
 
-    def request_quote(self, instrument: object, *, venue: str | None = None, market: str | None = None) -> object | None:
-        resolved = MarketResolver(default_venue=venue, default_market=market).resolve(instrument, venue=venue, market=market)
-        quotes = self.views.get("market.quotes", None)
-        for item in reversed(tuple(getattr(quotes, "quotes", ()))):
-            if getattr(item, "instrument_id", None) == str(resolved.instrument_id) or getattr(item, "market_id", None) == str(resolved.market_id):
-                return item
-        return None
+    @property
+    def market(self) -> StrategyMarketViews:
+        return StrategyMarketViews(self.views)
 
     def target_position(
         self,

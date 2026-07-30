@@ -7,7 +7,7 @@ from typing import Mapping
 
 from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.application.system.artifacts.output import RunOutput
-from kairospy.core.market import Bar, MarketEvent, Quote, RateObservation, TradePrint
+from kairospy.core.market import Bar, MarketEvent, OptionGreeks, Quote, RateObservation, TradePrint
 from kairospy.core.views import ViewStore
 
 
@@ -267,13 +267,15 @@ def _view_snapshot(views: ViewStore) -> Mapping[str, object]:
 
 
 def _mark_price(value: object) -> Decimal | None:
-    if isinstance(value, Bar) or value.__class__.__name__ == "MarketBarSummary":
+    if isinstance(value, Bar):
         return getattr(value, "close", None)
-    if isinstance(value, TradePrint) or value.__class__.__name__ == "MarketTradeSummary":
+    if isinstance(value, TradePrint):
         return getattr(value, "price", None)
-    if isinstance(value, RateObservation) or value.__class__.__name__ == "MarketRateSummary":
+    if isinstance(value, RateObservation):
         return getattr(value, "mark_price", None)
-    if isinstance(value, Quote) or value.__class__.__name__ == "MarketQuoteSummary":
+    if isinstance(value, OptionGreeks):
+        return getattr(value, "mark_price", None) or getattr(value, "underlying_price", None)
+    if isinstance(value, Quote):
         return getattr(value, "midpoint", None) or getattr(value, "bid", None) or getattr(value, "ask", None)
     return None
 

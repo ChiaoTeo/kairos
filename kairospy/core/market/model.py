@@ -18,6 +18,7 @@ MarketObservationKind = Literal[
     "orderbook",
     "trade",
     "bar",
+    "option_greeks",
     "funding_rate",
     "interest_rate",
     "curve_point",
@@ -211,6 +212,43 @@ class RateObservation(MarketSelectable):
         )
 
 
+@dataclass(frozen=True, slots=True)
+class OptionGreeks(MarketSelectable):
+    instrument_id: InstrumentId | str
+    time: datetime
+    market_id: MarketId | str | None = None
+    market_key: str | None = None
+    delta: Decimal | None = None
+    gamma: Decimal | None = None
+    theta: Decimal | None = None
+    vega: Decimal | None = None
+    rho: Decimal | None = None
+    implied_volatility: Decimal | None = None
+    mark_price: Decimal | None = None
+    underlying_price: Decimal | None = None
+    source: str = ""
+    basis: str = "greeks"
+    derivation: str = "direct"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
+        object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
+        if self.market_key is not None and not self.market_key.strip():
+            raise ValueError("option greeks market_key cannot be blank")
+        if self.time.tzinfo is None:
+            raise ValueError("option greeks time must be timezone-aware")
+        if self.implied_volatility is not None and self.implied_volatility < 0:
+            raise ValueError("option greeks implied_volatility cannot be negative")
+        if self.mark_price is not None and self.mark_price < 0:
+            raise ValueError("option greeks mark_price cannot be negative")
+        if self.underlying_price is not None and self.underlying_price < 0:
+            raise ValueError("option greeks underlying_price cannot be negative")
+        if not self.basis.strip():
+            raise ValueError("option greeks basis is required")
+        if not self.derivation.strip():
+            raise ValueError("option greeks derivation is required")
+
+
 __all__ = [
     "Bar",
     "MarketObservation",
@@ -218,6 +256,7 @@ __all__ = [
     "MarketSubject",
     "MarketSubjectType",
     "OrderBookSnapshot",
+    "OptionGreeks",
     "PriceLevel",
     "Quote",
     "RateObservation",

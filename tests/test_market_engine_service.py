@@ -79,7 +79,7 @@ def test_store_backed_market_data_service_feeds_runtime_view_state(tmp_path) -> 
     session.process(events[0])
 
     assert kernel.views.require("market.subscriptions").active_count == 1
-    assert kernel.views.require("market.quotes").quotes[0].ask == Decimal("101")
+    assert kernel.views.require("market.window.binance_spot_btc_usdt.quotes").latest.ask == Decimal("101")
 
 
 def test_replay_market_data_service_subscribes_to_funding_rate(tmp_path) -> None:

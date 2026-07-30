@@ -87,9 +87,14 @@ class OrderBookDelta:
     changes: tuple[OrderBookChange, ...]
     market_id: MarketId | str | None = None
     market_key: str | None = None
+    first_nonce: object | None = None
+    last_nonce: object | None = None
+    previous_nonce: object | None = None
     nonce: object | None = None
     source: str = ""
     sequence: int | None = None
+    checksum: object | None = None
+    derivation: str = "delta"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
@@ -98,7 +103,79 @@ class OrderBookDelta:
             raise ValueError("order book delta time must be timezone-aware")
         if self.sequence is not None and self.sequence < 1:
             raise ValueError("order book delta sequence must be positive")
+        if self.nonce is None and self.last_nonce is not None:
+            object.__setattr__(self, "nonce", self.last_nonce)
         object.__setattr__(self, "changes", tuple(self.changes))
+
+
+class OrderBookSyncError(ValueError):
+    pass
+
+
+class OrderBookSyncGap(OrderBookSyncError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class OrderBookSyncSnapshot:
+    book: OrderBookSnapshot
+    status: str = "ready"
+    update_count: int = 0
+    gap_count: int = 0
+
+
+class OrderBookSynchronizer:
+    def __init__(self, snapshot: OrderBookSnapshot | None = None) -> None:
+        self._snapshot = snapshot
+        self._update_count = 0
+        self._gap_count = 0
+        self._status = "ready" if snapshot is not None else "syncing"
+
+    @property
+    def current(self) -> OrderBookSnapshot | None:
+        return self._snapshot
+
+    @property
+    def status(self) -> str:
+        return self._status
+
+    @property
+    def update_count(self) -> int:
+        return self._update_count
+
+    @property
+    def gap_count(self) -> int:
+        return self._gap_count
+
+    def reset(self, snapshot: OrderBookSnapshot) -> OrderBookSyncSnapshot:
+        self._snapshot = snapshot
+        self._update_count = 0
+        self._status = "ready"
+        return self.snapshot()
+
+    def snapshot(self) -> OrderBookSyncSnapshot:
+        if self._snapshot is None:
+            raise OrderBookSyncError("order book synchronizer has no snapshot")
+        return OrderBookSyncSnapshot(
+            self._snapshot,
+            status=self._status,
+            update_count=self._update_count,
+            gap_count=self._gap_count,
+        )
+
+    def apply(self, delta: OrderBookDelta) -> OrderBookSyncSnapshot:
+        if self._snapshot is None:
+            raise OrderBookSyncError("order book synchronizer requires a snapshot before deltas")
+        if _is_old_delta(self._snapshot.nonce, delta):
+            return self.snapshot()
+        if _has_gap(self._snapshot.nonce, delta):
+            self._gap_count += 1
+            self._status = "stale"
+            raise OrderBookSyncGap("order book delta sequence has a gap")
+        self._snapshot = apply_orderbook_update(self._snapshot, delta)
+        self._update_count += 1
+        self._status = "ready"
+        return self.snapshot()
 
 
 def apply_orderbook_update(snapshot: OrderBookSnapshot, delta: OrderBookDelta) -> OrderBookSnapshot:
@@ -120,7 +197,7 @@ def apply_orderbook_update(snapshot: OrderBookSnapshot, delta: OrderBookDelta) -
         nonce=delta.nonce if delta.nonce is not None else snapshot.nonce,
         source=delta.source or snapshot.source,
         basis=snapshot.basis,
-        derivation=snapshot.derivation,
+        derivation=snapshot.derivation if delta.derivation == "delta" else delta.derivation,
     )
 
 
@@ -155,11 +232,43 @@ def _is_stale(current: object | None, incoming: object | None) -> bool:
         return False
 
 
+def _is_old_delta(current: object | None, delta: OrderBookDelta) -> bool:
+    current_int = _optional_int(current)
+    last_int = _optional_int(delta.last_nonce if delta.last_nonce is not None else delta.nonce)
+    return current_int is not None and last_int is not None and last_int <= current_int
+
+
+def _has_gap(current: object | None, delta: OrderBookDelta) -> bool:
+    current_int = _optional_int(current)
+    if current_int is None:
+        return False
+    previous_int = _optional_int(delta.previous_nonce)
+    if previous_int is not None:
+        return previous_int != current_int
+    first_int = _optional_int(delta.first_nonce)
+    if first_int is None:
+        return False
+    return first_int > current_int + 1
+
+
+def _optional_int(value: object | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
 __all__ = [
     "BookSide",
     "OrderBookChange",
     "OrderBookDelta",
+    "OrderBookSyncError",
+    "OrderBookSyncGap",
+    "OrderBookSyncSnapshot",
     "OrderBookSnapshot",
+    "OrderBookSynchronizer",
     "PriceLevel",
     "apply_orderbook_update",
 ]

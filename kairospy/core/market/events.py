@@ -5,11 +5,11 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Mapping, TypeAlias
 
-from .model import Bar, MarketObservation, MarketSubject, Quote, RateObservation, TradePrint
-from .orderbook import OrderBookSnapshot
+from .model import Bar, MarketObservation, MarketSubject, OptionGreeks, Quote, RateObservation, TradePrint
+from .orderbook import OrderBookDelta, OrderBookSnapshot
 
 
-MarketEventValue: TypeAlias = Bar | Quote | OrderBookSnapshot | TradePrint | RateObservation | MarketObservation
+MarketEventValue: TypeAlias = Bar | Quote | OrderBookSnapshot | OrderBookDelta | TradePrint | RateObservation | OptionGreeks | MarketObservation
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,12 +38,16 @@ class MarketEvent:
             return "quote"
         if isinstance(value, OrderBookSnapshot):
             return "orderbook"
+        if isinstance(value, OrderBookDelta):
+            return "orderbook_delta"
         if isinstance(value, Bar):
             return "bar"
         if isinstance(value, TradePrint):
             return "trade"
         if isinstance(value, RateObservation):
             return "rate"
+        if isinstance(value, OptionGreeks):
+            return "option_greeks"
         return value.kind
 
 

@@ -7,7 +7,7 @@ from typing import Mapping
 from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.core.account import AccountContext
 from kairospy.core.execution import ExecutionCoordinator
-from kairospy.core.market import Bar, MarketEvent, Quote, RateObservation, TradePrint
+from kairospy.core.market import Bar, MarketEvent, OptionGreeks, Quote, RateObservation, TradePrint
 from kairospy.core.views import ViewFieldSchema, ViewSchema, ViewStore
 
 from .models import (
@@ -155,6 +155,8 @@ def _mark_price(value: object) -> Decimal | None:
         return value.price
     if isinstance(value, RateObservation):
         return value.mark_price
+    if isinstance(value, OptionGreeks):
+        return value.mark_price or value.underlying_price
     if isinstance(value, Quote):
         return value.midpoint or value.bid or value.ask
     return None

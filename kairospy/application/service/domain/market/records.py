@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, TypeAlias, TypedDict
 
-from kairospy.core.market import Bar, OrderBookSnapshot, PriceLevel, Quote, RateObservation, TradePrint
+from kairospy.core.market import Bar, OptionGreeks, OrderBookSnapshot, PriceLevel, Quote, RateObservation, TradePrint
 from kairospy.core.reference import MarketRef
 
 
@@ -67,6 +67,18 @@ class RateRecord(MarketRecord, total=False):
     tenor: str | None
     basis: str
     mark_price: str | None
+
+
+class OptionGreeksRecord(MarketRecord, total=False):
+    delta: str | None
+    gamma: str | None
+    theta: str | None
+    vega: str | None
+    rho: str | None
+    implied_volatility: str | None
+    mark_price: str | None
+    underlying_price: str | None
+    basis: str
 
 
 def ohlcv_record(
@@ -249,6 +261,23 @@ def funding_rate_record(rate: RateObservation, *, venue: str, market: str, sourc
     }
 
 
+def option_greeks_record(greeks: OptionGreeks, *, venue: str, market: str, source_symbol: str) -> OptionGreeksRecord:
+    return {
+        "time": greeks.time.isoformat(),
+        "kind": "option_greeks",
+        **_identity_fields(greeks.market_id, greeks.instrument_id, greeks.market_key, venue, market, source_symbol),
+        "delta": _optional_decimal_text(greeks.delta),
+        "gamma": _optional_decimal_text(greeks.gamma),
+        "theta": _optional_decimal_text(greeks.theta),
+        "vega": _optional_decimal_text(greeks.vega),
+        "rho": _optional_decimal_text(greeks.rho),
+        "implied_volatility": _optional_decimal_text(greeks.implied_volatility),
+        "mark_price": _optional_decimal_text(greeks.mark_price),
+        "underlying_price": _optional_decimal_text(greeks.underlying_price),
+        "basis": greeks.basis,
+    }
+
+
 def event_time(value: object) -> datetime:
     if value is None:
         raise ValueError("market record timestamp is required")
@@ -335,6 +364,7 @@ __all__ = [
     "MarketRecord",
     "MarketRecordValue",
     "OrderBookRecord",
+    "OptionGreeksRecord",
     "QuoteRecord",
     "RateRecord",
     "TradeRecord",
@@ -344,6 +374,7 @@ __all__ = [
     "iso_time",
     "ohlcv_record",
     "order_book_record",
+    "option_greeks_record",
     "orderbook_record",
     "ticker_record",
     "trade_print_record",

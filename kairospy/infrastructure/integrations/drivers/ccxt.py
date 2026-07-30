@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable, Iterable, Mapping
@@ -156,6 +157,25 @@ class CcxtDriver:
             if callable(close):
                 close()
 
+    def fetch_order_book(
+        self,
+        exchange_id: str,
+        symbol: str,
+        *,
+        limit: int | None = None,
+        params: Mapping[str, object] | None = None,
+    ) -> Mapping[str, object]:
+        symbol = _symbol_text(symbol)
+        options = dict(params or {})
+        exchange = (self.exchange_factory or _default_exchange)(exchange_id)
+        try:
+            _configure_exchange_market(exchange, exchange_id, options)
+            return dict(exchange.fetch_order_book(symbol, limit=limit, params=_exchange_params(options)))
+        finally:
+            close = getattr(exchange, "close", None)
+            if callable(close):
+                close()
+
     def watch_ticker(
         self,
         exchange_id: str,
@@ -178,6 +198,14 @@ class CcxtDriver:
             options["limit"] = limit
         return self._poll(exchange_id, "orderbook", _symbol_text(symbol), options)
 
+    def watch_binance_depth_diffs(
+        self,
+        symbol: str,
+        *,
+        params: Mapping[str, object] | None = None,
+    ) -> AsyncIterator[Mapping[str, object]]:
+        return _watch_binance_depth_diffs(_symbol_text(symbol), dict(params or {}))
+
     def watch_trades(
         self,
         exchange_id: str,
@@ -191,6 +219,15 @@ class CcxtDriver:
         options.setdefault("since", since)
         options.setdefault("limit", limit)
         return self._poll(exchange_id, "trades", _symbol_text(symbol), options)
+
+    def watch_option_greeks(
+        self,
+        exchange_id: str,
+        symbol: str,
+        *,
+        params: Mapping[str, object] | None = None,
+    ) -> AsyncIterator[Mapping[str, object]]:
+        return self._poll(exchange_id, "option_greeks", _symbol_text(symbol), dict(params or {}))
 
     def create_order(
         self,
@@ -454,6 +491,15 @@ async def _fetch_live(
         for trade in trades:
             yield dict(trade)
         return
+    if source == "option_greeks":
+        try:
+            greeks = await _watch_option_greeks(exchange, symbol, params)
+        except _WsUnavailable:
+            if require_websocket:
+                raise
+            greeks = await _fetch_option_greeks(exchange, symbol, params)
+        yield dict(greeks)
+        return
     raise KeyError(f"ccxt live source is not supported: {source}")
 
 
@@ -570,6 +616,48 @@ async def _watch_trades(
         if _is_not_supported(error):
             raise _WsUnavailable() from error
         raise
+
+
+async def _watch_option_greeks(exchange: Any, symbol: str, params: Mapping[str, object]) -> Mapping[str, Any]:
+    watch = getattr(exchange, "watch_greeks", None) or getattr(exchange, "watchGreeks", None)
+    if not callable(watch):
+        raise _WsUnavailable()
+    try:
+        await _ensure_markets_loaded(exchange)
+        result = await watch(symbol, params=_exchange_params(params))
+        return _single_symbol_row(result, symbol)
+    except Exception as error:
+        if _is_not_supported(error):
+            raise _WsUnavailable() from error
+        raise
+
+
+async def _fetch_option_greeks(exchange: Any, symbol: str, params: Mapping[str, object]) -> Mapping[str, Any]:
+    fetch = getattr(exchange, "fetch_greeks", None) or getattr(exchange, "fetchGreeks", None)
+    if not callable(fetch):
+        raise _WsUnavailable("option greeks are not supported by this ccxt exchange")
+    await _ensure_markets_loaded(exchange)
+    result = await fetch(symbol, params=_exchange_params(params))
+    return _single_symbol_row(result, symbol)
+
+
+def _single_symbol_row(result: object, symbol: str) -> Mapping[str, Any]:
+    if isinstance(result, Mapping):
+        if symbol in result and isinstance(result[symbol], Mapping):
+            return dict(result[symbol])
+        if "symbol" in result or "delta" in result or "gamma" in result or "markIV" in result:
+            return dict(result)
+        for value in result.values():
+            if isinstance(value, Mapping):
+                return dict(value)
+    if isinstance(result, (list, tuple)):
+        for value in result:
+            if isinstance(value, Mapping) and str(value.get("symbol") or "").strip() in {"", symbol}:
+                return dict(value)
+        for value in result:
+            if isinstance(value, Mapping):
+                return dict(value)
+    raise TypeError(f"ccxt greeks response has no row for {symbol}: {result!r}")
 
 
 async def _ensure_markets_loaded(exchange: Any) -> None:
@@ -728,9 +816,57 @@ def _exchange_params(params: Mapping[str, object]) -> dict[str, object]:
     return {
         key: value
         for key, value in params.items()
-        if key not in {"market", "type", "poll_seconds", "max_events", "since", "limit", "require_ws"}
+        if key
+        not in {
+            "market",
+            "type",
+            "poll_seconds",
+            "max_events",
+            "since",
+            "limit",
+            "require_ws",
+            "derivation",
+            "orderbook_speed",
+            "orderbook_url",
+            "local_orderbook_limit",
+            "orderbook_depth",
+            "snapshot_timeout_seconds",
+        }
     }
 
 
 def _is_not_supported(error: Exception) -> bool:
     return error.__class__.__name__ in {"NotSupported", "NotImplementedError"}
+
+
+async def _watch_binance_depth_diffs(symbol: str, params: Mapping[str, object]) -> AsyncIterator[Mapping[str, object]]:
+    try:
+        import websockets
+    except ImportError as error:
+        raise RuntimeError("Binance local L2 orderbook requires websockets") from error
+    speed = str(params.get("orderbook_speed") or "100ms").strip()
+    stream_name = f"{_binance_stream_symbol(symbol)}@depth" + ("" if speed in {"", "1000ms"} else f"@{speed}")
+    url = str(params.get("orderbook_url") or _binance_depth_url(params, stream_name))
+    try:
+        connection = websockets.connect(url, proxy=None)
+    except TypeError:
+        connection = websockets.connect(url)
+    async with connection as websocket:
+        async for message in websocket:
+            raw = json.loads(message)
+            if isinstance(raw, Mapping) and isinstance(raw.get("data"), Mapping):
+                raw = raw["data"]
+            if isinstance(raw, Mapping) and raw.get("e") == "depthUpdate":
+                yield dict(raw)
+
+
+def _binance_depth_url(params: Mapping[str, object], stream_name: str) -> str:
+    market_type = _market_type("binance", params).lower()
+    if market_type in {"swap", "future", "futures", "perp", "perpetual"}:
+        return f"wss://fstream.binance.com/ws/{stream_name}"
+    return f"wss://stream.binance.com:9443/ws/{stream_name}"
+
+
+def _binance_stream_symbol(symbol: str) -> str:
+    value = symbol.split(":", 1)[0]
+    return "".join(part for part in value if part.isalnum()).lower()

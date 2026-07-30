@@ -70,7 +70,8 @@ def test_market_cli_reports_capabilities() -> None:
     assert by_market["spot"]["venue"] == "binance"
     assert by_market["spot"]["historical"][0]["kind"] == "ohlcv"
     assert {item["kind"] for item in by_market["spot"]["live"]} == {"ticker", "orderbook", "trades"}
-    assert by_market["option"]["status"] == "not_configured"
+    assert by_market["option"]["status"] == "configured"
+    assert {item["kind"] for item in by_market["option"]["live"]} == {"ticker", "orderbook", "trades", "option_greeks"}
 
 
 def test_market_cli_checks_specific_market_data_subscription() -> None:
@@ -88,7 +89,7 @@ def test_market_cli_checks_specific_market_data_subscription() -> None:
     assert json.loads(valid.output)["valid"] is True
     assert json.loads(valid.output)["dataset"] == "market.ohlcv.binance.spot.btc_usdt.1m"
     assert json.loads(invalid.output)["valid"] is False
-    assert "not configured" in json.loads(invalid.output)["reason"]
+    assert "not supported" in json.loads(invalid.output)["reason"]
 
 
 def test_market_cli_prefetches_backtest_strategy_subscriptions(tmp_path, monkeypatch) -> None:

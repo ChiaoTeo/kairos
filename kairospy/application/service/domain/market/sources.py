@@ -13,6 +13,7 @@ from kairospy.core.market import (
     MarketEvent,
     MarketObservation,
     MarketSubject,
+    OptionGreeks,
     OrderBookSnapshot,
     PriceLevel,
     Quote,
@@ -131,7 +132,7 @@ def _market_value_from_row(
     event_time: datetime,
     kind: str,
     stream: str,
-) -> Bar | Quote | OrderBookSnapshot | TradePrint | RateObservation | None:
+) -> Bar | Quote | OrderBookSnapshot | TradePrint | RateObservation | OptionGreeks | None:
     market_id = None if row.get("market_id") is None else str(row["market_id"])
     market_key = None if row.get("market_key") is None else str(row["market_key"])
     source = str(row.get("source") or stream)
@@ -185,6 +186,23 @@ def _market_value_from_row(
             ask_size=_optional_decimal(row.get("ask_size") or row.get("ask1_size")),
             source=source,
             basis=str(row.get("basis") or "ticker"),
+        )
+    if kind in {"option_greeks", "greeks"} or any(row.get(key) is not None for key in ("delta", "gamma", "theta", "vega", "rho", "implied_volatility")):
+        return OptionGreeks(
+            instrument_id=subject_id,
+            market_id=market_id,
+            market_key=market_key,
+            time=event_time,
+            delta=_optional_decimal(row.get("delta")),
+            gamma=_optional_decimal(row.get("gamma")),
+            theta=_optional_decimal(row.get("theta")),
+            vega=_optional_decimal(row.get("vega")),
+            rho=_optional_decimal(row.get("rho")),
+            implied_volatility=_optional_decimal(row.get("implied_volatility") or row.get("impliedVolatility")),
+            mark_price=_optional_decimal(row.get("mark_price") or row.get("markPrice")),
+            underlying_price=_optional_decimal(row.get("underlying_price") or row.get("underlyingPrice")),
+            source=source,
+            basis=str(row.get("basis") or "greeks"),
         )
     if row.get("rate") is not None:
         return RateObservation(

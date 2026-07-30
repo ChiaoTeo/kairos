@@ -5,10 +5,23 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from kairospy.core.market import Bar, MarketEvent, MarketSubject, OrderBookSnapshot, PriceLevel, Quote, RateObservation, TradePrint
+from kairospy.core.market import (
+    Bar,
+    MarketEvent,
+    MarketSubject,
+    OrderBookChange,
+    OrderBookDelta,
+    OrderBookSnapshot,
+    OptionGreeks,
+    PriceLevel,
+    Quote,
+    RateObservation,
+    TradePrint,
+)
 from kairospy.application.service.domain.market.records import (
     BarRecord,
     OrderBookRecord,
+    OptionGreeksRecord,
     QuoteRecord,
     RateRecord,
     TradeRecord,
@@ -16,6 +29,7 @@ from kairospy.application.service.domain.market.records import (
     event_time,
     funding_rate_record,
     order_book_record,
+    option_greeks_record,
     ticker_record,
     trade_print_record,
 )
@@ -51,25 +65,43 @@ def ccxt_ticker_quote(raw: Mapping[str, object], *, market: MarketRef) -> Quote:
     )
 
 
-def ccxt_order_book_snapshot(raw: Mapping[str, object], *, market: MarketRef) -> OrderBookSnapshot:
+def ccxt_order_book_snapshot(raw: Mapping[str, object], *, market: MarketRef, fallback_to_now: bool = False) -> OrderBookSnapshot:
+    nonce = _first_not_none(raw.get("nonce"), raw.get("lastUpdateId"), raw.get("last_update_id"), raw.get("u"))
     return OrderBookSnapshot(
         instrument_id=market.instrument_id,
         market_id=market.market_id,
         market_key=market.market_key,
-        time=_market_time(raw),
+        time=_market_time(raw, fallback_to_now=fallback_to_now),
         bids=_levels(raw.get("bids")),
         asks=_levels(raw.get("asks")),
-        nonce=raw.get("nonce"),
+        nonce=nonce,
         source=market.venue,
+        derivation=str(raw.get("derivation") or "direct"),
     )
 
 
-def ccxt_trade_print(raw: Mapping[str, object], *, market: MarketRef) -> TradePrint:
+def ccxt_order_book_delta(raw: Mapping[str, object], *, market: MarketRef, fallback_to_now: bool = True) -> OrderBookDelta:
+    return OrderBookDelta(
+        instrument_id=market.instrument_id,
+        market_id=market.market_id,
+        market_key=market.market_key,
+        time=_market_time(raw, fallback_to_now=fallback_to_now),
+        changes=_changes(raw),
+        first_nonce=_first_not_none(raw.get("U"), raw.get("firstUpdateId"), raw.get("first_update_id")),
+        last_nonce=_first_not_none(raw.get("u"), raw.get("lastUpdateId"), raw.get("last_update_id"), raw.get("nonce")),
+        previous_nonce=_first_not_none(raw.get("pu"), raw.get("prevUpdateId"), raw.get("previous_update_id")),
+        nonce=_first_not_none(raw.get("u"), raw.get("lastUpdateId"), raw.get("last_update_id"), raw.get("nonce")),
+        source=market.venue,
+        checksum=_first_not_none(raw.get("checksum"), raw.get("cs")),
+    )
+
+
+def ccxt_trade_print(raw: Mapping[str, object], *, market: MarketRef, fallback_to_now: bool = False) -> TradePrint:
     return TradePrint(
         instrument_id=market.instrument_id,
         market_id=market.market_id,
         market_key=market.market_key,
-        time=_market_time(raw),
+        time=_market_time(raw, fallback_to_now=fallback_to_now),
         trade_id=None if raw.get("id") is None else str(raw.get("id")),
         side=None if raw.get("side") is None else str(raw.get("side")),
         price=_optional_decimal(raw.get("price")),
@@ -91,6 +123,25 @@ def ccxt_funding_rate_observation(raw: Mapping[str, object], *, market: MarketRe
         market_id=market.market_id,
         instrument_id=market.instrument_id,
         mark_price=_optional_decimal(row.get("markPrice")),
+    )
+
+
+def ccxt_option_greeks_observation(raw: Mapping[str, object], *, market: MarketRef) -> OptionGreeks:
+    row = _normalized_option_greeks(raw)
+    return OptionGreeks(
+        instrument_id=market.instrument_id,
+        market_id=market.market_id,
+        market_key=market.market_key,
+        time=_market_time(row, fallback_to_now=True),
+        delta=_optional_decimal(row.get("delta")),
+        gamma=_optional_decimal(row.get("gamma")),
+        theta=_optional_decimal(row.get("theta")),
+        vega=_optional_decimal(row.get("vega")),
+        rho=_optional_decimal(row.get("rho")),
+        implied_volatility=_optional_decimal(row.get("impliedVolatility")),
+        mark_price=_optional_decimal(row.get("markPrice")),
+        underlying_price=_optional_decimal(row.get("underlyingPrice")),
+        source=market.venue,
     )
 
 
@@ -141,7 +192,7 @@ def ccxt_order_book_record(raw: Mapping[str, object], *, market: MarketRef) -> O
 
 
 def ccxt_order_book_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
-    book = ccxt_order_book_snapshot(raw, market=market)
+    book = ccxt_order_book_snapshot(raw, market=market, fallback_to_now=True)
     return MarketEvent(
         MarketSubject("instrument", book.instrument_id),
         book.time,
@@ -158,6 +209,25 @@ def ccxt_order_book_update(raw: Mapping[str, object], *, market: MarketRef) -> M
     )
 
 
+def ccxt_order_book_delta_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
+    delta = ccxt_order_book_delta(raw, market=market)
+    return MarketEvent(
+        MarketSubject("instrument", delta.instrument_id),
+        delta.time,
+        delta,
+        source=market.venue,
+        available_at=delta.time,
+        metadata=_market_metadata(
+            market,
+            raw=dict(raw),
+            first_nonce=delta.first_nonce,
+            last_nonce=delta.last_nonce,
+            previous_nonce=delta.previous_nonce,
+            nonce=delta.nonce,
+        ),
+    )
+
+
 def ccxt_trade_record(raw: Mapping[str, object], *, market: MarketRef) -> TradeRecord:
     return trade_print_record(
         ccxt_trade_print(raw, market=market),
@@ -168,7 +238,7 @@ def ccxt_trade_record(raw: Mapping[str, object], *, market: MarketRef) -> TradeR
 
 
 def ccxt_trade_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
-    trade = ccxt_trade_print(raw, market=market)
+    trade = ccxt_trade_print(raw, market=market, fallback_to_now=True)
     return MarketEvent(
         MarketSubject("instrument", trade.instrument_id),
         trade.time,
@@ -188,6 +258,15 @@ def ccxt_funding_rate_record(raw: Mapping[str, object], *, market: MarketRef) ->
     )
 
 
+def ccxt_option_greeks_record(raw: Mapping[str, object], *, market: MarketRef) -> OptionGreeksRecord:
+    return option_greeks_record(
+        ccxt_option_greeks_observation(raw, market=market),
+        venue=market.venue,
+        market=market.market,
+        source_symbol=market.source_symbol,
+    )
+
+
 def ccxt_funding_rate_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
     rate = ccxt_funding_rate_observation(raw, market=market)
     return MarketEvent(
@@ -197,6 +276,23 @@ def ccxt_funding_rate_update(raw: Mapping[str, object], *, market: MarketRef) ->
         source=market.venue,
         available_at=rate.time,
         metadata=_market_metadata(market, raw=dict(raw), mark_price=rate.mark_price),
+    )
+
+
+def ccxt_option_greeks_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
+    greeks = ccxt_option_greeks_observation(raw, market=market)
+    return MarketEvent(
+        MarketSubject("instrument", greeks.instrument_id),
+        greeks.time,
+        greeks,
+        source=market.venue,
+        available_at=greeks.time,
+        metadata=_market_metadata(
+            market,
+            raw=dict(raw),
+            mark_price=greeks.mark_price,
+            implied_volatility=greeks.implied_volatility,
+        ),
     )
 
 
@@ -224,6 +320,23 @@ def _levels(value: object) -> tuple[PriceLevel, ...]:
             continue
         levels.append(PriceLevel(_decimal(item[0]), _decimal(item[1])))
     return tuple(levels)
+
+
+def _changes(raw: Mapping[str, object]) -> tuple[OrderBookChange, ...]:
+    bids = _change_levels(_first_not_none(raw.get("b"), raw.get("bids")), side="bid")
+    asks = _change_levels(_first_not_none(raw.get("a"), raw.get("asks")), side="ask")
+    return bids + asks
+
+
+def _change_levels(value: object, *, side: str) -> tuple[OrderBookChange, ...]:
+    if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
+        return ()
+    changes: list[OrderBookChange] = []
+    for item in value:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            continue
+        changes.append(OrderBookChange(side, _decimal(item[0]), _decimal(item[1])))  # type: ignore[arg-type]
+    return tuple(changes)
 
 
 def _optional_decimal(value: object | None) -> Decimal | None:
@@ -277,6 +390,29 @@ def _normalized_funding_rate(raw: Mapping[str, object]) -> Mapping[str, object]:
     return value
 
 
+def _normalized_option_greeks(raw: Mapping[str, object]) -> Mapping[str, object]:
+    value = dict(raw)
+    info = value.get("info") if isinstance(value.get("info"), Mapping) else {}
+    aliases = {
+        "delta": ("delta",),
+        "gamma": ("gamma",),
+        "theta": ("theta",),
+        "vega": ("vega",),
+        "rho": ("rho",),
+        "impliedVolatility": ("impliedVolatility", "impliedVol", "iv", "markIV"),
+        "markPrice": ("markPrice", "mark_price"),
+        "underlyingPrice": ("underlyingPrice", "underlying_price", "indexPrice"),
+    }
+    for target, keys in aliases.items():
+        found = _first_not_none(*(value.get(key) for key in keys), *(info.get(key) for key in keys))
+        if found is not None:
+            value[target] = found
+    timestamp = _first_not_none(value.get("timestamp"), value.get("time"), value.get("datetime"), info.get("timestamp"), info.get("time"), info.get("E"))
+    if timestamp is not None:
+        value["timestamp"] = timestamp
+    return value
+
+
 def _info_price(raw: Mapping[str, object]) -> object | None:
     info = raw.get("info")
     return info.get("price") if isinstance(info, Mapping) else None
@@ -307,8 +443,13 @@ __all__ = [
     "ccxt_funding_rate_record",
     "ccxt_funding_rate_update",
     "ccxt_order_book_record",
+    "ccxt_order_book_delta",
+    "ccxt_order_book_delta_update",
     "ccxt_order_book_snapshot",
     "ccxt_order_book_update",
+    "ccxt_option_greeks_observation",
+    "ccxt_option_greeks_record",
+    "ccxt_option_greeks_update",
     "ccxt_market_type",
     "ccxt_ticker_quote",
     "ccxt_ticker_record",

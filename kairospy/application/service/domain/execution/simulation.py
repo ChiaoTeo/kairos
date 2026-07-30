@@ -9,6 +9,7 @@ from typing import Protocol
 from kairospy.core.account import AccountContext
 from kairospy.core.execution import ExecutionCoordinator, ExecutionIntentContext, FillReport
 from kairospy.core.intent import IntentEvent, IntentEventKind, IntentKind, TradeIntent
+from kairospy.core.market import Bar, Quote, RateObservation, TradePrint
 from kairospy.core.order import OrderEvent, OrderEventKind, OrderRequest, OrderSide, OrderType
 
 
@@ -211,27 +212,23 @@ class SimulatedExecutionAdapter:
 
     def _projected_market_value(self, context: ExecutionIntentContext, intent: TradeIntent) -> object | None:
         payload = self._market_payload(context, intent)
-        for key in (self.price_field, f"bar.{self.price_field}", f"trade.{self.price_field}", f"quote.{self.price_field}"):
+        for key in (self.price_field, f"bar.{self.price_field}", f"trade.{self.price_field}", f"quote.{self.price_field}", f"rate.{self.price_field}"):
             if key in payload:
                 return payload[key]
         return None
 
     def _market_payload(self, context: ExecutionIntentContext, intent: TradeIntent) -> Mapping[str, object]:
-        fields = context.view("market.fields")
-        if fields is None:
-            return {}
+        market = getattr(context, "market")
         values: dict[str, object] = {}
-        for item in tuple(getattr(fields, "fields", ())):
-            if getattr(item, "subject_id", None) != str(intent.instrument_id) and getattr(item, "market_id", None) != str(intent.market_id):
-                continue
-            field = str(getattr(item, "field", ""))
-            value = getattr(item, "value", None)
-            if value is None:
-                continue
-            values[field] = value
-            alias = _market_field_alias(field)
-            if alias is not None:
-                values.setdefault(alias, value)
+        for prefix, window in (
+            ("quote", market.quotes(intent.market_id or intent.instrument_id)),
+            ("bar", market.bars(intent.market_id or intent.instrument_id)),
+            ("trade", market.trades(intent.market_id or intent.instrument_id)),
+            ("rate", market.rates(intent.market_id or intent.instrument_id)),
+        ):
+            item = getattr(window, "latest", None)
+            if item is not None:
+                values.update(_market_model_payload(prefix, item))
         return values
 
     def _next_order_id(self, intent_id: object) -> str:
@@ -247,20 +244,52 @@ def _limit_crosses(order: OrderRequest, market_price: Decimal) -> bool:
     return market_price >= order.limit_price
 
 
-def _market_field_alias(field: str) -> str | None:
-    aliases = {
-        "Bar.open": "open",
-        "Bar.high": "high",
-        "Bar.low": "low",
-        "Bar.close": "close",
-        "Bar.volume": "volume",
-        "Quote.bid": "bid",
-        "Quote.ask": "ask",
-        "TradePrint.price": "price",
-        "TradePrint.size": "size",
-        "TradePrint.cost": "cost",
-    }
-    return aliases.get(field)
+def _market_model_payload(prefix: str, item: object) -> dict[str, object]:
+    values: dict[str, object] = {}
+    if isinstance(item, Quote):
+        values.update(
+            {
+                "bid": item.bid,
+                "ask": item.ask,
+                "bid_size": item.bid_size,
+                "ask_size": item.ask_size,
+                "midpoint": item.midpoint,
+            }
+        )
+    elif isinstance(item, Bar):
+        values.update(
+            {
+                "open": item.open,
+                "high": item.high,
+                "low": item.low,
+                "close": item.close,
+                "volume": item.volume,
+            }
+        )
+    elif isinstance(item, TradePrint):
+        values.update(
+            {
+                "price": item.price,
+                "size": item.size,
+                "cost": item.cost,
+            }
+        )
+    elif isinstance(item, RateObservation):
+        values.update(
+            {
+                "rate": item.rate,
+                "mark_price": item.mark_price,
+            }
+        )
+    return {key: value for key, value in _prefixed(prefix, values).items() if value is not None}
+
+
+def _prefixed(prefix: str, values: Mapping[str, object | None]) -> dict[str, object | None]:
+    payload: dict[str, object | None] = {}
+    for key, value in values.items():
+        payload.setdefault(key, value)
+        payload[f"{prefix}.{key}"] = value
+    return payload
 
 
 __all__ = [

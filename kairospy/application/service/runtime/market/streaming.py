@@ -8,9 +8,10 @@ from typing import Callable, Mapping
 from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.application.runtime.protocol.lines import RuntimeEventLine, close_event_line
 from kairospy.application.runtime.ports import DataSubscription, MarketDataPort, MarketDataSubscriptionSpec
-from kairospy.core.market import MarketEvent, OrderBookSnapshot, Quote, TradePrint
+from kairospy.core.market import MarketEvent, OptionGreeks, OrderBookSnapshot, Quote, TradePrint
 from kairospy.infrastructure.integrations.payloads.ccxt_market import (
     ccxt_order_book_update,
+    ccxt_option_greeks_update,
     ccxt_ticker_update,
     ccxt_trade_update,
 )
@@ -102,11 +103,18 @@ class StreamingMarketDataService(MarketSubscriptionState, MarketDataPort):
             return
         if model is OrderBookSnapshot:
             depth = getattr(selector, "depth", None)
+            params = dict(spec.params)
+            derivation = getattr(selector, "derivation", "direct")
+            if derivation != "direct":
+                params["derivation"] = derivation
+            if depth == "full":
+                params["orderbook_depth"] = "full"
+                depth = None
             method = getattr(self.feed, "watch_order_book_updates", None)
             stream = (
-                method(source_symbol, limit=depth, params=spec.params)
+                method(source_symbol, limit=depth, params=params)
                 if callable(method)
-                else self.feed.watch_order_book(source_symbol, limit=depth, params=spec.params)
+                else self.feed.watch_order_book(source_symbol, limit=depth, params=params)
             )
             async for item in stream:
                 if self._should_stop():
@@ -122,6 +130,18 @@ class StreamingMarketDataService(MarketSubscriptionState, MarketDataPort):
                     break
                 event = item if isinstance(item, MarketEvent) else ccxt_trade_update(_mapping(item, mode_label=self.mode_label), market=spec.market)
                 yield self._envelope("trade", event)
+            return
+        if model is OptionGreeks:
+            method = getattr(self.feed, "watch_option_greeks_updates", None)
+            if callable(method):
+                stream = method(source_symbol, params=spec.params)
+            else:
+                stream = self.feed.watch_option_greeks(source_symbol, params=spec.params)  # type: ignore[attr-defined]
+            async for item in stream:
+                if self._should_stop():
+                    break
+                event = item if isinstance(item, MarketEvent) else ccxt_option_greeks_update(_mapping(item, mode_label=self.mode_label), market=spec.market)
+                yield self._envelope("option_greeks", event)
             return
         raise ValueError(f"unsupported {self.mode_label} market selector model: {getattr(model, '__name__', model)!r}")
 

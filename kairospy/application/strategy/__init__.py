@@ -4,6 +4,7 @@ from .control import ControlFactory, ControlJournal, ControlRecorder, ControlReq
 from .context import Context, StrategyContext
 from .events import AccountSignal, ClockSignal, MarketSignal, OrderSignal, Signal, StrategySignal, SystemSignal
 from .protocol import Strategy, StrategyBase
+from .views import StrategyMarketViews, StrategyViews
 
 __all__ = [
     "Context",
@@ -20,6 +21,8 @@ __all__ = [
     "Strategy",
     "StrategyBase",
     "StrategyContext",
+    "StrategyMarketViews",
+    "StrategyViews",
     "StrategySignal",
     "SystemSignal",
 ]

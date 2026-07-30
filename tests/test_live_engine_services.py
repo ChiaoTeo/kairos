@@ -16,7 +16,7 @@ from kairospy.application.service.modes.live import (
 from kairospy.core.account import AccountContext, AccountRef, AccountSource, Environment
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentStatus, target_position_intent
-from kairospy.core.market import Quote
+from kairospy.core.market import OptionGreeks, Quote
 from kairospy.core.reference import MarketResolver, SourceSymbol
 from kairospy.infrastructure.integrations.drivers import CcxtDriver
 
@@ -90,6 +90,16 @@ class FakeLiveFeed:
         self.symbols.append(symbol)
         if False:
             yield {}
+
+    async def watch_option_greeks(
+        self,
+        symbol: str,
+        *,
+        params: Mapping[str, object] | None = None,
+    ) -> AsyncIterator[Mapping[str, object]]:
+        self.symbols.append(symbol)
+        for row in self.rows:
+            yield row
 
 
 class FakeBroker:
@@ -172,6 +182,10 @@ class _FakeAsyncExchange:
         self.symbols.append(symbol)
         return {"symbol": symbol, "timestamp": 1760000000000, "bid": "100", "ask": "101"}
 
+    async def watch_greeks(self, symbol: str, params: Mapping[str, object] | None = None) -> Mapping[str, object]:
+        self.symbols.append(symbol)
+        return {"symbol": symbol, "timestamp": 1760000000000, "delta": "0.5", "markIV": "0.6"}
+
     async def close(self) -> None:
         return None
 
@@ -193,6 +207,31 @@ def test_live_market_service_streams_from_integration_feed() -> None:
     assert service.view().source == "binance-live"
 
 
+def test_live_market_service_streams_option_greeks_from_integration_feed() -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    market = MarketResolver(default_venue="binance", default_market="option").resolve("BTC-260926-120000-C")
+    feed = FakeLiveFeed(
+        {
+            "timestamp": int(now.timestamp() * 1000),
+            "delta": "0.51",
+            "gamma": "0.002",
+            "theta": "-0.04",
+            "vega": "0.11",
+            "markIV": "0.62",
+            "markPrice": "1234.5",
+        }
+    )
+    service = LiveMarketDataService(feed=feed, source_name="binance-live")
+    service.subscribe(MarketDataSubscriptionSpec(market, (OptionGreeks,)))
+
+    event = asyncio.run(_first(service.events()))
+
+    assert feed.symbols == ["BTC-260926-120000-C"]
+    assert event.kind == "option_greeks"
+    assert event.payload.value.delta == Decimal("0.51")  # type: ignore[union-attr]
+    assert event.payload.value.implied_volatility == Decimal("0.62")  # type: ignore[union-attr]
+
+
 def test_ccxt_driver_normalizes_reference_symbol_for_live_ticker() -> None:
     exchange = _FakeAsyncExchange()
     driver = CcxtDriver(async_exchange_factory=lambda exchange_id: exchange)
@@ -201,6 +240,17 @@ def test_ccxt_driver_normalizes_reference_symbol_for_live_ticker() -> None:
 
     assert event["symbol"] == "ETH/USDT"
     assert exchange.symbols == ["ETH/USDT"]
+
+
+def test_ccxt_driver_streams_option_greeks() -> None:
+    exchange = _FakeAsyncExchange()
+    driver = CcxtDriver(async_exchange_factory=lambda exchange_id: exchange)
+
+    event = asyncio.run(_first(driver.watch_option_greeks("binance", SourceSymbol("BTC-260926-120000-C"), params={"max_events": 1})))  # type: ignore[arg-type]
+
+    assert event["symbol"] == "BTC-260926-120000-C"
+    assert event["delta"] == "0.5"
+    assert exchange.symbols == ["BTC-260926-120000-C"]
 
 
 def test_live_market_service_stops_streaming_when_stop_requested() -> None:

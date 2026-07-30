@@ -7,7 +7,9 @@ from typing import Mapping, Protocol, Sequence, overload
 from kairospy.core.intent import Intent, TradeIntent
 from kairospy.core.market import MarketSelector
 from kairospy.core.reference import MarketRef
+from kairospy.core.reference import ExchangeId, MarketTypeId
 from .control import ControlFactory
+from .views import StrategyMarketViews
 
 
 class Context(Protocol):
@@ -31,7 +33,7 @@ class Context(Protocol):
     @overload
     def subscribe(
         self,
-        market: MarketRef,
+        subject: MarketRef,
         *,
         selectors: Sequence[MarketSelector | type],
         identity: str | None = None,
@@ -41,11 +43,11 @@ class Context(Protocol):
     @overload
     def subscribe(
         self,
-        instrument: object | MarketRef,
+        subject: object | MarketRef,
         *,
         selectors: Sequence[MarketSelector | type] | None = None,
-        venue: str | None = None,
-        market: str | None = None,
+        exchange: ExchangeId | str | None = None,
+        market_type: MarketTypeId | str | None = None,
         identity: str | None = None,
     ) -> object:
         ...
@@ -54,9 +56,6 @@ class Context(Protocol):
         self,
         subscription: object,
     ) -> None:
-        ...
-
-    def request_quote(self, instrument: object, *, venue: str | None = None, market: str | None = None) -> object | None:
         ...
 
     def target_position(
@@ -78,6 +77,10 @@ class Context(Protocol):
         ...
 
     def require_view(self, key: str) -> object:
+        ...
+
+    @property
+    def market(self) -> StrategyMarketViews:
         ...
 
     @property

@@ -329,6 +329,8 @@ class MarketDataFacade:
             return client.watch_order_book(request.symbol, limit=book_limit, params=params)
         if request.kind == "trades":
             return client.watch_trades(request.symbol, limit=trade_limit, params=params)
+        if request.kind == "option_greeks":
+            return client.watch_option_greeks(request.symbol, params=params)
         raise ValueError(f"unsupported market data stream kind: {request.kind}")
 
     async def persist(
@@ -490,8 +492,8 @@ def _market_capability(venue: str, market: str, driver_name: DriverName) -> dict
     configured = driver_name is DriverName.ccxt and market_name in _configured_markets(venue_name)
     status = "configured" if configured else "not_configured"
     reason = None if configured else f"{venue_name} {market_name} market data is not configured"
-    historical = _historical_capabilities() if configured else ()
-    live = _live_capabilities() if configured else ()
+    historical = _historical_capabilities(market_name) if configured else ()
+    live = _live_capabilities(market_name) if configured else ()
     return {
         "venue": venue_name,
         "exchange": venue_name,
@@ -506,7 +508,7 @@ def _market_capability(venue: str, market: str, driver_name: DriverName) -> dict
 
 def _configured_markets(venue: str) -> set[str]:
     if venue == "binance":
-        return {"spot", "future", "swap"}
+        return {"spot", "future", "swap", "option"}
     if venue == "hyperliquid":
         return {"swap"}
     if venue in {"okx", "okex"}:
@@ -535,7 +537,7 @@ def _live_market_request(
     if dataset is not None:
         parsed = parse_market_dataset_id(dataset)
         live_kind = _live_kind(parsed.kind)
-        if live_kind not in {"ticker", "orderbook", "trades"}:
+        if live_kind not in {"ticker", "orderbook", "trades", "option_greeks"}:
             raise ValueError(f"dataset does not map to a live market stream: {dataset}")
         return _LiveMarketRequest(
             dataset=parsed.dataset_id,
@@ -550,7 +552,7 @@ def _live_market_request(
     if symbol is None or not symbol.strip():
         raise ValueError("--symbol is required when dataset is not provided")
     live_kind = _live_kind(kind)
-    if live_kind not in {"ticker", "orderbook", "trades"}:
+    if live_kind not in {"ticker", "orderbook", "trades", "option_greeks"}:
         raise ValueError(f"unsupported live market data kind: {kind}")
     return _LiveMarketRequest(
         dataset=None,
@@ -558,11 +560,13 @@ def _live_market_request(
         kind=live_kind,
         symbol=symbol,
         exchange_name=exchange_name,
-        market=_normalize_market(market or "spot"),
+        market=_normalize_market(market or ("option" if live_kind == "option_greeks" else "spot")),
     )
 
 
-def _historical_capabilities() -> tuple[dict[str, object], ...]:
+def _historical_capabilities(market: str) -> tuple[dict[str, object], ...]:
+    if market == "option":
+        return ()
     return (
         {
             "kind": "ohlcv",
@@ -574,12 +578,15 @@ def _historical_capabilities() -> tuple[dict[str, object], ...]:
     )
 
 
-def _live_capabilities() -> tuple[dict[str, object], ...]:
-    return (
+def _live_capabilities(market: str) -> tuple[dict[str, object], ...]:
+    capabilities = [
         {"kind": "ticker", "label": "quotes", "selector": "Quote", "command_kind": "ticker"},
         {"kind": "orderbook", "label": "orderbook", "selector": "OrderBookSnapshot", "command_kind": "orderbook"},
         {"kind": "trades", "label": "trades", "selector": "TradePrint", "command_kind": "trades"},
-    )
+    ]
+    if market == "option":
+        capabilities.append({"kind": "option_greeks", "label": "option greeks", "selector": "OptionGreeks", "command_kind": "option_greeks"})
+    return tuple(capabilities)
 
 
 def _capability_supports(capability: Mapping[str, object], *, kind: str, data_mode: MarketDataMode) -> bool:
@@ -602,6 +609,8 @@ def _live_kind(kind: str) -> str:
         return "ticker"
     if value in {"trade", "trades"}:
         return "trades"
+    if value in {"option_greeks", "greeks", "option-greeks"}:
+        return "option_greeks"
     return value
 
 

@@ -5,7 +5,7 @@ from hashlib import sha1
 from types import MappingProxyType
 from typing import Mapping
 
-from kairospy.core.market import Bar, MarketSelector, OrderBookSnapshot, Quote, RateObservation, TradePrint, market_selector
+from kairospy.core.market import Bar, MarketSelector, OptionGreeks, OrderBookSnapshot, Quote, RateObservation, TradePrint, market_selector
 
 
 STREAM_TICKER = "ticker"
@@ -13,6 +13,7 @@ STREAM_ORDERBOOK = "orderbook"
 STREAM_BAR = "bar"
 STREAM_TRADE = "trade"
 STREAM_MARKET_CONTEXT = "market_context"
+STREAM_OPTION_GREEKS = "option_greeks"
 STREAM_RATE = "rate"
 
 
@@ -51,6 +52,8 @@ def selector_channel(selector: MarketSelector | type) -> str:
         return STREAM_TRADE
     if model is RateObservation:
         return STREAM_MARKET_CONTEXT if selector.basis == "funding_rate" else STREAM_RATE
+    if model is OptionGreeks:
+        return STREAM_OPTION_GREEKS
     if model is OpenInterest:
         return STREAM_MARKET_CONTEXT
     return model.__name__.lower()
@@ -97,6 +100,7 @@ __all__ = [
     "STREAM_BAR",
     "STREAM_MARKET_CONTEXT",
     "STREAM_ORDERBOOK",
+    "STREAM_OPTION_GREEKS",
     "STREAM_RATE",
     "STREAM_TICKER",
     "STREAM_TRADE",

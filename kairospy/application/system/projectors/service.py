@@ -289,19 +289,12 @@ def _fills_from_views(timeline_records: list[dict[str, object]]) -> list[dict[st
 def _market_records_from_views(timeline_records: list[dict[str, object]]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for record in timeline_records:
-        for key, attr, source in (
-            ("market.bars", "bars", "ohlcv"),
-            ("market.trades", "trades", "trade"),
-            ("market.quotes", "quotes", "quote"),
-            ("market.rates", "rates", "rate"),
-        ):
-            payload = _view_payload(record, key)
-            values = payload.get(attr)
-            if not isinstance(values, list):
+        for key, payload in _view_payloads_with_prefix(record, "market.window."):
+            source = _market_window_source(key)
+            if source is None:
                 continue
-            for item in values:
-                if isinstance(item, Mapping):
-                    rows.append({"source": source, **dict(item)})
+            for item in _market_window_items(payload):
+                rows.append({"source": source, **dict(item)})
     return _unique_rows(rows)
 
 
@@ -314,6 +307,27 @@ def _unique_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
 
 def _stable_row_key(row: Mapping[str, object]) -> str:
     return json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _market_window_items(payload: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return ()
+    return tuple(item for item in items if isinstance(item, Mapping))
+
+
+def _market_window_source(key: str) -> str | None:
+    if ".bars." in key:
+        return "ohlcv"
+    if key.endswith(".trades"):
+        return "trade"
+    if key.endswith(".quotes"):
+        return "quote"
+    if key.endswith(".option_greeks"):
+        return "option_greeks"
+    if ".rates." in key:
+        return "rate"
+    return None
 
 
 def _timeline(records: Mapping[str, list[dict[str, object]]]) -> list[dict[str, object]]:
@@ -437,19 +451,12 @@ def _market_series(timeline_records: list[dict[str, object]]) -> list[dict[str, 
 
 def _market_series_from_views(record: Mapping[str, object]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for key, attr, kind, price_key in (
-        ("market.bars", "bars", "ohlcv", "close"),
-        ("market.trades", "trades", "trade", "price"),
-        ("market.quotes", "quotes", "price", None),
-        ("market.rates", "rates", "rate", "mark_price"),
-    ):
-        payload = _view_payload(record, key)
-        values = payload.get(attr)
-        if not isinstance(values, list):
+    for key, payload in _view_payloads_with_prefix(record, "market.window."):
+        kind = _market_window_source(key)
+        if kind is None:
             continue
-        for item in values:
-            if not isinstance(item, Mapping):
-                continue
+        price_key = _market_window_price_key(kind)
+        for item in _market_window_items(payload):
             time = _first_string(item.get("time"), item.get("observed_at"), _record_time(record))
             if time is None:
                 continue
@@ -480,6 +487,16 @@ def _market_series_from_views(record: Mapping[str, object]) -> list[dict[str, ob
                 row["close"] = value
             rows.append(row)
     return rows
+
+
+def _market_window_price_key(kind: str) -> str | None:
+    if kind == "ohlcv":
+        return "close"
+    if kind == "trade":
+        return "price"
+    if kind == "rate":
+        return "mark_price"
+    return None
 
 
 def _market_series_value(item: Mapping[str, object], price_key: str | None) -> object:

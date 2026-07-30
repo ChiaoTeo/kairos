@@ -80,11 +80,15 @@ def test_timeline_loader_derives_records_from_sampled_views(tmp_path) -> None:
                             ]
                         },
                     },
-                    "market.bars": {
+                    "market.window.binance_spot_btc_usdt.bars.1m": {
                         "schema_version": "1",
                         "payload_hash": "bars-1",
                         "payload": {
-                            "bars": [
+                            "market_id": "market:binance:spot:btc_usdt",
+                            "instrument_id": "instrument:spot:btc:usdt",
+                            "market_key": "binance_spot_btc_usdt",
+                            "timeframe": "1m",
+                            "items": [
                                 {
                                     "market_id": "market:binance:spot:btc_usdt",
                                     "instrument_id": "instrument:spot:btc:usdt",
@@ -97,7 +101,7 @@ def test_timeline_loader_derives_records_from_sampled_views(tmp_path) -> None:
                                     "close": "101",
                                     "volume": "10",
                                 }
-                            ]
+                            ],
                         },
                     },
                     "execution.fills": {
@@ -197,11 +201,14 @@ def test_timeline_loader_derives_market_views_and_multi_account_equity(tmp_path)
                             "positions": [],
                         },
                     },
-                    "market.quotes": {
+                    "market.window.binance_spot_btc_usdt.quotes": {
                         "schema_version": "1",
                         "payload_hash": "quote-1",
                         "payload": {
-                            "quotes": [
+                            "market_id": "market:binance:spot:btc_usdt",
+                            "instrument_id": "instrument:spot:btc:usdt",
+                            "market_key": "binance_spot_btc_usdt",
+                            "items": [
                                 {
                                     "market_id": "market:binance:spot:btc_usdt",
                                     "instrument_id": "instrument:spot:btc:usdt",
@@ -210,14 +217,17 @@ def test_timeline_loader_derives_market_views_and_multi_account_equity(tmp_path)
                                     "bid": "100",
                                     "ask": "102",
                                 }
-                            ]
+                            ],
                         },
                     },
-                    "market.trades": {
+                    "market.window.binance_spot_btc_usdt.trades": {
                         "schema_version": "1",
                         "payload_hash": "trade-1",
                         "payload": {
-                            "trades": [
+                            "market_id": "market:binance:spot:btc_usdt",
+                            "instrument_id": "instrument:spot:btc:usdt",
+                            "market_key": "binance_spot_btc_usdt",
+                            "items": [
                                 {
                                     "market_id": "market:binance:spot:btc_usdt",
                                     "instrument_id": "instrument:spot:btc:usdt",
@@ -226,14 +236,16 @@ def test_timeline_loader_derives_market_views_and_multi_account_equity(tmp_path)
                                     "price": "101",
                                     "size": "0.5",
                                 }
-                            ]
+                            ],
                         },
                     },
-                    "market.rates": {
+                    "market.window.binance_swap_btc_usdt.rates.default": {
                         "schema_version": "1",
                         "payload_hash": "rate-1",
                         "payload": {
-                            "rates": [
+                            "rate_id": "funding:btc",
+                            "market_id": "market:binance:swap:btc_usdt",
+                            "items": [
                                 {
                                     "rate_id": "funding:btc",
                                     "market_id": "market:binance:swap:btc_usdt",
@@ -241,7 +253,7 @@ def test_timeline_loader_derives_market_views_and_multi_account_equity(tmp_path)
                                     "rate": "0.0001",
                                     "mark_price": "101",
                                 }
-                            ]
+                            ],
                         },
                     },
                 },
@@ -255,7 +267,7 @@ def test_timeline_loader_derives_market_views_and_multi_account_equity(tmp_path)
     assert {row["equity"] for row in data["records"]["equity"]} == {"1000", "500"}
     assert {row["source"] for row in data["records"]["trades"]} == {"quote", "trade", "rate"}
     market_series = data["series"]["markets"]
-    assert any(row["key"] == "price:binance_spot_btc_usdt" and row["value"] == "101.0" for row in market_series)
+    assert any(row["key"] == "quote:binance_spot_btc_usdt" and row["value"] == "101.0" for row in market_series)
     assert any(row["key"] == "trade:binance_spot_btc_usdt" and row["value"] == "101" for row in market_series)
     assert any(row["key"] == "rate:market:binance:swap:btc_usdt" and row["rate"] == "0.0001" for row in market_series)
 

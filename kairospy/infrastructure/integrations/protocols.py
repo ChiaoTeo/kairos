@@ -49,6 +49,14 @@ class LiveMarketDataFeed(Protocol):
     ) -> AsyncIterator[Mapping[str, object]]:
         ...
 
+    def watch_option_greeks(
+        self,
+        symbol: str,
+        *,
+        params: Mapping[str, object] | None = None,
+    ) -> AsyncIterator[Mapping[str, object]]:
+        ...
+
 
 class ReferenceDataClient(Protocol):
     def fetch_markets(

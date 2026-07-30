@@ -7,12 +7,12 @@ from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.core.views import ViewStore
 
 from .state import MarketViewState
-from .store import MarketStore
+from .projection import MarketProjectionState
 
 
 class MarketProcessor:
     def __init__(self, port: MarketDataPort) -> None:
-        self.state = MarketViewState(MarketStore(data=port))
+        self.state = MarketViewState(MarketProjectionState(data=port))
 
     def on_event(self, event: RuntimeEnvelope) -> None:
         self.state.on_event(event)

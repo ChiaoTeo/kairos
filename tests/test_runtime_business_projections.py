@@ -6,6 +6,7 @@ from decimal import Decimal
 
 from kairospy.application.runtime.orchestration.pipeline import RuntimePortPipeline
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
+from kairospy.application.runtime.dispatch.context import RuntimeContext
 from kairospy.application.runtime.processors.system import runtime_processors
 from kairospy.application.runtime.protocol import RuntimeEnvelope
 from kairospy.application.runtime.ports import DataSubscription, MarketDataSubscriptionSpec
@@ -13,7 +14,7 @@ from kairospy.application.service.modes.backtest import BacktestExecutionService
 from kairospy.core.account import AccountBalance, AccountContext, AccountRef, AccountSnapshot, AccountSource, AccountState, Environment
 from kairospy.core.execution import ExecutionCoordinator, cash_order_request
 from kairospy.core.intent import IntentJournal
-from kairospy.core.market import Bar, Quote
+from kairospy.core.market import Bar, OptionGreeks, OrderBookSnapshot, PriceLevel, Quote, RateObservation, TradePrint
 from kairospy.core.order import OrderSide
 from kairospy.core.reference import MarketRef, MarketResolver, ReferenceCatalog
 from kairospy.core.views import ViewSchema, ViewStore
@@ -141,9 +142,195 @@ def test_market_view_state_publishes_business_views() -> None:
     pipeline.on_event(event)
 
     assert views.require("market.subscriptions").active_count == 1
-    assert views.require("market.quotes").quotes[0].bid == Decimal("100")
-    assert views.require("market.fields").fields
-    assert views.require("market.observations").observations[0].kind == "quote"
+    quote_window = views.require("market.window.binance_spot_btc_usdt.quotes")
+    assert quote_window.latest.bid == Decimal("100")
+    assert quote_window.size == 1
+    assert views.require("market.windows").total_count == 1
+
+
+def test_strategy_context_reads_market_views_through_typed_api() -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    views = ViewStore()
+    data = FakeMarketDataService()
+    pipeline = RuntimePortPipeline(
+        views=views,
+        processors=runtime_processors(strategy_id="s", intents=IntentJournal(), data=data),
+    )
+    market = data.market
+
+    pipeline.on_event(
+        RuntimeEnvelope(
+            "market",
+            "quote",
+            now,
+            1,
+            Quote(
+                instrument_id=market.instrument_id,
+                market_id=market.market_id,
+                market_key=market.market_key,
+                time=now,
+                bid=Decimal("100"),
+                ask=Decimal("101"),
+                source="binance",
+            ),
+        )
+    )
+    pipeline.on_event(
+        RuntimeEnvelope(
+            "market",
+            "bar",
+            now,
+            2,
+            Bar(
+                instrument_id=market.instrument_id,
+                market_id=market.market_id,
+                market_key=market.market_key,
+                time=now,
+                timeframe="1m",
+                open=Decimal("100"),
+                high=Decimal("102"),
+                low=Decimal("99"),
+                close=Decimal("101"),
+                volume=Decimal("10"),
+                source="binance",
+            ),
+        )
+    )
+    pipeline.on_event(
+        RuntimeEnvelope(
+            "market",
+            "funding_rate",
+            now,
+            3,
+            RateObservation(
+                rate_id=str(market.market_id),
+                market_id=market.market_id,
+                instrument_id=market.instrument_id,
+                time=now,
+                rate=Decimal("0.0001"),
+                basis="funding_rate",
+                source="binance",
+            ),
+        )
+    )
+    pipeline.on_event(
+        RuntimeEnvelope(
+            "market",
+            "option_greeks",
+            now,
+            4,
+            OptionGreeks(
+                instrument_id=market.instrument_id,
+                market_id=market.market_id,
+                market_key=market.market_key,
+                time=now,
+                delta=Decimal("0.52"),
+                gamma=Decimal("0.01"),
+                theta=Decimal("-0.05"),
+                vega=Decimal("0.12"),
+                implied_volatility=Decimal("0.65"),
+                mark_price=Decimal("1200"),
+                source="binance",
+            ),
+        )
+    )
+
+    context = RuntimeContext(strategy_id="s", views=views)
+    quotes = context.market.quotes("BTC/USDT", exchange="binance", market_type="spot")
+    bars = context.market.bars("BTC/USDT", timeframe="1m", exchange="binance", market_type="spot")
+    rates = context.market.rates("BTC/USDT", basis="funding_rate", exchange="binance", market_type="spot")
+    greeks = context.market.option_greeks("BTC/USDT", exchange="binance", market_type="spot")
+
+    assert isinstance(quotes.latest, Quote)
+    assert quotes.latest.ask == Decimal("101")
+    assert isinstance(bars.latest, Bar)
+    assert bars.latest.close == Decimal("101")
+    assert isinstance(rates.latest, RateObservation)
+    assert rates.latest.rate == Decimal("0.0001")
+    assert isinstance(greeks.latest, OptionGreeks)
+    assert greeks.latest.delta == Decimal("0.52")
+    assert views.require("market.window.binance_spot_btc_usdt.option_greeks").latest.implied_volatility == Decimal("0.65")
+
+
+def test_market_view_windows_keep_recent_history_and_orderbook_change() -> None:
+    first = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    second = datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc)
+    views = ViewStore()
+    data = FakeMarketDataService()
+    pipeline = RuntimePortPipeline(
+        views=views,
+        processors=runtime_processors(strategy_id="s", intents=IntentJournal(), data=data),
+    )
+    market = data.market
+
+    for sequence, trade in (
+        (
+            1,
+            TradePrint(
+                instrument_id=market.instrument_id,
+                market_id=market.market_id,
+                market_key=market.market_key,
+                time=first,
+                trade_id="t1",
+                price=Decimal("100"),
+                size=Decimal("1"),
+                source="binance",
+            ),
+        ),
+        (
+            2,
+            TradePrint(
+                instrument_id=market.instrument_id,
+                market_id=market.market_id,
+                market_key=market.market_key,
+                time=second,
+                trade_id="t2",
+                price=Decimal("101"),
+                size=Decimal("2"),
+                source="binance",
+            ),
+        ),
+    ):
+        pipeline.on_event(RuntimeEnvelope("market", "trade", trade.time, sequence, trade))
+
+    for sequence, book in (
+        (
+            3,
+            OrderBookSnapshot(
+                instrument_id=market.instrument_id,
+                market_id=market.market_id,
+                market_key=market.market_key,
+                time=first,
+                bids=(PriceLevel(Decimal("99"), Decimal("1")),),
+                asks=(PriceLevel(Decimal("101"), Decimal("1")),),
+                source="binance",
+            ),
+        ),
+        (
+            4,
+            OrderBookSnapshot(
+                instrument_id=market.instrument_id,
+                market_id=market.market_id,
+                market_key=market.market_key,
+                time=second,
+                bids=(PriceLevel(Decimal("100"), Decimal("2")),),
+                asks=(PriceLevel(Decimal("101"), Decimal("3")),),
+                source="binance",
+            ),
+        ),
+    ):
+        pipeline.on_event(RuntimeEnvelope("market", "orderbook", book.time, sequence, book))
+
+    context = RuntimeContext(strategy_id="s", views=views)
+    trades = context.market.trades("BTC/USDT", exchange="binance", market_type="spot")
+    orderbooks = context.market.orderbooks("BTC/USDT", exchange="binance", market_type="spot")
+
+    assert trades.size == 2
+    assert trades.previous.price == Decimal("100")
+    assert trades.latest.price == Decimal("101")
+    assert orderbooks.size == 2
+    assert orderbooks.current.bid1.price == Decimal("100")
+    assert orderbooks.change.spread_change == Decimal("-1")
 
 
 def test_account_port_publishes_current_account_view() -> None:

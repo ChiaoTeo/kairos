@@ -55,7 +55,7 @@ class TargetPositionStrategy:
         return None
 
 
-def test_backtest_execution_service_fills_target_position_from_market_fields(tmp_path) -> None:
+def test_backtest_execution_service_fills_target_position_from_market_quote(tmp_path) -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     market = MarketResolver(default_venue="binance", default_market="spot").resolve("BTC/USDT")
     account_config = SimulatedAccount("main", Decimal("1000"), cash_currency="USDT", broker="backtest")

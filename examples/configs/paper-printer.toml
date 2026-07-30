@@ -8,8 +8,8 @@ ref = "paper"
 
 [strategy.params]
 instrument = "BTC/USDT"
-venue = "binance"
-market = "spot"
+exchange = "binance"
+market_type = "spot"
 
 [market]
 venue = "binance"

@@ -170,6 +170,8 @@ def _kind_from_subscription(subscription: MarketSubscription) -> str:
         return "orderbook"
     if "Quote" in models:
         return "ticker"
+    if "OptionGreeks" in models:
+        return "option_greeks"
     if models:
         return sorted(models)[0].lower()
     return subscription.kind
@@ -190,7 +192,7 @@ def market_partition_for(*, kind: str, timeframe: str | None = None) -> Partitio
     normalized_kind = kind.strip().lower()
     if normalized_kind in {"trades", "trade", "orderbook", "order_book"}:
         return PartitionSpec(time_grain="day")
-    if normalized_kind in {"ticker", "quote"}:
+    if normalized_kind in {"ticker", "quote", "option_greeks", "greeks"}:
         return PartitionSpec(time_grain="day")
     if normalized_kind == "funding_rate":
         return PartitionSpec(time_grain="month")

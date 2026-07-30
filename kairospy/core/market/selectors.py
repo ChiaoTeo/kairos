@@ -14,7 +14,7 @@ class MarketSelector:
     attributes: tuple[str, ...] = ()
     subject_type: str = "market"
     interval: str | None = None
-    depth: int | None = None
+    depth: int | str | None = None
     basis: MarketBasis | None = None
     derivation: MarketDerivation = "direct"
 
@@ -26,8 +26,7 @@ class MarketSelector:
         object.__setattr__(self, "interval", _optional_text(self.interval, "market selector interval"))
         object.__setattr__(self, "basis", _optional_text(self.basis, "market selector basis"))
         object.__setattr__(self, "derivation", _required_text(self.derivation, "market selector derivation"))
-        if self.depth is not None and self.depth <= 0:
-            raise ValueError("market selector depth must be positive")
+        object.__setattr__(self, "depth", _depth(self.depth))
 
     @property
     def model_name(self) -> str:
@@ -56,7 +55,7 @@ class MarketSelectable:
         *attributes: str,
         subject_type: str = "market",
         interval: str | None = None,
-        depth: int | None = None,
+        depth: int | str | None = None,
         basis: str | None = None,
         derivation: str = "direct",
     ) -> MarketSelector:
@@ -77,7 +76,7 @@ def market_selector(
     attributes: tuple[str, ...] = (),
     subject_type: str = "market",
     interval: str | None = None,
-    depth: int | None = None,
+    depth: int | str | None = None,
     basis: str | None = None,
     derivation: str = "direct",
 ) -> MarketSelector:
@@ -106,6 +105,19 @@ def _optional_text(value: object | None, label: str) -> str | None:
     if value is None:
         return None
     return _required_text(value, label)
+
+
+def _depth(value: object | None) -> int | str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text == "full":
+            return "full"
+        value = int(text)
+    if int(value) <= 0:
+        raise ValueError("market selector depth must be positive")
+    return int(value)
 
 
 __all__ = ["MarketBasis", "MarketDerivation", "MarketSelectable", "MarketSelector", "market_selector"]

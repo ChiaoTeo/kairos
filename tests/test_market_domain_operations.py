@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable, Mapping
+from decimal import Decimal
 
 import pytest
 
 from kairospy.application.runtime.dispatch.context import RuntimeContext
 from kairospy.application.runtime.ports import DataSubscription, MarketDataSubscriptionSpec
-from kairospy.application.service.domain.market import MarketDataOperationsService, MarketDataSpec
+from kairospy.application.service.domain.market import IterableMarketEventSource, MarketDataOperationsService, MarketDataSpec
+from kairospy.core.market import OptionGreeks
 from kairospy.infrastructure.data import DataStore
 
 
@@ -89,6 +91,31 @@ def test_market_data_operations_persists_stream_rows(tmp_path) -> None:
     assert service.read(spec)[0]["price"] == "100"
 
 
+def test_option_greeks_rows_replay_as_typed_market_events() -> None:
+    source = IterableMarketEventSource(
+        "binance-option",
+        (
+            {
+                "time": "2026-01-01T00:00:00+00:00",
+                "kind": "option_greeks",
+                "instrument_id": "instrument:option:btc:260926_120000_c",
+                "market_id": "market:binance:option:btc_260926_120000_c",
+                "market_key": "binance_option_btc_260926_120000_c",
+                "delta": "0.5",
+                "gamma": "0.001",
+                "implied_volatility": "0.6",
+                "mark_price": "1234",
+            },
+        ),
+    )
+
+    event = asyncio.run(_first(source.events()))
+
+    assert event.kind == "option_greeks"
+    assert isinstance(event.payload.value, OptionGreeks)
+    assert event.payload.value.implied_volatility == Decimal("0.6")
+
+
 def test_runtime_context_subscribes_by_market_dataset_id() -> None:
     port = RecordingMarketDataPort()
     context = RuntimeContext(strategy_id="strategy-a", data=port)
@@ -115,3 +142,9 @@ class RecordingMarketDataPort:
 
     def subscriptions(self) -> tuple[DataSubscription, ...]:
         return tuple(self.items)
+
+
+async def _first(events):
+    async for event in events:
+        return event
+    raise AssertionError("no events")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from kairospy.core.market import Bar, MarketSelector, OrderBookSnapshot, Quote, RateObservation, TradePrint
+from kairospy.core.market import Bar, MarketSelector, OptionGreeks, OrderBookSnapshot, Quote, RateObservation, TradePrint
 from kairospy.core.reference import MarketRef
 from kairospy.core.reference.identity import reference_slug
 
@@ -22,6 +22,8 @@ class MarketDataset:
 
     @property
     def source_symbol(self) -> str:
+        if self.market == "option" or self.kind in {"option_greeks", "greeks"}:
+            return "-".join(part.upper() for part in self.symbol.split("_") if part)
         if "_" in self.symbol:
             base, quote = self.symbol.split("_", 1)
             return f"{base.upper()}/{quote.upper()}"
@@ -47,6 +49,8 @@ class MarketDataset:
             return RateObservation.select(basis="funding_rate")
         if self.kind == "rate":
             return RateObservation.select()
+        if self.kind in {"option_greeks", "greeks"}:
+            return OptionGreeks.select()
         raise ValueError(f"unsupported market dataset kind: {self.kind}")
 
 
