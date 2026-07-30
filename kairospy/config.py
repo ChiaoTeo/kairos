@@ -5,6 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Mapping
 import tomllib
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 CONFIG_FILENAME = "kairos.toml"
@@ -17,6 +18,9 @@ VALID_ACCOUNT_ENVIRONMENTS = frozenset({"backtest", "paper", "live", "sandbox", 
 DEFAULT_ACCOUNT_CASH = Decimal("100000")
 DEFAULT_ACCOUNT_CURRENCY = "USD"
 DEFAULT_ACCOUNT_FEE_RATE = Decimal("0")
+DEFAULT_PROJECT_TIMEZONE = "UTC"
+DEFAULT_PROJECT_LANGUAGE = "en"
+VALID_PROJECT_LANGUAGES = frozenset({"en", "zh-CN"})
 
 
 class ConfigError(ValueError):
@@ -33,6 +37,28 @@ class KairosConfig:
     def project_name(self) -> str | None:
         value = self._section_value("project", "name")
         return value if isinstance(value, str) and value else None
+
+    @property
+    def timezone_name(self) -> str:
+        value = self._section_value("project", "timezone")
+        name = value if isinstance(value, str) and value.strip() else DEFAULT_PROJECT_TIMEZONE
+        try:
+            ZoneInfo(name)
+        except ZoneInfoNotFoundError as error:
+            raise ValueError(f"unsupported project.timezone: {name!r}") from error
+        return name
+
+    @property
+    def timezone(self) -> ZoneInfo:
+        return ZoneInfo(self.timezone_name)
+
+    @property
+    def language(self) -> str:
+        value = self._section_value("project", "language")
+        language = _normalize_language(value if isinstance(value, str) else DEFAULT_PROJECT_LANGUAGE)
+        if language not in VALID_PROJECT_LANGUAGES:
+            raise ValueError(f"unsupported project.language: {value!r}")
+        return language
 
     @property
     def data_root(self) -> Path:
@@ -390,6 +416,16 @@ def _valid_optional_text(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _normalize_language(value: str) -> str:
+    text = value.strip().replace("_", "-")
+    lowered = text.lower()
+    if lowered in {"en", "en-us", "en-gb"}:
+        return "en"
+    if lowered in {"zh", "zh-cn", "zh-hans", "cn"}:
+        return "zh-CN"
+    return text
+
+
 def _decimal(value: object, source: str) -> Decimal:
     try:
         return Decimal(str(value))
@@ -579,10 +615,13 @@ __all__ = [
     "DEFAULT_DATA_ROOT",
     "DEFAULT_REFERENCE_ROOT",
     "DEFAULT_STORAGE_FORMAT",
+    "DEFAULT_PROJECT_LANGUAGE",
+    "DEFAULT_PROJECT_TIMEZONE",
     "KairosConfig",
     "RunConfig",
     "RunConfigValidationReport",
     "VALID_ACCOUNT_ENVIRONMENTS",
+    "VALID_PROJECT_LANGUAGES",
     "VALID_RUN_MODES",
     "find_config_path",
     "find_manifest_path",

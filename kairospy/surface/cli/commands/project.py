@@ -51,6 +51,8 @@ def _render_status(result: object) -> str:
             "Project Status",
             f"  root             {payload['root']}",
             f"  manifest         {payload['manifest'] or '<defaults>'}",
+            f"  timezone         {payload['timezone']}",
+            f"  language         {payload['language']}",
             f"  workspace        {payload['workspace_root']}",
             f"  accounts         {payload['accounts']}",
             f"  runs             {payload['runs']}",

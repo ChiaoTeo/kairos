@@ -80,6 +80,7 @@ def configured_paper(
     run_config = load_required_run_config(config_path, mode=RuntimeMode.PAPER, error_type=PaperConfigurationError, strategy_ref=strategy_ref)
     paper = _table(run_config.values.get("paper"), "paper")
     market_config = _table(run_config.values.get("market"), "market") if run_config.values.get("market") is not None else {}
+    timeline_config = _table(run_config.values.get("timeline"), "timeline") if run_config.values.get("timeline") is not None else {}
     execution_config = _table(run_config.values.get("execution"), "execution") if run_config.values.get("execution") is not None else {}
     account_config = _configured_account(
         run_config.account_ref,
@@ -125,6 +126,7 @@ def configured_paper(
             "market": {**dict(market_config), **source_config},
             "account": {"cash": account_config.cash, "currency": account_config.currency, "fee_rate": account_config.fee_rate},
             "execution": dict(execution_config),
+            "timeline": dict(timeline_config),
         },
         account_config=account_config,
         paper_config=paper,

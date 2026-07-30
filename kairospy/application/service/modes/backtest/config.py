@@ -74,6 +74,7 @@ def configured_backtest(config_path: Path, *, strategy_ref: str | None = None) -
     values = run_config.values
     strategy_params = _strategy_params(values)
     backtest = _table(values.get("backtest"), "backtest")
+    timeline_config = _table(values.get("timeline"), "timeline") if values.get("timeline") is not None else {}
     execution_config = _table(values.get("execution"), "execution") if values.get("execution") is not None else {}
     account_defaults = run_config.account_defaults
     account_config = BacktestAccountConfig(
@@ -106,6 +107,7 @@ def configured_backtest(config_path: Path, *, strategy_ref: str | None = None) -
             account=account_config,
             data=data,
             market_policy=market_policy,
+            timeline=timeline_config,
         ),
         data=data,
         account_config=account_config,
@@ -171,6 +173,7 @@ def _normalized_config(
     account: BacktestAccountConfig,
     data: BacktestMarketDataService,
     market_policy: ReplayMarketDataPolicy,
+    timeline: Mapping[str, object],
 ) -> Mapping[str, object]:
     return {
         "run": {"id": run_id, "mode": RuntimeMode.BACKTEST.value, "strategy": strategy},
@@ -192,6 +195,7 @@ def _normalized_config(
             "price_field": account.price_field,
         },
         "execution": dict(execution),
+        "timeline": dict(timeline),
     }
 
 

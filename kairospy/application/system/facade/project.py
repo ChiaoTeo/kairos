@@ -33,6 +33,8 @@ class ProjectFacade:
         return {
             "root": str(workspace.root),
             "manifest": str(workspace.manifest_path) if workspace.manifest_path is not None else None,
+            "timezone": workspace.manifest.timezone_name,
+            "language": workspace.manifest.language,
             "workspace_root": str(workspace.workspace_root),
             "accounts": len(workspace.accounts.list()),
             "runs": len(workspace.run_index.list()),
@@ -60,6 +62,8 @@ class ProjectFacade:
         )
         return {
             "project_name": config.project_name or config.root.name,
+            "timezone": config.timezone_name,
+            "language": config.language,
             "root": config.root,
             "data_root": config.data_root,
             "reference_root": config.reference_root,
@@ -75,6 +79,7 @@ def _workspace_manifest(project_name: str) -> str:
             "[project]",
             f'name = "{project_name}"',
             'timezone = "UTC"',
+            'language = "en"',
             "",
             "[data]",
             'storage_format = "parquet"',

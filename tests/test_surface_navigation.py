@@ -17,6 +17,7 @@ def test_interactive_product_order_is_stable() -> None:
         "reference",
         "strategy",
         "config",
+        "timeline",
     ]
 
 

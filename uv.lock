@@ -1382,6 +1382,7 @@ dependencies = [
     { name = "click" },
     { name = "pandas" },
     { name = "pyarrow" },
+    { name = "requests" },
     { name = "typer" },
 ]
 
@@ -1420,6 +1421,7 @@ requires-dist = [
     { name = "pandas", marker = "extra == 'notebook'", specifier = ">=2,<4" },
     { name = "polars", marker = "extra == 'query'", specifier = ">=1.30,<2" },
     { name = "pyarrow", specifier = ">=22,<26" },
+    { name = "requests", specifier = ">=2,<3" },
     { name = "rich", marker = "extra == 'tui'", specifier = ">=13,<15" },
     { name = "typer", specifier = ">=0.12,<1" },
 ]

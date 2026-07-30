@@ -310,7 +310,9 @@ def test_main_cli_initializes_local_project(tmp_path) -> None:
     result = CliRunner().invoke(app, ["project", "init", str(tmp_path / "demo")], catch_exceptions=False)
 
     assert result.exit_code == 0
-    assert (tmp_path / "demo" / ".kairos" / "kairos.toml").exists()
+    manifest = tmp_path / "demo" / ".kairos" / "kairos.toml"
+    assert manifest.exists()
+    assert 'language = "en"' in manifest.read_text(encoding="utf-8")
     assert (tmp_path / "demo" / ".kairos" / "accounts").is_dir()
     operation = json.loads((tmp_path / "demo" / ".kairos" / "state" / "operations.jsonl").read_text(encoding="utf-8"))
     assert operation["action"] == "project.init"
@@ -499,7 +501,10 @@ def test_root_output_option_controls_command_output(tmp_path, monkeypatch) -> No
     result = CliRunner().invoke(app, ["--output", "json", "project", "status"], catch_exceptions=False)
 
     assert result.exit_code == 0
-    assert json.loads(result.output)["root"] == str(tmp_path)
+    payload = json.loads(result.output)
+    assert payload["root"] == str(tmp_path)
+    assert payload["timezone"] == "UTC"
+    assert payload["language"] == "en"
 
 
 def test_command_format_option_overrides_root_output(tmp_path, monkeypatch) -> None:

@@ -151,7 +151,7 @@ def test_run_environment_clock_callbacks_use_strategy_time(tmp_path: Path, monke
         ],
     )
 
-    result = env.builder().strategy(strategy).source(data).clock(clock).run()
+    result = env.run(strategy=strategy, sources=[data], clocks=[clock])
 
     assert result.runtime.event_count == 4
     assert strategy.callbacks == [
@@ -184,6 +184,78 @@ def test_run_environment_interval_clock_source(tmp_path: Path, monkeypatch) -> N
         datetime.fromisoformat("2026-01-01T10:01:00+00:00"),
         datetime.fromisoformat("2026-01-01T10:02:00+00:00"),
     ]
+
+
+def test_run_environment_uses_project_timezone_for_naive_clock_times(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".kairos").mkdir()
+    (tmp_path / ".kairos" / "kairos.toml").write_text(
+        "\n".join(["[project]", 'name = "tz-test"', 'timezone = "Asia/Shanghai"', 'language = "zh"']),
+        encoding="utf-8",
+    )
+    config_path = _write_minimal_config(tmp_path, run_id="timezone-clock")
+    env = RunEnvironment.from_config(config_path)
+    clock = env.clocks.interval(
+        "local-clock",
+        start="2026-01-01T09:30:00",
+        end="2026-01-01T09:31:00",
+        every="1m",
+    )
+
+    async def collect():
+        return [event async for event in clock.events()]
+
+    import asyncio
+
+    events = asyncio.run(collect())
+
+    assert env.timezone_name == "Asia/Shanghai"
+    assert env.language == "zh-CN"
+    assert env.normalized_config["project"]["timezone"] == "Asia/Shanghai"
+    assert env.normalized_config["project"]["language"] == "zh-CN"
+    assert [event.time.isoformat() for event in events] == [
+        "2026-01-01T09:30:00+08:00",
+        "2026-01-01T09:31:00+08:00",
+    ]
+
+
+def test_run_environment_uses_project_timezone_for_naive_csv_times(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".kairos").mkdir()
+    (tmp_path / ".kairos" / "kairos.toml").write_text(
+        "\n".join(["[project]", 'name = "tz-test"', 'timezone = "America/New_York"']),
+        encoding="utf-8",
+    )
+    config_path = _write_minimal_config(tmp_path, run_id="timezone-csv")
+    (tmp_path / "news.csv").write_text(
+        "\n".join(
+            [
+                "available_at,observed_at,symbol,headline,sentiment",
+                "2026-01-01T09:30:00,2026-01-01T09:29:30,BTC/USDT,local open,0.72",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    env = RunEnvironment.from_config(config_path)
+    source = env.sources.csv_events(
+        "news.csv",
+        kind="news.sentiment",
+        time_field="available_at",
+        observed_at_field="observed_at",
+        available_at_field="available_at",
+        subject_id_field="symbol",
+    )
+
+    async def collect():
+        return [event async for event in source.events()]
+
+    import asyncio
+
+    events = asyncio.run(collect())
+
+    assert env.parse_time("2026-01-01T09:30:00").isoformat() == "2026-01-01T09:30:00-05:00"
+    assert events[0].time.isoformat() == "2026-01-01T09:30:00-05:00"
+    assert events[0].payload.observed_at.isoformat() == "2026-01-01T09:29:30-05:00"
 
 
 def test_run_environment_resolves_registered_run_name(tmp_path: Path, monkeypatch) -> None:

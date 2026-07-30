@@ -7,6 +7,7 @@ from typing import Iterable, Mapping
 
 
 ARTIFACT_FILES = (
+    "timeline.jsonl",
     "decision_trace.jsonl",
     "risk_snapshots.jsonl",
     "equity.jsonl",
@@ -28,7 +29,8 @@ class TimelineDataLoader:
         metrics = _read_json(root / "metrics.json")
         config = _read_json(root / "config.normalized.json")
         state = _read_json(root / "state.json")
-        records = {
+        artifact_records = {
+            "timelineRecords": _read_jsonl(root / "timeline.jsonl"),
             "decisionTrace": _read_jsonl(root / "decision_trace.jsonl"),
             "riskSnapshots": _read_jsonl(root / "risk_snapshots.jsonl"),
             "equity": _read_jsonl(root / "equity.jsonl"),
@@ -36,6 +38,7 @@ class TimelineDataLoader:
             "intents": _read_jsonl(root / "intent_states.jsonl"),
             "trades": _read_jsonl(root / "trades.jsonl"),
         }
+        records = _records_from_view_snapshots(artifact_records)
         timeline = _timeline(records)
         files = {
             name: {"path": str(root / name), "exists": (root / name).exists(), "rows": _row_count(records, name)}
@@ -60,6 +63,7 @@ class TimelineDataLoader:
                 "equity": _equity_series(records["equity"], records["riskSnapshots"]),
                 "risk": _risk_series(records["riskSnapshots"]),
                 "fundingRates": _funding_series(records["riskSnapshots"]),
+                "markets": _market_series(records["timelineRecords"]),
             },
             "records": records,
             "timeline": timeline,
@@ -113,6 +117,7 @@ def list_instances(root: Path, *, mode: str | None = None, run_id: str | None = 
                 "strategy_id": _first_string(summary.get("strategy_id"), _context_value(state, "strategy")),
                 "updated_at": _mtime(path),
                 "directory": str(path),
+                "timeline_count": _count_lines(path / "timeline.jsonl"),
                 "decision_trace_count": _count_lines(path / "decision_trace.jsonl"),
                 "risk_snapshot_count": _count_lines(path / "risk_snapshots.jsonl"),
                 "equity_count": _count_lines(path / "equity.jsonl"),
@@ -146,11 +151,161 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
                 raise ValueError(f"invalid JSONL file: {path}:{line_number}") from error
             if isinstance(value, Mapping):
                 rows.append(dict(value))
-    return rows
+    return _unique_rows(rows)
+
+
+def _records_from_view_snapshots(records: Mapping[str, list[dict[str, object]]]) -> dict[str, list[dict[str, object]]]:
+    timeline_records = records.get("timelineRecords", [])
+    if not any(_sampled_views(row) for row in timeline_records):
+        return {key: list(value) for key, value in records.items()}
+    derived = {
+        "timelineRecords": list(timeline_records),
+        "decisionTrace": _decision_trace_from_views(timeline_records),
+        "riskSnapshots": _risk_snapshots_from_views(timeline_records),
+        "equity": _equity_from_views(timeline_records),
+        "fills": list(records.get("fills", [])),
+        "intents": _intents_from_views(timeline_records),
+        "trades": _market_records_from_views(timeline_records),
+    }
+    return {
+        key: rows if rows else list(records.get(key, []))
+        for key, rows in derived.items()
+    }
+
+
+def _sampled_views(row: Mapping[str, object]) -> Mapping[str, object]:
+    views = row.get("views")
+    return views if isinstance(views, Mapping) else {}
+
+
+def _view_payload(row: Mapping[str, object], key: str) -> Mapping[str, object]:
+    view = _sampled_views(row).get(key)
+    if not isinstance(view, Mapping):
+        return {}
+    payload = view.get("payload")
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _view_payloads_with_prefix(row: Mapping[str, object], prefix: str) -> list[tuple[str, Mapping[str, object]]]:
+    payloads: list[tuple[str, Mapping[str, object]]] = []
+    for key, view in _sampled_views(row).items():
+        if not isinstance(key, str) or not key.startswith(prefix) or not isinstance(view, Mapping):
+            continue
+        payload = view.get("payload")
+        if isinstance(payload, Mapping):
+            payloads.append((key, payload))
+    return payloads
+
+
+def _decision_trace_from_views(timeline_records: list[dict[str, object]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for record in timeline_records:
+        payload = _view_payload(record, "strategy.decision_trace")
+        records = payload.get("records")
+        if isinstance(records, list):
+            rows.extend(dict(item) for item in records if isinstance(item, Mapping))
+    return _unique_rows(rows)
+
+
+def _risk_snapshots_from_views(timeline_records: list[dict[str, object]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for record in timeline_records:
+        payload = _view_payload(record, "account.risk_snapshots")
+        snapshots = payload.get("snapshots")
+        if isinstance(snapshots, list):
+            rows.extend(dict(item) for item in snapshots if isinstance(item, Mapping))
+    return _unique_rows(rows)
+
+
+def _equity_from_views(timeline_records: list[dict[str, object]]) -> list[dict[str, object]]:
+    curve_rows: list[dict[str, object]] = []
+    current_rows: list[dict[str, object]] = []
+    for record in timeline_records:
+        record_time = _record_time(record)
+        curve = _view_payload(record, "account.equity_curve")
+        points = curve.get("points")
+        if isinstance(points, list):
+            curve_rows.extend(dict(item) for item in points if isinstance(item, Mapping))
+        for _key, account in _view_payloads_with_prefix(record, "account.current."):
+            time = _first_string(account.get("last_event_time"), record_time)
+            if time is None:
+                continue
+            current_rows.append(
+                {
+                    "time": time,
+                    "equity": account.get("equity"),
+                    "cash": account.get("cash"),
+                    "net_profit": account.get("net_profit"),
+                    "total_return": account.get("total_return"),
+                    "positions": account.get("positions", []),
+                }
+            )
+    return _unique_rows(curve_rows or current_rows)
+
+
+def _intents_from_views(timeline_records: list[dict[str, object]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for record in timeline_records:
+        record_time = _record_time(record)
+        payload = _view_payload(record, "intent.journal")
+        states = payload.get("states")
+        if not isinstance(states, list):
+            continue
+        for item in states:
+            if isinstance(item, Mapping):
+                row = dict(item)
+                row.setdefault("updated_at", record_time)
+                rows.append(row)
+    return _unique_rows(rows)
+
+
+def _market_records_from_views(timeline_records: list[dict[str, object]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for record in timeline_records:
+        for key, attr, source in (
+            ("market.bars", "bars", "ohlcv"),
+            ("market.trades", "trades", "trade"),
+            ("market.quotes", "quotes", "quote"),
+            ("market.rates", "rates", "rate"),
+        ):
+            payload = _view_payload(record, key)
+            values = payload.get(attr)
+            if not isinstance(values, list):
+                continue
+            for item in values:
+                if isinstance(item, Mapping):
+                    rows.append({"source": source, **dict(item)})
+    return _unique_rows(rows)
+
+
+def _unique_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    unique: dict[str, dict[str, object]] = {}
+    for row in rows:
+        unique[_stable_row_key(row)] = row
+    return [unique[key] for key in sorted(unique, key=lambda item: (_record_time(unique[item]) or "", item))]
+
+
+def _stable_row_key(row: Mapping[str, object]) -> str:
+    return json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
 
 
 def _timeline(records: Mapping[str, list[dict[str, object]]]) -> list[dict[str, object]]:
     by_time: dict[str, dict[str, object]] = {}
+    timeline_records = records.get("timelineRecords", [])
+    if timeline_records:
+        for row in timeline_records:
+            time = _record_time(row)
+            if time is None:
+                continue
+            item = by_time.setdefault(time, {"time": time, "counts": {}})
+            counts = item["counts"] if isinstance(item["counts"], dict) else {}
+            counts["timelineRecords"] = int(counts.get("timelineRecords", 0)) + 1
+            trigger = row.get("trigger")
+            if isinstance(trigger, str) and trigger:
+                trigger_key = f"trigger:{trigger}"
+                counts[trigger_key] = int(counts.get(trigger_key, 0)) + 1
+            item["counts"] = counts
+        return [by_time[key] for key in sorted(by_time)]
     for key, rows in records.items():
         for row in rows:
             time = _record_time(row)
@@ -177,7 +332,7 @@ def _record_time(row: Mapping[str, object]) -> str | None:
 
 
 def _equity_series(equity: list[dict[str, object]], risk: list[dict[str, object]]) -> list[dict[str, object]]:
-    rows = equity if equity else risk
+    rows = equity if len(equity) >= len(risk) else risk
     return [
         {
             "time": row.get("time"),
@@ -216,6 +371,111 @@ def _funding_series(risk: list[dict[str, object]]) -> list[dict[str, object]]:
     return rows
 
 
+def _market_series(timeline_records: list[dict[str, object]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for record in timeline_records:
+        view_rows = _market_series_from_views(record)
+        rows.extend(view_rows)
+        if view_rows:
+            continue
+        record_time = _record_time(record)
+        state = record.get("state")
+        if not isinstance(state, Mapping):
+            continue
+        market = state.get("market")
+        if not isinstance(market, Mapping):
+            continue
+        for key, item in market.items():
+            if not isinstance(item, Mapping):
+                continue
+            time = _first_string(item.get("time"), record_time)
+            price = item.get("price")
+            if time is None or price is None:
+                continue
+            market_key = str(key)
+            rows.append(
+                {
+                    "time": time,
+                    "key": f"market:{market_key}",
+                    "label": _market_label(item, market_key),
+                    "kind": "price",
+                    "marketId": item.get("market_id"),
+                    "instrumentId": item.get("instrument_id"),
+                    "value": price,
+                    "close": price,
+                }
+            )
+    return _unique_rows(rows)
+
+
+def _market_series_from_views(record: Mapping[str, object]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for key, attr, kind, price_key in (
+        ("market.bars", "bars", "ohlcv", "close"),
+        ("market.trades", "trades", "trade", "price"),
+        ("market.quotes", "quotes", "price", None),
+        ("market.rates", "rates", "rate", "mark_price"),
+    ):
+        payload = _view_payload(record, key)
+        values = payload.get(attr)
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, Mapping):
+                continue
+            time = _first_string(item.get("time"), item.get("observed_at"), _record_time(record))
+            if time is None:
+                continue
+            value = _market_series_value(item, price_key)
+            if value is None:
+                continue
+            market_key = _market_label(item, str(item.get("market_key") or item.get("market_id") or item.get("instrument_id") or item.get("rate_id") or key))
+            row = {
+                "time": time,
+                "key": f"{kind}:{market_key}",
+                "label": market_key,
+                "kind": kind,
+                "marketId": item.get("market_id"),
+                "instrumentId": item.get("instrument_id"),
+                "value": value,
+            }
+            if kind == "ohlcv":
+                row.update({
+                    "open": item.get("open"),
+                    "high": item.get("high"),
+                    "low": item.get("low"),
+                    "close": item.get("close"),
+                    "volume": item.get("volume"),
+                })
+            elif kind == "rate":
+                row.update({"rate": item.get("rate"), "close": value})
+            else:
+                row["close"] = value
+            rows.append(row)
+    return rows
+
+
+def _market_series_value(item: Mapping[str, object], price_key: str | None) -> object:
+    if price_key is not None:
+        return item.get(price_key)
+    bid = item.get("bid")
+    ask = item.get("ask")
+    if bid is not None and ask is not None:
+        try:
+            return str((float(str(bid)) + float(str(ask))) / 2)
+        except ValueError:
+            return bid
+    return bid if bid is not None else ask
+
+
+def _market_label(item: Mapping[str, object], fallback: str) -> str:
+    for key in ("market_key", "market_id", "instrument_id"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return fallback
+
+
 def _time_range(timeline: list[dict[str, object]]) -> dict[str, object]:
     if not timeline:
         return {"start": None, "end": None}
@@ -224,6 +484,7 @@ def _time_range(timeline: list[dict[str, object]]) -> dict[str, object]:
 
 def _row_count(records: Mapping[str, list[dict[str, object]]], file_name: str) -> int:
     mapping = {
+        "timeline.jsonl": "timelineRecords",
         "decision_trace.jsonl": "decisionTrace",
         "risk_snapshots.jsonl": "riskSnapshots",
         "equity.jsonl": "equity",
@@ -279,4 +540,3 @@ def _first_string(*values: object) -> str | None:
 def _context_value(state: Mapping[str, object], key: str) -> object:
     context = state.get("context")
     return context.get(key) if isinstance(context, Mapping) else None
-

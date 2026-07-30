@@ -31,6 +31,8 @@ class RuntimeKernel:
         trading_execution: TradingExecutionPort | None = None,
         execution_coordinator: ExecutionCoordinator | None = None,
         account_journal: AccountJournalSink | None = None,
+        timeline_journal: object | None = None,
+        timeline_sample_interval: object = "1m",
         processors: RuntimeProcessors | None = None,
     ) -> None:
         if not strategy.strategy_id.strip():
@@ -46,6 +48,8 @@ class RuntimeKernel:
         self.trading_execution = trading_execution
         self.execution_coordinator = execution_coordinator
         self.account_journal = account_journal
+        self.timeline_journal = timeline_journal
+        self.timeline_sample_interval = timeline_sample_interval
         self.processors = processors or self._processors()
         self.pipeline = RuntimePortPipeline(
             views=self.views,
@@ -87,6 +91,8 @@ class RuntimeKernel:
             trading_execution=self.trading_execution,
             execution_coordinator=self.execution_coordinator,
             account_journal=self.account_journal,
+            timeline_journal=self.timeline_journal,
+            timeline_sample_interval=self.timeline_sample_interval,
         )
 
     def _event_line(self, source: RuntimeEventLine | None = None) -> RuntimeEventLine | None:

@@ -13,6 +13,7 @@ from kairospy.application.runtime.processors.market import MarketProcessor
 from kairospy.application.runtime.processors.order import OrderProcessor
 from kairospy.application.runtime.processors.reference import ReferenceProcessor
 from kairospy.application.runtime.processors.risk import RiskProcessor
+from kairospy.application.runtime.processors.timeline import TimelineProcessor
 from kairospy.application.runtime.processors.trace import TraceProcessor
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentJournal
@@ -36,6 +37,7 @@ class RuntimeProcessors:
     trading_intent: TradingIntentProcessor | None = None
     account_journal: AccountJournalProcessor | None = None
     trace: TraceProcessor | None = None
+    timeline: TimelineProcessor | None = None
 
     def on_event(self, event: RuntimeEnvelope) -> None:
         self.system.on_event(event)
@@ -59,6 +61,8 @@ class RuntimeProcessors:
             self.trading_intent.on_event(event)
         if self.trace is not None:
             self.trace.on_event(event)
+        if self.timeline is not None:
+            self.timeline.on_event(event)
 
     def on_intents(self, intents: tuple[object, ...], context: object, hook: str) -> None:
         if self.trading_intent is not None:
@@ -67,6 +71,8 @@ class RuntimeProcessors:
             self.equity.on_intents(context)
         if self.trace is not None:
             self.trace.on_intents(intents, context, hook)
+        if self.timeline is not None:
+            self.timeline.on_intents(intents, context, hook)
 
     def register_views(self, views: ViewStore) -> None:
         self.system.register_views(views)
@@ -107,6 +113,8 @@ class RuntimeProcessors:
             self.account_journal.publish_views(views, as_of=as_of)
         if self.trace is not None:
             self.trace.publish_views(views, as_of=as_of)
+        if self.timeline is not None:
+            self.timeline.publish_views(views, as_of=as_of)
 
 
 def runtime_processors(
@@ -119,6 +127,8 @@ def runtime_processors(
     trading_execution: TradingExecutionPort | None = None,
     execution_coordinator: ExecutionCoordinator | None = None,
     account_journal: AccountJournalSink | None = None,
+    timeline_journal: object | None = None,
+    timeline_sample_interval: object = "1m",
 ) -> RuntimeProcessors:
     account_processor = None if account is None else AccountProcessor(account)
     funding_processor = _funding_processor(account, execution_coordinator)
@@ -146,6 +156,11 @@ def runtime_processors(
             else AccountJournalProcessor(account_journal, account_view_keys=tuple(state.key for state in account_processor.states))
         ),
         trace=trace_processor,
+        timeline=(
+            None
+            if timeline_journal is None
+            else TimelineProcessor(timeline_journal, sample_interval=timeline_sample_interval)
+        ),
     )
 
 

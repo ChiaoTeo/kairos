@@ -18,3 +18,5 @@ build/
 /kairos.toml
 /.configs/
 kairospy.bak
+node_modules/
+view/tsconfig.tsbuildinfo

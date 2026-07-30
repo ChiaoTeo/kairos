@@ -3,7 +3,13 @@ name = "kairospy"
 version = "0.1.0"
 description = "Strategy runtime, execution, account, reference, and integration toolkit"
 requires-python = ">=3.11"
-dependencies = ["click>=8,<9", "pandas>=2,<4", "pyarrow>=22,<26", "typer>=0.12,<1"]
+dependencies = [
+    "click>=8,<9",
+    "pandas>=2,<4",
+    "pyarrow>=22,<26",
+    "requests>=2,<3",
+    "typer>=0.12,<1",
+]
 
 [project.optional-dependencies]
 notebook = ["jupyterlab>=4,<5", "pandas>=2,<4", "matplotlib>=3.8,<4", "mplfinance>=0.12.10b0,<1"]
@@ -26,6 +32,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["kairospy*"]
+
+[tool.setuptools.package-data]
+"kairospy.surface.timeline" = ["static/index.html", "static/assets/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

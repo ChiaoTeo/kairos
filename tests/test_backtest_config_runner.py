@@ -27,12 +27,12 @@ def test_configured_backtest_runs_new_engine_and_writes_account_journal(tmp_path
 
     assert result.runtime.event_count == 2
     assert len(result.fills) == 1
-    assert len(result.equity_curve) == 1
+    assert len(result.equity_curve) == 2
     assert result.metrics.net_profit == result.net_profit
-    assert result.final_equity == result.account_view.equity
+    assert result.final_equity == Decimal("1000")
     current = json.loads((configured.run_directory / "account" / "current.json").read_text(encoding="utf-8"))
     assert current["run_id"] == "bt-1"
-    assert current["equity"] == str(result.final_equity)
+    assert current["equity"] == str(result.account_view.equity)
 
 
 def test_configured_backtest_applies_account_fee_rate(tmp_path) -> None:
@@ -86,8 +86,15 @@ def test_run_backtest_command_writes_run_artifacts(tmp_path) -> None:
     assert "Run Environment" in log_text
     assert "System Status" in log_text
     assert "Account Status" in log_text
-    assert (run_directory / "equity.jsonl").read_text(encoding="utf-8").strip()
-    assert json.loads((run_directory / "metrics.json").read_text(encoding="utf-8"))["net_profit"] == "-202"
+    equity_rows = [json.loads(line) for line in (run_directory / "equity.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(equity_rows) == 2
+    timeline_rows = [json.loads(line) for line in (run_directory / "timeline.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert timeline_rows
+    assert {row["trigger"] for row in timeline_rows} >= {"interval", "intent_created"}
+    assert "context_hash" in timeline_rows[0]
+    assert "system.strategy" in timeline_rows[0]["views"]
+    assert "account.risk_snapshots" in timeline_rows[-1]["views"]
+    assert json.loads((run_directory / "metrics.json").read_text(encoding="utf-8"))["net_profit"] == "0"
     assert json.loads((run_directory / "summary.json").read_text(encoding="utf-8"))["event_count"] == 2
     intent_states = [json.loads(line) for line in (run_directory / "intent_states.jsonl").read_text(encoding="utf-8").splitlines()]
     assert len(intent_states) == 1

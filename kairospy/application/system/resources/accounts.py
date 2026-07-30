@@ -80,6 +80,13 @@ class BacktestAccountResources:
 
 
 def _equity_curve(runtime: RuntimeRunResult) -> tuple[object, ...]:
+    equity_view = runtime.views.get("account.equity_curve", None)
+    points = tuple(getattr(equity_view, "points", ()) or ())
+    if points:
+        return points
+    risk_curve = _risk_equity_curve(runtime)
+    if risk_curve:
+        return risk_curve
     account_keys = tuple(key for key in runtime.views.envelopes() if key.startswith("account.current."))
     account_view = runtime.views.get(account_keys[0], None) if account_keys else None
     return tuple(

@@ -4,7 +4,7 @@ import csv
 import asyncio
 from collections.abc import AsyncIterable, AsyncIterator, Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping, Protocol
@@ -97,6 +97,7 @@ class ClockEventSource:
         *,
         kind: str = "tick",
         metadata: Mapping[str, object] | None = None,
+        default_timezone: tzinfo | None = None,
     ) -> None:
         if not source_id.strip():
             raise ValueError("source_id is required")
@@ -105,7 +106,8 @@ class ClockEventSource:
         self.source_id = source_id
         self.kind = kind
         self.metadata = MappingProxyType(dict(metadata or {}))
-        self._ticks = tuple(sorted(_coerce_time(tick) for tick in ticks))
+        self.default_timezone = default_timezone
+        self._ticks = tuple(sorted(_coerce_time(tick, default_timezone=self.default_timezone) for tick in ticks))
 
     async def events(self) -> AsyncIterator[RuntimeEnvelope]:
         for sequence, at in enumerate(self._ticks, start=1):
@@ -124,14 +126,16 @@ class IntervalClockSource:
         every: timedelta | str | int | float,
         kind: str = "tick",
         metadata: Mapping[str, object] | None = None,
+        default_timezone: tzinfo | None = None,
     ) -> None:
         if not source_id.strip():
             raise ValueError("source_id is required")
         if not kind.strip():
             raise ValueError("clock kind is required")
         self.source_id = source_id
-        self.start = _coerce_time(start)
-        self.end = _coerce_time(end)
+        self.default_timezone = default_timezone
+        self.start = _coerce_time(start, default_timezone=self.default_timezone)
+        self.end = _coerce_time(end, default_timezone=self.default_timezone)
         self.every = _coerce_duration(every)
         self.kind = kind
         self.metadata = MappingProxyType(dict(metadata or {}))
@@ -204,6 +208,7 @@ class CsvEventSource:
         subject_id_field: str | None = None,
         value_fields: Iterable[str] | None = None,
         metadata_fields: Iterable[str] = (),
+        default_timezone: tzinfo | None = None,
     ) -> None:
         self.path = Path(path).expanduser()
         self.source_id = source_id or self.path.stem
@@ -217,6 +222,7 @@ class CsvEventSource:
         self.subject_id_field = subject_id_field
         self.value_fields = None if value_fields is None else tuple(value_fields)
         self.metadata_fields = tuple(metadata_fields)
+        self.default_timezone = default_timezone
         if not self.kind.strip():
             raise ValueError("kind is required")
 
@@ -244,14 +250,14 @@ class CsvEventSource:
                 if self.time_field not in row or not str(row[self.time_field] or "").strip():
                     raise ValueError(f"CSV event row {index} requires {self.time_field!r}: {self.path}")
                 item: dict[str, object] = {key: _coerce(value) for key, value in row.items()}
-                item["_event_time"] = parse_event_time(item[self.time_field])
+                item["_event_time"] = _coerce_time(item[self.time_field], default_timezone=self.default_timezone)
                 rows.append(item)
             return tuple(rows)
 
     def _row_time(self, row: Mapping[str, object], field: str | None) -> datetime | None:
         if field is None or row.get(field) in {None, ""}:
             return None
-        return parse_event_time(row[field])
+        return _coerce_time(row[field], default_timezone=self.default_timezone)
 
     def _subject_id(self, row: Mapping[str, object]) -> str:
         if self.subject_id is not None:
@@ -293,12 +299,25 @@ def _coerce(value: object) -> object:
         return text
 
 
-def _coerce_time(value: datetime | str) -> datetime:
+def _coerce_time(value: object, *, default_timezone: tzinfo | None = None) -> datetime:
     if isinstance(value, datetime):
+        if value.tzinfo is None and default_timezone is not None:
+            return value.replace(tzinfo=default_timezone)
         if value.tzinfo is None:
-            raise ValueError("clock time must be timezone-aware")
+            raise ValueError("runtime time must be timezone-aware")
         return value
-    return parse_event_time(value)
+    text = str(value).strip()
+    try:
+        return parse_event_time(text)
+    except ValueError:
+        if default_timezone is None:
+            raise
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(text)
+    if parsed.tzinfo is not None:
+        return parsed
+    return parsed.replace(tzinfo=default_timezone)
 
 
 def _coerce_duration(value: timedelta | str | int | float) -> timedelta:

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Mapping
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
 from kairospy.application.runtime.ports import AccountPort, TradingExecutionPort
 from kairospy.application.runtime.run import RuntimeRunResult, RuntimeRunSession
 from kairospy.application.system.artifacts.journals.account import RunAccountJournal
+from kairospy.application.system.artifacts.journals.timeline import RunTimelineJournal
 from kairospy.core.execution import ExecutionCoordinator
 
 from .lifecycle import NoopTradingLifecycle
@@ -33,6 +35,8 @@ class TradingSystem:
                 trading_execution=resources.trading_execution,
                 execution_coordinator=self._execution_coordinator(resources),
                 account_journal=RunAccountJournal(self.spec.run_directory, run_id=self.spec.run_id, mode=self.spec.mode.value),
+                timeline_journal=RunTimelineJournal(self.spec.run_directory),
+                timeline_sample_interval=_timeline_sample_interval(self.spec.normalized_config),
             )
             session = RuntimeRunSession(
                 run_id=self.spec.run_id,
@@ -60,6 +64,15 @@ def _coordinator(candidate: TradingExecutionPort | AccountPort | None) -> Execut
     if isinstance(value, ExecutionCoordinator):
         return value
     return None
+
+
+def _timeline_sample_interval(config: object) -> object:
+    if not isinstance(config, Mapping):
+        return "1m"
+    timeline = config.get("timeline")
+    if not isinstance(timeline, Mapping):
+        return "1m"
+    return timeline.get("sample_interval", "1m")
 
 
 __all__ = ["TradingSystem"]

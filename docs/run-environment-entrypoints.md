@@ -7,6 +7,21 @@ KairosPy supports two ways to run strategy code:
 
 Both paths should use the same run environment model. The difference is who owns the program entrypoint.
 
+## Workspace Manifest
+
+`.kairos/kairos.toml` owns project-level defaults:
+
+```toml
+[project]
+name = "my-project"
+timezone = "UTC"
+language = "en"
+```
+
+`project.timezone` is the default timezone used by `RunEnvironment` helpers when a user-owned main program supplies local wall-clock strings without an explicit offset. Runtime events remain timezone-aware.
+
+`project.language` is the preferred system/display language for CLI output, logs, and reports. Use `zh-CN` for Simplified Chinese. It should not change strategy event domains, payload keys, or data formats.
+
 ## Run Environment
 
 A run TOML file describes the Kairos runtime environment. It is not required to describe the user's program entrypoint.
@@ -141,7 +156,7 @@ clock = env.clocks.interval(
     end="2026-01-02T00:00:00Z",
     every="1h",
 )
-result = env.run(strategy=strategy, sources=[market_data, clock])
+result = env.run(strategy=strategy, sources=[market_data], clocks=[clock])
 ```
 
 For fixed historical schedules:

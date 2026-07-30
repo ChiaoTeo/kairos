@@ -91,6 +91,7 @@ def configured_live(
 ) -> ConfiguredLive:
     run_config = load_required_run_config(config_path, mode=RuntimeMode.LIVE, error_type=LiveConfigurationError, strategy_ref=strategy_ref)
     live = _table(run_config.values.get("live"), "live")
+    timeline_config = _table(run_config.values.get("timeline"), "timeline") if run_config.values.get("timeline") is not None else {}
     venue = _required_text(live.get("venue"), "live.venue")
     market = str(live.get("market", "spot"))
     symbol = _required_text(live.get("symbol"), "live.symbol")
@@ -125,6 +126,7 @@ def configured_live(
             "strategy": {"params": dict(_strategy_params(run_config.values))},
             "live": dict(live),
             "account": {"account_id": account_config.account_id, "venue": venue, "currency": account_config.currency},
+            "timeline": dict(timeline_config),
         },
         run_directory=state_path.parent,
         state_path=state_path,

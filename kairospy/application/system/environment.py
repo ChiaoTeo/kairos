@@ -6,6 +6,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from kairospy.application.runtime import RuntimeMode
 from kairospy.application.runtime.sources import AsyncEventSource, ClockEventSource, CsvEventSource, IntervalClockSource, IterableEventSource, RealtimeClockSource
@@ -20,6 +21,7 @@ class SourceTools:
     env: "RunEnvironment"
 
     def csv_events(self, path: str | Path, **kwargs: object) -> CsvEventSource:
+        kwargs.setdefault("default_timezone", self.env.timezone)
         return CsvEventSource(self.env.path(path), **kwargs)
 
     def iterable(self, source_id: str, events: object) -> IterableEventSource:
@@ -34,9 +36,11 @@ class ClockTools:
     env: "RunEnvironment"
 
     def ticks(self, source_id: str, times: object, **kwargs: object) -> ClockEventSource:
+        kwargs.setdefault("default_timezone", self.env.timezone)
         return ClockEventSource(source_id, times, **kwargs)  # type: ignore[arg-type]
 
     def interval(self, source_id: str, *, start: object, end: object, every: object, **kwargs: object) -> IntervalClockSource:
+        kwargs.setdefault("default_timezone", self.env.timezone)
         return IntervalClockSource(source_id, start=start, end=end, every=every, **kwargs)  # type: ignore[arg-type]
 
     def realtime(self, source_id: str, *, every: object, limit: int | None = None, start_immediately: bool = False, **kwargs: object) -> RealtimeClockSource:
@@ -49,6 +53,8 @@ class RunEnvironment:
     run_group_dir: Path
     instance_dir: Path
     run_instance_id: str
+    timezone_name: str
+    language: str
     params: Mapping[str, object]
     strategy_params: Mapping[str, object]
     normalized_config: Mapping[str, object]
@@ -62,17 +68,25 @@ class RunEnvironment:
         strategy_params: Mapping[str, object] | None = None,
         instance_dir: str | Path | None = None,
     ) -> "RunEnvironment":
-        run_config = load_run_config(resolve_config(path))
+        config_path = resolve_config(path)
+        run_config = load_run_config(config_path)
+        workspace = KairosWorkspace.resolve(config_path)
         merged_params = {**_params(run_config.values), **dict(params or {})}
         merged_strategy_params = {**_strategy_params(run_config.values), **dict(strategy_params or {})}
         group_directory = _run_group_directory(run_config)
         directory, instance_id = _instance_directory(run_config, group_directory, instance_dir)
+        timezone_name = workspace.manifest.timezone_name
+        language = workspace.manifest.language
         normalized_config = {
             "run": {
                 "id": run_config.run_id,
                 "mode": run_config.mode,
                 "strategy": run_config.strategy,
                 "run_instance_id": instance_id,
+            },
+            "project": {
+                "timezone": timezone_name,
+                "language": language,
             },
             "params": dict(merged_params),
             "strategy": {"params": dict(merged_strategy_params)},
@@ -83,6 +97,8 @@ class RunEnvironment:
             run_group_dir=group_directory,
             instance_dir=directory,
             run_instance_id=instance_id,
+            timezone_name=timezone_name,
+            language=language,
             params=MappingProxyType(merged_params),
             strategy_params=MappingProxyType(merged_strategy_params),
             normalized_config=normalized_config,
@@ -133,6 +149,10 @@ class RunEnvironment:
         return RuntimeMode(self.run_config.mode)
 
     @property
+    def timezone(self) -> ZoneInfo:
+        return ZoneInfo(self.timezone_name)
+
+    @property
     def sources(self) -> SourceTools:
         return SourceTools(self)
 
@@ -143,6 +163,18 @@ class RunEnvironment:
     def path(self, value: str | Path) -> Path:
         path = Path(value).expanduser()
         return path if path.is_absolute() else (self.root / path).resolve()
+
+    def parse_time(self, value: object) -> datetime:
+        if isinstance(value, datetime):
+            parsed = value
+        else:
+            text = str(value).strip()
+            if text.endswith("Z"):
+                text = text[:-1] + "+00:00"
+            parsed = datetime.fromisoformat(text)
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=self.timezone)
+        return parsed
 
     def builder(self) -> RunBuilder:
         return RunBuilder(self)
@@ -158,8 +190,8 @@ class RunEnvironment:
             params=self.strategy_params,
         )
 
-    def run(self, *, strategy: object, sources: object = (), echo: bool = False):
-        return self.builder().strategy(strategy).sources(sources).echo(echo).run()  # type: ignore[arg-type]
+    def run(self, *, strategy: object, sources: object = (), clocks: object = (), echo: bool = False):
+        return self.builder().strategy(strategy).sources(sources).clocks(clocks).echo(echo).run()  # type: ignore[arg-type]
 
 
 def _params(values: Mapping[str, object]) -> dict[str, object]:
@@ -291,6 +323,7 @@ def _workspace_manifest(project_name: str) -> str:
             "[project]",
             f'name = "{project_name}"',
             'timezone = "UTC"',
+            'language = "en"',
             "",
             "[data]",
             'storage_format = "parquet"',

@@ -40,6 +40,11 @@ class RunBuilder:
     def clock(self, source: RuntimeEventLine | RuntimeDataSource) -> "RunBuilder":
         return self.source(source)
 
+    def clocks(self, sources: Iterable[RuntimeEventLine | RuntimeDataSource]) -> "RunBuilder":
+        for source in sources:
+            self.clock(source)
+        return self
+
     def sources(self, sources: Iterable[RuntimeEventLine | RuntimeDataSource]) -> "RunBuilder":
         for source in sources:
             self.source(source)
@@ -85,6 +90,8 @@ class RunBuilder:
                 "run_instance_id": getattr(self.env, "run_instance_id", None),
                 "run_directory": run_directory,
                 "strategy_id": getattr(strategy, "strategy_id", None),
+                "timezone": getattr(self.env, "timezone_name", None),
+                "language": getattr(self.env, "language", None),
             },
             stdout=stdout,
         )

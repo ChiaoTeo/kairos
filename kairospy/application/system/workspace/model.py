@@ -69,6 +69,8 @@ class KairosWorkspace:
         return {
             "root": str(self.root),
             "manifest_path": str(self.manifest_path) if self.manifest_path is not None else None,
+            "timezone": self.manifest.timezone_name,
+            "language": self.manifest.language,
             "workspace_root": str(self.workspace_root),
             "state_root": str(self.state_root),
             "run_root": str(self.run_root),
