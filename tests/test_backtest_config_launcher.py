@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Mapping
 
@@ -10,7 +11,10 @@ from typer.testing import CliRunner
 
 from kairospy.application.service.modes.backtest import BacktestConfigurationError, configured_backtest
 from kairospy.application.launch import TradingConfigurationError, TradingSystemLauncher
-from kairospy.infrastructure.data import DataStore
+from kairospy.application.domain.reference import catalog_from_market_rows
+from kairospy.core.market import Bar
+from kairospy.infrastructure.persistence.market_data.catalog import DataStore
+from kairospy.infrastructure.persistence.reference.sqlite_store import SqliteReferenceStore
 from kairospy.surface.timeline.loader import TimelineDataLoader
 from kairospy.surface.cli.commands.launch import launch_app
 
@@ -68,10 +72,39 @@ def test_backtest_strategy_subscribes_by_dataset_id(tmp_path) -> None:
     assert len(result.fills) == 1
 
 
+def test_configured_backtest_mounts_workspace_reference_catalog(tmp_path) -> None:
+    config_path = _write_backtest_project(tmp_path)
+    as_of = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    SqliteReferenceStore(tmp_path / ".kairos" / "reference").save_catalog(
+        catalog_from_market_rows(
+            (
+                {
+                    "venue": "binance",
+                    "market": "spot",
+                    "source_symbol": "BTC/USDT",
+                    "base": "BTC",
+                    "quote": "USDT",
+                    "status": "trading",
+                },
+            ),
+            effective_from=as_of,
+        )
+    )
+
+    result = TradingSystemLauncher().launch_configured_backtest(configured_backtest(config_path))
+
+    catalog = result.views.require("reference.catalog")
+    markets = result.views.require("reference.markets")
+    resolved = result.views.require("reference.market.binance_spot_btc_usdt")
+    assert catalog.market_count == 1
+    assert markets.markets[0].market_key == "binance_spot_btc_usdt"
+    assert str(resolved.ref.market_id) == "market:binance:spot:btc_usdt"
+
+
 def test_launch_backtest_command_writes_launch_artifacts(tmp_path) -> None:
     config_path = _write_backtest_project(tmp_path)
 
-    result = CliRunner().invoke(launch_app, ["run", "start", str(config_path), "--format", "json"], catch_exceptions=False)
+    result = CliRunner().invoke(launch_app, ["start", str(config_path), "--format", "json"], catch_exceptions=False)
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -119,7 +152,7 @@ def test_launch_backtest_command_writes_launch_artifacts(tmp_path) -> None:
 def test_decision_trace_artifact_requires_explicit_strategy_trace(tmp_path) -> None:
     config_path = _write_backtest_project(tmp_path)
 
-    result = CliRunner().invoke(launch_app, ["run", "start", str(config_path), "--format", "json"], catch_exceptions=False)
+    result = CliRunner().invoke(launch_app, ["start", str(config_path), "--format", "json"], catch_exceptions=False)
 
     launch_directory = Path(json.loads(result.output)["directory"])
     assert not (launch_directory / "decision_trace.jsonl").exists()
@@ -132,10 +165,12 @@ def test_decision_trace_artifact_requires_explicit_strategy_trace(tmp_path) -> N
 def test_explicit_strategy_trace_writes_decision_trace_and_timeline_decision(tmp_path) -> None:
     config_path = _write_backtest_project(tmp_path, emit_trace=True)
 
-    result = CliRunner().invoke(launch_app, ["run", "start", str(config_path), "--format", "json"], catch_exceptions=False)
+    result = CliRunner().invoke(launch_app, ["start", str(config_path), "--format", "json"], catch_exceptions=False)
 
     launch_directory = Path(json.loads(result.output)["directory"])
-    assert not (launch_directory / "decision_trace.jsonl").exists()
+    decision_file_rows = [json.loads(line) for line in (launch_directory / "decision_trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(decision_file_rows) == 1
+    assert decision_file_rows[0]["name"] == "entry_signal"
     decision_rows = TimelineDataLoader(launch_directory).load()["records"]["decisionTrace"]
     assert len(decision_rows) == 1
     assert decision_rows[0]["name"] == "entry_signal"
@@ -153,7 +188,7 @@ def test_launch_backtest_command_accepts_strategy_runtime_override(tmp_path) -> 
 
     result = CliRunner().invoke(
         launch_app,
-        ["run", "start", str(config_path), "--strategy", "strategy_mod:ConfiguredStrategy", "--format", "json"],
+        ["start", str(config_path), "--strategy", "strategy_mod:ConfiguredStrategy", "--format", "json"],
         catch_exceptions=False,
     )
 
@@ -166,8 +201,8 @@ def test_launch_backtest_command_accepts_strategy_runtime_override(tmp_path) -> 
 def test_launch_backtest_command_creates_a_new_instance_each_start(tmp_path) -> None:
     config_path = _write_backtest_project(tmp_path)
 
-    first = CliRunner().invoke(launch_app, ["run", "start", str(config_path), "--format", "json"], catch_exceptions=False)
-    second = CliRunner().invoke(launch_app, ["run", "start", str(config_path), "--format", "json"], catch_exceptions=False)
+    first = CliRunner().invoke(launch_app, ["start", str(config_path), "--format", "json"], catch_exceptions=False)
+    second = CliRunner().invoke(launch_app, ["start", str(config_path), "--format", "json"], catch_exceptions=False)
 
     first_payload = json.loads(first.output)
     second_payload = json.loads(second.output)
@@ -181,7 +216,7 @@ def test_launch_backtest_command_creates_a_new_instance_each_start(tmp_path) -> 
 def test_launch_backtest_command_uses_new_config_runner(tmp_path) -> None:
     config_path = _write_backtest_project(tmp_path)
 
-    result = CliRunner().invoke(launch_app, ["run", "start", str(config_path), "--format", "json"], catch_exceptions=False)
+    result = CliRunner().invoke(launch_app, ["start", str(config_path), "--format", "json"], catch_exceptions=False)
 
     assert result.exit_code == 0
     assert '"launch_id": "bt-1"' in result.output
@@ -260,7 +295,7 @@ def test_launch_backtest_config_does_not_wrap_strategy_runtime_value_error(tmp_p
 
 
 class FakeHistoricalClient:
-    def fetch_ohlcv(
+    def fetch_bars(
         self,
         symbol: str,
         *,
@@ -268,25 +303,23 @@ class FakeHistoricalClient:
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
-        params: Mapping[str, object] | None = None,
+        adapter_options: Mapping[str, object] | None = None,
     ):
+        _ = since, until, limit, adapter_options
         return (
-            {
-                "time": "2026-01-01T00:00:00+00:00",
-                "kind": "bar",
-                "venue": "binance",
-                "market": "spot",
-                "source_symbol": symbol,
-                "market_id": "market:binance:spot:btc_usdt",
-                "instrument_id": "instrument:spot:btc:usdt",
-                "market_key": "binance_spot_btc_usdt",
-                "timeframe": timeframe,
-                "open": "101",
-                "high": "101",
-                "low": "101",
-                "close": "101",
-                "volume": "1",
-            },
+            Bar(
+                instrument_id="instrument:spot:btc:usdt",
+                market_id="market:binance:spot:btc_usdt",
+                market_key="binance_spot_btc_usdt",
+                time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                timeframe=timeframe,
+                open=Decimal("101"),
+                high=Decimal("101"),
+                low=Decimal("101"),
+                close=Decimal("101"),
+                volume=Decimal("1"),
+                source=symbol,
+            ),
         )
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Mapping
 
-from kairospy.infrastructure.artifacts import LaunchInstanceStore, jsonable
+from kairospy.infrastructure.persistence.artifacts.launch_store import LaunchInstanceStore, jsonable
 
 
 class LaunchOutput:
@@ -26,13 +26,16 @@ class LaunchOutput:
         self.store.json("summary").write(summary)
         self.store.json("config.normalized").write(normalized_config)
         self.store.json("metrics").write(getattr(result, "metrics", {}))
+        decision_trace = tuple(getattr(result, "decision_trace", ()) or ())
+        if decision_trace:
+            self.store.jsonl("decision_trace").replace(decision_trace)
         if not self.write_legacy_jsonl:
             return summary
         self.store.jsonl("equity").replace(tuple(getattr(result, "equity_curve", ()) or ()))
         self.store.jsonl("fills").replace(tuple(getattr(result, "fills", ()) or ()))
         self.store.jsonl("trades").replace(tuple(getattr(result, "trades", ()) or ()))
         self.store.jsonl("intent_states").replace(_intent_states(result))
-        self.store.jsonl("decision_trace").replace(tuple(getattr(result, "decision_trace", ()) or ()))
+        self.store.jsonl("decision_trace").replace(decision_trace)
         self.store.jsonl("risk_snapshots").replace(tuple(getattr(result, "risk_snapshots", ()) or ()))
         return summary
 

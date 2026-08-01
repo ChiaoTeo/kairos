@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.service.runtime import RuntimeAccountService
+from kairospy.application.runtime.services import RuntimeAccountService
 from kairospy.core.market import MarketEvent, RateObservation
 from kairospy.core.reference import MarketId, reference_slug
 

@@ -5,13 +5,14 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.orchestration.state import RuntimePorts, RuntimeStores
+from kairospy.application.runtime.components import RuntimeComponents
+from kairospy.application.runtime.orchestration.state import RuntimeStores
 from kairospy.application.protocol import RuntimeEnvelope, RuntimeLine
-from kairospy.application.service.domain.account import SimulatedAccount, account_baseline_snapshot
-from kairospy.application.service.domain.execution import JsonExecutionStateStore
+from kairospy.application.domain.account import SimulatedAccount, account_baseline_snapshot
+from kairospy.infrastructure.persistence.runtime_state.execution_json_store import JsonExecutionStateStore
 from kairospy.application.service.modes.paper import PaperAccountService
-from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
-from kairospy.application.service.runtime.execution import ApplyExecutionUpdateUseCase
+from kairospy.application.runtime.services import RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.application.runtime.services.execution import ApplyExecutionUpdateUseCase
 from kairospy.core.account import AccountBookKind, AccountContext, AccountBookRef, AccountSource, Environment
 from kairospy.core.execution import ExecutionCoordinator, ExecutionUpdate
 from kairospy.core.intent import IntentEvent, IntentEventKind, IntentJournal, IntentStatus, target_position_intent
@@ -68,14 +69,15 @@ def test_account_baseline_event_updates_account_view_state() -> None:
     intents = IntentJournal()
     kernel = RuntimeKernel(
         NoopStrategy(),
-        ports=RuntimePorts(account=account_service),
+        components=RuntimeComponents(account=account_service),
         stores=RuntimeStores(intents=intents),
         services=RuntimeApplicationServices.from_dependencies(
             RuntimeServiceDependencies(
                 intents=intents,
                 account_snapshot_store=account_service,
                 account=account_service,
-                execution=coordinator,
+                account_catalog=account_service,
+                execution_coordinator=coordinator,
             )
         ),
     )
@@ -257,7 +259,7 @@ def test_execution_runtime_update_drives_coordinator_intent_and_views() -> None:
         NoopStrategy(),
         stores=RuntimeStores(intents=intents),
         services=RuntimeApplicationServices.from_dependencies(
-            RuntimeServiceDependencies(intents=intents, execution=coordinator)
+            RuntimeServiceDependencies(intents=intents, execution_coordinator=coordinator)
         ),
     )
 

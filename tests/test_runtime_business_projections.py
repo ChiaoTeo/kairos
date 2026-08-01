@@ -8,17 +8,18 @@ import pytest
 
 from kairospy.application.runtime.orchestration.pipeline import RuntimeProjectionPipeline
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.orchestration.state import RuntimePorts, RuntimeStores
+from kairospy.application.runtime.components import RuntimeComponents
+from kairospy.application.runtime.orchestration.state import RuntimeStores
 from kairospy.application.runtime.dispatch.context import RuntimeContext
-from kairospy.application.ports import LaunchScopedAccountPort
+from kairospy.application.launch import LaunchScopedAccountRuntime
 from kairospy.application.launch import LaunchAccountBinding, LaunchAccountDirectory
 from kairospy.application.runtime.processors.account import AccountCurrentViewState
 from kairospy.application.runtime.processors.system import runtime_processors
 from kairospy.application.protocol import RuntimeEnvelope
 from kairospy.application.ports import DataSubscription, MarketDataSubscriptionSpec
-from kairospy.application.service.runtime import RuntimeAccountService, RuntimeAccountViewProjectionService, RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.application.runtime.services import RuntimeAccountService, RuntimeAccountViewProjectionService, RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.application.service.modes.backtest import BacktestExecutionService
-from kairospy.application.service.domain.reference import catalog_from_market_rows
+from kairospy.application.domain.reference import catalog_from_market_rows
 from kairospy.core.account import AccountBalance, AccountBookKind, AccountCapability, AccountContext, AccountFeeSchedule, AccountBookRef, AccountSnapshot, AccountSource, AccountState, Environment
 from kairospy.core.execution import ExecutionCoordinator, cash_order_request
 from kairospy.core.intent import IntentJournal
@@ -479,7 +480,7 @@ def test_account_port_publishes_current_account_view() -> None:
     views = ViewStore()
     account = FakeAccountService()
     intents = IntentJournal()
-    services = RuntimeApplicationServices.from_dependencies(RuntimeServiceDependencies(intents=intents, account=account))
+    services = RuntimeApplicationServices.from_dependencies(RuntimeServiceDependencies(intents=intents, account=account, account_catalog=account))
     pipeline = RuntimeProjectionPipeline(
         views=views,
         processors=runtime_processors(strategy_id="s", intents=intents, services=services),
@@ -499,7 +500,7 @@ def test_account_processor_ingests_snapshot_before_publishing_view() -> None:
     account = MutableFakeAccountService()
     intents = IntentJournal()
     services = RuntimeApplicationServices.from_dependencies(
-        RuntimeServiceDependencies(intents=intents, account_snapshot_store=account, account=account)
+        RuntimeServiceDependencies(intents=intents, account_snapshot_store=account, account=account, account_catalog=account)
     )
     pipeline = RuntimeProjectionPipeline(
         views=views,
@@ -531,6 +532,7 @@ def test_runtime_processors_can_use_application_services_for_snapshot_ingestion(
             intents=intents,
             account_snapshot_store=account,
             account=account,
+            account_catalog=account,
         )
     )
     pipeline = RuntimeProjectionPipeline(
@@ -590,9 +592,16 @@ def test_launch_scoped_account_port_publishes_launch_aliases() -> None:
             LaunchAccountBinding("account2", 1, (account.perp,), ref="okx_main"),
         )
     )
-    scoped = LaunchScopedAccountPort(account, directory)
+    scoped = LaunchScopedAccountRuntime(account, account)
     intents = IntentJournal()
-    services = RuntimeApplicationServices.from_dependencies(RuntimeServiceDependencies(intents=intents, account=scoped))
+    services = RuntimeApplicationServices.from_dependencies(
+        RuntimeServiceDependencies(
+            intents=intents,
+            account=scoped,
+            account_catalog=scoped,
+            account_directory=directory,
+        )
+    )
     pipeline = RuntimeProjectionPipeline(
         views=views,
         processors=runtime_processors(strategy_id="s", intents=intents, services=services),
@@ -612,7 +621,7 @@ def test_strategy_context_reads_multiple_account_books_through_typed_api() -> No
     views = ViewStore()
     account = FakeMultiAccountService()
     intents = IntentJournal()
-    services = RuntimeApplicationServices.from_dependencies(RuntimeServiceDependencies(intents=intents, account=account))
+    services = RuntimeApplicationServices.from_dependencies(RuntimeServiceDependencies(intents=intents, account=account, account_catalog=account))
     pipeline = RuntimeProjectionPipeline(
         views=views,
         processors=runtime_processors(strategy_id="s", intents=intents, services=services),
@@ -699,7 +708,7 @@ def test_strategy_account_reader_rejects_ambiguous_book_kind() -> None:
         ),
     }
     intents = IntentJournal()
-    services = RuntimeApplicationServices.from_dependencies(RuntimeServiceDependencies(intents=intents, account=account))
+    services = RuntimeApplicationServices.from_dependencies(RuntimeServiceDependencies(intents=intents, account=account, account_catalog=account))
     pipeline = RuntimeProjectionPipeline(
         views=views,
         processors=runtime_processors(strategy_id="s", intents=intents, services=services),
@@ -829,20 +838,21 @@ def test_kernel_wires_runtime_ports_to_view_states() -> None:
     intents = IntentJournal()
     kernel = RuntimeKernel(
         EmptyStrategy(),
-        ports=RuntimePorts(
-            data=data,
+        components=RuntimeComponents(
+            market=data,
             account=account,
             reference=reference,
-            trading_execution=trading_execution,
+            execution=trading_execution,
         ),
         services=RuntimeApplicationServices.from_dependencies(
             RuntimeServiceDependencies(
                 intents=intents,
                 data=data,
                 account=account,
+                account_catalog=account,
                 reference=reference,
                 trading_execution=trading_execution,
-                execution=execution,
+                execution_coordinator=execution,
                 fills_source=trading_execution,
             )
         ),
@@ -859,18 +869,19 @@ def test_kernel_accepts_runtime_stores_and_application_services() -> None:
     views = ViewStore()
     account = MutableFakeAccountService()
     stores = RuntimeStores(intents=IntentJournal(), views=views)
-    ports = RuntimePorts(account=account)
+    components = RuntimeComponents(account=account)
     services = RuntimeApplicationServices.from_dependencies(
         RuntimeServiceDependencies(
             intents=stores.intents,
             account_snapshot_store=account,
             account=account,
+            account_catalog=account,
         )
     )
 
     kernel = RuntimeKernel(
         EmptyStrategy(),
-        ports=ports,
+        components=components,
         stores=stores,
         services=services,
     )
@@ -879,7 +890,7 @@ def test_kernel_accepts_runtime_stores_and_application_services() -> None:
     assert kernel.stores is stores
     assert kernel.intents is stores.intents
     assert kernel.views is views
-    assert kernel.ports is ports
+    assert kernel.components is components
     assert kernel.services is services
     assert views.require("account.current.paper.paper.main").cash == Decimal("1000")
 
@@ -900,7 +911,7 @@ def test_system_risk_execution_and_order_views_are_business_panels() -> None:
     views = ViewStore()
     intents = IntentJournal()
     services = RuntimeApplicationServices.from_dependencies(
-        RuntimeServiceDependencies(intents=intents, execution=execution)
+        RuntimeServiceDependencies(intents=intents, execution_coordinator=execution)
     )
     pipeline = RuntimeProjectionPipeline(
         views=views,

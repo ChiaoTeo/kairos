@@ -9,7 +9,6 @@ from kairospy.core.intent import Intent, TradeIntent
 from kairospy.core.market import MarketSelector, MarketViewReader
 from kairospy.core.reference import MarketRef
 from kairospy.core.reference import ExchangeId, MarketTypeId, ReferenceViewReader
-from .control import ControlFactory
 
 
 class Context(Protocol):
@@ -90,10 +89,6 @@ class Context(Protocol):
 
     @property
     def reference(self) -> ReferenceViewReader:
-        ...
-
-    @property
-    def control(self) -> ControlFactory:
         ...
 
 

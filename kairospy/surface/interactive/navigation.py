@@ -37,7 +37,7 @@ def child_names(root: CommandInfo, path: tuple[str, ...]) -> tuple[str, ...]:
     node = command_at(root, path)
     if not has_children(node):
         return ()
-    return _ordered_child_names(path, tuple(node.commands))
+    return _ordered_child_names(path, tuple(name for name, child in node.commands.items() if not _is_hidden(child)))
 
 
 def resolve_token(token: str, *, names: tuple[str, ...]) -> str | None:
@@ -76,6 +76,10 @@ def has_children(command: CommandInfo | None) -> bool:
     return hasattr(command, "commands")
 
 
+def _is_hidden(command: CommandInfo) -> bool:
+    return bool(getattr(command, "hidden", False))
+
+
 def _ordered_child_names(path: tuple[str, ...], names: tuple[str, ...]) -> tuple[str, ...]:
     order = _CHILD_ORDER.get(path)
     if order is None:
@@ -85,23 +89,179 @@ def _ordered_child_names(path: tuple[str, ...], names: tuple[str, ...]) -> tuple
 
 
 _CHILD_ORDER = {
-    ("launch",): (
+    ("project",): (
+        "init",
+        "status",
+        "doctor",
         "config",
-        "register",
-        "unregister",
-        "specs",
-        "validate",
+    ),
+    ("project", "config"): (
+        "paths",
+        "show",
+        "manifest",
+        "doctor",
         "explain",
+        "operations",
+        "profile",
+    ),
+    ("launch",): (
+        "targets",
+        "diagnose",
+        "replay",
+        "timeline",
         "start",
         "stop",
         "status",
         "logs",
         "artifacts",
-        "events",
+        "instances",
+    ),
+    ("launch", "targets"): (
+        "add",
+        "remove",
+        "index",
         "list",
-        "system",
-        "daemon",
-        "instance",
+        "browse",
+    ),
+    ("launch", "diagnose"): (
+        "validate",
+        "explain",
+    ),
+    ("launch", "replay"): (
+        "events",
+    ),
+    ("launch", "timeline"): (
+        "list",
+        "export",
+        "open",
+        "api",
+    ),
+    ("account",): (
+        "list",
+        "browse",
+        "schemas",
+        "schema",
+        "create",
+        "modify",
+        "delete",
+        "remove",
+        "show",
+        "doctor",
+        "credential",
+        "query",
+        "trade-lock",
+    ),
+    ("account", "credential"): (
+        "add",
+        "list",
+        "create",
+        "show",
+        "delete",
+        "remove",
+    ),
+    ("account", "query"): (
+        "balance",
+        "current",
+        "balances",
+        "positions",
+        "open-orders",
+        "snapshot",
+    ),
+    ("account", "trade-lock"): (
+        "status",
+        "list",
+        "show",
+        "release",
+    ),
+    ("order",): (
+        "open",
+        "list",
+        "browse",
+        "closed",
+        "history",
+        "place",
+        "cancel",
+        "replace",
+        "show",
+        "inspect",
+    ),
+    ("market",): (
+        "source",
+        "data",
+        "dataset",
+        "stream",
+    ),
+    ("market", "source"): (
+        "capabilities",
+        "check",
+        "doctor",
+    ),
+    ("market", "data"): (
+        "download",
+        "prefetch",
+    ),
+    ("market", "dataset"): (
+        "list",
+        "inspect",
+        "alias",
+        "prune",
+        "read",
+    ),
+    ("market", "stream"): (
+        "replay",
+        "watch",
+        "persist",
+    ),
+    ("catalog",): (
+        "sync",
+        "participants",
+        "assets",
+        "markets",
+        "events",
+        "view",
+        "query",
+        "search",
+        "show",
+        "status",
+    ),
+    ("catalog", "sync"): (
+        "binance",
+        "hyperliquid",
+        "massive",
+    ),
+    ("catalog", "participants"): (
+        "brokers",
+        "exchanges",
+        "providers",
+    ),
+    ("catalog", "assets"): (
+        "add",
+        "list",
+        "browse",
+        "show",
+    ),
+    ("catalog", "markets"): (
+        "list",
+        "browse",
+        "resolve",
+    ),
+    ("catalog", "events"): (
+        "sync",
+    ),
+    ("system",): (
+        "status",
+        "inspect",
+        "attach",
+        "up",
+        "down",
+        "restart",
+        "account",
+        "command",
+    ),
+    ("system", "account"): (
+        "trade-status",
+        "trade-acquire",
+        "trade-release",
     ),
 }
 

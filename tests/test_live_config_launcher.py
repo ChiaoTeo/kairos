@@ -8,6 +8,9 @@ import pytest
 
 from kairospy.application.service.modes.live import LiveConfigurationError, configured_live
 from kairospy.application.launch import TradingSystemLauncher
+from kairospy.core.account import AccountBookRef
+from kairospy.core.reference import MarketRef
+from kairospy.infrastructure.integrations.payloads.ccxt_market import ccxt_ticker_update
 
 
 @pytest.fixture(autouse=True)
@@ -18,6 +21,10 @@ def _workspace(tmp_path, monkeypatch) -> None:
 class FakeLiveFeed:
     async def watch_ticker(self, symbol: str, *, params: Mapping[str, object] | None = None) -> AsyncIterator[Mapping[str, object]]:
         yield {"timestamp": 1767225600000, "bid": "100", "ask": "101"}
+
+    async def watch_ticker_updates(self, symbol: str, *, market: MarketRef, params: Mapping[str, object] | None = None) -> AsyncIterator[object]:
+        async for row in self.watch_ticker(symbol, params=params):
+            yield ccxt_ticker_update(row, market=market)
 
     async def watch_order_book(
         self,
@@ -111,7 +118,7 @@ def test_configured_live_launches_with_injected_integrations(tmp_path) -> None:
     configured = configured_live(
         config_path,
         market_feed_factory=lambda venue: FakeLiveFeed(),
-        broker_factory=lambda venue, credential: FakeBroker(),
+        broker_factory=lambda book, credential: FakeBroker(str(book.broker)),
         account_resolver=_resolver(config_path),
     )
     result = TradingSystemLauncher().launch_configured_live(configured)
@@ -120,6 +127,10 @@ def test_configured_live_launches_with_injected_integrations(tmp_path) -> None:
     assert result.runtime.event_count == 2
     assert result.runtime.strategy_id == "live-strategy"
     assert configured.market_data.view().subscription_count == 1
+    assert configured.private_sync.enabled is True
+    assert not hasattr(configured, "live_config")
+    assert not hasattr(configured, "venue")
+    assert not hasattr(configured, "market")
     assert (tmp_path / ".kairos" / "launches" / "live" / "live-1" / "live_state.json").exists()
     assert (tmp_path / ".kairos" / "launches" / "live" / "live-1" / "account" / "current.json").exists()
     assert not (tmp_path / ".kairos" / "launches" / "live" / "live-1" / "account" / "equity.jsonl").exists()
@@ -135,7 +146,7 @@ def test_configured_live_accepts_launch_account_references(tmp_path) -> None:
     configured = configured_live(
         config_path,
         market_feed_factory=lambda venue: FakeLiveFeed(),
-        broker_factory=lambda venue, credential: FakeBroker(),
+        broker_factory=lambda book, credential: FakeBroker(str(book.broker)),
         account_resolver=_resolver(config_path),
     )
 
@@ -167,9 +178,9 @@ def test_configured_live_launch_accounts_use_distinct_brokers(tmp_path) -> None:
     )
     brokers: dict[str, FakeBroker] = {}
 
-    def broker_factory(venue: str, credential: str | None) -> FakeBroker:
-        broker = FakeBroker(venue)
-        brokers[venue] = broker
+    def broker_factory(book: AccountBookRef, credential: str | None) -> FakeBroker:
+        broker = FakeBroker(str(book.broker))
+        brokers[str(book.broker)] = broker
         return broker
 
     configured = configured_live(
@@ -187,6 +198,47 @@ def test_configured_live_launch_accounts_use_distinct_brokers(tmp_path) -> None:
     assert {(book.account_alias, book.broker, book.account_id, book.book_kind) for book in books} == {
         ("account1", "binance", "main", "spot"),
         ("account2", "okx", "okx-main", "swap"),
+    }
+
+
+def test_configured_live_broker_factory_is_account_book_aware(tmp_path) -> None:
+    config_path = _write_live_project(tmp_path)
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace(
+            '[account]\nref = "main"\n',
+            "\n".join(
+                [
+                    "[accounts.account1]",
+                    'ref = "main"',
+                    'books = ["spot", "equity"]',
+                    "",
+                ]
+            ),
+        ),
+        encoding="utf-8",
+    )
+    brokers: dict[str, FakeBroker] = {}
+
+    def broker_factory(book: AccountBookRef, credential: str | None) -> FakeBroker:
+        broker = FakeBroker(str(book.broker))
+        brokers[book.value] = broker
+        return broker
+
+    configured = configured_live(
+        config_path,
+        market_feed_factory=lambda venue: FakeLiveFeed(),
+        broker_factory=broker_factory,
+        account_resolver=_resolver(config_path),
+    )
+    result = TradingSystemLauncher().launch_configured_live(configured)
+    books = result.views.require("account.books").books
+
+    assert set(brokers) == {"binance:main:spot", "binance:main:equity"}
+    assert brokers["binance:main:spot"].balance_calls == 1
+    assert brokers["binance:main:equity"].balance_calls == 1
+    assert {(book.account_alias, book.broker, book.account_id, book.book_kind) for book in books} == {
+        ("account1", "binance", "main", "spot"),
+        ("account1", "binance", "main", "equity"),
     }
 
 
@@ -214,9 +266,9 @@ def test_configured_live_readonly_credential_disables_trading_capability(tmp_pat
     )
     seen_credentials: list[str | None] = []
 
-    def broker_factory(venue: str, credential: str | None) -> FakeBroker:
+    def broker_factory(book: AccountBookRef, credential: str | None) -> FakeBroker:
         seen_credentials.append(credential)
-        return FakeBroker(venue)
+        return FakeBroker(str(book.broker))
 
     configured = configured_live(
         config_path,
@@ -236,7 +288,7 @@ def test_configured_live_restores_runtime_state(tmp_path) -> None:
     configured = configured_live(
         config_path,
         market_feed_factory=lambda venue: FakeLiveFeed(),
-        broker_factory=lambda venue, credential: FakeBroker(),
+        broker_factory=lambda book, credential: FakeBroker(str(book.broker)),
         account_resolver=_resolver(config_path),
     )
     TradingSystemLauncher().launch_configured_live(configured)
@@ -244,7 +296,7 @@ def test_configured_live_restores_runtime_state(tmp_path) -> None:
     restored = configured_live(
         config_path,
         market_feed_factory=lambda venue: FakeLiveFeed(),
-        broker_factory=lambda venue, credential: FakeBrokerWithoutOpenOrders(),
+        broker_factory=lambda book, credential: FakeBrokerWithoutOpenOrders(str(book.broker)),
         account_resolver=_resolver(config_path),
     )
     TradingSystemLauncher().launch_configured_live(restored)
@@ -260,7 +312,7 @@ def test_configured_live_selects_account_ref(tmp_path) -> None:
     configured = configured_live(
         config_path,
         market_feed_factory=lambda venue: FakeLiveFeed(),
-        broker_factory=lambda venue, credential: FakeBroker(),
+        broker_factory=lambda book, credential: FakeBroker(str(book.broker)),
         account_resolver=_resolver(config_path),
     )
     result = TradingSystemLauncher().launch_configured_live(configured)
@@ -276,7 +328,7 @@ def test_configured_live_rejects_paper_account_ref(tmp_path) -> None:
         configured_live(
             config_path,
             market_feed_factory=lambda venue: FakeLiveFeed(),
-            broker_factory=lambda venue, credential: FakeBroker(),
+            broker_factory=lambda book, credential: FakeBroker(str(book.broker)),
             account_resolver=_resolver(config_path),
         )
 
@@ -288,8 +340,11 @@ def _write_live_project(root: Path, *, account_ref: str = "main", account_enviro
     (root / "strategy_mod.py").write_text(
         "\n".join([
             "from kairospy.application.strategy import StrategyBase",
+            "from kairospy.core.market import Quote",
             "class LiveStrategy(StrategyBase):",
             "    strategy_id = 'live-strategy'",
+            "    def on_start(self, context):",
+            "        context.subscribe('BTC/USDT', exchange='binance', market_type='spot', selectors=(Quote,), identity=self.strategy_id)",
             "    def on_data(self, context, signal):",
             "        return None",
         ]),
@@ -317,9 +372,6 @@ def _live_config_lines(*, account_ref: str) -> list[str]:
     lines.extend([
             "",
             "[live]",
-            'venue = "binance"',
-            'market = "spot"',
-            'symbol = "BTC/USDT"',
             'state_path = ".kairos/launches/live/live-1/live_state.json"',
     ])
     lines.extend([

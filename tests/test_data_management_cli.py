@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Mapping
 
 from typer.testing import CliRunner
 
-from kairospy.infrastructure.data import DataStore
+from kairospy.core.market import Bar
+from kairospy.infrastructure.persistence.market_data.catalog import DataStore
 from kairospy.surface.cli.commands.market import market_app
 
 
@@ -23,20 +26,32 @@ def test_market_cli_lists_inspects_aliases_and_prunes(tmp_path, monkeypatch) -> 
         mode="replace",
     )
 
-    listed = CliRunner().invoke(market_app, ["list", "--format", "jsonl", "--output", "json"], catch_exceptions=False)
+    read_text = CliRunner().invoke(
+        market_app,
+        ["dataset", "read", "market.ohlcv.binance.spot.btc_usdt.1m", "--output", "text", "--limit", "1"],
+        catch_exceptions=False,
+    )
+    read_jsonl = CliRunner().invoke(
+        market_app,
+        ["dataset", "read", "market.ohlcv.binance.spot.btc_usdt.1m", "--output", "jsonl", "--limit", "1"],
+        catch_exceptions=False,
+    )
+
+    listed = CliRunner().invoke(market_app, ["dataset", "list", "--format", "jsonl", "--output", "json"], catch_exceptions=False)
     inspected = CliRunner().invoke(
         market_app,
-        ["inspect", "market.ohlcv.binance.spot.btc_usdt.1m", "--format", "jsonl", "--output", "json"],
+        ["dataset", "inspect", "market.ohlcv.binance.spot.btc_usdt.1m", "--format", "jsonl", "--output", "json"],
         catch_exceptions=False,
     )
     aliased = CliRunner().invoke(
         market_app,
-        ["alias", "market.ohlcv.binance.spot.btc_usdt.1m", "btc-bars", "--format", "jsonl"],
+        ["dataset", "alias", "market.ohlcv.binance.spot.btc_usdt.1m", "btc-bars", "--format", "jsonl"],
         catch_exceptions=False,
     )
     pruned = CliRunner().invoke(
         market_app,
         [
+            "dataset",
             "prune",
             "btc-bars",
             "--start",
@@ -51,6 +66,11 @@ def test_market_cli_lists_inspects_aliases_and_prunes(tmp_path, monkeypatch) -> 
         catch_exceptions=False,
     )
 
+    assert read_text.exit_code == 0
+    assert read_text.output.startswith("Result\n")
+    assert "2026-01-01T00:00:00+00:00" in read_text.output
+    assert read_jsonl.exit_code == 0
+    assert json.loads(read_jsonl.output)["close"] == "100"
     assert listed.exit_code == 0
     assert "market.ohlcv.binance.spot.btc_usdt.1m" in json.loads(listed.output)["datasets"]
     assert json.loads(inspected.output)["rows"] == 2
@@ -62,7 +82,7 @@ def test_market_cli_lists_inspects_aliases_and_prunes(tmp_path, monkeypatch) -> 
 
 
 def test_market_cli_reports_capabilities() -> None:
-    result = CliRunner().invoke(market_app, ["capabilities", "--exchange", "binance", "--output", "json"], catch_exceptions=False)
+    result = CliRunner().invoke(market_app, ["source", "capabilities", "--exchange", "binance", "--output", "json"], catch_exceptions=False)
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -77,12 +97,12 @@ def test_market_cli_reports_capabilities() -> None:
 def test_market_cli_checks_specific_market_data_subscription() -> None:
     valid = CliRunner().invoke(
         market_app,
-        ["check", "--exchange", "binance", "--market", "spot", "--symbol", "BTC/USDT", "--kind", "bar", "--timeframe", "1m", "--output", "json"],
+        ["source", "check", "--exchange", "binance", "--market", "spot", "--symbol", "BTC/USDT", "--kind", "bar", "--timeframe", "1m", "--output", "json"],
         catch_exceptions=False,
     )
     invalid = CliRunner().invoke(
         market_app,
-        ["check", "--exchange", "binance", "--market", "option", "--symbol", "BTC/USDT", "--kind", "bar", "--timeframe", "1m", "--output", "json"],
+        ["source", "check", "--exchange", "binance", "--market", "option", "--symbol", "BTC/USDT", "--kind", "bar", "--timeframe", "1m", "--output", "json"],
         catch_exceptions=False,
     )
 
@@ -99,7 +119,7 @@ def test_market_cli_prefetches_backtest_strategy_subscriptions(tmp_path, monkeyp
 
     monkeypatch.setattr("kairospy.application.system.facade.market.exchange", lambda exchange_name, driver_name: FakeHistoricalClient())
 
-    result = CliRunner().invoke(market_app, ["prefetch", str(config_path), "--output", "json", "--limit", "10"], catch_exceptions=False)
+    result = CliRunner().invoke(market_app, ["data", "prefetch", str(config_path), "--output", "json", "--limit", "10"], catch_exceptions=False)
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -114,7 +134,7 @@ def test_market_cli_prefetch_dry_launch_plans_without_downloading(tmp_path, monk
     _write_workspace_manifest(tmp_path)
     config_path = _write_backtest_project(tmp_path)
 
-    result = CliRunner().invoke(market_app, ["prefetch", str(config_path), "--dry-run", "--output", "json"], catch_exceptions=False)
+    result = CliRunner().invoke(market_app, ["data", "prefetch", str(config_path), "--dry-run", "--output", "json"], catch_exceptions=False)
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -131,7 +151,7 @@ def test_market_cli_persists_live_stream_by_dataset_id(tmp_path, monkeypatch) ->
 
     result = CliRunner().invoke(
         market_app,
-        ["persist", "market.trades.binance.spot.btc_usdt", "--limit", "1", "--format", "jsonl"],
+        ["stream", "persist", "market.trades.binance.spot.btc_usdt", "--limit", "1", "--format", "jsonl"],
         catch_exceptions=False,
     )
 
@@ -142,7 +162,7 @@ def test_market_cli_persists_live_stream_by_dataset_id(tmp_path, monkeypatch) ->
 
 
 class FakeHistoricalClient:
-    def fetch_ohlcv(
+    def fetch_bars(
         self,
         symbol: str,
         *,
@@ -150,25 +170,23 @@ class FakeHistoricalClient:
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
-        params: Mapping[str, object] | None = None,
+        adapter_options: Mapping[str, object] | None = None,
     ):
+        _ = symbol, since, until, limit, adapter_options
         return (
-            {
-                "time": "2026-01-01T00:00:00+00:00",
-                "kind": "bar",
-                "venue": "binance",
-                "market": "spot",
-                "source_symbol": symbol,
-                "market_id": "market:binance:spot:btc_usdt",
-                "instrument_id": "instrument:spot:btc:usdt",
-                "market_key": "binance_spot_btc_usdt",
-                "timeframe": timeframe,
-                "open": "100",
-                "high": "101",
-                "low": "99",
-                "close": "100.5",
-                "volume": "10",
-            },
+            Bar(
+                instrument_id="instrument:spot:btc:usdt",
+                market_id="market:binance:spot:btc_usdt",
+                market_key="binance_spot_btc_usdt",
+                time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                timeframe=timeframe,
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100.5"),
+                volume=Decimal("10"),
+                source="binance",
+            ),
         )
 
     async def watch_trades(

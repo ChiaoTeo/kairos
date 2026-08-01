@@ -8,8 +8,10 @@ import typer
 
 from kairospy.application.modes import RuntimeMode
 from kairospy.application.system.facade.order import OrderFacade
+from kairospy.application.browsing import ListQuery
 from kairospy.surface.cli.options import OutputFormat
 from kairospy.surface.cli.output import write_cli_result
+from kairospy.surface.tui import ResourceList, ResourceListBrowser
 
 
 order_app = typer.Typer(no_args_is_help=True, help="Order commands")
@@ -44,6 +46,27 @@ def list_orders(
     open_orders(ctx=ctx, account_id=account_id, symbol=symbol, limit=limit, params_json=params_json, output_format=output_format)
 
 
+@order_app.command("browse")
+def browse_orders(
+    account_id: str = typer.Option(..., "--account"),
+    symbol: str | None = typer.Option(None, "--symbol"),
+    limit: int | None = typer.Option(None, "--limit"),
+    params_json: str | None = typer.Option(None, "--params-json"),
+    page_size: int = typer.Option(20, "--page-size", min=1),
+    query: str | None = typer.Option(None, "--query", help="JMESPath expression returning a list of objects."),
+) -> None:
+    params = _params(params_json)
+    try:
+        resource = ResourceList.from_rows(
+            _open_order_rows(account_id=account_id, symbol=symbol, limit=limit, params=params),
+            title="Open Orders",
+            query=ListQuery(page_size=page_size, expression=query),
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    ResourceListBrowser(resource).run()
+
+
 @order_app.command("history")
 @order_app.command("closed")
 def history_orders(
@@ -73,9 +96,9 @@ def place_order(
     price: str | None = typer.Option(None, "--price"),
     params_json: str | None = typer.Option(None, "--params-json"),
     launch: str | None = typer.Option(None, "--launch", help="Registered launch name or launch id for the launched system session."),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    launch_id: str | None = typer.Option(None, "--launch-id"),
-    root: Path | None = typer.Option(None, "--root"),
+    mode: RuntimeMode | None = typer.Option(None, "--mode", hidden=True),
+    launch_id: str | None = typer.Option(None, "--launch-id", hidden=True),
+    root: Path | None = typer.Option(None, "--root", hidden=True),
     wait: bool = typer.Option(False, "--wait", help="Wait for a launched system command response."),
     timeout_seconds: float = typer.Option(5.0, "--timeout"),
     submit: bool = typer.Option(False, "--submit"),
@@ -101,7 +124,7 @@ def place_order(
             )
         else:
             if account_id is None:
-                raise ValueError("order place requires --account unless --launch/--mode/--launch-id targets a launched system")
+                raise ValueError("order place requires --account unless --launch targets a launched system")
             payload = _ORDERS.place(
                 account_id=account_id,
                 symbol=symbol,
@@ -126,9 +149,9 @@ def cancel_order(
     symbol: str | None = typer.Option(None, "--symbol"),
     params_json: str | None = typer.Option(None, "--params-json"),
     launch: str | None = typer.Option(None, "--launch", help="Registered launch name or launch id for the launched system session."),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    launch_id: str | None = typer.Option(None, "--launch-id"),
-    root: Path | None = typer.Option(None, "--root"),
+    mode: RuntimeMode | None = typer.Option(None, "--mode", hidden=True),
+    launch_id: str | None = typer.Option(None, "--launch-id", hidden=True),
+    root: Path | None = typer.Option(None, "--root", hidden=True),
     wait: bool = typer.Option(False, "--wait", help="Wait for a launched system command response."),
     timeout_seconds: float = typer.Option(5.0, "--timeout"),
     submit: bool = typer.Option(False, "--submit"),
@@ -151,7 +174,7 @@ def cancel_order(
             )
         else:
             if account_id is None:
-                raise ValueError("order cancel requires --account unless --launch/--mode/--launch-id targets a launched system")
+                raise ValueError("order cancel requires --account unless --launch targets a launched system")
             payload = _ORDERS.cancel(
                 account_id=account_id,
                 order_id=order_id,
@@ -204,9 +227,9 @@ def show_order(
     account_id: str | None = typer.Option(None, "--account"),
     order_id: str = typer.Option(..., "--order-id"),
     launch: str | None = typer.Option(None, "--launch", help="Registered launch name or launch id for the launched system session."),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    launch_id: str | None = typer.Option(None, "--launch-id"),
-    root: Path | None = typer.Option(None, "--root"),
+    mode: RuntimeMode | None = typer.Option(None, "--mode", hidden=True),
+    launch_id: str | None = typer.Option(None, "--launch-id", hidden=True),
+    root: Path | None = typer.Option(None, "--root", hidden=True),
     wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for a launched system command response."),
     timeout_seconds: float = typer.Option(5.0, "--timeout"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
@@ -225,7 +248,7 @@ def show_order(
             )
         else:
             if account_id is None:
-                raise ValueError("order show requires --account unless --launch/--mode/--launch-id targets a launched system")
+                raise ValueError("order show requires --account unless --launch targets a launched system")
             payload = _ORDERS.show(account_id=account_id, order_id=order_id)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
@@ -238,9 +261,9 @@ def inspect_order(
     account_id: str | None = typer.Option(None, "--account"),
     order_id: str = typer.Option(..., "--order-id"),
     launch: str | None = typer.Option(None, "--launch", help="Registered launch name or launch id for the launched system session."),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    launch_id: str | None = typer.Option(None, "--launch-id"),
-    root: Path | None = typer.Option(None, "--root"),
+    mode: RuntimeMode | None = typer.Option(None, "--mode", hidden=True),
+    launch_id: str | None = typer.Option(None, "--launch-id", hidden=True),
+    root: Path | None = typer.Option(None, "--root", hidden=True),
     wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for a launched system command response."),
     timeout_seconds: float = typer.Option(5.0, "--timeout"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
@@ -269,6 +292,20 @@ def _params(value: str | None) -> Mapping[str, object] | None:
     if not isinstance(payload, Mapping):
         raise typer.BadParameter("--params-json must be a JSON object")
     return payload
+
+
+def _open_order_rows(
+    *,
+    account_id: str,
+    symbol: str | None,
+    limit: int | None,
+    params: Mapping[str, object] | None,
+) -> tuple[Mapping[str, object], ...]:
+    payload = _ORDERS.open_orders(account_id=account_id, symbol=symbol, limit=limit, params=params)
+    rows = payload.get("orders", ())
+    if not isinstance(rows, (tuple, list)):
+        return ()
+    return tuple(row for row in rows if isinstance(row, Mapping))
 
 
 __all__ = ["order_app"]

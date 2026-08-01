@@ -57,7 +57,7 @@ def test_workspace_text_format_controls_manifest_fallback(tmp_path, monkeypatch)
         encoding="utf-8",
     )
 
-    result = CliRunner().invoke(app, ["config", "manifest"], catch_exceptions=False)
+    result = CliRunner().invoke(app, ["project", "config", "manifest"], catch_exceptions=False)
 
     assert result.exit_code == 0
     assert result.output.startswith("Result\n")

@@ -16,7 +16,17 @@ from kairospy.core.account import (
     AccountState,
     derive_account_state,
 )
-from kairospy.core.order import OrderEvent, OrderEventKind, OrderJournal, OrderRequest, OrderSide, OrderState, OrderStatus, OrderType
+from kairospy.core.order import (
+    OrderEvent,
+    OrderEventKind,
+    OrderJournal,
+    OrderRequest,
+    OrderSide,
+    OrderState,
+    OrderStatus,
+    OrderType,
+    VenueOrderResponse,
+)
 from kairospy.core.reference import InstrumentId
 
 from .impact import reserve_cash_order, reserve_margin_order
@@ -34,7 +44,7 @@ class BrokerGateway(Protocol):
         amount: object,
         price: object | None = None,
         params: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+    ) -> VenueOrderResponse:
         ...
 
     def cancel_order(
@@ -43,7 +53,7 @@ class BrokerGateway(Protocol):
         *,
         symbol: str | None = None,
         params: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+    ) -> VenueOrderResponse:
         ...
 
 

@@ -35,6 +35,7 @@ class MarginScope(StrEnum):
 class AccountBookKind(StrEnum):
     DEFAULT = "default"
     SPOT = "spot"
+    EQUITY = "equity"
     CROSS_MARGIN = "cross_margin"
     ISOLATED_MARGIN = "isolated_margin"
     USD_M_FUTURES = "usd_m_futures"

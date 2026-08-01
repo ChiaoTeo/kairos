@@ -7,10 +7,11 @@ from types import MappingProxyType
 from typing import Mapping, Sequence, overload
 
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.ports import DataSubscription, MarketDataPort, MarketDataSubscriptionSpec
-from kairospy.application.service.domain.market import parse_market_dataset_id
-from kairospy.application.service.runtime import AccountQueryService
-from kairospy.application.strategy import Context, ControlFactory, ControlJournal
+from kairospy.application.ports import DataSubscription, MarketDataSubscriptionSpec
+from kairospy.application.runtime.contracts import MarketRuntime
+from kairospy.application.domain.market import parse_market_dataset_id
+from kairospy.application.query import AccountQueryService
+from kairospy.application.strategy import Context
 from kairospy.core.intent import Intent, IntentJournal, TradeIntent, target_position_intent
 from kairospy.core.market import MarketSelector, MarketViewReader
 from kairospy.core.reference import ExchangeId, MarketRef, MarketResolver, MarketTypeId, ReferenceViewReader
@@ -23,9 +24,8 @@ class RuntimeContext(Context):
     event: RuntimeEnvelope | None = None
     state: Mapping[str, object] = field(default_factory=dict)
     intents: IntentJournal = field(default_factory=IntentJournal)
-    data: MarketDataPort | None = None
+    data: MarketRuntime | None = None
     views: ViewStore = field(default_factory=ViewStore)
-    controls: ControlJournal = field(default_factory=ControlJournal)
     emitted_intents: list[Intent] = field(default_factory=list)
     emitted_traces: list[Mapping[str, object]] = field(default_factory=list)
 
@@ -40,10 +40,6 @@ class RuntimeContext(Context):
         self.emitted_intents.clear()
         self.emitted_traces.clear()
         return self
-
-    @property
-    def control(self) -> ControlFactory:
-        return ControlFactory(strategy_id=self.strategy_id, requested_at=self.now, journal=self.controls)
 
     @property
     def now(self) -> datetime | None:

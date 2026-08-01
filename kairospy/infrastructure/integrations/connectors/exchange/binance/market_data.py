@@ -6,15 +6,15 @@ from typing import AsyncIterator, Iterable, Mapping
 
 import requests
 
-from kairospy.infrastructure.data import DataSink
-from kairospy.core.market import MarketEvent, MarketSubject, OrderBookSyncGap, OrderBookSynchronizer
+from kairospy.infrastructure.persistence.market_data.ingest import DataSink
+from kairospy.core.market import Bar, MarketEvent, MarketSubject, OrderBookSyncGap, OrderBookSynchronizer, RateObservation
 from kairospy.core.reference import (
     LifecycleEvent,
     MarketDefinition,
     MarketRef,
     ReferenceCatalog,
 )
-from kairospy.application.service.domain.reference.builders import (
+from kairospy.application.domain.reference.builders import (
     catalog_from_market_rows,
     market_definitions_from_rows,
 )
@@ -22,10 +22,10 @@ from kairospy.application.service.domain.reference.builders import (
 from kairospy.infrastructure.integrations.connectors.exchange.binance.reference import delist_schedule_events
 from kairospy.infrastructure.integrations.payloads.ccxt_market import (
     ccxt_market_type,
+    ccxt_funding_rate_observation,
     ccxt_order_book_delta,
-    ccxt_ohlcv_record,
+    ccxt_ohlcv_bar,
     ccxt_ohlcv_update,
-    ccxt_funding_rate_record,
     ccxt_option_greeks_update,
     ccxt_order_book_record,
     ccxt_order_book_snapshot,
@@ -37,6 +37,7 @@ from kairospy.infrastructure.integrations.payloads.ccxt_market import (
     ephemeral_market_ref,
 )
 from kairospy.infrastructure.integrations.drivers import CcxtDriver
+from kairospy.infrastructure.integrations.types import IntegrationParams, OrderBookRecordStream, QuoteRecordStream, RawPayload, RawPayloadRows, RawPayloadStream, TradeRecordStream
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,15 +49,15 @@ class BinanceMarketDataConnector:
     def fetch_markets(
         self,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadRows:
         return self.driver.fetch_markets(self.exchange_id, params=params)
 
     def fetch_market_definitions(
         self,
         *,
         as_of: datetime | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> tuple[MarketDefinition, ...]:
         effective_from = (as_of or datetime.now(timezone.utc)).astimezone(timezone.utc)
         return market_definitions_from_rows(self.fetch_markets(params=params), effective_from=effective_from)
@@ -65,7 +66,7 @@ class BinanceMarketDataConnector:
         self,
         *,
         as_of: datetime | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> ReferenceCatalog:
         effective_from = (as_of or datetime.now(timezone.utc)).astimezone(timezone.utc)
         return catalog_from_market_rows(self.fetch_markets(params=params), effective_from=effective_from)
@@ -73,8 +74,8 @@ class BinanceMarketDataConnector:
     def fetch_delist_schedule(
         self,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadRows:
         return self.driver.fetch_binance_spot_delist_schedule(params=params)
 
     def fetch_delist_events(
@@ -82,7 +83,7 @@ class BinanceMarketDataConnector:
         *,
         catalog: ReferenceCatalog | None = None,
         market: str = "spot",
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> tuple[LifecycleEvent, ...]:
         return delist_schedule_events(
             self.fetch_delist_schedule(params=params),
@@ -91,7 +92,7 @@ class BinanceMarketDataConnector:
             market=market,
         )
 
-    def fetch_ohlcv(
+    def fetch_bars(
         self,
         symbol: str,
         *,
@@ -99,9 +100,9 @@ class BinanceMarketDataConnector:
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
-        market_ref = _market_ref(self.exchange_id, symbol, params)
+        adapter_options: IntegrationParams | None = None,
+    ) -> Iterable[Bar]:
+        market_ref = _market_ref(self.exchange_id, symbol, adapter_options)
         rows = self.driver.fetch_ohlcv(
             self.exchange_id,
             symbol,
@@ -109,9 +110,9 @@ class BinanceMarketDataConnector:
             since=since,
             until=until,
             limit=limit,
-            params=params,
+            params=adapter_options,
         )
-        return (ccxt_ohlcv_record(row, market=market_ref, timeframe=timeframe) for row in rows)
+        return (ccxt_ohlcv_bar(row, market=market_ref, timeframe=timeframe) for row in rows)
 
     def fetch_ohlcv_updates(
         self,
@@ -121,7 +122,7 @@ class BinanceMarketDataConnector:
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> Iterable[MarketEvent]:
         market_ref = _market_ref(self.exchange_id, symbol, params)
         rows = self.driver.fetch_ohlcv(
@@ -135,16 +136,16 @@ class BinanceMarketDataConnector:
         )
         return (ccxt_ohlcv_update(row, market=market_ref, timeframe=timeframe) for row in rows)
 
-    def fetch_funding_rate(
+    def fetch_funding_rates(
         self,
         symbol: str,
         *,
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
-        funding_params = {"type": "swap", **dict(params or {})}
+        adapter_options: IntegrationParams | None = None,
+    ) -> Iterable[RateObservation]:
+        funding_params = {"type": "swap", **dict(adapter_options or {})}
         market_ref = _market_ref(self.exchange_id, symbol, funding_params)
         rows = self.driver.fetch_funding_rate(
             self.exchange_id,
@@ -154,14 +155,14 @@ class BinanceMarketDataConnector:
             limit=limit,
             params=funding_params,
         )
-        return (ccxt_funding_rate_record(row, market=market_ref) for row in rows)
+        return (ccxt_funding_rate_observation(row, market=market_ref) for row in rows)
 
     def watch_ticker(
         self,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> QuoteRecordStream:
         return _ticker_records(
             self.driver.watch_ticker(self.exchange_id, symbol, params=params),
             _market_ref(self.exchange_id, symbol, params),
@@ -171,7 +172,7 @@ class BinanceMarketDataConnector:
         self,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> AsyncIterator[MarketEvent]:
         return _ticker_updates(
             self.driver.watch_ticker(self.exchange_id, symbol, params=params),
@@ -182,8 +183,8 @@ class BinanceMarketDataConnector:
         self,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
         option_params = {"type": "option", **dict(params or {})}
         return self.driver.watch_option_greeks(self.exchange_id, symbol, params=option_params)
 
@@ -191,7 +192,7 @@ class BinanceMarketDataConnector:
         self,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> AsyncIterator[MarketEvent]:
         option_params = {"type": "option", **dict(params or {})}
         return _option_greeks_updates(
@@ -204,8 +205,8 @@ class BinanceMarketDataConnector:
         symbol: str,
         *,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> OrderBookRecordStream:
         return _order_book_records(
             self.driver.watch_order_book(self.exchange_id, symbol, limit=limit, params=params),
             _market_ref(self.exchange_id, symbol, params),
@@ -216,7 +217,7 @@ class BinanceMarketDataConnector:
         symbol: str,
         *,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> AsyncIterator[MarketEvent]:
         if str((params or {}).get("derivation") or "").strip().lower() == "local_l2":
             return _local_l2_order_book_updates(self.driver, self.exchange_id, symbol, limit, params, _market_ref(self.exchange_id, symbol, params))
@@ -231,8 +232,8 @@ class BinanceMarketDataConnector:
         *,
         since: object | None = None,
         limit: int = 50,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> TradeRecordStream:
         return _trade_records(
             self.driver.watch_trades(self.exchange_id, symbol, since=since, limit=limit, params=params),
             _market_ref(self.exchange_id, symbol, params),
@@ -244,7 +245,7 @@ class BinanceMarketDataConnector:
         *,
         since: object | None = None,
         limit: int = 50,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> AsyncIterator[MarketEvent]:
         return _trade_updates(
             self.driver.watch_trades(self.exchange_id, symbol, since=since, limit=limit, params=params),
@@ -257,7 +258,7 @@ class BinanceMarketDataConnector:
         sink: DataSink,
         *,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> int:
         return await sink.consume(self.watch_ticker(symbol, params=params), limit=limit)
 
@@ -268,7 +269,7 @@ class BinanceMarketDataConnector:
         *,
         book_limit: int | None = None,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> int:
         return await sink.consume(self.watch_order_book(symbol, limit=book_limit, params=params), limit=limit)
 
@@ -280,7 +281,7 @@ class BinanceMarketDataConnector:
         since: object | None = None,
         trade_limit: int = 50,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> int:
         return await sink.consume(
             self.watch_trades(symbol, since=since, limit=trade_limit, params=params),
@@ -288,7 +289,7 @@ class BinanceMarketDataConnector:
         )
 
 
-def _market_ref(exchange_id: str, symbol: object, params: Mapping[str, object] | None) -> MarketRef:
+def _market_ref(exchange_id: str, symbol: object, params: RawPayload | None) -> MarketRef:
     return ephemeral_market_ref(venue=exchange_id, market=ccxt_market_type(exchange_id, params), source_symbol=str(symbol))
 
 
@@ -373,7 +374,7 @@ def _optional_int(value: object | None) -> int | None:
         return None
 
 
-def _fetch_binance_depth_snapshot(symbol: str, *, limit: int, params: Mapping[str, object]) -> dict[str, object]:
+def _fetch_binance_depth_snapshot(symbol: str, *, limit: int, params: RawPayload) -> dict[str, object]:
     url = _binance_depth_snapshot_url(params)
     session = requests.Session()
     session.trust_env = False
@@ -390,14 +391,14 @@ def _fetch_binance_depth_snapshot(symbol: str, *, limit: int, params: Mapping[st
         session.close()
 
 
-def _binance_depth_snapshot_url(params: Mapping[str, object]) -> str:
+def _binance_depth_snapshot_url(params: RawPayload) -> str:
     market_type = str(params.get("market") or params.get("type") or "spot").strip().lower()
     if market_type in {"swap", "future", "futures", "perp", "perpetual"}:
         return "https://fapi.binance.com/fapi/v1/depth"
     return "https://api.binance.com/api/v3/depth"
 
 
-def _orderbook_snapshot_limit(limit: object | None, params: Mapping[str, object]) -> int:
+def _orderbook_snapshot_limit(limit: object | None, params: RawPayload) -> int:
     configured = params.get("local_orderbook_limit")
     if configured is not None:
         return int(configured)

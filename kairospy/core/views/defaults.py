@@ -41,15 +41,6 @@ def default_view_registry() -> ViewRegistry:
                 mutability="runtime_writable",
                 evidence="intent journal view state",
             ),
-            ViewSchema(
-                "system.control",
-                "system",
-                fields=(
-                    ViewFieldSchema("total_count", "control request count", "runtime state", "ControlJournal"),
-                    ViewFieldSchema("requests", "strategy runtime control requests", "request time", "ControlJournal"),
-                ),
-                evidence="control request journal projection",
-            ),
         )
     )
 

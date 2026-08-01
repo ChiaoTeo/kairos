@@ -18,7 +18,14 @@ from .config import (
     table,
 )
 from .accounts import AccountConfigRegistry, AccountResolver, ConfiguredAccount, ConfiguredCredential, configured_account, configured_account_ref
-from .integrations import default_broker, default_market_feed
+from .integrations import (
+    configured_market_feed_for_subscription,
+    default_broker,
+    default_broker_for_book,
+    default_market_feed,
+    default_market_feed_for_subscription,
+    parse_feeds,
+)
 from .results import AccountPerformanceMixin
 
 __all__ = [
@@ -31,8 +38,11 @@ __all__ = [
     "bool_value",
     "configured_account",
     "configured_account_ref",
+    "configured_market_feed_for_subscription",
     "default_broker",
+    "default_broker_for_book",
     "default_market_feed",
+    "default_market_feed_for_subscription",
     "int_value",
     "jsonable",
     "load_required_launch_config",
@@ -40,6 +50,7 @@ __all__ = [
     "optional_int",
     "optional_text",
     "params_table",
+    "parse_feeds",
     "read_jsonl",
     "required_text",
     "resolve_path",

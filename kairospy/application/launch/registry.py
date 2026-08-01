@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 from typing import Mapping
 
@@ -20,18 +21,28 @@ class LaunchRecord:
     state: Mapping[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
+        identity = self.identity
+        pid = _optional_int(identity.get("pid"))
+        pid_alive = None if pid is None else _pid_alive(pid)
         return {
             "launch_id": self.launch_id,
             "mode": self.mode,
             "launch_instance_id": self.launch_instance_id,
+            "pid": pid,
+            "pid_alive": pid_alive,
+            "process_dead": self.process_dead,
+            "identity": identity,
             "directory": str(self.directory),
             "phase": self.phase,
             "status": self.status,
+            "health": self.health,
             "desired_state": self.desired_state,
             "heartbeat_at": None if self.heartbeat_at is None else self.heartbeat_at.isoformat(),
+            "heartbeat_fresh": not self.stale if self.active else None,
             "updated_at": self.updated_at.isoformat(),
             "heartbeat_age_seconds": self.heartbeat_age_seconds,
             "stale": self.stale,
+            "stale_reason": self.stale_reason,
             "log_file": str(self.directory / "launch.log") if (self.directory / "launch.log").exists() else None,
             "context": {
                 **dict(self.state.get("context", {}) if isinstance(self.state.get("context"), Mapping) else {}),
@@ -50,8 +61,45 @@ class LaunchRecord:
         return value if isinstance(value, str) and value.strip() else None
 
     @property
+    def identity(self) -> Mapping[str, object]:
+        value = self.state.get("identity")
+        return value if isinstance(value, Mapping) else {}
+
+    @property
     def status(self) -> str:
         return "stale" if self.stale else str(self.state.get("status") or self.summary.get("status") or self.phase)
+
+    @property
+    def active(self) -> bool:
+        return self.phase in {"starting", "running", "stopping"}
+
+    @property
+    def health(self) -> str:
+        if self.process_dead:
+            return "dead"
+        if self.active and self.stale:
+            return "stale"
+        if self.active:
+            pid = _optional_int(self.identity.get("pid"))
+            if pid is None:
+                return "unknown"
+            return "healthy"
+        return self.status
+
+    @property
+    def process_dead(self) -> bool:
+        pid = _optional_int(self.identity.get("pid"))
+        return self.active and pid is not None and _pid_alive(pid) is False
+
+    @property
+    def stale_reason(self) -> str | None:
+        if not self.stale:
+            return None
+        if self.process_dead:
+            return "process_dead"
+        if self.heartbeat_at is None:
+            return "heartbeat_missing"
+        return "heartbeat_expired"
 
     @property
     def desired_state(self) -> str:
@@ -207,6 +255,24 @@ def _parse_time(value: object) -> datetime | None:
     return datetime.fromisoformat(value)
 
 
+def _optional_int(value: object) -> int | None:
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def _is_mirrored_group_directory(path: Path) -> bool:
     if not (path / "current.json").exists():
         return False
@@ -220,10 +286,10 @@ def _record_accepts_commands(record: LaunchRecord) -> bool:
 
 def _inactive_command_message(mode: str, launch_id: str) -> str:
     if mode == "system":
-        return f"system runtime is not running for {launch_id}; start it with `kairospy launch system up`"
+        return f"system runtime is not running for {launch_id}; start it with `kairospy system up`"
     return (
         f"launch is not running for {mode}:{launch_id}; "
-        "start it with `kairospy launch daemon start TARGET` or pass --mode and --config"
+        "start it with `kairospy launch start TARGET` or pass --mode and --config"
     )
 
 

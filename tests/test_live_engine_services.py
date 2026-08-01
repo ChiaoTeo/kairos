@@ -6,23 +6,27 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.orchestration.state import RuntimePorts, RuntimeStores
+from kairospy.application.runtime.components import RuntimeComponents
+from kairospy.application.runtime.orchestration.state import RuntimeStores
 from kairospy.application.launch import LaunchAccountBinding, LaunchAccountDirectory
+from kairospy.application.account_books import default_account_books
 from kairospy.application.ports import MarketDataSubscriptionSpec
-from kairospy.application.service.domain.account.routing import account_book_route
+from kairospy.application.domain.account.routing import account_book_route
 from kairospy.application.service.modes.live import (
     LiveAccountService,
     LiveExecutionService,
     LiveMarketDataService,
     LiveTradingSafetyPolicy,
 )
-from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.application.runtime.services import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.core.account import AccountBookKind, AccountContext, AccountBookRef, AccountSource, Environment
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentJournal, IntentStatus, target_position_intent
 from kairospy.core.market import OptionGreeks, Quote
-from kairospy.core.reference import MarketResolver, SourceSymbol
+from kairospy.core.reference import MarketRef, MarketResolver, SourceSymbol
 from kairospy.infrastructure.integrations.drivers import CcxtDriver
+from kairospy.infrastructure.integrations.payloads import CcxtAccountPayloadAdapter
+from kairospy.infrastructure.integrations.payloads.ccxt_market import ccxt_option_greeks_update, ccxt_ticker_update
 
 
 class LiveTargetPositionStrategy:
@@ -72,6 +76,10 @@ class FakeLiveFeed:
         for row in self.rows:
             yield row
 
+    async def watch_ticker_updates(self, symbol: str, *, market: MarketRef, params: Mapping[str, object] | None = None) -> AsyncIterator[object]:
+        async for row in self.watch_ticker(symbol, params=params):
+            yield ccxt_ticker_update(row, market=market)
+
     async def watch_order_book(
         self,
         symbol: str,
@@ -104,6 +112,10 @@ class FakeLiveFeed:
         self.symbols.append(symbol)
         for row in self.rows:
             yield row
+
+    async def watch_option_greeks_updates(self, symbol: str, *, market: MarketRef, params: Mapping[str, object] | None = None) -> AsyncIterator[object]:
+        async for row in self.watch_option_greeks(symbol, params=params):
+            yield ccxt_option_greeks_update(row, market=market)
 
 
 class FakeBroker:
@@ -232,6 +244,25 @@ def test_live_market_service_streams_from_integration_feed() -> None:
     assert service.view().source == "binance-live"
 
 
+def test_live_market_service_resolves_feed_by_subscription_market() -> None:
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    spot_feed = FakeLiveFeed({"timestamp": int(now.timestamp() * 1000), "bid": "2000", "ask": "2001"})
+    equity_feed = FakeLiveFeed({"timestamp": int(now.timestamp() * 1000), "bid": "180", "ask": "181"})
+    market = MarketResolver(default_venue="binance", default_market="equity").resolve("AAPL")
+    service = LiveMarketDataService(
+        feed_resolver=lambda spec: equity_feed if str(spec.market.market) == "equity" else spot_feed,
+        source_name="binance-live",
+    )
+    service.subscribe(MarketDataSubscriptionSpec(market, (Quote,)))
+
+    event = asyncio.run(_first(service.events()))
+
+    assert equity_feed.symbols == ["AAPL"]
+    assert spot_feed.symbols == []
+    assert event.kind == "quote"
+    assert event.payload.value.ask == Decimal("181")  # type: ignore[union-attr]
+
+
 def test_live_market_service_streams_option_greeks_from_integration_feed() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     market = MarketResolver(default_venue="binance", default_market="option").resolve("BTC-260926-120000-C")
@@ -349,6 +380,7 @@ def test_live_account_service_refreshes_from_broker_integration() -> None:
     service = LiveAccountService(
         account,
         coordinator,
+        parser=CcxtAccountPayloadAdapter(),
         broker=FakeBroker(
             open_orders=(
                 {
@@ -374,14 +406,18 @@ def test_live_account_service_refreshes_from_broker_integration() -> None:
     assert service.state(account.book).balances[0].total == Decimal("1000")  # type: ignore[union-attr]
 
 
-def test_account_book_route_maps_binance_books_to_ccxt_params() -> None:
-    spot = account_book_route(AccountBookRef("binance", "main", AccountBookKind.SPOT), provider="binance")
-    funding = account_book_route(AccountBookRef("binance", "main", AccountBookKind.FUNDING), provider="binance")
-    futures = account_book_route(AccountBookRef("binance", "main", AccountBookKind.USD_M_FUTURES), provider="binance")
-    isolated = account_book_route(AccountBookRef("binance", "main", AccountBookKind.ISOLATED_MARGIN, qualifier="ETH/USDT"), provider="binance")
+def test_account_book_route_maps_binance_books_to_product_params() -> None:
+    spot = account_book_route(AccountBookRef("binance", "main", AccountBookKind.SPOT), broker="binance")
+    equity = account_book_route(AccountBookRef("binance", "main", AccountBookKind.EQUITY), broker="binance")
+    funding = account_book_route(AccountBookRef("binance", "main", AccountBookKind.FUNDING), broker="binance")
+    futures = account_book_route(AccountBookRef("binance", "main", AccountBookKind.USD_M_FUTURES), broker="binance")
+    isolated = account_book_route(AccountBookRef("binance", "main", AccountBookKind.ISOLATED_MARGIN, qualifier="ETH/USDT"), broker="binance")
 
     assert spot.balance_params == {}
     assert spot.order_params["defaultType"] == "spot"
+    assert equity.balance_params == {}
+    assert equity.order_params == {}
+    assert equity.can_trade is False
     assert funding.balance_params["type"] == "funding"
     assert funding.can_trade is False
     assert futures.order_params["defaultType"] == "future"
@@ -389,13 +425,26 @@ def test_account_book_route_maps_binance_books_to_ccxt_params() -> None:
     assert isolated.balance_params["symbols"] == ["ETH/USDT"]
 
 
+def test_account_book_route_keeps_provider_keyword_as_legacy_alias() -> None:
+    book = AccountBookRef("binance", "main", AccountBookKind.EQUITY)
+
+    route = account_book_route(book, provider="binance")
+
+    assert route == account_book_route(book, broker="binance")
+    assert route.can_trade is False
+
+
+def test_default_binance_account_books_include_equity() -> None:
+    assert "equity" in default_account_books("binance")
+
+
 def test_live_account_service_refreshes_each_enabled_book_with_routed_params() -> None:
     spot = AccountContext(AccountBookRef("binance", "main", AccountBookKind.SPOT), Environment.LIVE)
     funding = AccountContext(AccountBookRef("binance", "main", AccountBookKind.FUNDING), Environment.LIVE)
     directory = LaunchAccountDirectory((LaunchAccountBinding("account1", 0, (spot, funding)),))
     routes = (
-        account_book_route(spot.book, provider="binance"),
-        account_book_route(funding.book, provider="binance"),
+        account_book_route(spot.book, broker="binance"),
+        account_book_route(funding.book, broker="binance"),
     )
     broker = FakeBroker(
         open_orders=(
@@ -411,7 +460,14 @@ def test_live_account_service_refreshes_each_enabled_book_with_routed_params() -
             },
         )
     )
-    service = LiveAccountService(spot, ExecutionCoordinator(), broker=broker, directory=directory, routes=routes)
+    service = LiveAccountService(
+        spot,
+        ExecutionCoordinator(),
+        broker=broker,
+        parser=CcxtAccountPayloadAdapter(),
+        directory=directory,
+        routes=routes,
+    )
 
     snapshots = service.refresh_all(observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
 
@@ -430,8 +486,8 @@ def test_live_execution_routes_target_position_to_intent_account_book_params() -
     swap = AccountContext(AccountBookRef("binance", "main", AccountBookKind.USD_M_FUTURES), Environment.LIVE)
     directory = LaunchAccountDirectory((LaunchAccountBinding("account1", 0, (spot, swap), ref="binance_main"),))
     routes = (
-        account_book_route(spot.book, provider="binance"),
-        account_book_route(swap.book, provider="binance"),
+        account_book_route(spot.book, broker="binance"),
+        account_book_route(swap.book, broker="binance"),
     )
     broker = FakeBroker()
     coordinator = ExecutionCoordinator(broker=broker, broker_symbol_resolver=lambda symbol: "ETH/USDT")
@@ -456,7 +512,7 @@ def test_live_execution_routes_target_position_to_intent_account_book_params() -
     )
     context.intents.record_intent(intent, at=now)
 
-    assert service.execute_intent(intent, context) is True
+    assert service.submit_intent(intent, context) is True
 
     assert broker.created[0]["params"] == {"type": "future", "defaultType": "future"}
     assert coordinator.orders.get("live-book-intent-live-order").request.context == swap
@@ -487,7 +543,7 @@ def test_live_execution_routes_target_position_to_distinct_account_broker() -> N
         account=binance_spot,
         safety_policy=LiveTradingSafetyPolicy(trading_enabled=True, require_limit_orders=True),
         directory=directory,
-        routes=(account_book_route(binance_spot.book, provider="binance"), account_book_route(okx_swap.book, provider="okx")),
+        routes=(account_book_route(binance_spot.book, broker="binance"), account_book_route(okx_swap.book, broker="okx")),
     )
     context = _IntentContext(now)
     intent = target_position_intent(
@@ -503,7 +559,7 @@ def test_live_execution_routes_target_position_to_distinct_account_broker() -> N
     )
     context.intents.record_intent(intent, at=now)
 
-    assert service.execute_intent(intent, context) is True
+    assert service.submit_intent(intent, context) is True
 
     assert binance_broker.created == []
     assert okx_broker.created[0]["params"] == {"type": "swap", "defaultType": "swap"}
@@ -516,6 +572,7 @@ def test_live_account_service_streams_private_balance_updates() -> None:
         account,
         coordinator,
         broker=FakeBroker(),
+        parser=CcxtAccountPayloadAdapter(),
         stream=FakeLiveAccountStream(),
         max_balance_events=1,
     )
@@ -537,8 +594,9 @@ def test_live_account_service_streams_private_updates_for_each_account_book() ->
         spot,
         ExecutionCoordinator(),
         broker=FakeBroker(),
+        parser=CcxtAccountPayloadAdapter(),
         directory=directory,
-        routes=(account_book_route(spot.book, provider="binance"), account_book_route(swap.book, provider="okx")),
+        routes=(account_book_route(spot.book, broker="binance"), account_book_route(swap.book, broker="okx")),
         stream_resolver=lambda account: {
             spot.book: spot_stream,
             swap.book: swap_stream,
@@ -611,7 +669,7 @@ def _live_kernel(
     account = AccountContext(AccountBookRef("binance", "main"), Environment.LIVE)
     broker = FakeBroker()
     coordinator = ExecutionCoordinator(broker=broker, broker_symbol_resolver=lambda symbol: "ETH/USDT")
-    account_service = LiveAccountService(account, coordinator, broker=broker)
+    account_service = LiveAccountService(account, coordinator, broker=broker, parser=CcxtAccountPayloadAdapter())
     execution = LiveExecutionService(
         coordinator,
         account=account,
@@ -622,7 +680,7 @@ def _live_kernel(
     return (
         RuntimeKernel(
             LiveTargetPositionStrategy(instrument_id=market.instrument_id, market_id=market.market_id, limit_price=limit_price),
-            ports=RuntimePorts(data=market_data, account=account_service, trading_execution=execution),
+            components=RuntimeComponents(market=market_data, account=account_service, execution=execution),
             stores=RuntimeStores(intents=intents),
             services=RuntimeApplicationServices.from_dependencies(
                 RuntimeServiceDependencies(
@@ -630,8 +688,9 @@ def _live_kernel(
                     data=market_data,
                     account_snapshot_store=account_service,
                     account=account_service,
+                    account_catalog=account_service,
                     trading_execution=execution,
-                    execution=coordinator,
+                    execution_coordinator=coordinator,
                     fills_source=execution,
                 )
             ),

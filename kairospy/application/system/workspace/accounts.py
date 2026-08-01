@@ -68,8 +68,12 @@ class AccountRecord:
     values: Mapping[str, object] = field(default_factory=dict)
 
     @property
+    def broker(self) -> str:
+        return self.provider
+
+    @property
     def identity(self) -> AccountIdentity:
-        return AccountIdentity(self.venue or self.provider, self.account_id)
+        return AccountIdentity(self.venue or self.broker, self.account_id)
 
     @property
     def account_key(self) -> str:
@@ -89,8 +93,8 @@ class AccountRecord:
             credential_values = {key: _redact_secret(key, value) for key, value in credential_values.items()}
         return {
             "account_id": self.account_id,
-            "broker": self.provider,
-            "provider": self.provider,
+            "broker": self.broker,
+            "provider": self.broker,
             "environment": self.environment,
             "venue": self.venue,
             "market": self.market,
@@ -153,7 +157,7 @@ def _load_account_file(path: Path) -> AccountRecord:
     if not isinstance(account, Mapping):
         raise ConfigError(f"[account] table is required in account config: {path}")
     account_id = _optional_text(account.get("id")) or path.stem
-    provider = _optional_text(account.get("provider")) or _required_text(account.get("broker"), f"{path}: account.broker")
+    provider = _optional_text(account.get("broker")) or _required_text(account.get("provider"), f"{path}: account.broker or account.provider")
     environment = _required_text(account.get("environment"), f"{path}: account.environment")
     credential = values.get("credential")
     permissions = values.get("permissions")
@@ -193,11 +197,11 @@ def _account_books(account: Mapping[str, object], values: Mapping[str, object]) 
                 )
             )
         return tuple(records)
-    provider = _optional_text(account.get("provider")) or _optional_text(account.get("broker")) or ""
+    broker = _optional_text(account.get("broker")) or _optional_text(account.get("provider")) or ""
     market = _optional_text(account.get("market"))
     if market is not None:
         return (AccountBookRecord(market, market),)
-    return tuple(AccountBookRecord(book, book) for book in default_account_books(provider))
+    return tuple(AccountBookRecord(book, book) for book in default_account_books(broker))
 
 
 def _account_credentials(values: Mapping[str, object]) -> tuple[AccountCredentialRecord, ...]:

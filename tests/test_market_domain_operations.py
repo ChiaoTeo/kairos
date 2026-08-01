@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
 
 from kairospy.application.runtime.dispatch.context import RuntimeContext
 from kairospy.application.ports import DataSubscription, MarketDataSubscriptionSpec
-from kairospy.application.service.domain.market import IterableMarketEventSource, MarketDataOperationsService, MarketDataSpec
-from kairospy.core.market import OptionGreeks
-from kairospy.infrastructure.data import DataStore
+from kairospy.application.domain.market import IterableMarketEventSource, MarketDataOperationsService, MarketDataSpec
+from kairospy.core.market import Bar, OptionGreeks
+from kairospy.infrastructure.persistence.market_data.catalog import DataStore
 
 
 class FakeHistoricalClient:
-    def fetch_ohlcv(
+    def fetch_bars(
         self,
         symbol: str,
         *,
@@ -22,19 +23,23 @@ class FakeHistoricalClient:
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        adapter_options: Mapping[str, object] | None = None,
+    ) -> Iterable[Bar]:
+        _ = symbol, since, until, limit, adapter_options
         return (
-            {
-                "time": "2026-01-01T00:00:00+00:00",
-                "open": "100",
-                "high": "101",
-                "low": "99",
-                "close": "100.5",
-                "volume": "10",
-                "symbol": symbol,
-                "timeframe": timeframe,
-            },
+            Bar(
+                instrument_id="instrument:spot:btc:usdt",
+                market_id="market:binance:spot:btc_usdt",
+                market_key="binance_spot_btc_usdt",
+                time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                timeframe=timeframe,
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100.5"),
+                volume=Decimal("10"),
+                source="binance",
+            ),
         )
 
 

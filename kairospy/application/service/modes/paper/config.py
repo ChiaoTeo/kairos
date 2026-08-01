@@ -8,25 +8,24 @@ from typing import Mapping
 from kairospy.config import LaunchAccountConfig
 from kairospy.application.modes import RuntimeMode
 from kairospy.application.ports import MarketDataSubscriptionSpec
-from kairospy.application.service.domain.market import IterableMarketEventSource
-from kairospy.application.service.runtime.market import RuntimeIterableMarketEventSource
+from kairospy.application.domain.market import IterableMarketEventSource
+from kairospy.application.runtime.services.market import RuntimeIterableMarketEventSource
 from kairospy.application.strategy import Strategy
 from kairospy.core.account import AccountContext
-from kairospy.core.market import Quote
-from kairospy.core.reference import MarketResolver
-from kairospy.infrastructure.integrations.protocols import LiveMarketDataFeed
+from kairospy.application.ports import MarketStreamGateway
 
 from ..common import (
     AccountPerformanceMixin,
     AccountResolver,
     ConfiguredAccount,
+    configured_market_feed_for_subscription as common_configured_market_feed_for_subscription,
     configured_account_ref as common_configured_account_ref,
     default_market_feed as common_default_market_feed,
     load_required_launch_config,
     load_strategy as common_load_strategy,
+    parse_feeds as common_parse_feeds,
     params_table as common_params_table,
     read_jsonl as common_read_jsonl,
-    required_text as common_required_text,
     resolve_path as common_resolve_path,
     strategy_params as common_strategy_params,
     table as common_table,
@@ -38,7 +37,8 @@ class PaperConfigurationError(ValueError):
     pass
 
 
-MarketFeedFactory = Callable[[str], LiveMarketDataFeed]
+MarketFeedFactory = Callable[[str], MarketStreamGateway]
+MarketFeedResolverFactory = Callable[[MarketDataSubscriptionSpec], MarketStreamGateway | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +48,6 @@ class PaperLaunchResult(AccountPerformanceMixin):
     runtime: object
     views: object
     intents: object
-    controls: object
     account: AccountContext
     account_view: object | None
     fills: tuple[object, ...] = ()
@@ -63,7 +62,6 @@ class ConfiguredPaper:
     launch_id: str
     strategy: Strategy
     source: object | None
-    source_value: str
     launch_directory: Path
     normalized_config: Mapping[str, object]
     account_config: ConfiguredAccount
@@ -84,13 +82,14 @@ def configured_paper(
     launch_config = load_required_launch_config(config_path, mode=RuntimeMode.PAPER, error_type=PaperConfigurationError, strategy_ref=strategy_ref)
     paper = _table(launch_config.values.get("paper"), "paper")
     market_config = _table(launch_config.values.get("market"), "market") if launch_config.values.get("market") is not None else {}
+    feeds_config = common_parse_feeds(launch_config.values.get("feeds"), error_type=PaperConfigurationError)
     timeline_config = _table(launch_config.values.get("timeline"), "timeline") if launch_config.values.get("timeline") is not None else {}
     execution_config = _table(launch_config.values.get("execution"), "execution") if launch_config.values.get("execution") is not None else {}
     account_ref = launch_config.account_ref or _primary_launch_account_ref(launch_config.launch_accounts)
     account_config = _configured_account(
         account_ref,
         account_resolver=account_resolver,
-        venue=None if (market_config.get("venue") or paper.get("venue")) is None else str(market_config.get("venue") or paper.get("venue")),
+        venue=None,
     )
     launch_account_configs = _configured_launch_accounts(
         launch_config.launch_accounts,
@@ -98,42 +97,26 @@ def configured_paper(
         venue=None,
     )
     source: IterableMarketEventSource | None
-    source_value: str
-    source_config: Mapping[str, object]
     market_data: PaperMarketDataService
     if paper.get("events") is not None:
         source_path = _resolve_path(paper.get("events"), root=launch_config.root, source="paper.events")
         source = IterableMarketEventSource(str(paper.get("stream") or source_path.stem), _read_jsonl(source_path))
-        source_value = str(source_path)
-        source_config = {"source": source_value}
         market_data = PaperMarketDataService(RuntimeIterableMarketEventSource(source), source_name=str(paper.get("source_name") or source_path.stem))
     else:
-        venue = _required_text(market_config.get("venue") or paper.get("venue"), "market.venue")
-        market = str(market_config.get("market") or paper.get("market") or "spot")
-        symbol = market_config.get("symbol") or paper.get("symbol")
-        feed = (market_feed_factory or _default_market_feed)(venue)
+        feed_resolver = _market_feed_resolver(market_feed_factory, feeds=feeds_config)
         source = None
-        source_value = f"{venue}:{market}" if symbol is None else f"{venue}:{market}:{symbol}"
-        source_config = {"source": source_value, "venue": venue, "market": market}
-        if symbol is not None:
-            market_ref = MarketResolver(default_venue=venue, default_market=market).resolve(symbol)
-            source_config = {**source_config, "symbol": symbol}
-        else:
-            market_ref = None
-        market_data = PaperMarketDataService(feed=feed, source_name=str(paper.get("source_name") or f"{venue}-paper"))
-        if market_ref is not None:
-            market_data.subscribe(MarketDataSubscriptionSpec(market_ref, (Quote,), params=_params_table(paper.get("stream"), default={"type": market})))
+        market_data = PaperMarketDataService(feed_resolver=feed_resolver, source_name=str(paper.get("source_name") or "paper"))
     return ConfiguredPaper(
         launch_id=launch_config.launch_id,
         strategy=_load_strategy(launch_config.strategy, root=launch_config.root, params=_strategy_params(launch_config.values)),
         source=source,
-        source_value=source_value,
         launch_directory=_launch_directory(paper, root=launch_config.root, launch_id=launch_config.launch_id),
         normalized_config={
             "launch": {"id": launch_config.launch_id, "mode": RuntimeMode.PAPER.value, "strategy": launch_config.strategy},
             "strategy": {"params": dict(_strategy_params(launch_config.values))},
             "paper": dict(paper),
-            "market": {**dict(market_config), **source_config},
+            "feeds": {key: dict(feed.values or {}) for key, feed in feeds_config.items()},
+            **({} if not market_config else {"market": dict(market_config)}),
             "account": {"ref": account_ref, "cash": account_config.cash, "currency": account_config.currency, "fee_rate": account_config.fee_rate},
             "accounts": {key: {"ref": value.ref, "index": value.index, "books": list(value.books), "trade": value.trade} for key, value in launch_config.launch_accounts.items()},
             "execution": dict(execution_config),
@@ -187,8 +170,14 @@ def _primary_launch_account_ref(accounts: Mapping[str, object]) -> str | None:
     return str(getattr(first, "ref", "") or "") or None
 
 
-def _default_market_feed(venue: str) -> LiveMarketDataFeed:
+def _default_market_feed(venue: str) -> MarketStreamGateway:
     return common_default_market_feed(venue, mode_label="paper", error_type=PaperConfigurationError)
+
+
+def _market_feed_resolver(factory: MarketFeedFactory | None, *, feeds: Mapping[str, object]) -> MarketFeedResolverFactory:
+    if factory is not None:
+        return lambda spec: factory(str(spec.market.venue))
+    return lambda spec: common_configured_market_feed_for_subscription(spec, feeds=feeds, mode_label="paper", error_type=PaperConfigurationError)
 
 
 def _params_table(value: object, *, default: Mapping[str, object] | None = None) -> Mapping[str, object]:
@@ -206,10 +195,6 @@ def _table(value: object, name: str) -> Mapping[str, object]:
 
 def _resolve_path(value: object, *, root: Path, source: str) -> Path:
     return common_resolve_path(value, root=root, source=source, error_type=PaperConfigurationError)
-
-
-def _required_text(value: object, source: str) -> str:
-    return common_required_text(value, source, PaperConfigurationError)
 
 
 def _read_jsonl(path: Path) -> list[dict[str, object]]:

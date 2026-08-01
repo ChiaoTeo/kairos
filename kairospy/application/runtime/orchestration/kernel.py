@@ -6,13 +6,13 @@ from kairospy.application.runtime.orchestration.pipeline import RuntimeProjectio
 from kairospy.application.runtime.orchestration.session import RuntimeSession
 from kairospy.application.runtime.orchestration.state import (
     RuntimeFrame,
-    RuntimePorts,
     RuntimeLaunchResult,
     RuntimeStores,
     RuntimeStep,
     Callback,
 )
-from kairospy.application.service.runtime.services import RuntimeApplicationServices
+from kairospy.application.runtime.components import RuntimeComponents
+from kairospy.application.runtime.services.application import RuntimeApplicationServices
 from kairospy.application.protocol import MergedRuntimeEventLine, RuntimeEventLine
 from kairospy.application.runtime.processors.system import RuntimeProcessors, runtime_processors
 from kairospy.application.strategy import Strategy
@@ -23,7 +23,7 @@ class RuntimeKernel:
         self,
         strategy: Strategy,
         *,
-        ports: RuntimePorts | None = None,
+        components: RuntimeComponents | None = None,
         stores: RuntimeStores | None = None,
         services: RuntimeApplicationServices | None = None,
         processors: RuntimeProcessors | None = None,
@@ -31,17 +31,16 @@ class RuntimeKernel:
         if not strategy.strategy_id.strip():
             raise ValueError("strategy_id is required")
         self.strategy = strategy
-        self.ports = ports or RuntimePorts()
+        self.components = components or RuntimeComponents()
         self.stores = stores or RuntimeStores()
         self.services = services or RuntimeApplicationServices()
         self.state = dict(self.stores.strategy_state)
         self.intents = self.stores.intents
-        self.controls = self.stores.controls
         self.views = self.stores.views
-        self.data = self.ports.data
-        self.account = self.ports.account
-        self.reference = self.ports.reference
-        self.trading_execution = self.ports.trading_execution
+        self.data = self.components.market
+        self.account = self.components.account
+        self.reference = self.components.reference
+        self.trading_execution = self.components.execution
         self.processors = processors or self._processors()
         self.pipeline = RuntimeProjectionPipeline(
             views=self.views,
@@ -51,7 +50,6 @@ class RuntimeKernel:
             strategy_id=self.strategy.strategy_id,
             state=self.state,
             intents=self.intents,
-            controls=self.controls,
             data=self.data,
             views=self.views,
         )
@@ -96,7 +94,7 @@ class RuntimeKernel:
 __all__ = [
     "RuntimeKernel",
     "RuntimeFrame",
-    "RuntimePorts",
+    "RuntimeComponents",
     "RuntimeLaunchResult",
     "RuntimeStores",
     "RuntimeStep",

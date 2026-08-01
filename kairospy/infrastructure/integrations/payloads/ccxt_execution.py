@@ -11,12 +11,13 @@ from kairospy.core.order import OrderEventKind, OrderSide, OrderState, OrderStat
 from kairospy.core.execution import ExecutionCoordinator, ExecutionUpdate
 
 from .ccxt_parsing import ccxt_decimal, ccxt_optional_decimal, ccxt_order_quantity, ccxt_order_type, ccxt_required_text
+from kairospy.infrastructure.integrations.types import RawPayload
 
 
 def ingest_ccxt_order_update(
     coordinator: ExecutionCoordinator,
     context: AccountContext,
-    raw: Mapping[str, object],
+    raw: RawPayload,
     *,
     at: datetime | None = None,
     market_resolver: MarketResolver | None = None,
@@ -28,7 +29,7 @@ def ingest_ccxt_order_update(
 
 def ccxt_order_update(
     context: AccountContext,
-    raw: Mapping[str, object],
+    raw: RawPayload,
     *,
     at: datetime | None = None,
     market_resolver: MarketResolver | None = None,
@@ -60,7 +61,7 @@ def ccxt_order_update(
 def ingest_ccxt_my_trade(
     coordinator: ExecutionCoordinator,
     context: AccountContext,
-    raw: Mapping[str, object],
+    raw: RawPayload,
     *,
     at: datetime | None = None,
 ) -> OrderState:
@@ -70,7 +71,7 @@ def ingest_ccxt_my_trade(
 def ccxt_trade_update(
     coordinator: ExecutionCoordinator,
     context: AccountContext,
-    raw: Mapping[str, object],
+    raw: RawPayload,
     *,
     at: datetime | None = None,
 ) -> ExecutionUpdate:
@@ -112,7 +113,7 @@ def ccxt_trade_update(
 def _import_active_order(
     coordinator: ExecutionCoordinator,
     context: AccountContext,
-    raw: Mapping[str, object],
+    raw: RawPayload,
     *,
     occurred_at: datetime,
     market_resolver: MarketResolver | None = None,
@@ -138,7 +139,7 @@ def _import_active_order(
     )
 
 
-def _event_kind(raw: Mapping[str, object]) -> OrderEventKind:
+def _event_kind(raw: RawPayload) -> OrderEventKind:
     status = str(raw.get("status") or "").strip().lower()
     filled = ccxt_decimal(raw.get("filled"))
     remaining = ccxt_decimal(raw.get("remaining"))
@@ -158,7 +159,7 @@ def _event_kind(raw: Mapping[str, object]) -> OrderEventKind:
     return OrderEventKind.UNKNOWN
 
 
-def _event_time(raw: Mapping[str, object], fallback: datetime | None) -> datetime:
+def _event_time(raw: RawPayload, fallback: datetime | None) -> datetime:
     value = raw.get("timestamp") or raw.get("lastTradeTimestamp")
     if value is not None:
         return datetime.fromtimestamp(float(Decimal(str(value)) / Decimal("1000")), tz=timezone.utc)
@@ -191,13 +192,13 @@ def _optional_text(value: object) -> str | None:
     return text or None
 
 
-def _optional_order_quantity(raw: Mapping[str, object]) -> Decimal | None:
+def _optional_order_quantity(raw: RawPayload) -> Decimal | None:
     if raw.get("amount") in {None, ""} and raw.get("filled") in {None, ""} and raw.get("remaining") in {None, ""}:
         return None
     return ccxt_order_quantity(raw, subject="ccxt order update")
 
 
-def _fee(raw: Mapping[str, object]) -> tuple[str | None, Decimal]:
+def _fee(raw: RawPayload) -> tuple[str | None, Decimal]:
     fee = raw.get("fee")
     if not isinstance(fee, Mapping):
         return None, Decimal("0")

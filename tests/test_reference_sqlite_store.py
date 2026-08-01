@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from kairospy.application.service.domain.reference import ReferenceStore, catalog_from_market_rows, market_to_primitive
-from kairospy.application.service.domain.reference.serde import listing_from_primitive, listing_to_primitive, market_from_primitive
+from kairospy.application.domain.reference import catalog_from_market_rows, market_to_primitive
+from kairospy.infrastructure.persistence.reference.sqlite_store import ReferenceStore
+from kairospy.application.domain.reference.serde import listing_from_primitive, listing_to_primitive, market_from_primitive
 from kairospy.core.reference import ExchangeId, MarketTypeId, SourceSymbol
 from kairospy.core.reference import LifecycleEvent, LifecycleEventType
 

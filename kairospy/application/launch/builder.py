@@ -9,7 +9,7 @@ from typing import Mapping
 
 from kairospy.application.protocol import MergedRuntimeEventLine, RuntimeEnvelope, RuntimeEventLine
 from kairospy.application.modes import RuntimeMode
-from kairospy.application.ports import AccountPort, MarketDataPort, ReferencePort, TradingExecutionPort
+from kairospy.application.runtime.contracts import AccountRuntime, ExecutionRuntime, MarketRuntime, ReferenceRuntime
 from kairospy.application.runtime.sources import RuntimeDataSource
 from kairospy.application.strategy import Strategy
 from kairospy.application.system.artifacts.logging import LaunchOutputLog
@@ -24,10 +24,10 @@ class LaunchBuilder:
         self.env = env
         self._strategy: Strategy | None = None
         self._sources: list[RuntimeEventLine] = []
-        self._data: MarketDataPort | None = None
-        self._account: AccountPort | None = None
-        self._reference: ReferencePort | None = None
-        self._trading_execution: TradingExecutionPort | None = None
+        self._data: MarketRuntime | None = None
+        self._account: AccountRuntime | None = None
+        self._reference: ReferenceRuntime | None = None
+        self._trading_execution: ExecutionRuntime | None = None
         self._echo = False
 
     def strategy(self, strategy: Strategy) -> "LaunchBuilder":
@@ -51,19 +51,19 @@ class LaunchBuilder:
             self.source(source)
         return self
 
-    def data(self, data: MarketDataPort) -> "LaunchBuilder":
+    def data(self, data: MarketRuntime) -> "LaunchBuilder":
         self._data = data
         return self
 
-    def account(self, account: AccountPort) -> "LaunchBuilder":
+    def account(self, account: AccountRuntime) -> "LaunchBuilder":
         self._account = account
         return self
 
-    def reference(self, reference: ReferencePort) -> "LaunchBuilder":
+    def reference(self, reference: ReferenceRuntime) -> "LaunchBuilder":
         self._reference = reference
         return self
 
-    def trading_execution(self, trading_execution: TradingExecutionPort) -> "LaunchBuilder":
+    def trading_execution(self, trading_execution: ExecutionRuntime) -> "LaunchBuilder":
         self._trading_execution = trading_execution
         return self
 

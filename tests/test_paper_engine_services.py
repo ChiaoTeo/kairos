@@ -5,12 +5,13 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.orchestration.state import RuntimePorts, RuntimeStores
+from kairospy.application.runtime.components import RuntimeComponents
+from kairospy.application.runtime.orchestration.state import RuntimeStores
 from kairospy.application.launch import LaunchAccountBinding, LaunchAccountDirectory
 from kairospy.application.protocol import RuntimeEnvelope, RuntimeLine
-from kairospy.application.service.domain.account import SimulatedAccount
+from kairospy.application.domain.account import SimulatedAccount
 from kairospy.application.service.modes.paper import PaperAccountService, PaperExecutionService, PaperMarketDataService
-from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.application.runtime.services import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.core.account import AccountBookKind, AccountContext, AccountBookRef, Environment
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentJournal, IntentStatus, target_position_intent
@@ -97,16 +98,17 @@ def test_paper_services_stream_market_data_and_simulate_execution() -> None:
     intents = IntentJournal()
     kernel = RuntimeKernel(
         PaperTargetPositionStrategy(instrument_id=market.instrument_id, market_id=market.market_id),
-        ports=RuntimePorts(data=market_data, account=account, trading_execution=execution),
+        components=RuntimeComponents(market=market_data, account=account, execution=execution),
         stores=RuntimeStores(intents=intents),
         services=RuntimeApplicationServices.from_dependencies(
             RuntimeServiceDependencies(
                 intents=intents,
                 data=market_data,
-                account_snapshot_store=account,
-                account=account,
+                    account_snapshot_store=account,
+                    account=account,
+                    account_catalog=account,
                 trading_execution=execution,
-                execution=coordinator,
+                execution_coordinator=coordinator,
                 fills_source=execution,
             )
         ),
@@ -147,7 +149,7 @@ def test_paper_execution_routes_target_position_to_intent_account_book() -> None
     )
     context.intents.record_intent(intent, at=now)
 
-    fill = service.execute_intent(intent, context)
+    fill = service.submit_intent(intent, context)
 
     assert fill is not None
     assert coordinator.ledger.positions(spot.book)[market.instrument_id] == Decimal("1")

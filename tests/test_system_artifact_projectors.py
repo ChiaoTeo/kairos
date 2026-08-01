@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from kairospy.application.runtime.orchestration.pipeline import RuntimeProjectionPipeline
 from kairospy.application.runtime.processors.system import runtime_processors
-from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.application.runtime.services import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.application.system.projectors import TimelineProjector
 from kairospy.core.account import AccountContext, AccountBookRef, Environment
 from kairospy.core.execution import ExecutionCoordinator, FillReport, cash_order_request
@@ -20,7 +20,7 @@ def test_timeline_projector_order_triggers_follow_execution_state_deltas() -> No
     execution = ExecutionCoordinator()
     intents = IntentJournal()
     services = RuntimeApplicationServices.from_dependencies(
-        RuntimeServiceDependencies(intents=intents, execution=execution)
+        RuntimeServiceDependencies(intents=intents, execution_coordinator=execution)
     )
     output = MemoryTimelineOutput()
     projector = TimelineProjector(output, sample_interval="off")  # type: ignore[arg-type]

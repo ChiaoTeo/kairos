@@ -12,7 +12,7 @@ from kairospy.application.runtime.processors.order import OrderProcessor
 from kairospy.application.runtime.processors.reference import ReferenceProcessor
 from kairospy.application.runtime.processors.risk import RiskProcessor
 from kairospy.application.runtime.processors.trace import TraceProcessor
-from kairospy.application.service.runtime.services import RuntimeApplicationServices
+from kairospy.application.runtime.services.application import RuntimeApplicationServices
 from kairospy.core.intent import IntentJournal
 from kairospy.core.views import ViewStore
 
@@ -126,13 +126,13 @@ def runtime_processors(
         reference=None if services.reference is None else ReferenceProcessor(services.reference),
         execution=(
             None
-            if services.execution is None or services.execution.projection is None or services.execution.updates is None
+            if services.execution is None or not services.execution.has_projection or not services.execution.has_updates
             else ExecutionProcessor(
                 service=services.execution,
             )
         ),
-        order=None if services.execution is None or services.execution.projection is None else OrderProcessor(services.execution),
-        trading_intent=None if services.execution is None or services.execution.trading_intents is None else TradingIntentProcessor(services.execution),
+        order=None if services.execution is None or not services.execution.has_projection else OrderProcessor(services.execution),
+        trading_intent=None if services.execution is None or not services.execution.can_execute_intents else TradingIntentProcessor(services.execution),
         trace=trace_processor,
     )
 

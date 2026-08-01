@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.orchestration.state import RuntimePorts
-from kairospy.application.service.domain.reference import ReferenceStore, refresh_instrument_provider
-from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
-from kairospy.application.service.runtime.reference import ReferenceCatalogService
+from kairospy.application.runtime.components import RuntimeComponents
+from kairospy.application.domain.reference import refresh_exchange_reference
+from kairospy.infrastructure.persistence.reference.sqlite_store import ReferenceStore
+from kairospy.application.runtime.services import RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.application.runtime.services.reference import ReferenceCatalogService
 from kairospy.core.intent import IntentJournal
 from kairospy.core.reference import SourceSymbol
+from kairospy.application.domain.reference.builders import catalog_from_market_rows
 
 
 class NoopStrategy:
@@ -34,9 +35,10 @@ class NoopStrategy:
         return None
 
 
-class FakeReferenceProvider:
-    def fetch_markets(self, *, params: Mapping[str, object] | None = None) -> Iterable[Mapping[str, object]]:
-        return (
+class FakeExchangeReference:
+    def fetch_catalog(self, *, as_of: datetime, market: str | None = None, params=None):
+        return catalog_from_market_rows(
+            (
             {
                 "venue": "binance",
                 "market": "spot",
@@ -45,16 +47,18 @@ class FakeReferenceProvider:
                 "quote": "USDT",
                 "status": "trading",
             },
+            ),
+            effective_from=as_of,
         )
 
 
-def test_reference_provider_refresh_feeds_runtime_view_state(tmp_path) -> None:
+def test_exchange_reference_refresh_feeds_runtime_view_state(tmp_path) -> None:
     as_of = datetime(2026, 1, 1, tzinfo=timezone.utc)
     store = ReferenceStore(tmp_path / "reference")
 
-    result = refresh_instrument_provider(
+    result = refresh_exchange_reference(
         store,
-        FakeReferenceProvider(),
+        FakeExchangeReference(),
         as_of=as_of,
         venue="binance",
         market="spot",
@@ -63,7 +67,7 @@ def test_reference_provider_refresh_feeds_runtime_view_state(tmp_path) -> None:
     service = ReferenceCatalogService(store, default_venue="binance", default_market="spot")
     kernel = RuntimeKernel(
         NoopStrategy(),
-        ports=RuntimePorts(reference=service),
+        components=RuntimeComponents(reference=service),
         services=RuntimeApplicationServices.from_dependencies(
             RuntimeServiceDependencies(intents=IntentJournal(), reference=service)
         ),

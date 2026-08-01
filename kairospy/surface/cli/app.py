@@ -15,16 +15,12 @@ from kairospy.application.system.facade.context import ProjectNotFound, set_cli_
 from kairospy.application.system.diagnostics import record_exception
 from kairospy.surface.cli.commands import (
     account_app,
-    config_app,
-    credential_app,
     market_app,
     order_app,
     project_app,
     reference_app,
     launch_app,
-    strategy_app,
     system_app,
-    timeline_app,
 )
 from kairospy.surface.cli.options import OutputFormat, RootOptions
 
@@ -33,14 +29,10 @@ app = typer.Typer(no_args_is_help=True, help="KairosPy strategy runtime toolkit"
 app.add_typer(project_app, name="project")
 app.add_typer(launch_app, name="launch")
 app.add_typer(account_app, name="account")
-app.add_typer(credential_app, name="credential")
 app.add_typer(order_app, name="order")
 app.add_typer(market_app, name="market")
-app.add_typer(reference_app, name="reference")
-app.add_typer(strategy_app, name="strategy")
+app.add_typer(reference_app, name="catalog")
 app.add_typer(system_app, name="system")
-app.add_typer(config_app, name="config")
-app.add_typer(timeline_app, name="timeline")
 
 
 @app.callback()
@@ -69,13 +61,6 @@ def shell(
     _shell(command)
 
 
-@app.command("app", hidden=True, help="Compatibility alias for the interactive command shell.")
-def app_command(
-    command: list[str] | None = typer.Option(None, "--command"),
-) -> None:
-    _app(command)
-
-
 @app.command("tui", hidden=True, help="Experimental Rich-rendered interactive shell.")
 def tui() -> None:
     from kairospy.surface.interactive.tui import RichTui
@@ -83,7 +68,7 @@ def tui() -> None:
     RichTui(command_executor=_execute_product_command).run()
 
 
-def _app(command: list[str] | None = None, *, surface_name: str = "app") -> None:
+def _run_shell(command: list[str] | None = None, *, surface_name: str = "shell") -> None:
     from kairospy.surface.interactive.tui import TextTui
 
     session = TextTui(
@@ -100,7 +85,7 @@ def _app(command: list[str] | None = None, *, surface_name: str = "app") -> None
 
 
 def _shell(command: list[str] | None = None) -> None:
-    _app(command, surface_name="shell")
+    _run_shell(command, surface_name="shell")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

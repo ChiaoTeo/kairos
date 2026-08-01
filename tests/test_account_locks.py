@@ -54,7 +54,7 @@ def test_read_only_paper_launch_can_reference_locked_account(tmp_path: Path, mon
     assert result.mode.value == "paper"
     assert manager.get("binance.main").launch_id == "trader"
     capabilities = result.views.require("account.capabilities").capabilities
-    assert len(capabilities) == 6
+    assert len(capabilities) == 7
     assert all(capability.can_trade is False for capability in capabilities)
     lease.release()
 
@@ -185,7 +185,7 @@ def test_system_runtime_does_not_trade_live_account_with_readonly_credential(tmp
     try:
         books = runtime.views.require("account.books").books
         capabilities = runtime.views.require("account.capabilities").capabilities
-        assert {book.book_kind for book in books} == {"spot", "cross_margin", "isolated_margin", "usd_m_futures", "coin_m_futures", "funding"}
+        assert {book.book_kind for book in books} == {"spot", "equity", "cross_margin", "isolated_margin", "usd_m_futures", "coin_m_futures", "funding"}
         assert all(capability.can_trade is False for capability in capabilities)
         assert manager.get("binance.main") is None
     finally:

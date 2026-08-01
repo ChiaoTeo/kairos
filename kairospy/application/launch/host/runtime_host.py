@@ -4,19 +4,18 @@ import asyncio
 from typing import Mapping
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.orchestration.state import RuntimePorts, RuntimeStores, RuntimeStep
-from kairospy.application.ports import AccountPort, TradingExecutionPort
+from kairospy.application.runtime.orchestration.state import RuntimeStores, RuntimeStep
+from kairospy.application.runtime.components import RuntimeComponents
 from kairospy.application.runtime.launch import RuntimeLaunchResult, RuntimeLaunchSession
 from kairospy.application.runtime.launch.pump import RuntimeEnvelopePump
 from kairospy.application.protocol import RuntimeEnvelope, RuntimeEventLine, close_event_line
-from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.application.runtime.services import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.application.system.artifacts.output import LaunchOutput
 from kairospy.application.system.projectors import LaunchArtifactProjector
-from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentJournal
 
 from .lifecycle import NoopTradingLifecycle, TradingLifecycle
-from .resources import TradingRuntimeResources, TradingLaunchSpec
+from .resources import TradingLaunchSpec
 
 
 class TradingSystem:
@@ -34,6 +33,7 @@ class TradingSystem:
 
     def start(self) -> "TradingSystemSession":
         resources = self.spec.resources
+        components = resources.runtime_components()
         lifecycle = self.spec.lifecycle or NoopTradingLifecycle()
         lifecycle.prepare()
         connections_started = False
@@ -46,27 +46,24 @@ class TradingSystem:
                 output,
                 timeline_sample_interval=_timeline_sample_interval(self.spec.normalized_config),
             )
-            coordinator = self._execution_coordinator(resources)
+            coordinator = self._execution_coordinator(components)
             intents = IntentJournal()
             kernel = RuntimeKernel(
                 self.spec.strategy,
-                ports=RuntimePorts(
-                    data=resources.data,
-                    account=resources.account,
-                    reference=resources.reference,
-                    trading_execution=resources.trading_execution,
-                ),
+                components=components,
                 stores=RuntimeStores(intents=intents),
                 services=RuntimeApplicationServices.from_dependencies(
                     RuntimeServiceDependencies(
                         intents=intents,
-                        data=resources.data,
-                        account_snapshot_store=resources.account,
-                        account=resources.account,
-                        reference=resources.reference,
-                        trading_execution=resources.trading_execution,
-                        execution=coordinator,
-                        fills_source=resources.trading_execution,
+                        data=components.market,
+                        account_snapshot_store=components.account,
+                        account=components.account,
+                        account_catalog=components.account_catalog,
+                        account_directory=_account_directory(components),
+                        reference=components.reference,
+                        trading_execution=components.execution,
+                        execution_coordinator=coordinator,
+                        fills_source=components.execution,
                     )
                 ),
             )
@@ -77,6 +74,7 @@ class TradingSystem:
                 session=kernel.start(),
             )
             projector.publish_started(session.views)
+            _publish_connection_health(projector, resources.connections)
             return TradingSystemSession(
                 session=session,
                 projector=projector,
@@ -90,12 +88,18 @@ class TradingSystem:
                 resources.connections.stop()
             raise
 
-    def _execution_coordinator(self, resources: TradingRuntimeResources) -> ExecutionCoordinator | None:
-        for candidate in (resources.trading_execution, resources.account):
-            coordinator = _coordinator(candidate)
+    def _execution_coordinator(self, components: RuntimeComponents) -> object | None:
+        for candidate in (components.execution, components.account):
+            coordinator = getattr(candidate, "coordinator", None)
             if coordinator is not None:
                 return coordinator
         return None
+
+
+def _account_directory(components: RuntimeComponents):
+    catalog = components.account_catalog
+    provider = getattr(catalog, "directory", None)
+    return provider() if callable(provider) else None
 
 
 class TradingSystemSession:
@@ -134,10 +138,6 @@ class TradingSystemSession:
     def intents(self) -> object:
         return self.session.intents
 
-    @property
-    def controls(self) -> object:
-        return self.session.controls
-
     def process(self, event: RuntimeEnvelope) -> tuple[RuntimeStep, ...]:
         steps = self.session.session.process(event)
         for step in steps:
@@ -158,7 +158,6 @@ class TradingSystemSession:
             runtime=runtime,
             views=self.session.views,
             intents=self.session.intents,
-            controls=self.session.controls,
         )
 
     def complete(self) -> None:
@@ -171,14 +170,8 @@ class TradingSystemSession:
             return
         if self.connections_started and self.connections is not None:
             self.connections.stop()
+            _publish_connection_health(self.projector, self.connections)
         self._closed = True
-
-
-def _coordinator(candidate: TradingExecutionPort | AccountPort | None) -> ExecutionCoordinator | None:
-    value = getattr(candidate, "coordinator", None)
-    if isinstance(value, ExecutionCoordinator):
-        return value
-    return None
 
 
 def _timeline_sample_interval(config: object) -> object:
@@ -217,8 +210,13 @@ async def _launch_with_artifacts(
         runtime=runtime,
         views=session.views,
         intents=session.intents,
-        controls=session.controls,
     )
+
+
+def _publish_connection_health(projector: LaunchArtifactProjector, connections: object | None) -> None:
+    health = getattr(connections, "health", None)
+    if callable(health):
+        projector.publish_connection_health(health())
 
 
 __all__ = ["TradingSystem", "TradingSystemSession"]

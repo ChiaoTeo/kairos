@@ -27,8 +27,8 @@ def list_timeline_launches(
     rows = list_instances(_launch_root(root), mode=mode.value if mode else None, launch_id=target)
     payload = {"instances": rows, "count": len(rows)}
     output = resolve_output(ctx, output_format, default=OutputFormat.text)
-    if output is OutputFormat.json:
-        write_result(payload, output=OutputFormat.json)
+    if output in {OutputFormat.json, OutputFormat.jsonl}:
+        write_result(payload, output=output)
         return
     typer.echo(_render_instances(payload))
 

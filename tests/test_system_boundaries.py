@@ -23,6 +23,7 @@ def test_launch_package_exports_launch_lifecycle_api() -> None:
     assert launch.__all__ == [
         "LaunchAccountBinding",
         "LaunchAccountDirectory",
+        "LaunchScopedAccountRuntime",
         "LaunchAlreadyActiveError",
         "LaunchBuilder",
         "LaunchControl",
@@ -159,14 +160,19 @@ def test_system_implementation_uses_orthogonal_packages() -> None:
         ROOT / "kairospy" / "application" / "system" / "session" / "dispatcher.py",
         ROOT / "kairospy" / "application" / "system" / "resources" / "accounts.py",
         ROOT / "kairospy" / "application" / "system" / "resources" / "connections.py",
-        ROOT / "kairospy" / "application" / "system" / "resources" / "live_state.py",
     )
     assert [str(path.relative_to(ROOT)) for path in expected_packages if not path.exists()] == []
     expected_infrastructure = (
+        ROOT / "kairospy" / "infrastructure" / "persistence" / "artifacts" / "__init__.py",
+        ROOT / "kairospy" / "infrastructure" / "persistence" / "artifacts" / "launch_store.py",
+    )
+    assert [str(path.relative_to(ROOT)) for path in expected_infrastructure if not path.exists()] == []
+    removed_infrastructure = (
+        ROOT / "kairospy" / "infrastructure" / "data" / "__init__.py",
         ROOT / "kairospy" / "infrastructure" / "artifacts" / "__init__.py",
         ROOT / "kairospy" / "infrastructure" / "artifacts" / "store.py",
     )
-    assert [str(path.relative_to(ROOT)) for path in expected_infrastructure if not path.exists()] == []
+    assert [str(path.relative_to(ROOT)) for path in removed_infrastructure if path.exists()] == []
 
 
 def test_runtime_does_not_import_system_layer() -> None:
@@ -193,7 +199,6 @@ def test_runtime_processors_do_not_depend_on_ports() -> None:
     processors_root = ROOT / "kairospy" / "application" / "runtime" / "processors"
     forbidden = (
         "application.ports",
-        "AccountPort",
         "MarketDataPort",
         "ReferencePort",
         "TradingExecutionPort",
@@ -205,6 +210,20 @@ def test_runtime_processors_do_not_depend_on_ports() -> None:
             if re.search(rf"\b{re.escape(marker)}\b", text):
                 offenders.append(f"{path.relative_to(ROOT)}:{marker}")
     assert offenders == []
+
+
+def test_runtime_execution_uses_execution_runtime_contract() -> None:
+    from kairospy.application.runtime.components import ExecutionRuntime
+    from kairospy.application.runtime.services import RuntimeExecutionService, TradingRuntimeExecutionService
+
+    assert "submit_intent" in ExecutionRuntime.__dict__
+    assert "port" in TradingRuntimeExecutionService.__dataclass_fields__
+    assert "projection" in TradingRuntimeExecutionService.__dataclass_fields__
+    assert "updates" in TradingRuntimeExecutionService.__dataclass_fields__
+    assert "intent_executor" not in TradingRuntimeExecutionService.__dataclass_fields__
+    assert "trading" in RuntimeExecutionService.__dataclass_fields__
+    assert "projection" not in RuntimeExecutionService.__dataclass_fields__
+    assert "updates" not in RuntimeExecutionService.__dataclass_fields__
 
 
 def test_shared_read_paths_do_not_import_runtime_processors() -> None:
@@ -247,7 +266,7 @@ def test_runtime_processors_do_not_define_shared_view_contracts() -> None:
 
 
 def test_runtime_services_do_not_export_legacy_execution_projection_aliases() -> None:
-    services_root = ROOT / "kairospy" / "application" / "service" / "runtime"
+    services_root = ROOT / "kairospy" / "application" / "runtime" / "services"
     forbidden = ("ExecutionCurrentProjection", "ExecutionFillsProjection")
     offenders = []
     for path in services_root.rglob("*.py"):
@@ -259,7 +278,7 @@ def test_runtime_services_do_not_export_legacy_execution_projection_aliases() ->
 
 
 def test_runtime_service_public_api_does_not_reexport_execution_view_contracts() -> None:
-    import kairospy.application.service.runtime as runtime_service
+    import kairospy.application.runtime.services as runtime_service
 
     forbidden = {"ExecutionCurrentView", "ExecutionFillSummary", "ExecutionFillsView", "ExecutionOrderSummary"}
     assert forbidden.isdisjoint(set(runtime_service.__all__))
@@ -371,8 +390,8 @@ def test_surface_does_not_import_lower_layers_directly() -> None:
         "kairospy.infrastructure",
         "kairospy.application.runtime",
         "kairospy.application.service.modes",
-        "kairospy.application.service.runtime",
-        "kairospy.application.service.domain",
+        "kairospy.application.runtime.services",
+        "kairospy.application.domain",
         "kairospy.core",
     )
     offenders = []

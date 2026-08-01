@@ -7,10 +7,41 @@ def test_launch_config_accepts_account_ref_for_live() -> None:
     values = {
         "launch": {"mode": "live", "strategy": "strategy_mod:factory"},
         "account": {"ref": "binance_live"},
-        "live": {"venue": "binance", "symbol": "BTC/USDT"},
+        "live": {},
     }
 
     assert LaunchConfig.from_values(values).validation_report().valid
+
+
+def test_launch_config_rejects_legacy_live_market_fields() -> None:
+    values = {
+        "launch": {"mode": "live", "strategy": "strategy_mod:factory"},
+        "account": {"ref": "binance_live"},
+        "live": {"venue": "binance", "symbol": "BTC/USDT"},
+    }
+
+    report = LaunchConfig.from_values(values).validation_report()
+
+    assert not report.valid
+    assert "live.venue is no longer supported; use account refs, account books, and strategy context.subscribe(...)" in report.issues
+    assert "live.symbol is no longer supported; use account refs, account books, and strategy context.subscribe(...)" in report.issues
+
+
+def test_launch_config_rejects_legacy_live_private_stream_fields() -> None:
+    values = {
+        "launch": {"mode": "live", "strategy": "strategy_mod:factory"},
+        "account": {"ref": "binance_live"},
+        "live": {
+            "max_balance_events": 1,
+            "private_sync": {"enabled": True, "mode": "auto"},
+        },
+    }
+
+    report = LaunchConfig.from_values(values).validation_report()
+
+    assert not report.valid
+    assert "live.max_balance_events is no longer supported; use live.account_stream.max_balance_events" in report.issues
+    assert "live.private_sync.mode is not supported" in report.issues
 
 
 def test_launch_config_rejects_inline_accounts() -> None:

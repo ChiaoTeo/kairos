@@ -78,20 +78,21 @@ uv run kairospy launch diagnose explain examples/configs/binance_spot_btc_sma_ba
 启动回测：
 
 ```bash
-uv run kairospy launch run start examples/configs/binance_spot_btc_sma_backtest.toml
+uv run kairospy launch start examples/configs/binance_spot_btc_sma_backtest.toml
 ```
 
 查看运行状态和日志：
 
 ```bash
-uv run kairospy launch run status
-uv run kairospy launch observe logs --limit 100
+uv run kairospy launch status
+uv run kairospy launch logs --limit 100
 ```
 
 启动内置 system runtime 管理账户和调试下单：
 
 ```bash
-uv run kairospy launch system up
+uv run kairospy system up
+uv run kairospy system status
 uv run kairospy system account trade-status
 uv run kairospy system account trade-acquire main
 uv run kairospy system account trade-release main
@@ -100,7 +101,7 @@ uv run kairospy system account trade-release main
 打开时间线查看器：
 
 ```bash
-uv run kairospy timeline open --latest binance-spot-btc-sma-backtest
+uv run kairospy launch timeline open --latest binance-spot-btc-sma-backtest
 ```
 
 进入交互式命令 shell：
@@ -109,7 +110,32 @@ uv run kairospy timeline open --latest binance-spot-btc-sma-backtest
 uv run kairospy shell
 ```
 
-`kairospy app` 和 `kairospy tui` 目前保留为隐藏的兼容/实验入口，项目默认推荐使用普通 CLI 和 `kairospy shell`。
+列表浏览
+
+列表命令保持适合脚本的无状态输出；需要人工翻页、搜索或查看单行详情时，使用统一的 `browse` 子命令：
+
+```bash
+uv run kairospy catalog assets browse --type crypto
+uv run kairospy catalog markets browse --venue binance --active-only
+uv run kairospy account browse
+uv run kairospy launch targets browse
+uv run kairospy order browse --account main
+```
+
+浏览器支持 `n`/`p` 翻页、`/text` 跨字段搜索、`query JMESPATH` 通用查询、`filter key=value` 条件过滤、`sort field` 或 `sort -field` 排序、`size N` 修改页大小、`open N` 查看当前页的行、`json` 导出当前查询结果、`clear` 清除搜索条件，以及 `q` 退出。也可以通过 `browse --query 'JMESPATH'` 预置查询。JMESPath 表达式必须返回对象数组，以便继续分页和显示结果。它也可以从 `kairospy shell` 中执行对应的 `browse` 命令。
+
+在真实 TTY 中，`browse` 会进入 Textual 全屏模式：`/` 聚焦搜索、`f` 聚焦过滤、`s` 聚焦排序、`g` 聚焦页码、`n`/`p` 翻页、方向键选择行、回车打开详情、Esc 取消详情或编辑、`q` 退出。通过管道或测试环境运行时自动使用行式模式。`e` 和 `Ctrl+S` 已支持通用编辑流程，但只有注册了资源 `save` 回调的资源可写；当前资产、市场、账户和订单浏览均为只读。
+
+这套能力位于 `application.browsing` 和 `surface.interactive.browse`：application 层负责查询、过滤、排序和分页，surface 层负责行式浏览与 Textual 全屏展示。领域命令只负责提供 rows 与领域过滤条件，因此后续列表资源可以复用同一套交互行为，不需要各自实现分页循环。
+
+Shell 层级约定：
+
+- CLI 路径按 `product resource action` 组织，例如 `catalog assets browse`、`system attach`、`launch targets list`。
+- `product` 和 `resource` 可以成为 `kairospy shell` 的上下文；`list`、`browse`、`show`、`attach`、`start`、`stop`、`logs` 等 action 只执行命令，不成为新的 shell 上下文。
+- `system` 是内置 system runtime 的顶层产品入口。需要连接正在运行的 system runtime 时使用 `system attach`。
+- system daemon 的健康心跳写入 launch `state.json`；attach 会把状态心跳以 `[system/heartbeat]` 展示出来。普通脚本输出仍保持无状态、可解析。
+
+`kairospy tui` 目前是实验入口，项目默认推荐使用普通 CLI 和 `kairospy shell`。
 
 ## 账户、Book 与交易锁
 
@@ -138,10 +164,10 @@ live 账户可以配置多个具名 credential：
 
 ```bash
 uv run kairospy account create main --broker binance --environment live --credential-role readonly --api-key ... --api-secret ...
-uv run kairospy credential create binance_read --broker binance --api-key ... --api-secret ...
-uv run kairospy credential create binance_trade --broker binance --api-key ... --api-secret ...
-uv run kairospy account credential-add main readonly --ref binance_read
-uv run kairospy account credential-add main trade --ref binance_trade
+uv run kairospy account credential create binance_read --broker binance --api-key ... --api-secret ...
+uv run kairospy account credential create binance_trade --broker binance --api-key ... --api-secret ...
+uv run kairospy account credential add main readonly --ref binance_read
+uv run kairospy account credential add main trade --ref binance_trade
 ```
 
 ```toml
@@ -157,21 +183,21 @@ ref = "binance_read"
 ref = "binance_trade"
 ```
 
-如果账户只有 `readonly` key，live launch 会使用它读取账户数据，但不会把该账户标记为可交易，也不会支持下单。添加 key 时，`account credential-add` 默认会校验 role 和账户身份；确实只想先写入配置时可以使用 `--no-check`。
+如果账户只有 `readonly` key，live launch 会使用它读取账户数据，但不会把该账户标记为可交易，也不会支持下单。添加 key 时，`account credential add` 默认会校验 role 和账户身份；确实只想先写入配置时可以使用 `--no-check`。
 
-API key 不通过环境变量注入。`credential create` 会写入 `.kairos/credentials/<credential_id>.toml`，账户配置只保存 credential id 引用。`account create` 直接传 `--api-key`/`--api-secret` 时也会创建同名 credential 文件，并在账户里写入 `[credentials.readonly]` 或 `[credentials.trade]`；可以用 `--credential <credential_id>` 指定 credential id。旧的 `provider`、`venue`、`market`、`currency` 字段仍可读取；新生成的账户文件默认只写必要字段。
+API key 不通过环境变量注入。`account credential create` 会写入 `.kairos/credentials/<credential_id>.toml`，账户配置只保存 credential id 引用。`account create` 直接传 `--api-key`/`--api-secret` 时也会创建同名 credential 文件，并在账户里写入 `[credentials.readonly]` 或 `[credentials.trade]`；可以用 `--credential <credential_id>` 指定 credential id。旧的 `provider`、`venue`、`market`、`currency` 字段仍可读取；新生成的账户文件默认只写必要字段。
 
 直接查询账户余额使用单数 `balance`：
 
 ```bash
-uv run kairospy account balance main
-uv run kairospy account balance main --book spot
-uv run kairospy account balance main --book spot --book usd_m_futures
-uv run kairospy account balance main --include-zero
-uv run kairospy account balance main --page 2 --page-size 50
+uv run kairospy account query balance main
+uv run kairospy account query balance main --book spot
+uv run kairospy account query balance main --book spot --book usd_m_futures
+uv run kairospy account query balance main --include-zero
+uv run kairospy account query balance main --page 2 --page-size 50
 ```
 
-`account balance` 默认查询 broker 支持的全部 book，并过滤 free/used/total 全为 0 的资产；`--book` 可重复传入以限制查询范围。每个 book 独立查询，某个 book 因权限或账户类型失败时不会阻断其它 book，失败项会显示在 `Balance Errors` 中。分页结果会在 text 和 JSON 输出中带上 `page` metadata。
+`account query balance` 默认查询 broker 支持的全部 book，并过滤 free/used/total 全为 0 的资产；`--book` 可重复传入以限制查询范围。每个 book 独立查询，某个 book 因权限或账户类型失败时不会阻断其它 book，失败项会显示在 `Balance Errors` 中。分页结果会在 text 和 JSON 输出中带上 `page` metadata。
 
 ## 🧪 示例配置
 
@@ -180,10 +206,19 @@ uv run kairospy account balance main --page 2 --page-size 50
 | 文件 | 用途 |
 | --- | --- |
 | `binance_spot_btc_sma_backtest.toml` | BTC/USDT SMA 现货策略回测 |
+| `binance_equity_aapl_paper.toml` | 使用 Binance equity quote 的 AAPL 本地纸交易示例 |
 | `binance_btc_funding_arbitrage_backtest.toml` | BTC 资金费率套利回测 |
 | `binance_hot_funding_arbitrage_backtest.toml` | 多币种资金费率套利回测 |
 | `news_factor_backtest.toml` | 新闻因子策略回测 |
 | `paper-printer.toml` | Binance spot 纸交易配置 |
+
+运行 Binance equity paper 示例前，先创建一个模拟 Binance equity book 的本地账户：
+
+```bash
+uv run kairospy account create binance_paper_equity --broker binance --environment paper --book equity --currency USDC --cash 100000
+uv run kairospy account credential create binance_read --broker binance --api-key ...
+uv run kairospy launch start examples/configs/binance_equity_aapl_paper.toml
+```
 
 ## 🖼️ 时间线前端
 
@@ -202,7 +237,7 @@ cd view
 npm run build
 ```
 
-构建后的资源会用于 `kairospy timeline open` 提供的本地查看体验。
+构建后的资源会用于 `kairospy launch timeline open` 提供的本地查看体验。
 
 ## 🗂️ 项目结构
 
@@ -210,7 +245,7 @@ npm run build
 kairospy/
   application/        # CLI facade、launch、runtime orchestration、strategy entrypoint
   core/               # account、execution、intent、market、order、reference 等领域模型
-  infrastructure/     # artifacts、data store、exchange/data provider integrations
+  infrastructure/     # integrations 与 persistence adapters（market data、reference、runtime state、artifacts）
   surface/            # CLI、interactive shell、timeline server 与渲染层
 examples/
   configs/            # launch 配置示例

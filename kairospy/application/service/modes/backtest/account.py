@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.application.service.runtime.account import SimulatedAccountService
+from kairospy.application.runtime.services.account import SimulatedAccountService
 
 
 class BacktestAccountService(SimulatedAccountService):

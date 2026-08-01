@@ -7,9 +7,9 @@ from kairospy.application.account_books import default_account_books
 from kairospy.application.launch import LaunchAccountBinding, LaunchAccountDirectory
 from kairospy.application.modes import RuntimeMode
 from kairospy.application.runtime.launch import RuntimeLaunchResult
-from kairospy.application.service.domain.account import SimulatedAccount
-from kairospy.application.service.domain.account.routing import AccountBookRoute, account_book_route
-from kairospy.application.service.domain.execution import ImmediateFillModel, PercentageCommissionModel
+from kairospy.application.domain.account import SimulatedAccount
+from kairospy.application.domain.account.routing import AccountBookRoute, account_book_route
+from kairospy.application.domain.execution import ImmediateFillModel, PercentageCommissionModel
 from kairospy.application.service.modes.backtest.account import BacktestAccountService
 from kairospy.application.service.modes.backtest.config import BacktestLaunchResult, ConfiguredBacktest
 from kairospy.application.service.modes.backtest.execution import BacktestExecutionService
@@ -21,13 +21,13 @@ from kairospy.application.service.modes.live.execution import LiveExecutionServi
 from kairospy.application.service.modes.paper.account import PaperAccountService
 from kairospy.application.service.modes.paper.config import ConfiguredPaper, PaperLaunchResult
 from kairospy.application.service.modes.paper.execution import PaperExecutionService
-from kairospy.application.service.modes.common import ConfiguredAccount
+from kairospy.application.service.modes.common import ConfiguredAccount, default_broker_for_book
 from kairospy.config import LaunchAccountConfig
 from kairospy.core.account import AccountBookKind, AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, Environment, account_current_view_key
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.reference import MarketResolver
 from kairospy.infrastructure.integrations.payloads import CcxtAccountPayloadAdapter
-from kairospy.infrastructure.integrations.protocols import BrokerClient
+from kairospy.application.domain.account.bootstrap import AccountBootstrapGateway
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +48,6 @@ class BacktestAccountResources:
             runtime=runtime.runtime,
             views=runtime.views,
             intents=runtime.intents,
-            controls=runtime.controls,
             account=account_config.context,
             account_view=account_view,
             fills=fills,
@@ -155,7 +154,6 @@ class PaperAccountResources:
             runtime=runtime.runtime,
             views=runtime.views,
             intents=runtime.intents,
-            controls=runtime.controls,
             account=account_context,
             account_view=account_view,
             fills=fills,
@@ -225,7 +223,6 @@ class LiveAccountResources:
             runtime=runtime.runtime,
             views=runtime.views,
             intents=runtime.intents,
-            controls=runtime.controls,
             account=account_context,
             account_view=account_view,
             decision_trace=_decision_trace(runtime),
@@ -235,15 +232,15 @@ class LiveAccountResources:
     @classmethod
     def from_configured(cls, configured: ConfiguredLive) -> "LiveAccountResources":
         account_config = configured.account_config
-        market_resolver = MarketResolver(default_venue=configured.venue, default_market=configured.market)
+        primary_broker = account_config.venue
+        primary_book = _primary_book(configured.launch_accounts, default="spot")
+        account = AccountContext(AccountBookRef(primary_broker, account_config.account_id, primary_book), Environment.LIVE)
+        market_resolver = MarketResolver(default_venue=primary_broker)
         broker_factory = configured.broker_factory or _default_live_broker
-        primary_broker = account_config.venue or configured.venue
-        broker = broker_factory(primary_broker, account_config.read_credential_ref())
         trade_ref = account_config.trade_credential_ref()
         read_ref = account_config.read_credential_ref()
-        trade_broker = broker if trade_ref == read_ref else broker_factory(primary_broker, trade_ref)
-        primary_book = _primary_book(configured.launch_accounts, default=configured.market)
-        account = AccountContext(AccountBookRef(primary_broker, account_config.account_id, primary_book), Environment.LIVE)
+        broker = broker_factory(account.book, read_ref)
+        trade_broker = broker if trade_ref == read_ref else broker_factory(account.book, trade_ref)
         directory = _launch_account_directory(
             configured.launch_accounts,
             account_configs=configured.launch_account_configs,
@@ -252,13 +249,22 @@ class LiveAccountResources:
             environment=Environment.LIVE,
             default_book=primary_book,
         )
-        read_brokers = _live_brokers(directory, configured.launch_account_configs, fallback=account_config, broker_factory=broker_factory, primary=broker, role="readonly")
+        read_brokers = _live_brokers(
+            directory,
+            configured.launch_account_configs,
+            fallback=account_config,
+            broker_factory=broker_factory,
+            primary=broker,
+            primary_book=account.book,
+            role="readonly",
+        )
         trade_brokers = _live_brokers(
             directory,
             configured.launch_account_configs,
             fallback=account_config,
             broker_factory=broker_factory,
             primary=trade_broker,
+            primary_book=account.book,
             role="trade",
             existing=read_brokers,
         )
@@ -278,14 +284,11 @@ class LiveAccountResources:
             broker=broker,
             broker_resolver=read_broker_resolver,
             parser=CcxtAccountPayloadAdapter(market_resolver),
-            balance_params=configured.balance_params,
-            open_order_params=configured.order_params,
-            stream=broker if configured.watch_private else None,
-            stream_resolver=read_broker_resolver if configured.watch_private else None,
-            stream_symbol=configured.symbol,
-            max_balance_events=configured.max_balance_events,
-            max_order_events=configured.max_order_events,
-            max_trade_events=configured.max_trade_events,
+            stream=broker if configured.private_sync.enabled else None,
+            stream_resolver=read_broker_resolver if configured.private_sync.enabled else None,
+            max_balance_events=configured.private_sync.max_balance_events,
+            max_order_events=configured.private_sync.max_order_events,
+            max_trade_events=configured.private_sync.max_trade_events,
             directory=directory,
             capabilities=capabilities,
             fees=fees,
@@ -296,15 +299,14 @@ class LiveAccountResources:
             account=account,
             snapshot_provider=account_service.snapshot,
             safety_policy=configured.safety_policy,
-            order_params=configured.order_params,
             directory=directory,
             routes=routes,
         )
         return cls(account_service, execution, coordinator)
 
 
-def _default_live_broker(venue: str, credential: str | None) -> BrokerClient:
-    return default_broker(venue, credential, mode_label="live", error_type=LiveConfigurationError)
+def _default_live_broker(book: AccountBookRef, credential: str | None) -> AccountBootstrapGateway:
+    return default_broker_for_book(book, credential, mode_label="live", error_type=LiveConfigurationError)
 
 
 def _primary_book(accounts: Mapping[str, LaunchAccountConfig], *, default: str) -> str:
@@ -349,7 +351,7 @@ def _capabilities(
 
 
 def _capability(book: AccountBookRef, *, trade: bool = True) -> AccountCapability:
-    route = account_book_route(book, provider=str(book.broker))
+    route = account_book_route(book, broker=str(book.broker))
     kind = str(book.book)
     can_hold_position = kind not in {AccountBookKind.FUNDING.value, AccountBookKind.EARN.value}
     can_borrow = kind in {AccountBookKind.CROSS_MARGIN.value, AccountBookKind.ISOLATED_MARGIN.value}
@@ -366,7 +368,7 @@ def _routes(
     for binding in directory.bindings:
         can_trade = binding.trade and _account_can_trade_with_credential(binding, account_configs, fallback)
         for context in binding.books:
-            route = account_book_route(context.book, provider=str(context.identity.broker))
+            route = account_book_route(context.book, broker=str(context.identity.broker))
             routes.append(
                 AccountBookRoute(
                     route.book,
@@ -398,28 +400,30 @@ def _live_brokers(
     *,
     fallback: ConfiguredAccount,
     broker_factory: object,
-    primary: BrokerClient,
+    primary: AccountBootstrapGateway,
+    primary_book: AccountBookRef,
     role: str,
-    existing: Mapping[tuple[str, str], BrokerClient] | None = None,
-) -> Mapping[tuple[str, str], BrokerClient]:
+    existing: Mapping[AccountBookRef, AccountBootstrapGateway] | None = None,
+) -> Mapping[AccountBookRef, AccountBootstrapGateway]:
     factory = broker_factory  # type: ignore[assignment]
-    brokers: dict[tuple[str, str], BrokerClient] = {}
+    brokers: dict[AccountBookRef, AccountBootstrapGateway] = {}
     for binding in directory.bindings:
         config = account_configs.get(binding.alias, fallback)
-        key = (str(binding.books[0].identity.broker), str(binding.books[0].identity.account_id))
-        if key in brokers:
-            continue
-        if key == (str(fallback.venue), fallback.account_id):
-            brokers[key] = primary
-            continue
         read_ref = config.read_credential_ref()
         selected_ref = config.trade_credential_ref() if role == "trade" else config.read_credential_ref()
-        if existing is not None and selected_ref == read_ref and key in existing:
-            brokers[key] = existing[key]
-            continue
-        brokers[key] = factory(str(binding.books[0].identity.broker), selected_ref)
+        for context in binding.books:
+            key = context.book
+            if key in brokers:
+                continue
+            if key == primary_book:
+                brokers[key] = primary
+                continue
+            if existing is not None and selected_ref == read_ref and key in existing:
+                brokers[key] = existing[key]
+                continue
+            brokers[key] = factory(key, selected_ref)
     if not brokers:
-        brokers[(str(fallback.venue), fallback.account_id)] = primary
+        brokers[AccountBookRef(fallback.venue, fallback.account_id)] = primary
     return brokers
 
 
@@ -436,9 +440,9 @@ def _account_can_trade_with_credential(
     return account.has_trade_credential()
 
 
-def _broker_resolver(brokers: Mapping[tuple[str, str], BrokerClient]):
-    def resolve(account: AccountBookRef) -> BrokerClient | None:
-        return brokers.get((str(account.broker), str(account.account_id)))
+def _broker_resolver(brokers: Mapping[AccountBookRef, AccountBootstrapGateway]):
+    def resolve(account: AccountBookRef) -> AccountBootstrapGateway | None:
+        return brokers.get(account)
 
     return resolve
 

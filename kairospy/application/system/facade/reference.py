@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from kairospy.application.service.domain.reference import (
+from kairospy.application.domain.reference import (
     add_asset,
+    refresh_exchange_reference,
+    refresh_exchange_reference_with_delist_schedule,
     refresh_equity_provider,
     refresh_instrument_provider,
     refresh_instrument_provider_with_delist_schedule,
+    refresh_provider_reference,
     sync_lifecycle_events,
 )
-from kairospy.application.service.domain.reference.serde import (
+from kairospy.application.domain.reference.serde import (
     asset_to_primitive,
     entity_to_primitive,
     instrument_to_primitive,
@@ -49,9 +52,12 @@ __all__ = [
     "reference_brokers",
     "reference_exchanges",
     "reference_providers",
+    "refresh_exchange_reference",
+    "refresh_exchange_reference_with_delist_schedule",
     "refresh_equity_provider",
     "refresh_instrument_provider",
     "refresh_instrument_provider_with_delist_schedule",
+    "refresh_provider_reference",
     "sync_lifecycle_events",
     "workspace_cli_format",
 ]

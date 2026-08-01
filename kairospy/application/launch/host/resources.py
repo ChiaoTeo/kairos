@@ -5,10 +5,11 @@ from pathlib import Path
 from typing import Mapping
 
 from kairospy.application.modes import RuntimeMode
-from kairospy.application.ports import AccountPort, MarketDataPort, ReferencePort, TradingExecutionPort
+from kairospy.application.runtime.contracts import AccountRuntime, ExecutionRuntime, MarketRuntime, ReferenceRuntime
 from kairospy.application.protocol import RuntimeEventLine
+from kairospy.application.runtime.components import RuntimeComponents
 from kairospy.application.strategy import Strategy
-from kairospy.application.system.resources.connections import ConnectionManager
+from kairospy.application.runtime.connections import ConnectionManager
 
 from .lifecycle import TradingLifecycle
 
@@ -16,11 +17,23 @@ from .lifecycle import TradingLifecycle
 @dataclass(frozen=True, slots=True)
 class TradingRuntimeResources:
     source: RuntimeEventLine | None = None
-    data: MarketDataPort | None = None
-    account: AccountPort | None = None
-    reference: ReferencePort | None = None
-    trading_execution: TradingExecutionPort | None = None
+    components: RuntimeComponents | None = None
+    data: MarketRuntime | None = None
+    account: AccountRuntime | None = None
+    reference: ReferenceRuntime | None = None
+    trading_execution: ExecutionRuntime | None = None
     connections: ConnectionManager | None = None
+
+    def runtime_components(self) -> RuntimeComponents:
+        if self.components is not None:
+            return self.components
+        return RuntimeComponents(
+            market=self.data,
+            account=self.account,
+            account_catalog=self.account,
+            execution=self.trading_execution,
+            reference=self.reference,
+        )
 
 
 @dataclass(frozen=True, slots=True)

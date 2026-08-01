@@ -6,12 +6,12 @@ from pathlib import Path
 from typing import Mapping
 
 from kairospy.application.modes import RuntimeMode
-from kairospy.application.service.domain.market import MarketDataResolver
-from kairospy.application.service.runtime.market import ReplayMarketDataPolicy
+from kairospy.application.domain.market import MarketDataResolver
+from kairospy.application.runtime.services.market import ReplayMarketDataPolicy
 from kairospy.application.strategy import Strategy
 from kairospy.core.account import AccountContext
 from kairospy.core.reference import MarketResolver
-from kairospy.infrastructure.data import DataStore
+from kairospy.infrastructure.persistence.market_data.catalog import DataStore
 
 from ..common import (
     AccountPerformanceMixin,
@@ -36,7 +36,6 @@ class BacktestLaunchResult(AccountPerformanceMixin):
     runtime: object
     views: object
     intents: object
-    controls: object
     account: AccountContext
     account_view: object | None
     fills: tuple[object, ...] = ()

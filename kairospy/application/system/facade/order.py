@@ -8,9 +8,10 @@ from typing import Mapping
 from kairospy.application.modes import RuntimeMode
 from kairospy.application.system.facade.context import workspace as resolve_workspace
 from kairospy.application.launch.facade import LaunchFacade
-from kairospy.application.system.facade.resources import DriverName, ExchangeName, broker
+from kairospy.application.system.facade.resources import DriverName, order_execution_client, order_query_client
 from kairospy.application.system.workspace import AccountRecord, KairosWorkspace
 from kairospy.config import ConfigError
+from kairospy.core.account import AccountBookKind, AccountBookRef
 
 
 class OrderFacade:
@@ -26,7 +27,7 @@ class OrderFacade:
         params: Mapping[str, object] | None,
     ) -> dict[str, object]:
         workspace, account = _account(account_id)
-        rows = tuple(self._broker(account).fetch_open_orders(symbol, limit=limit, params=params))
+        rows = tuple(self._order_query_client(account).fetch_open_orders(symbol, limit=limit, params=params))
         payload = {"account": account.account_id, "orders": rows, "count": len(rows)}
         _write_journal(workspace, account, "open", {"symbol": symbol, "limit": limit}, payload)
         return payload
@@ -41,7 +42,7 @@ class OrderFacade:
         params: Mapping[str, object] | None,
     ) -> dict[str, object]:
         workspace, account = _account(account_id)
-        rows = tuple(self._broker(account).fetch_closed_orders(symbol, since=since, limit=limit, params=params))
+        rows = tuple(self._order_query_client(account).fetch_closed_orders(symbol, since=since, limit=limit, params=params))
         payload = {"account": account.account_id, "orders": rows, "count": len(rows)}
         _write_journal(workspace, account, "history", {"symbol": symbol, "since": since, "limit": limit}, payload)
         return payload
@@ -66,7 +67,7 @@ class OrderFacade:
             _write_journal(workspace, account, "place_dry_run", request, payload)
             return payload
         _require_live_confirmation(account, confirm_live=confirm_live)
-        result = self._trade_broker(account).create_order(symbol, side=side, type=type_, amount=amount, price=price, params=params)
+        result = self._order_execution_client(account).create_order(symbol, side=side, type=type_, amount=amount, price=price, params=params)
         payload = {"dry_run": False, "request": request, "result": result}
         _write_journal(workspace, account, "place", request, payload)
         return payload
@@ -124,7 +125,7 @@ class OrderFacade:
             _write_journal(workspace, account, "cancel_dry_run", request, payload)
             return payload
         _require_live_confirmation(account, confirm_live=confirm_live)
-        result = self._trade_broker(account).cancel_order(order_id, symbol=symbol, params=params)
+        result = self._order_execution_client(account).cancel_order(order_id, symbol=symbol, params=params)
         payload = {"dry_run": False, "request": request, "result": result}
         _write_journal(workspace, account, "cancel", request, payload)
         return payload
@@ -189,7 +190,7 @@ class OrderFacade:
             _write_journal(workspace, account, "replace_dry_run", request, payload)
             return payload
         _require_live_confirmation(account, confirm_live=confirm_live)
-        client = self._broker(account)
+        client = self._order_execution_client(account)
         cancel_result = client.cancel_order(order_id, symbol=symbol, params=params)
         create_result = client.create_order(symbol, side=side, type=type_, amount=amount, price=price, params=params)
         payload = {"dry_run": False, "request": request, "result": {"cancel": cancel_result, "create": create_result}}
@@ -227,14 +228,14 @@ class OrderFacade:
             timeout_seconds=timeout_seconds,
         )
 
-    def _broker(self, account: AccountRecord):
-        return broker(_exchange(account), DriverName.ccxt, credential=_read_credential_ref(account))
+    def _order_query_client(self, account: AccountRecord):
+        return order_query_client(_account_book_ref(account), DriverName.ccxt, credential=_read_credential_ref(account))
 
-    def _trade_broker(self, account: AccountRecord):
+    def _order_execution_client(self, account: AccountRecord):
         credential = _trade_credential_ref(account)
         if credential is None:
             raise ValueError(f"account {account.account_id} has no trade credential")
-        return broker(_exchange(account), DriverName.ccxt, credential=credential)
+        return order_execution_client(_account_book_ref(account), DriverName.ccxt, credential=credential)
 
 
 def _account(account_id: str) -> tuple[KairosWorkspace, AccountRecord]:
@@ -245,12 +246,15 @@ def _account(account_id: str) -> tuple[KairosWorkspace, AccountRecord]:
         raise ValueError(str(error)) from error
 
 
-def _exchange(account: AccountRecord) -> ExchangeName:
-    value = (account.venue or account.provider).strip().lower()
-    try:
-        return ExchangeName(value)
-    except ValueError as error:
-        raise ValueError(f"unsupported order account venue/provider: {value}") from error
+def _account_book_ref(account: AccountRecord) -> AccountBookRef:
+    return AccountBookRef(account.venue or account.broker, account.account_id, account.market or _first_account_book(account) or AccountBookKind.SPOT.value)
+
+
+def _first_account_book(account: AccountRecord) -> str | None:
+    if not account.books:
+        return None
+    value = account.books[0].kind or account.books[0].key
+    return value or None
 
 
 def _read_credential_ref(account: AccountRecord) -> str | None:

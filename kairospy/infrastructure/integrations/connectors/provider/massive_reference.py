@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from datetime import datetime, time, timezone
 from decimal import Decimal
 
 from kairospy.core.reference import ReferenceCatalog
 from kairospy.core.reference.model import LifecycleEvent, LifecycleEventType, MarketDefinition
+from kairospy.infrastructure.integrations.types import RawPayload, RawPayloadRows
 
 
 def massive_split_events(
-    rows: Iterable[Mapping[str, object]],
+    rows: RawPayloadRows,
     *,
     catalog: ReferenceCatalog,
     venue: str | None = None,
@@ -45,7 +46,7 @@ def massive_split_events(
 
 
 def massive_dividend_events(
-    rows: Iterable[Mapping[str, object]],
+    rows: RawPayloadRows,
     *,
     catalog: ReferenceCatalog,
     venue: str | None = None,
@@ -89,7 +90,7 @@ def massive_dividend_events(
 
 
 def massive_ticker_change_events(
-    rows: Iterable[Mapping[str, object]],
+    rows: RawPayloadRows,
     *,
     catalog: ReferenceCatalog,
     ticker: str,
@@ -126,9 +127,9 @@ def massive_ticker_change_events(
 
 def massive_corporate_action_events(
     *,
-    splits: Iterable[Mapping[str, object]] = (),
-    dividends: Iterable[Mapping[str, object]] = (),
-    ticker_events: Iterable[Mapping[str, object]] = (),
+    splits: RawPayloadRows = (),
+    dividends: RawPayloadRows = (),
+    ticker_events: RawPayloadRows = (),
     catalog: ReferenceCatalog,
     ticker: str,
     venue: str | None = None,
@@ -161,7 +162,7 @@ def _resolve_equity_market(catalog: ReferenceCatalog, ticker: str, at: datetime,
     return candidates[0]
 
 
-def _ticker(row: Mapping[str, object]) -> str:
+def _ticker(row: RawPayload) -> str:
     text = str(row.get("ticker") or row.get("symbol") or "").strip().upper()
     if not text:
         raise ValueError("Massive corporate action row is missing ticker")
@@ -178,11 +179,11 @@ def _date(value: object) -> datetime:
     return datetime.combine(datetime.fromisoformat(str(value)).date(), time.min, tzinfo=timezone.utc)
 
 
-def _is_ticker_change(row: Mapping[str, object]) -> bool:
+def _is_ticker_change(row: RawPayload) -> bool:
     return str(row.get("type") or row.get("event_type") or "").lower() in {"ticker_change", "symbol_change"}
 
 
-def _ticker_change(row: Mapping[str, object]) -> tuple[datetime, str, str, Mapping[str, object]]:
+def _ticker_change(row: RawPayload) -> tuple[datetime, str, str, RawPayload]:
     payload = row.get("ticker_change")
     nested = payload if isinstance(payload, Mapping) else {}
     old_symbol = str(row.get("old_ticker") or nested.get("old_ticker") or "").strip().upper()
@@ -192,7 +193,7 @@ def _ticker_change(row: Mapping[str, object]) -> tuple[datetime, str, str, Mappi
     return _date(row.get("date") or row.get("effective_date")), old_symbol, symbol, row
 
 
-def _metadata(row: Mapping[str, object], *keys: str) -> dict[str, object]:
+def _metadata(row: RawPayload, *keys: str) -> dict[str, object]:
     return {key: str(row[key]) for key in keys if row.get(key) is not None}
 
 

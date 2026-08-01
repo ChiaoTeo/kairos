@@ -2,20 +2,22 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, Mapping, TypeAlias
+from types import MappingProxyType
+from typing import Generic, Literal, Mapping, TypeAlias, TypeVar
 
 
 RuntimeDomain = Literal["data", "market", "account", "execution", "intent", "clock", "system"]
 RuntimePayload: TypeAlias = object | None
+TPayload_co = TypeVar("TPayload_co", covariant=True)
 
 
 @dataclass(frozen=True, slots=True)
-class RuntimeEnvelope:
+class RuntimeEnvelope(Generic[TPayload_co]):
     domain: RuntimeDomain | str
     kind: str
     time: datetime
     sequence: int
-    payload: RuntimePayload = None
+    payload: TPayload_co | None = None
 
     def __post_init__(self) -> None:
         if not str(self.domain).strip() or not self.kind.strip():
@@ -29,14 +31,17 @@ class RuntimeEnvelope:
         return str(self.domain) == domain and (kind is None or self.kind == kind)
 
 
+AnyRuntimeEnvelope: TypeAlias = RuntimeEnvelope[object]
+
+
 def system_envelope(
     kind: str,
     *,
     time: datetime,
     sequence: int,
     payload: Mapping[str, object] | None = None,
-) -> RuntimeEnvelope:
-    return RuntimeEnvelope(
+) -> RuntimeEnvelope[Mapping[str, object]]:
+        return RuntimeEnvelope(
         "system",
         kind,
         time,
@@ -45,9 +50,21 @@ def system_envelope(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class RuntimeIncident:
+    kind: str
+    message: str
+    raw: Mapping[str, object] = MappingProxyType({})
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "raw", MappingProxyType(dict(self.raw)))
+
+
 __all__ = [
+    "AnyRuntimeEnvelope",
     "RuntimeDomain",
     "RuntimeEnvelope",
     "RuntimePayload",
+    "RuntimeIncident",
     "system_envelope",
 ]

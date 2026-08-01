@@ -11,6 +11,7 @@ from kairospy.core.views import ViewStore
 
 class LaunchArtifactProjector:
     def __init__(self, output: LaunchOutput, *, timeline_sample_interval: str | timedelta | None = "1m") -> None:
+        self.output = output
         self.account_current = AccountCurrentProjector(output)
         self.timeline = TimelineProjector(output, sample_interval=timeline_sample_interval)
 
@@ -26,6 +27,13 @@ class LaunchArtifactProjector:
             self.timeline.on_intents(step.intents, step.context, step.hook)
         self.account_current.publish_views(step_views, as_of=step.as_of)
         self.timeline.publish_views(step_views, as_of=step.as_of)
+
+    def publish_connection_health(self, health: object) -> None:
+        if isinstance(health, dict):
+            payload = health
+        else:
+            payload = {"status": "unknown", "details": health}
+        self.output.update_current("system", {"connections": payload})
 
 
 __all__ = ["LaunchArtifactProjector"]

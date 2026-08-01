@@ -18,7 +18,7 @@ from kairospy.core.market import (
     RateObservation,
     TradePrint,
 )
-from kairospy.application.service.domain.market.records import (
+from kairospy.infrastructure.persistence.market_data.records import (
     BarRecord,
     OrderBookRecord,
     OptionGreeksRecord,
@@ -34,6 +34,7 @@ from kairospy.application.service.domain.market.records import (
     trade_print_record,
 )
 from kairospy.core.reference import MarketRef
+from kairospy.infrastructure.integrations.types import IntegrationParams, RawPayload
 
 
 def ccxt_ohlcv_bar(values: list[Any] | tuple[Any, ...], *, market: MarketRef, timeframe: str) -> Bar:
@@ -52,7 +53,7 @@ def ccxt_ohlcv_bar(values: list[Any] | tuple[Any, ...], *, market: MarketRef, ti
     )
 
 
-def ccxt_ticker_quote(raw: Mapping[str, object], *, market: MarketRef) -> Quote:
+def ccxt_ticker_quote(raw: RawPayload, *, market: MarketRef) -> Quote:
     ticker = _normalized_ticker(raw)
     return Quote(
         instrument_id=market.instrument_id,
@@ -65,7 +66,7 @@ def ccxt_ticker_quote(raw: Mapping[str, object], *, market: MarketRef) -> Quote:
     )
 
 
-def ccxt_order_book_snapshot(raw: Mapping[str, object], *, market: MarketRef, fallback_to_now: bool = False) -> OrderBookSnapshot:
+def ccxt_order_book_snapshot(raw: RawPayload, *, market: MarketRef, fallback_to_now: bool = False) -> OrderBookSnapshot:
     nonce = _first_not_none(raw.get("nonce"), raw.get("lastUpdateId"), raw.get("last_update_id"), raw.get("u"))
     return OrderBookSnapshot(
         instrument_id=market.instrument_id,
@@ -80,7 +81,7 @@ def ccxt_order_book_snapshot(raw: Mapping[str, object], *, market: MarketRef, fa
     )
 
 
-def ccxt_order_book_delta(raw: Mapping[str, object], *, market: MarketRef, fallback_to_now: bool = True) -> OrderBookDelta:
+def ccxt_order_book_delta(raw: RawPayload, *, market: MarketRef, fallback_to_now: bool = True) -> OrderBookDelta:
     return OrderBookDelta(
         instrument_id=market.instrument_id,
         market_id=market.market_id,
@@ -96,7 +97,7 @@ def ccxt_order_book_delta(raw: Mapping[str, object], *, market: MarketRef, fallb
     )
 
 
-def ccxt_trade_print(raw: Mapping[str, object], *, market: MarketRef, fallback_to_now: bool = False) -> TradePrint:
+def ccxt_trade_print(raw: RawPayload, *, market: MarketRef, fallback_to_now: bool = False) -> TradePrint:
     return TradePrint(
         instrument_id=market.instrument_id,
         market_id=market.market_id,
@@ -111,7 +112,7 @@ def ccxt_trade_print(raw: Mapping[str, object], *, market: MarketRef, fallback_t
     )
 
 
-def ccxt_funding_rate_observation(raw: Mapping[str, object], *, market: MarketRef) -> RateObservation:
+def ccxt_funding_rate_observation(raw: RawPayload, *, market: MarketRef) -> RateObservation:
     row = _normalized_funding_rate(raw)
     return RateObservation(
         rate_id=str(market.market_id),
@@ -126,7 +127,7 @@ def ccxt_funding_rate_observation(raw: Mapping[str, object], *, market: MarketRe
     )
 
 
-def ccxt_option_greeks_observation(raw: Mapping[str, object], *, market: MarketRef) -> OptionGreeks:
+def ccxt_option_greeks_observation(raw: RawPayload, *, market: MarketRef) -> OptionGreeks:
     row = _normalized_option_greeks(raw)
     return OptionGreeks(
         instrument_id=market.instrument_id,
@@ -166,11 +167,11 @@ def ccxt_ohlcv_update(values: list[Any] | tuple[Any, ...], *, market: MarketRef,
     )
 
 
-def ccxt_ticker_record(raw: Mapping[str, object], *, market: MarketRef) -> QuoteRecord:
+def ccxt_ticker_record(raw: RawPayload, *, market: MarketRef) -> QuoteRecord:
     return ticker_record(venue=market.venue, market=market.market, instrument=market, ticker=_normalized_ticker(raw))
 
 
-def ccxt_ticker_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
+def ccxt_ticker_update(raw: RawPayload, *, market: MarketRef) -> MarketEvent:
     quote = ccxt_ticker_quote(raw, market=market)
     return MarketEvent(
         MarketSubject("instrument", quote.instrument_id),
@@ -182,7 +183,7 @@ def ccxt_ticker_update(raw: Mapping[str, object], *, market: MarketRef) -> Marke
     )
 
 
-def ccxt_order_book_record(raw: Mapping[str, object], *, market: MarketRef) -> OrderBookRecord:
+def ccxt_order_book_record(raw: RawPayload, *, market: MarketRef) -> OrderBookRecord:
     return order_book_record(
         ccxt_order_book_snapshot(raw, market=market),
         venue=market.venue,
@@ -191,7 +192,7 @@ def ccxt_order_book_record(raw: Mapping[str, object], *, market: MarketRef) -> O
     )
 
 
-def ccxt_order_book_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
+def ccxt_order_book_update(raw: RawPayload, *, market: MarketRef) -> MarketEvent:
     book = ccxt_order_book_snapshot(raw, market=market, fallback_to_now=True)
     return MarketEvent(
         MarketSubject("instrument", book.instrument_id),
@@ -209,7 +210,7 @@ def ccxt_order_book_update(raw: Mapping[str, object], *, market: MarketRef) -> M
     )
 
 
-def ccxt_order_book_delta_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
+def ccxt_order_book_delta_update(raw: RawPayload, *, market: MarketRef) -> MarketEvent:
     delta = ccxt_order_book_delta(raw, market=market)
     return MarketEvent(
         MarketSubject("instrument", delta.instrument_id),
@@ -228,7 +229,7 @@ def ccxt_order_book_delta_update(raw: Mapping[str, object], *, market: MarketRef
     )
 
 
-def ccxt_trade_record(raw: Mapping[str, object], *, market: MarketRef) -> TradeRecord:
+def ccxt_trade_record(raw: RawPayload, *, market: MarketRef) -> TradeRecord:
     return trade_print_record(
         ccxt_trade_print(raw, market=market),
         venue=market.venue,
@@ -237,7 +238,7 @@ def ccxt_trade_record(raw: Mapping[str, object], *, market: MarketRef) -> TradeR
     )
 
 
-def ccxt_trade_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
+def ccxt_trade_update(raw: RawPayload, *, market: MarketRef) -> MarketEvent:
     trade = ccxt_trade_print(raw, market=market, fallback_to_now=True)
     return MarketEvent(
         MarketSubject("instrument", trade.instrument_id),
@@ -249,7 +250,7 @@ def ccxt_trade_update(raw: Mapping[str, object], *, market: MarketRef) -> Market
     )
 
 
-def ccxt_funding_rate_record(raw: Mapping[str, object], *, market: MarketRef) -> RateRecord:
+def ccxt_funding_rate_record(raw: RawPayload, *, market: MarketRef) -> RateRecord:
     return funding_rate_record(
         ccxt_funding_rate_observation(raw, market=market),
         venue=market.venue,
@@ -258,7 +259,7 @@ def ccxt_funding_rate_record(raw: Mapping[str, object], *, market: MarketRef) ->
     )
 
 
-def ccxt_option_greeks_record(raw: Mapping[str, object], *, market: MarketRef) -> OptionGreeksRecord:
+def ccxt_option_greeks_record(raw: RawPayload, *, market: MarketRef) -> OptionGreeksRecord:
     return option_greeks_record(
         ccxt_option_greeks_observation(raw, market=market),
         venue=market.venue,
@@ -267,7 +268,7 @@ def ccxt_option_greeks_record(raw: Mapping[str, object], *, market: MarketRef) -
     )
 
 
-def ccxt_funding_rate_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
+def ccxt_funding_rate_update(raw: RawPayload, *, market: MarketRef) -> MarketEvent:
     rate = ccxt_funding_rate_observation(raw, market=market)
     return MarketEvent(
         MarketSubject("market", market.market_id),
@@ -279,7 +280,7 @@ def ccxt_funding_rate_update(raw: Mapping[str, object], *, market: MarketRef) ->
     )
 
 
-def ccxt_option_greeks_update(raw: Mapping[str, object], *, market: MarketRef) -> MarketEvent:
+def ccxt_option_greeks_update(raw: RawPayload, *, market: MarketRef) -> MarketEvent:
     greeks = ccxt_option_greeks_observation(raw, market=market)
     return MarketEvent(
         MarketSubject("instrument", greeks.instrument_id),
@@ -300,7 +301,7 @@ def ephemeral_market_ref(*, venue: str, market: str, source_symbol: str) -> Mark
     return MarketRef.ephemeral(venue=venue, market=market, source_symbol=source_symbol)
 
 
-def ccxt_market_type(exchange_id: str, params: Mapping[str, object] | None = None) -> str:
+def ccxt_market_type(exchange_id: str, params: IntegrationParams | None = None) -> str:
     options = params or {}
     if options.get("market") is not None:
         return str(options["market"])
@@ -322,7 +323,7 @@ def _levels(value: object) -> tuple[PriceLevel, ...]:
     return tuple(levels)
 
 
-def _changes(raw: Mapping[str, object]) -> tuple[OrderBookChange, ...]:
+def _changes(raw: RawPayload) -> tuple[OrderBookChange, ...]:
     bids = _change_levels(_first_not_none(raw.get("b"), raw.get("bids")), side="bid")
     asks = _change_levels(_first_not_none(raw.get("a"), raw.get("asks")), side="ask")
     return bids + asks
@@ -347,7 +348,7 @@ def _decimal(value: object) -> Decimal:
     return Decimal(str(value))
 
 
-def _market_time(raw: Mapping[str, object], *, fallback_to_now: bool = False) -> datetime:
+def _market_time(raw: RawPayload, *, fallback_to_now: bool = False) -> datetime:
     value = raw.get("timestamp")
     if value is not None:
         return event_time(value)
@@ -360,7 +361,7 @@ def _market_time(raw: Mapping[str, object], *, fallback_to_now: bool = False) ->
     return event_time(None)
 
 
-def _normalized_ticker(raw: Mapping[str, object]) -> Mapping[str, object]:
+def _normalized_ticker(raw: RawPayload) -> RawPayload:
     value = dict(raw)
     price = _first_not_none(value.get("last"), value.get("close"), value.get("markPrice"), value.get("indexPrice"), _info_price(value))
     if value.get("bid") is None and price is not None:
@@ -372,7 +373,7 @@ def _normalized_ticker(raw: Mapping[str, object]) -> Mapping[str, object]:
     return value
 
 
-def _normalized_funding_rate(raw: Mapping[str, object]) -> Mapping[str, object]:
+def _normalized_funding_rate(raw: RawPayload) -> RawPayload:
     value = dict(raw)
     info = value.get("info") if isinstance(value.get("info"), Mapping) else {}
     rate = _first_not_none(value.get("fundingRate"), value.get("rate"), info.get("fundingRate"))
@@ -390,7 +391,7 @@ def _normalized_funding_rate(raw: Mapping[str, object]) -> Mapping[str, object]:
     return value
 
 
-def _normalized_option_greeks(raw: Mapping[str, object]) -> Mapping[str, object]:
+def _normalized_option_greeks(raw: RawPayload) -> RawPayload:
     value = dict(raw)
     info = value.get("info") if isinstance(value.get("info"), Mapping) else {}
     aliases = {
@@ -413,7 +414,7 @@ def _normalized_option_greeks(raw: Mapping[str, object]) -> Mapping[str, object]
     return value
 
 
-def _info_price(raw: Mapping[str, object]) -> object | None:
+def _info_price(raw: RawPayload) -> object | None:
     info = raw.get("info")
     return info.get("price") if isinstance(info, Mapping) else None
 

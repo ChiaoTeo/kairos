@@ -4,17 +4,18 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.orchestration.state import RuntimePorts, RuntimeStores
+from kairospy.application.runtime.components import RuntimeComponents
+from kairospy.application.runtime.orchestration.state import RuntimeStores
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.service.domain.account import SimulatedAccount
-from kairospy.application.service.domain.market import MarketDataResolver
+from kairospy.application.domain.account import SimulatedAccount
+from kairospy.application.domain.market import MarketDataResolver
 from kairospy.application.service.modes.backtest import BacktestAccountService, BacktestExecutionService, BacktestMarketDataService
-from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.application.runtime.services import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentJournal, IntentStatus, target_position_intent
 from kairospy.core.market import MarketEvent, MarketSubject, Quote, RateObservation
 from kairospy.core.reference import MarketResolver
-from kairospy.infrastructure.data import DataStore
+from kairospy.infrastructure.persistence.market_data.catalog import DataStore
 
 
 class TargetPositionStrategy:
@@ -77,16 +78,17 @@ def test_backtest_execution_service_fills_target_position_from_market_quote(tmp_
     intents = IntentJournal()
     kernel = RuntimeKernel(
         TargetPositionStrategy(instrument_id=market.instrument_id, market_id=market.market_id),
-        ports=RuntimePorts(data=data, account=account_service, trading_execution=execution),
+        components=RuntimeComponents(market=data, account=account_service, execution=execution),
         stores=RuntimeStores(intents=intents),
         services=RuntimeApplicationServices.from_dependencies(
             RuntimeServiceDependencies(
                 intents=intents,
                 data=data,
-                account_snapshot_store=account_service,
-                account=account_service,
+                    account_snapshot_store=account_service,
+                    account=account_service,
+                    account_catalog=account_service,
                 trading_execution=execution,
-                execution=coordinator,
+                execution_coordinator=coordinator,
                 fills_source=execution,
             )
         ),
@@ -150,16 +152,17 @@ def test_backtest_execution_service_supports_short_target_and_funding_cashflow(t
     intents = IntentJournal()
     kernel = RuntimeKernel(
         TargetPositionStrategy(instrument_id=market.instrument_id, market_id=market.market_id, target_quantity=Decimal("-2")),
-        ports=RuntimePorts(data=data, account=account_service, trading_execution=execution),
+        components=RuntimeComponents(market=data, account=account_service, execution=execution),
         stores=RuntimeStores(intents=intents),
         services=RuntimeApplicationServices.from_dependencies(
             RuntimeServiceDependencies(
                 intents=intents,
                 data=data,
-                account_snapshot_store=account_service,
-                account=account_service,
+                    account_snapshot_store=account_service,
+                    account=account_service,
+                    account_catalog=account_service,
                 trading_execution=execution,
-                execution=coordinator,
+                execution_coordinator=coordinator,
                 fills_source=execution,
             )
         ),

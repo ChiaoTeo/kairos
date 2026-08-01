@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, Mapping
 
 from .ccxt import CcxtDriver
+from kairospy.infrastructure.integrations.types import IntegrationParams, RawPayloadRows
 
 
 @dataclass(frozen=True, slots=True)
 class BinanceReferenceDriver:
     driver: CcxtDriver = field(default_factory=CcxtDriver)
 
-    def fetch_delist_schedule(self, *, params: Mapping[str, object] | None = None) -> Iterable[Mapping[str, object]]:
+    def fetch_delist_schedule(self, *, params: IntegrationParams | None = None) -> RawPayloadRows:
         return self.driver.fetch_binance_spot_delist_schedule(params=params)
 
 

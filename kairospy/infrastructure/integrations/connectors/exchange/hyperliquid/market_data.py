@@ -2,23 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import AsyncIterator, Iterable, Mapping
+from typing import AsyncIterator, Iterable
 
-from kairospy.infrastructure.data import DataSink
-from kairospy.core.market import MarketEvent
+from kairospy.infrastructure.persistence.market_data.ingest import DataSink
+from kairospy.core.market import Bar, MarketEvent
 from kairospy.core.reference import (
     MarketDefinition,
     MarketRef,
     ReferenceCatalog,
 )
-from kairospy.application.service.domain.reference.builders import (
+from kairospy.application.domain.reference.builders import (
     catalog_from_market_rows,
     market_definitions_from_rows,
 )
 
 from kairospy.infrastructure.integrations.payloads.ccxt_market import (
     ccxt_market_type,
-    ccxt_ohlcv_record,
+    ccxt_ohlcv_bar,
     ccxt_ohlcv_update,
     ccxt_order_book_record,
     ccxt_order_book_update,
@@ -29,6 +29,8 @@ from kairospy.infrastructure.integrations.payloads.ccxt_market import (
     ephemeral_market_ref,
 )
 from kairospy.infrastructure.integrations.drivers import CcxtDriver
+from kairospy.infrastructure.persistence.market_data.records import QuoteRecord
+from kairospy.infrastructure.integrations.types import IntegrationParams, OrderBookRecordStream, QuoteRecordStream, RawPayload, RawPayloadRows, RawPayloadStream, TradeRecordStream
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,15 +42,15 @@ class HyperliquidMarketDataConnector:
     def fetch_markets(
         self,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadRows:
         return self.driver.fetch_markets(self.exchange_id, params=params)
 
     def fetch_market_definitions(
         self,
         *,
         as_of: datetime | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> tuple[MarketDefinition, ...]:
         effective_from = (as_of or datetime.now(timezone.utc)).astimezone(timezone.utc)
         return market_definitions_from_rows(self.fetch_markets(params=params), effective_from=effective_from)
@@ -57,12 +59,12 @@ class HyperliquidMarketDataConnector:
         self,
         *,
         as_of: datetime | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> ReferenceCatalog:
         effective_from = (as_of or datetime.now(timezone.utc)).astimezone(timezone.utc)
         return catalog_from_market_rows(self.fetch_markets(params=params), effective_from=effective_from)
 
-    def fetch_ohlcv(
+    def fetch_bars(
         self,
         symbol: str,
         *,
@@ -70,10 +72,10 @@ class HyperliquidMarketDataConnector:
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        adapter_options: IntegrationParams | None = None,
+    ) -> Iterable[Bar]:
         ccxt_symbol = _ccxt_symbol(symbol)
-        market_ref = _market_ref(self.exchange_id, ccxt_symbol, params)
+        market_ref = _market_ref(self.exchange_id, ccxt_symbol, adapter_options)
         rows = self.driver.fetch_ohlcv(
             self.exchange_id,
             ccxt_symbol,
@@ -81,9 +83,9 @@ class HyperliquidMarketDataConnector:
             since=since,
             until=until,
             limit=limit,
-            params=params,
+            params=adapter_options,
         )
-        return (ccxt_ohlcv_record(row, market=market_ref, timeframe=timeframe) for row in rows)
+        return (ccxt_ohlcv_bar(row, market=market_ref, timeframe=timeframe) for row in rows)
 
     def fetch_ohlcv_updates(
         self,
@@ -93,7 +95,7 @@ class HyperliquidMarketDataConnector:
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> Iterable[MarketEvent]:
         ccxt_symbol = _ccxt_symbol(symbol)
         market_ref = _market_ref(self.exchange_id, ccxt_symbol, params)
@@ -112,8 +114,8 @@ class HyperliquidMarketDataConnector:
         self,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> QuoteRecordStream:
         ccxt_symbol = _ccxt_symbol(symbol)
         return _ticker_records(
             self.driver.watch_ticker(self.exchange_id, ccxt_symbol, params=params),
@@ -124,7 +126,7 @@ class HyperliquidMarketDataConnector:
         self,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> AsyncIterator[MarketEvent]:
         ccxt_symbol = _ccxt_symbol(symbol)
         return _ticker_updates(
@@ -136,8 +138,8 @@ class HyperliquidMarketDataConnector:
         self,
         market: MarketRef,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+        params: IntegrationParams | None = None,
+    ) -> QuoteRecord:
         ccxt_symbol = _ccxt_symbol(market.source_symbol)
         raw = self.driver.fetch_ticker(self.exchange_id, ccxt_symbol, params=params)
         return ccxt_ticker_record(raw, market=_market_ref(self.exchange_id, ccxt_symbol, params))
@@ -146,7 +148,7 @@ class HyperliquidMarketDataConnector:
         self,
         market: MarketRef,
         *,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> MarketEvent:
         ccxt_symbol = _ccxt_symbol(market.source_symbol)
         raw = self.driver.fetch_ticker(self.exchange_id, ccxt_symbol, params=params)
@@ -157,8 +159,8 @@ class HyperliquidMarketDataConnector:
         symbol: str,
         *,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> OrderBookRecordStream:
         ccxt_symbol = _ccxt_symbol(symbol)
         return _order_book_records(
             self.driver.watch_order_book(self.exchange_id, ccxt_symbol, limit=limit, params=params),
@@ -170,7 +172,7 @@ class HyperliquidMarketDataConnector:
         symbol: str,
         *,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> AsyncIterator[MarketEvent]:
         ccxt_symbol = _ccxt_symbol(symbol)
         return _order_book_updates(
@@ -184,8 +186,8 @@ class HyperliquidMarketDataConnector:
         *,
         since: object | None = None,
         limit: int = 50,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> TradeRecordStream:
         ccxt_symbol = _ccxt_symbol(symbol)
         return _trade_records(
             self.driver.watch_trades(self.exchange_id, ccxt_symbol, since=since, limit=limit, params=params),
@@ -198,7 +200,7 @@ class HyperliquidMarketDataConnector:
         *,
         since: object | None = None,
         limit: int = 50,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> AsyncIterator[MarketEvent]:
         ccxt_symbol = _ccxt_symbol(symbol)
         return _trade_updates(
@@ -212,7 +214,7 @@ class HyperliquidMarketDataConnector:
         sink: DataSink,
         *,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> int:
         return await sink.consume(self.watch_ticker(symbol, params=params), limit=limit)
 
@@ -223,7 +225,7 @@ class HyperliquidMarketDataConnector:
         *,
         book_limit: int | None = None,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> int:
         return await sink.consume(self.watch_order_book(symbol, limit=book_limit, params=params), limit=limit)
 
@@ -235,7 +237,7 @@ class HyperliquidMarketDataConnector:
         since: object | None = None,
         trade_limit: int = 50,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> int:
         return await sink.consume(
             self.watch_trades(symbol, since=since, limit=trade_limit, params=params),
@@ -250,7 +252,7 @@ def _ccxt_symbol(symbol: object) -> str:
     return f"{value.upper()}/USDC:USDC"
 
 
-def _market_ref(exchange_id: str, symbol: object, params: Mapping[str, object] | None) -> MarketRef:
+def _market_ref(exchange_id: str, symbol: object, params: RawPayload | None) -> MarketRef:
     return ephemeral_market_ref(venue=exchange_id, market=ccxt_market_type(exchange_id, params), source_symbol=str(symbol))
 
 

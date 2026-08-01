@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Mapping, Protocol
 
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.service.domain.market.sources import parse_event_time
+from kairospy.application.domain.market.sources import parse_event_time
 
 
 class RuntimeDataSource(Protocol):

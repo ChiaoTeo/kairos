@@ -1,50 +1,22 @@
 from __future__ import annotations
 
-from .dispatch import RuntimeContext, RuntimeDispatcher
-from .orchestration.kernel import RuntimeKernel
-from .orchestration.session import RuntimeSession
-from .orchestration.state import RuntimeFrame, RuntimePorts, RuntimeLaunchResult, RuntimeStores, Callback
-from .processors import (
-    AccountCurrentViewState,
-    ExecutionCurrentViewState,
-    IntentJournalViewState,
-    MarketViewState,
-    MarketProjectionState,
-    OrderCurrentViewState,
-    ReferenceCatalogViewState,
-    RiskEventViewState,
-    RuntimeSystemViewState,
-    SystemEventViewState,
-)
-from .launch import RuntimeEnvelopePump, RuntimeRunner, RuntimeLaunchSession, RuntimeLaunchSpec
-from .sources import ClockEventSource, ClockTick, IntervalClockSource, RealtimeClockSource
+from .components import AccountCatalog, AccountRuntime, ExecutionRuntime, MarketRuntime, ReferenceRuntime, RuntimeComponents
+
+
+def __getattr__(name: str) -> object:
+    if name in {"RuntimeLaunchSpec", "RuntimeRunner"}:
+        from .launch import RuntimeLaunchSpec, RuntimeRunner
+
+        return {"RuntimeLaunchSpec": RuntimeLaunchSpec, "RuntimeRunner": RuntimeRunner}[name]
+    raise AttributeError(name)
 
 __all__ = [
-    "AccountCurrentViewState",
-    "ReferenceCatalogViewState",
-    "RuntimeContext",
-    "RuntimeDispatcher",
-    "RuntimePorts",
-    "RuntimeStores",
-    "ExecutionCurrentViewState",
-    "IntentJournalViewState",
-    "MarketViewState",
-    "MarketProjectionState",
-    "OrderCurrentViewState",
-    "RiskEventViewState",
-    "RuntimeFrame",
-    "RuntimeKernel",
-    "RuntimeRunner",
-    "RuntimeLaunchResult",
-    "RuntimeLaunchSession",
+    "AccountCatalog",
+    "AccountRuntime",
+    "ExecutionRuntime",
+    "MarketRuntime",
+    "ReferenceRuntime",
+    "RuntimeComponents",
     "RuntimeLaunchSpec",
-    "RuntimeSession",
-    "RuntimeEnvelopePump",
-    "RuntimeSystemViewState",
-    "SystemEventViewState",
-    "Callback",
-    "ClockEventSource",
-    "ClockTick",
-    "IntervalClockSource",
-    "RealtimeClockSource",
+    "RuntimeRunner",
 ]

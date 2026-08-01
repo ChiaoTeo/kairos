@@ -2,15 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from io import StringIO
 from types import SimpleNamespace
 
-import kairospy.surface.interactive.shell as shell_product
 import pytest
 from kairospy.core.intent import IntentJournal, target_position_intent
-from kairospy.application.modes import RuntimeMode
-from kairospy.surface.cli.app import execute_argv
-from kairospy.surface.interactive.shell import AppSession
 from kairospy.surface.interactive.system import parse_system_command, parse_system_entry, render_command_result
 
 
@@ -36,65 +31,6 @@ def test_system_shell_command_parses_domain_commands() -> None:
         "command": "target_position",
         "args": {"account": "main", "instrument": "BTC/USDT", "limit_price": "50000", "quantity": "0.1"},
     }
-
-
-def test_app_shell_enters_system_and_reuses_session(monkeypatch) -> None:
-    created: list[FakeInteractiveSystemSession] = []
-
-    def factory(**kwargs):
-        session = FakeInteractiveSystemSession(**kwargs)
-        created.append(session)
-        return session
-
-    monkeypatch.setattr(shell_product, "InteractiveSystemSession", factory)
-    stdout = StringIO()
-    session = AppSession(stdout=stdout, command_executor=lambda argv: (0, ""))
-
-    assert session.handle("system --launch-id check-1") is False
-    assert session.prompt() == "kairos/app/system> "
-    assert session.handle("account current --account main") is False
-    assert session.handle("order target-position BTC/USDT 0.1 --account main") is False
-    assert session.handle("exit-system") is False
-
-    assert session.system_session is None
-    assert created[0].kwargs == {"launch_id": "check-1"}
-    assert created[0].lines == ["account current --account main", "order target-position BTC/USDT 0.1 --account main"]
-    assert created[0].finished is True
-    assert created[0].closed is True
-    assert "Entered system mode" in stdout.getvalue()
-    assert "launch_id: check-1" in stdout.getvalue()
-
-
-def test_cli_shell_command_enters_system_mode(tmp_path, monkeypatch) -> None:
-    _write_workspace_manifest(tmp_path)
-    monkeypatch.chdir(tmp_path)
-    created: list[FakeInteractiveSystemSession] = []
-
-    def factory(**kwargs):
-        session = FakeInteractiveSystemSession(**kwargs)
-        created.append(session)
-        return session
-
-    monkeypatch.setattr(shell_product, "InteractiveSystemSession", factory)
-    stdout = StringIO()
-
-    exit_code = execute_argv(
-        [
-            "shell",
-            "--command",
-            "system --launch-id check-1",
-            "--command",
-            "trace check '{}'",
-            "--command",
-            "exit-system",
-        ],
-        stdout,
-    )
-
-    assert exit_code == 0
-    assert created[0].lines == ["trace check '{}'"]
-    assert "Entered system mode" in stdout.getvalue()
-    assert "launch_id: check-1" in stdout.getvalue()
 
 
 def test_system_command_result_renders_trace_payload() -> None:
@@ -178,38 +114,9 @@ def test_system_command_result_renders_latest_target_position_intent() -> None:
     )
 
 
-class FakeInteractiveSystemSession:
-    def __init__(self, **kwargs) -> None:
-        self.kwargs = kwargs
-        self.lines: list[str] = []
-        self.finished = False
-        self.closed = False
-
-    def handle(self, line: str) -> str:
-        self.lines.append(line)
-        return "ok"
-
-    def finish(self):
-        self.finished = True
-        return SimpleNamespace(
-            launch_id=self.kwargs["launch_id"],
-            mode=self.kwargs.get("mode", RuntimeMode.SYSTEM),
-            runtime=SimpleNamespace(strategy_id="strategy", event_count=len(self.lines), intent_count=1),
-        )
-
-    def close(self) -> None:
-        self.closed = True
-
-
 class FakeViews:
     def __init__(self, value) -> None:
         self.value = value
 
     def get(self, key, default=None):
         return self.value if key == "strategy.decision_trace" else default
-
-
-def _write_workspace_manifest(root) -> None:
-    kairos = root / ".kairos"
-    kairos.mkdir(parents=True, exist_ok=True)
-    (kairos / "kairos.toml").write_text("[project]\nname = \"test\"\n", encoding="utf-8")

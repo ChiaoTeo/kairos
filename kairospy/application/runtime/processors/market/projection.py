@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Callable, TypeVar
 
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.service.runtime import RuntimeMarketService
+from kairospy.application.runtime.services import RuntimeMarketService
 from kairospy.core.market import (
     Bar,
     BarWindow,

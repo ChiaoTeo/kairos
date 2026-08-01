@@ -12,16 +12,21 @@ from typing import Callable, Mapping, Sequence
 from kairospy.application.account_books import default_account_books
 from kairospy.application.system.diagnostics import record_exception
 from kairospy.application.system.facade.context import workspace as resolve_workspace
-from kairospy.application.system.facade.resources import DriverName, ExchangeName, broker
+from kairospy.application.system.facade.resources import (
+    DriverName,
+    account_balance_client,
+    account_bootstrap_client,
+    order_query_client,
+)
 from kairospy.application.system.workspace import AccountRecord, write_credential_file
 from kairospy.config import ConfigError
 from kairospy.core.account import AccountBookKind, AccountBookRef
-from kairospy.application.service.domain.account.routing import account_book_route
+from kairospy.application.domain.account.routing import account_book_route
 from kairospy.application.pagination import PageRequest, paginate
 
 
 @dataclass(frozen=True, slots=True)
-class AccountProviderSchema:
+class AccountBrokerSchema:
     provider: str
     venue: str
     default_market: str
@@ -29,27 +34,34 @@ class AccountProviderSchema:
     credential_fields: tuple[str, ...]
     optional_fields: tuple[str, ...] = ()
 
+    @property
+    def broker(self) -> str:
+        return self.provider
+
     def required_credential_fields(self) -> tuple[str, ...]:
         optional = set(self.optional_fields)
         return tuple(field for field in self.credential_fields if field not in optional)
 
 
-ACCOUNT_SCHEMAS: dict[str, AccountProviderSchema] = {
-    "binance": AccountProviderSchema(
+AccountProviderSchema = AccountBrokerSchema
+
+
+ACCOUNT_SCHEMAS: dict[str, AccountBrokerSchema] = {
+    "binance": AccountBrokerSchema(
         provider="binance",
         venue="binance",
         default_market="spot",
         credential_kind="api_key_secret",
         credential_fields=("api_key", "api_secret"),
     ),
-    "okx": AccountProviderSchema(
+    "okx": AccountBrokerSchema(
         provider="okx",
         venue="okx",
         default_market="spot",
         credential_kind="api_key_secret_passphrase",
         credential_fields=("api_key", "api_secret", "passphrase"),
     ),
-    "hyperliquid": AccountProviderSchema(
+    "hyperliquid": AccountBrokerSchema(
         provider="hyperliquid",
         venue="hyperliquid",
         default_market="swap",
@@ -79,13 +91,13 @@ class AccountFacade:
         return {"schemas": {name: _schema_payload(schema) for name, schema in ACCOUNT_SCHEMAS.items()}}
 
     def schema(self, broker_name: str) -> dict[str, object]:
-        return _schema_payload(_provider_schema(broker_name))
+        return _schema_payload(_broker_schema(broker_name))
 
     def create(
         self,
         *,
         account_id: str,
-        provider: str,
+        broker: str,
         environment: str,
         venue: str | None,
         market: str | None,
@@ -106,7 +118,7 @@ class AccountFacade:
         force: bool,
     ) -> str:
         workspace = resolve_workspace()
-        provider_schema = _provider_schema(provider)
+        broker_schema = _broker_schema(broker)
         environment_value = environment.strip().lower()
         parsed_cash = None if cash is None else _non_negative_decimal(cash, "cash")
         parsed_fee_rate = _non_negative_decimal(fee_rate, "fee_rate")
@@ -132,7 +144,7 @@ class AccountFacade:
         resolved_credential_kind = _credential_kind(
             environment=environment_value,
             explicit=credential_kind,
-            default=provider_schema.credential_kind,
+            default=broker_schema.credential_kind,
             credential_values=credential_field_values,
         )
         path = workspace.accounts_root / f"{account_id}.toml"
@@ -147,7 +159,7 @@ class AccountFacade:
                 credential_path,
                 {
                     "id": credential_id,
-                    "broker": provider_schema.provider,
+                    "broker": broker_schema.broker,
                     "kind": resolved_credential_kind,
                     **credential_field_values,
                 },
@@ -155,11 +167,11 @@ class AccountFacade:
         path.write_text(
             _account_template(
                 account_id,
-                provider=provider_schema.provider,
+                provider=broker_schema.broker,
                 environment=environment,
-                venue=venue or provider_schema.venue,
-                market=market or provider_schema.default_market,
-                default_market=provider_schema.default_market,
+                venue=venue or broker_schema.venue,
+                market=market or broker_schema.default_market,
+                default_market=broker_schema.default_market,
                 currency=currency,
                 cash=parsed_cash if parsed_cash is not None else (Decimal("100000") if include_simulated_fields else None),
                 fee_rate=parsed_fee_rate if include_fee_rate else None,
@@ -167,7 +179,7 @@ class AccountFacade:
                 named_credential_ref=credential_ref,
                 named_credential_role=credential_role_value if credential_ref is not None else None,
                 credential_kind=None,
-                credential_fields=provider_schema.credential_fields,
+                credential_fields=broker_schema.credential_fields,
                 credential_values={},
                 account_values=account_values,
             ),
@@ -178,10 +190,11 @@ class AccountFacade:
             target={"account": account_id},
             payload={
                 "path": path,
-                "provider": provider_schema.provider,
+                "broker": broker_schema.broker,
+                "provider": broker_schema.broker,
                 "environment": environment,
-                "venue": venue or provider_schema.venue,
-                "market": market or provider_schema.default_market,
+                "venue": venue or broker_schema.venue,
+                "market": market or broker_schema.default_market,
                 "credential": credential_ref,
                 "credential_role": credential_role_value if credential_ref is not None else None,
                 "credential_path": credential_path,
@@ -228,7 +241,7 @@ class AccountFacade:
         self,
         account_id: str,
         *,
-        provider: str | None,
+        broker: str | None,
         environment: str | None,
         venue: str | None,
         currency: str | None,
@@ -245,8 +258,8 @@ class AccountFacade:
         if credential is not None and clear_credential:
             raise ValueError("--credential and --clear-credential cannot be used together")
         updates: dict[str, object] = {}
-        if provider is not None:
-            updates["provider"] = _provider_schema(provider).provider
+        if broker is not None:
+            updates["broker"] = _broker_schema(broker).broker
         if environment is not None:
             updates["environment"] = environment.strip().lower()
         if venue is not None:
@@ -327,18 +340,19 @@ class AccountFacade:
     ) -> dict[str, object]:
         account = _account(account_id)
         selected_books = _balance_books(account, books)
-        client = self._broker(account)
         raw_by_book: dict[str, Mapping[str, object]] = {}
         errors: list[dict[str, object]] = []
         rows: list[dict[str, object]] = []
         if progress is not None:
             progress({"event": "start", "account": account.account_id, "books": list(selected_books), "total": len(selected_books)})
         for index, book in enumerate(selected_books, start=1):
-            route = account_book_route(AccountBookRef(account.venue or account.provider, account.account_id, book), provider=account.provider, base_params=params)
+            book_ref = _account_book_ref(account, book)
+            route = account_book_route(book_ref, broker=account.broker, base_params=params)
             if progress is not None:
                 progress({"event": "book_start", "book": book, "index": index, "total": len(selected_books), "params": dict(route.balance_params)})
             started_at = time.monotonic()
             try:
+                client = account_balance_client(book_ref, DriverName.ccxt, credential=_read_credential_ref(account))
                 raw = client.fetch_balance(params=route.balance_params)
             except Exception as error:
                 elapsed_ms = int((time.monotonic() - started_at) * 1000)
@@ -348,7 +362,7 @@ class AccountFacade:
                     command="account balance",
                     context={
                         "account": account.account_id,
-                        "broker": account.provider,
+                        "broker": account.broker,
                         "venue": account.venue,
                         "book": book,
                         "params": dict(route.balance_params),
@@ -388,7 +402,7 @@ class AccountFacade:
         paged_rows, page_result = paginate(rows, PageRequest(page=page, page_size=page_size))
         return {
             "account": account.account_id,
-            "broker": account.provider,
+            "broker": account.broker,
             "books": list(selected_books),
             "rows": list(paged_rows),
             "page": page_result.to_dict(),
@@ -406,13 +420,14 @@ class AccountFacade:
         params: Mapping[str, object] | None,
     ) -> dict[str, object]:
         account = _account(account_id)
-        orders = tuple(self._broker(account).fetch_open_orders(symbol, limit=limit, params=params))
+        client = order_query_client(_account_book_ref(account), DriverName.ccxt, credential=_read_credential_ref(account))
+        orders = tuple(client.fetch_open_orders(symbol, limit=limit, params=params))
         return {"account": account.account_id, "orders": orders, "count": len(orders)}
 
     def snapshot(self, account_id: str, *, symbol: str | None, params: Mapping[str, object] | None) -> dict[str, object]:
         workspace = resolve_workspace()
         account = _account(account_id)
-        client = self._broker(account)
+        client = account_bootstrap_client(_account_book_ref(account), DriverName.ccxt, credential=_read_credential_ref(account))
         payload = {
             "account": account.account_id,
             "event_time": datetime.now(timezone.utc).isoformat(),
@@ -427,44 +442,41 @@ class AccountFacade:
     def doctor(self, account_id: str) -> dict[str, object]:
         account = _account(account_id)
         issues: list[str] = []
-        if not account.provider:
+        if not account.broker:
             issues.append("broker is required")
         try:
-            provider_schema = _provider_schema(account.provider)
+            broker_schema = _broker_schema(account.broker)
         except ValueError as error:
-            provider_schema = None
+            broker_schema = None
             issues.append(str(error))
         if account.environment == "live" and not account.credential_values and not account.credential and not account.credentials:
             issues.append("live account has no credential metadata")
-        if provider_schema is not None and account.credential_values:
-            for key in provider_schema.required_credential_fields():
+        if broker_schema is not None and account.credential_values:
+            for key in broker_schema.required_credential_fields():
                 value = account.credential_values.get(key)
                 if not isinstance(value, str) or not value.strip():
                     issues.append(f"credential.{key} is empty")
-            unknown = sorted(set(account.credential_values) - set(provider_schema.credential_fields) - {"kind", "ip_bound"})
+            unknown = sorted(set(account.credential_values) - set(broker_schema.credential_fields) - {"kind", "ip_bound"})
             if unknown:
-                issues.append(f"credential has unknown fields for {provider_schema.provider}: {', '.join(unknown)}")
+                issues.append(f"credential has unknown fields for {broker_schema.broker}: {', '.join(unknown)}")
         return {"account": account.to_dict(), "valid": not issues, "issues": issues}
 
-    def _broker(self, account: AccountRecord):
-        return broker(_exchange(account), DriverName.ccxt, credential=_read_credential_ref(account))
-
-    def _credential_broker(self, account: AccountRecord, ref: str):
-        return broker(_exchange(account), DriverName.ccxt, credential=ref)
+    def _credential_profile_client(self, account: AccountRecord, ref: str):
+        return account_balance_client(_account_book_ref(account), DriverName.ccxt, credential=ref)
 
     def _check_credential(self, account: AccountRecord, *, ref: str, role: str) -> None:
-        profile = _credential_profile(self._credential_broker(account, ref), ref=ref)
+        profile = _credential_profile(self._credential_profile_client(account, ref), ref=ref)
         _require_credential_role(ref, profile, role)
         new_identity = _credential_identity(profile)
         existing_identities = [
             identity
             for credential in account.credentials
             if credential.ref
-            for identity in [_credential_identity(_credential_profile(self._credential_broker(account, credential.ref), ref=credential.ref))]
+            for identity in [_credential_identity(_credential_profile(self._credential_profile_client(account, credential.ref), ref=credential.ref))]
             if identity is not None
         ]
         if account.credential:
-            identity = _credential_identity(_credential_profile(self._credential_broker(account, account.credential), ref=account.credential))
+            identity = _credential_identity(_credential_profile(self._credential_profile_client(account, account.credential), ref=account.credential))
             if identity is not None:
                 existing_identities.append(identity)
         if existing_identities:
@@ -482,20 +494,24 @@ def _account(account_id: str) -> AccountRecord:
         raise ValueError(str(error)) from error
 
 
-def _exchange(account: AccountRecord) -> ExchangeName:
-    value = (account.venue or account.provider).strip().lower()
-    try:
-        return ExchangeName(value)
-    except ValueError as error:
-        raise ValueError(f"unsupported account venue/provider: {value}") from error
+def _account_book_ref(account: AccountRecord, book: str | None = None) -> AccountBookRef:
+    selected_book = book or account.market or _first_account_book(account) or AccountBookKind.SPOT.value
+    return AccountBookRef(account.venue or account.broker, account.account_id, selected_book)
+
+
+def _first_account_book(account: AccountRecord) -> str | None:
+    if not account.books:
+        return None
+    value = account.books[0].kind or account.books[0].key
+    return value or None
 
 
 def _balance_books(account: AccountRecord, books: Sequence[str] | None) -> tuple[str, ...]:
     requested = tuple(book.strip().lower().replace("-", "_") for book in books or () if book.strip())
     if requested:
         return requested
-    provider = account.provider.strip().lower()
-    return default_account_books(provider, fallback=account.market or AccountBookKind.SPOT.value)
+    broker = account.broker.strip().lower()
+    return default_account_books(broker, fallback=account.market or AccountBookKind.SPOT.value)
 
 
 def _balance_rows(account: AccountRecord, *, book: str, balance: Mapping[str, object], include_zero: bool) -> list[dict[str, object]]:
@@ -510,7 +526,7 @@ def _balance_rows(account: AccountRecord, *, book: str, balance: Mapping[str, ob
         rows.append(
             {
                 "account": account.account_id,
-                "broker": account.provider,
+                "broker": account.broker,
                 "book": book,
                 "asset": asset,
                 "free": str(free),
@@ -568,8 +584,8 @@ def _read_credential_ref(account: AccountRecord) -> str | None:
     return account.credential
 
 
-def _provider_schema(provider: str) -> AccountProviderSchema:
-    normalized = _normalize_provider(provider)
+def _broker_schema(provider: str) -> AccountBrokerSchema:
+    normalized = _normalize_broker(provider)
     try:
         return ACCOUNT_SCHEMAS[normalized]
     except KeyError as error:
@@ -577,16 +593,16 @@ def _provider_schema(provider: str) -> AccountProviderSchema:
         raise ValueError(f"unsupported account broker: {provider}; supported: {supported}") from error
 
 
-def _normalize_provider(provider: str) -> str:
+def _normalize_broker(provider: str) -> str:
     normalized = provider.strip().lower().replace("-", "_")
     return PROVIDER_ALIASES.get(normalized, normalized)
 
 
-def _schema_payload(schema: AccountProviderSchema) -> dict[str, object]:
-    balance_books = default_account_books(schema.provider, fallback=schema.default_market)
+def _schema_payload(schema: AccountBrokerSchema) -> dict[str, object]:
+    balance_books = default_account_books(schema.broker, fallback=schema.default_market)
     return {
-        "broker": schema.provider,
-        "provider": schema.provider,
+        "broker": schema.broker,
+        "provider": schema.broker,
         "venue": schema.venue,
         "balance_books": list(balance_books),
         "default_market": schema.default_market,
@@ -891,4 +907,4 @@ def _jsonable(value: object) -> object:
     return value
 
 
-__all__ = ["ACCOUNT_SCHEMAS", "AccountFacade", "AccountProviderSchema"]
+__all__ = ["ACCOUNT_SCHEMAS", "AccountBrokerSchema", "AccountFacade", "AccountProviderSchema"]

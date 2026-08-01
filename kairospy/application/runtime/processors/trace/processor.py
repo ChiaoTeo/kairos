@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Mapping
 
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.service.runtime import RuntimeAccountService
+from kairospy.application.runtime.services import RuntimeAccountService
 from kairospy.application.views import (
     DECISION_TRACE_SCHEMA,
     RISK_SNAPSHOTS_SCHEMA,

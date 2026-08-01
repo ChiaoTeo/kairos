@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from contextlib import AbstractContextManager, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,12 +22,16 @@ class LaunchOutputLog(AbstractContextManager["LaunchOutputLog"]):
         self._file: TextIO | None = None
         self._stdout_redirect: redirect_stdout[TextIO] | None = None
         self._stderr_redirect: redirect_stderr[TextIO] | None = None
+        self._logging_handler: logging.Handler | None = None
 
     def __enter__(self) -> "LaunchOutputLog":
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._file = self.path.open("a", encoding="utf-8")
         out = _TeeTextIO(self._file, self.stdout) if self.stdout is not None else self._file
         err = _TeeTextIO(self._file, self.stderr) if self.stderr is not None else self._file
+        self._logging_handler = logging.StreamHandler(err)
+        self._logging_handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s"))
+        logging.getLogger().addHandler(self._logging_handler)
         self._stdout_redirect = redirect_stdout(out)
         self._stderr_redirect = redirect_stderr(err)
         self._stdout_redirect.__enter__()
@@ -35,11 +40,16 @@ class LaunchOutputLog(AbstractContextManager["LaunchOutputLog"]):
 
     def __exit__(self, exc_type, exc_value, traceback) -> bool | None:
         try:
+            if self._logging_handler is not None:
+                logging.getLogger().removeHandler(self._logging_handler)
+                self._logging_handler.flush()
             if self._stderr_redirect is not None:
                 self._stderr_redirect.__exit__(exc_type, exc_value, traceback)
             if self._stdout_redirect is not None:
                 self._stdout_redirect.__exit__(exc_type, exc_value, traceback)
         finally:
+            if self._logging_handler is not None:
+                self._logging_handler.close()
             if self._file is not None:
                 self._file.close()
         return None

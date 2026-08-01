@@ -224,6 +224,17 @@ def test_order_place_with_launch_uses_system_command_channel(monkeypatch) -> Non
     ]
 
 
+def test_order_runtime_help_hides_launch_registry_coordinates() -> None:
+    for command in ("place", "cancel", "show", "inspect"):
+        result = CliRunner().invoke(order_app, [command, "--help"], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        assert "--launch" in result.output
+        assert "--mode" not in result.output
+        assert "--launch-id" not in result.output
+        assert "--root" not in result.output
+
+
 def test_order_cancel_with_launch_uses_system_command_channel(monkeypatch) -> None:
     calls = []
 
@@ -332,7 +343,7 @@ def test_order_history_reads_closed_orders_and_writes_journal(tmp_path, monkeypa
         def fetch_closed_orders(self, symbol=None, since=None, limit=None, params=None):
             return ({"id": "closed-1", "symbol": symbol, "since": since, "limit": limit},)
 
-    monkeypatch.setattr(order_product._ORDERS, "_broker", lambda account: FakeBroker())
+    monkeypatch.setattr(order_product._ORDERS, "_order_query_client", lambda account: FakeBroker())
 
     result = CliRunner().invoke(
         order_app,

@@ -31,7 +31,7 @@ def render_context_screen(
     ]
     if children:
         sections.append(render_command_registry("Subcommands", children))
-        sections.append(render_context_commands(command))
+        sections.append(render_context_commands(command, children))
     else:
         sections.append(render_leaf_commands(command))
     return "\n\n".join(sections)
@@ -61,20 +61,26 @@ def render_command_detail(command: CommandView) -> str:
 def render_global_commands(*, surface_name: str = "app") -> str:
     return _render_command_rows((
         ("<#>|<product>", "open command context"),
+        ("history", "show shell command history"),
         ("refresh", f"reload {surface_name} state"),
         ("quit", f"exit {surface_name}"),
     ))
 
 
-def render_context_commands(command: CommandView) -> str:
+def render_context_commands(command: CommandView, children: tuple[CommandView, ...] = ()) -> str:
     prefix = " ".join(command.argv_prefix)
-    return _render_command_rows((
+    rows = [
         ("<#>|<subcommand>", "open subcommand context"),
         ("<command>", f"execute `kairospy {prefix} <command>`"),
+    ]
+    if any(child.name == "browse" for child in children):
+        rows.append(("browse", "open full-screen resource browser"))
+    rows.extend((
         ("help", "show this context"),
         ("back", "return to parent context"),
         ("home", "return to products"),
     ))
+    return _render_command_rows(tuple(rows))
 
 
 def render_leaf_commands(command: CommandView) -> str:

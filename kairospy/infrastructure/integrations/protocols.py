@@ -1,33 +1,35 @@
 from __future__ import annotations
 
-from typing import AsyncIterator, Iterable, Mapping, Protocol
+from typing import AsyncIterator, Protocol
+
+from kairospy.core.market import MarketEvent
+
+from .types import IntegrationParams, OrderBookRecordStream, OrderSubmissionResponse, QuoteRecordStream, RawPayload, RawPayloadRows, RawPayloadStream, TradeRecordStream
 
 
-class IntegrationAdapter(Protocol):
+class IntegrationParticipant(Protocol):
     name: str
 
 
-class HistoricalMarketDataClient(Protocol):
-    def fetch_ohlcv(
-        self,
-        symbol: str,
-        *,
-        timeframe: str = "1m",
-        since: object | None = None,
-        until: object | None = None,
-        limit: int = 1000,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
-        ...
+class IntegrationAdapter(IntegrationParticipant, Protocol):
+    """Compatibility name for registered integration participants."""
 
 
-class LiveMarketDataFeed(Protocol):
+class RawMarketDataGateway(Protocol):
     def watch_ticker(
         self,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> QuoteRecordStream:
+        ...
+
+    def watch_ticker_updates(
+        self,
+        symbol: str,
+        *,
+        params: IntegrationParams | None = None,
+    ) -> AsyncIterator[MarketEvent]:
         ...
 
     def watch_order_book(
@@ -35,8 +37,17 @@ class LiveMarketDataFeed(Protocol):
         symbol: str,
         *,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> OrderBookRecordStream:
+        ...
+
+    def watch_order_book_updates(
+        self,
+        symbol: str,
+        *,
+        limit: int | None = None,
+        params: IntegrationParams | None = None,
+    ) -> AsyncIterator[MarketEvent]:
         ...
 
     def watch_trades(
@@ -45,29 +56,39 @@ class LiveMarketDataFeed(Protocol):
         *,
         since: object | None = None,
         limit: int = 50,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> TradeRecordStream:
+        ...
+
+    def watch_trades_updates(
+        self,
+        symbol: str,
+        *,
+        since: object | None = None,
+        limit: int = 50,
+        params: IntegrationParams | None = None,
+    ) -> AsyncIterator[MarketEvent]:
         ...
 
     def watch_option_greeks(
         self,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
         ...
 
 
-class ReferenceDataClient(Protocol):
+class RawReferenceGateway(Protocol):
     def fetch_markets(
         self,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadRows:
         ...
 
 
-class BrokerClient(Protocol):
+class OrderExecutionClient(Protocol):
     def create_order(
         self,
         symbol: str,
@@ -76,8 +97,8 @@ class BrokerClient(Protocol):
         type: str,
         amount: object,
         price: object | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+        params: IntegrationParams | None = None,
+    ) -> OrderSubmissionResponse:
         ...
 
     def cancel_order(
@@ -85,21 +106,25 @@ class BrokerClient(Protocol):
         id: str,
         *,
         symbol: str | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+        params: IntegrationParams | None = None,
+    ) -> OrderSubmissionResponse:
         ...
 
-    def fetch_balance(self, *, params: Mapping[str, object] | None = None) -> Mapping[str, object]:
+
+class AccountBalanceClient(Protocol):
+    def fetch_balance(self, *, params: IntegrationParams | None = None) -> RawPayload:
         ...
 
+
+class OrderQueryClient(Protocol):
     def fetch_open_orders(
         self,
         symbol: str | None = None,
         *,
         since: object | None = None,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadRows:
         ...
 
     def fetch_closed_orders(
@@ -108,15 +133,59 @@ class BrokerClient(Protocol):
         *,
         since: object | None = None,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadRows:
+        ...
+
+
+class AccountBootstrapClient(AccountBalanceClient, OrderQueryClient, Protocol):
+    """Capability required to construct an account snapshot from a broker."""
+
+
+class PrivateAccountStream(Protocol):
+    def watch_balance(
+        self,
+        *,
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
+        ...
+
+    def watch_orders(
+        self,
+        symbol: str | None = None,
+        *,
+        since: object | None = None,
+        limit: int | None = None,
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
+        ...
+
+    def watch_my_trades(
+        self,
+        symbol: str | None = None,
+        *,
+        since: object | None = None,
+        limit: int | None = None,
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
         ...
 
 
 __all__ = [
-    "BrokerClient",
-    "HistoricalMarketDataClient",
+    "AccountBalanceClient",
+    "AccountBootstrapClient",
     "IntegrationAdapter",
-    "LiveMarketDataFeed",
-    "ReferenceDataClient",
+    "IntegrationParticipant",
+    "RawMarketDataGateway",
+    "OrderExecutionClient",
+    "OrderQueryClient",
+    "PrivateAccountStream",
+    "OrderBookRecordStream",
+    "OrderSubmissionResponse",
+    "QuoteRecordStream",
+    "RawPayload",
+    "RawPayloadRows",
+    "RawPayloadStream",
+    "TradeRecordStream",
+    "RawReferenceGateway",
 ]

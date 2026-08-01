@@ -8,10 +8,15 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from kairospy.application.ports import MarketDataSubscriptionSpec
 from kairospy.application.service.modes.paper import PaperConfigurationError, configured_paper
 from kairospy.application.launch import TradingSystemLauncher
 from kairospy.application.launch.registry import LaunchRegistry
-from kairospy.infrastructure.integrations import HyperliquidMarketDataConnector
+from kairospy.infrastructure.integrations.connectors.broker.binance import BinanceEquityMarketDataConnector
+from kairospy.infrastructure.integrations.connectors.exchange.hyperliquid import HyperliquidMarketDataConnector
+from kairospy.core.market import Quote
+from kairospy.core.reference import MarketRef
+from kairospy.infrastructure.integrations.payloads.ccxt_market import ccxt_ticker_update
 from kairospy.surface.cli.commands.launch import launch_app
 
 
@@ -43,7 +48,7 @@ def test_launch_paper_command_uses_new_config_runner(tmp_path) -> None:
     (tmp_path / ".kairos" / "kairos.toml").write_text("[project]\nname = \"test\"\n", encoding="utf-8")
     config_path = _write_paper_project(tmp_path)
 
-    result = CliRunner().invoke(launch_app, ["run", "start", str(config_path), "--format", "json"], catch_exceptions=False)
+    result = CliRunner().invoke(launch_app, ["start", str(config_path), "--format", "json"], catch_exceptions=False)
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -102,6 +107,7 @@ def test_configured_paper_launch_account_without_books_defaults_to_all_broker_bo
 
     assert [book.book_kind for book in result.views.require("account.books").books] == [
         "spot",
+        "equity",
         "cross_margin",
         "isolated_margin",
         "usd_m_futures",
@@ -165,7 +171,7 @@ def test_configured_paper_can_stream_market_data_from_integration_feed(tmp_path)
     assert (launch_directory / "account" / "current.json").exists()
 
 
-def test_configured_paper_uses_market_section_for_feed_and_strategy_subscription(tmp_path) -> None:
+def test_configured_paper_uses_strategy_subscription_for_feed(tmp_path) -> None:
     config_path = _write_market_section_paper_project(tmp_path)
 
     configured = configured_paper(config_path, market_feed_factory=lambda venue: FakePaperFeed(), account_resolver=_resolver(config_path))
@@ -175,7 +181,7 @@ def test_configured_paper_uses_market_section_for_feed_and_strategy_subscription
     assert result.runtime.event_count == 2
     assert len(result.fills) == 1
     assert configured.normalized_config["paper"] == {}
-    assert configured.normalized_config["market"]["source"] == "binance:spot"
+    assert configured.normalized_config["market"] == {"venue": "binance", "market": "spot"}
 
 
 def test_configured_paper_selects_account_id_for_streaming_feed(tmp_path) -> None:
@@ -226,11 +232,120 @@ def test_configured_paper_supports_hyperliquid_default_market_feed(tmp_path) -> 
         symbol="BTC/USDC:USDC",
         quote_currency="USDC",
     )
+    config_path.write_text(config_path.read_text(encoding="utf-8") + "\n[feeds.hyperliquid]\n", encoding="utf-8")
 
     configured = configured_paper(config_path, account_resolver=_resolver(config_path))
 
-    assert isinstance(configured.market_data.feed, HyperliquidMarketDataConnector)
-    assert configured.normalized_config["market"]["source"] == "hyperliquid:swap:BTC/USDC:USDC"
+    assert configured.market_data.feed_resolver is not None
+    spec = MarketDataSubscriptionSpec(MarketRef.ephemeral(venue="hyperliquid", market="swap", source_symbol="BTC/USDC:USDC"), (Quote,))
+    assert isinstance(configured.market_data.feed_resolver(spec).feed, HyperliquidMarketDataConnector)
+    assert "market" not in configured.normalized_config
+
+
+def test_configured_paper_routes_binance_equity_quotes_to_equity_feed(tmp_path) -> None:
+    config_path = _write_streaming_paper_project(
+        tmp_path,
+        venue="binance",
+        market="equity",
+        symbol="AAPL",
+        quote_currency="USDC",
+    )
+    credential_root = tmp_path / ".kairos" / "credentials"
+    credential_root.mkdir(parents=True, exist_ok=True)
+    (credential_root / "binance_read.toml").write_text(
+        "[credential]\nbroker = \"binance\"\napi_key = \"paper-key\"\n",
+        encoding="utf-8",
+    )
+    config_path.write_text(config_path.read_text(encoding="utf-8") + "\n[feeds.binance]\ncredential = \"binance_read\"\n", encoding="utf-8")
+
+    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+
+    assert configured.market_data.feed_resolver is not None
+    spec = MarketDataSubscriptionSpec(MarketRef.ephemeral(venue="binance", market="equity", source_symbol="AAPL"), (Quote,))
+    feed = configured.market_data.feed_resolver(spec).feed
+    assert isinstance(feed, BinanceEquityMarketDataConnector)
+    assert feed.client.api_key == "paper-key"
+    assert "market" not in configured.normalized_config
+
+
+def test_configured_paper_requires_feed_for_strategy_subscription(tmp_path) -> None:
+    config_path = _write_streaming_paper_project(
+        tmp_path,
+        venue="binance",
+        market="equity",
+        symbol="AAPL",
+        quote_currency="USDC",
+    )
+
+    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+    spec = MarketDataSubscriptionSpec(MarketRef.ephemeral(venue="binance", market="equity", source_symbol="AAPL"), (Quote,))
+
+    assert configured.market_data.feed_resolver is not None
+    with pytest.raises(PaperConfigurationError, match="no configured feed"):
+        configured.market_data.feed_resolver(spec)
+
+
+def test_configured_paper_rejects_unknown_feed_credential(tmp_path) -> None:
+    config_path = _write_streaming_paper_project(
+        tmp_path,
+        venue="binance",
+        market="equity",
+        symbol="AAPL",
+        quote_currency="USDC",
+    )
+    config_path.write_text(config_path.read_text(encoding="utf-8") + "\n[feeds.binance]\ncredential = \"missing_read\"\n", encoding="utf-8")
+
+    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+    spec = MarketDataSubscriptionSpec(MarketRef.ephemeral(venue="binance", market="equity", source_symbol="AAPL"), (Quote,))
+
+    assert configured.market_data.feed_resolver is not None
+    with pytest.raises(PaperConfigurationError, match="unknown credential"):
+        configured.market_data.feed_resolver(spec)
+
+
+def test_configured_paper_accepts_broker_named_paper_equity_account(tmp_path) -> None:
+    _write_account("binance_paper_equity", venue="binance", cash=100000, currency="USDC")
+    account_path = Path.cwd() / ".kairos" / "accounts" / "binance_paper_equity.toml"
+    account_path.write_text(account_path.read_text(encoding="utf-8") + 'market = "equity"\n', encoding="utf-8")
+    config_path = tmp_path / "binance_equity_aapl_paper.toml"
+    (tmp_path / "strategy_mod.py").write_text(
+        "\n".join(
+            [
+                "from kairospy.application.strategy import StrategyBase",
+                "from kairospy.core.market import Quote",
+                "class PaperStrategy(StrategyBase):",
+                "    strategy_id = 'paper-equity'",
+                "    def on_start(self, context):",
+                "        context.subscribe('AAPL', exchange='binance', market_type='equity', selectors=(Quote,), identity=self.strategy_id)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    config_path.write_text(
+        "\n".join(
+            [
+                "[launch]",
+                'id = "binance-equity-aapl-paper"',
+                'mode = "paper"',
+                'strategy = "strategy_mod:PaperStrategy"',
+                "",
+                "[account]",
+                'ref = "binance_paper_equity"',
+                "",
+                "[execution]",
+                'price_field = "ask"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+
+    assert configured.account_config.account_id == "binance_paper_equity"
+    assert configured.account_config.venue == "binance"
+    assert configured.account_config.currency == "USDC"
+    assert "market" not in configured.normalized_config
 
 
 def test_configured_paper_can_launch_hyperliquid_streaming_feed(tmp_path) -> None:
@@ -271,6 +386,10 @@ def test_configured_paper_accepts_live_ticker_without_timestamp(tmp_path) -> Non
 class FakePaperFeed:
     async def watch_ticker(self, symbol: str, *, params: Mapping[str, object] | None = None) -> AsyncIterator[Mapping[str, object]]:
         yield {"timestamp": 1767225600000, "bid": "100", "ask": "101"}
+
+    async def watch_ticker_updates(self, symbol: str, *, market: MarketRef, params: Mapping[str, object] | None = None) -> AsyncIterator[object]:
+        async for row in self.watch_ticker(symbol, params=params):
+            yield ccxt_ticker_update(row, market=market)
 
     async def watch_order_book(
         self,
@@ -393,12 +512,18 @@ def _write_streaming_paper_project(
             "from decimal import Decimal",
             "from kairospy.application.strategy import StrategyBase",
             "from kairospy.core.intent import target_position_intent",
+            "from kairospy.core.market import Quote",
             "class PaperStrategy(StrategyBase):",
             "    strategy_id = 'paper-strategy'",
-            "    def __init__(self, instrument_id, market_id):",
+            "    def __init__(self, instrument_id, market_id, venue, market, symbol):",
             "        self.instrument_id = instrument_id",
             "        self.market_id = market_id",
+            "        self.venue = venue",
+            "        self.market = market",
+            "        self.symbol = symbol",
             "        self.entered = False",
+            "    def on_start(self, context):",
+            "        context.subscribe(self.symbol, exchange=self.venue, market_type=self.market, selectors=(Quote,), identity=self.strategy_id)",
             "    def on_data(self, context, signal):",
             "        if self.entered:",
             "            return None",
@@ -427,13 +552,13 @@ def _write_streaming_paper_project(
             "[strategy.params]",
             f'instrument_id = "{instrument_id}"',
             f'market_id = "{market_id}"',
+            f'venue = "{venue}"',
+            f'market = "{market}"',
+            f'symbol = "{symbol}"',
     ]
     lines.extend([
             "",
             "[paper]",
-            f'venue = "{venue}"',
-            f'market = "{market}"',
-            f'symbol = "{symbol}"',
             'price_field = "ask"',
             'launches_root = ".kairos/launches"',
     ])

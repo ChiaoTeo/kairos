@@ -18,6 +18,7 @@ from kairospy.core.order import OrderOrigin, OrderSide, OrderState, OrderStatus,
 
 from .ccxt_parsing import ccxt_decimal, ccxt_optional_decimal, ccxt_order_quantity, ccxt_order_type, ccxt_required_text
 from .ccxt_execution import ingest_ccxt_my_trade, ingest_ccxt_order_update
+from kairospy.infrastructure.integrations.types import IntegrationParams, RawPayload
 
 
 class CcxtAccountPayloadAdapter:
@@ -30,8 +31,8 @@ class CcxtAccountPayloadAdapter:
     def snapshot(
         self,
         context: AccountContext,
-        raw_balance: Mapping[str, object],
-        raw_orders: tuple[Mapping[str, object], ...],
+        raw_balance: RawPayload,
+        raw_orders: tuple[RawPayload, ...],
         *,
         observed_at: datetime,
     ) -> AccountSnapshot:
@@ -48,7 +49,7 @@ class CcxtAccountPayloadAdapter:
         self,
         context: AccountContext,
         coordinator,
-        raw: Mapping[str, object],
+        raw: RawPayload,
         *,
         observed_at: datetime,
     ) -> OrderState:
@@ -57,17 +58,17 @@ class CcxtAccountPayloadAdapter:
     def balance_snapshot(
         self,
         context: AccountContext,
-        raw_balance: Mapping[str, object],
+        raw_balance: RawPayload,
         *,
         at: datetime,
         open_orders: tuple[OpenOrderSnapshot, ...] = (),
     ) -> AccountSnapshot:
         return ccxt_balance_snapshot(context, raw_balance, at=at, open_orders=open_orders, market_resolver=self.market_resolver)
 
-    def ingest_order_update(self, coordinator, context: AccountContext, raw: Mapping[str, object]) -> OrderState:
+    def ingest_order_update(self, coordinator, context: AccountContext, raw: RawPayload) -> OrderState:
         return ingest_ccxt_order_update(coordinator, context, raw, market_resolver=self.market_resolver)
 
-    def ingest_trade_update(self, coordinator, context: AccountContext, raw: Mapping[str, object]) -> OrderState:
+    def ingest_trade_update(self, coordinator, context: AccountContext, raw: RawPayload) -> OrderState:
         return ingest_ccxt_my_trade(coordinator, context, raw)
 
 
@@ -76,11 +77,11 @@ CcxtAccountBootstrapParser = CcxtAccountPayloadAdapter
 
 def ccxt_balance_snapshot(
     context: AccountContext,
-    raw_balance: Mapping[str, object],
+    raw_balance: RawPayload,
     *,
     at: datetime,
     open_orders: tuple[OpenOrderSnapshot, ...] = (),
-    raw: Mapping[str, object] | None = None,
+    raw: IntegrationParams | None = None,
     market_resolver: MarketResolver | None = None,
 ) -> AccountSnapshot:
     if at.tzinfo is None:
@@ -99,7 +100,7 @@ def ccxt_balance_snapshot(
 def import_ccxt_open_order(
     context: AccountContext,
     coordinator,
-    raw: Mapping[str, object],
+    raw: RawPayload,
     *,
     observed_at: datetime,
     market_resolver: MarketResolver | None = None,
@@ -126,7 +127,7 @@ def import_ccxt_open_order(
     )
 
 
-def _balances_from_ccxt(raw: Mapping[str, object]) -> tuple[AccountBalance, ...]:
+def _balances_from_ccxt(raw: RawPayload) -> tuple[AccountBalance, ...]:
     free_values = _mapping(raw.get("free"))
     locked_values = _mapping(raw.get("used")) or _mapping(raw.get("locked"))
     total_values = _mapping(raw.get("total"))
@@ -149,7 +150,7 @@ def _balances_from_ccxt(raw: Mapping[str, object]) -> tuple[AccountBalance, ...]
     return tuple(balances)
 
 
-def _margins_from_ccxt(raw: Mapping[str, object], *, market_resolver: MarketResolver | None = None) -> tuple[MarginState, ...]:
+def _margins_from_ccxt(raw: RawPayload, *, market_resolver: MarketResolver | None = None) -> tuple[MarginState, ...]:
     margins: list[MarginState] = []
     margins.extend(_account_margins_from_ccxt(raw))
     for value in _sequence(raw.get("positions")):
@@ -165,7 +166,7 @@ def _margins_from_ccxt(raw: Mapping[str, object], *, market_resolver: MarketReso
     return tuple(margins)
 
 
-def _account_margins_from_ccxt(raw: Mapping[str, object]) -> tuple[MarginState, ...]:
+def _account_margins_from_ccxt(raw: RawPayload) -> tuple[MarginState, ...]:
     currency = _margin_currency(raw)
     initial = _first_decimal(raw, "totalInitialMargin", "initialMargin", "totalMargin")
     maintenance = _first_decimal(raw, "totalMaintMargin", "totalMaintenanceMargin", "maintenanceMargin")
@@ -175,7 +176,7 @@ def _account_margins_from_ccxt(raw: Mapping[str, object]) -> tuple[MarginState, 
     return (MarginState(currency, initial, maintenance, AccountSource.VENUE, available=available),)
 
 
-def _instrument_margin_from_ccxt(raw: Mapping[str, object], *, market_resolver: MarketResolver | None = None) -> MarginState | None:
+def _instrument_margin_from_ccxt(raw: RawPayload, *, market_resolver: MarketResolver | None = None) -> MarginState | None:
     raw_symbol = _first_text(raw, "symbol", "instrumentId", "instrument_id")
     currency = _margin_currency(raw)
     initial = _first_decimal(raw, "initialMargin", "initial", "positionInitialMargin")
@@ -195,7 +196,7 @@ def _instrument_margin_from_ccxt(raw: Mapping[str, object], *, market_resolver: 
     )
 
 
-def _asset_margin_from_ccxt(raw: Mapping[str, object]) -> MarginState | None:
+def _asset_margin_from_ccxt(raw: RawPayload) -> MarginState | None:
     currency = _first_text(raw, "asset", "currency", "marginAsset")
     initial = _first_decimal(raw, "initialMargin", "initial", "walletInitialMargin")
     maintenance = _first_decimal(raw, "maintenanceMargin", "maintMargin", "walletMaintenanceMargin")
@@ -205,7 +206,7 @@ def _asset_margin_from_ccxt(raw: Mapping[str, object]) -> MarginState | None:
     return MarginState(currency, initial, maintenance, AccountSource.VENUE, available=available)
 
 
-def _open_order_snapshot(raw: Mapping[str, object], *, market_resolver: MarketResolver | None = None) -> OpenOrderSnapshot:
+def _open_order_snapshot(raw: RawPayload, *, market_resolver: MarketResolver | None = None) -> OpenOrderSnapshot:
     order_id = ccxt_required_text(raw, "id", subject="ccxt order")
     market = _resolve_market(ccxt_required_text(raw, "symbol", subject="ccxt order"), market_resolver)
     quantity = _open_quantity(raw)
@@ -222,7 +223,7 @@ def _open_order_snapshot(raw: Mapping[str, object], *, market_resolver: MarketRe
     )
 
 
-def _mapping(value: object) -> Mapping[str, object]:
+def _mapping(value: object) -> RawPayload:
     return value if isinstance(value, Mapping) else {}
 
 
@@ -232,11 +233,11 @@ def _sequence(value: object) -> tuple[object, ...]:
     return ()
 
 
-def _margin_currency(raw: Mapping[str, object]) -> str | None:
+def _margin_currency(raw: RawPayload) -> str | None:
     return _first_text(raw, "marginCurrency", "marginAsset", "currency", "asset")
 
 
-def _first_text(raw: Mapping[str, object], *keys: str) -> str | None:
+def _first_text(raw: RawPayload, *keys: str) -> str | None:
     for key in keys:
         value = raw.get(key)
         if value is not None and str(value).strip():
@@ -249,17 +250,17 @@ def _first_text(raw: Mapping[str, object], *keys: str) -> str | None:
     return None
 
 
-def _first_decimal(raw: Mapping[str, object], *keys: str) -> Decimal:
+def _first_decimal(raw: RawPayload, *keys: str) -> Decimal:
     value = _first_value(raw, *keys)
     return ccxt_decimal(value)
 
 
-def _first_optional_decimal(raw: Mapping[str, object], *keys: str) -> Decimal | None:
+def _first_optional_decimal(raw: RawPayload, *keys: str) -> Decimal | None:
     value = _first_value(raw, *keys)
     return None if value is None else ccxt_decimal(value)
 
 
-def _first_value(raw: Mapping[str, object], *keys: str) -> object | None:
+def _first_value(raw: RawPayload, *keys: str) -> object | None:
     for key in keys:
         if key in raw:
             return raw.get(key)
@@ -270,7 +271,7 @@ def _first_value(raw: Mapping[str, object], *keys: str) -> object | None:
     return None
 
 
-def _open_quantity(raw: Mapping[str, object]) -> Decimal:
+def _open_quantity(raw: RawPayload) -> Decimal:
     remaining = ccxt_decimal(raw.get("remaining"))
     if remaining > 0:
         return remaining

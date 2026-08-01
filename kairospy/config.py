@@ -308,6 +308,12 @@ class LaunchConfig:
             issues.append("launch.mode must be one of: backtest, paper, live")
         if "data" in self.values:
             issues.append("[data] is not valid launch config; strategy code declares market data with context.subscribe")
+        feeds = self.values.get("feeds")
+        if feeds is not None:
+            if not isinstance(feeds, Mapping):
+                issues.append("[feeds] must be a table")
+            else:
+                issues.extend(_feeds_issues(feeds))
         accounts = self.values.get("accounts")
         if accounts is not None:
             if not isinstance(accounts, Mapping):
@@ -385,6 +391,7 @@ class LaunchConfig:
                 key: {"ref": value.ref, "index": value.index, "books": list(value.books), "trade": value.trade}
                 for key, value in self.launch_accounts.items()
             },
+            "feeds": dict(self._table("feeds", required=False)),
             "execution": dict(self._table("execution", required=False)),
         }
 
@@ -625,13 +632,31 @@ def _launch_accounts_issues(accounts: Mapping[str, Any]) -> list[str]:
     return issues
 
 
+def _feeds_issues(feeds: Mapping[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for feed_id, raw in feeds.items():
+        source = f"feeds.{feed_id}"
+        if not str(feed_id).strip():
+            issues.append("feeds id cannot be empty")
+        if raw is None:
+            continue
+        if not isinstance(raw, Mapping):
+            issues.append(f"{source} must be a table")
+            continue
+        if "credential" in raw and not _valid_optional_text(raw.get("credential")):
+            issues.append(f"{source}.credential must be a non-empty string")
+    return issues
+
+
 def _live_issues(live: Mapping[str, Any]) -> list[str]:
     issues: list[str] = []
-    for key in ("venue", "symbol"):
-        if not _valid_optional_text(live.get(key)):
-            issues.append(f"live.{key} is required")
-    if "market" in live and not _valid_optional_text(live.get("market")):
-        issues.append("live.market must be a non-empty string")
+    legacy_fields = ("venue", "market", "symbol", "stream", "order_params", "balance_params", "watch_private")
+    for key in legacy_fields:
+        if key in live:
+            issues.append(f"live.{key} is no longer supported; use account refs, account books, and strategy context.subscribe(...)")
+    for key in ("max_balance_events", "max_order_events", "max_trade_events"):
+        if key in live:
+            issues.append(f"live.{key} is no longer supported; use live.account_stream.{key}")
     if "equity_currency" in live and not _valid_optional_text(live.get("equity_currency")):
         issues.append("live.equity_currency must be a non-empty string")
     if "max_iterations" in live:
@@ -672,9 +697,15 @@ def _live_issues(live: Mapping[str, Any]) -> list[str]:
                     else:
                         if value < 0:
                             issues.append(f"live.account_stream.{key} cannot be negative")
-    for key in ("stream", "balance_params", "order_params"):
-        if key in live and not isinstance(live[key], Mapping):
-            issues.append(f"live.{key} must be a table")
+    private_sync = live.get("private_sync")
+    if private_sync is not None:
+        if not isinstance(private_sync, Mapping):
+            issues.append("live.private_sync must be a table")
+        else:
+            if "enabled" in private_sync and not isinstance(private_sync["enabled"], bool):
+                issues.append("live.private_sync.enabled must be a boolean")
+            if "mode" in private_sync:
+                issues.append("live.private_sync.mode is not supported")
     issues.extend(_account_selector_issues(live, "live"))
     return issues
 

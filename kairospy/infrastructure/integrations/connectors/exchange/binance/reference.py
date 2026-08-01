@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 from datetime import datetime
 
 from kairospy.core.reference import LifecycleEvent, LifecycleEventType, ReferenceCatalog
+from kairospy.infrastructure.integrations.types import RawPayloadRows
 
 
 def delist_schedule_events(
-    rows: Iterable[Mapping[str, object]],
+    rows: RawPayloadRows,
     *,
     catalog: ReferenceCatalog | None = None,
     venue: str = "binance",

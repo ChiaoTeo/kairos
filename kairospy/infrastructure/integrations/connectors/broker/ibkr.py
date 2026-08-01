@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from kairospy.infrastructure.integrations.types import IntegrationParams, OrderSubmissionResponse, RawPayload
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,8 +16,8 @@ class IBKR:
         type: str,
         amount: object,
         price: object | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+        params: IntegrationParams | None = None,
+    ) -> OrderSubmissionResponse:
         raise NotImplementedError("IBKR broker driver is not implemented yet")
 
     def cancel_order(
@@ -25,11 +25,11 @@ class IBKR:
         id: str,
         *,
         symbol: str | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+        params: IntegrationParams | None = None,
+    ) -> OrderSubmissionResponse:
         raise NotImplementedError("IBKR broker driver is not implemented yet")
 
-    def fetch_balance(self, *, params: Mapping[str, object] | None = None) -> Mapping[str, object]:
+    def fetch_balance(self, *, params: IntegrationParams | None = None) -> RawPayload:
         raise NotImplementedError("IBKR broker driver is not implemented yet")
 
 

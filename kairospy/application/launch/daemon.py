@@ -86,7 +86,7 @@ class LaunchDaemonService:
         target = _resolve_target(self._targets, runtime_mode, Path(config_path), strategy_ref=strategy_ref)
         actual_launch_id = launch_id or target.launch_id
         _validate_non_system_launch_id(actual_launch_id)
-        identity = _identity(actual_launch_id, runtime_mode, process_id=os.environ.get(_LAUNCH_INSTANCE_ID_ENV))
+        identity = _identity(actual_launch_id, runtime_mode, process_id=os.environ.get(_LAUNCH_INSTANCE_ID_ENV), root=self.root)
         group_directory = self.root / runtime_mode.value / actual_launch_id
         directory = _instance_directory(group_directory, identity)
         group_directory.mkdir(parents=True, exist_ok=True)
@@ -154,7 +154,7 @@ class LaunchDaemonService:
     def launch_system_foreground(self, *, launch_id: str = SYSTEM_LAUNCH_ID) -> LaunchDaemonResult:
         _validate_system_launch_id(launch_id)
         runtime_mode = RuntimeMode.SYSTEM
-        identity = _identity(launch_id, runtime_mode, process_id=os.environ.get(_LAUNCH_INSTANCE_ID_ENV))
+        identity = _identity(launch_id, runtime_mode, process_id=os.environ.get(_LAUNCH_INSTANCE_ID_ENV), root=self.root)
         group_directory = self.root / runtime_mode.value / launch_id
         directory = _instance_directory(group_directory, identity)
         group_directory.mkdir(parents=True, exist_ok=True)
@@ -208,7 +208,7 @@ class LaunchDaemonService:
         target = self._targets.describe(runtime_mode, Path(config_path))
         actual_launch_id = launch_id or target.launch_id
         _validate_non_system_launch_id(actual_launch_id)
-        identity = _identity(actual_launch_id, runtime_mode)
+        identity = _identity(actual_launch_id, runtime_mode, root=self.root)
         group_directory = self.root / runtime_mode.value / actual_launch_id
         directory = _instance_directory(group_directory, identity)
         group_directory.mkdir(parents=True, exist_ok=True)
@@ -226,7 +226,6 @@ class LaunchDaemonService:
             "-m",
             "kairospy",
             "launch",
-            "daemon",
             "start",
             "--foreground",
             "--root",
@@ -240,6 +239,7 @@ class LaunchDaemonService:
             args.extend(("--launch-id", launch_id))
         if strategy_ref is not None:
             args.extend(("--strategy", strategy_ref))
+        identity = identity | {"argv": args}
         self._store.write_state(directory, phase="starting", reason="background launch requested", identity=identity, context=context, mirrors=(group_directory,))
         self._store.record_event(directory, "start_requested", phase="starting", reason="background launch requested", args=args, log_file=str(log_path))
         with log_path.open("ab") as output:
@@ -262,7 +262,7 @@ class LaunchDaemonService:
     def start_system_background(self, *, launch_id: str = SYSTEM_LAUNCH_ID) -> LaunchDaemonResult:
         _validate_system_launch_id(launch_id)
         runtime_mode = RuntimeMode.SYSTEM
-        identity = _identity(launch_id, runtime_mode)
+        identity = _identity(launch_id, runtime_mode, root=self.root)
         group_directory = self.root / runtime_mode.value / launch_id
         directory = _instance_directory(group_directory, identity)
         group_directory.mkdir(parents=True, exist_ok=True)
@@ -274,7 +274,6 @@ class LaunchDaemonService:
             sys.executable,
             "-m",
             "kairospy",
-            "launch",
             "system",
             "up",
             "--foreground",
@@ -283,6 +282,7 @@ class LaunchDaemonService:
             "--launch-id",
             launch_id,
         ]
+        identity = identity | {"argv": args}
         self._store.write_state(directory, phase="starting", reason="background launch requested", identity=identity, context=context, mirrors=(group_directory,))
         self._store.record_event(directory, "start_requested", phase="starting", reason="background launch requested", args=args, log_file=str(log_path))
         with log_path.open("ab") as output:
@@ -511,13 +511,17 @@ def _resolve_workspace_path(value: object, *, root: Path) -> Path:
     return path.resolve()
 
 
-def _identity(launch_id: str, mode: RuntimeMode, *, process_id: str | None = None) -> dict[str, object]:
+def _identity(launch_id: str, mode: RuntimeMode, *, process_id: str | None = None, root: Path | None = None) -> dict[str, object]:
     return {
         "launch_id": launch_id,
         "mode": mode.value,
         "process_id": process_id if process_id is not None and process_id.strip() else str(uuid4()),
         "pid": os.getpid(),
+        "ppid": os.getppid(),
         "host": socket.gethostname(),
+        "cwd": str(Path.cwd()),
+        "root": None if root is None else str(root),
+        "argv": list(sys.argv),
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
 

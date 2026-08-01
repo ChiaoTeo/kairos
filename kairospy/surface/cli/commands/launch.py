@@ -8,27 +8,26 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.launch.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchAlreadyActiveError, LaunchFacade, RuntimeMode, TradingConfigurationError, record_payload
+from kairospy.application.launch.facade import LaunchAlreadyActiveError, LaunchFacade, RuntimeMode, TradingConfigurationError, record_payload
+from kairospy.application.launch.attach import LaunchAttachSession, read_file_chunk
+from kairospy.application.browsing import ListQuery
 from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.cli.output import write_cli_result
+from kairospy.surface.cli.commands.timeline import timeline_app
+from kairospy.surface.interactive.attach import RuntimeAttachShell
+from kairospy.surface.tui import ResourceList, ResourceListBrowser
+from kairospy.surface.tui.attach import RuntimeAttachApp
 from kairospy.surface.rendering.writer import write_result
 
 
 launch_app = typer.Typer(no_args_is_help=True, help="Launch commands")
 targets_app = typer.Typer(no_args_is_help=True, help="Launch target commands")
-run_app = typer.Typer(no_args_is_help=True, help="Launch run commands")
-observe_app = typer.Typer(no_args_is_help=True, help="Launch observability commands")
 diagnose_app = typer.Typer(no_args_is_help=True, help="Launch diagnostics commands")
-daemon_app = typer.Typer(no_args_is_help=False, help="Launch daemon commands", invoke_without_command=True)
 replay_app = typer.Typer(no_args_is_help=True, help="Launch replay commands")
-system_app = typer.Typer(no_args_is_help=True, help="Built-in system runtime commands")
 launch_app.add_typer(targets_app, name="targets")
-launch_app.add_typer(run_app, name="run")
-launch_app.add_typer(observe_app, name="observe")
 launch_app.add_typer(diagnose_app, name="diagnose")
-launch_app.add_typer(daemon_app, name="daemon")
 launch_app.add_typer(replay_app, name="replay")
-launch_app.add_typer(system_app, name="system")
+launch_app.add_typer(timeline_app, name="timeline")
 _RUNS = LaunchFacade()
 
 
@@ -111,21 +110,38 @@ def explain(
     typer.echo("\n".join(lines))
 
 
-@run_app.command("start")
+@launch_app.command("start")
 def start(
     ctx: typer.Context,
-    target: str = typer.Argument(..., help="Registered launch name or launch config path"),
+    target: str | None = typer.Argument(None, help="Registered launch name or launch config path"),
+    root: Path | None = typer.Option(None, "--root"),
+    launch_id: str | None = typer.Option(None, "--launch-id"),
+    mode: RuntimeMode | None = typer.Option(None, "--mode"),
+    config_path: Path | None = typer.Option(None, "--config"),
     strategy_ref: str | None = typer.Option(None, "--strategy", help="Strategy import path override: module:callable"),
+    foreground: bool = typer.Option(True, "--foreground/--background"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     try:
-        payload = _RUNS.start(target, strategy_ref=strategy_ref)
+        if target is not None and root is None and launch_id is None and mode is None and config_path is None and foreground:
+            payload = _RUNS.start(target, strategy_ref=strategy_ref)
+        else:
+            payload = _RUNS.daemon(
+                action="start",
+                target=target,
+                root=root,
+                launch_id=launch_id,
+                mode=mode,
+                config_path=config_path,
+                foreground=foreground,
+                strategy_ref=strategy_ref,
+            )
     except (LaunchAlreadyActiveError, TradingConfigurationError, ValueError) as error:
         raise typer.BadParameter(str(error)) from error
     _echo_start_result(payload, output_format=resolve_output(ctx, output_format, default=OutputFormat.auto))
 
 
-@run_app.command("stop")
+@launch_app.command("stop")
 def stop(
     ctx: typer.Context,
     target: str | None = typer.Argument(None, help="Registered launch name or launch id"),
@@ -141,7 +157,7 @@ def stop(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_stop)
 
 
-@run_app.command("status")
+@launch_app.command("status")
 def status(
     ctx: typer.Context,
     target: str | None = typer.Argument(None, help="Registered launch name or launch id"),
@@ -150,11 +166,11 @@ def status(
     root: Path | None = typer.Option(None, "--root"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
-    records = _RUNS.records(target=target, mode=mode, launch_id=launch_id, root=root)
+    records = _RUNS.records(target=target, mode=mode, launch_id=launch_id, root=root, current=target is not None or launch_id is not None)
     _echo_registry(records, output_format=resolve_output(ctx, output_format, default=OutputFormat.auto))
 
 
-@observe_app.command("logs")
+@launch_app.command("logs")
 def logs(
     ctx: typer.Context,
     target: str | None = typer.Argument(None, help="Registered launch name or launch id"),
@@ -187,23 +203,25 @@ def logs(
     typer.echo("\n".join(str(line) for line in payload["lines"]))
 
 
-@daemon_app.command("attach")
-def daemon_attach(
-    ctx: typer.Context,
+@launch_app.command("attach")
+def attach(
     target: str | None = typer.Argument(None, help="Registered launch name or launch id"),
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str | None = typer.Option(None, "--launch-id"),
     mode: RuntimeMode | None = typer.Option(None, "--mode"),
+    launch_id: str | None = typer.Option(None, "--launch-id"),
+    root: Path | None = typer.Option(None, "--root"),
+    shell: bool = typer.Option(False, "--shell", help="Use the line-oriented attach shell instead of the Textual app."),
 ) -> None:
-    _ = ctx
     try:
-        path = _RUNS.log_file(target=target, mode=mode, launch_id=launch_id, root=root)
+        session = LaunchAttachSession.resolve(target=target, mode=mode, launch_id=launch_id, root=root, launches=_RUNS)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    _tail_file(path)
+    if shell:
+        RuntimeAttachShell(session).run()
+        return
+    RuntimeAttachApp(session).run()
 
 
-@observe_app.command("artifacts")
+@launch_app.command("artifacts")
 def artifacts(
     ctx: typer.Context,
     target: str | None = typer.Argument(None, help="Registered launch name or launch id"),
@@ -246,310 +264,6 @@ def events(
     _echo_launch_result(result, output_format=resolve_output(ctx, output_format, default=OutputFormat.auto))
 
 
-@system_app.command("up")
-def system_up(
-    ctx: typer.Context,
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
-    foreground: bool = typer.Option(False, "--foreground/--background"),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    try:
-        payload = _RUNS.system_up(root=root, launch_id=launch_id, foreground=foreground)
-    except LaunchAlreadyActiveError as error:
-        raise typer.BadParameter(str(error)) from error
-    except ValueError as error:
-        raise typer.BadParameter(str(error)) from error
-    _echo_start_result(payload, output_format=resolve_output(ctx, output_format, default=OutputFormat.auto))
-
-
-@system_app.command("down")
-def system_down(
-    ctx: typer.Context,
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    try:
-        payload = _RUNS.system_down(root=root, launch_id=launch_id)
-    except ValueError as error:
-        raise typer.BadParameter(str(error)) from error
-    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_stop)
-
-
-@system_app.command("restart")
-def system_restart(
-    ctx: typer.Context,
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
-    foreground: bool = typer.Option(False, "--foreground/--background"),
-    timeout_seconds: float = typer.Option(10.0, "--timeout", help="Seconds to wait for the current system runtime to stop."),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    try:
-        payload = _RUNS.system_restart(root=root, launch_id=launch_id, foreground=foreground, timeout_seconds=timeout_seconds)
-    except (LaunchAlreadyActiveError, ValueError) as error:
-        raise typer.BadParameter(str(error)) from error
-    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_restart)
-
-
-@system_app.command("command")
-def system_command(
-    ctx: typer.Context,
-    kind: str = typer.Argument(..., help="System command kind, for example account.current or runtime.stop"),
-    payload_json: str | None = typer.Option(None, "--payload-json", help="Command payload JSON object"),
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
-    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for the system runtime response."),
-    timeout_seconds: float = typer.Option(5.0, "--timeout"),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    try:
-        payload = _RUNS.system_command(
-            kind=kind,
-            payload=_json_object(payload_json),
-            root=root,
-            launch_id=launch_id,
-            wait=wait,
-            timeout_seconds=timeout_seconds,
-        )
-    except ValueError as error:
-        raise typer.BadParameter(str(error)) from error
-    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
-
-
-@system_app.command("trade-status")
-def system_trade_status(
-    ctx: typer.Context,
-    account: str | None = typer.Argument(None, help="Optional account id or broker.account key"),
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
-    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for the system runtime response."),
-    timeout_seconds: float = typer.Option(5.0, "--timeout"),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    payload = _system_trade_command(
-        "account.trade-status",
-        account=account,
-        root=root,
-        launch_id=launch_id,
-        wait=wait,
-        timeout_seconds=timeout_seconds,
-    )
-    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
-
-
-@system_app.command("trade-acquire")
-def system_trade_acquire(
-    ctx: typer.Context,
-    account: str = typer.Argument(..., help="Account id or broker.account key"),
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
-    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for the system runtime response."),
-    timeout_seconds: float = typer.Option(5.0, "--timeout"),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    payload = _system_trade_command(
-        "account.trade-acquire",
-        account=account,
-        root=root,
-        launch_id=launch_id,
-        wait=wait,
-        timeout_seconds=timeout_seconds,
-    )
-    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
-
-
-@system_app.command("trade-release")
-def system_trade_release(
-    ctx: typer.Context,
-    account: str = typer.Argument(..., help="Account id or broker.account key"),
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
-    wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for the system runtime response."),
-    timeout_seconds: float = typer.Option(5.0, "--timeout"),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    payload = _system_trade_command(
-        "account.trade-release",
-        account=account,
-        root=root,
-        launch_id=launch_id,
-        wait=wait,
-        timeout_seconds=timeout_seconds,
-    )
-    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
-
-
-@system_app.command("attach")
-def system_attach(
-    ctx: typer.Context,
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
-) -> None:
-    _ = ctx
-    try:
-        path = _RUNS.system_log_file(root=root, launch_id=launch_id)
-    except ValueError as error:
-        raise typer.BadParameter(str(error)) from error
-    _tail_file(path)
-
-
-def _system_trade_command(
-    kind: str,
-    *,
-    account: str | None,
-    root: Path | None,
-    launch_id: str,
-    wait: bool,
-    timeout_seconds: float,
-) -> dict[str, object]:
-    payload = {"account": account} if account is not None else {}
-    try:
-        return _RUNS.system_command(
-            kind=kind,
-            payload=payload,
-            root=root,
-            launch_id=launch_id,
-            wait=wait,
-            timeout_seconds=timeout_seconds,
-        )
-    except ValueError as error:
-        raise typer.BadParameter(str(error)) from error
-
-
-@daemon_app.callback()
-def daemon(
-    ctx: typer.Context,
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    if ctx.invoked_subcommand is not None:
-        return
-    result = _daemon_result(action="status", target=None, root=None, launch_id=None, mode=None, config_path=None, foreground=False)
-    if isinstance(result, Mapping):
-        _write_json(result)
-        return
-    _echo_registry(result, output_format=resolve_output(ctx, output_format, default=OutputFormat.auto))
-
-
-@daemon_app.command("start")
-def daemon_start(
-    ctx: typer.Context,
-    target: str | None = typer.Argument(None, help="Registered launch name or launch config path"),
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str | None = typer.Option(None, "--launch-id"),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    config_path: Path | None = typer.Option(None, "--config"),
-    strategy_ref: str | None = typer.Option(None, "--strategy", help="Strategy import path override: module:callable"),
-    foreground: bool = typer.Option(False, "--foreground/--background"),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    result = _daemon_result(
-        action="start",
-        target=target,
-        root=root,
-        launch_id=launch_id,
-        mode=mode,
-        config_path=config_path,
-        foreground=foreground,
-        strategy_ref=strategy_ref,
-    )
-    output = resolve_output(ctx, output_format, default=OutputFormat.auto)
-    if isinstance(result, Mapping):
-        _echo_start_result(result, output_format=output)
-        return
-    _echo_registry(result, output_format=output)
-
-
-@daemon_app.command("status")
-def daemon_status(
-    ctx: typer.Context,
-    target: str | None = typer.Argument(None, help="Registered launch name or launch id"),
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str | None = typer.Option(None, "--launch-id"),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    result = _daemon_result(action="status", target=target, root=root, launch_id=launch_id, mode=mode, config_path=None, foreground=False)
-    if isinstance(result, Mapping):
-        _write_json(result)
-        return
-    _echo_registry(result, output_format=resolve_output(ctx, output_format, default=OutputFormat.auto))
-
-
-@daemon_app.command("stop")
-def daemon_stop(
-    ctx: typer.Context,
-    target: str | None = typer.Argument(None, help="Registered launch name or launch id"),
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str | None = typer.Option(None, "--launch-id"),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    result = _daemon_result(action="stop", target=target, root=root, launch_id=launch_id, mode=mode, config_path=None, foreground=False)
-    output = resolve_output(ctx, output_format, default=OutputFormat.auto)
-    if isinstance(result, Mapping):
-        write_result(result, output=output)
-        return
-    _echo_registry(result, output_format=output)
-
-
-@daemon_app.command("command")
-def daemon_command(
-    ctx: typer.Context,
-    kind: str = typer.Argument(..., help="System command kind, for example runtime.stop or account.current"),
-    target: str | None = typer.Argument(None, help="Registered launch name or launch id"),
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str | None = typer.Option(None, "--launch-id"),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    payload_json: str | None = typer.Option(None, "--payload-json", help="Command payload JSON object"),
-    wait: bool = typer.Option(False, "--wait", help="Wait for the running daemon to write a command response."),
-    timeout_seconds: float = typer.Option(5.0, "--timeout", help="Seconds to wait for --wait command responses."),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    try:
-        payload = _RUNS.submit_command(
-            target=target,
-            root=root,
-            launch_id=launch_id,
-            mode=mode,
-            kind=kind,
-            payload=_json_object(payload_json),
-            wait=wait,
-            timeout_seconds=timeout_seconds,
-        )
-    except ValueError as error:
-        raise typer.BadParameter(str(error)) from error
-    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
-
-
-def _daemon_result(
-    *,
-    action: str,
-    target: str | None,
-    root: Path | None,
-    launch_id: str | None,
-    mode: RuntimeMode | None,
-    config_path: Path | None,
-    foreground: bool,
-    strategy_ref: str | None = None,
-) -> dict[str, object] | tuple[object, ...]:
-    try:
-        return _RUNS.daemon(
-            action=action,
-            target=target,
-            root=root,
-            launch_id=launch_id,
-            mode=mode,
-            config_path=config_path,
-            foreground=foreground,
-            strategy_ref=strategy_ref,
-        )
-    except LaunchAlreadyActiveError as error:
-        raise typer.BadParameter(str(error)) from error
-    except ValueError as error:
-        raise typer.BadParameter(str(error)) from error
-
 
 def _json_object(value: str | None) -> Mapping[str, object] | None:
     if value is None:
@@ -576,7 +290,21 @@ def list_launches(
     typer.echo(_render_registered_launch_table(payload))
 
 
-@observe_app.command("instances")
+@targets_app.command("browse")
+def browse_launches(
+    page_size: int = typer.Option(20, "--page-size", min=1),
+    query: str | None = typer.Option(None, "--query", help="JMESPath expression returning a list of objects."),
+) -> None:
+    ResourceListBrowser(
+        ResourceList.from_rows(
+            _launch_target_rows(),
+            title="Launch Targets",
+            query=ListQuery(page_size=page_size, expression=query),
+        )
+    ).run()
+
+
+@launch_app.command("instances")
 def list_instances(
     ctx: typer.Context,
     target: str | None = typer.Argument(None, help="Registered launch name or launch id"),
@@ -592,8 +320,7 @@ def list_instances(
 
 def _echo_launch_result(result: object, *, output_format: OutputFormat) -> None:
     runtime = getattr(result, "runtime")
-    controls = getattr(result, "controls").list()
-    payload = _launch_result_payload(result, runtime=runtime, controls=controls)
+    payload = _launch_result_payload(result, runtime=runtime)
     if _use_json_output(output_format):
         _write_json(payload)
         return
@@ -603,7 +330,6 @@ def _echo_launch_result(result: object, *, output_format: OutputFormat) -> None:
             f"  strategy  {runtime.strategy_id}",
             f"  events    {runtime.event_count}",
             f"  intents   {runtime.intent_count}",
-            f"  controls  {len(controls)}",
             f"  equity    {payload.get('final_equity') or ''}",
             f"  pnl       {payload.get('net_profit') or ''}",
         ])
@@ -630,14 +356,13 @@ def _echo_start_result(payload: Mapping[str, object], *, output_format: OutputFo
     )
 
 
-def _launch_result_payload(result: object, *, runtime: object, controls: object) -> dict[str, object]:
+def _launch_result_payload(result: object, *, runtime: object) -> dict[str, object]:
     return {
         "launch_id": getattr(result, "launch_id"),
         "mode": getattr(result, "mode"),
         "strategy_id": getattr(runtime, "strategy_id", None),
         "event_count": getattr(runtime, "event_count", None),
         "intent_count": getattr(runtime, "intent_count", None),
-        "control_count": len(controls) if hasattr(controls, "__len__") else None,
         "fills": len(getattr(result, "fills", ())),
         "trades": len(getattr(result, "trades", ())),
         "decision_trace_count": len(getattr(result, "decision_trace", ())),
@@ -725,7 +450,7 @@ def _render_registered_launch_table(payload: Mapping[str, object]) -> str:
     if not isinstance(items, list) or not items:
         return f"Launches\n  none\n  index {payload.get('path', '')}"
     rows = tuple(_registered_launch_table_row(item) for item in items if isinstance(item, Mapping))
-    columns = ("name", "mode", "launch_id", "strategy", "valid", "config", "registered")
+    columns = ("name", "source", "mode", "launch_id", "strategy", "valid", "status", "config", "registered", "updated")
     visible_columns = tuple(column for column in columns if any(row.get(column) not in {None, ""} for row in rows))
     widths = {
         column: max(len(column), *(len(_table_cell(row.get(column))) for row in rows))
@@ -741,16 +466,31 @@ def _render_registered_launch_table(payload: Mapping[str, object]) -> str:
     return "\n".join(lines)
 
 
+def _launch_target_rows() -> tuple[Mapping[str, object], ...]:
+    payload = _RUNS.list()
+    rows = payload.get("launches", ())
+    if not isinstance(rows, (tuple, list)):
+        return ()
+    return tuple(row for row in rows if isinstance(row, Mapping))
+
+
 def _registered_launch_table_row(item: Mapping[str, object]) -> dict[str, object]:
     return {
         "name": item.get("name"),
+        "source": item.get("source"),
         "mode": item.get("mode"),
         "launch_id": item.get("launch_id"),
         "strategy": item.get("strategy"),
-        "valid": str(bool(item.get("valid"))).lower(),
+        "valid": _valid_cell(item),
+        "status": item.get("status"),
         "config": _display_path(item.get("config")),
         "registered": _short_time(item.get("registered_at")),
+        "updated": _short_time(item.get("updated_at")),
     }
+
+
+def _valid_cell(item: Mapping[str, object]) -> str:
+    return str(bool(item["valid"])).lower() if "valid" in item else ""
 
 
 def _use_json_output(output_format: OutputFormat) -> bool:
@@ -767,6 +507,8 @@ def _render_launch_table(items: list[Mapping[str, object]], *, details: bool) ->
         "mode",
         "launch_id",
         "status",
+        "health",
+        "reason",
         "strategy",
         "equity",
         "pnl",
@@ -776,7 +518,7 @@ def _render_launch_table(items: list[Mapping[str, object]], *, details: bool) ->
         "updated",
     ]
     if details:
-        columns.extend(("phase", "return", "intents", "directory", "log"))
+        columns.extend(("phase", "pid", "pid_alive", "heartbeat_age", "return", "intents", "directory", "log"))
     columns = tuple(columns)
     visible_columns = tuple(column for column in columns if any(row.get(column) not in {None, ""} for row in rows))
     widths = {
@@ -800,7 +542,12 @@ def _launch_table_row(item: Mapping[str, object]) -> dict[str, object]:
         "mode": item.get("mode"),
         "launch_id": item.get("launch_id"),
         "status": item.get("status"),
+        "health": item.get("health"),
+        "reason": item.get("stale_reason"),
         "phase": item.get("phase"),
+        "pid": item.get("pid"),
+        "pid_alive": item.get("pid_alive"),
+        "heartbeat_age": item.get("heartbeat_age_seconds"),
         "strategy": context.get("strategy") or result.get("strategy_id"),
         "equity": result.get("final_equity"),
         "pnl": result.get("net_profit"),
@@ -813,6 +560,38 @@ def _launch_table_row(item: Mapping[str, object]) -> dict[str, object]:
         "directory": _display_path(item.get("directory")),
         "log": _display_path(item.get("log_file")),
     }
+
+
+def _render_system_inspect(result: object) -> str:
+    payload = result if isinstance(result, Mapping) else {}
+    processes = payload.get("processes") if isinstance(payload.get("processes"), Mapping) else {}
+    current_record = payload.get("current_record") if isinstance(payload.get("current_record"), Mapping) else {}
+    lines = [
+        "System Inspect",
+        f"  launch_id       {payload.get('launch_id') or '-'}",
+        f"  health          {payload.get('health') or '-'}",
+        f"  phase           {current_record.get('phase') or '-'}",
+        f"  status          {current_record.get('status') or '-'}",
+        f"  pid             {payload.get('pid') or '-'}",
+        f"  pid_alive       {_bool_cell(payload.get('pid_alive'))}",
+        f"  heartbeat_fresh {_bool_cell(payload.get('heartbeat_fresh'))}",
+        f"  heartbeat_age   {_table_cell(current_record.get('heartbeat_age_seconds'))}",
+        f"  current         {_display_path(payload.get('current_directory'))}",
+        f"  process_count   {processes.get('count') if processes else 0}",
+    ]
+    orphaned = processes.get("orphaned") if isinstance(processes.get("orphaned"), list) else []
+    if orphaned:
+        lines.append("  orphaned")
+        for process in orphaned:
+            if isinstance(process, Mapping):
+                lines.append(f"    pid={process.get('pid')} command={process.get('command')}")
+    return "\n".join(lines)
+
+
+def _bool_cell(value: object) -> str:
+    if value is None:
+        return "-"
+    return str(bool(value)).lower()
 
 
 def _table_cell(value: object) -> str:
@@ -850,13 +629,9 @@ def _tail_file(path: Path, *, interval_seconds: float = 0.5) -> None:
     position = 0
     try:
         while True:
-            if path.exists():
-                with path.open("r", encoding="utf-8", errors="replace") as handle:
-                    handle.seek(position)
-                    chunk = handle.read()
-                    position = handle.tell()
-                if chunk:
-                    typer.echo(chunk, nl=False)
+            chunk, position = read_file_chunk(path, position)
+            if chunk:
+                typer.echo(chunk, nl=False)
             time.sleep(interval_seconds)
     except KeyboardInterrupt:
         return

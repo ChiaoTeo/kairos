@@ -18,7 +18,7 @@ class CredentialFacade:
         self,
         *,
         credential_id: str,
-        provider: str,
+        broker: str,
         kind: str | None,
         api_key: str | None,
         api_secret: str | None,
@@ -31,12 +31,12 @@ class CredentialFacade:
         force: bool,
     ) -> str:
         workspace = resolve_workspace()
-        provider_value = _normalize_provider(provider)
-        schema = ACCOUNT_SCHEMAS.get(provider_value)
+        broker_value = _normalize_broker(broker)
+        schema = ACCOUNT_SCHEMAS.get(broker_value)
         resolved_kind = kind or (schema.credential_kind if schema is not None else None)
         values = {
             "id": credential_id,
-            "broker": provider_value,
+            "broker": broker_value,
             "kind": resolved_kind,
             "api_key": api_key,
             "api_secret": api_secret,
@@ -51,7 +51,7 @@ class CredentialFacade:
         if path.exists() and not force:
             raise ValueError(f"credential already exists: {path}")
         write_credential_file(path, values)
-        workspace.operations.append("credential.create", target={"credential": credential_id}, payload={"path": path, "broker": provider_value})
+        workspace.operations.append("credential.create", target={"credential": credential_id}, payload={"path": path, "broker": broker_value})
         return str(path)
 
     def show(self, credential_id: str, *, reveal_secrets: bool) -> dict[str, object]:
@@ -77,8 +77,8 @@ def _credential(credential_id: str) -> CredentialRecord:
         raise ValueError(str(error)) from error
 
 
-def _normalize_provider(provider: str) -> str:
-    normalized = provider.strip().lower().replace("-", "_")
+def _normalize_broker(broker: str) -> str:
+    normalized = broker.strip().lower().replace("-", "_")
     return {"okex": "okx", "ouyi": "okx"}.get(normalized, normalized)
 
 

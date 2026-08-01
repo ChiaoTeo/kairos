@@ -50,9 +50,6 @@ class CliStrategyBase(StrategyBase):
         if command.name == "target_position":
             self.target_position(context, command)
             return None
-        if command.name == "control":
-            self.control(context, command)
-            return None
         if command.name == "account.current":
             view = context.accounts.current(_optional_text(command.args.get("account")))
             context.trace("account.current", {"account": command.args.get("account"), "view": view})
@@ -87,33 +84,6 @@ class CliStrategyBase(StrategyBase):
             intent_id=_optional_text(command.args.get("intent_id")),
         )
 
-    def control(self, context: Context, command: CliCommand) -> object:
-        kind = str(command.args.get("kind") or "").strip()
-        reason = str(command.args.get("reason") or "")
-        request_id = _optional_text(command.args.get("request_id"))
-        if kind == "pause":
-            return context.control.request_pause(reason=reason, request_id=request_id)
-        if kind == "resume":
-            return context.control.request_resume(reason=reason, request_id=request_id)
-        if kind == "reduce_only":
-            return context.control.request_reduce_only(_bool(command.args.get("enabled"), default=True), reason=reason, request_id=request_id)
-        if kind == "parameter_update":
-            name = _optional_text(command.args.get("name"))
-            if name is None:
-                raise ValueError("control parameter_update requires name")
-            return context.control.request_parameter_update(name, command.args.get("value"), reason=reason, request_id=request_id)
-        if kind == "subscription":
-            stream = _optional_text(command.args.get("stream"))
-            if stream is None:
-                raise ValueError("control subscription requires stream")
-            return context.control.request_subscription(
-                stream,
-                action=str(command.args.get("action") or "add"),
-                reason=reason,
-                request_id=request_id,
-            )
-        raise ValueError(f"unsupported cli control kind: {kind}")
-
 
 def cli_command_envelope(
     command: str,
@@ -139,19 +109,6 @@ def _optional_text(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
-
-
-def _bool(value: object, *, default: bool) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "on"}:
-        return True
-    if text in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"invalid boolean value: {value}")
 
 
 __all__ = ["CliCommand", "CliStrategyBase", "cli_command_envelope"]

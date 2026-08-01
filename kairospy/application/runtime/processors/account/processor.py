@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from kairospy.application.launch import LaunchAccountBinding, LaunchAccountDirectory
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.service.runtime import RuntimeAccountService
+from kairospy.application.runtime.services import RuntimeAccountService
 from kairospy.core.account import (
     ACCOUNT_BOOKS_SCHEMA,
     ACCOUNT_CAPABILITIES_SCHEMA,

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping, TypeVar
 
 from kairospy.application.modes import RuntimeMode
-from kairospy.application.service.domain.execution import BasisPointSlippageModel
+from kairospy.application.domain.execution import BasisPointSlippageModel
 from kairospy.application.strategy import Strategy
 from kairospy.application.strategy.entrypoint import load_strategy_entrypoint
 from kairospy.config import ConfigError, LaunchConfig, load_launch_config

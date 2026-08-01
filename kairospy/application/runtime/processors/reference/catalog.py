@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.service.runtime import RuntimeReferenceService
+from kairospy.application.runtime.services import RuntimeReferenceService
 from kairospy.core.reference import (
     REFERENCE_CATALOG_SCHEMA,
     REFERENCE_LIFECYCLE_EVENTS_SCHEMA,

@@ -4,7 +4,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from kairospy.application.runtime.dispatch.context import RuntimeContext
-from kairospy.application.service.runtime import AccountQueryService
+from kairospy.application.query import AccountQueryService
 from kairospy.core.account import (
     AccountBalance,
     AccountContext,

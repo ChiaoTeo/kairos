@@ -12,6 +12,10 @@ def credential_value(credential: str | None, suffix: str, *fallback_env: str) ->
     return _credential_file_value(credential, suffix)
 
 
+def credential_exists(credential: str | None) -> bool:
+    return credential is not None and bool(credential.strip()) and _credential_path(credential.strip()) is not None
+
+
 def credential_env_prefix(credential: str | None) -> str | None:
     if credential is None:
         return None
@@ -75,4 +79,4 @@ def _field_keys(suffix: str) -> tuple[str, ...]:
     return aliases.get(key, (key,))
 
 
-__all__ = ["credential_env_prefix", "credential_value"]
+__all__ = ["credential_env_prefix", "credential_exists", "credential_value"]

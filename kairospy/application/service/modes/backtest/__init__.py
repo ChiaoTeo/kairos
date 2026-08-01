@@ -8,7 +8,7 @@ from .config import (
     configured_backtest,
 )
 from .execution import BacktestExecutionService
-from .market import BacktestMarketDataService, HistoricalMarketDataClient, MarketDataServiceView
+from .market import BacktestMarketDataService, HistoricalMarketDataPort, MarketDataServiceView
 from .metrics import BacktestMetrics, MetricsModel
 
 __all__ = [
@@ -19,7 +19,7 @@ __all__ = [
     "BacktestMetrics",
     "BacktestLaunchResult",
     "ConfiguredBacktest",
-    "HistoricalMarketDataClient",
+    "HistoricalMarketDataPort",
     "MarketDataServiceView",
     "MetricsModel",
     "configured_backtest",

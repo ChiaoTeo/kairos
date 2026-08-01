@@ -12,18 +12,13 @@ from kairospy.surface.interactive.navigation import (
     resolve_token,
     root_command,
 )
+from kairospy.surface.interactive.line_reader import LineReader, clear_history, default_line_reader, load_history_entries
 from kairospy.surface.interactive.session import SurfaceContext
 from kairospy.surface.rendering.text import (
     render_context_screen,
     render_home_screen,
 )
 from kairospy.surface.interactive.account import AccountCreateWizard, account_create_direct_argv, is_account_create_argv
-from kairospy.surface.interactive.system import (
-    InteractiveSystemSession,
-    parse_system_entry,
-    render_system_result,
-    system_help_text,
-)
 
 
 CommandExecutor = Callable[[list[str]], tuple[int, str]]
@@ -48,6 +43,7 @@ class AppSession:
         streaming_command_executor: StreamingCommandExecutor | None = None,
         command_root: CommandInfo | None = None,
         surface_name: str = "app",
+        line_reader: LineReader | None = None,
     ) -> None:
         self.stdout = stdout or sys.stdout
         self.context = context or SurfaceContext(product="home")
@@ -55,8 +51,8 @@ class AppSession:
         self.streaming_command_executor = streaming_command_executor
         self.command_root = command_root or _default_command_root()
         self.surface_name = surface_name
+        self.line_reader = line_reader
         self.context_path: tuple[str, ...] = ()
-        self.system_session: InteractiveSystemSession | None = None
         self.account_create_wizard: AccountCreateWizard | None = None
         self.context.set_product("home")
 
@@ -76,8 +72,6 @@ class AppSession:
     def prompt(self) -> str:
         if self.account_create_wizard is not None:
             return f"kairos/{self.surface_name}/account/create> "
-        if self.system_session is not None:
-            return f"kairos/{self.surface_name}/system> "
         if not self.context_path:
             return f"kairos/{self.surface_name}> "
         return f"kairos/{self.surface_name}/{'/'.join(self.context_path)}> "
@@ -95,7 +89,7 @@ class AppSession:
         self._write_screen()
         while True:
             try:
-                line = input(self.prompt())
+                line = self._line_reader().read(self.prompt())
             except EOFError:
                 self._write("")
                 return
@@ -105,6 +99,11 @@ class AppSession:
             if self.handle(line):
                 return
 
+    def _line_reader(self) -> LineReader:
+        if self.line_reader is None:
+            self.line_reader = default_line_reader()
+        return self.line_reader
+
     def handle(self, line: str) -> bool:
         parts = shlex.split(line.strip())
         if self.account_create_wizard is not None:
@@ -112,16 +111,14 @@ class AppSession:
         if not parts:
             self._write_screen()
             return False
-        if self.system_session is not None:
-            return self._handle_system(parts, line)
         command = parts[0]
         if command in {"quit", "exit", "q"}:
             return True
-        if command == "system":
-            self._enter_system(parts[1:])
-            return False
         if command in {"help", "?", "menu"}:
             self._write_screen()
+            return False
+        if command == "history" and not self._context_has_command(command):
+            self._handle_history(parts[1:])
             return False
         if command in {"home", "products"}:
             self._open_home()
@@ -173,6 +170,42 @@ class AppSession:
         self._execute_raw(resolved_parts)
         return False
 
+    def _handle_history(self, parts: list[str]) -> None:
+        if parts == ["clear"]:
+            reader_clear = getattr(self.line_reader, "clear_history", None)
+            if callable(reader_clear):
+                reader_clear()
+            else:
+                clear_history()
+            self._write("Shell history cleared.")
+            return
+        if len(parts) > 1:
+            self._write("usage: history [limit|clear]")
+            return
+        limit = 20
+        if parts:
+            try:
+                limit = int(parts[0])
+            except ValueError:
+                self._write("usage: history [limit|clear]")
+                return
+            if limit <= 0:
+                self._write("usage: history [limit|clear]")
+                return
+        entries = load_history_entries(limit=limit)
+        if not entries:
+            self._write("No shell history.")
+            return
+        start = max(1, len(load_history_entries()) - len(entries) + 1)
+        width = len(str(start + len(entries) - 1))
+        for index, entry in enumerate(entries, start=start):
+            self._write(f"{index:>{width}}  {entry}")
+
+    def _context_has_command(self, command: str) -> bool:
+        if not self.context_path:
+            return False
+        return resolve_token(command, names=child_names(self.command_root, self.context_path)) is not None
+
     def _enter_account_create_wizard(self) -> None:
         self.account_create_wizard = AccountCreateWizard()
         self._set_context_path(("account",))
@@ -187,49 +220,6 @@ class AppSession:
             self.context.refresh()
             self._write_screen()
         return False
-
-    def _handle_system(self, parts: list[str], line: str) -> bool:
-        command = parts[0]
-        if command in {"quit", "q"}:
-            self._exit_system()
-            return True
-        if command in {"exit", "exit-system", "back", "b", ".."}:
-            self._exit_system()
-            self._write_screen()
-            return False
-        if command in {"help", "?", "menu"}:
-            self._write(system_help_text())
-            return False
-        assert self.system_session is not None
-        try:
-            self._write(self.system_session.handle(line))
-        except ValueError as error:
-            self._write(f"error: {error}")
-        return False
-
-    def _enter_system(self, parts: list[str]) -> None:
-        try:
-            entry = parse_system_entry(parts)
-            self.system_session = InteractiveSystemSession(**entry)
-        except ValueError as error:
-            self._write(f"error: {error}")
-            self._write("usage: system [--launch-id LAUNCH]")
-            return
-        self._set_context_path(())
-        self.context.set_product("system")
-        self._write("Entered system mode. Type `help` for commands, `exit-system` to return.")
-
-    def _exit_system(self) -> None:
-        session = self.system_session
-        if session is None:
-            return
-        try:
-            result = session.finish()
-            self._write(render_system_result(result))
-        finally:
-            session.close()
-            self.system_session = None
-            self.context.set_product("home")
 
     def _resolve_context_command(self, parts: list[str]) -> list[str]:
         if not parts:
@@ -251,7 +241,9 @@ class AppSession:
         if not self.context_path or product is None:
             return
         argv = [*self.context_path, *parts]
-        self._write(_command_output_header(tuple(argv)))
+        fullscreen = _is_fullscreen_shell_command(tuple(argv), self.stdout)
+        if not fullscreen:
+            self._write(_command_output_header(tuple(argv)))
         try:
             if self.streaming_command_executor is not None:
                 exit_code = self.streaming_command_executor(argv, self.stdout)
@@ -266,7 +258,8 @@ class AppSession:
             self._write(f"error: {error}")
         if exit_code:
             self._write(f"Command exited with status {exit_code}")
-        self._write(_COMMAND_OUTPUT_FOOTER)
+        if not fullscreen:
+            self._write(_COMMAND_OUTPUT_FOOTER)
 
     def _root_views(self) -> tuple[CommandView, ...]:
         return tuple(
@@ -334,9 +327,18 @@ def _command_output_header(argv: tuple[str, ...]) -> str:
     return f"--- kairospy {' '.join(argv)}"
 
 
+def _is_fullscreen_shell_command(argv: tuple[str, ...], stdout: TextIO) -> bool:
+    if not argv or argv[-1] != "browse":
+        return False
+    try:
+        return bool(stdout.isatty())
+    except (AttributeError, OSError):
+        return False
+
+
 _COMMAND_OUTPUT_FOOTER = "---"
 _SCREEN_SEPARATOR = "-" * 72
-_ROOT_COMMANDS_EXCLUDED_FROM_PRODUCTS = {"shell", "app", "tui", "system"}
+_ROOT_COMMANDS_EXCLUDED_FROM_PRODUCTS = {"shell", "tui"}
 
 
 __all__ = [

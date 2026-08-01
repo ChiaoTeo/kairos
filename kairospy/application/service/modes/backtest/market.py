@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from kairospy.application.service.domain.market import HistoricalMarketDataClient
-from kairospy.application.service.runtime.market import ReplayMarketDataService, RuntimeMarketDataServiceView
+from kairospy.application.ports import HistoricalMarketDataPort
+from kairospy.application.runtime.services.market import ReplayMarketDataService, RuntimeMarketDataServiceView
 
 
 class BacktestMarketDataService(ReplayMarketDataService):
@@ -11,7 +11,7 @@ class BacktestMarketDataService(ReplayMarketDataService):
 MarketDataServiceView = RuntimeMarketDataServiceView
 
 __all__ = [
-    "HistoricalMarketDataClient",
+    "HistoricalMarketDataPort",
     "BacktestMarketDataService",
     "MarketDataServiceView",
 ]

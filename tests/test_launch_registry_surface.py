@@ -4,6 +4,7 @@ from io import StringIO
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 import kairospy.surface.cli.commands.launch as launch_commands
@@ -53,8 +54,35 @@ def test_launch_list_reads_registered_launchs(tmp_path, monkeypatch) -> None:
 
     text = CliRunner().invoke(launch_app, ["targets", "list", "--format", "text"], catch_exceptions=False)
 
-    assert "name     mode      launch_id" in text.output
-    assert "btc-sma  backtest  bt-1" in text.output
+    assert "name     source      mode      launch_id" in text.output
+    assert "btc-sma  registered  backtest  bt-1" in text.output
+
+
+def test_launch_targets_list_includes_runtime_launches_without_registered_index(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_workspace_manifest(tmp_path)
+    directory = tmp_path / ".kairos" / "launches" / "paper" / "paper-1"
+    directory.mkdir(parents=True)
+    (directory / "summary.json").write_text(
+        json.dumps({"launch_id": "paper-1", "mode": "paper", "strategy_id": "strategy_mod:PaperStrategy"}) + "\n",
+        encoding="utf-8",
+    )
+    (directory / "state.json").write_text(json.dumps({"phase": "stopped", "status": "stopped"}) + "\n", encoding="utf-8")
+
+    result = CliRunner().invoke(launch_app, ["targets", "list", "--format", "json"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["count"] == 1
+    assert payload["launches"][0]["name"] == "paper-1"
+    assert payload["launches"][0]["source"] == "runtime"
+    assert payload["launches"][0]["mode"] == "paper"
+    assert payload["launches"][0]["launch_id"] == "paper-1"
+
+    text = CliRunner().invoke(launch_app, ["targets", "list", "--format", "text"], catch_exceptions=False)
+
+    assert "none" not in text.output
+    assert "paper-1  runtime  paper  paper-1" in text.output
 
 
 def test_launch_instance_list_reads_rewritten_runtime_artifact_registry(tmp_path, monkeypatch) -> None:
@@ -66,7 +94,7 @@ def test_launch_instance_list_reads_rewritten_runtime_artifact_registry(tmp_path
     )
     (directory / "launch.log").write_text("strategy output\n", encoding="utf-8")
 
-    result = CliRunner().invoke(launch_app, ["observe", "instances", "--root", str(tmp_path), "--format", "json"], catch_exceptions=False)
+    result = CliRunner().invoke(launch_app, ["instances", "--root", str(tmp_path), "--format", "json"], catch_exceptions=False)
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
@@ -77,7 +105,7 @@ def test_launch_instance_list_reads_rewritten_runtime_artifact_registry(tmp_path
 
     filtered = CliRunner().invoke(
         launch_app,
-        ["observe", "instances", "--root", str(tmp_path), "--launch-id", "bt-1", "--format", "json"],
+        ["instances", "--root", str(tmp_path), "--launch-id", "bt-1", "--format", "json"],
         catch_exceptions=False,
     )
 
@@ -85,19 +113,19 @@ def test_launch_instance_list_reads_rewritten_runtime_artifact_registry(tmp_path
 
     positional = CliRunner().invoke(
         launch_app,
-        ["observe", "instances", "bt-1", "--root", str(tmp_path), "--format", "json"],
+        ["instances", "bt-1", "--root", str(tmp_path), "--format", "json"],
         catch_exceptions=False,
     )
 
     assert json.loads(positional.output)["count"] == 1
 
-    text = CliRunner().invoke(launch_app, ["observe", "instances", "--root", str(tmp_path), "--format", "text"], catch_exceptions=False)
+    text = CliRunner().invoke(launch_app, ["instances", "--root", str(tmp_path), "--format", "text"], catch_exceptions=False)
 
     assert "mode      launch_id  status" in text.output
     assert "backtest  bt-1" in text.output
     assert str(directory / "launch.log") not in text.output
 
-    default_text = CliRunner().invoke(launch_app, ["observe", "instances", "--root", str(tmp_path)], catch_exceptions=False)
+    default_text = CliRunner().invoke(launch_app, ["instances", "--root", str(tmp_path)], catch_exceptions=False)
 
     assert default_text.output.startswith("Launches\n")
     assert "backtest  bt-1" in default_text.output
@@ -105,7 +133,7 @@ def test_launch_instance_list_reads_rewritten_runtime_artifact_registry(tmp_path
     monkeypatch.chdir(tmp_path)
     details = CliRunner().invoke(
         launch_app,
-        ["observe", "instances", "--root", str(tmp_path), "--details", "--format", "text"],
+        ["instances", "--root", str(tmp_path), "--details", "--format", "text"],
         catch_exceptions=False,
     )
 
@@ -124,7 +152,7 @@ def test_launch_daemon_status_uses_artifact_registry(tmp_path) -> None:
 
     result = CliRunner().invoke(
         launch_app,
-        ["daemon", "status", "--root", str(tmp_path), "--launch-id", "bt-1", "--format", "json"],
+        ["status", "--root", str(tmp_path), "--launch-id", "bt-1", "--format", "json"],
         catch_exceptions=False,
     )
 
@@ -132,36 +160,218 @@ def test_launch_daemon_status_uses_artifact_registry(tmp_path) -> None:
     assert json.loads(result.output)["launches"][0]["launch_id"] == "bt-1"
 
 
-def test_launch_system_trade_commands_wrap_system_command(monkeypatch, tmp_path) -> None:
+def test_launch_system_status_uses_system_artifact_registry(tmp_path) -> None:
+    directory = tmp_path / "system" / "kairos-system"
+    directory.mkdir(parents=True)
+    (directory / "summary.json").write_text(
+        json.dumps({"launch_id": "kairos-system", "mode": "system", "event_count": 3}) + "\n",
+        encoding="utf-8",
+    )
+    (directory / "launch.log").write_text("system output\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        launch_app,
+        ["status", "--root", str(tmp_path), "--format", "json"],
+        catch_exceptions=False,
+    )
+    text = CliRunner().invoke(
+        launch_app,
+        ["status", "--root", str(tmp_path), "--format", "text"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["count"] == 1
+    assert payload["launches"][0]["launch_id"] == "kairos-system"
+    assert payload["launches"][0]["mode"] == "system"
+    assert "system  kairos-system" in text.output
+
+
+def test_top_level_system_status_uses_system_artifact_registry(tmp_path) -> None:
+    directory = tmp_path / "system" / "kairos-system"
+    directory.mkdir(parents=True)
+    (directory / "summary.json").write_text(
+        json.dumps({"launch_id": "kairos-system", "mode": "system", "event_count": 3}) + "\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        app,
+        ["system", "status", "--root", str(tmp_path), "--format", "json"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["count"] == 1
+    assert payload["launches"][0]["launch_id"] == "kairos-system"
+    assert payload["launches"][0]["mode"] == "system"
+
+
+def test_top_level_system_inspect_wraps_system_inspect(monkeypatch, tmp_path) -> None:
     fake = _FakeLaunchFacade()
-    monkeypatch.setattr(launch_commands, "_RUNS", fake)
+    monkeypatch.setattr(system_commands, "_RUNS", fake)
+
+    result = CliRunner().invoke(
+        app,
+        ["system", "inspect", "--root", str(tmp_path), "--format", "json"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert fake.inspects == [{"root": str(tmp_path), "launch_id": "kairos-system"}]
+    assert json.loads(result.output)["health"] == "healthy"
+
+
+def test_system_log_file_uses_current_instance_when_history_exists(tmp_path) -> None:
+    group = tmp_path / "system" / "kairos-system"
+    failed = group / "instances" / "failed-1"
+    running = group / "instances" / "running-1"
+    failed.mkdir(parents=True)
+    running.mkdir(parents=True)
+    (group / "current.json").write_text(
+        json.dumps(
+            {
+                "directory": str(running),
+                "mode": "system",
+                "launch_id": "kairos-system",
+                "launch_instance_id": "running-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (failed / "state.json").write_text(
+        json.dumps({"mode": "system", "launch_id": "kairos-system", "launch_instance_id": "failed-1", "phase": "failed"}),
+        encoding="utf-8",
+    )
+    (failed / "summary.json").write_text(
+        json.dumps({"mode": "system", "launch_id": "kairos-system", "phase": "failed"}),
+        encoding="utf-8",
+    )
+    (running / "state.json").write_text(
+        json.dumps({"mode": "system", "launch_id": "kairos-system", "launch_instance_id": "running-1", "phase": "running"}),
+        encoding="utf-8",
+    )
+    (running / "launch.log").write_text("running\n", encoding="utf-8")
+
+    assert system_commands._RUNS.system_log_file(root=tmp_path) == running / "launch.log"
+
+
+def test_launch_log_file_uses_current_instance_when_history_exists(tmp_path) -> None:
+    group = tmp_path / "paper" / "binance-equity-aapl-paper"
+    failed = group / "instances" / "failed-1"
+    current = group / "instances" / "current-1"
+    failed.mkdir(parents=True)
+    current.mkdir(parents=True)
+    (group / "current.json").write_text(
+        json.dumps(
+            {
+                "directory": str(current),
+                "mode": "paper",
+                "launch_id": "binance-equity-aapl-paper",
+                "launch_instance_id": "current-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (failed / "state.json").write_text(
+        json.dumps({"mode": "paper", "launch_id": "binance-equity-aapl-paper", "launch_instance_id": "failed-1", "phase": "failed"}),
+        encoding="utf-8",
+    )
+    (failed / "summary.json").write_text(
+        json.dumps({"mode": "paper", "launch_id": "binance-equity-aapl-paper", "phase": "failed"}),
+        encoding="utf-8",
+    )
+    (current / "state.json").write_text(
+        json.dumps({"mode": "paper", "launch_id": "binance-equity-aapl-paper", "launch_instance_id": "current-1", "phase": "running"}),
+        encoding="utf-8",
+    )
+    (current / "summary.json").write_text(
+        json.dumps({"mode": "paper", "launch_id": "binance-equity-aapl-paper", "phase": "running"}),
+        encoding="utf-8",
+    )
+    (current / "launch.log").write_text("current\n", encoding="utf-8")
+
+    assert launch_commands._RUNS.log_file(target=None, mode=None, launch_id="binance-equity-aapl-paper", root=tmp_path) == current / "launch.log"
+
+
+def test_launch_status_uses_current_instance_when_history_exists(tmp_path) -> None:
+    group = tmp_path / "paper" / "binance-equity-aapl-paper"
+    failed = group / "instances" / "failed-1"
+    current = group / "instances" / "current-1"
+    failed.mkdir(parents=True)
+    current.mkdir(parents=True)
+    (group / "current.json").write_text(
+        json.dumps(
+            {
+                "directory": str(current),
+                "mode": "paper",
+                "launch_id": "binance-equity-aapl-paper",
+                "launch_instance_id": "current-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (failed / "state.json").write_text(
+        json.dumps({"mode": "paper", "launch_id": "binance-equity-aapl-paper", "launch_instance_id": "failed-1", "phase": "failed"}),
+        encoding="utf-8",
+    )
+    (failed / "summary.json").write_text(
+        json.dumps({"mode": "paper", "launch_id": "binance-equity-aapl-paper", "phase": "failed"}),
+        encoding="utf-8",
+    )
+    (current / "state.json").write_text(
+        json.dumps({"mode": "paper", "launch_id": "binance-equity-aapl-paper", "launch_instance_id": "current-1", "phase": "running"}),
+        encoding="utf-8",
+    )
+    (current / "summary.json").write_text(
+        json.dumps({"mode": "paper", "launch_id": "binance-equity-aapl-paper", "phase": "running"}),
+        encoding="utf-8",
+    )
 
     status = CliRunner().invoke(
         launch_app,
-        ["system", "trade-status", "--root", str(tmp_path), "--no-wait", "--format", "json"],
+        ["status", "--root", str(tmp_path), "--launch-id", "binance-equity-aapl-paper", "--format", "json"],
         catch_exceptions=False,
     )
-    acquire = CliRunner().invoke(
+    instances = CliRunner().invoke(
         launch_app,
-        ["system", "trade-acquire", "main", "--root", str(tmp_path), "--timeout", "1", "--format", "json"],
-        catch_exceptions=False,
-    )
-    release = CliRunner().invoke(
-        launch_app,
-        ["system", "trade-release", "binance.main", "--root", str(tmp_path), "--format", "json"],
+        ["instances", "--root", str(tmp_path), "--launch-id", "binance-equity-aapl-paper", "--format", "json"],
         catch_exceptions=False,
     )
 
-    assert status.exit_code == 0
-    assert acquire.exit_code == 0
-    assert release.exit_code == 0
-    assert [call["kind"] for call in fake.calls] == ["account.trade-status", "account.trade-acquire", "account.trade-release"]
-    assert fake.calls[0]["payload"] == {}
-    assert fake.calls[0]["wait"] is False
-    assert fake.calls[1]["payload"] == {"account": "main"}
-    assert fake.calls[1]["timeout_seconds"] == 1.0
-    assert fake.calls[2]["payload"] == {"account": "binance.main"}
-    assert json.loads(acquire.output)["kind"] == "account.trade-acquire"
+    status_payload = json.loads(status.output)
+    assert status_payload["count"] == 1
+    assert status_payload["launches"][0]["launch_instance_id"] == "current-1"
+    assert json.loads(instances.output)["count"] == 2
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["status", "binance-equity-aapl-paper", "--format", "json"], '"count": 1'),
+        (["logs", "binance-equity-aapl-paper", "--limit", "10"], "current log line"),
+        (["artifacts", "binance-equity-aapl-paper", "--format", "json"], '"count":'),
+    ],
+)
+def test_launch_commands_infer_mode_from_launch_id_target(tmp_path, argv, expected) -> None:
+    run_dir = tmp_path / "paper" / "binance-equity-aapl-paper"
+    run_dir.mkdir(parents=True)
+    (run_dir / "state.json").write_text(
+        json.dumps({"mode": "paper", "launch_id": "binance-equity-aapl-paper", "phase": "running"}),
+        encoding="utf-8",
+    )
+    (run_dir / "summary.json").write_text(
+        json.dumps({"mode": "paper", "launch_id": "binance-equity-aapl-paper", "phase": "running"}),
+        encoding="utf-8",
+    )
+    (run_dir / "launch.log").write_text("current log line\n", encoding="utf-8")
+
+    result = CliRunner().invoke(launch_app, [*argv, "--root", str(tmp_path)], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert expected in result.output
 
 
 def test_top_level_system_account_trade_commands_wrap_system_command(monkeypatch, tmp_path) -> None:
@@ -194,9 +404,48 @@ def test_top_level_system_account_trade_commands_wrap_system_command(monkeypatch
     assert json.loads(status.output)["kind"] == "account.trade-status"
 
 
+def test_top_level_system_restart_wraps_system_restart(monkeypatch, tmp_path) -> None:
+    fake = _FakeLaunchFacade()
+    monkeypatch.setattr(system_commands, "_RUNS", fake)
+
+    result = CliRunner().invoke(
+        app,
+        ["system", "restart", "--root", str(tmp_path), "--timeout", "1", "--format", "json"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert fake.restarts == [
+        {
+            "root": str(tmp_path),
+            "launch_id": "kairos-system",
+            "foreground": False,
+            "timeout_seconds": 1.0,
+            "clean_stale": False,
+        }
+    ]
+    assert json.loads(result.output)["action"] == "restart"
+
+
+def test_top_level_system_restart_clean_stale_passes_flag(monkeypatch, tmp_path) -> None:
+    fake = _FakeLaunchFacade()
+    monkeypatch.setattr(system_commands, "_RUNS", fake)
+
+    result = CliRunner().invoke(
+        app,
+        ["system", "restart", "--clean-stale", "--root", str(tmp_path), "--format", "json"],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    assert fake.restarts[0]["clean_stale"] is True
+
+
 class _FakeLaunchFacade:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.restarts: list[dict[str, object]] = []
+        self.inspects: list[dict[str, object]] = []
 
     def system_command(
         self,
@@ -218,6 +467,41 @@ class _FakeLaunchFacade:
         }
         self.calls.append(call)
         return dict(call) | {"command_file": "commands/1.json", "response_file": "responses/1.json"}
+
+    def system_restart(
+        self,
+        *,
+        root,
+        launch_id: str,
+        foreground: bool,
+        timeout_seconds: float,
+        clean_stale: bool = False,
+    ) -> dict[str, object]:
+        call = {
+            "root": str(root) if root is not None else None,
+            "launch_id": launch_id,
+            "foreground": foreground,
+            "timeout_seconds": timeout_seconds,
+            "clean_stale": clean_stale,
+        }
+        self.restarts.append(call)
+        return {
+            "action": "restart",
+            "stopped": None,
+            "cleaned": None,
+            "started": {
+                "mode": "system",
+                "launch_id": launch_id,
+                "launch_instance_id": "instance-1",
+                "phase": "starting",
+                "directory": "launches/system/kairos-system",
+            },
+        }
+
+    def system_inspect(self, *, root, launch_id: str) -> dict[str, object]:
+        call = {"root": str(root) if root is not None else None, "launch_id": launch_id}
+        self.inspects.append(call)
+        return {"launch_id": launch_id, "health": "healthy", "processes": {"count": 1}, "records": []}
 
 
 def _write_workspace_manifest(root) -> None:
@@ -252,7 +536,7 @@ def _write_launch_config(root) -> Path:
 def test_execute_argv_returns_usage_errors_without_raising() -> None:
     output = StringIO()
 
-    exit_code = execute_argv(["launch", "daemon", "start", "paper-printer", "extra"], output)
+    exit_code = execute_argv(["launch", "start", "paper-printer", "extra"], output)
 
     assert exit_code != 0
     assert "Got unexpected extra argument" in output.getvalue()
@@ -311,21 +595,20 @@ def test_app_launch_workspace_prompt_has_default_launch_state(tmp_path) -> None:
     assert session.prompt() == "kairos/app/launch> "
 
 
-def test_app_launch_daemon_is_navigation_context(tmp_path) -> None:
+def test_app_launch_timeline_is_navigation_context(tmp_path) -> None:
     stdout = StringIO()
     session = AppSession(
         stdout=stdout,
         context=_surface_context(tmp_path),
     )
 
-    assert session.handle("launch daemon") is False
+    assert session.handle("launch timeline") is False
 
-    assert session.prompt() == "kairos/app/launch/daemon> "
+    assert session.prompt() == "kairos/app/launch/timeline> "
     output = stdout.getvalue()
     assert "Subcommands" in output
-    assert "start" in output
-    assert "status" in output
-    assert "stop" in output
+    assert "open" in output
+    assert "export" in output
 
 
 def test_app_initial_screen_renders_home_from_navigation(tmp_path) -> None:
@@ -338,7 +621,7 @@ def test_app_initial_screen_renders_home_from_navigation(tmp_path) -> None:
 
     assert "view home" in output
     assert "Products" in output
-    assert "reference" in output
+    assert "catalog" in output
     assert "Commands" in output
 
 
@@ -380,7 +663,7 @@ def test_app_order_context_does_not_inject_account(tmp_path) -> None:
     assert calls[-1] == ["order", "open", "--account", "account1", "--symbol", "BTC/USDT"]
 
 
-def test_app_reference_view_shows_reference_commands(tmp_path, monkeypatch) -> None:
+def test_app_catalog_view_shows_catalog_commands(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / ".kairos").mkdir()
     (tmp_path / ".kairos" / "kairos.toml").write_text(
@@ -393,15 +676,16 @@ def test_app_reference_view_shows_reference_commands(tmp_path, monkeypatch) -> N
         context=_surface_context(tmp_path),
     )
 
-    assert session.handle("7") is False
+    assert session.handle("6") is False
 
     output = stdout.getvalue()
-    assert "view reference" in output
+    assert "view catalog" in output
     assert "Subcommands" in output
     assert "sync" in output
     assert "participants" in output
     assert "assets" in output
-    assert "catalog" in output
+    assert "events" in output
+    assert "lifecycle" not in output
     assert "Reference Panel" not in output
 
 
@@ -412,24 +696,24 @@ def test_app_context_screen_is_framed(tmp_path) -> None:
         context=_surface_context(tmp_path),
     )
 
-    assert session.handle("reference") is False
+    assert session.handle("catalog") is False
 
     assert stdout.getvalue().startswith("-" * 72 + "\n")
 
 
-def test_app_reference_numeric_subcommand_uses_current_context(tmp_path) -> None:
+def test_app_catalog_numeric_subcommand_uses_current_context(tmp_path) -> None:
     session = AppSession(
         stdout=StringIO(),
         context=_surface_context(tmp_path),
     )
 
-    assert session.handle("reference") is False
+    assert session.handle("catalog") is False
     assert session.handle("2") is False
 
-    assert session.prompt() == "kairos/app/reference/participants> "
+    assert session.prompt() == "kairos/app/catalog/participants> "
 
 
-def test_app_reference_removed_legacy_refresh_context(tmp_path) -> None:
+def test_app_catalog_removed_legacy_refresh_context(tmp_path) -> None:
     stdout = StringIO()
     calls: list[list[str]] = []
 
@@ -443,10 +727,10 @@ def test_app_reference_removed_legacy_refresh_context(tmp_path) -> None:
         command_executor=execute,
     )
 
-    assert session.handle("reference refresh") is False
+    assert session.handle("catalog refresh") is False
 
-    assert session.prompt() == "kairos/app/reference> "
-    assert calls == [["reference", "refresh"]]
+    assert session.prompt() == "kairos/app/catalog> "
+    assert calls == [["catalog", "refresh"]]
 
 
 def test_app_top_level_product_tail_executes_in_context(tmp_path) -> None:
@@ -463,13 +747,13 @@ def test_app_top_level_product_tail_executes_in_context(tmp_path) -> None:
         command_executor=execute,
     )
 
-    assert session.handle("reference assets list --type crypto") is False
+    assert session.handle("catalog assets list --type crypto") is False
 
-    assert session.prompt() == "kairos/app/reference/assets> "
-    assert calls == [["reference", "assets", "list", "--type", "crypto"]]
+    assert session.prompt() == "kairos/app/catalog/assets> "
+    assert calls == [["catalog", "assets", "list", "--type", "crypto"]]
 
 
-def test_app_reference_child_context_prefixes_commands(tmp_path) -> None:
+def test_app_catalog_child_context_prefixes_commands(tmp_path) -> None:
     stdout = StringIO()
     calls: list[list[str]] = []
 
@@ -483,12 +767,12 @@ def test_app_reference_child_context_prefixes_commands(tmp_path) -> None:
         command_executor=execute,
     )
 
-    assert session.handle("reference") is False
+    assert session.handle("catalog") is False
     assert session.handle("assets") is False
-    assert session.prompt() == "kairos/app/reference/assets> "
+    assert session.prompt() == "kairos/app/catalog/assets> "
     assert session.handle("list --type crypto") is False
 
-    assert calls == [["reference", "assets", "list", "--type", "crypto"]]
+    assert calls == [["catalog", "assets", "list", "--type", "crypto"]]
 
 
 def test_app_command_output_is_framed(tmp_path) -> None:
@@ -503,9 +787,9 @@ def test_app_command_output_is_framed(tmp_path) -> None:
         command_executor=execute,
     )
 
-    assert session.handle("reference assets list --type crypto") is False
+    assert session.handle("catalog assets list --type crypto") is False
 
-    assert stdout.getvalue().endswith("--- kairospy reference assets list --type crypto\nok\n---\n")
+    assert stdout.getvalue().endswith("--- kairospy catalog assets list --type crypto\nok\n---\n")
 
 
 def test_app_back_pops_one_context_level(tmp_path) -> None:
@@ -514,7 +798,7 @@ def test_app_back_pops_one_context_level(tmp_path) -> None:
         context=_surface_context(tmp_path),
     )
 
-    assert session.handle("reference assets") is False
-    assert session.prompt() == "kairos/app/reference/assets> "
+    assert session.handle("catalog assets") is False
+    assert session.prompt() == "kairos/app/catalog/assets> "
     assert session.handle("back") is False
-    assert session.prompt() == "kairos/app/reference> "
+    assert session.prompt() == "kairos/app/catalog> "

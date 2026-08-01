@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .account import LiveAccountService
-from .config import ConfiguredLive, LiveConfigurationError, LiveLaunchResult, configured_live
+from .config import ConfiguredLive, LiveConfigurationError, LiveLaunchResult, LivePrivateSyncConfig, configured_live
 from .execution import LiveExecutionAdapter, LiveExecutionService, LiveTradingSafetyPolicy
 from .market import LiveMarketDataService, LiveMarketDataServiceView
 
@@ -14,6 +14,7 @@ __all__ = [
     "LiveMarketDataService",
     "LiveMarketDataServiceView",
     "LiveLaunchResult",
+    "LivePrivateSyncConfig",
     "LiveTradingSafetyPolicy",
     "configured_live",
 ]

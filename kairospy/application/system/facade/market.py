@@ -7,7 +7,7 @@ from typing import Mapping, Literal
 
 from kairospy.application.runtime.dispatch.context import RuntimeContext
 from kairospy.application.ports import DataSubscription, MarketDataSubscriptionSpec
-from kairospy.application.service.domain.market import MarketDataOperationsService, MarketDataResolver, MarketDataSpec, parse_market_dataset_id, replay_rows
+from kairospy.application.domain.market import MarketDataOperationsService, MarketDataResolver, MarketDataSpec, parse_market_dataset_id, replay_rows
 from kairospy.application.service.modes.backtest import BacktestConfigurationError, configured_backtest
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, StorageFormat, data_store, exchange
 from kairospy.application.system.facade.context import workspace as resolve_workspace

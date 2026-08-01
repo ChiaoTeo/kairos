@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from kairospy.application.service.domain.execution import SimulatedEquityPoint
+from kairospy.application.domain.execution import SimulatedEquityPoint
 from kairospy.core.account import AccountContext
 from kairospy.core.views import ViewFieldSchema, ViewSchema
 

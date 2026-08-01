@@ -4,7 +4,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.service.runtime import RuntimeExecutionService
+from kairospy.application.runtime.services import RuntimeExecutionService
 from kairospy.core.execution import ExecutionUpdate
 from kairospy.core.views import ViewStore
 

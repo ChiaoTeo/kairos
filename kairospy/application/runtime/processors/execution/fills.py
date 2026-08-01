@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.application.service.runtime import RuntimeExecutionService
+from kairospy.application.runtime.services import RuntimeExecutionService
 from kairospy.core.execution import EXECUTION_FILLS_SCHEMA, ExecutionFillSummary, ExecutionFillsView, ExecutionViewKeys
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.service.runtime import RuntimeMarketService
+from kairospy.application.runtime.services import RuntimeMarketService
 from kairospy.core.views import ViewStore
 
 from .state import MarketViewState

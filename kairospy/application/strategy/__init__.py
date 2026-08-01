@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from .cli import CliCommand, CliStrategyBase, cli_command_envelope
-from .control import ControlFactory, ControlJournal, ControlRecorder, ControlRequest, ControlRequestKind
 from .context import Context, StrategyContext
 from .events import AccountSignal, ClockSignal, MarketSignal, OrderSignal, Signal, StrategySignal, SystemSignal
 from .protocol import Strategy, StrategyBase
@@ -11,11 +10,6 @@ __all__ = [
     "Context",
     "CliCommand",
     "CliStrategyBase",
-    "ControlFactory",
-    "ControlJournal",
-    "ControlRecorder",
-    "ControlRequest",
-    "ControlRequestKind",
     "AccountSignal",
     "ClockSignal",
     "MarketSignal",

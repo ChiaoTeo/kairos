@@ -12,16 +12,19 @@ from kairospy.application.account_books import default_account_books
 from kairospy.application.protocol import RuntimeEnvelope, RuntimeLine
 from kairospy.application.modes import RuntimeMode
 from kairospy.application.runtime.launch import RuntimeLaunchResult
+from kairospy.application.runtime.components import RuntimeComponents
 from kairospy.application.service.modes.backtest import BacktestConfigurationError, BacktestLaunchResult, ConfiguredBacktest, configured_backtest
 from kairospy.application.service.modes.live.account import LiveAccountService
 from kairospy.application.service.modes.live.config import BrokerFactory, ConfiguredLive, LiveConfigurationError, LiveLaunchResult, MarketFeedFactory as LiveMarketFeedFactory, configured_live
 from kairospy.application.service.modes.paper.config import ConfiguredPaper, PaperConfigurationError, PaperLaunchResult, MarketFeedFactory as PaperMarketFeedFactory, configured_paper
 from kairospy.application.service.modes.common import ConfiguredAccount, ConfiguredCredential
-from kairospy.application.service.domain.account.routing import account_book_route
-from kairospy.application.service.domain.account import SimulatedAccount
-from kairospy.application.service.domain.market import MarketDataSpec
-from kairospy.application.service.runtime.account import SimulatedAccountService
-from kairospy.application.service.runtime.execution import AccountTradeAuthority, AuthorizingAccountPort, AuthorizingTradingExecutionService, SimulatedExecutionService
+from kairospy.application.domain.account.routing import account_book_route
+from kairospy.application.domain.account import SimulatedAccount
+from kairospy.application.domain.market import MarketDataSpec
+from kairospy.application.runtime.services.account import SimulatedAccountService
+from kairospy.application.launch.authority import AccountTradeAuthority, AuthorizingAccountRuntime, AuthorizingTradingExecutionService
+from kairospy.application.runtime.services.execution import SimulatedExecutionService
+from kairospy.application.runtime.services.reference import ReferenceCatalogService
 from kairospy.application.system.artifacts.logging import LaunchOutputLog, write_launch_log_section
 from kairospy.application.system.artifacts.output import LaunchOutput
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, exchange
@@ -29,13 +32,15 @@ from kairospy.application.launch import LaunchAccountBinding, LaunchAccountDirec
 from kairospy.application.launch.host.resources import TradingRuntimeResources, TradingLaunchSpec
 from kairospy.application.launch.host.runtime_host import TradingSystem, TradingSystemSession
 from kairospy.application.system.resources.accounts import BacktestAccountResources, LiveAccountResources, PaperAccountResources
-from kairospy.application.system.resources.live_state import JsonLiveRuntimeStateStore
+from kairospy.infrastructure.persistence.runtime_state.live_json_store import JsonLiveRuntimeStateStore
 from kairospy.application.system.workspace import AccountRecord, KairosWorkspace
 from kairospy.application.strategy import CliStrategyBase, Strategy
 from kairospy.application.system.session import SystemCommandDispatcher, SystemCommandFileQueue, SystemCommandResult
+from kairospy.application.runtime.connections import DefaultConnectionManager
 from kairospy.config import LaunchAccountConfig
 from kairospy.core.account import AccountBookKind, AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, AccountIdentity, Environment
 from kairospy.core.execution import ExecutionCoordinator
+from kairospy.infrastructure.persistence.reference.sqlite_store import SqliteReferenceStore
 from kairospy.config import SYSTEM_LAUNCH_ID
 
 
@@ -81,6 +86,7 @@ class TradingSystemLauncher:
     def launch_configured_backtest(self, configured: ConfiguredBacktest) -> BacktestLaunchResult:
         self._configure_backtest_market_downloads(configured)
         account_resources = BacktestAccountResources.from_configured(configured)
+        connections = DefaultConnectionManager()
         runtime = self._launch_configured(
             launch_id=configured.launch_id,
             mode=RuntimeMode.BACKTEST,
@@ -89,9 +95,18 @@ class TradingSystemLauncher:
             normalized_config=configured.normalized_config,
             resources=TradingRuntimeResources(
                 source=configured.data,
-                data=configured.data,
-                account=account_resources.account,
-                trading_execution=account_resources.execution,
+                components=RuntimeComponents(
+                    market=configured.data,
+                    account=account_resources.account,
+                    account_catalog=account_resources.account,
+                    execution=account_resources.execution,
+                    reference=_reference_runtime(
+                        configured.launch_directory,
+                        default_venue=_backtest_default_venue(configured.backtest_config),
+                        default_market=_backtest_default_market(configured.backtest_config),
+                    ),
+                ),
+                connections=connections,
             ),
         )
         result = account_resources.build_result(configured, runtime)
@@ -110,6 +125,7 @@ class TradingSystemLauncher:
 
     def _system_resources(self, launch_directory: Path, *, launch_id: str) -> tuple[TradingRuntimeResources, AccountTradeAuthority]:
         workspace = KairosWorkspace.resolve(launch_directory)
+        connections = DefaultConnectionManager()
         directory = _system_account_directory(workspace)
         authority = AccountTradeAuthority(
             workspace.account_locks,
@@ -119,7 +135,11 @@ class TradingSystemLauncher:
         )
         authority.acquire_available(_tradable_contexts(directory))
         if not directory.bindings:
-            return TradingRuntimeResources(source=_SystemCommandEventLine(launch_directory)), authority
+            return TradingRuntimeResources(
+                source=_SystemCommandEventLine(launch_directory),
+                reference=_reference_runtime(launch_directory),
+                connections=connections,
+            ), authority
         primary = directory.bindings[0].books[0]
         account = SimulatedAccount(
             str(primary.identity.account_id),
@@ -134,13 +154,15 @@ class TradingSystemLauncher:
         fees = _system_fees(directory)
         account_service = SimulatedAccountService(account, coordinator, directory=directory, capabilities=capabilities, fees=fees)
         execution = SimulatedExecutionService(coordinator, account=primary, cash_currency="USD", price_field="close", directory=directory)
-        account_port = AuthorizingAccountPort(account_service, authority)
+        account_port = AuthorizingAccountRuntime(account_service, authority)
         execution_port = AuthorizingTradingExecutionService(execution, authority)
         return (
             TradingRuntimeResources(
                 source=_SystemCommandEventLine(launch_directory),
                 account=account_port,
+                reference=_reference_runtime(launch_directory),
                 trading_execution=execution_port,
+                connections=connections,
             ),
             authority,
         )
@@ -160,6 +182,8 @@ class TradingSystemLauncher:
 
     def launch_configured_paper(self, configured: ConfiguredPaper) -> PaperLaunchResult:
         def run() -> PaperLaunchResult:
+            connections = DefaultConnectionManager()
+            configured.market_data.set_connection_manager(connections)
             resources = PaperAccountResources.from_configured(configured)
             runtime = self._launch_configured(
                 launch_id=configured.launch_id,
@@ -171,7 +195,13 @@ class TradingSystemLauncher:
                     source=configured.market_data,
                     data=configured.market_data,
                     account=resources.account,
+                    reference=_reference_runtime(
+                        configured.launch_directory,
+                        default_venue=configured.account_config.venue,
+                        default_market=_paper_default_market(configured.normalized_config),
+                    ),
                     trading_execution=resources.execution,
+                    connections=connections,
                 ),
             )
             result = resources.build_result(configured, runtime)
@@ -202,7 +232,10 @@ class TradingSystemLauncher:
 
     def launch_configured_live(self, configured: ConfiguredLive) -> LiveLaunchResult:
         def run() -> LiveLaunchResult:
+            connections = DefaultConnectionManager()
+            configured.market_data.set_connection_manager(connections)
             account_resources = LiveAccountResources.from_configured(configured)
+            account_resources.account.set_connection_manager(connections)
             runtime = self._launch_configured(
                 launch_id=configured.launch_id,
                 mode=RuntimeMode.LIVE,
@@ -214,7 +247,13 @@ class TradingSystemLauncher:
                     source=configured.market_data,
                     data=configured.market_data,
                     account=account_resources.account,
+                    reference=_reference_runtime(
+                        configured.launch_directory,
+                        default_venue=configured.account_config.venue,
+                        default_market="spot",
+                    ),
                     trading_execution=account_resources.execution,
+                    connections=connections,
                 ),
             )
             result = account_resources.build_result(configured, runtime)
@@ -236,6 +275,7 @@ class TradingSystemLauncher:
         runtime_mode = mode if isinstance(mode, RuntimeMode) else RuntimeMode(str(mode))
         strategy = self._load_strategy(strategy_path)
         event_path = Path(events_path)
+        connections = DefaultConnectionManager()
         return self._launch_configured(
             launch_id=launch_id,
             mode=runtime_mode,
@@ -245,7 +285,11 @@ class TradingSystemLauncher:
                 "launch": {"id": launch_id, "mode": runtime_mode.value, "strategy": strategy_path},
                 "events": {"source": str(event_path)},
             },
-            resources=TradingRuntimeResources(source=RuntimeLine(self._read_event_jsonl(event_path))),
+            resources=TradingRuntimeResources(
+                source=RuntimeLine(self._read_event_jsonl(event_path)),
+                reference=_reference_runtime(event_path),
+                connections=connections,
+            ),
         )
 
     def open_system_session(
@@ -268,7 +312,10 @@ class TradingSystemLauncher:
                     "launch": {"id": launch_id, "mode": runtime_mode.value, "strategy": strategy_path},
                     "system": {"interactive": True},
                 },
-                resources=TradingRuntimeResources(),
+                resources=TradingRuntimeResources(
+                    reference=_reference_runtime(launch_directory),
+                    connections=DefaultConnectionManager(),
+                ),
             )
         ).start()
 
@@ -408,6 +455,46 @@ class TradingSystemLauncher:
         )
 
 
+def _reference_runtime(
+    start: str | Path | None,
+    *,
+    default_venue: str | None = None,
+    default_market: str | None = None,
+) -> ReferenceCatalogService:
+    workspace = KairosWorkspace.resolve(start)
+    return ReferenceCatalogService(
+        SqliteReferenceStore(workspace.reference_root),
+        default_venue=_optional_default_text(default_venue),
+        default_market=_optional_default_text(default_market),
+    )
+
+
+def _backtest_default_venue(config: Mapping[str, object]) -> str:
+    return _optional_default_text(config.get("venue")) or "simulated"
+
+
+def _backtest_default_market(config: Mapping[str, object]) -> str:
+    market = config.get("market")
+    if isinstance(market, Mapping):
+        return _optional_default_text(market.get("market")) or "spot"
+    return _optional_default_text(config.get("market")) or "spot"
+
+
+def _paper_default_market(config: Mapping[str, object]) -> str:
+    market = config.get("market")
+    if isinstance(market, Mapping):
+        return _optional_default_text(market.get("market")) or "spot"
+    return "spot"
+
+
+def _optional_default_text(value: object) -> str | None:
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            return text
+    return None
+
+
 class _SystemCommandEventLine:
     def __init__(self, directory: Path) -> None:
         self.directory = directory
@@ -524,7 +611,7 @@ def _configured_account_from_record(account: AccountRecord, *, workspace: Kairos
     return ConfiguredAccount(
         account.account_id,
         _int_value(account.values.get("index", 0)),
-        account.venue or account.provider,
+        account.venue or account.broker,
         _decimal_value(account.values.get("cash", "100000")),
         str(account.values.get("currency", "USD")),
         environment=str(account.environment),
@@ -569,7 +656,7 @@ def _tradable_contexts(directory: LaunchAccountDirectory) -> tuple[AccountContex
         for binding in directory.bindings
         if binding.trade
         for context in binding.books
-        if account_book_route(context.book, provider=str(context.book.broker)).can_trade
+        if account_book_route(context.book, broker=str(context.book.broker)).can_trade
     )
 
 
@@ -577,7 +664,7 @@ def _system_capabilities(directory: LaunchAccountDirectory) -> tuple[AccountCapa
     capabilities: list[AccountCapability] = []
     for binding in directory.bindings:
         for context in binding.books:
-            route = account_book_route(context.book, provider=str(context.book.broker))
+            route = account_book_route(context.book, broker=str(context.book.broker))
             kind = str(context.book.book)
             can_hold_position = kind not in {AccountBookKind.FUNDING.value, AccountBookKind.EARN.value}
             can_borrow = kind in {AccountBookKind.CROSS_MARGIN.value, AccountBookKind.ISOLATED_MARGIN.value}
@@ -637,7 +724,7 @@ def _launch_account_can_trade(launch_account: LaunchAccountConfig, account: Conf
     books = launch_account.books or default_account_books(account.venue, fallback=_default_trade_book(configured))
     for book in books:
         ref = AccountBookRef(account.venue, account.account_id, book)
-        if account_book_route(ref, provider=str(ref.broker)).can_trade:
+        if account_book_route(ref, broker=str(ref.broker)).can_trade:
             return True
     return False
 

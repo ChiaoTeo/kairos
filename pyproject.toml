@@ -5,10 +5,13 @@ description = "Strategy runtime, execution, account, reference, and integration 
 requires-python = ">=3.11"
 dependencies = [
     "click>=8,<9",
+    "jmespath>=1.0,<2",
     "pandas>=2,<4",
     "prettytable>=3,<4",
+    "prompt-toolkit>=3,<4",
     "pyarrow>=22,<26",
     "requests>=2,<3",
+    "textual>=8,<9",
     "typer>=0.12,<1",
 ]
 

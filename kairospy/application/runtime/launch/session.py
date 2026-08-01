@@ -9,7 +9,6 @@ from kairospy.application.runtime.orchestration.session import RuntimeSession
 from kairospy.application.runtime.orchestration.state import RuntimeLaunchResult as StrategyRuntimeLaunchResult
 from kairospy.application.protocol import RuntimeEnvelope, RuntimeEventLine
 from kairospy.application.runtime.launch.pump import RuntimeEnvelopePump
-from kairospy.application.strategy import ControlJournal
 from kairospy.core.intent import IntentJournal
 from kairospy.core.views import ViewStore
 
@@ -21,7 +20,6 @@ class RuntimeLaunchResult:
     runtime: StrategyRuntimeLaunchResult
     views: ViewStore
     intents: IntentJournal
-    controls: ControlJournal
 
     @property
     def decision_trace(self) -> tuple[object, ...]:
@@ -51,10 +49,6 @@ class RuntimeLaunchSession:
     def intents(self) -> IntentJournal:
         return self.kernel.intents
 
-    @property
-    def controls(self) -> ControlJournal:
-        return self.kernel.controls
-
     async def run(self, source: RuntimeEventLine | None = None) -> RuntimeLaunchResult:
         line = source or self.kernel.data or self.kernel.account
         if line is None:
@@ -73,7 +67,6 @@ class RuntimeLaunchSession:
             runtime=runtime,
             views=self.views,
             intents=self.intents,
-            controls=self.controls,
         )
 
 

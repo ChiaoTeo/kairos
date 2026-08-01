@@ -4,6 +4,7 @@ import asyncio
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
 from kairospy.application.runtime.orchestration.state import RuntimeStores
+from kairospy.application.runtime.components import RuntimeComponents
 
 from .session import RuntimeLaunchResult, RuntimeLaunchSession
 from .spec import RuntimeLaunchSpec
@@ -14,6 +15,7 @@ class RuntimeRunner:
     def start(spec: RuntimeLaunchSpec) -> RuntimeLaunchSession:
         kernel = RuntimeKernel(
             spec.strategy,
+            components=RuntimeComponents(),
             stores=spec.stores or RuntimeStores(),
         )
         return RuntimeLaunchSession(

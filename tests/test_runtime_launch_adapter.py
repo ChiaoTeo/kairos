@@ -24,13 +24,12 @@ class RecordingStrategy(StrategyBase):
 
     def on_system(self, context, signal) -> None:
         self.system_events += 1
-        context.control.request_pause(reason="test pause", request_id="pause-1")
 
     def on_data(self, context, signal) -> None:
         self.data_events += 1
 
 
-def test_runtime_runner_pumps_start_event_and_records_controls() -> None:
+def test_runtime_runner_pumps_start_event() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     strategy = RecordingStrategy()
 
@@ -49,8 +48,6 @@ def test_runtime_runner_pumps_start_event_and_records_controls() -> None:
     assert result.runtime.event_count == 2
     assert strategy.system_events == 1
     assert strategy.data_events == 1
-    assert [request.request_id for request in result.controls.list()] == ["pause-1"]
-    assert result.controls.list()[0].requested_at == now
 
 
 def test_launch_events_command_executes_jsonl_source(tmp_path, monkeypatch) -> None:
@@ -148,7 +145,6 @@ def test_launch_system_command_enqueues_builtin_system_command(tmp_path, monkeyp
 
     exit_code = execute_argv(
         [
-            "launch",
             "system",
             "command",
             "account.current",

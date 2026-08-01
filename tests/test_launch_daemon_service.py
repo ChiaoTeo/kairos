@@ -11,10 +11,13 @@ from typer.testing import CliRunner
 
 from kairospy.application.modes import RuntimeMode
 from kairospy.application.launch.daemon import LaunchAlreadyActiveError, LaunchDaemonService
+import kairospy.application.launch.facade as launch_facade
+from kairospy.application.launch.facade import LaunchFacade
 from kairospy.application.launch.registry import LaunchRegistry
-from kairospy.infrastructure.data import DataStore
+from kairospy.infrastructure.persistence.market_data.catalog import DataStore
 from kairospy.surface.cli import app
 from kairospy.surface.cli.commands.launch import launch_app
+from kairospy.surface.cli.commands.system import system_app
 
 
 @pytest.fixture(autouse=True)
@@ -40,6 +43,11 @@ def test_launch_daemon_service_launches_backtest_foreground_and_writes_state(tmp
     assert (root / "backtest" / "bt-1" / "instances" / result.launch_instance_id / "account" / "current.json").exists()
     record = LaunchRegistry(root).list(mode="backtest", launch_id="bt-1")[0].to_dict()
     assert record["phase"] == "stopped"
+    assert record["pid"]
+    assert record["identity"]["pid"] == record["pid"]
+    assert record["identity"]["cwd"] == str(tmp_path)
+    assert record["identity"]["root"] == str(root)
+    assert record["identity"]["argv"]
     assert record["heartbeat_at"] is not None
     assert record["result"]["event_count"] == 2
     assert record["context"]["config_file"] == str(config_path)
@@ -51,7 +59,7 @@ def test_launch_daemon_start_foreground_command_launches_config(tmp_path) -> Non
 
     result = CliRunner().invoke(
         launch_app,
-        ["daemon", "start", "--foreground", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
+        ["start", "--foreground", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
         catch_exceptions=False,
     )
 
@@ -73,7 +81,7 @@ def test_launch_daemon_start_uses_workspace_default_text_format(tmp_path) -> Non
 
     result = CliRunner().invoke(
         app,
-        ["launch", "daemon", "start", "--foreground", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
+        ["launch", "start", "--foreground", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
         catch_exceptions=False,
     )
 
@@ -95,7 +103,6 @@ def test_launch_daemon_start_format_option_overrides_workspace_default(tmp_path)
         app,
         [
             "launch",
-            "daemon",
             "start",
             "--foreground",
             "--root",
@@ -120,10 +127,10 @@ def test_launch_workspace_commands_explain_status_logs_artifacts_and_stop(tmp_pa
     LaunchDaemonService(root).launch_foreground(mode="backtest", config_path=config_path)
 
     explain = CliRunner().invoke(launch_app, ["diagnose", "explain", str(config_path), "--format", "json"], catch_exceptions=False)
-    status = CliRunner().invoke(launch_app, ["run", "status", "bt-1", "--root", str(root), "--format", "json"], catch_exceptions=False)
-    logs = CliRunner().invoke(launch_app, ["observe", "logs", "bt-1", "--root", str(root), "--format", "json"], catch_exceptions=False)
-    artifacts = CliRunner().invoke(launch_app, ["observe", "artifacts", "bt-1", "--root", str(root), "--format", "json"], catch_exceptions=False)
-    stop = CliRunner().invoke(launch_app, ["run", "stop", "bt-1", "--mode", "backtest", "--root", str(root)], catch_exceptions=False)
+    status = CliRunner().invoke(launch_app, ["status", "bt-1", "--root", str(root), "--format", "json"], catch_exceptions=False)
+    logs = CliRunner().invoke(launch_app, ["logs", "bt-1", "--root", str(root), "--format", "json"], catch_exceptions=False)
+    artifacts = CliRunner().invoke(launch_app, ["artifacts", "bt-1", "--root", str(root), "--format", "json"], catch_exceptions=False)
+    stop = CliRunner().invoke(launch_app, ["stop", "bt-1", "--mode", "backtest", "--root", str(root)], catch_exceptions=False)
 
     assert explain.exit_code == 0
     assert json.loads(explain.output)["launch_config"]["launch"]["id"] == "bt-1"
@@ -145,7 +152,7 @@ def test_launch_daemon_start_background_command_launches_config(tmp_path) -> Non
 
     result = CliRunner().invoke(
         launch_app,
-        ["daemon", "start", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
+        ["start", "--background", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
         catch_exceptions=False,
     )
 
@@ -171,7 +178,7 @@ def test_launch_daemon_start_background_command_accepts_registered_target(tmp_pa
     register = CliRunner().invoke(launch_app, ["targets", "add", "paper-printer", str(config_path)], catch_exceptions=False)
     result = CliRunner().invoke(
         launch_app,
-        ["daemon", "start", "paper-printer", "--root", str(root)],
+        ["start", "paper-printer", "--background", "--root", str(root)],
         catch_exceptions=False,
     )
 
@@ -235,8 +242,8 @@ def test_launch_system_rejects_non_builtin_launch_id(tmp_path) -> None:
 
 def test_launch_system_cli_rejects_non_builtin_launch_id(tmp_path) -> None:
     result = CliRunner().invoke(
-        launch_app,
-        ["system", "up", "--root", str(tmp_path / "daemon-launches"), "--launch-id", "custom-system"],
+        system_app,
+        ["up", "--root", str(tmp_path / "daemon-launches"), "--launch-id", "custom-system"],
     )
 
     assert result.exit_code != 0
@@ -256,8 +263,8 @@ def test_launch_system_restart_starts_system_when_not_running(tmp_path, monkeypa
     monkeypatch.setattr("kairospy.application.launch.daemon.subprocess.Popen", FakePopen)
 
     result = CliRunner().invoke(
-        launch_app,
-        ["system", "restart", "--root", str(root), "--format", "json"],
+        system_app,
+        ["restart", "--root", str(root), "--format", "json"],
         catch_exceptions=False,
     )
 
@@ -319,8 +326,8 @@ def test_launch_system_restart_stops_active_system_before_starting_new_instance(
     stopper.start()
 
     result = CliRunner().invoke(
-        launch_app,
-        ["system", "restart", "--root", str(root), "--timeout", "2", "--format", "json"],
+        system_app,
+        ["restart", "--root", str(root), "--timeout", "2", "--format", "json"],
         catch_exceptions=False,
     )
     stopper.join(timeout=2)
@@ -336,8 +343,8 @@ def test_launch_system_restart_stops_active_system_before_starting_new_instance(
 
 def test_launch_system_restart_rejects_non_builtin_launch_id(tmp_path) -> None:
     result = CliRunner().invoke(
-        launch_app,
-        ["system", "restart", "--root", str(tmp_path / "daemon-launches"), "--launch-id", "custom-system"],
+        system_app,
+        ["restart", "--root", str(tmp_path / "daemon-launches"), "--launch-id", "custom-system"],
     )
 
     assert result.exit_code != 0
@@ -366,6 +373,149 @@ def test_launch_daemon_rejects_second_active_instance_for_same_launch_id(tmp_pat
     assert current["launch_instance_id"] == first.launch_instance_id
 
 
+def test_system_inspect_reports_current_pid_and_health(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "daemon-launches"
+    group = root / "system" / "kairos-system"
+    instance = group / "instances" / "system-1"
+    instance.mkdir(parents=True)
+    state = {
+        "launch_id": "kairos-system",
+        "mode": "system",
+        "launch_instance_id": "system-1",
+        "phase": "running",
+        "status": "running",
+        "heartbeat_at": datetime.now(timezone.utc).isoformat(),
+        "identity": {"pid": 12345, "process_id": "system-1"},
+    }
+    (group / "current.json").write_text(
+        json.dumps({"launch_id": "kairos-system", "mode": "system", "launch_instance_id": "system-1", "directory": str(instance)}),
+        encoding="utf-8",
+    )
+    (instance / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    monkeypatch.setattr(launch_facade, "_pid_alive", lambda pid: pid == 12345)
+    monkeypatch.setattr(
+        launch_facade,
+        "_matching_system_processes",
+        lambda *, launch_root, launch_id: ({"pid": 12345, "command": "python -m kairospy system up", "argv": []},),
+    )
+
+    payload = LaunchFacade().system_inspect(root=root)
+
+    assert payload["health"] == "healthy"
+    assert payload["pid"] == 12345
+    assert payload["pid_alive"] is True
+    assert payload["processes"]["managed"][0]["pid"] == 12345
+
+
+def test_system_health_classifies_dead_orphaned_and_conflicted() -> None:
+    stale_record = {"phase": "running", "stale": True}
+
+    assert (
+        launch_facade._system_health(
+            current_record=stale_record,
+            pid=12345,
+            pid_alive=False,
+            processes=(),
+            orphaned_processes=(),
+        )
+        == "dead"
+    )
+    assert (
+        launch_facade._system_health(
+            current_record=None,
+            pid=None,
+            pid_alive=None,
+            processes=({"pid": 111},),
+            orphaned_processes=({"pid": 111},),
+        )
+        == "orphaned"
+    )
+    assert (
+        launch_facade._system_health(
+            current_record={"phase": "running", "stale": False},
+            pid=12345,
+            pid_alive=True,
+            processes=({"pid": 12345}, {"pid": 22222}),
+            orphaned_processes=({"pid": 22222},),
+        )
+        == "conflicted"
+    )
+
+
+def test_system_process_match_requires_foreground_root_and_launch_id(tmp_path) -> None:
+    argv = [
+        "python",
+        "-m",
+        "kairospy",
+        "system",
+        "up",
+        "--foreground",
+        "--root",
+        str(tmp_path / "launches"),
+        "--launch-id",
+        "kairos-system",
+    ]
+
+    assert launch_facade._matches_system_process(argv, command=" ".join(argv), launch_root=str(tmp_path / "launches"), launch_id="kairos-system")
+    assert not launch_facade._matches_system_process(argv, command=" ".join(argv), launch_root=str(tmp_path / "other"), launch_id="kairos-system")
+    assert not launch_facade._matches_system_process(argv, command=" ".join(argv), launch_root=str(tmp_path / "launches"), launch_id="other-system")
+    assert not launch_facade._matches_system_process(
+        [part for part in argv if part != "--foreground"],
+        command=" ".join(part for part in argv if part != "--foreground"),
+        launch_root=str(tmp_path / "launches"),
+        launch_id="kairos-system",
+    )
+
+
+def test_system_restart_clean_stale_terminates_only_verified_current_pid(tmp_path, monkeypatch) -> None:
+    root = tmp_path / "daemon-launches"
+    group = root / "system" / "kairos-system"
+    instance = group / "instances" / "system-1"
+    instance.mkdir(parents=True)
+    old = datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat()
+    state = {
+        "launch_id": "kairos-system",
+        "mode": "system",
+        "launch_instance_id": "system-1",
+        "phase": "running",
+        "status": "running",
+        "heartbeat_at": old,
+        "identity": {"pid": 12345, "process_id": "system-1"},
+    }
+    (group / "current.json").write_text(
+        json.dumps({"launch_id": "kairos-system", "mode": "system", "launch_instance_id": "system-1", "directory": str(instance)}),
+        encoding="utf-8",
+    )
+    (instance / "state.json").write_text(json.dumps(state), encoding="utf-8")
+    killed: list[tuple[int, int]] = []
+    alive = {12345: True}
+
+    class FakePopen:
+        pid = 67890
+
+        def __init__(self, args, **kwargs) -> None:
+            pass
+
+    def fake_kill(pid: int, sig: int) -> None:
+        killed.append((pid, sig))
+        alive[pid] = False
+
+    monkeypatch.setattr("kairospy.application.launch.daemon.subprocess.Popen", FakePopen)
+    monkeypatch.setattr(launch_facade, "_pid_alive", lambda pid: alive.get(pid, False))
+    monkeypatch.setattr(launch_facade.os, "kill", fake_kill)
+    monkeypatch.setattr(
+        launch_facade,
+        "_matching_system_processes",
+        lambda *, launch_root, launch_id: ({"pid": 12345, "command": "python -m kairospy system up", "argv": []},),
+    )
+
+    payload = LaunchFacade().system_restart(root=root, clean_stale=True, timeout_seconds=1)
+
+    assert killed == [(12345, launch_facade.signal.SIGTERM)]
+    assert payload["cleaned"]["pid"] == 12345
+    assert payload["started"]["launch_instance_id"] != "system-1"
+
+
 def test_launch_daemon_start_cli_reports_active_instance_conflict(tmp_path, monkeypatch) -> None:
     config_path = _write_backtest_project(tmp_path)
     root = tmp_path / "daemon-launches"
@@ -380,12 +530,12 @@ def test_launch_daemon_start_cli_reports_active_instance_conflict(tmp_path, monk
 
     first = CliRunner().invoke(
         launch_app,
-        ["daemon", "start", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
+        ["start", "--background", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
         catch_exceptions=False,
     )
     second = CliRunner().invoke(
         launch_app,
-        ["daemon", "start", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
+        ["start", "--background", "--root", str(root), "--mode", "backtest", "--config", str(config_path)],
         catch_exceptions=False,
     )
 
@@ -539,7 +689,7 @@ def test_launch_daemon_processes_account_query_command_queue(tmp_path, monkeypat
     assert worker_error == []
 
 
-def test_launch_daemon_command_cli_enqueues_system_command(tmp_path) -> None:
+def test_launch_daemon_command_facade_enqueues_system_command(tmp_path) -> None:
     _write_backtest_project(tmp_path)
     root = tmp_path / "daemon-launches"
     group = root / "backtest" / "bt-1"
@@ -555,32 +705,21 @@ def test_launch_daemon_command_cli_enqueues_system_command(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    result = CliRunner().invoke(
-        launch_app,
-        [
-            "daemon",
-            "command",
-            "account.current",
-            "--root",
-            str(root),
-            "--mode",
-            "backtest",
-            "--launch-id",
-            "bt-1",
-            "--payload-json",
-            '{"account": "main"}',
-        ],
-        catch_exceptions=False,
+    payload = LaunchFacade().submit_command(
+        target=None,
+        root=root,
+        launch_id="bt-1",
+        mode=RuntimeMode.BACKTEST,
+        kind="account.current",
+        payload={"account": "main"},
     )
 
-    assert result.exit_code == 0
-    payload = json.loads(result.output)
     assert payload["kind"] == "account.current"
     command = json.loads(Path(payload["command_file"]).read_text(encoding="utf-8"))
     assert command["payload"]["account"] == "main"
 
 
-def test_launch_daemon_command_cli_can_wait_for_account_query_response(tmp_path, monkeypatch) -> None:
+def test_launch_daemon_command_facade_can_wait_for_account_query_response(tmp_path, monkeypatch) -> None:
     (tmp_path / ".kairos").mkdir(parents=True, exist_ok=True)
     (tmp_path / ".kairos" / "kairos.toml").write_text("[project]\nname = \"test\"\n", encoding="utf-8")
     config_path = tmp_path / "launch.toml"
@@ -603,29 +742,17 @@ def test_launch_daemon_command_cli_can_wait_for_account_query_response(tmp_path,
     instance_dir = _wait_for_running_instance(root / "backtest" / "long-launch")
     _write_account_current_artifact(instance_dir)
 
-    result = CliRunner().invoke(
-        launch_app,
-        [
-            "daemon",
-            "command",
-            "account.current",
-            "--root",
-            str(root),
-            "--mode",
-            "backtest",
-            "--launch-id",
-            "long-launch",
-            "--payload-json",
-            '{"account": "main"}',
-            "--wait",
-            "--timeout",
-            "2",
-        ],
-        catch_exceptions=False,
+    payload = LaunchFacade().submit_command(
+        target=None,
+        root=root,
+        launch_id="long-launch",
+        mode=RuntimeMode.BACKTEST,
+        kind="account.current",
+        payload={"account": "main"},
+        wait=True,
+        timeout_seconds=2,
     )
 
-    payload = json.loads(result.output)
-    assert result.exit_code == 0
     assert payload["response"]["status"] == "accepted"
     assert payload["response"]["result"]["current"]["cash"] == "1000"
 

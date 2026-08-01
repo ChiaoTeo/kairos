@@ -6,8 +6,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from kairospy.application.service.runtime import AccountQueryService, OrderQueryService
-from kairospy.application.service.domain.account.routing import account_book_route
+from kairospy.application.query import AccountQueryService, OrderQueryService
+from kairospy.application.domain.account.routing import account_book_route
 from kairospy.application.system.workspace import KairosWorkspace
 from kairospy.config import SYSTEM_LAUNCH_ID
 from kairospy.core.views import ViewEnvelope
@@ -276,7 +276,7 @@ def _tradable_books(account: object) -> list[str]:
     books = []
     for book in tuple(getattr(account, "books", ()) or ()):
         ref = book.to_ref(getattr(account, "identity"))
-        if account_book_route(ref, provider=str(ref.broker)).can_trade:
+        if account_book_route(ref, broker=str(ref.broker)).can_trade:
             books.append(str(ref.book))
     return books
 

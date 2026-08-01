@@ -7,14 +7,14 @@ import os
 import requests
 from typing import AsyncIterator, Iterable, Mapping
 
-from kairospy.core.market import MarketEvent
+from kairospy.core.market import Bar, MarketEvent
 from kairospy.core.reference import MarketDefinition, MarketRef, ReferenceCatalog
-from kairospy.infrastructure.data import DataSink
+from kairospy.infrastructure.persistence.market_data.ingest import DataSink
 from kairospy.infrastructure.integrations.credentials import credential_value
 from kairospy.infrastructure.integrations.drivers import CcxtDriver
 from kairospy.infrastructure.integrations.payloads.ccxt_market import (
     ccxt_market_type,
-    ccxt_ohlcv_record,
+    ccxt_ohlcv_bar,
     ccxt_ohlcv_update,
     ccxt_order_book_record,
     ccxt_order_book_update,
@@ -24,7 +24,8 @@ from kairospy.infrastructure.integrations.payloads.ccxt_market import (
     ccxt_trade_update,
     ephemeral_market_ref,
 )
-from kairospy.application.service.domain.reference.builders import catalog_from_market_rows, market_definitions_from_rows
+from kairospy.application.domain.reference.builders import catalog_from_market_rows, market_definitions_from_rows
+from kairospy.infrastructure.integrations.types import IntegrationParams, OrderBookRecordStream, QuoteRecordStream, RawPayload, RawPayloadRows, RawPayloadStream, TradeRecordStream
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,14 +34,14 @@ class OkxMarketDataConnector:
     name: str = "okx"
     exchange_id: str = "okx"
 
-    def fetch_markets(self, *, params: Mapping[str, object] | None = None) -> Iterable[Mapping[str, object]]:
+    def fetch_markets(self, *, params: IntegrationParams | None = None) -> RawPayloadRows:
         return self.driver.fetch_markets(self.exchange_id, params=params)
 
     def fetch_market_definitions(
         self,
         *,
         as_of: datetime | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> tuple[MarketDefinition, ...]:
         effective_from = (as_of or datetime.now(timezone.utc)).astimezone(timezone.utc)
         return market_definitions_from_rows(self.fetch_markets(params=params), effective_from=effective_from)
@@ -49,12 +50,12 @@ class OkxMarketDataConnector:
         self,
         *,
         as_of: datetime | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> ReferenceCatalog:
         effective_from = (as_of or datetime.now(timezone.utc)).astimezone(timezone.utc)
         return catalog_from_market_rows(self.fetch_markets(params=params), effective_from=effective_from)
 
-    def fetch_ohlcv(
+    def fetch_bars(
         self,
         symbol: str,
         *,
@@ -62,9 +63,9 @@ class OkxMarketDataConnector:
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
-        market_ref = _market_ref(self.exchange_id, symbol, params)
+        adapter_options: IntegrationParams | None = None,
+    ) -> Iterable[Bar]:
+        market_ref = _market_ref(self.exchange_id, symbol, adapter_options)
         rows = self.driver.fetch_ohlcv(
             self.exchange_id,
             symbol,
@@ -72,9 +73,9 @@ class OkxMarketDataConnector:
             since=since,
             until=until,
             limit=limit,
-            params=params,
+            params=adapter_options,
         )
-        return (ccxt_ohlcv_record(row, market=market_ref, timeframe=timeframe) for row in rows)
+        return (ccxt_ohlcv_bar(row, market=market_ref, timeframe=timeframe) for row in rows)
 
     def fetch_ohlcv_updates(
         self,
@@ -84,7 +85,7 @@ class OkxMarketDataConnector:
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> Iterable[MarketEvent]:
         market_ref = _market_ref(self.exchange_id, symbol, params)
         rows = self.driver.fetch_ohlcv(
@@ -102,8 +103,8 @@ class OkxMarketDataConnector:
         self,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> QuoteRecordStream:
         return _ticker_records(
             _poll_ticker(self.driver, self.exchange_id, symbol, params=params),
             _market_ref(self.exchange_id, symbol, params),
@@ -113,19 +114,19 @@ class OkxMarketDataConnector:
         self,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> AsyncIterator[MarketEvent]:
         return _ticker_updates(
             _poll_ticker(self.driver, self.exchange_id, symbol, params=params),
             _market_ref(self.exchange_id, symbol, params),
         )
 
-    def fetch_quote(self, market: MarketRef, *, params: Mapping[str, object] | None = None) -> Mapping[str, object]:
+    def fetch_quote(self, market: MarketRef, *, params: IntegrationParams | None = None) -> RawPayload:
         symbol = str(market.source_symbol)
         raw = _fetch_okx_ticker(symbol)
         return ccxt_ticker_record(raw, market=_market_ref(self.exchange_id, symbol, params))
 
-    def fetch_quote_update(self, market: MarketRef, *, params: Mapping[str, object] | None = None) -> MarketEvent:
+    def fetch_quote_update(self, market: MarketRef, *, params: IntegrationParams | None = None) -> MarketEvent:
         symbol = str(market.source_symbol)
         raw = _fetch_okx_ticker(symbol)
         return ccxt_ticker_update(raw, market=_market_ref(self.exchange_id, symbol, params))
@@ -135,8 +136,8 @@ class OkxMarketDataConnector:
         symbol: str,
         *,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> OrderBookRecordStream:
         return _order_book_records(
             self.driver.watch_order_book(self.exchange_id, symbol, limit=limit, params=params),
             _market_ref(self.exchange_id, symbol, params),
@@ -147,7 +148,7 @@ class OkxMarketDataConnector:
         symbol: str,
         *,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> AsyncIterator[MarketEvent]:
         return _order_book_updates(
             self.driver.watch_order_book(self.exchange_id, symbol, limit=limit, params=params),
@@ -160,8 +161,8 @@ class OkxMarketDataConnector:
         *,
         since: object | None = None,
         limit: int = 50,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> TradeRecordStream:
         return _trade_records(
             self.driver.watch_trades(self.exchange_id, symbol, since=since, limit=limit, params=params),
             _market_ref(self.exchange_id, symbol, params),
@@ -173,7 +174,7 @@ class OkxMarketDataConnector:
         *,
         since: object | None = None,
         limit: int = 50,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> AsyncIterator[MarketEvent]:
         return _trade_updates(
             self.driver.watch_trades(self.exchange_id, symbol, since=since, limit=limit, params=params),
@@ -186,7 +187,7 @@ class OkxMarketDataConnector:
         sink: DataSink,
         *,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> int:
         return await sink.consume(self.watch_ticker(symbol, params=params), limit=limit)
 
@@ -197,7 +198,7 @@ class OkxMarketDataConnector:
         *,
         book_limit: int | None = None,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> int:
         return await sink.consume(self.watch_order_book(symbol, limit=book_limit, params=params), limit=limit)
 
@@ -209,12 +210,12 @@ class OkxMarketDataConnector:
         since: object | None = None,
         trade_limit: int = 50,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
+        params: IntegrationParams | None = None,
     ) -> int:
         return await sink.consume(self.watch_trades(symbol, since=since, limit=trade_limit, params=params), limit=limit)
 
 
-def _market_ref(exchange_id: str, symbol: object, params: Mapping[str, object] | None) -> MarketRef:
+def _market_ref(exchange_id: str, symbol: object, params: RawPayload | None) -> MarketRef:
     return ephemeral_market_ref(venue=exchange_id, market=ccxt_market_type(exchange_id, params), source_symbol=str(symbol))
 
 
@@ -248,7 +249,7 @@ async def _trade_updates(events, market):
         yield ccxt_trade_update(event, market=market)
 
 
-async def _poll_ticker(driver: CcxtDriver, exchange_id: str, symbol: str, *, params: Mapping[str, object] | None):
+async def _poll_ticker(driver: CcxtDriver, exchange_id: str, symbol: str, *, params: RawPayload | None):
     options = dict(params or {})
     poll_seconds = float(options.get("poll_seconds", 1.0))
     max_events = options.get("max_events")

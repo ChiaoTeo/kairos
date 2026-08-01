@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .accounts import LaunchAccountBinding, LaunchAccountDirectory
+from .scoped_account import LaunchScopedAccountRuntime
 
 
 def __getattr__(name: str) -> object:
@@ -37,6 +38,7 @@ def __getattr__(name: str) -> object:
 __all__ = [
     "LaunchAccountBinding",
     "LaunchAccountDirectory",
+    "LaunchScopedAccountRuntime",
     "LaunchAlreadyActiveError",
     "LaunchBuilder",
     "LaunchControl",

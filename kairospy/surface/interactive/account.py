@@ -143,7 +143,7 @@ class AccountCreateWizard:
         try:
             self.result_path = self.facade.create(
                 account_id=self._required("account_id"),
-                provider=self._required("provider"),
+                broker=self._required("provider"),
                 environment=self._required("environment"),
                 venue=None,
                 market=None,

@@ -5,7 +5,7 @@ from typing import Mapping
 
 import pytest
 
-from kairospy.application.service.runtime import OrderQueryService
+from kairospy.application.query import OrderQueryService
 
 
 class _Views:

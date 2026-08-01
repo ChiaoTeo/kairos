@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import Mapping
 
 from kairospy.core.order import OrderType
+from kairospy.infrastructure.integrations.types import RawPayload
 
 
 def ccxt_decimal(value: object) -> Decimal:
@@ -18,14 +18,14 @@ def ccxt_optional_decimal(value: object) -> Decimal | None:
     return Decimal(str(value))
 
 
-def ccxt_required_text(raw: Mapping[str, object], key: str, *, subject: str = "ccxt value") -> str:
+def ccxt_required_text(raw: RawPayload, key: str, *, subject: str = "ccxt value") -> str:
     value = raw.get(key)
     if value is None or not str(value).strip():
         raise ValueError(f"{subject} requires {key}")
     return str(value)
 
 
-def ccxt_order_quantity(raw: Mapping[str, object], *, subject: str = "ccxt order") -> Decimal:
+def ccxt_order_quantity(raw: RawPayload, *, subject: str = "ccxt order") -> Decimal:
     amount = ccxt_decimal(raw.get("amount"))
     if amount > 0:
         return amount
@@ -37,7 +37,7 @@ def ccxt_order_quantity(raw: Mapping[str, object], *, subject: str = "ccxt order
     return quantity
 
 
-def ccxt_order_type(raw: Mapping[str, object], price: Decimal | None) -> OrderType:
+def ccxt_order_type(raw: RawPayload, price: Decimal | None) -> OrderType:
     raw_type = str(raw.get("type") or "").strip().lower()
     if raw_type == OrderType.LIMIT.value:
         return OrderType.LIMIT if price is not None else OrderType.MARKET

@@ -9,24 +9,23 @@ from typing import Mapping
 from kairospy.config import LaunchAccountConfig
 from kairospy.application.modes import RuntimeMode
 from kairospy.application.ports import MarketDataSubscriptionSpec
+from kairospy.application.domain.account.bootstrap import AccountBootstrapGateway
 from kairospy.application.strategy import Strategy
-from kairospy.core.account import AccountContext
-from kairospy.core.market import Quote
-from kairospy.core.reference import MarketResolver
-from kairospy.infrastructure.integrations.protocols import BrokerClient, LiveMarketDataFeed
+from kairospy.core.account import AccountBookRef, AccountContext
+from kairospy.application.ports import MarketStreamGateway
 
 from ..common import (
     AccountPerformanceMixin,
     AccountResolver,
     ConfiguredAccount,
     bool_value as common_bool_value,
+    configured_market_feed_for_subscription as common_configured_market_feed_for_subscription,
     configured_account_ref as common_configured_account_ref,
     default_market_feed as common_default_market_feed,
     int_value as common_int_value,
     load_required_launch_config,
     load_strategy as common_load_strategy,
-    params_table as common_params_table,
-    required_text as common_required_text,
+    parse_feeds as common_parse_feeds,
     strategy_params as common_strategy_params,
     table as common_table,
 )
@@ -38,8 +37,9 @@ class LiveConfigurationError(ValueError):
     pass
 
 
-BrokerFactory = Callable[[str, str | None], BrokerClient]
-MarketFeedFactory = Callable[[str], LiveMarketDataFeed]
+BrokerFactory = Callable[[AccountBookRef, str | None], AccountBootstrapGateway]
+MarketFeedFactory = Callable[[str], MarketStreamGateway]
+MarketFeedResolverFactory = Callable[[MarketDataSubscriptionSpec], MarketStreamGateway | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +49,6 @@ class LiveLaunchResult(AccountPerformanceMixin):
     runtime: object
     views: object
     intents: object
-    controls: object
     account: AccountContext
     account_view: object | None
     fills: tuple[object, ...] = ()
@@ -66,22 +65,21 @@ class ConfiguredLive:
     market_data: LiveMarketDataService
     account_config: ConfiguredAccount
     launch_account_configs: Mapping[str, ConfiguredAccount]
-    live_config: Mapping[str, object]
-    venue: str
-    market: str
-    symbol: str
     broker_factory: BrokerFactory | None
     launch_accounts: Mapping[str, LaunchAccountConfig]
-    balance_params: Mapping[str, object]
-    order_params: Mapping[str, object]
     safety_policy: LiveTradingSafetyPolicy
-    watch_private: bool
-    max_balance_events: int
-    max_order_events: int
-    max_trade_events: int
+    private_sync: LivePrivateSyncConfig
     normalized_config: Mapping[str, object]
     launch_directory: Path
     state_path: Path
+
+
+@dataclass(frozen=True, slots=True)
+class LivePrivateSyncConfig:
+    enabled: bool
+    max_balance_events: int = 0
+    max_order_events: int = 0
+    max_trade_events: int = 0
 
 
 def configured_live(
@@ -94,44 +92,30 @@ def configured_live(
 ) -> ConfiguredLive:
     launch_config = load_required_launch_config(config_path, mode=RuntimeMode.LIVE, error_type=LiveConfigurationError, strategy_ref=strategy_ref)
     live = _table(launch_config.values.get("live"), "live")
+    feeds_config = common_parse_feeds(launch_config.values.get("feeds"), error_type=LiveConfigurationError)
     timeline_config = _table(launch_config.values.get("timeline"), "timeline") if launch_config.values.get("timeline") is not None else {}
-    venue = _required_text(live.get("venue"), "live.venue")
-    market = str(live.get("market", "spot"))
-    symbol = _required_text(live.get("symbol"), "live.symbol")
     account_ref = launch_config.account_ref or _primary_launch_account_ref(launch_config.launch_accounts)
-    account_config = _configured_account(account_ref, account_resolver=account_resolver, venue=venue)
+    account_config = _configured_account(account_ref, account_resolver=account_resolver, venue=None)
     launch_account_configs = _configured_launch_accounts(launch_config.launch_accounts, account_resolver=account_resolver, venue=None)
-    market_resolver = MarketResolver(default_venue=venue, default_market=market)
-    market_ref = market_resolver.resolve(symbol)
-    feed = (market_feed_factory or _default_market_feed)(venue)
+    venue = account_config.venue
+    feed_resolver = _market_feed_resolver(market_feed_factory, feeds=feeds_config)
     state_path = _state_path(live, root=launch_config.root, launch_id=launch_config.launch_id)
-    market_data = LiveMarketDataService(feed=feed, source_name=str(live.get("source_name") or f"{venue}-live"))
-    market_data.subscribe(MarketDataSubscriptionSpec(market_ref, (Quote,), params=_params_table(live.get("stream"), default={"type": market})))
-    balance_params = _params_table(live.get("balance_params"), default={"type": market})
-    order_params = _params_table(live.get("order_params"), default={"type": market})
+    market_data = LiveMarketDataService(feed_resolver=feed_resolver, source_name=str(live.get("source_name") or f"{venue}-live"))
     return ConfiguredLive(
         launch_id=launch_config.launch_id,
         strategy=_load_strategy(launch_config.strategy, root=launch_config.root, params=_strategy_params(launch_config.values)),
         market_data=market_data,
         account_config=account_config,
         launch_account_configs=launch_account_configs,
-        live_config=live,
-        venue=venue,
-        market=market,
-        symbol=symbol,
         broker_factory=broker_factory,
         launch_accounts=launch_config.launch_accounts,
-        balance_params=balance_params,
-        order_params=order_params,
         safety_policy=_safety_policy(live.get("safety")),
-        watch_private=_bool_value(live.get("watch_private", False), "live.watch_private"),
-        max_balance_events=_int_value(live.get("max_balance_events", 0), "live.max_balance_events"),
-        max_order_events=_int_value(live.get("max_order_events", 0), "live.max_order_events"),
-        max_trade_events=_int_value(live.get("max_trade_events", 0), "live.max_trade_events"),
+        private_sync=_private_sync_config(live, account_ref=account_ref),
         normalized_config={
             "launch": {"id": launch_config.launch_id, "mode": RuntimeMode.LIVE.value, "strategy": launch_config.strategy},
             "strategy": {"params": dict(_strategy_params(launch_config.values))},
             "live": dict(live),
+            "feeds": {key: dict(feed.values or {}) for key, feed in feeds_config.items()},
             "account": {"ref": account_ref, "account_id": account_config.account_id, "venue": venue, "currency": account_config.currency},
             "accounts": {key: {"ref": value.ref, "index": value.index, "books": list(value.books), "trade": value.trade} for key, value in launch_config.launch_accounts.items()},
             "timeline": dict(timeline_config),
@@ -190,12 +174,35 @@ def _safety_policy(raw: object) -> LiveTradingSafetyPolicy:
     )
 
 
-def _default_market_feed(venue: str) -> LiveMarketDataFeed:
+def _default_market_feed(venue: str) -> MarketStreamGateway:
     return common_default_market_feed(venue, mode_label="live", error_type=LiveConfigurationError)
 
 
-def _params_table(value: object, *, default: Mapping[str, object] | None = None) -> Mapping[str, object]:
-    return common_params_table(value, default=default, source="live", error_type=LiveConfigurationError)
+def _market_feed_resolver(factory: MarketFeedFactory | None, *, feeds: Mapping[str, object]) -> MarketFeedResolverFactory:
+    if factory is not None:
+        return lambda spec: factory(str(spec.market.venue))
+    return lambda spec: common_configured_market_feed_for_subscription(spec, feeds=feeds, mode_label="live", error_type=LiveConfigurationError)
+
+
+def _private_sync_config(live: Mapping[str, object], *, account_ref: str | None) -> LivePrivateSyncConfig:
+    private_sync = live.get("private_sync")
+    if isinstance(private_sync, Mapping) and "enabled" in private_sync:
+        enabled = _bool_value(private_sync.get("enabled"), "live.private_sync.enabled")
+    else:
+        enabled = account_ref is not None
+    return LivePrivateSyncConfig(
+        enabled=enabled,
+        max_balance_events=_account_stream_limit(live, "max_balance_events"),
+        max_order_events=_account_stream_limit(live, "max_order_events"),
+        max_trade_events=_account_stream_limit(live, "max_trade_events"),
+    )
+
+
+def _account_stream_limit(live: Mapping[str, object], key: str) -> int:
+    account_stream = live.get("account_stream")
+    if isinstance(account_stream, Mapping) and key in account_stream:
+        return _int_value(account_stream.get(key), f"live.account_stream.{key}")
+    return 0
 
 
 def _state_path(live: Mapping[str, object], *, root: Path, launch_id: str) -> Path:
@@ -212,10 +219,6 @@ def _table(value: object, name: str) -> Mapping[str, object]:
     return common_table(value, name, LiveConfigurationError, allow_none=False)
 
 
-def _required_text(value: object, source: str) -> str:
-    return common_required_text(value, source, LiveConfigurationError)
-
-
 def _bool_value(value: object, source: str) -> bool:
     return common_bool_value(value, source, LiveConfigurationError)
 
@@ -224,4 +227,4 @@ def _int_value(value: object, source: str) -> int:
     return common_int_value(value, source, LiveConfigurationError)
 
 
-__all__ = ["ConfiguredLive", "LiveConfigurationError", "LiveLaunchResult", "configured_live"]
+__all__ = ["ConfiguredLive", "LiveConfigurationError", "LiveLaunchResult", "LivePrivateSyncConfig", "configured_live"]

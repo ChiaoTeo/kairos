@@ -10,12 +10,12 @@ from decimal import Decimal
 from typing import Sequence
 
 from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.orchestration.state import RuntimePorts
+from kairospy.application.runtime.components import RuntimeComponents
 from kairospy.application.ports import DataSubscription, MarketDataSubscriptionSpec
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.application.runtime.services import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.application.service.modes.live import LiveMarketDataService
-from kairospy.application.service.runtime.market.common import MarketSubscriptionState
+from kairospy.application.runtime.services.market.common import MarketSubscriptionState
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, exchange
 from kairospy.core.intent import IntentJournal
 from kairospy.core.market import Bar, MarketEvent, MarketSelector, MarketSubject, OrderBookSnapshot, PriceLevel, Quote, RateObservation, TradePrint
@@ -215,7 +215,7 @@ async def run_demo(args: argparse.Namespace) -> None:
     intents = IntentJournal()
     kernel = RuntimeKernel(
         strategy,
-        ports=RuntimePorts(data=data),
+        components=RuntimeComponents(market=data),
         services=RuntimeApplicationServices.from_dependencies(RuntimeServiceDependencies(intents=intents, data=data)),
     )
     await kernel.run()

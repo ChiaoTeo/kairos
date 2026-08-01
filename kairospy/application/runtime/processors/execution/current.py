@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.service.runtime import RuntimeExecutionService
+from kairospy.application.runtime.services import RuntimeExecutionService
 from kairospy.core.execution import EXECUTION_CURRENT_SCHEMA, ExecutionCurrentView, ExecutionOrderSummary, ExecutionViewKeys
 
 

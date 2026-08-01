@@ -9,14 +9,22 @@ from typing import Mapping
 import typer
 
 from kairospy.application.modes import RuntimeMode
+from kairospy.application.browsing import ListQuery
 from kairospy.application.system.facade.account import AccountFacade
 from kairospy.application.launch.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchFacade
 from kairospy.surface.interactive.account import run_account_create_wizard
+from kairospy.surface.tui import ResourceList, ResourceListBrowser
 from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.cli.output import write_cli_result
 
 
 account_app = typer.Typer(no_args_is_help=True, help="Configured account commands")
+account_credential_app = typer.Typer(no_args_is_help=True, help="Account credential commands")
+account_query_app = typer.Typer(no_args_is_help=True, help="Account query commands")
+account_trade_lock_app = typer.Typer(no_args_is_help=True, help="Account trade-lock commands")
+account_app.add_typer(account_credential_app, name="credential")
+account_app.add_typer(account_query_app, name="query")
+account_app.add_typer(account_trade_lock_app, name="trade-lock")
 _ACCOUNTS = AccountFacade()
 _RUNS = LaunchFacade()
 
@@ -28,6 +36,20 @@ def list_accounts(
 ) -> None:
     payload = _ACCOUNTS.list_accounts()
     write_cli_result(ctx, payload, output_format=output_format, text=_render_accounts)
+
+
+@account_app.command("browse")
+def browse_accounts(
+    page_size: int = typer.Option(20, "--page-size", min=1),
+    query: str | None = typer.Option(None, "--query", help="JMESPath expression returning a list of objects."),
+) -> None:
+    ResourceListBrowser(
+        ResourceList.from_rows(
+            _account_rows(_ACCOUNTS),
+            title="Accounts",
+            query=ListQuery(page_size=page_size, expression=query),
+        )
+    ).run()
 
 
 @account_app.command("schemas")
@@ -55,10 +77,10 @@ def schema(
 @account_app.command("create")
 def create_account(
     account_id: str | None = typer.Argument(None),
-    provider: str | None = typer.Option(None, "--broker", "--provider"),
+    broker_name: str | None = typer.Option(None, "--broker", "--provider"),
     environment: str | None = typer.Option(None, "--environment"),
     venue: str | None = typer.Option(None, "--venue"),
-    market: str | None = typer.Option(None, "--market", hidden=True),
+    market: str | None = typer.Option(None, "--book", "--market", help="Default account book/product, for example spot, equity, or swap."),
     currency: str = typer.Option("USD", "--currency"),
     cash: str | None = typer.Option(None, "--cash", help="Initial simulated cash; only written for non-live accounts"),
     fee_rate: str = typer.Option("0", "--fee-rate", help="Commission rate charged on filled notional, for example 0.001"),
@@ -89,14 +111,14 @@ def create_account(
         )
     if account_id is None:
         raise typer.BadParameter("account_id is required for direct creation; use --interactive for guided setup")
-    if provider is None:
+    if broker_name is None:
         raise typer.BadParameter("--broker is required for direct creation; use --interactive for guided setup")
     if environment is None:
         raise typer.BadParameter("--environment is required for direct creation; use --interactive for guided setup")
     try:
         path = _ACCOUNTS.create(
             account_id=account_id,
-            provider=provider,
+            broker=broker_name,
             environment=environment,
             venue=venue,
             market=market,
@@ -121,7 +143,6 @@ def create_account(
     typer.echo(path)
 
 
-@account_app.command("credential-add")
 def add_credential(
     account_id: str = typer.Argument(...),
     name: str = typer.Argument(...),
@@ -135,10 +156,101 @@ def add_credential(
         raise typer.BadParameter(str(error)) from error
 
 
+@account_credential_app.command("add")
+def add_account_credential(
+    account_id: str = typer.Argument(...),
+    name: str = typer.Argument(...),
+    ref: str = typer.Option(..., "--ref", help="Credential id, for example okx_trade"),
+    check: bool = typer.Option(True, "--check/--no-check", help="Validate credential permission and account identity before saving."),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    add_credential(account_id=account_id, name=name, ref=ref, check=check, force=force)
+
+
+@account_credential_app.command("list")
+def list_account_credentials(
+    ctx: typer.Context,
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
+    from kairospy.application.system.facade.credential import CredentialFacade
+
+    payload = CredentialFacade().list_credentials()
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
+
+
+@account_credential_app.command("create")
+def create_account_credential(
+    credential_id: str = typer.Argument(...),
+    broker_name: str = typer.Option(..., "--broker", "--provider"),
+    kind: str | None = typer.Option(None, "--kind"),
+    api_key: str | None = typer.Option(None, "--api-key"),
+    api_secret: str | None = typer.Option(None, "--api-secret"),
+    passphrase: str | None = typer.Option(None, "--passphrase"),
+    password: str | None = typer.Option(None, "--password"),
+    wallet_address: str | None = typer.Option(None, "--wallet-address"),
+    private_key: str | None = typer.Option(None, "--private-key"),
+    vault_address: str | None = typer.Option(None, "--vault-address"),
+    field_values: list[str] | None = typer.Option(None, "--field", help="Extra credential field as key=value"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    from kairospy.application.system.facade.credential import CredentialFacade
+
+    try:
+        typer.echo(
+            CredentialFacade().create(
+                credential_id=credential_id,
+                broker=broker_name,
+                kind=kind,
+                api_key=api_key,
+                api_secret=api_secret,
+                passphrase=passphrase,
+                password=password,
+                wallet_address=wallet_address,
+                private_key=private_key,
+                vault_address=vault_address,
+                field_values=field_values,
+                force=force,
+            )
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+
+
+@account_credential_app.command("show")
+def show_account_credential(
+    ctx: typer.Context,
+    credential_id: str = typer.Argument(...),
+    reveal_secrets: bool = typer.Option(False, "--reveal-secrets"),
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
+    from kairospy.application.system.facade.credential import CredentialFacade
+
+    try:
+        payload = CredentialFacade().show(credential_id, reveal_secrets=reveal_secrets)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
+
+
+@account_credential_app.command("delete")
+def delete_account_credential(credential_id: str = typer.Argument(...), force: bool = typer.Option(False, "--force")) -> None:
+    from kairospy.application.system.facade.credential import CredentialFacade
+
+    try:
+        typer.echo(CredentialFacade().delete(credential_id, force=force))
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+
+
+@account_credential_app.command("remove")
+def remove_account_credential(credential_id: str = typer.Argument(...), force: bool = typer.Option(False, "--force")) -> None:
+    delete_account_credential(credential_id=credential_id, force=force)
+
+
 @account_app.command("modify")
 def modify_account(
     account_id: str = typer.Argument(...),
-    provider: str | None = typer.Option(None, "--broker", "--provider"),
+    broker_name: str | None = typer.Option(None, "--broker", "--provider"),
     environment: str | None = typer.Option(None, "--environment"),
     venue: str | None = typer.Option(None, "--venue"),
     currency: str | None = typer.Option(None, "--currency"),
@@ -152,7 +264,7 @@ def modify_account(
         typer.echo(
             _ACCOUNTS.modify(
                 account_id,
-                provider=provider,
+                broker=broker_name,
                 environment=environment,
                 venue=venue,
                 currency=currency,
@@ -194,7 +306,7 @@ def show_account(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_show)
 
 
-@account_app.command("balance")
+@account_query_app.command("balance")
 def balance(
     ctx: typer.Context,
     account_id: str = typer.Argument(...),
@@ -222,13 +334,13 @@ def balance(
     write_cli_result(ctx, payload, output_format=resolved_output, default=OutputFormat.text, text=_render_balance)
 
 
-@account_app.command("current")
+@account_query_app.command("current")
 def current(
     ctx: typer.Context,
     launch: str | None = typer.Option(None, "--launch", help="Registered launch name or launch id for the launched system session."),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    launch_id: str | None = typer.Option(None, "--launch-id"),
-    root: Path | None = typer.Option(None, "--root"),
+    mode: RuntimeMode | None = typer.Option(None, "--mode", hidden=True),
+    launch_id: str | None = typer.Option(None, "--launch-id", hidden=True),
+    root: Path | None = typer.Option(None, "--root", hidden=True),
     account_key: str | None = typer.Option(None, "--account", help="Account alias/id when the launch exposes multiple accounts."),
     timeout_seconds: float = typer.Option(5.0, "--timeout"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
@@ -248,13 +360,13 @@ def current(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
-@account_app.command("balances")
+@account_query_app.command("balances")
 def balances(
     ctx: typer.Context,
     launch: str | None = typer.Option(None, "--launch", help="Registered launch name or launch id for the launched system session."),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    launch_id: str | None = typer.Option(None, "--launch-id"),
-    root: Path | None = typer.Option(None, "--root"),
+    mode: RuntimeMode | None = typer.Option(None, "--mode", hidden=True),
+    launch_id: str | None = typer.Option(None, "--launch-id", hidden=True),
+    root: Path | None = typer.Option(None, "--root", hidden=True),
     account_key: str | None = typer.Option(None, "--account", help="Account alias/id when the launch exposes multiple accounts."),
     timeout_seconds: float = typer.Option(5.0, "--timeout"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
@@ -274,13 +386,13 @@ def balances(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
-@account_app.command("positions")
+@account_query_app.command("positions")
 def positions(
     ctx: typer.Context,
     launch: str | None = typer.Option(None, "--launch", help="Registered launch name or launch id for the launched system session."),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    launch_id: str | None = typer.Option(None, "--launch-id"),
-    root: Path | None = typer.Option(None, "--root"),
+    mode: RuntimeMode | None = typer.Option(None, "--mode", hidden=True),
+    launch_id: str | None = typer.Option(None, "--launch-id", hidden=True),
+    root: Path | None = typer.Option(None, "--root", hidden=True),
     account_key: str | None = typer.Option(None, "--account", help="Account alias/id when the launch exposes multiple accounts."),
     timeout_seconds: float = typer.Option(5.0, "--timeout"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
@@ -300,12 +412,12 @@ def positions(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
-@account_app.command("trade-status")
+@account_trade_lock_app.command("status")
 def trade_status(
     ctx: typer.Context,
     account_key: str | None = typer.Argument(None, help="Optional account id or broker.account key"),
-    root: Path | None = typer.Option(None, "--root"),
-    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
+    root: Path | None = typer.Option(None, "--root", hidden=True),
+    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id", hidden=True),
     wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for the system runtime response."),
     timeout_seconds: float = typer.Option(5.0, "--timeout"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
@@ -324,7 +436,7 @@ def trade_status(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
-@account_app.command("open-orders")
+@account_query_app.command("open-orders")
 def open_orders(
     ctx: typer.Context,
     account_id: str = typer.Argument(...),
@@ -340,7 +452,7 @@ def open_orders(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
-@account_app.command("snapshot")
+@account_query_app.command("snapshot")
 def snapshot(
     ctx: typer.Context,
     account_id: str = typer.Argument(...),
@@ -355,7 +467,7 @@ def snapshot(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
-@account_app.command("locks")
+@account_trade_lock_app.command("list")
 def locks(
     ctx: typer.Context,
     output_format: OutputFormat | None = typer.Option(None, "--format"),
@@ -364,7 +476,7 @@ def locks(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_locks)
 
 
-@account_app.command("lock")
+@account_trade_lock_app.command("show")
 def lock(
     ctx: typer.Context,
     account_id: str = typer.Argument(...),
@@ -377,7 +489,7 @@ def lock(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_lock)
 
 
-@account_app.command("release-lock")
+@account_trade_lock_app.command("release")
 def release_lock(
     ctx: typer.Context,
     account_id: str = typer.Argument(...),
@@ -459,6 +571,14 @@ def _runtime_account_query(
     timeout_seconds: float,
 ) -> dict[str, object]:
     command_payload = {} if account_key is None else {"account": account_key}
+    if launch is None and mode is None and launch_id is None:
+        return _RUNS.system_command(
+            kind=kind,
+            payload=command_payload,
+            root=root,
+            wait=True,
+            timeout_seconds=timeout_seconds,
+        )
     return _RUNS.submit_command(
         target=launch,
         root=root,
@@ -504,7 +624,7 @@ def _render_accounts(result: object) -> str:
             rows.append(
                 (
                     _display(account.get("account_id")),
-                    _display(account.get("provider")),
+                    _display(account.get("broker", account.get("provider"))),
                     _display(account.get("environment")),
                     _display(account.get("venue")),
                     _display(account.get("market")),
@@ -679,6 +799,14 @@ def _payload(result: object) -> Mapping[str, object]:
     if not isinstance(result, Mapping):
         raise TypeError("account renderer expected mapping payload")
     return result
+
+
+def _account_rows(facade: AccountFacade) -> tuple[Mapping[str, object], ...]:
+    payload = facade.list_accounts()
+    rows = payload.get("accounts", ())
+    if not isinstance(rows, (tuple, list)):
+        return ()
+    return tuple(row for row in rows if isinstance(row, Mapping))
 
 
 def _table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> list[str]:

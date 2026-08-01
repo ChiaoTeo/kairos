@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-from .connectors.broker import IBKR
-from .connectors.exchange.binance import BinanceBroker
 from .connectors.exchange.binance.reference import delist_schedule_events
-from .connectors.exchange.okx import OkxBroker
 from .drivers import BinanceReferenceDriver, CcxtDriver, MassiveDriver
 from .equities import EquityReferenceSnapshotProvider
-from .connectors import Binance, BinanceMarketDataConnector, Hyperliquid, HyperliquidMarketDataConnector, OkxMarketDataConnector
 from .instruments import InstrumentReferenceSnapshotProvider
-from .connectors.provider import Massive
 from .connectors.provider.massive_reference import (
     massive_corporate_action_events,
     massive_dividend_events,
@@ -23,36 +18,56 @@ from .model import (
     IntegrationOrderUpdate,
     IntegrationReferenceUpdate,
 )
-from .protocols import BrokerClient, HistoricalMarketDataClient, IntegrationAdapter, LiveMarketDataFeed, ReferenceDataClient
+from .protocols import (
+    AccountBalanceClient,
+    AccountBootstrapClient,
+    IntegrationAdapter,
+    IntegrationParticipant,
+    RawMarketDataGateway,
+    OrderExecutionClient,
+    OrderQueryClient,
+    PrivateAccountStream,
+    RawReferenceGateway,
+)
 from .registry import IntegrationRegistry
+from .resolver import DEFAULT_INTEGRATION_RESOLVER, IntegrationResolver, ReferenceSourceRef
+from .reference_catalog import ReferenceCatalogAdapter
+from .types import IntegrationParams, OrderBookRecordStream, OrderSubmissionResponse, QuoteRecordStream, RawPayload, RawPayloadRows, RawPayloadStream, TradeRecordStream
 
 __all__ = [
-    "Binance",
-    "BinanceBroker",
-    "BinanceMarketDataConnector",
+    "AccountBalanceClient",
+    "AccountBootstrapClient",
     "BinanceReferenceDriver",
-    "BrokerClient",
     "CcxtDriver",
+    "DEFAULT_INTEGRATION_RESOLVER",
     "EquityReferenceSnapshotProvider",
-    "Hyperliquid",
-    "HyperliquidMarketDataConnector",
-    "HistoricalMarketDataClient",
-    "IBKR",
     "INTEGRATION_DOMAIN_ACCOUNT",
     "INTEGRATION_DOMAIN_ORDER",
     "INTEGRATION_DOMAIN_REFERENCE",
-    "ReferenceDataClient",
     "InstrumentReferenceSnapshotProvider",
     "IntegrationAdapter",
+    "IntegrationParticipant",
     "IntegrationAccountUpdate",
     "IntegrationOrderUpdate",
+    "IntegrationParams",
     "IntegrationRegistry",
+    "IntegrationResolver",
     "IntegrationReferenceUpdate",
-    "LiveMarketDataFeed",
-    "Massive",
+    "RawMarketDataGateway",
     "MassiveDriver",
-    "OkxMarketDataConnector",
-    "OkxBroker",
+    "OrderExecutionClient",
+    "OrderQueryClient",
+    "OrderBookRecordStream",
+    "PrivateAccountStream",
+    "OrderSubmissionResponse",
+    "QuoteRecordStream",
+    "RawPayload",
+    "RawPayloadRows",
+    "RawPayloadStream",
+    "RawReferenceGateway",
+    "ReferenceSourceRef",
+    "ReferenceCatalogAdapter",
+    "TradeRecordStream",
     "delist_schedule_events",
     "massive_corporate_action_events",
     "massive_dividend_events",

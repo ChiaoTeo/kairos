@@ -4,9 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Mapping
 
-from kairospy.application.ports import AccountPort, MarketDataPort, ReferencePort, TradingExecutionPort
 from kairospy.application.protocol.events import RuntimeEnvelope
-from kairospy.application.strategy import ControlJournal
 from kairospy.core.intent import IntentJournal
 from kairospy.core.views import ViewStore
 
@@ -51,21 +49,11 @@ class RuntimeFrame:
 class RuntimeStores:
     strategy_state: Mapping[str, object] = field(default_factory=dict)
     intents: IntentJournal = field(default_factory=IntentJournal)
-    controls: ControlJournal = field(default_factory=ControlJournal)
     views: ViewStore = field(default_factory=ViewStore)
-
-
-@dataclass(frozen=True, slots=True)
-class RuntimePorts:
-    data: MarketDataPort | None = None
-    account: AccountPort | None = None
-    reference: ReferencePort | None = None
-    trading_execution: TradingExecutionPort | None = None
 
 
 __all__ = [
     "RuntimeFrame",
-    "RuntimePorts",
     "RuntimeLaunchResult",
     "RuntimeStores",
     "RuntimeStep",

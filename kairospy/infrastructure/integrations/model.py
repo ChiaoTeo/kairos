@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import Mapping
+
+from .types import RawPayload
 
 
 INTEGRATION_DOMAIN_ACCOUNT = "account"
@@ -15,11 +16,11 @@ INTEGRATION_DOMAIN_REFERENCE = "reference"
 class IntegrationAccountUpdate:
     account_id: str
     observed_at: datetime
-    fields: Mapping[str, object]
+    fields: RawPayload
     source: str = ""
     identity: str | None = None
     sequence: int | None = None
-    metadata: Mapping[str, object] = MappingProxyType({})
+    metadata: RawPayload = MappingProxyType({})
 
     def __post_init__(self) -> None:
         if not self.account_id.strip():
@@ -35,11 +36,11 @@ class IntegrationAccountUpdate:
 class IntegrationOrderUpdate:
     order_id: str
     observed_at: datetime
-    fields: Mapping[str, object]
+    fields: RawPayload
     source: str = ""
     identity: str | None = None
     sequence: int | None = None
-    metadata: Mapping[str, object] = MappingProxyType({})
+    metadata: RawPayload = MappingProxyType({})
 
     def __post_init__(self) -> None:
         if not self.order_id.strip():
@@ -56,10 +57,10 @@ class IntegrationReferenceUpdate:
     entity_type: str
     entity_id: str
     observed_at: datetime
-    fields: Mapping[str, object]
+    fields: RawPayload
     source: str = ""
     sequence: int | None = None
-    metadata: Mapping[str, object] = MappingProxyType({})
+    metadata: RawPayload = MappingProxyType({})
 
     def __post_init__(self) -> None:
         _require_identity(self.entity_type, self.entity_id)

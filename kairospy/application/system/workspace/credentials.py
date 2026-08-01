@@ -17,14 +17,18 @@ class CredentialRecord:
     source_path: Path | None = None
     values: Mapping[str, object] = field(default_factory=dict)
 
+    @property
+    def broker(self) -> str:
+        return self.provider
+
     def to_dict(self, *, include_secret_values: bool = False) -> dict[str, object]:
         values = dict(self.values)
         if not include_secret_values:
             values = {key: _redact_secret(key, value) for key, value in values.items()}
         return {
             "credential_id": self.credential_id,
-            "broker": self.provider,
-            "provider": self.provider,
+            "broker": self.broker,
+            "provider": self.broker,
             "kind": self.kind,
             "source_path": str(self.source_path) if self.source_path is not None else None,
             "values": values,

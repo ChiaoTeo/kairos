@@ -12,7 +12,9 @@ from kairospy.application.system.facade.market import MarketDataFacade
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, StorageFormat
 from kairospy.surface.cli.options import OutputFormat
 from kairospy.surface.cli.output import write_cli_result
+from kairospy.surface.cli.options import resolve_output
 from kairospy.surface.rendering.terminal import write_jsonl
+from kairospy.surface.rendering.writer import render_text
 
 
 class HistoricalKind(str, Enum):
@@ -25,6 +27,14 @@ class WriteMode(str, Enum):
 
 
 market_app = typer.Typer(no_args_is_help=True, help="Market data commands")
+source_app = typer.Typer(no_args_is_help=True, help="Market data source commands")
+data_app = typer.Typer(no_args_is_help=True, help="Historical market data commands")
+dataset_app = typer.Typer(no_args_is_help=True, help="Local market dataset commands")
+stream_app = typer.Typer(no_args_is_help=True, help="Live market stream commands")
+market_app.add_typer(source_app, name="source")
+market_app.add_typer(data_app, name="data")
+market_app.add_typer(dataset_app, name="dataset")
+market_app.add_typer(stream_app, name="stream")
 _MARKET_DATA = MarketDataFacade()
 
 
@@ -39,7 +49,7 @@ class DataMode(str, Enum):
     live = "live"
 
 
-@market_app.command("capabilities")
+@source_app.command("capabilities")
 def capabilities(
     ctx: typer.Context,
     exchange_name: ExchangeName | None = typer.Option(None, "--exchange"),
@@ -51,7 +61,7 @@ def capabilities(
     write_cli_result(ctx, payload, output_format=output_format, text=_render_capabilities)
 
 
-@market_app.command("check")
+@source_app.command("check")
 def check(
     ctx: typer.Context,
     symbol: str = typer.Option(..., "--symbol"),
@@ -75,7 +85,7 @@ def check(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_check)
 
 
-@market_app.command("download")
+@data_app.command("download")
 def download(
     symbol: str = typer.Option(..., "--symbol"),
     dataset: str | None = typer.Option(None, "--dataset"),
@@ -114,7 +124,7 @@ def download(
     typer.echo(path)
 
 
-@market_app.command("prefetch")
+@data_app.command("prefetch")
 def prefetch(
     ctx: typer.Context,
     config_path: str = typer.Argument(...),
@@ -137,7 +147,7 @@ def prefetch(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_prefetch)
 
 
-@market_app.command("list")
+@dataset_app.command("list")
 def list_datasets(
     ctx: typer.Context,
     root: str | None = typer.Option(None, "--root"),
@@ -148,7 +158,7 @@ def list_datasets(
     write_cli_result(ctx, payload, output_format=output_format, text=_render_datasets)
 
 
-@market_app.command("inspect")
+@dataset_app.command("inspect")
 def inspect_dataset(
     ctx: typer.Context,
     dataset: str = typer.Argument(...),
@@ -161,7 +171,7 @@ def inspect_dataset(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
-@market_app.command("alias")
+@dataset_app.command("alias")
 def alias_dataset(
     ctx: typer.Context,
     dataset: str = typer.Argument(...),
@@ -174,7 +184,7 @@ def alias_dataset(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_alias)
 
 
-@market_app.command("prune")
+@dataset_app.command("prune")
 def prune(
     ctx: typer.Context,
     dataset: str = typer.Argument(...),
@@ -188,8 +198,9 @@ def prune(
     write_cli_result(ctx, result, output_format=output_format, default=OutputFormat.json)
 
 
-@market_app.command("read")
+@dataset_app.command("read")
 def read(
+    ctx: typer.Context,
     dataset: str | None = typer.Argument(None),
     root: str | None = typer.Option(None, "--root"),
     storage_format: StorageFormat | None = typer.Option(None, "--format"),
@@ -202,6 +213,7 @@ def read(
     end: str | None = typer.Option(None, "--end"),
     columns: list[str] | None = typer.Option(None, "--columns"),
     limit: int | None = typer.Option(None, "--limit"),
+    output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
     try:
         rows = _MARKET_DATA.read(
@@ -220,11 +232,12 @@ def read(
         )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_jsonl(rows, sys.stdout)
+    write_cli_result(ctx, rows, output_format=output_format, default=OutputFormat.jsonl, text=render_text)
 
 
-@market_app.command("replay")
+@stream_app.command("replay")
 def replay(
+    ctx: typer.Context,
     dataset: str | None = typer.Argument(None),
     root: str | None = typer.Option(None, "--root"),
     storage_format: StorageFormat | None = typer.Option(None, "--format"),
@@ -237,7 +250,9 @@ def replay(
     end: str | None = typer.Option(None, "--end"),
     limit: int | None = typer.Option(None, "--limit"),
     speed: float = typer.Option(1.0, "--speed"),
+    output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
+    output = resolve_output(ctx, output_format, default=OutputFormat.jsonl)
     try:
         _MARKET_DATA.replay(
             dataset=dataset,
@@ -252,14 +267,15 @@ def replay(
             end=end,
             limit=limit,
             speed=speed,
-            write=lambda batch: write_jsonl(batch, sys.stdout),
+            write=lambda batch: _write_stream_batch(batch, output=output),
         )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
 
 
-@market_app.command("watch")
+@stream_app.command("watch")
 def watch(
+    ctx: typer.Context,
     dataset: str | None = typer.Argument(None),
     kind: StreamKind | None = typer.Option(None, "--kind"),
     symbol: str | None = typer.Option(None, "--symbol"),
@@ -269,12 +285,14 @@ def watch(
     book_limit: int | None = typer.Option(None, "--book-limit"),
     trade_limit: int = typer.Option(50, "--trade-limit"),
     poll_seconds: float = typer.Option(1.0, "--poll-seconds"),
+    output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
+    output = resolve_output(ctx, output_format, default=OutputFormat.jsonl)
     events = stream_events(dataset, exchange_name, driver_name, kind, symbol, limit, book_limit, trade_limit, poll_seconds)
-    asyncio.run(print_events(events, limit=limit, stdout=sys.stdout))
+    asyncio.run(print_events(events, limit=limit, stdout=sys.stdout, output=output))
 
 
-@market_app.command("persist")
+@stream_app.command("persist")
 def persist(
     dataset: str | None = typer.Argument(None),
     dataset_option: str | None = typer.Option(None, "--dataset"),
@@ -313,7 +331,7 @@ def persist(
     typer.echo(str(count))
 
 
-@market_app.command("doctor")
+@source_app.command("doctor")
 def doctor(
     ctx: typer.Context,
     exchange_name: ExchangeName = typer.Option(ExchangeName.binance, "--exchange"),
@@ -327,14 +345,34 @@ def doctor(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_doctor)
 
 
-async def print_events(events: AsyncIterable[Mapping[str, object]], *, limit: int | None, stdout: TextIO) -> int:
+async def print_events(
+    events: AsyncIterable[Mapping[str, object]],
+    *,
+    limit: int | None,
+    stdout: TextIO,
+    output: OutputFormat,
+) -> int:
     count = 0
     async for event in events:
-        write_jsonl((event,), stdout)
+        _write_stream_batch((event,), output=output, stdout=stdout)
         count += 1
         if limit is not None and count >= limit:
             break
     return 0
+
+
+def _write_stream_batch(
+    batch: object,
+    *,
+    output: OutputFormat,
+    stdout: TextIO | None = None,
+) -> None:
+    stream = stdout or sys.stdout
+    if output is OutputFormat.text:
+        stream.write(render_text(batch) + "\n")
+        stream.flush()
+        return
+    write_jsonl(batch if isinstance(batch, (tuple, list)) else (batch,), stream)  # type: ignore[arg-type]
 
 
 def stream_events(

@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable, Iterable, Mapping
+from kairospy.infrastructure.integrations.types import IntegrationParams, OrderSubmissionResponse, RawPayload, RawPayloadRows, RawPayloadStream
 
 
 SyncExchangeFactory = Callable[[str], Any]
@@ -22,8 +23,8 @@ class CcxtDriver:
         self,
         exchange_id: str,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadRows:
         options = dict(params or {})
         market = _market_type(exchange_id, options)
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
@@ -55,8 +56,8 @@ class CcxtDriver:
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadRows:
         symbol = _symbol_text(symbol)
         options = dict(params or {})
         max_pages = int(options.pop("max_pages", 1 if until is None else 1000))
@@ -98,8 +99,8 @@ class CcxtDriver:
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadRows:
         symbol = _symbol_text(symbol)
         options = dict(params or {})
         max_pages = int(options.pop("max_pages", 1 if until is None else 1000))
@@ -144,8 +145,8 @@ class CcxtDriver:
     def fetch_binance_spot_delist_schedule(
         self,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadRows:
         options = dict(params or {})
         api_key = str(options.pop("api_key", "") or os.getenv("BINANCE_API_KEY") or "").strip()
         if not api_key:
@@ -168,8 +169,8 @@ class CcxtDriver:
         exchange_id: str,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+        params: IntegrationParams | None = None,
+    ) -> OrderSubmissionResponse:
         symbol = _symbol_text(symbol)
         options = dict(params or {})
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
@@ -186,8 +187,8 @@ class CcxtDriver:
         symbol: str,
         *,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+        params: IntegrationParams | None = None,
+    ) -> OrderSubmissionResponse:
         symbol = _symbol_text(symbol)
         options = dict(params or {})
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
@@ -204,8 +205,8 @@ class CcxtDriver:
         exchange_id: str,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
         return self._poll(exchange_id, "ticker", _symbol_text(symbol), dict(params or {}))
 
     def watch_order_book(
@@ -214,8 +215,8 @@ class CcxtDriver:
         symbol: str,
         *,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
         options = dict(params or {})
         if limit is not None:
             options["limit"] = limit
@@ -225,8 +226,8 @@ class CcxtDriver:
         self,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
         return _watch_binance_depth_diffs(_symbol_text(symbol), dict(params or {}))
 
     def watch_trades(
@@ -236,8 +237,8 @@ class CcxtDriver:
         *,
         since: object | None = None,
         limit: int = 50,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
         options = dict(params or {})
         options.setdefault("since", since)
         options.setdefault("limit", limit)
@@ -248,8 +249,8 @@ class CcxtDriver:
         exchange_id: str,
         symbol: str,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
         return self._poll(exchange_id, "option_greeks", _symbol_text(symbol), dict(params or {}))
 
     def create_order(
@@ -261,8 +262,8 @@ class CcxtDriver:
         type: str,
         amount: object,
         price: object | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayload:
         symbol = _symbol_text(symbol)
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
@@ -278,8 +279,8 @@ class CcxtDriver:
         id: str,
         *,
         symbol: str | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> Mapping[str, object]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayload:
         symbol = _optional_symbol_text(symbol)
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
@@ -289,7 +290,7 @@ class CcxtDriver:
             if callable(close):
                 close()
 
-    def fetch_balance(self, exchange_id: str, *, params: Mapping[str, object] | None = None) -> Mapping[str, object]:
+    def fetch_balance(self, exchange_id: str, *, params: IntegrationParams | None = None) -> RawPayload:
         options = dict(params or {})
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
@@ -307,8 +308,8 @@ class CcxtDriver:
         *,
         since: object | None = None,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadRows:
         symbol = _optional_symbol_text(symbol)
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
@@ -332,8 +333,8 @@ class CcxtDriver:
         *,
         since: object | None = None,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> Iterable[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadRows:
         symbol = _optional_symbol_text(symbol)
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
@@ -367,8 +368,8 @@ class CcxtDriver:
         self,
         exchange_id: str,
         *,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
         return self._poll_account(exchange_id, "balance", None, dict(params or {}))
 
     def watch_orders(
@@ -378,8 +379,8 @@ class CcxtDriver:
         *,
         since: object | None = None,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
         options = dict(params or {})
         options.setdefault("since", since)
         options.setdefault("limit", limit)
@@ -392,8 +393,8 @@ class CcxtDriver:
         *,
         since: object | None = None,
         limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: IntegrationParams | None = None,
+    ) -> RawPayloadStream:
         options = dict(params or {})
         options.setdefault("since", since)
         options.setdefault("limit", limit)
@@ -404,8 +405,8 @@ class CcxtDriver:
         exchange_id: str,
         source: str,
         symbol: str,
-        params: Mapping[str, object],
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: RawPayload,
+    ) -> RawPayloadStream:
         poll_seconds = float(params.get("poll_seconds", 1.0))
         max_events = params.get("max_events")
         remaining = int(max_events) if max_events is not None else None
@@ -445,8 +446,8 @@ class CcxtDriver:
         exchange_id: str,
         source: str,
         symbol: str | None,
-        params: Mapping[str, object],
-    ) -> AsyncIterator[Mapping[str, object]]:
+        params: RawPayload,
+    ) -> RawPayloadStream:
         poll_seconds = float(params.get("poll_seconds", 1.0))
         max_events = params.get("max_events")
         remaining = int(max_events) if max_events is not None else None
@@ -480,7 +481,7 @@ async def _fetch_live(
     source: str,
     exchange: Any,
     symbol: str,
-    params: Mapping[str, object],
+    params: RawPayload,
     *,
     require_websocket: bool = False,
 ) -> AsyncIterator[dict[str, object]]:
@@ -532,8 +533,8 @@ async def _fetch_account_live(
     source: str,
     exchange: Any,
     symbol: str | None,
-    params: Mapping[str, object],
-) -> AsyncIterator[Mapping[str, object]]:
+    params: RawPayload,
+) -> RawPayloadStream:
     if source == "balance":
         watch = getattr(exchange, "watch_balance", None)
         if not callable(watch):
@@ -593,7 +594,7 @@ def _optional_symbol_text(symbol: object | None) -> str | None:
     return None if symbol is None else _symbol_text(symbol)
 
 
-async def _watch_ticker(exchange: Any, symbol: str, params: Mapping[str, object]) -> Mapping[str, Any]:
+async def _watch_ticker(exchange: Any, symbol: str, params: RawPayload) -> Mapping[str, Any]:
     watch = getattr(exchange, "watch_ticker", None)
     if not callable(watch):
         raise _WsUnavailable()
@@ -610,7 +611,7 @@ async def _watch_order_book(
     exchange: Any,
     symbol: str,
     limit: int | None,
-    params: Mapping[str, object],
+    params: RawPayload,
 ) -> Mapping[str, Any]:
     watch = getattr(exchange, "watch_order_book", None)
     if not callable(watch):
@@ -629,7 +630,7 @@ async def _watch_trades(
     symbol: str,
     since: int | None,
     limit: int,
-    params: Mapping[str, object],
+    params: RawPayload,
 ) -> Iterable[Mapping[str, Any]]:
     watch = getattr(exchange, "watch_trades", None)
     if not callable(watch):
@@ -643,7 +644,7 @@ async def _watch_trades(
         raise
 
 
-async def _watch_option_greeks(exchange: Any, symbol: str, params: Mapping[str, object]) -> Mapping[str, Any]:
+async def _watch_option_greeks(exchange: Any, symbol: str, params: RawPayload) -> Mapping[str, Any]:
     watch = getattr(exchange, "watch_greeks", None) or getattr(exchange, "watchGreeks", None)
     if not callable(watch):
         raise _WsUnavailable()
@@ -657,7 +658,7 @@ async def _watch_option_greeks(exchange: Any, symbol: str, params: Mapping[str, 
         raise
 
 
-async def _fetch_option_greeks(exchange: Any, symbol: str, params: Mapping[str, object]) -> Mapping[str, Any]:
+async def _fetch_option_greeks(exchange: Any, symbol: str, params: RawPayload) -> Mapping[str, Any]:
     fetch = getattr(exchange, "fetch_greeks", None) or getattr(exchange, "fetchGreeks", None)
     if not callable(fetch):
         raise _WsUnavailable("option greeks are not supported by this ccxt exchange")
@@ -735,7 +736,7 @@ def _normalized_exchange_id(value: str) -> str:
     return {"okex": "okx"}.get(value.strip().lower(), value.strip().lower())
 
 
-def _market_type(exchange_id: str, params: Mapping[str, object]) -> str:
+def _market_type(exchange_id: str, params: RawPayload) -> str:
     if params.get("market") is not None:
         return str(params["market"])
     if params.get("type") is not None:
@@ -745,7 +746,7 @@ def _market_type(exchange_id: str, params: Mapping[str, object]) -> str:
     return "spot"
 
 
-def _configure_exchange_market(exchange: Any, exchange_id: str, params: Mapping[str, object]) -> None:
+def _configure_exchange_market(exchange: Any, exchange_id: str, params: RawPayload) -> None:
     market_type = _ccxt_market_type(exchange_id, _market_type(exchange_id, params))
     options = getattr(exchange, "options", None)
     if isinstance(options, dict) and market_type is not None:
@@ -772,7 +773,7 @@ def _ccxt_market_type(exchange_id: str, market_type: str) -> str | None:
     return normalized or None
 
 
-def _market_record(exchange_id: str, default_market: str, market: object) -> Mapping[str, object]:
+def _market_record(exchange_id: str, default_market: str, market: object) -> RawPayload:
     row = dict(market) if isinstance(market, Mapping) else {"symbol": str(market)}
     symbol = str(row.get("symbol") or row.get("id") or "").strip()
     if not symbol:
@@ -800,7 +801,7 @@ def _market_record(exchange_id: str, default_market: str, market: object) -> Map
     }
 
 
-def _market_from_flags(row: Mapping[str, object]) -> str | None:
+def _market_from_flags(row: RawPayload) -> str | None:
     if row.get("spot") is True:
         return "spot"
     if row.get("swap") is True:
@@ -812,7 +813,7 @@ def _market_from_flags(row: Mapping[str, object]) -> str | None:
     return None
 
 
-def _binance_delist_schedule_row(row: Mapping[str, object]) -> Mapping[str, object]:
+def _binance_delist_schedule_row(row: RawPayload) -> RawPayload:
     value = dict(row)
     delist_time = value.get("delistTime") or value.get("delist_time")
     if delist_time is None:
@@ -850,7 +851,7 @@ def _millis(value: object) -> int:
     return int(parsed.astimezone(timezone.utc).timestamp() * 1000)
 
 
-def _funding_timestamp(row: Mapping[str, object]) -> int | None:
+def _funding_timestamp(row: RawPayload) -> int | None:
     value = row.get("timestamp") or row.get("fundingTimestamp")
     if value is not None:
         return int(value)
@@ -862,7 +863,7 @@ def _funding_timestamp(row: Mapping[str, object]) -> int | None:
     return None
 
 
-def _exchange_params(params: Mapping[str, object]) -> dict[str, object]:
+def _exchange_params(params: RawPayload) -> dict[str, object]:
     return {
         key: value
         for key, value in params.items()
@@ -889,7 +890,7 @@ def _is_not_supported(error: Exception) -> bool:
     return error.__class__.__name__ in {"NotSupported", "NotImplementedError"}
 
 
-async def _watch_binance_depth_diffs(symbol: str, params: Mapping[str, object]) -> AsyncIterator[Mapping[str, object]]:
+async def _watch_binance_depth_diffs(symbol: str, params: RawPayload) -> RawPayloadStream:
     try:
         import websockets
     except ImportError as error:
@@ -910,7 +911,7 @@ async def _watch_binance_depth_diffs(symbol: str, params: Mapping[str, object]) 
                 yield dict(raw)
 
 
-def _binance_depth_url(params: Mapping[str, object], stream_name: str) -> str:
+def _binance_depth_url(params: RawPayload, stream_name: str) -> str:
     market_type = _market_type("binance", params).lower()
     if market_type in {"swap", "future", "futures", "perp", "perpetual"}:
         return f"wss://fstream.binance.com/ws/{stream_name}"

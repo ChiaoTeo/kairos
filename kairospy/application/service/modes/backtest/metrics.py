@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from math import sqrt
 
-from kairospy.application.service.domain.execution import SimulatedClosedTrade, SimulatedEquityPoint, SimulatedFill
+from kairospy.application.domain.execution import SimulatedClosedTrade, SimulatedEquityPoint, SimulatedFill
 from kairospy.core.order import OrderSide
 
 

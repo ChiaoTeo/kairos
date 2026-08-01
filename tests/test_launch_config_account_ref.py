@@ -15,16 +15,16 @@ def test_launch_config_accepts_account_ref_for_paper_launches() -> None:
     assert config.validation_report().valid is True
 
 
-def test_launch_config_account_ref_avoids_legacy_live_account_requirements() -> None:
+def test_launch_config_account_ref_is_enough_for_live_account_binding() -> None:
     config = LaunchConfig.from_values(
         {
             "launch": {"id": "live", "mode": "live", "strategy": "examples.strategies.sma:strategy"},
             "account": {"ref": "binance_live_spot"},
-            "live": {"venue": "binance", "symbol": "BTC/USDT"},
+            "live": {},
         }
     )
 
     report = config.validation_report()
 
     assert report.valid is True
-    assert not any("legacy live" in issue for issue in report.issues)
+    assert not report.issues

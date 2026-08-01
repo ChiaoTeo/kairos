@@ -4,19 +4,19 @@ import asyncio
 from collections.abc import AsyncIterator, Iterable
 from typing import Protocol
 
-from .events import RuntimeEnvelope
+from .events import AnyRuntimeEnvelope
 
 
 class RuntimeEventLine(Protocol):
-    def events(self) -> AsyncIterator[RuntimeEnvelope]:
+    def events(self) -> AsyncIterator[AnyRuntimeEnvelope]:
         ...
 
 
 class RuntimeLine:
-    def __init__(self, items: Iterable[RuntimeEnvelope]) -> None:
+    def __init__(self, items: Iterable[AnyRuntimeEnvelope]) -> None:
         self._items = tuple(items)
 
-    async def events(self) -> AsyncIterator[RuntimeEnvelope]:
+    async def events(self) -> AsyncIterator[AnyRuntimeEnvelope]:
         for item in self._items:
             yield item
 
@@ -25,7 +25,7 @@ class MergedRuntimeEventLine:
     def __init__(self, lines: Iterable[RuntimeEventLine]) -> None:
         self.lines = tuple(lines)
 
-    async def events(self) -> AsyncIterator[RuntimeEnvelope]:
+    async def events(self) -> AsyncIterator[AnyRuntimeEnvelope]:
         iterators = [line.events().__aiter__() for line in self.lines]
         tasks = {asyncio.create_task(iterator.__anext__()): iterator for iterator in iterators}
         try:
