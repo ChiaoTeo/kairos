@@ -7,7 +7,7 @@ from kairospy.infrastructure.integrations.connectors.provider.massive_reference 
 from kairospy.infrastructure.integrations.drivers import MassiveDriver
 from kairospy.core.reference import ReferenceCatalog
 from kairospy.core.reference.model import LifecycleEvent
-from kairospy.infrastructure.integrations.types import IntegrationParams, RawPayloadRows, RawPayloadStream
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, RawPayloadRows, RawPayloadStream
 
 
 @dataclass(frozen=True, slots=True)

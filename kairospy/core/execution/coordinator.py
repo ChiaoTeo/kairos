@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Callable, Mapping, Protocol
 from uuid import uuid4
 
 from kairospy.core.account import (
@@ -25,36 +24,12 @@ from kairospy.core.order import (
     OrderState,
     OrderStatus,
     OrderType,
-    VenueOrderResponse,
 )
 from kairospy.core.reference import InstrumentId
 
 from .impact import reserve_cash_order, reserve_margin_order
 from .reservation import Reservation, ReservationBook
 from .updates import ExecutionUpdate
-
-
-class BrokerGateway(Protocol):
-    def create_order(
-        self,
-        symbol: str,
-        *,
-        side: str,
-        type: str,
-        amount: object,
-        price: object | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> VenueOrderResponse:
-        ...
-
-    def cancel_order(
-        self,
-        id: str,
-        *,
-        symbol: str | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> VenueOrderResponse:
-        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,16 +64,10 @@ class ExecutionCoordinator:
         orders: OrderJournal | None = None,
         ledger: AccountLedger | None = None,
         reservations: ReservationBook | None = None,
-        broker: BrokerGateway | None = None,
-        broker_resolver: Callable[[AccountBookRef], BrokerGateway | None] | None = None,
-        broker_symbol_resolver: Callable[[object], str] | None = None,
     ) -> None:
         self.orders = orders or OrderJournal()
         self.ledger = ledger or AccountLedger()
         self.reservations = reservations or ReservationBook()
-        self.broker = broker
-        self.broker_resolver = broker_resolver
-        self.broker_symbol_resolver = broker_symbol_resolver or (lambda instrument_id: instrument_id)
 
     def plan_order(
         self,
@@ -160,34 +129,22 @@ class ExecutionCoordinator:
             return self.orders.get(request.order_id)
         return self.orders.record(OrderEvent(request.order_id, OrderEventKind.RESERVED, at))
 
-    def submit_order(
-        self,
-        order_id: str,
-        *,
-        at: datetime,
-        params: Mapping[str, object] | None = None,
-    ) -> OrderState:
+    def submit_order(self, order_id: str, *, at: datetime) -> OrderState:
         if at.tzinfo is None:
             raise ValueError("submit timestamp must be timezone-aware")
-        state = self.orders.record(OrderEvent(order_id, OrderEventKind.SUBMITTED, at))
-        broker = self._broker_for(state.request.context.book)
-        if broker is None:
-            return state
-        try:
-            response = broker.create_order(
-                self.broker_symbol(state.request.market_id or state.request.instrument_id),
-                side=state.request.side.value,
-                type=state.request.order_type.value,
-                amount=state.request.quantity,
-                price=state.request.limit_price,
-                params=params,
-            )
-        except Exception as error:
-            return self.orders.record(OrderEvent(order_id, OrderEventKind.UNKNOWN, at, reason=str(error)))
-        order_venue_id = str(response.get("id") or response.get("orderId") or "")
-        if not order_venue_id:
-            return self.orders.record(OrderEvent(order_id, OrderEventKind.UNKNOWN, at, reason="missing venue order id"))
+        return self.orders.record(OrderEvent(order_id, OrderEventKind.SUBMITTED, at))
+
+    def acknowledge_order(self, order_id: str, *, order_venue_id: str, at: datetime) -> OrderState:
+        if at.tzinfo is None:
+            raise ValueError("acknowledgement timestamp must be timezone-aware")
+        if not order_venue_id.strip():
+            raise ValueError("order venue id cannot be empty")
         return self.orders.record(OrderEvent(order_id, OrderEventKind.ACKNOWLEDGED, at, order_venue_id=order_venue_id))
+
+    def mark_order_unknown(self, order_id: str, *, at: datetime, reason: str) -> OrderState:
+        if at.tzinfo is None:
+            raise ValueError("unknown-order timestamp must be timezone-aware")
+        return self.orders.record(OrderEvent(order_id, OrderEventKind.UNKNOWN, at, reason=reason))
 
     def mark_reservation_reflected(self, order_id: str) -> None:
         state = self.orders.get(order_id)
@@ -210,39 +167,8 @@ class ExecutionCoordinator:
     def request_cancel(self, order_id: str, *, at: datetime) -> OrderState:
         return self.orders.record(OrderEvent(order_id, OrderEventKind.CANCEL_REQUESTED, at))
 
-    def cancel_order(
-        self,
-        order_id: str,
-        *,
-        at: datetime,
-        params: Mapping[str, object] | None = None,
-    ) -> OrderState:
-        state = self.request_cancel(order_id, at=at)
-        broker = self._broker_for(state.request.context.book)
-        if broker is None:
-            return state
-        if not state.order_venue_id:
-            return self.orders.record(
-                OrderEvent(order_id, OrderEventKind.UNKNOWN, at, reason="missing venue order id for cancel")
-            )
-        try:
-            response = broker.cancel_order(
-                state.order_venue_id,
-                symbol=self.broker_symbol(state.request.market_id or state.request.instrument_id),
-                params=params,
-            )
-        except Exception as error:
-            return self.orders.record(OrderEvent(order_id, OrderEventKind.UNKNOWN, at, reason=str(error)))
-        status = str(response.get("status") or "").strip().lower()
-        if status in {"canceled", "cancelled"}:
-            return self.cancel_confirmed(order_id, at=at)
-        return state
-
-    def _broker_for(self, account: AccountBookRef) -> BrokerGateway | None:
-        if self.broker_resolver is None:
-            return self.broker
-        selected = self.broker_resolver(account)
-        return selected or self.broker
+    def cancel_order(self, order_id: str, *, at: datetime) -> OrderState:
+        return self.request_cancel(order_id, at=at)
 
     def cancel_confirmed(self, order_id: str, *, at: datetime) -> OrderState:
         state = self.orders.record(OrderEvent(order_id, OrderEventKind.CANCELED, at))
@@ -327,12 +253,6 @@ class ExecutionCoordinator:
         except KeyError:
             return
 
-    def broker_symbol(self, instrument_id: InstrumentId | str) -> str:
-        symbol = str(self.broker_symbol_resolver(instrument_id)).strip()
-        if not symbol:
-            raise ValueError(f"empty broker symbol for instrument: {instrument_id}")
-        return symbol
-
     def _consume_reservation(self, state: OrderState) -> None:
         reservation_id = state.request.reservation_id or state.request.order_id
         try:
@@ -406,4 +326,4 @@ def _cash_delta(side: OrderSide, quantity: Decimal, price: Decimal) -> Decimal:
     return cost if side is OrderSide.SELL else -cost
 
 
-__all__ = ["BrokerGateway", "ExecutionCoordinator", "FillReport", "cash_order_request"]
+__all__ = ["ExecutionCoordinator", "FillReport", "cash_order_request"]

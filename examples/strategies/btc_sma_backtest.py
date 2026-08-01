@@ -4,7 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 from decimal import Decimal
 
-from kairospy.application.strategy import StrategyBase
+from kairospy.application.usecases.strategy.protocol import StrategyBase
 from kairospy.core.intent import target_position_intent
 from kairospy.core.market import Bar
 from kairospy.core.reference import MarketRef

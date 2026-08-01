@@ -18,7 +18,7 @@ from kairospy.core.order import OrderOrigin, OrderSide, OrderState, OrderStatus,
 
 from .ccxt_parsing import ccxt_decimal, ccxt_optional_decimal, ccxt_order_quantity, ccxt_order_type, ccxt_required_text
 from .ccxt_execution import ingest_ccxt_my_trade, ingest_ccxt_order_update
-from kairospy.infrastructure.integrations.types import IntegrationParams, RawPayload
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, RawPayload
 
 
 class CcxtAccountPayloadAdapter:

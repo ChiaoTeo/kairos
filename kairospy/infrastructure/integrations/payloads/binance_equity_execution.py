@@ -7,7 +7,7 @@ from typing import Mapping
 from kairospy.core.account import AccountContext
 from kairospy.core.execution import ExecutionUpdate
 from kairospy.core.order import OrderEventKind, OrderSide, OrderType
-from kairospy.infrastructure.integrations.types import IntegrationParams, RawPayload
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, RawPayload
 
 
 def binance_equity_create_order_params(

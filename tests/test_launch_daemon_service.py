@@ -9,11 +9,11 @@ import time
 import pytest
 from typer.testing import CliRunner
 
-from kairospy.application.modes import RuntimeMode
-from kairospy.application.launch.daemon import LaunchAlreadyActiveError, LaunchDaemonService
-import kairospy.application.launch.facade as launch_facade
-from kairospy.application.launch.facade import LaunchFacade
-from kairospy.application.launch.registry import LaunchRegistry
+from kairospy.application.support.launch.modes import RuntimeMode
+from kairospy.application.support.launch.control.daemon import LaunchAlreadyActiveError, LaunchDaemonService
+import kairospy.application.support.launch.control.facade as launch_facade
+from kairospy.application.support.launch.control.facade import LaunchFacade
+from kairospy.application.support.launch.control.registry import LaunchRegistry
 from kairospy.infrastructure.persistence.market_data.catalog import DataStore
 from kairospy.surface.cli import app
 from kairospy.surface.cli.commands.launch import launch_app
@@ -206,7 +206,7 @@ def test_launch_daemon_start_background_only_describes_target_before_spawning(tm
         def __init__(self, args, **kwargs) -> None:
             popen_calls.append((args, kwargs))
 
-    monkeypatch.setattr("kairospy.application.launch.daemon.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("kairospy.application.support.launch.control.daemon.subprocess.Popen", FakePopen)
 
     result = LaunchDaemonService(root, target_resolver=resolver).start_background(mode="backtest", config_path=config_path)
 
@@ -260,7 +260,7 @@ def test_launch_system_restart_starts_system_when_not_running(tmp_path, monkeypa
         def __init__(self, args, **kwargs) -> None:
             popen_calls.append((args, kwargs))
 
-    monkeypatch.setattr("kairospy.application.launch.daemon.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("kairospy.application.support.launch.control.daemon.subprocess.Popen", FakePopen)
 
     result = CliRunner().invoke(
         system_app,
@@ -321,7 +321,7 @@ def test_launch_system_restart_stops_active_system_before_starting_new_instance(
         }
         (instance / "state.json").write_text(json.dumps(stopped), encoding="utf-8")
 
-    monkeypatch.setattr("kairospy.application.launch.daemon.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("kairospy.application.support.launch.control.daemon.subprocess.Popen", FakePopen)
     stopper = threading.Thread(target=stop_old_instance)
     stopper.start()
 
@@ -361,7 +361,7 @@ def test_launch_daemon_rejects_second_active_instance_for_same_launch_id(tmp_pat
         def __init__(self, args, **kwargs) -> None:
             pass
 
-    monkeypatch.setattr("kairospy.application.launch.daemon.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("kairospy.application.support.launch.control.daemon.subprocess.Popen", FakePopen)
 
     service = LaunchDaemonService(root)
     first = service.start_background(mode="backtest", config_path=config_path)
@@ -500,7 +500,7 @@ def test_system_restart_clean_stale_terminates_only_verified_current_pid(tmp_pat
         killed.append((pid, sig))
         alive[pid] = False
 
-    monkeypatch.setattr("kairospy.application.launch.daemon.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("kairospy.application.support.launch.control.daemon.subprocess.Popen", FakePopen)
     monkeypatch.setattr(launch_facade, "_pid_alive", lambda pid: alive.get(pid, False))
     monkeypatch.setattr(launch_facade.os, "kill", fake_kill)
     monkeypatch.setattr(
@@ -526,7 +526,7 @@ def test_launch_daemon_start_cli_reports_active_instance_conflict(tmp_path, monk
         def __init__(self, args, **kwargs) -> None:
             pass
 
-    monkeypatch.setattr("kairospy.application.launch.daemon.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("kairospy.application.support.launch.control.daemon.subprocess.Popen", FakePopen)
 
     first = CliRunner().invoke(
         launch_app,
@@ -569,8 +569,8 @@ def test_launch_daemon_heartbeat_keeps_long_running_instance_active(tmp_path, mo
     root = tmp_path / "daemon-launches"
     runner_can_finish = threading.Event()
     resolver = _FakeLongRunningResolver(runner_can_finish)
-    monkeypatch.setattr("kairospy.application.launch.daemon._STALE_AFTER_SECONDS", 0.25)
-    monkeypatch.setattr("kairospy.application.launch.daemon._HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr("kairospy.application.support.launch.control.daemon._STALE_AFTER_SECONDS", 0.25)
+    monkeypatch.setattr("kairospy.application.support.launch.control.daemon._HEARTBEAT_INTERVAL_SECONDS", 0.05)
 
     service = LaunchDaemonService(root, target_resolver=resolver)
     worker_error = []
@@ -607,7 +607,7 @@ def test_launch_daemon_processes_runtime_stop_command_queue(tmp_path, monkeypatc
     root = tmp_path / "daemon-launches"
     runner_can_finish = threading.Event()
     resolver = _FakeLongRunningResolver(runner_can_finish)
-    monkeypatch.setattr("kairospy.application.launch.daemon._HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr("kairospy.application.support.launch.control.daemon._HEARTBEAT_INTERVAL_SECONDS", 0.05)
 
     service = LaunchDaemonService(root, target_resolver=resolver)
     worker_error = []
@@ -652,7 +652,7 @@ def test_launch_daemon_processes_account_query_command_queue(tmp_path, monkeypat
     root = tmp_path / "daemon-launches"
     runner_can_finish = threading.Event()
     resolver = _FakeLongRunningResolver(runner_can_finish)
-    monkeypatch.setattr("kairospy.application.launch.daemon._HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr("kairospy.application.support.launch.control.daemon._HEARTBEAT_INTERVAL_SECONDS", 0.05)
 
     service = LaunchDaemonService(root, target_resolver=resolver)
     worker_error = []
@@ -727,7 +727,7 @@ def test_launch_daemon_command_facade_can_wait_for_account_query_response(tmp_pa
     root = tmp_path / "daemon-launches"
     runner_can_finish = threading.Event()
     resolver = _FakeLongRunningResolver(runner_can_finish)
-    monkeypatch.setattr("kairospy.application.launch.daemon._HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr("kairospy.application.support.launch.control.daemon._HEARTBEAT_INTERVAL_SECONDS", 0.05)
     service = LaunchDaemonService(root, target_resolver=resolver)
     worker_error = []
 
@@ -764,7 +764,7 @@ def test_launch_daemon_command_facade_can_wait_for_account_query_response(tmp_pa
 
 def test_launch_system_foreground_processes_command_queue_and_stops(tmp_path, monkeypatch) -> None:
     root = tmp_path / "daemon-launches"
-    monkeypatch.setattr("kairospy.application.launch.daemon._HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr("kairospy.application.support.launch.control.daemon._HEARTBEAT_INTERVAL_SECONDS", 0.05)
     service = LaunchDaemonService(root)
     worker_error = []
 
@@ -921,7 +921,7 @@ def _write_backtest_project(root: Path) -> Path:
     (root / "strategy_mod.py").write_text(
         "\n".join([
             "from decimal import Decimal",
-            "from kairospy.application.strategy import StrategyBase",
+            "from kairospy.application.usecases.strategy.protocol import StrategyBase",
             "from kairospy.core.market import Bar",
             "from kairospy.core.intent import target_position_intent",
             "from kairospy.core.reference import MarketRef",

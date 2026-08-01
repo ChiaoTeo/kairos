@@ -11,7 +11,7 @@ from kairospy.core.order import OrderEventKind, OrderSide, OrderState, OrderStat
 from kairospy.core.execution import ExecutionCoordinator, ExecutionUpdate
 
 from .ccxt_parsing import ccxt_decimal, ccxt_optional_decimal, ccxt_order_quantity, ccxt_order_type, ccxt_required_text
-from kairospy.infrastructure.integrations.types import RawPayload
+from kairospy.infrastructure.integrations.payloads.types import RawPayload
 
 
 def ingest_ccxt_order_update(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .ccxt import CcxtDriver
-from kairospy.infrastructure.integrations.types import IntegrationParams, RawPayloadRows
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, RawPayloadRows
 
 
 @dataclass(frozen=True, slots=True)

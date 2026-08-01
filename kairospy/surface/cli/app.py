@@ -11,8 +11,8 @@ import typer
 from typer._click.exceptions import ClickException as TyperClickException
 from typer.main import get_command
 
-from kairospy.application.system.facade.context import ProjectNotFound, set_cli_context
-from kairospy.application.system.diagnostics import record_exception
+from kairospy.application.support.system.facade.context import ProjectNotFound, set_cli_context
+from kairospy.application.support.system.diagnostics import record_exception
 from kairospy.surface.cli.commands import (
     account_app,
     market_app,

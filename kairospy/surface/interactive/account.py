@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Protocol
 
-from kairospy.application.system.facade.account import ACCOUNT_SCHEMAS, AccountFacade
+from kairospy.application.support.system.facade.account import ACCOUNT_SCHEMAS, AccountFacade
 
 
 _ENVIRONMENTS = ("paper", "testnet", "live")
 _CREDENTIAL_MODES = ("reference", "direct", "skip")
+
+
+class WizardPrompt(Protocol):
+    def __call__(self, message: str) -> str:
+        ...
+
+
+class WizardEcho(Protocol):
+    def __call__(self, message: str) -> None:
+        ...
 
 
 @dataclass(slots=True)
@@ -34,7 +44,7 @@ class AccountCreateWizard:
         match self.current:
             case "account_id":
                 return "account id: "
-            case "provider":
+            case "broker":
                 return f"broker [{'/'.join(sorted(ACCOUNT_SCHEMAS))}]: "
             case "environment":
                 return "environment [paper/testnet/live] (paper): "
@@ -50,7 +60,7 @@ class AccountCreateWizard:
                 return "credential id, for example okx_live: "
             case field_name if field_name.startswith("credential."):
                 name = field_name.split(".", 1)[1]
-                optional = name in ACCOUNT_SCHEMAS[self._provider()].optional_fields
+                optional = name in ACCOUNT_SCHEMAS[self._broker()].optional_fields
                 suffix = " (optional): " if optional else ": "
                 return f"{name}{suffix}"
             case "confirm":
@@ -82,14 +92,14 @@ class AccountCreateWizard:
                 if not value:
                     raise ValueError("account id is required")
                 self.fields["account_id"] = value
-                self.current = "provider"
-            case "provider":
-                provider = value.lower().replace("-", "_")
-                if not provider:
+                self.current = "broker"
+            case "broker":
+                broker = value.lower().replace("-", "_")
+                if not broker:
                     raise ValueError("broker is required")
-                if provider not in ACCOUNT_SCHEMAS:
+                if broker not in ACCOUNT_SCHEMAS:
                     raise ValueError(f"unsupported broker: {value}; supported: {', '.join(sorted(ACCOUNT_SCHEMAS))}")
-                self.fields["provider"] = provider
+                self.fields["broker"] = broker
                 self.current = "environment"
             case "environment":
                 environment = value.lower() or "paper"
@@ -124,7 +134,7 @@ class AccountCreateWizard:
                 self.current = "confirm"
             case field_name if field_name.startswith("credential."):
                 name = field_name.split(".", 1)[1]
-                schema = ACCOUNT_SCHEMAS[self._provider()]
+                schema = ACCOUNT_SCHEMAS[self._broker()]
                 if not value and name not in schema.optional_fields:
                     raise ValueError(f"{name} is required")
                 if value:
@@ -141,9 +151,9 @@ class AccountCreateWizard:
 
     def _create(self) -> None:
         try:
-            self.result_path = self.facade.create(
-                account_id=self._required("account_id"),
-                broker=self._required("provider"),
+                self.result_path = self.facade.create(
+                    account_id=self._required("account_id"),
+                    broker=self._required("broker"),
                 environment=self._required("environment"),
                 venue=None,
                 market=None,
@@ -167,8 +177,8 @@ class AccountCreateWizard:
             self.error = str(error)
         self.complete = True
 
-    def _provider(self) -> str:
-        return self._required("provider")
+    def _broker(self) -> str:
+        return self._required("broker")
 
     def _environment(self) -> str:
         return self._required("environment")
@@ -180,11 +190,11 @@ class AccountCreateWizard:
         return value
 
     def _first_credential_field(self) -> str:
-        schema = ACCOUNT_SCHEMAS[self._provider()]
+        schema = ACCOUNT_SCHEMAS[self._broker()]
         return f"credential.{schema.credential_fields[0]}"
 
     def _next_credential_field(self, name: str) -> str:
-        fields = ACCOUNT_SCHEMAS[self._provider()].credential_fields
+        fields = ACCOUNT_SCHEMAS[self._broker()].credential_fields
         index = fields.index(name)
         if index + 1 >= len(fields):
             return "confirm"
@@ -194,7 +204,7 @@ class AccountCreateWizard:
         lines = [
             "Account summary",
             f"  id:          {self.fields.get('account_id')}",
-            f"  broker:      {self.fields.get('provider')}",
+            f"  broker:      {self.fields.get('broker')}",
             f"  environment: {self.fields.get('environment')}",
             f"  currency:    {self.fields.get('currency')}",
         ]
@@ -214,8 +224,8 @@ class AccountCreateWizard:
 
 def run_account_create_wizard(
     *,
-    prompt: Callable[[str], str],
-    echo: Callable[[str], None],
+    prompt: WizardPrompt,
+    echo: WizardEcho,
     facade: AccountFacade | None = None,
 ) -> int:
     wizard = AccountCreateWizard(facade=facade or AccountFacade())

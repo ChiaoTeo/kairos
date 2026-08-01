@@ -5,12 +5,14 @@ from decimal import Decimal
 import json
 from pathlib import Path
 import sys
-from typing import Callable, Iterable, Mapping, Sequence, TextIO
+from typing import Iterable, Mapping, Protocol, Sequence, TextIO
 
 from kairospy.surface.cli.options import OutputFormat
 
 
-TextRenderer = Callable[[object], str]
+class TextRenderer(Protocol):
+    def __call__(self, value: object) -> str:
+        ...
 
 
 def write_result(

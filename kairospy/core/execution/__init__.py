@@ -7,7 +7,7 @@ from .impact import (
     reserve_cash_order,
     reserve_margin_order,
 )
-from .coordinator import BrokerGateway, ExecutionCoordinator, FillReport, cash_order_request
+from .coordinator import ExecutionCoordinator, FillReport, cash_order_request
 from .protocols import ExecutionIntentContext
 from .reservation import Reservation, ReservationBook, ReservationStatus
 from .state import ExecutionStateSnapshot
@@ -25,7 +25,6 @@ from .views import (
 __all__ = [
     "EXECUTION_CURRENT_SCHEMA",
     "EXECUTION_FILLS_SCHEMA",
-    "BrokerGateway",
     "BuyingPowerCheck",
     "CashBuyingPowerModel",
     "ExecutionCoordinator",

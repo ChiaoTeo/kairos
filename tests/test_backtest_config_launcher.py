@@ -9,9 +9,9 @@ from typing import Mapping
 import pytest
 from typer.testing import CliRunner
 
-from kairospy.application.service.modes.backtest import BacktestConfigurationError, configured_backtest
-from kairospy.application.launch import TradingConfigurationError, TradingSystemLauncher
-from kairospy.application.domain.reference import catalog_from_market_rows
+from kairospy.application.support.launch.config.backtest import BacktestConfigurationError, configured_backtest
+from kairospy.application.support.launch.launcher import TradingConfigurationError, TradingSystemLauncher
+from kairospy.application.usecases.reference import catalog_from_market_rows
 from kairospy.core.market import Bar
 from kairospy.infrastructure.persistence.market_data.catalog import DataStore
 from kairospy.infrastructure.persistence.reference.sqlite_store import SqliteReferenceStore
@@ -54,7 +54,7 @@ def test_configured_backtest_applies_account_fee_rate(tmp_path) -> None:
 def test_backtest_downloads_missing_history_after_strategy_subscribe(tmp_path, monkeypatch) -> None:
     config_path = _write_backtest_project(tmp_path, seed_data=False, on_missing="download")
 
-    monkeypatch.setattr("kairospy.application.launch.launcher.exchange", lambda exchange_name, driver_name: FakeHistoricalClient())
+    monkeypatch.setattr("kairospy.application.support.launch.composition.backtest.exchange", lambda exchange_name, driver_name: FakeHistoricalClient())
 
     result = TradingSystemLauncher().launch_backtest_config(config_path)
 
@@ -264,7 +264,7 @@ def test_launch_backtest_config_does_not_wrap_strategy_runtime_value_error(tmp_p
     config_path = _write_backtest_project(tmp_path)
     (tmp_path / "strategy_mod.py").write_text(
         "\n".join([
-            "from kairospy.application.strategy import StrategyBase",
+            "from kairospy.application.usecases.strategy.protocol import StrategyBase",
             "from kairospy.core.market import Bar",
             "from kairospy.core.reference import MarketRef",
             "",
@@ -339,7 +339,7 @@ def _write_backtest_project(
     (root / "strategy_mod.py").write_text(
         "\n".join([
             "from decimal import Decimal",
-            "from kairospy.application.strategy import StrategyBase",
+            "from kairospy.application.usecases.strategy.protocol import StrategyBase",
             "from kairospy.core.market import Bar",
             "from kairospy.core.intent import target_position_intent",
             "from kairospy.core.reference import MarketRef",

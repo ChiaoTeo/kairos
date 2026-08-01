@@ -117,7 +117,7 @@ def test_market_cli_prefetches_backtest_strategy_subscriptions(tmp_path, monkeyp
     _write_workspace_manifest(tmp_path)
     config_path = _write_backtest_project(tmp_path)
 
-    monkeypatch.setattr("kairospy.application.system.facade.market.exchange", lambda exchange_name, driver_name: FakeHistoricalClient())
+    monkeypatch.setattr("kairospy.application.support.system.facade.market.exchange", lambda exchange_name, driver_name: FakeHistoricalClient())
 
     result = CliRunner().invoke(market_app, ["data", "prefetch", str(config_path), "--output", "json", "--limit", "10"], catch_exceptions=False)
 
@@ -147,7 +147,7 @@ def test_market_cli_prefetch_dry_launch_plans_without_downloading(tmp_path, monk
 def test_market_cli_persists_live_stream_by_dataset_id(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _write_workspace_manifest(tmp_path)
-    monkeypatch.setattr("kairospy.application.system.facade.market.exchange", lambda exchange_name, driver_name: FakeHistoricalClient())
+    monkeypatch.setattr("kairospy.application.support.system.facade.market.exchange", lambda exchange_name, driver_name: FakeHistoricalClient())
 
     result = CliRunner().invoke(
         market_app,
@@ -213,7 +213,7 @@ def _write_backtest_project(root) -> object:
     instrument_id = "instrument:spot:btc:usdt"
     (root / "strategy_mod.py").write_text(
         "\n".join([
-            "from kairospy.application.strategy import StrategyBase",
+            "from kairospy.application.usecases.strategy.protocol import StrategyBase",
             "from kairospy.core.market import Bar",
             "from kairospy.core.reference import MarketRef",
             "",

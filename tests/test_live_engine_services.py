@@ -5,26 +5,25 @@ from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.components import RuntimeComponents
-from kairospy.application.runtime.orchestration.state import RuntimeStores
-from kairospy.application.launch import LaunchAccountBinding, LaunchAccountDirectory
-from kairospy.application.account_books import default_account_books
-from kairospy.application.ports import MarketDataSubscriptionSpec
-from kairospy.application.domain.account.routing import account_book_route
-from kairospy.application.service.modes.live import (
-    LiveAccountService,
-    LiveExecutionService,
-    LiveMarketDataService,
-    LiveTradingSafetyPolicy,
-)
-from kairospy.application.runtime.services import RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.application.support.runtime.orchestration.kernel import RuntimeKernel
+from kairospy.application.support.runtime.components import RuntimeComponents
+from kairospy.application.support.runtime.orchestration.state import RuntimeStores
+from kairospy.application.support.launch.accounts import LaunchAccountBinding, LaunchAccountDirectory
+from kairospy.application.usecases.account.books import default_account_books
+from kairospy.application.usecases.market.subscriptions import MarketDataSubscriptionSpec
+from kairospy.application.usecases.account.routing import account_book_route
+from kairospy.application.support.launch.composition.accounts import configured_account_book_route
+from kairospy.application.support.runtime.services.account.live import LiveAccountService
+from kairospy.application.support.runtime.services.execution.live import LiveExecutionService, LiveTradingSafetyPolicy
+from kairospy.application.support.runtime.services.market.modes.live import LiveMarketDataService
+from kairospy.application.support.runtime.services.application import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.core.account import AccountBookKind, AccountContext, AccountBookRef, AccountSource, Environment
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentJournal, IntentStatus, target_position_intent
 from kairospy.core.market import OptionGreeks, Quote
 from kairospy.core.reference import MarketRef, MarketResolver, SourceSymbol
 from kairospy.infrastructure.integrations.drivers import CcxtDriver
+from kairospy.infrastructure.integrations.adapters.order_execution import BrokerOrderExecutionAdapter
 from kairospy.infrastructure.integrations.payloads import CcxtAccountPayloadAdapter
 from kairospy.infrastructure.integrations.payloads.ccxt_market import ccxt_option_greeks_update, ccxt_ticker_update
 
@@ -406,12 +405,12 @@ def test_live_account_service_refreshes_from_broker_integration() -> None:
     assert service.state(account.book).balances[0].total == Decimal("1000")  # type: ignore[union-attr]
 
 
-def test_account_book_route_maps_binance_books_to_product_params() -> None:
-    spot = account_book_route(AccountBookRef("binance", "main", AccountBookKind.SPOT), broker="binance")
-    equity = account_book_route(AccountBookRef("binance", "main", AccountBookKind.EQUITY), broker="binance")
-    funding = account_book_route(AccountBookRef("binance", "main", AccountBookKind.FUNDING), broker="binance")
-    futures = account_book_route(AccountBookRef("binance", "main", AccountBookKind.USD_M_FUTURES), broker="binance")
-    isolated = account_book_route(AccountBookRef("binance", "main", AccountBookKind.ISOLATED_MARGIN, qualifier="ETH/USDT"), broker="binance")
+def test_configured_account_book_route_maps_binance_books_to_product_params() -> None:
+    spot = configured_account_book_route(AccountBookRef("binance", "main", AccountBookKind.SPOT), broker="binance")
+    equity = configured_account_book_route(AccountBookRef("binance", "main", AccountBookKind.EQUITY), broker="binance")
+    funding = configured_account_book_route(AccountBookRef("binance", "main", AccountBookKind.FUNDING), broker="binance")
+    futures = configured_account_book_route(AccountBookRef("binance", "main", AccountBookKind.USD_M_FUTURES), broker="binance")
+    isolated = configured_account_book_route(AccountBookRef("binance", "main", AccountBookKind.ISOLATED_MARGIN, qualifier="ETH/USDT"), broker="binance")
 
     assert spot.balance_params == {}
     assert spot.order_params["defaultType"] == "spot"
@@ -443,8 +442,8 @@ def test_live_account_service_refreshes_each_enabled_book_with_routed_params() -
     funding = AccountContext(AccountBookRef("binance", "main", AccountBookKind.FUNDING), Environment.LIVE)
     directory = LaunchAccountDirectory((LaunchAccountBinding("account1", 0, (spot, funding)),))
     routes = (
-        account_book_route(spot.book, broker="binance"),
-        account_book_route(funding.book, broker="binance"),
+        configured_account_book_route(spot.book, broker="binance"),
+        configured_account_book_route(funding.book, broker="binance"),
     )
     broker = FakeBroker(
         open_orders=(
@@ -486,14 +485,16 @@ def test_live_execution_routes_target_position_to_intent_account_book_params() -
     swap = AccountContext(AccountBookRef("binance", "main", AccountBookKind.USD_M_FUTURES), Environment.LIVE)
     directory = LaunchAccountDirectory((LaunchAccountBinding("account1", 0, (spot, swap), ref="binance_main"),))
     routes = (
-        account_book_route(spot.book, broker="binance"),
-        account_book_route(swap.book, broker="binance"),
+        configured_account_book_route(spot.book, broker="binance"),
+        configured_account_book_route(swap.book, broker="binance"),
     )
     broker = FakeBroker()
-    coordinator = ExecutionCoordinator(broker=broker, broker_symbol_resolver=lambda symbol: "ETH/USDT")
+    coordinator = ExecutionCoordinator()
     service = LiveExecutionService(
         coordinator,
         account=spot,
+        order_execution=BrokerOrderExecutionAdapter(broker),
+        symbol_resolver=lambda symbol: "ETH/USDT",
         safety_policy=LiveTradingSafetyPolicy(trading_enabled=True, require_limit_orders=True),
         directory=directory,
         routes=routes,
@@ -530,20 +531,21 @@ def test_live_execution_routes_target_position_to_distinct_account_broker() -> N
     )
     binance_broker = FakeBroker()
     okx_broker = FakeBroker()
-    coordinator = ExecutionCoordinator(
-        broker=binance_broker,
-        broker_resolver=lambda account: {
-            binance_spot.book: binance_broker,
-            okx_swap.book: okx_broker,
-        }.get(account),
-        broker_symbol_resolver=lambda symbol: "ETH/USDT",
-    )
+    coordinator = ExecutionCoordinator()
     service = LiveExecutionService(
         coordinator,
         account=binance_spot,
+        order_execution=BrokerOrderExecutionAdapter(
+            binance_broker,
+            broker_resolver=lambda account: {
+            binance_spot.book: binance_broker,
+            okx_swap.book: okx_broker,
+            }.get(account),
+        ),
+        symbol_resolver=lambda symbol: "ETH/USDT",
         safety_policy=LiveTradingSafetyPolicy(trading_enabled=True, require_limit_orders=True),
         directory=directory,
-        routes=(account_book_route(binance_spot.book, broker="binance"), account_book_route(okx_swap.book, broker="okx")),
+        routes=(configured_account_book_route(binance_spot.book, broker="binance"), configured_account_book_route(okx_swap.book, broker="okx")),
     )
     context = _IntentContext(now)
     intent = target_position_intent(
@@ -596,7 +598,7 @@ def test_live_account_service_streams_private_updates_for_each_account_book() ->
         broker=FakeBroker(),
         parser=CcxtAccountPayloadAdapter(),
         directory=directory,
-        routes=(account_book_route(spot.book, broker="binance"), account_book_route(swap.book, broker="okx")),
+        routes=(configured_account_book_route(spot.book, broker="binance"), configured_account_book_route(swap.book, broker="okx")),
         stream_resolver=lambda account: {
             spot.book: spot_stream,
             swap.book: swap_stream,
@@ -668,11 +670,13 @@ def _live_kernel(
     market_data.subscribe(MarketDataSubscriptionSpec(market, (Quote,)))
     account = AccountContext(AccountBookRef("binance", "main"), Environment.LIVE)
     broker = FakeBroker()
-    coordinator = ExecutionCoordinator(broker=broker, broker_symbol_resolver=lambda symbol: "ETH/USDT")
+    coordinator = ExecutionCoordinator()
     account_service = LiveAccountService(account, coordinator, broker=broker, parser=CcxtAccountPayloadAdapter())
     execution = LiveExecutionService(
         coordinator,
         account=account,
+        order_execution=BrokerOrderExecutionAdapter(broker),
+        symbol_resolver=lambda symbol: "ETH/USDT",
         snapshot_provider=account_service.snapshot,
         safety_policy=safety_policy,
     )

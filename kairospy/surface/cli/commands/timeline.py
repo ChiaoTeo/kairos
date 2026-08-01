@@ -6,8 +6,8 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.system.facade.context import workspace as resolve_workspace
-from kairospy.application.launch.control import RuntimeMode
+from kairospy.application.support.system.facade.context import workspace as resolve_workspace
+from kairospy.application.support.launch.control import RuntimeMode
 from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.rendering.writer import write_result
 from kairospy.surface.timeline import TimelineDataLoader, find_latest_instance, list_instances, serve_timeline

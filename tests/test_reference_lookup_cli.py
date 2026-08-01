@@ -5,7 +5,7 @@ import json
 
 from typer.testing import CliRunner
 
-from kairospy.application.domain.reference import catalog_from_equity_rows, catalog_from_market_rows
+from kairospy.application.usecases.reference import catalog_from_equity_rows, catalog_from_market_rows
 from kairospy.infrastructure.persistence.reference.sqlite_store import ReferenceStore
 from kairospy.core.reference import LifecycleEvent, LifecycleEventType
 from kairospy.surface.cli.commands.reference import reference_app

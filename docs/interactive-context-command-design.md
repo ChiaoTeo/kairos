@@ -97,7 +97,7 @@ User strategy method
 新增模块：
 
 ```text
-kairospy/application/strategy/commands.py
+kairospy/application/usecases/strategy/commands.py
 ```
 
 职责：
@@ -498,7 +498,7 @@ context.trace(f"cli.{command.name}", {"result": result})
 
 ### 阶段 1：命令解析与 `CliStrategyBase` 执行
 
-- 新增 `kairospy/application/strategy/commands.py`
+- 新增 `kairospy/application/usecases/strategy/commands.py`
 - 实现 `parse_context_command`
 - 实现 `execute_context_command`
 - `CliStrategyBase` 改为委托该模块

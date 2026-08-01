@@ -9,16 +9,16 @@ from typing import Mapping
 
 from prettytable import PrettyTable
 
-from kairospy.application.modes import RuntimeMode
-from kairospy.application.strategy import cli_command_envelope
-from kairospy.application.launch.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchFacade
+from kairospy.application.support.launch.modes import RuntimeMode
+from kairospy.application.support.system.session.commands import cli_command_envelope
+from kairospy.application.support.launch.control.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchFacade
 
 
 class InteractiveSystemSession:
     def __init__(
         self,
         *,
-        strategy_path: str = "kairospy.application.strategy:CliStrategyBase",
+        strategy_path: str = "kairospy.application.usecases.strategy:CliStrategyBase",
         launch_id: str = DEFAULT_SYSTEM_LAUNCH_ID,
         mode: RuntimeMode = RuntimeMode.SYSTEM,
         launches: LaunchFacade | None = None,

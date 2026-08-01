@@ -1,6 +1,6 @@
-from kairospy.application.browsing import ListQuery, query_rows
-from kairospy.application.browsing.engine import query_rows as engine_query_rows
-from kairospy.application.browsing.models import ListQuery as ModelListQuery
+from kairospy.application.support.system.browsing import ListQuery, query_rows
+from kairospy.application.support.system.browsing.engine import query_rows as engine_query_rows
+from kairospy.application.support.system.browsing.models import ListQuery as ModelListQuery
 from kairospy.surface.tui import KairosTuiApp, ResourceBrowserApp, ResourceBrowserScreen, ResourceList, ResourceListBrowser
 from kairospy.surface.tui.screens import ReferenceAssetsScreen
 from kairospy.surface.tui.widgets import JsonDetail, QueryBar, ResourceTable

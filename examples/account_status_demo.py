@@ -7,7 +7,7 @@ from typing import Any
 
 from prettytable import PrettyTable
 
-from kairospy.application.launch import TradingSystemLauncher
+from kairospy.application.support.launch.launcher import TradingSystemLauncher
 from kairospy.config import LaunchConfig
 
 

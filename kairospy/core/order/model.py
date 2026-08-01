@@ -4,7 +4,6 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import TypedDict
 
 from kairospy.core.account.model import AccountContext
 from kairospy.core.reference import AccountId, BrokerId, InstrumentId, MarketId
@@ -48,12 +47,6 @@ class OrderStatus(StrEnum):
     @property
     def terminal(self) -> bool:
         return self in {self.FILLED, self.CANCELED, self.REJECTED, self.EXPIRED}
-
-
-class VenueOrderResponse(TypedDict, total=False):
-    id: str | int
-    orderId: str | int
-    status: str
 
 
 class OrderEventKind(StrEnum):
@@ -318,7 +311,6 @@ __all__ = [
     "OrderState",
     "OrderStatus",
     "OrderType",
-    "VenueOrderResponse",
 ]
 
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from kairospy.infrastructure.integrations.types import IntegrationParams, OrderSubmissionResponse, RawPayload
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, OrderSubmissionResponse, RawPayload
 
 
 @dataclass(frozen=True, slots=True)

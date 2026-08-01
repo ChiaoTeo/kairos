@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from kairospy.application.launch.host.resources import TradingRuntimeResources
-from kairospy.application.runtime.components import RuntimeComponents
+from kairospy.application.support.launch.host.resources import TradingRuntimeResources
+from kairospy.application.support.runtime.components import RuntimeComponents
 
 
 def test_runtime_resources_expose_composed_components() -> None:

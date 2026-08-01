@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 from kairospy.infrastructure.integrations.connectors.exchange.okx.market_data import okx_ccxt_driver
 from kairospy.infrastructure.integrations.drivers import CcxtDriver
-from kairospy.infrastructure.integrations.types import IntegrationParams, OrderSubmissionResponse, RawPayload, RawPayloadRows, RawPayloadStream
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, OrderSubmissionResponse, RawPayload, RawPayloadRows, RawPayloadStream
 
 
 @dataclass(frozen=True, slots=True)

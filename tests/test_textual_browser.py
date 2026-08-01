@@ -1,4 +1,4 @@
-from kairospy.application.browsing import ListQuery
+from kairospy.application.support.system.browsing import ListQuery
 from kairospy.surface.tui.screens import replace_query
 from kairospy.surface.tui.widgets import filters_text, sort_text
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from kairospy.core.order import OrderType
-from kairospy.infrastructure.integrations.types import RawPayload
+from kairospy.infrastructure.integrations.payloads.types import RawPayload
 
 
 def ccxt_decimal(value: object) -> Decimal:

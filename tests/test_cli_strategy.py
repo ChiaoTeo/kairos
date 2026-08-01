@@ -4,7 +4,8 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 import pytest
 
-from kairospy.application.strategy import CliStrategyBase, cli_command_envelope
+from kairospy.application.usecases.strategy.cli import CliStrategyBase
+from kairospy.application.support.system.session.commands import cli_command_envelope
 
 
 def test_cli_strategy_base_records_trace_commands() -> None:

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-from kairospy.application.system.workspace import AccountLeaseManager
-from kairospy.application.system.session import SystemCommand, SystemCommandDispatcher, SystemCommandFileQueue, SystemCommandResult
+from kairospy.application.support.system.workspace import AccountLeaseManager
+from kairospy.application.support.system.session import SystemCommand, SystemCommandDispatcher, SystemCommandFileQueue, SystemCommandResult
 from kairospy.core.account import AccountIdentity
 
 

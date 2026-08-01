@@ -8,9 +8,9 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.launch.facade import LaunchAlreadyActiveError, LaunchFacade, RuntimeMode, TradingConfigurationError, record_payload
-from kairospy.application.launch.attach import LaunchAttachSession, read_file_chunk
-from kairospy.application.browsing import ListQuery
+from kairospy.application.support.launch.control.facade import LaunchAlreadyActiveError, LaunchFacade, RuntimeMode, TradingConfigurationError, record_payload
+from kairospy.application.support.launch.control.attach import LaunchAttachSession, read_file_chunk
+from kairospy.application.support.system.browsing import ListQuery
 from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.cli.output import write_cli_result
 from kairospy.surface.cli.commands.timeline import timeline_app

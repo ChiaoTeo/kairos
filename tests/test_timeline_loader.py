@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from kairospy.application.system.projectors import LaunchProjectionService
+from kairospy.application.support.system.projectors import LaunchProjectionService
 from kairospy.surface.timeline.loader import TimelineDataLoader
 
 

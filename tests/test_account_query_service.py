@@ -3,8 +3,8 @@ from __future__ import annotations
 from decimal import Decimal
 from types import SimpleNamespace
 
-from kairospy.application.runtime.dispatch.context import RuntimeContext
-from kairospy.application.query import AccountQueryService
+from kairospy.application.support.runtime.dispatch.context import RuntimeContext
+from kairospy.application.support.runtime.query import AccountQueryService
 from kairospy.core.account import (
     AccountBalance,
     AccountContext,

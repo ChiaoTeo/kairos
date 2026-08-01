@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Mapping
 
-from kairospy.application.domain.reference.builders import catalog_from_equity_rows
-from kairospy.core.reference import MarketDefinition, ReferenceCatalog
-
 from .sapi import BinanceSapiClient
-from kairospy.infrastructure.integrations.types import IntegrationParams, RawPayload, RawPayloadRows
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, RawPayload, RawPayloadRows
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,24 +25,6 @@ class BinanceEquityReferenceConnector:
     ) -> RawPayloadRows:
         payload = self.client.get("/sapi/v1/equity/market/exchangeInfo", params=params, signed=False, api_key=True)
         return tuple(_market_row(item, venue=self.venue) for item in _symbols(payload))
-
-    def fetch_market_definitions(
-        self,
-        *,
-        as_of: datetime | None = None,
-        params: IntegrationParams | None = None,
-    ) -> tuple[MarketDefinition, ...]:
-        effective_from = (as_of or datetime.now(timezone.utc)).astimezone(timezone.utc)
-        return catalog_from_equity_rows(self.fetch_markets(params=params), effective_from=effective_from).list_markets(at=effective_from)
-
-    def fetch_reference_catalog(
-        self,
-        *,
-        as_of: datetime | None = None,
-        params: IntegrationParams | None = None,
-    ) -> ReferenceCatalog:
-        effective_from = (as_of or datetime.now(timezone.utc)).astimezone(timezone.utc)
-        return catalog_from_equity_rows(self.fetch_markets(params=params), effective_from=effective_from)
 
 
 def _symbols(payload: object) -> tuple[RawPayload, ...]:

@@ -4,16 +4,18 @@ import hashlib
 import hmac
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Mapping
+from typing import Mapping, Protocol
 from urllib.parse import urlencode
 
 import requests
 
-from kairospy.infrastructure.integrations.credentials import credential_value
-from kairospy.infrastructure.integrations.types import IntegrationParams, RawPayload
+from kairospy.infrastructure.integrations.services.credentials import credential_value
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, RawPayload
 
 
-TimeProvider = Callable[[], int]
+class TimeProvider(Protocol):
+    def __call__(self) -> int:
+        ...
 
 
 class BinanceSapiError(RuntimeError):

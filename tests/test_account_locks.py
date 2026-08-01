@@ -4,12 +4,13 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.launch.launcher import TradingSystemLauncher
-from kairospy.application.launch.host.resources import TradingLaunchSpec
-from kairospy.application.launch.host.runtime_host import TradingSystem
-from kairospy.application.modes import RuntimeMode
-from kairospy.application.strategy import CliStrategyBase, cli_command_envelope
-from kairospy.application.system.workspace import AccountLeaseError, AccountLeaseManager
+from kairospy.application.support.launch.launcher import TradingSystemLauncher
+from kairospy.application.support.launch.host.resources import TradingLaunchSpec
+from kairospy.application.support.launch.host.runtime_host import TradingSystem
+from kairospy.application.support.launch.modes import RuntimeMode
+from kairospy.application.usecases.strategy.cli import CliStrategyBase
+from kairospy.application.support.system.session.commands import cli_command_envelope
+from kairospy.application.support.system.workspace import AccountLeaseError, AccountLeaseManager
 from kairospy.core.account import AccountIdentity
 from kairospy.core.intent import IntentStatus
 
@@ -282,7 +283,7 @@ def _write_paper_config(root: Path, *, account_ref: str, trade: bool = True, boo
     (root / "strategy_mod.py").write_text(
         "\n".join(
             [
-                "from kairospy.application.strategy import StrategyBase",
+                "from kairospy.application.usecases.strategy.protocol import StrategyBase",
                 "",
                 "class ConfiguredStrategy(StrategyBase):",
                 "    strategy_id = 'lock-test-strategy'",

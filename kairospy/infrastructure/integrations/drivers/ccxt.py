@@ -5,12 +5,23 @@ import json
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Callable, Iterable, Mapping
-from kairospy.infrastructure.integrations.types import IntegrationParams, OrderSubmissionResponse, RawPayload, RawPayloadRows, RawPayloadStream
+from typing import Any, AsyncIterator, Iterable, Mapping, Protocol
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, OrderSubmissionResponse, RawPayload, RawPayloadRows, RawPayloadStream
 
 
-SyncExchangeFactory = Callable[[str], Any]
-AsyncExchangeFactory = Callable[[str], Any]
+class SyncExchangeFactory(Protocol):
+    def __call__(self, exchange_id: str) -> Any:
+        ...
+
+
+class AsyncExchangeFactory(Protocol):
+    def __call__(self, exchange_id: str) -> Any:
+        ...
+
+
+class LoopExceptionHandler(Protocol):
+    def __call__(self, loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -571,7 +582,7 @@ class _WsUnavailable(Exception):
     pass
 
 
-def _ignore_cancelled_loop_exception(previous_handler: object) -> Callable[[asyncio.AbstractEventLoop, dict[str, Any]], None]:
+def _ignore_cancelled_loop_exception(previous_handler: object) -> LoopExceptionHandler:
     def handle(loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
         if isinstance(context.get("exception"), asyncio.CancelledError):
             return

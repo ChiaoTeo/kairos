@@ -5,7 +5,7 @@ import json
 
 from typer.testing import CliRunner
 
-from kairospy.application.launch.registry import LaunchRegistry, list_launch_daemons
+from kairospy.application.support.launch.control.registry import LaunchRegistry, list_launch_daemons
 from kairospy.surface.cli.commands.launch import launch_app
 from kairospy.surface.cli.commands.system import system_app
 

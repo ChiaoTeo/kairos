@@ -1,32 +1,32 @@
-# Application Ports and Domain Boundaries
+# Application Contracts and Domain Boundaries
 
-This document defines how KairosPy should separate domain types, application ports, and infrastructure integrations. It complements `docs/integration-boundaries.md`, which explains how external participants are organized under `infrastructure/integrations`.
+This document defines how KairosPy should separate domain types, application contracts, and infrastructure integrations. The architecture overview and conflict-resolution rules live in `docs/architecture-boundaries.md`; this document provides additional detail for domain models, raw payloads, persistence records, and contracts owned by application areas or runtime services. It complements `docs/integration-boundaries.md`, which explains how external participants are organized under `infrastructure/integrations`.
 
 ## Goal
 
-Application services should depend on KairosPy business contracts, not on exchange SDK shapes. Infrastructure integrations should adapt external APIs into those contracts.
+Application services should depend on KairosPy business contracts or injected integration adapters, not on exchange SDK shapes. Infrastructure integrations should adapt external APIs into those contracts only when the abstraction has real use-case value.
 
 The intended dependency direction is:
 
 ```text
 core
-  <- application ports
+  <- local application contracts where needed
   <- application services
   <- surface / runtime composition
 
 infrastructure integrations
   -> core
-  -> application ports
+  -> application contracts only when implementing one
 
 infrastructure persistence
   -> core
 ```
 
-Arrows point from the importing layer to the imported layer. For example, `application services -> application ports` means services import ports, not the other way around.
+Arrows point from the importing layer to the imported layer. For example, `application services -> local application contracts` means services import contracts, not the other way around.
 
 `core` must not depend on `application` or `infrastructure`.
 
-`infrastructure` must not depend on `application.service.*` implementation modules. It may depend on `application.ports` when implementing application-facing interfaces.
+`infrastructure` must not depend on `application.service.*` implementation modules. It may depend on an application contract when implementing one, but not every integration capability needs a global port.
 
 ## Layer Responsibilities
 
@@ -43,18 +43,18 @@ Core types should be valid without knowing whether the data came from CCXT, Bina
 
 Core should not define persistence row schemas. If a shape exists mainly because JSONL, CSV, Parquet, or `DataStore.write(...)` needs it, it belongs in persistence/storage code, not in core.
 
-### Application Ports
+### Application Contracts
 
-`kairospy/application/ports/` defines what application services need.
+`kairospy/application/ports/` has been removed and should not be reintroduced. Prefer local Protocols beside the runtime service or use-case package that consumes the capability. When a contract is shared by a business area, place it in the owning `application/usecases/<area>/` package.
 
-Ports should be:
+Contracts should be:
 
 - business-facing
 - narrow
 - stable
-- expressed in core types or application port DTOs
+- expressed in core types or owning-area DTOs
 
-They should not mirror third-party SDK method names unless those names are already domain vocabulary.
+They should not mirror third-party SDK method names unless those names are already domain vocabulary. If a contract still looks like the integration API, keep it in `infrastructure/integrations` or make it a local runtime-service dependency.
 
 Prefer:
 
@@ -79,17 +79,17 @@ class HistoricalMarketDataClient(Protocol):
 
 The second shape is acceptable inside an integration gateway, translator, or driver, but it should not be the primary application contract.
 
-Request and response DTOs that exist only to call a use case belong beside the port:
+Request and response DTOs that exist only to call a use case belong beside the contract:
 
 ```text
-kairospy/application/ports/market_history.py
+kairospy/application/usecases/market/history.py
   BarHistoryRequest
   BarHistoryPort
 ```
 
-Move a DTO into `core` only when it is a domain concept that remains meaningful without a port. `OrderRequest` is core because it is part of order state and execution history. `BarHistoryRequest` is an application query shape, so it belongs with the port.
+Move a DTO into `core` only when it is a domain concept that remains meaningful without a contract. `OrderRequest` is core because it is part of order state and execution history. `BarHistoryRequest` is an application query shape, so it belongs with the historical-data contract if that contract remains.
 
-Use frozen dataclasses for port DTOs unless the value is intentionally a JSON-like diagnostic payload. Avoid `Mapping[str, object]` for required business parameters.
+Use frozen dataclasses for contract DTOs unless the value is intentionally a JSON-like diagnostic payload. Avoid `Mapping[str, object]` for required business parameters.
 
 ### Application Services
 
@@ -101,9 +101,9 @@ Use frozen dataclasses for port DTOs unless the value is intentionally a JSON-li
 - persisting and replaying market data
 - coordinating execution services
 
-Application services should depend on application ports and core types. They should not import connector classes directly.
+Application services should depend on core types plus either local contracts or injected adapters selected by composition. They should not import concrete connector classes directly.
 
-Runtime services are application services. They may depend on `application.ports`, but should not depend on `infrastructure.integrations.protocols` once an application-facing port exists for that capability.
+Runtime services are application services. They may define a narrow local Protocol for injected live/integration behavior. They should not depend on `infrastructure.integrations.protocols`.
 
 ### Infrastructure Integrations
 
@@ -146,13 +146,13 @@ BinanceMarketDataConnector
   -> DataStore
 ```
 
-Integration connectors may expose raw methods for gateway-local, translator-local, or connector tests, but those methods are not application ports. Name them as raw/vendor-facing methods and keep them out of runtime service contracts.
+Integration connectors may expose raw methods for gateway-local, translator-local, or connector tests, but those methods are not application contracts. Name them as raw/vendor-facing methods and keep them out of runtime service contracts.
 
 ## Integration Protocols
 
 `kairospy/infrastructure/integrations/protocols.py` is transitional.
 
-It can still hold low-level raw connector protocols while the codebase migrates, but new application services should not add dependencies on it. If a service needs a capability, define a narrow port in `kairospy/application/ports/` and make the integration connector or a capability-specific gateway implement that port.
+It can still hold low-level raw connector protocols while the codebase migrates, but new application services should not add dependencies on it. If a service needs a capability, first inject an integration adapter through composition. If a Protocol is needed, define it beside the consuming runtime service or use-case package. Shared contracts belong in the owning `kairospy/application/usecases/<area>/` package.
 
 Allowed use of integration protocols:
 
@@ -168,7 +168,7 @@ Avoid using integration protocols in:
 - execution services
 - application facades
 
-Once a capability has an application port, the integration protocol for the same capability should either be removed or renamed to make its raw/vendor role clear.
+Once a capability has an application contract, the integration protocol for the same capability should either be removed or renamed to make its raw/vendor role clear.
 
 ## Port Granularity
 
@@ -210,7 +210,7 @@ Composition code can pass one concrete connector object that implements several 
 
 ## Naming Rules
 
-Use domain names in application ports:
+Use domain names in application contracts:
 
 - `bars`, not `fetch_ohlcv`
 - `quotes`, not `watch_ticker`
@@ -238,7 +238,7 @@ Use request DTO names that describe intent:
 - `OrderSubmissionRequest`
 - `OrderCancelRequest`
 
-Do not pass vendor params through application ports as a generic `params` argument. If a vendor override is unavoidable, put it behind an explicitly named escape hatch such as `integration_options` and keep it optional.
+Do not pass vendor params through application contracts as a generic `params` argument. If a vendor override is unavoidable, put it behind an explicitly named escape hatch such as `integration_options` and keep it optional.
 
 ## Raw Payload Policy
 
@@ -248,7 +248,7 @@ Raw payloads are allowed in three places:
 2. Payload translators that convert raw values into core/application types
 3. Diagnostic or browsing surfaces whose purpose is to show raw external data
 
-Raw payloads should not be used as normal business return values from application ports.
+Raw payloads should not be used as normal business return values from application contracts.
 
 If raw data must be preserved, attach it explicitly:
 
@@ -270,7 +270,7 @@ If a core domain object keeps external details, store them in explicit metadata:
 Quote(..., metadata={"raw_payload": dict(raw)})
 ```
 
-or in an application/runtime envelope metadata field. Do not add vendor-specific fields to core models just because one connector returns them.
+or in an application/support/runtime envelope metadata field. Do not add vendor-specific fields to core models just because one connector returns them.
 
 ## Persistence Records
 
@@ -290,7 +290,7 @@ They are appropriate for:
 - replay files
 - CLI export/import surfaces
 
-They are not appropriate as default application port return values.
+They are not appropriate as default application contract return values.
 
 Prefer application-facing ports that return core models:
 
@@ -342,17 +342,18 @@ Do not begin with a package-wide rename. That creates a large mechanical diff be
 The current codebase still has integration protocols that are too close to external APIs. The target is:
 
 ```text
-kairospy/application/ports/market_history.py
-  BarHistoryPort
-  FundingRateHistoryPort
-  BarHistoryRequest
-  FundingRateHistoryRequest
+application/support/runtime/services/market/streaming.py
+  local streaming feed contract if needed
 
-kairospy/application/ports/live_market.py
-  QuoteStreamPort
-  OrderBookStreamPort
-  TradeStreamPort
-  MarketStreamRequest
+application/support/runtime/services/execution/live.py
+  local live execution contract if needed
+
+application/usecases/reference/
+  ReferenceStore
+  ReferenceCatalogSource
+
+application/usecases/market/
+  subscription and dataset contracts
 
 kairospy/infrastructure/integrations/protocols.py
   AccountBalanceClient
@@ -360,7 +361,7 @@ kairospy/infrastructure/integrations/protocols.py
   OrderExecutionClient
   PrivateAccountStream
 
-kairospy/application/runtime/contracts.py
+kairospy/application/support/runtime/contracts.py
   AccountRuntime
   AccountCatalog
   ExecutionRuntime
@@ -380,17 +381,17 @@ kairospy/infrastructure/persistence/market/projectors.py
 
 Then:
 
-- application services depend on these ports
-- infrastructure connectors or capability-specific gateways implement these ports
+- application services depend on local/use-case contracts only where they add value
+- infrastructure connectors or capability-specific gateways are injected by composition
 - persistence projectors convert core models/events into records and write them
-- `infrastructure.integrations.protocols` can shrink to raw driver/connector protocols, or disappear where application ports fully replace it
+- `infrastructure.integrations.protocols` can shrink to raw driver/connector protocols, or disappear where local/use-case contracts fully replace it
 
 ## Migration Principle: Full Cutover, Not Compatibility
 
 Boundary migrations should not preserve two application-facing contracts for compatibility. The preferred approach is:
 
 1. Analyze the existing architecture first: identify callers, concrete implementations, composition roots, tests, persistence flows, and raw payload boundaries.
-2. Define the target port/domain shape before editing call sites.
+2. Define the target contract/domain shape before editing call sites.
 3. Migrate all affected application services, composition code, integrations, and tests to the target shape in one coherent change.
 4. Remove the replaced contract in the same migration.
 
@@ -398,12 +399,12 @@ Do not add long-lived compatibility layers whose purpose is to let old and new a
 
 Avoid these patterns:
 
-- keeping both `BrokerClient` and narrow account/order ports as supported application contracts
-- adding optional fallback paths that call either the old integration protocol or the new application port
+- keeping both `BrokerClient` and narrow account/order contracts as supported application contracts
+- adding optional fallback paths that call either the old integration protocol or the new application contract
 - preserving raw SDK-shaped request/response fields in application DTOs to reduce call-site changes
 - marking old protocols as deprecated while new application code still depends on them
 
-When a migration is too large for one commit, split it by architecture boundary rather than by compatibility layer. For example, migrate market history ports fully, then account snapshot ports fully, then order execution ports fully. Each slice should leave one target contract for that capability.
+When a migration is too large for one commit, split it by architecture boundary rather than by compatibility layer. For example, migrate market history contracts fully, then account snapshot contracts fully, then order execution contracts fully. Each slice should leave one target contract for that capability.
 
 ## Composition Boundary
 
@@ -414,7 +415,7 @@ Concrete connector selection belongs at composition boundaries:
 - integration resolver
 - test fixtures
 
-Composition code may import concrete integration classes. After composition, application services should receive only ports or callables typed by ports.
+Composition code may import concrete integration classes. After composition, application services should receive only injected adapters, local contracts, or callables typed by local/use-case contracts.
 
 Acceptable:
 
@@ -429,22 +430,22 @@ Not acceptable in an application service:
 from kairospy.infrastructure.integrations.connectors.exchange.binance import BinanceMarketDataConnector
 ```
 
-This keeps the application service testable with an in-memory port implementation.
+This keeps the application service testable with an in-memory fake without forcing every live-only capability into a global port.
 
 ## Migration Steps
 
 1. Map the current callers, implementations, composition roots, and tests for one capability slice.
-2. Define the target core types, request DTOs, narrow ports, and persistence projectors for that slice.
+2. Define the target core types, request DTOs, narrow local/use-case contracts, and persistence projectors for that slice.
 3. Move persistence record types and projectors out of `core` into `infrastructure/persistence/market_data`.
-4. Add or update request DTOs and narrow ports under `application/ports`.
-5. Change all affected application services to consume the new ports and core models/events.
-6. Update infrastructure connectors or capability-specific gateways to implement those ports.
+4. Add or update request DTOs and narrow contracts near their consuming use case or owning application area.
+5. Change all affected application services to consume the new contracts, injected adapters, and core models/events.
+6. Update infrastructure connectors or capability-specific gateways to satisfy those contracts where a contract exists.
 7. Move connector `persist_*` methods into application services or persistence-oriented services.
 8. Add persistence projectors/codecs that convert core models/events into records.
 9. Update composition roots and tests to use the target contracts.
 10. Remove replaced broad integration protocols such as `BrokerClient` once the slice has moved.
 11. Remove service imports from infrastructure.
-12. Keep raw aliases only in raw integration boundaries such as `infrastructure.integrations.types`.
+12. Keep raw aliases only in raw integration boundaries such as `infrastructure.integrations.payloads.types`; persistence record schemas and record stream aliases belong with persistence codecs or stores, not in integrations.
 13. Remove broad storage aliases after each slice has moved to the target persistence package.
 
 ## Decision Checklist
@@ -453,10 +454,10 @@ When adding a new integration method, ask:
 
 - Is this a core business concept? Put the type in `core`.
 - Is this a storage/import/export row schema? Put it in persistence/storage, not core.
-- Is this what an application service needs? Put the protocol/request DTO in `application.ports`.
+- Is this what an application service needs? Put the protocol/request DTO beside the consuming service or in the owning `application/usecases/<area>/` package.
 - Is this a third-party SDK shape or raw HTTP payload? Keep it in `infrastructure.integrations`.
 - Does the method return `Mapping[str, object]`? If yes, is it raw, diagnostic, or intentionally generic? If not, define a domain type.
-- Does an application service import `infrastructure.integrations.*`? Prefer depending on a port instead.
+- Does an application service import `infrastructure.integrations.*`? Prefer depending on a local/area contract or injected adapter instead.
 - Does an integration connector write directly to a store? Move that orchestration into an application service.
-- Does infrastructure import `application.service.*`? Move the shared type/function to `core` or an application port.
+- Does infrastructure import application service implementations? Move the shared type/function to `core`, an owning application area contract, or an integration adapter boundary.
 - Is this file only selecting concrete implementations? It can live in composition/factory code and import infrastructure.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from kairospy.application.domain.reference import ReferenceLifecycleService, catalog_from_market_rows
+from kairospy.application.usecases.reference import ReferenceLifecycleService, catalog_from_market_rows
 from kairospy.core.reference import LifecycleEventType
 
 

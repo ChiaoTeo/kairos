@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from kairospy.application.service.modes.common.accounts import AccountConfigRegistry, ConfiguredAccount
+from kairospy.application.support.launch.config.common import AccountConfigRegistry, ConfiguredAccount
 
 
 def test_account_config_registry_resolves_by_index_or_id_with_venue_guard() -> None:

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Mapping, Protocol
 
-from kairospy.application.domain.account import LivePrivateStreamState
+from kairospy.application.usecases.account import LivePrivateStreamState
 from kairospy.core.execution import ExecutionCoordinator, ExecutionStateSnapshot
 
 

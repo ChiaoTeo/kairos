@@ -30,7 +30,7 @@ surface/cli
 application/*/facade
   面向 CLI 的用例 facade，例如 LaunchFacade、AccountFacade、OrderFacade
 
-application/service、application/runtime、application/system/workspace
+application/service、application/support/runtime、application/support/system/workspace
   运行模式、runtime command channel、workspace store、operation journal、projector
 
 infrastructure/integrations
@@ -76,7 +76,7 @@ project doctor
 ### 实现路径
 
 - CLI：`kairospy/surface/cli/commands/project.py`
-- Facade：`kairospy/application/system/facade/project.py`
+- Facade：`kairospy/application/support/system/facade/project.py`
 - 存储：`.kairos/kairos.toml`、`.kairos/accounts`、`.kairos/launches`、`.kairos/data`、`.kairos/reference`、`.kairos/state/operations.jsonl`
 
 `init` 创建 `.kairos` 目录结构和 manifest。`status` 统计 workspace、账户、launch、market datasets、reference root。`doctor` 检查 workspace 目录和 manifest。
@@ -106,7 +106,7 @@ config profile list/use/create
 ### 实现路径
 
 - CLI：`kairospy/surface/cli/commands/config.py`
-- Facade：`kairospy/application/system/facade/config.py`
+- Facade：`kairospy/application/support/system/facade/config.py`
 - 存储：workspace manifest、profiles、state selection、operations journal
 
 `config explain` 实际解释 launch config 和 workspace/account source，与 `launch diagnose explain` 有重叠。
@@ -148,7 +148,7 @@ launch timeline list/export/open/api
 ### 实现路径
 
 - CLI：`kairospy/surface/cli/commands/launch.py`
-- Facade：`kairospy/application/launch/facade.py`
+- Facade：`kairospy/application/support/launch/facade.py`
 - 控制：`LaunchControl`
 - 启动：`TradingSystemLauncher`
 - 存储：`.kairos/launches/<mode>/<launch_id>/...`
@@ -260,7 +260,7 @@ account trade-lock status/list/show/release
 ### 实现路径
 
 - CLI：`kairospy/surface/cli/commands/account.py`
-- Facade：`kairospy/application/system/facade/account.py`
+- Facade：`kairospy/application/support/system/facade/account.py`
 - Workspace：`workspace.accounts`、`workspace.credentials`、`workspace.account_locks`
 - Broker connector：`broker(..., DriverName.ccxt, credential=...)`
 - Runtime command：`account.current`、`account.balances`、`account.positions`、`account.trade-status`
@@ -306,7 +306,7 @@ credential delete/remove
 ### 实现路径
 
 - CLI：`kairospy/surface/cli/commands/credential.py`
-- Facade：`kairospy/application/system/facade/credential.py`
+- Facade：`kairospy/application/support/system/facade/credential.py`
 - 存储：`.kairos/credentials/<credential_id>.toml`
 
 `CredentialFacade` 使用 account schema 推断 credential kind，写 credential TOML，并在 operations journal 记录操作。
@@ -338,7 +338,7 @@ order show/inspect
 ### 实现路径
 
 - CLI：`kairospy/surface/cli/commands/order.py`
-- Facade：`kairospy/application/system/facade/order.py`
+- Facade：`kairospy/application/support/system/facade/order.py`
 - Direct broker：`broker(...).fetch_open_orders()`、`fetch_closed_orders()`、`create_order()`、`cancel_order()`
 - Journal：`.kairos/orders/journals/<account>.jsonl`
 - Runtime command：`order.submit`、`order.cancel`、`order.status`
@@ -410,7 +410,7 @@ market replay
 ### 实现路径
 
 - CLI：`kairospy/surface/cli/commands/market.py`
-- Facade：`kairospy/application/system/facade/market.py`
+- Facade：`kairospy/application/support/system/facade/market.py`
 - Service：`MarketDataOperationsService`
 - Resolver：`MarketDataResolver`
 - Store：`data_store(root, storage_format)`
@@ -489,7 +489,7 @@ catalog status
 
 - CLI：`kairospy/surface/cli/commands/strategy.py`
 
-虽然 application 层有 `kairospy/application/strategy/*`，但 surface 上没有暴露实际策略管理能力。
+虽然 application 层有 `kairospy/application/usecases/strategy/*`，但 surface 上没有暴露实际策略管理能力。
 
 ### 判断
 
@@ -565,7 +565,7 @@ catalog markets browse
 
 ### 实现路径
 
-- Application：`kairospy/application/browsing`
+- Application：`kairospy/application/support/system/browsing`
 - Surface：`kairospy/surface/tui`、`ResourceListBrowser`
 - CLI domain command 负责提供 rows 和 columns
 

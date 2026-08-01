@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shlex
 import sys
-from typing import Callable, TextIO
+from typing import Protocol, TextIO
 
 from kairospy.surface.interactive.navigation import (
     CommandInfo,
@@ -21,8 +21,14 @@ from kairospy.surface.rendering.text import (
 from kairospy.surface.interactive.account import AccountCreateWizard, account_create_direct_argv, is_account_create_argv
 
 
-CommandExecutor = Callable[[list[str]], tuple[int, str]]
-StreamingCommandExecutor = Callable[[list[str], TextIO], int]
+class CommandExecutor(Protocol):
+    def __call__(self, argv: list[str]) -> tuple[int, str]:
+        ...
+
+
+class StreamingCommandExecutor(Protocol):
+    def __call__(self, argv: list[str], stdout: TextIO) -> int:
+        ...
 
 
 class CommandView:

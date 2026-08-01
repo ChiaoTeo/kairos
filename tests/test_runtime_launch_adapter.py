@@ -7,10 +7,11 @@ import sys
 
 from typer.testing import CliRunner
 
-from kairospy.application.protocol import RuntimeEnvelope, RuntimeLine
-from kairospy.application.modes import RuntimeMode
-from kairospy.application.runtime import RuntimeLaunchSpec, RuntimeRunner
-from kairospy.application.strategy import StrategyBase
+from kairospy.application.support.runtime.events import RuntimeEnvelope
+from kairospy.application.support.runtime.lines import RuntimeLine
+from kairospy.application.support.launch.modes import RuntimeMode
+from kairospy.application.support.runtime import RuntimeLaunchSpec, RuntimeRunner
+from kairospy.application.usecases.strategy.protocol import StrategyBase
 from kairospy.surface.cli.app import execute_argv
 from kairospy.surface.cli.commands.launch import launch_app
 
@@ -54,7 +55,7 @@ def test_launch_events_command_executes_jsonl_source(tmp_path, monkeypatch) -> N
     strategy_path = tmp_path / "strategy_mod.py"
     strategy_path.write_text(
         "\n".join([
-            "from kairospy.application.strategy import StrategyBase",
+            "from kairospy.application.usecases.strategy.protocol import StrategyBase",
             "class CliStrategy(StrategyBase):",
             "    strategy_id = 'cli-strategy'",
             "    def on_data(self, context, signal):",

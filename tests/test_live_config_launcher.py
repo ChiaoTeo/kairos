@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from kairospy.application.service.modes.live import LiveConfigurationError, configured_live
-from kairospy.application.launch import TradingSystemLauncher
+from kairospy.application.support.launch.config.live import LiveConfigurationError, configured_live
+from kairospy.application.support.launch.launcher import TradingSystemLauncher
 from kairospy.core.account import AccountBookRef
 from kairospy.core.reference import MarketRef
 from kairospy.infrastructure.integrations.payloads.ccxt_market import ccxt_ticker_update
@@ -339,7 +339,7 @@ def _write_live_project(root: Path, *, account_ref: str = "main", account_enviro
         _write_account(account_ref, credential="fake-alt", index=1)
     (root / "strategy_mod.py").write_text(
         "\n".join([
-            "from kairospy.application.strategy import StrategyBase",
+            "from kairospy.application.usecases.strategy.protocol import StrategyBase",
             "from kairospy.core.market import Quote",
             "class LiveStrategy(StrategyBase):",
             "    strategy_id = 'live-strategy'",

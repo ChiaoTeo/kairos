@@ -5,9 +5,9 @@ from collections.abc import AsyncIterator, Mapping
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.application.ports import MarketDataSubscriptionSpec
-from kairospy.application.runtime.services.market import StreamingMarketDataService
-from kairospy.application.system.resources.connections import DefaultConnectionManager
+from kairospy.application.usecases.market.subscriptions import MarketDataSubscriptionSpec
+from kairospy.application.support.runtime.services.market.streaming import StreamingMarketDataService
+from kairospy.application.support.system.resources.connections import DefaultConnectionManager
 from kairospy.core.market import MarketEvent, MarketSubject, Quote
 from kairospy.core.reference import MarketRef
 

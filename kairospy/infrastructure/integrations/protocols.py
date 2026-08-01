@@ -4,15 +4,17 @@ from typing import AsyncIterator, Protocol
 
 from kairospy.core.market import MarketEvent
 
-from .types import IntegrationParams, OrderBookRecordStream, OrderSubmissionResponse, QuoteRecordStream, RawPayload, RawPayloadRows, RawPayloadStream, TradeRecordStream
+from kairospy.infrastructure.integrations.payloads.types import (
+    IntegrationParams,
+    OrderSubmissionResponse,
+    RawPayload,
+    RawPayloadRows,
+    RawPayloadStream,
+)
 
 
 class IntegrationParticipant(Protocol):
     name: str
-
-
-class IntegrationAdapter(IntegrationParticipant, Protocol):
-    """Compatibility name for registered integration participants."""
 
 
 class RawMarketDataGateway(Protocol):
@@ -21,7 +23,7 @@ class RawMarketDataGateway(Protocol):
         symbol: str,
         *,
         params: IntegrationParams | None = None,
-    ) -> QuoteRecordStream:
+    ) -> RawPayloadStream:
         ...
 
     def watch_ticker_updates(
@@ -38,7 +40,7 @@ class RawMarketDataGateway(Protocol):
         *,
         limit: int | None = None,
         params: IntegrationParams | None = None,
-    ) -> OrderBookRecordStream:
+    ) -> RawPayloadStream:
         ...
 
     def watch_order_book_updates(
@@ -57,7 +59,7 @@ class RawMarketDataGateway(Protocol):
         since: object | None = None,
         limit: int = 50,
         params: IntegrationParams | None = None,
-    ) -> TradeRecordStream:
+    ) -> RawPayloadStream:
         ...
 
     def watch_trades_updates(
@@ -174,18 +176,14 @@ class PrivateAccountStream(Protocol):
 __all__ = [
     "AccountBalanceClient",
     "AccountBootstrapClient",
-    "IntegrationAdapter",
     "IntegrationParticipant",
     "RawMarketDataGateway",
     "OrderExecutionClient",
     "OrderQueryClient",
     "PrivateAccountStream",
-    "OrderBookRecordStream",
     "OrderSubmissionResponse",
-    "QuoteRecordStream",
     "RawPayload",
     "RawPayloadRows",
     "RawPayloadStream",
-    "TradeRecordStream",
     "RawReferenceGateway",
 ]

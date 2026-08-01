@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from kairospy.core.reference import LifecycleEvent, LifecycleEventType, ReferenceCatalog
-from kairospy.infrastructure.integrations.types import RawPayloadRows
+from kairospy.infrastructure.integrations.payloads.types import RawPayloadRows
 
 
 def delist_schedule_events(

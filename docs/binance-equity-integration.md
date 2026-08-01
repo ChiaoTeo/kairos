@@ -239,7 +239,7 @@ allow_extended_hours = false
 策略负责构造 market ref 并订阅行情：
 
 ```python
-from kairospy.application.strategy import StrategyBase
+from kairospy.application.usecases.strategy import StrategyBase
 from kairospy.core.market import Quote
 from kairospy.core.reference import MarketRef
 

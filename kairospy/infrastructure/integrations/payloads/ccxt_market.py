@@ -18,23 +18,8 @@ from kairospy.core.market import (
     RateObservation,
     TradePrint,
 )
-from kairospy.infrastructure.persistence.market_data.records import (
-    BarRecord,
-    OrderBookRecord,
-    OptionGreeksRecord,
-    QuoteRecord,
-    RateRecord,
-    TradeRecord,
-    bar_record,
-    event_time,
-    funding_rate_record,
-    order_book_record,
-    option_greeks_record,
-    ticker_record,
-    trade_print_record,
-)
 from kairospy.core.reference import MarketRef
-from kairospy.infrastructure.integrations.types import IntegrationParams, RawPayload
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, RawPayload
 
 
 def ccxt_ohlcv_bar(values: list[Any] | tuple[Any, ...], *, market: MarketRef, timeframe: str) -> Bar:
@@ -42,7 +27,7 @@ def ccxt_ohlcv_bar(values: list[Any] | tuple[Any, ...], *, market: MarketRef, ti
         instrument_id=market.instrument_id,
         market_id=market.market_id,
         market_key=market.market_key,
-        time=event_time(values[0]),
+        time=_event_time(values[0]),
         timeframe=timeframe,
         open=_decimal(values[1]),
         high=_decimal(values[2]),
@@ -146,15 +131,6 @@ def ccxt_option_greeks_observation(raw: RawPayload, *, market: MarketRef) -> Opt
     )
 
 
-def ccxt_ohlcv_record(values: list[Any] | tuple[Any, ...], *, market: MarketRef, timeframe: str) -> BarRecord:
-    return bar_record(
-        ccxt_ohlcv_bar(values, market=market, timeframe=timeframe),
-        venue=market.venue,
-        market=market.market,
-        source_symbol=market.source_symbol,
-    )
-
-
 def ccxt_ohlcv_update(values: list[Any] | tuple[Any, ...], *, market: MarketRef, timeframe: str) -> MarketEvent:
     bar = ccxt_ohlcv_bar(values, market=market, timeframe=timeframe)
     return MarketEvent(
@@ -167,10 +143,6 @@ def ccxt_ohlcv_update(values: list[Any] | tuple[Any, ...], *, market: MarketRef,
     )
 
 
-def ccxt_ticker_record(raw: RawPayload, *, market: MarketRef) -> QuoteRecord:
-    return ticker_record(venue=market.venue, market=market.market, instrument=market, ticker=_normalized_ticker(raw))
-
-
 def ccxt_ticker_update(raw: RawPayload, *, market: MarketRef) -> MarketEvent:
     quote = ccxt_ticker_quote(raw, market=market)
     return MarketEvent(
@@ -180,15 +152,6 @@ def ccxt_ticker_update(raw: RawPayload, *, market: MarketRef) -> MarketEvent:
         source=market.venue,
         available_at=quote.time,
         metadata=_market_metadata(market, raw=dict(raw), last=_optional_decimal(raw.get("last"))),
-    )
-
-
-def ccxt_order_book_record(raw: RawPayload, *, market: MarketRef) -> OrderBookRecord:
-    return order_book_record(
-        ccxt_order_book_snapshot(raw, market=market),
-        venue=market.venue,
-        market=market.market,
-        source_symbol=market.source_symbol,
     )
 
 
@@ -229,15 +192,6 @@ def ccxt_order_book_delta_update(raw: RawPayload, *, market: MarketRef) -> Marke
     )
 
 
-def ccxt_trade_record(raw: RawPayload, *, market: MarketRef) -> TradeRecord:
-    return trade_print_record(
-        ccxt_trade_print(raw, market=market),
-        venue=market.venue,
-        market=market.market,
-        source_symbol=market.source_symbol,
-    )
-
-
 def ccxt_trade_update(raw: RawPayload, *, market: MarketRef) -> MarketEvent:
     trade = ccxt_trade_print(raw, market=market, fallback_to_now=True)
     return MarketEvent(
@@ -247,24 +201,6 @@ def ccxt_trade_update(raw: RawPayload, *, market: MarketRef) -> MarketEvent:
         source=market.venue,
         available_at=trade.time,
         metadata=_market_metadata(market, raw=dict(raw), id=trade.trade_id),
-    )
-
-
-def ccxt_funding_rate_record(raw: RawPayload, *, market: MarketRef) -> RateRecord:
-    return funding_rate_record(
-        ccxt_funding_rate_observation(raw, market=market),
-        venue=market.venue,
-        market=market.market,
-        source_symbol=market.source_symbol,
-    )
-
-
-def ccxt_option_greeks_record(raw: RawPayload, *, market: MarketRef) -> OptionGreeksRecord:
-    return option_greeks_record(
-        ccxt_option_greeks_observation(raw, market=market),
-        venue=market.venue,
-        market=market.market,
-        source_symbol=market.source_symbol,
     )
 
 
@@ -351,14 +287,20 @@ def _decimal(value: object) -> Decimal:
 def _market_time(raw: RawPayload, *, fallback_to_now: bool = False) -> datetime:
     value = raw.get("timestamp")
     if value is not None:
-        return event_time(value)
+        return _event_time(value)
     value = raw.get("datetime") or raw.get("time") or raw.get("transactTime")
     if isinstance(value, str) and value.strip():
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
     if fallback_to_now:
         return datetime.now(timezone.utc)
-    return event_time(None)
+    return _event_time(None)
+
+
+def _event_time(value: object) -> datetime:
+    if value is None:
+        raise ValueError("market payload timestamp is required")
+    return datetime.fromtimestamp(int(value) / 1000, timezone.utc)
 
 
 def _normalized_ticker(raw: RawPayload) -> RawPayload:
@@ -438,25 +380,19 @@ def _market_metadata(market: MarketRef, **values: object) -> dict[str, object]:
 
 __all__ = [
     "ccxt_ohlcv_bar",
-    "ccxt_ohlcv_record",
     "ccxt_ohlcv_update",
     "ccxt_funding_rate_observation",
-    "ccxt_funding_rate_record",
     "ccxt_funding_rate_update",
-    "ccxt_order_book_record",
     "ccxt_order_book_delta",
     "ccxt_order_book_delta_update",
     "ccxt_order_book_snapshot",
     "ccxt_order_book_update",
     "ccxt_option_greeks_observation",
-    "ccxt_option_greeks_record",
     "ccxt_option_greeks_update",
     "ccxt_market_type",
     "ccxt_ticker_quote",
-    "ccxt_ticker_record",
     "ccxt_ticker_update",
     "ccxt_trade_print",
-    "ccxt_trade_record",
     "ccxt_trade_update",
     "ephemeral_market_ref",
 ]

@@ -6,8 +6,8 @@ from typing import Mapping
 
 import kairospy.surface.cli.commands.launch as launch_commands
 import kairospy.surface.cli.commands.system as system_commands
-from kairospy.application.launch.attach import AttachTarget, LaunchAttachSession, read_file_chunk, resolve_attach_target
-from kairospy.application.modes import RuntimeMode
+from kairospy.application.support.launch.control.attach import AttachTarget, LaunchAttachSession, read_file_chunk, resolve_attach_target
+from kairospy.application.support.launch.modes import RuntimeMode
 from kairospy.surface.interactive.attach import parse_attach_shell_command
 from kairospy.surface.tui.attach import AttachViewModel, RuntimeAttachApp, summary_text
 

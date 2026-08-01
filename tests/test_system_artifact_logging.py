@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from kairospy.application.system.artifacts.logging import LaunchOutputLog
+from kairospy.application.support.system.artifacts.logging import LaunchOutputLog
 
 
 def test_launch_output_log_captures_python_logging(tmp_path) -> None:

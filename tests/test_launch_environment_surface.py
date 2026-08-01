@@ -4,9 +4,9 @@ from datetime import datetime
 import json
 from pathlib import Path
 
-from kairospy import LaunchEnvironment, ensure_launch_registered
-from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.application.strategy import StrategyBase
+from kairospy.application.support.launch.environment import LaunchEnvironment, ensure_launch_registered
+from kairospy.application.support.runtime.events import RuntimeEnvelope
+from kairospy.application.usecases.strategy.protocol import StrategyBase
 
 
 class NewsStrategy(StrategyBase):

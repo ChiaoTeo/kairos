@@ -356,6 +356,20 @@ def test_shell_account_create_enters_interactive_wizard(tmp_path, monkeypatch) -
     assert "created account:" in stdout.getvalue()
 
 
+def test_account_create_wizard_uses_broker_as_internal_account_identity() -> None:
+    from kairospy.surface.interactive.account import AccountCreateWizard
+
+    wizard = AccountCreateWizard()
+
+    assert wizard.current == "account_id"
+    wizard.handle("binance_paper")
+    assert wizard.current == "broker"
+    wizard.handle("binance")
+
+    assert wizard.fields["broker"] == "binance"
+    assert "provider" not in wizard.fields
+
+
 def test_shell_account_create_direct_uses_command_executor() -> None:
     calls: list[list[str]] = []
     session = AppSession(command_executor=lambda argv: calls.append(argv) or (0, "created"))

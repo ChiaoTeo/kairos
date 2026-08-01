@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from kairospy.infrastructure.integrations.credentials import credential_value
+from kairospy.infrastructure.integrations.services.credentials import credential_value
 from kairospy.infrastructure.integrations.drivers import CcxtDriver
-from kairospy.infrastructure.integrations.types import IntegrationParams, OrderSubmissionResponse, RawPayload, RawPayloadRows, RawPayloadStream
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, OrderSubmissionResponse, RawPayload, RawPayloadRows, RawPayloadStream
 
 
 @dataclass(frozen=True, slots=True)

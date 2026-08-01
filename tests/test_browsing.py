@@ -1,6 +1,6 @@
 from io import StringIO
 
-from kairospy.application.browsing import ListQuery, parse_filters, query_rows
+from kairospy.application.support.system.browsing import ListQuery, parse_filters, query_rows
 from kairospy.surface.tui import ResourceListBrowser
 
 

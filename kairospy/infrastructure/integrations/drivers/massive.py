@@ -4,13 +4,15 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 import os
-from typing import Callable, Mapping
+from typing import Mapping, Protocol
 from urllib.parse import urlencode, urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
-from kairospy.infrastructure.integrations.types import IntegrationParams, RawPayload, RawPayloadRows, RawPayloadStream
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, RawPayload, RawPayloadRows, RawPayloadStream
 
 
-HttpGet = Callable[[str], RawPayload]
+class HttpGet(Protocol):
+    def __call__(self, url: str) -> RawPayload:
+        ...
 
 
 @dataclass(frozen=True, slots=True)

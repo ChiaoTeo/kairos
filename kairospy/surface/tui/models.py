@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Mapping, Sequence
+from typing import Mapping, Protocol, Sequence
 
-from kairospy.application.browsing import ListQuery
+from kairospy.application.support.system.browsing import ListQuery
 
 
-DetailReader = Callable[[Mapping[str, object]], object]
-SaveEditor = Callable[[Mapping[str, object]], object]
+class DetailReader(Protocol):
+    def __call__(self, row: Mapping[str, object]) -> object:
+        ...
+
+
+class SaveEditor(Protocol):
+    def __call__(self, row: Mapping[str, object]) -> object:
+        ...
 
 
 @dataclass

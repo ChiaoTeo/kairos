@@ -8,7 +8,7 @@ from kairospy.infrastructure.integrations.payloads.binance_equity_execution impo
     binance_equity_cancel_order_params,
     binance_equity_create_order_params,
 )
-from kairospy.infrastructure.integrations.types import IntegrationParams, OrderSubmissionResponse, RawPayload, RawPayloadRows
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, OrderSubmissionResponse, RawPayload, RawPayloadRows
 
 
 @dataclass(frozen=True, slots=True)

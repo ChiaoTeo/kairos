@@ -1,6 +1,6 @@
 # Runtime Composition and Protocol Boundaries
 
-本文是对当前 `application`、`runtime`、`integration` 和 `persistence` 边界的进一步调整说明。它补充：
+本文是对当前 `application`、`runtime`、`integration` 和 `persistence` 边界的进一步调整说明。总体架构边界和冲突解决规则见 `docs/architecture-boundaries.md`。它补充：
 
 - `docs/application-ports-and-domain-boundaries.md`
 - `docs/integration-boundaries.md`
@@ -9,7 +9,7 @@
 
 - `Gateway`、`Translator`、`Connector` 是否是同一个概念
 - 账户 runtime、账户 catalog 和 launch directory 如何分离
-- runtime 是否应该直接依赖大量 application ports
+- runtime 是否应该直接依赖大量 application contracts
 - live、paper、backtest 如何共享运行时协议
 - composition 和 system 的边界在哪里
 
@@ -21,7 +21,7 @@
 Integration Gateway
   外部系统语言，允许 raw payload
 
-Application Use-case Port
+Application Use-case Contract
   应用用例语言，返回 core 类型
 
 Runtime Role Contract
@@ -30,7 +30,7 @@ Runtime Role Contract
 
 三者不能混用。
 
-运行模式不应该产生三套 port。live、paper、backtest 应该实现同一组 runtime role contract，由 composition 层替换具体实现。
+运行模式不应该产生三套 contract。live、paper、backtest 应该实现同一组 runtime role contract，由 composition 层替换具体实现。
 
 当前代码已经删除宽 `AccountPort`。账户能力由 `AccountRuntime`、`AccountCatalog` 和 launch directory 分别表达；`LaunchScopedAccountRuntime` 只是 composition 边界的装配对象，不是新的业务 aggregate。
 
@@ -66,7 +66,7 @@ Runtime Role Contract
 
 ### 改造原则
 
-1. **先定边界，再改调用方**：先确定 core 类型、application port、runtime role 和 persistence record 的职责。
+1. **先定边界，再改调用方**：先确定 core 类型、application contract、runtime role 和 persistence record 的职责。
 2. **按能力切片迁移**：一次完整迁移 market history、account runtime 或 execution，而不是全仓库机械移动文件。
 3. **优先打通垂直链路**：先让一条最小 backtest 流程完整运行，再扩展到 paper 和 live。
 4. **不为模式复制协议**：live、paper、backtest 只替换 runtime role 的实现。
@@ -205,7 +205,7 @@ bars
 events
 ```
 
-Translator 不表达运行时协作角色，也不作为 application service 的长期兼容包装。实现 application port 的基础设施对象用 `Gateway` 命名；实现 runtime role 的对象用 `Runtime` 命名；composition 里的接线对象用 `Binding` 或 `Factory` 命名。
+Translator 不表达运行时协作角色，也不作为 application service 的长期兼容包装。实现 application contract 的基础设施对象用 `Gateway` 命名；实现 runtime role 的对象用 `Runtime` 命名；composition 里的接线对象用 `Binding` 或 `Factory` 命名。
 
 ### Connector
 
@@ -287,12 +287,12 @@ class FundingRateHistoryGateway(Protocol):
         ...
 ```
 
-### Application Use-case Port
+### Application Use-case Contract
 
 位置：
 
 ```text
-kairospy/application/ports/
+kairospy/application/usecases/<area>/
 ```
 
 它表达 application service 的业务需求，而不是第三方 API 形状：
@@ -306,7 +306,7 @@ class FundingRateHistoryPort(Protocol):
         ...
 ```
 
-Gateway 和 Use-case Port 可以同时存在：
+Gateway 和 use-case contract 可以同时存在：
 
 ```text
 FundingRateHistoryGateway
@@ -315,7 +315,7 @@ FundingRateHistoryGateway
   -> HistoricalDataService
 ```
 
-如果没有对应的 application use case，integration 内部不需要创建 application port，Gateway 和 Translator 可以直接完成接入。
+如果没有对应的 application use case，integration 内部不需要创建 application contract，Gateway 和 Translator 可以直接完成接入。
 
 ### Runtime Role Contract
 
@@ -351,10 +351,10 @@ Runtime role contract 可以由 application runtime 或 application composition 
 当前账户 runtime contract 位于：
 
 ```text
-kairospy/application/runtime/contracts.py
+kairospy/application/support/runtime/contracts.py
 ```
 
-`LaunchScopedAccountRuntime` 位于 `kairospy/application/launch/scoped_account.py`，只负责 launch composition。
+`LaunchScopedAccountRuntime` 位于 `kairospy/application/support/launch/scoped_account.py`，只负责 launch composition。
 
 目标角色分别包含：
 
@@ -496,7 +496,7 @@ FundingRateHistoryPort / BarHistoryPort
 
 ## Backtest、Mock 和 Fake
 
-Backtest 不需要实现所有 application port，也不应该通过大量 mock 来模拟整个外部世界。
+Backtest 不需要实现所有 application contract，也不应该通过大量 mock 来模拟整个外部世界。
 
 Backtest 只需要实现当前运行路径所消费的 runtime role contract：
 
@@ -600,7 +600,7 @@ def build_backtest_components(config) -> RuntimeComponents:
     )
 ```
 
-如果需要自动准备数据，准备阶段单独接收 application port：
+如果需要自动准备数据，准备阶段单独接收 application contract：
 
 ```python
 def prepare_backtest_dataset(
@@ -641,7 +641,7 @@ Backtest Preparation
   可选：ReferenceRuntime
 ```
 
-这也是区分 `Application Use-case Port` 和 `Runtime Role Contract` 的实际原因：回测只实现运行时需要的角色，数据准备和单元测试按各自的应用边界提供 gateway、runtime 或 fake。
+这也是区分 `Application Use-case Contract` 和 `Runtime Role Contract` 的实际原因：回测只实现运行时需要的角色，数据准备和单元测试按各自的应用边界提供 gateway、runtime 或 fake。
 
 ## Composition 和 System
 
@@ -692,18 +692,18 @@ kairospy/application/composition/
   backtest.py
   common.py
 
-kairospy/application/runtime/
+kairospy/application/support/runtime/
   components.py
   kernel.py
   orchestration/
 
-kairospy/application/system/
+kairospy/application/support/system/
   facade/
   workspace/
   session/
 ```
 
-短期可以继续让 composition 代码位于 `application/launch` 或 mode factory 中，只要不让 `TradingSystem` 同时负责具体 Connector 创建和 runtime 执行。
+短期可以继续让 composition 代码位于 `application/support/launch` 或 mode factory 中，只要不让 `TradingSystem` 同时负责具体 Connector 创建和 runtime 执行。
 
 ## Persistence 边界
 
@@ -726,7 +726,7 @@ External API
 infrastructure/persistence/market_data/
 ```
 
-但不应重新放回 `core`，也不应作为 runtime 或 application port 的默认返回值。
+但不应重新放回 `core`，也不应作为 runtime 或 application contract 的默认返回值。
 
 ## 当前代码的改造方向
 

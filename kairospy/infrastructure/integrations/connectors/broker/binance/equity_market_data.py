@@ -6,7 +6,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Mapping
 
 from .sapi import BinanceSapiClient
-from kairospy.infrastructure.integrations.types import IntegrationParams, RawPayload, RawPayloadStream
+from kairospy.infrastructure.integrations.payloads.types import IntegrationParams, RawPayload, RawPayloadStream
 
 
 @dataclass(frozen=True, slots=True)

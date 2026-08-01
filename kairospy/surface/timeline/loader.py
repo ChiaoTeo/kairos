@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from kairospy.application.system.projectors.service import LaunchProjectionService
-from kairospy.application.system.projectors.service import find_latest_instance, list_instances
+from kairospy.application.support.system.projectors.service import LaunchProjectionService
+from kairospy.application.support.system.projectors.service import find_latest_instance, list_instances
 
 
 @dataclass(frozen=True, slots=True)

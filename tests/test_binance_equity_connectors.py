@@ -9,9 +9,9 @@ from decimal import Decimal
 
 import pytest
 
-from kairospy.application.ports import MarketDataSubscriptionSpec
-from kairospy.application.service.modes.common.integrations import default_broker_for_book, default_market_feed_for_subscription
-from kairospy.application.domain.account.routing import account_book_route
+from kairospy.application.usecases.market.subscriptions import MarketDataSubscriptionSpec
+from kairospy.application.support.launch.composition.integrations import default_broker_for_book, default_market_feed_for_subscription
+from kairospy.application.usecases.account.routing import account_book_route
 from kairospy.core.account import AccountContext, Environment
 from kairospy.core.order import OrderEventKind, OrderSide, OrderType
 from kairospy.core.account import AccountBookRef
@@ -29,7 +29,8 @@ from kairospy.infrastructure.integrations.payloads.binance_equity_execution impo
     binance_equity_order_update,
     binance_equity_trade_update,
 )
-from kairospy.infrastructure.integrations.resolver import IntegrationResolver, ReferenceSourceRef
+from kairospy.infrastructure.integrations.adapters.reference_catalog import ReferenceCatalogAdapter
+from kairospy.infrastructure.integrations.services.resolver import IntegrationResolver, ReferenceSourceRef
 
 
 class FakeResponse:
@@ -106,7 +107,7 @@ def test_equity_reference_connector_maps_exchange_info_to_catalog() -> None:
     as_of = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
     rows = tuple(connector.fetch_markets())
-    catalog = connector.fetch_reference_catalog(as_of=as_of)
+    catalog = ReferenceCatalogAdapter(connector, default_market="equity").fetch_catalog(as_of=as_of)
     market = catalog.resolve_market("AAPL", venue="binance", market="equity", at=as_of)
 
     assert rows[0]["ticker"] == "AAPL"
@@ -144,7 +145,7 @@ def test_integration_resolver_routes_by_capability_and_source() -> None:
     resolver = IntegrationResolver()
     spec = MarketDataSubscriptionSpec(MarketRef.ephemeral(venue="binance", market="equity", source_symbol="AAPL"), (Quote,))
 
-    assert isinstance(resolver.market_feed_for_subscription(spec), BinanceEquityMarketDataConnector)
+    assert isinstance(resolver.market_feed_for_market(str(spec.market.venue), str(spec.market.market)), BinanceEquityMarketDataConnector)
     assert isinstance(resolver.account_bootstrap_for_book(AccountBookRef("binance", "main", "equity")), BinanceEquityBroker)
     assert isinstance(resolver.order_query_for_book(AccountBookRef("binance", "main", "equity")), BinanceEquityBroker)
     assert isinstance(resolver.order_execution_for_book(AccountBookRef("binance", "main", "spot")), BinanceBroker)

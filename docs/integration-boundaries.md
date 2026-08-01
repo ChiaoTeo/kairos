@@ -1,12 +1,14 @@
 # Integration 边界定义
 
-本文定义 KairosPy 中 `exchange`、`broker`、`provider`、`driver`、`connector` 的定位，以及新增外部接口时应该放在哪里。目标是让 integration 层按业务边界组织，而不是按历史实现或第三方 SDK 名字随意扩展。
+本文定义 KairosPy 中 `exchange`、`broker`、`provider`、`driver`、`connector` 的定位，以及新增外部接口时应该放在哪里。总体架构边界和冲突解决规则见 `docs/architecture-boundaries.md`；本文只细化 integration bounded context。目标是让 integration 层按外部接入领域组织，而不是按历史实现或第三方 SDK 名字随意扩展。
 
-应用端口、领域类型、raw payload 的依赖方向见 `docs/application-ports-and-domain-boundaries.md`。本文只定义 infrastructure integration 内部的参与方和目录归属。
+应用端口、领域类型、raw payload 的依赖方向见 `docs/application-ports-and-domain-boundaries.md`。Integration application layer 如何向上层提供 port implementation，见 `docs/integration-application-layer.md`。本文只定义 infrastructure integration 内部的 DDD 结构、参与方和目录归属。
 
 ## 核心原则
 
 Integration 层只负责把外部系统适配成 KairosPy 的端口和领域模型。业务流程、运行模式、风控、账户路由、策略订阅不应写进 connector。
+
+Integration 可以有自己的 DDD 模型，但它的领域是“外部系统接入”，不是交易领域本身。也就是说，`integrations/domain` 可以描述 participant、capability、product line、credential scope、connection session、rate limit、vendor error taxonomy；但不能描述 order matching、fill simulation、account equity curve、strategy intent policy。
 
 按下面的顺序判断归属：
 
@@ -15,6 +17,212 @@ Integration 层只负责把外部系统适配成 KairosPy 的端口和领域模�
 3. 最后才选择目录和文件名。
 
 不要因为某个第三方库叫 `exchange`，就把所有能力都放到 `connectors/exchange/`。例如 CCXT 把下单和行情都挂在 exchange object 上，但 KairosPy 仍应把公开市场能力和账户执行能力分开建模。
+
+## DDD 内部结构
+
+`kairospy/infrastructure/integrations/` 是一个 bounded context。内部推荐按下面结构组织：
+
+```text
+kairospy/infrastructure/integrations/
+  domain/
+    participants.py
+    capabilities.py
+    bindings.py
+    sessions.py
+    health.py
+    errors.py
+    policies.py
+
+  services/
+    resolver.py
+    registry.py
+    factories.py
+    credentials.py
+
+  application/
+    order.py
+    market.py
+    account.py
+    reference.py
+    registry.py
+    factories.py
+    credentials.py
+
+  connectors/
+    exchange/<exchange>/
+    broker/<broker>/
+    provider/<provider>/
+
+  drivers/
+  payloads/
+  adapters/
+  protocols.py
+```
+
+### Domain Layer
+
+`integrations/domain/` 只放外部接入领域的稳定概念和规则。它不能 import connector、driver、payload translator、application、surface 或 persistence。
+
+适合：
+
+- `ParticipantRef`、`ParticipantRole`
+- `Capability`、`ProductLine`、`EndpointProfile`
+- `CredentialScope`
+- `IntegrationBinding`
+- `IntegrationSession`
+- `IntegrationHealth`
+- `IntegrationError` taxonomy
+- shared `RateLimitPolicy` / `ReconnectPolicy`
+
+不适合：
+
+- Binance/OKX/Massive concrete client
+- HTTP/WebSocket/SDK 调用
+- vendor raw payload schema
+- application use case DTO
+- runtime envelope
+- persistence row schema
+
+### Application / Services Layer
+
+`integrations/application/` 放 integration bounded context 内部的 application services。它们可以依赖 integration domain、connector factory、credential resolver、registry 和 adapter，并向 launch composition 提供 KairosPy 上层 application 所需的 port implementation。
+
+`integrations/services/` 是当前过渡目录，可视为 integration application layer 的旧命名。新能力优先放入 `integrations/application/<capability>.py`；旧 `services/resolver.py`、`services/registry.py` 后续应按 capability 拆分或迁移。
+
+适合：
+
+- `IntegrationResolver`
+- `IntegrationRegistry`
+- `IntegrationFactory`
+- `CredentialResolver`
+- `CapabilityRouter`
+- `OrderIntegrationService`
+- `MarketIntegrationService`
+- `AccountIntegrationService`
+- `ReferenceIntegrationService`
+
+这些 service 负责回答：
+
+```text
+给定 MarketRef / AccountBookRef / ReferenceSourceRef，需要哪个 participant、product line、capability 和 connector factory？
+```
+
+它们也可以进一步返回上层 application 定义的 port implementation：
+
+```text
+OrderIntegrationService.execution_port(AccountBookRef) -> OrderExecutionPort
+MarketIntegrationService.market_stream_port(MarketRef) -> MarketStreamPort
+ReferenceIntegrationService.reference_catalog_port(ReferenceSourceRef) -> ReferenceCatalogPort
+```
+
+注意：port 的定义权属于 `kairospy/application/usecases/<area>`，integration application layer 只负责实现、选择和组装。普通 business use case 不直接依赖 `integrations/application`；由 `application/support/launch/composition` 调用它并完成注入。
+
+它们不负责：
+
+- live / paper / backtest lifecycle；
+- RuntimeKernel 装配；
+- strategy subscription policy；
+- persistence 写入；
+- CLI 输出。
+
+### Connector Layer
+
+`connectors/` 是 aggregate implementation。一个 connector 应表达一个明确的 participant + role/product + capability 聚合，不应成为宽泛 facade。
+
+推荐：
+
+```text
+BinanceSpotMarketDataConnector
+  participant = binance
+  role = exchange
+  product_line = spot
+  capability = market_data
+
+BinanceEquityExecutionConnector
+  participant = binance
+  role = broker
+  product_line = equity
+  capability = execution
+
+MassiveReferenceConnector
+  participant = massive
+  role = provider
+  capability = reference
+```
+
+不推荐：
+
+```text
+BinanceClient
+BinanceBroker  # if it mixes account, execution, reference, market data
+ExchangeAdapter
+BrokerClient
+```
+
+如果一个类同时做 public market data、account balance、order execution、reference refresh，它应拆成多个 capability connector，再由 resolver/composition 组合。
+
+### Adapter Layer
+
+`adapters/` 是 integration 到 KairosPy application/core 的 anti-corruption layer。
+
+adapter 可以：
+
+- 调用 connector 或 raw capability protocol；
+- 使用 payload translator；
+- 把 vendor error 转成 integration/application-facing error；
+- 返回 core model、core event 或 use-case contract DTO。
+
+adapter 不应该：
+
+- 选择 launch mode；
+- 读取 workspace manifest；
+- 持有 runtime lifecycle；
+- 写 persistence store；
+- 产出 CLI/TUI payload。
+
+### Dependency Rules
+
+推荐依赖方向：
+
+```text
+application/services
+  -> domain
+  -> connector factory / registry
+  -> adapter
+  -> application use-case contract when returning a port implementation
+
+connector
+  -> domain
+  -> driver
+  -> payload translator
+  -> core
+
+adapter
+  -> domain
+  -> connector or raw protocol
+  -> payload translator
+  -> optional application use-case contract
+  -> core
+
+driver
+  -> domain errors only when useful
+```
+
+禁止方向：
+
+```text
+domain -> services
+domain -> connectors / drivers / payloads / adapters
+domain -> application / surface / persistence
+connector -> application/support/runtime
+connector -> application/support/launch
+connector -> surface
+connector -> persistence store
+driver -> application
+payloads -> application/support/runtime
+```
+
+顶层目录不保留 resolver、registry、credential 等服务入口。目标目录是 `integrations/application/`；`integrations/services/` 只作为迁移期旧命名存在。如果需要兼容旧 import，必须在同一个迁移切片内完成替换并删除旧入口。
 
 ## 参与方定义
 
@@ -159,11 +367,11 @@ kairospy/infrastructure/integrations/drivers/
 kairospy/infrastructure/integrations/connectors/broker/binance/sapi.py
 ```
 
-Driver 不应直接泄漏到 `core`。Application 可以在 composition/factory 层创建 driver，但运行时服务应依赖 application port。Integration protocol 只作为 connector/gateway/translator 层的原始能力接口。
+Driver 不应直接泄漏到 `core`。Launch composition 可以创建 driver，但运行时服务应依赖 service-local contract、use-case contract 或 integration adapter。Integration protocol 只作为 connector/gateway/translator 层的原始能力接口。
 
 ### Connector
 
-`connector` 是某个参与方的具体能力实现。它把外部系统返回的 payload 转成 KairosPy 的领域模型、领域事件，或 application port 需要的 DTO。
+`connector` 是某个参与方的具体能力实现。它把外部系统返回的 payload 转成 KairosPy 的领域模型、领域事件，或 adapter / use-case contract 需要的 DTO。
 
 命名建议：
 
@@ -175,19 +383,30 @@ Driver 不应直接泄漏到 `core`。Application 可以在 composition/factory 
 
 KairosPy 有两层接口，不要混用。
 
-### Application ports
+### Application contracts
 
-`kairospy/application/ports/` 定义应用运行时依赖的端口。它们表达 KairosPy 内部用例，不表达第三方 API 形状。
+应用层 contract 表达 KairosPy 内部用例，不表达第三方 API 形状。`kairospy/application/ports/` 已删除，不应重新引入。优先把窄 Protocol 放在消费它的 runtime service 或 use-case package 附近；只有跨用例共享、非 live 专属、且确实需要替换实现的能力，才放到 owning application area。
 
-适合放这里：
+可能适合提升为 application-level contract：
 
-- `MarketRuntime`
-- `ExecutionRuntime`
-- `AccountRuntime`、`AccountCatalog`
-- `ReferenceRuntime` / `ReferenceCatalogSource`
-- 订阅、运行时事件、执行计划等应用级抽象
+- `ReferenceStore`
+- `ReferenceCatalogSource`
+- `HistoricalMarketDataPort`，仅当 backtest/runtime 缺失数据下载仍是运行时用例的一部分
+- `MarketDatasetStore`，仅当多个 market use case 共享同一存储边界
 
-这些接口应由 application runtime/service 使用。Connector 不需要实现完整 application port；通常由 capability-specific gateway 或 runtime role implementation 包装 connector。
+通常不需要提升为全局 port：
+
+- `MarketStreamGateway`，如果只服务 live/paper streaming runtime
+- `OrderExecutionPort`，如果只服务 live broker execution
+- integration method shape 仍接近 `watch_ticker`、`fetch_balance`、`create_order` 的接口
+
+不适合放这里：
+
+- `MarketRuntime`、`ExecutionRuntime`、`AccountRuntime` 等 runtime role contract
+- `MarketDataSubscriptionSpec`、`DataSubscription` 等订阅模型
+- 运行时事件、执行计划、strategy context helper
+
+这些接口应由 application runtime/service 使用。Connector 不需要实现完整 application runtime role；通常由 capability-specific gateway 或 adapter 包装 connector，直接注入 runtime service，或在确有收益时实现 owning area 的 application contract。
 
 ### Integration protocols
 
@@ -303,9 +522,9 @@ Core 可以知道 broker/exchange/provider 的概念，但不能知道 Binance�
 | 新数据供应商 corporate actions | `connectors/provider/<provider>/corporate_actions.py` |
 | 第三方 SDK 封装 | `drivers/` 或 connector 内部私有 client |
 | payload 到领域模型转换 | `infrastructure/integrations/payloads/` |
-| 应用运行时依赖的端口 | `application/ports/` |
+| 应用运行时依赖的外部能力 contract | 优先放在消费它的 runtime service/use-case 附近；确有跨 area 价值时才定义清晰命名的 application-level contract |
 | 参与方 id 和领域身份 | `core/reference/` |
-| live/paper/backtest 工厂选择 | `application/service/modes/common/integrations.py` |
+| live/paper/backtest 工厂选择 | `application/support/launch/composition/` |
 
 ## 命名规则
 
@@ -477,7 +696,7 @@ source_kind=provider, source=massive     # data provider reference
 
 旧字段 `provider` 可以暂时保留为输出兼容，但不要再用它判断 Binance/Hyperliquid 这类 exchange sync 的身份。
 
-`IntegrationResolver` 是唯一应该 import 具体 Binance/OKX/Massive connector 的位置。策略、CLI facade、runtime service 应依赖 application port。Integration capability protocol 只用于 connector/gateway/translator 边界；迁移完成后不保留兼容桥接。
+`IntegrationResolver` / `IntegrationFactory` 是唯一应该 import 具体 Binance/OKX/Massive connector 的位置。策略、CLI facade、runtime service 应依赖 service-local contract、use-case contract 或 adapter。Integration capability protocol 只用于 connector/gateway/translator 边界；迁移完成后不保留兼容桥接。
 
 具体 connector 不从聚合 package root 再导出。不要从下面这些入口拿具体 Binance/OKX/Massive/IBKR connector：
 
@@ -520,15 +739,17 @@ def order_execution_for(book: AccountBookRef) -> OrderExecutionClient:
 - 交易执行按 `AccountBookRef(broker, account, book)` 路由。
 - Reference refresh 按 `exchange`、`broker/book` 或 `provider` 路由。
 - 策略不选择 connector，也不传 driver 参数。
-- Application runtime 不依赖第三方 SDK，也不新增对 integration protocol 的依赖；新增能力优先定义 application port。
+- Application runtime 不依赖第三方 SDK，也不新增对 integration protocol 的依赖；新增能力优先使用 service-local contract 或 direct injected adapter。
 
 ## 工厂和路由规则
 
 Integration connector 的统一装配入口是：
 
 ```text
-kairospy/infrastructure/integrations/resolver.py
+kairospy/infrastructure/integrations/services/resolver.py
 ```
+
+`kairospy/infrastructure/integrations/resolver.py` 这类顶层旧入口不作为目标形态存在。调用方应直接使用 `services/resolver.py` 或由 composition 层注入已经构造好的 resolver。
 
 `IntegrationResolver` 负责把 application/facade 传入的业务引用解析成具体 connector：
 
@@ -623,7 +844,7 @@ broker=binance, book=equity  -> Binance equity broker reference connector
 - 是否把账户/下单/private stream 放在 broker 下。
 - 是否把公开行情/reference/rules 放在 exchange 或 provider 下。
 - 是否避免让 `core` import `infrastructure`。
-- 是否让 application runtime 依赖 application port，而不是直接依赖第三方 SDK 或 integration protocol。
+- 是否让 application runtime 依赖 service-local contract、use-case contract 或 adapter，而不是直接依赖第三方 SDK 或 integration protocol。
 - 是否把 payload 解析放在 `payloads/` 或 connector 私有 parser 中。
 - 是否有明确的 factory 路由入口，而不是在业务流程里散落 `if venue == ...`。
 - 是否明确本次切片完成后删除旧 alias 和旧 import 入口。
@@ -634,5 +855,5 @@ broker=binance, book=equity  -> Binance equity broker reference connector
 1. 新增 broker/account/execution/private stream 能力时，一律放到 `connectors/broker/<broker>/`。
 2. 新增 exchange public market data/reference/rules 时，一律放到 `connectors/exchange/<exchange>/`。
 3. 具体 connector 选择一律通过 `IntegrationResolver`，不要在 runtime/facade/CLI 分散 `if name == ...`。
-4. 新 runtime service 依赖目标 runtime role；application service 依赖小 application port，不引入 integration capability protocol 或 `BrokerClient` aggregate。
+4. 新 runtime service 依赖 service-local contract 或 adapter；application service 只在确有共享价值时依赖小 use-case contract，不引入 integration capability protocol 或 `BrokerClient` aggregate。
 5. 为 Binance/OKX 等 broker 补齐 account/private stream 的产品线文件，并通过 resolver 注册路由。

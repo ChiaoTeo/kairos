@@ -4,15 +4,18 @@ import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.application.runtime.orchestration.kernel import RuntimeKernel
-from kairospy.application.runtime.components import RuntimeComponents
-from kairospy.application.runtime.orchestration.state import RuntimeStores
-from kairospy.application.protocol import RuntimeEnvelope, RuntimeLine
-from kairospy.application.domain.account import SimulatedAccount, account_baseline_snapshot
+from kairospy.application.support.runtime.orchestration.kernel import RuntimeKernel
+from kairospy.application.support.runtime.components import RuntimeComponents
+from kairospy.application.support.runtime.orchestration.state import RuntimeStores
+from kairospy.application.support.runtime.events import RuntimeEnvelope
+from kairospy.application.support.runtime.lines import RuntimeLine
+from kairospy.application.usecases.account import SimulatedAccount, account_baseline_snapshot
 from kairospy.infrastructure.persistence.runtime_state.execution_json_store import JsonExecutionStateStore
-from kairospy.application.service.modes.paper import PaperAccountService
-from kairospy.application.runtime.services import RuntimeApplicationServices, RuntimeServiceDependencies
-from kairospy.application.runtime.services.execution import ApplyExecutionUpdateUseCase
+from kairospy.application.support.runtime.services.account.modes.paper import PaperAccountService
+from kairospy.application.support.runtime.services.application import RuntimeApplicationServices, RuntimeServiceDependencies
+from kairospy.application.support.runtime.services.execution.live import LiveExecutionService
+from kairospy.application.support.runtime.services.execution.updates import ApplyExecutionUpdateUseCase
+from kairospy.application.usecases.execution.live import OrderCancelRequest, OrderCancelResult, OrderSubmissionRequest, OrderSubmissionResult
 from kairospy.core.account import AccountBookKind, AccountContext, AccountBookRef, AccountSource, Environment
 from kairospy.core.execution import ExecutionCoordinator, ExecutionUpdate
 from kairospy.core.intent import IntentEvent, IntentEventKind, IntentJournal, IntentStatus, target_position_intent
@@ -29,6 +32,26 @@ class FakeBroker:
 
     def cancel_order(self, id: str, *, symbol: str | None = None, params=None):
         return {"id": id, "status": "canceled"}
+
+
+class _BrokerOrderExecutionPort:
+    def __init__(self, *, broker_resolver) -> None:
+        self.broker_resolver = broker_resolver
+
+    def submit(self, request: OrderSubmissionRequest) -> OrderSubmissionResult:
+        broker = self.broker_resolver(request.account)
+        response = broker.create_order(
+            request.symbol,
+            side=request.side.value,
+            type=request.order_type.value,
+            amount=request.quantity,
+            price=request.limit_price,
+            params=request.integration_options,
+        )
+        return OrderSubmissionResult(order_venue_id=str(response["id"]))
+
+    def cancel(self, request: OrderCancelRequest) -> OrderCancelResult:
+        return OrderCancelResult(request.order_venue_id, "canceled")
 
 
 class NoopStrategy:
@@ -114,7 +137,7 @@ def test_account_ref_models_identity_book_and_legacy_segment() -> None:
 def test_order_id_preserves_intent_context_and_resolves_order_venue_id() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     account = SimulatedAccount("paper-main", Decimal("0"), cash_currency="USDT", broker="paper", environment=Environment.PAPER)
-    coordinator = ExecutionCoordinator(broker=FakeBroker())
+    coordinator = ExecutionCoordinator()
     order_id = "intent:rebalance-btc:order:0001"
     request = OrderRequest(
         order_id,
@@ -126,6 +149,7 @@ def test_order_id_preserves_intent_context_and_resolves_order_venue_id() -> None
 
     coordinator.plan_order(request, at=now)
     state = coordinator.submit_order(order_id, at=now)
+    state = coordinator.acknowledge_order(order_id, order_venue_id="venue-order-1", at=now)
 
     assert state.order_id == order_id
     assert state.order_venue_id == "venue-order-1"
@@ -139,12 +163,16 @@ def test_execution_coordinator_resolves_broker_by_order_account() -> None:
     okx = AccountBookRef("okx", "hedge", AccountBookKind.USD_M_FUTURES)
     binance_broker = FakeBroker()
     okx_broker = FakeBroker()
-    coordinator = ExecutionCoordinator(
-        broker_resolver=lambda account: {
+    coordinator = ExecutionCoordinator()
+    service = LiveExecutionService(
+        coordinator,
+        order_execution=_BrokerOrderExecutionPort(
+            broker_resolver=lambda account: {
             binance: binance_broker,
             okx: okx_broker,
-        }.get(account),
-        broker_symbol_resolver=lambda symbol: "ETH/USDT",
+            }.get(account),
+        ),
+        symbol_resolver=lambda symbol: "ETH/USDT",
     )
     request = OrderRequest(
         "order-okx",
@@ -155,7 +183,7 @@ def test_execution_coordinator_resolves_broker_by_order_account() -> None:
     )
 
     coordinator.plan_order(request, at=now)
-    state = coordinator.submit_order("order-okx", at=now, params={"type": "swap"})
+    state = service.submit_order("order-okx", at=now, params={"type": "swap"})
 
     assert state.order_venue_id == "venue-order-1"
     assert binance_broker.created == []
@@ -165,7 +193,7 @@ def test_execution_coordinator_resolves_broker_by_order_account() -> None:
 def test_apply_execution_update_use_case_updates_order_ledger_and_intent() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     account = AccountContext(AccountBookRef("binance", "main", AccountBookKind.SPOT), Environment.LIVE)
-    coordinator = ExecutionCoordinator(broker=FakeBroker(), broker_symbol_resolver=lambda symbol: "ETH/USDT")
+    coordinator = ExecutionCoordinator()
     intents = IntentJournal()
     intent = target_position_intent(
         strategy_id="account-domain-strategy",
@@ -190,6 +218,7 @@ def test_apply_execution_update_use_case_updates_order_ledger_and_intent() -> No
     intents.record(IntentEvent(intent.intent_id, IntentEventKind.ACCEPTED, now))
     intents.record(IntentEvent(intent.intent_id, IntentEventKind.PLANNED, now, order_ids=(request.order_id,)))
     coordinator.submit_order(request.order_id, at=now)
+    coordinator.acknowledge_order(request.order_id, order_venue_id="venue-order-1", at=now)
     intents.record(IntentEvent(intent.intent_id, IntentEventKind.ORDERING, now, order_ids=(request.order_id,)))
     use_case = ApplyExecutionUpdateUseCase(coordinator, intents=intents)
 
@@ -214,7 +243,7 @@ def test_apply_execution_update_use_case_updates_order_ledger_and_intent() -> No
 def test_execution_runtime_update_drives_coordinator_intent_and_views() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     account = AccountContext(AccountBookRef("binance", "main", AccountBookKind.SPOT), Environment.LIVE)
-    coordinator = ExecutionCoordinator(broker=FakeBroker(), broker_symbol_resolver=lambda symbol: "ETH/USDT")
+    coordinator = ExecutionCoordinator()
     intents = IntentJournal()
     intent = target_position_intent(
         strategy_id="account-domain-strategy",
@@ -239,6 +268,7 @@ def test_execution_runtime_update_drives_coordinator_intent_and_views() -> None:
     intents.record(IntentEvent(intent.intent_id, IntentEventKind.ACCEPTED, now))
     intents.record(IntentEvent(intent.intent_id, IntentEventKind.PLANNED, now, order_ids=(request.order_id,)))
     coordinator.submit_order(request.order_id, at=now)
+    coordinator.acknowledge_order(request.order_id, order_venue_id="venue-order-1", at=now)
     intents.record(IntentEvent(intent.intent_id, IntentEventKind.ORDERING, now, order_ids=(request.order_id,)))
     event = RuntimeEnvelope(
         "execution",

@@ -4,7 +4,7 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.system.facade.project import ProjectFacade
+from kairospy.application.support.system.facade.project import ProjectFacade
 from kairospy.surface.cli.options import OutputFormat
 from kairospy.surface.cli.output import write_cli_result
 from kairospy.surface.cli.commands.config import config_app

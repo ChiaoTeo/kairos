@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from kairospy.core.reference import ReferenceCatalog
 from kairospy.core.reference.model import LifecycleEvent, LifecycleEventType, MarketDefinition
-from kairospy.infrastructure.integrations.types import RawPayload, RawPayloadRows
+from kairospy.infrastructure.integrations.payloads.types import RawPayload, RawPayloadRows
 
 
 def massive_split_events(

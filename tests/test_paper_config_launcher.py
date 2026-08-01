@@ -8,10 +8,11 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from kairospy.application.ports import MarketDataSubscriptionSpec
-from kairospy.application.service.modes.paper import PaperConfigurationError, configured_paper
-from kairospy.application.launch import TradingSystemLauncher
-from kairospy.application.launch.registry import LaunchRegistry
+from kairospy.application.usecases.market.subscriptions import MarketDataSubscriptionSpec
+from kairospy.application.support.launch.composition.integrations import configured_market_feed_for_subscription
+from kairospy.application.support.launch.config.paper import PaperConfigurationError, configured_paper
+from kairospy.application.support.launch.launcher import TradingSystemLauncher
+from kairospy.application.support.launch.control.registry import LaunchRegistry
 from kairospy.infrastructure.integrations.connectors.broker.binance import BinanceEquityMarketDataConnector
 from kairospy.infrastructure.integrations.connectors.exchange.hyperliquid import HyperliquidMarketDataConnector
 from kairospy.core.market import Quote
@@ -73,7 +74,7 @@ def test_configured_paper_default_launches_root_uses_current_working_directory(t
     )
     monkeypatch.chdir(tmp_path)
 
-    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+    configured = configured_paper(config_path, market_feed_resolver_builder=_paper_feed_resolver_builder(), account_resolver=_resolver(config_path))
 
     assert configured.launch_directory == tmp_path / ".kairos" / "launches" / "paper" / "paper-1"
 
@@ -85,7 +86,7 @@ def test_configured_paper_accepts_launch_account_references(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+    configured = configured_paper(config_path, market_feed_resolver_builder=_paper_feed_resolver_builder(), account_resolver=_resolver(config_path))
     result = TradingSystemLauncher().launch_configured_paper(configured)
 
     assert configured.account_config.account_id == "main"
@@ -102,7 +103,7 @@ def test_configured_paper_launch_account_without_books_defaults_to_all_broker_bo
         encoding="utf-8",
     )
 
-    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+    configured = configured_paper(config_path, market_feed_resolver_builder=_paper_feed_resolver_builder(), account_resolver=_resolver(config_path))
     result = TradingSystemLauncher().launch_configured_paper(configured)
 
     assert [book.book_kind for book in result.views.require("account.books").books] == [
@@ -139,7 +140,7 @@ def test_configured_paper_launch_accounts_resolve_distinct_workspace_accounts(tm
         encoding="utf-8",
     )
 
-    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+    configured = configured_paper(config_path, market_feed_resolver_builder=_paper_feed_resolver_builder(), account_resolver=_resolver(config_path))
     result = TradingSystemLauncher().launch_configured_paper(configured)
     books = result.views.require("account.books").books
 
@@ -234,7 +235,7 @@ def test_configured_paper_supports_hyperliquid_default_market_feed(tmp_path) -> 
     )
     config_path.write_text(config_path.read_text(encoding="utf-8") + "\n[feeds.hyperliquid]\n", encoding="utf-8")
 
-    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+    configured = configured_paper(config_path, market_feed_resolver_builder=_paper_feed_resolver_builder(), account_resolver=_resolver(config_path))
 
     assert configured.market_data.feed_resolver is not None
     spec = MarketDataSubscriptionSpec(MarketRef.ephemeral(venue="hyperliquid", market="swap", source_symbol="BTC/USDC:USDC"), (Quote,))
@@ -258,7 +259,7 @@ def test_configured_paper_routes_binance_equity_quotes_to_equity_feed(tmp_path) 
     )
     config_path.write_text(config_path.read_text(encoding="utf-8") + "\n[feeds.binance]\ncredential = \"binance_read\"\n", encoding="utf-8")
 
-    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+    configured = configured_paper(config_path, market_feed_resolver_builder=_paper_feed_resolver_builder(), account_resolver=_resolver(config_path))
 
     assert configured.market_data.feed_resolver is not None
     spec = MarketDataSubscriptionSpec(MarketRef.ephemeral(venue="binance", market="equity", source_symbol="AAPL"), (Quote,))
@@ -277,7 +278,7 @@ def test_configured_paper_requires_feed_for_strategy_subscription(tmp_path) -> N
         quote_currency="USDC",
     )
 
-    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+    configured = configured_paper(config_path, market_feed_resolver_builder=_paper_feed_resolver_builder(), account_resolver=_resolver(config_path))
     spec = MarketDataSubscriptionSpec(MarketRef.ephemeral(venue="binance", market="equity", source_symbol="AAPL"), (Quote,))
 
     assert configured.market_data.feed_resolver is not None
@@ -295,7 +296,7 @@ def test_configured_paper_rejects_unknown_feed_credential(tmp_path) -> None:
     )
     config_path.write_text(config_path.read_text(encoding="utf-8") + "\n[feeds.binance]\ncredential = \"missing_read\"\n", encoding="utf-8")
 
-    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+    configured = configured_paper(config_path, market_feed_resolver_builder=_paper_feed_resolver_builder(), account_resolver=_resolver(config_path))
     spec = MarketDataSubscriptionSpec(MarketRef.ephemeral(venue="binance", market="equity", source_symbol="AAPL"), (Quote,))
 
     assert configured.market_data.feed_resolver is not None
@@ -311,7 +312,7 @@ def test_configured_paper_accepts_broker_named_paper_equity_account(tmp_path) ->
     (tmp_path / "strategy_mod.py").write_text(
         "\n".join(
             [
-                "from kairospy.application.strategy import StrategyBase",
+                "from kairospy.application.usecases.strategy.protocol import StrategyBase",
                 "from kairospy.core.market import Quote",
                 "class PaperStrategy(StrategyBase):",
                 "    strategy_id = 'paper-equity'",
@@ -424,7 +425,7 @@ def _write_paper_project(root: Path, *, launches_root: bool = True, fee_rate: st
     (root / "strategy_mod.py").write_text(
         "\n".join([
             "from decimal import Decimal",
-            "from kairospy.application.strategy import StrategyBase",
+            "from kairospy.application.usecases.strategy.protocol import StrategyBase",
             "from kairospy.core.intent import target_position_intent",
             "class PaperStrategy(StrategyBase):",
             "    strategy_id = 'paper-strategy'",
@@ -510,7 +511,7 @@ def _write_streaming_paper_project(
     (root / "strategy_mod.py").write_text(
         "\n".join([
             "from decimal import Decimal",
-            "from kairospy.application.strategy import StrategyBase",
+            "from kairospy.application.usecases.strategy.protocol import StrategyBase",
             "from kairospy.core.intent import target_position_intent",
             "from kairospy.core.market import Quote",
             "class PaperStrategy(StrategyBase):",
@@ -576,7 +577,7 @@ def _write_market_section_paper_project(root: Path) -> Path:
     (root / "strategy_mod.py").write_text(
         "\n".join([
             "from decimal import Decimal",
-            "from kairospy.application.strategy import StrategyBase",
+            "from kairospy.application.usecases.strategy.protocol import StrategyBase",
             "from kairospy.core.intent import target_position_intent",
             "from kairospy.core.market import Quote",
             "class PaperStrategy(StrategyBase):",
@@ -652,3 +653,18 @@ def _write_account(
 
 def _resolver(config_path: Path):
     return TradingSystemLauncher()._account_resolver(config_path)
+
+
+def _paper_feed_resolver_builder():
+    def build(feeds):
+        def resolve(spec):
+            return configured_market_feed_for_subscription(
+                spec,
+                feeds=feeds,
+                mode_label="paper",
+                error_type=PaperConfigurationError,
+            )
+
+        return resolve
+
+    return build

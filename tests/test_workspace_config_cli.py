@@ -6,8 +6,8 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from kairospy.application.system.workspace import KairosWorkspace
-import kairospy.application.system.facade.account as account_facade
+from kairospy.application.support.system.workspace import KairosWorkspace
+import kairospy.application.support.system.facade.account as account_facade
 import kairospy.surface.cli.commands.account as account_product
 from kairospy.infrastructure.integrations.connectors.exchange.okx.market_data import _okx_config
 from kairospy.surface.cli import app, execute_argv

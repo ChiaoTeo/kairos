@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from decimal import Decimal
 
-from kairospy.application.strategy import StrategyBase
+from kairospy.application.usecases.strategy.protocol import StrategyBase
 from kairospy.core.market import Quote
 from kairospy.core.reference import MarketRef
 
