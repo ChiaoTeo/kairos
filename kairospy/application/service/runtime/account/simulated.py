@@ -11,11 +11,11 @@ from kairospy.application.ports import AccountPort
 from kairospy.application.service.domain.account.simulated import SimulatedAccount
 from kairospy.core.account import (
     AccountContext,
+    AccountBookRef,
     AccountCapability,
     AccountEvent,
     AccountEventKind,
     AccountFeeSchedule,
-    AccountRef,
     AccountSnapshot,
     AccountSource,
     AccountState,
@@ -40,7 +40,7 @@ class SimulatedAccountService(AccountPort):
         self._directory = directory
         self._capabilities = capabilities
         self._fees = fees
-        self._snapshots: dict[AccountRef, AccountSnapshot] = {}
+        self._snapshots: dict[AccountBookRef, AccountSnapshot] = {}
         self._deposit_initial_cash()
 
     async def events(self) -> AsyncIterator[RuntimeEnvelope]:
@@ -53,21 +53,21 @@ class SimulatedAccountService(AccountPort):
     def directory(self) -> LaunchAccountDirectory:
         return self._directory or LaunchAccountDirectory.from_contexts((self.account.context,))
 
-    def capabilities(self, account: AccountRef | None = None) -> tuple[AccountCapability, ...]:
+    def capabilities(self, account: AccountBookRef | None = None) -> tuple[AccountCapability, ...]:
         if account is None:
             return self._capabilities
         return tuple(item for item in self._capabilities if item.book == account)
 
-    def fees(self, account: AccountRef | None = None) -> tuple[AccountFeeSchedule, ...]:
+    def fees(self, account: AccountBookRef | None = None) -> tuple[AccountFeeSchedule, ...]:
         if account is None:
             return self._fees
         return tuple(item for item in self._fees if item.book == account)
 
-    def snapshot(self, account: AccountRef | None = None) -> AccountSnapshot | None:
+    def snapshot(self, account: AccountBookRef | None = None) -> AccountSnapshot | None:
         context = self._context_for(account)
         if context is None:
             return None
-        snapshot = self._snapshots.get(context.account)
+        snapshot = self._snapshots.get(context.book)
         if snapshot is not None:
             return snapshot
         state = self.state(account)
@@ -83,12 +83,12 @@ class SimulatedAccountService(AccountPort):
             source=AccountSource.SIMULATED,
         )
 
-    def state(self, account: AccountRef | None = None) -> AccountState | None:
+    def state(self, account: AccountBookRef | None = None) -> AccountState | None:
         context = self._context_for(account)
         if context is None:
             return None
-        snapshot = self._snapshots.get(context.account)
-        if context.account != self.account.context.account:
+        snapshot = self._snapshots.get(context.book)
+        if context.book != self.account.context.book:
             if snapshot is not None:
                 return self.coordinator.account_projection(context, venue_snapshot=snapshot)
             return AccountState(context, (), (), (), (), self.initialized_at, AccountSource.SIMULATED)
@@ -97,27 +97,27 @@ class SimulatedAccountService(AccountPort):
     def update_snapshot(self, snapshot: AccountSnapshot) -> None:
         if snapshot.context not in self.accounts():
             raise ValueError("simulated account snapshot context does not match service account directory")
-        self._snapshots[snapshot.context.account] = snapshot
+        self._snapshots[snapshot.context.book] = snapshot
 
-    def _context_for(self, account: AccountRef | None) -> AccountContext | None:
+    def _context_for(self, account: AccountBookRef | None) -> AccountContext | None:
         if account is None:
             return self.account.context
-        if account == self.account.context.account:
+        if account == self.account.context.book:
             return self.account.context
         for context in self.accounts():
-            if context.account == account:
+            if context.book == account:
                 return context
         return None
 
     def _deposit_initial_cash(self) -> None:
         if self.account.initial_cash == 0:
             return
-        if self.coordinator.ledger.cash(self.account.context.account).get(self.account.cash_currency, Decimal("0")):
+        if self.coordinator.ledger.cash(self.account.context.book).get(self.account.cash_currency, Decimal("0")):
             return
         self.coordinator.ledger.record(
             AccountEvent(
                 uuid4(),
-                self.account.context.account,
+                self.account.context.book,
                 AccountEventKind.DEPOSIT,
                 self.initialized_at,
                 self.account.cash_currency,

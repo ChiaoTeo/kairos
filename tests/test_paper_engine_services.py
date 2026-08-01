@@ -11,7 +11,7 @@ from kairospy.application.protocol import RuntimeEnvelope, RuntimeLine
 from kairospy.application.service.domain.account import SimulatedAccount
 from kairospy.application.service.modes.paper import PaperAccountService, PaperExecutionService, PaperMarketDataService
 from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
-from kairospy.core.account import AccountBookKind, AccountContext, AccountRef, Environment
+from kairospy.core.account import AccountBookKind, AccountContext, AccountBookRef, Environment
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.intent import IntentJournal, IntentStatus, target_position_intent
 from kairospy.core.market import MarketEvent, MarketSubject, Quote
@@ -117,8 +117,8 @@ def test_paper_services_stream_market_data_and_simulate_execution() -> None:
     assert runtime_result.event_count == 1
     assert kernel.intents.get("paper-intent-1").status is IntentStatus.SATISFIED
     assert execution.fills[0].price == Decimal("2001")
-    assert coordinator.ledger.cash(account_config.context.account)["USDT"] == Decimal("2999")
-    assert coordinator.ledger.positions(account_config.context.account)[market.instrument_id] == Decimal("1")
+    assert coordinator.ledger.cash(account_config.context.book)["USDT"] == Decimal("2999")
+    assert coordinator.ledger.positions(account_config.context.book)[market.instrument_id] == Decimal("1")
     account_view = kernel.views.require("account.current.paper.paper.paper_main")
     assert account_view.cash == Decimal("2999")
     assert account_view.positions[0].quantity == Decimal("1")
@@ -129,8 +129,8 @@ def test_paper_execution_routes_target_position_to_intent_account_book() -> None
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
     market = MarketResolver(default_venue="binance", default_market="spot").resolve("ETH/USDT")
     account = SimulatedAccount("main", Decimal("5000"), cash_currency="USDT", broker="binance", environment=Environment.PAPER)
-    spot = AccountContext(AccountRef("binance", "main", AccountBookKind.SPOT), Environment.PAPER)
-    funding = AccountContext(AccountRef("binance", "main", AccountBookKind.FUNDING), Environment.PAPER)
+    spot = AccountContext(AccountBookRef("binance", "main", AccountBookKind.SPOT), Environment.PAPER)
+    funding = AccountContext(AccountBookRef("binance", "main", AccountBookKind.FUNDING), Environment.PAPER)
     directory = LaunchAccountDirectory((LaunchAccountBinding("account1", 0, (spot, funding), ref="binance_main"),))
     coordinator = ExecutionCoordinator()
     service = PaperExecutionService(coordinator, account=account.context, cash_currency="USDT", price_field="ask", directory=directory)
@@ -150,8 +150,8 @@ def test_paper_execution_routes_target_position_to_intent_account_book() -> None
     fill = service.execute_intent(intent, context)
 
     assert fill is not None
-    assert coordinator.ledger.positions(spot.account)[market.instrument_id] == Decimal("1")
-    assert coordinator.ledger.positions(account.context.account).get(market.instrument_id, Decimal("0")) == Decimal("0")
+    assert coordinator.ledger.positions(spot.book)[market.instrument_id] == Decimal("1")
+    assert coordinator.ledger.positions(account.context.book).get(market.instrument_id, Decimal("0")) == Decimal("0")
 
 
 class RuntimeContextWithQuote:

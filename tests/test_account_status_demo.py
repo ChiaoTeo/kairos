@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from kairospy.core.account import AccountBalance, AccountContext, AccountRef, AccountSource, Environment, PositionSnapshot
+from kairospy.core.account import AccountBalance, AccountContext, AccountBookRef, AccountSource, Environment, PositionSnapshot
 from kairospy.core.intent import IntentJournal, target_position_intent
 
 
@@ -39,7 +39,7 @@ class _Views:
 def test_account_status_demo_renders_account_report() -> None:
     module = _demo_module()
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    account = AccountContext(AccountRef("binance", "main", "spot"), Environment.PAPER)
+    account = AccountContext(AccountBookRef("binance", "main", "spot"), Environment.PAPER)
     account_view = SimpleNamespace(
         context=account,
         book=account.book,

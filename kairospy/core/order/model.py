@@ -147,11 +147,12 @@ class OrderRequest:
         limit_price: Decimal | None = None,
         origin: OrderOrigin = OrderOrigin.VENUE,
         market_id: MarketId | str | None = None,
-    ) -> "OrderRequest":
+        ) -> "OrderRequest":
+        book = context.book
         identity = OrderIdentity.external(
-            broker=context.account.broker,
-            account_id=context.account.account_id,
-            segment=context.account.segment,
+            broker=book.broker,
+            account_id=book.account_id,
+            segment=book.segment,
             order_venue_id=order_venue_id,
             origin=origin,
         )

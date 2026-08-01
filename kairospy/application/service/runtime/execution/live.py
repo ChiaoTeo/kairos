@@ -9,7 +9,7 @@ from kairospy.application.launch import LaunchAccountDirectory
 from kairospy.application.ports import TradingExecutionPort
 from kairospy.application.service.domain.account.routing import AccountBookRoute, account_book_route
 from kairospy.application.protocol import RuntimeEnvelope
-from kairospy.core.account import AccountContext, AccountRef, AccountSnapshot
+from kairospy.core.account import AccountBookRef, AccountContext, AccountSnapshot
 from kairospy.core.execution import ExecutionCoordinator, ExecutionIntentContext
 from kairospy.core.intent import IntentEvent, IntentEventKind, IntentKind, TradeIntent
 from kairospy.core.order import OrderEvent, OrderEventKind, OrderRequest, OrderSide, OrderState, OrderType
@@ -74,7 +74,7 @@ class LiveExecutionAdapter:
             self._record_intent_event(context, intent, IntentEventKind.REJECTED, "target_position intent requires target_quantity")
             return True
 
-        current = self.coordinator.ledger.positions(self.account.account).get(str(intent.instrument_id), Decimal("0"))
+        current = self.coordinator.ledger.positions(self.account.book).get(str(intent.instrument_id), Decimal("0"))
         delta = intent.target_quantity - current
         if delta == 0:
             self._record_intent_event(context, intent, IntentEventKind.ACCEPTED, "")
@@ -156,11 +156,11 @@ class LiveExecutionService(TradingExecutionPort):
 
     def execute_intent(self, intent: TradeIntent, context: object, *, hook: str = "") -> bool:
         account = self._resolve_account(intent)
-        if account is not None and not self._route(account.account).can_trade:
-            _reject_intent(context, intent, _not_tradable_reason(account.account))
+        if account is not None and not self._route(account.book).can_trade:
+            _reject_intent(context, intent, _not_tradable_reason(account.book))
             return True
         adapter = self._adapter(account)
-        return adapter.execute_intent(intent, context, order_params=self._order_params(account.account))  # type: ignore[arg-type]
+        return adapter.execute_intent(intent, context, order_params=self._order_params(account.book))  # type: ignore[arg-type]
 
     def plan_order(
         self,
@@ -174,9 +174,9 @@ class LiveExecutionService(TradingExecutionPort):
         venue_snapshot: AccountSnapshot | None = None,
         at: datetime,
     ) -> OrderState:
-        if not self._route(request.context.account).can_trade:
+        if not self._route(request.context.book).can_trade:
             state = self.coordinator.orders.plan(request)
-            self.coordinator.orders.record(OrderEvent(state.order_id, OrderEventKind.REJECTED, at, reason=_not_tradable_reason(request.context.account)))
+            self.coordinator.orders.record(OrderEvent(state.order_id, OrderEventKind.REJECTED, at, reason=_not_tradable_reason(request.context.book)))
             return self.coordinator.orders.get(state.order_id)
         return self.coordinator.plan_order(
             request,
@@ -197,9 +197,9 @@ class LiveExecutionService(TradingExecutionPort):
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
         state = self.coordinator.orders.get(order_id)
-        if not self._route(state.request.context.account).can_trade:
+        if not self._route(state.request.context.book).can_trade:
             return self.coordinator.orders.record(
-                OrderEvent(order_id, OrderEventKind.REJECTED, at, reason=_not_tradable_reason(state.request.context.account))
+                OrderEvent(order_id, OrderEventKind.REJECTED, at, reason=_not_tradable_reason(state.request.context.book))
             )
         return self.coordinator.submit_order(order_id, at=at, params=params)
 
@@ -211,9 +211,9 @@ class LiveExecutionService(TradingExecutionPort):
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
         state = self.coordinator.orders.get(order_id)
-        if not self._route(state.request.context.account).can_trade:
+        if not self._route(state.request.context.book).can_trade:
             return self.coordinator.orders.record(
-                OrderEvent(order_id, OrderEventKind.REJECTED, at, reason=_not_tradable_reason(state.request.context.account))
+                OrderEvent(order_id, OrderEventKind.REJECTED, at, reason=_not_tradable_reason(state.request.context.book))
             )
         return self.coordinator.cancel_order(order_id, at=at, params=params)
 
@@ -224,7 +224,7 @@ class LiveExecutionService(TradingExecutionPort):
         return LiveExecutionAdapter(
             account=selected,
             coordinator=self.coordinator,
-            snapshot_provider=lambda: self._snapshot(selected.account),
+            snapshot_provider=lambda: self._snapshot(selected.book),
             safety_policy=self.safety_policy,
         )
 
@@ -238,7 +238,7 @@ class LiveExecutionService(TradingExecutionPort):
             default=self.account,
         )
 
-    def _snapshot(self, account: AccountRef) -> AccountSnapshot | None:
+    def _snapshot(self, account: AccountBookRef) -> AccountSnapshot | None:
         if self.snapshot_provider is None:
             return None
         try:
@@ -246,12 +246,12 @@ class LiveExecutionService(TradingExecutionPort):
         except TypeError:
             return self.snapshot_provider()
 
-    def _order_params(self, account: AccountRef) -> Mapping[str, object] | None:
+    def _order_params(self, account: AccountBookRef) -> Mapping[str, object] | None:
         route = self._route(account)
         values = {**dict(route.order_params), **dict(self.order_params or {})}
         return values or None
 
-    def _route(self, account: AccountRef) -> AccountBookRoute:
+    def _route(self, account: AccountBookRef) -> AccountBookRoute:
         for route in self.routes:
             if route.book == account:
                 return route
@@ -284,7 +284,7 @@ def _reject_intent(context: object, intent: TradeIntent, reason: str) -> None:
     intents.record(IntentEvent(intent.intent_id, IntentEventKind.REJECTED, now, reason=reason))
 
 
-def _not_tradable_reason(account: AccountRef) -> str:
+def _not_tradable_reason(account: AccountBookRef) -> str:
     return f"account {account.value} is not tradable with the selected credential"
 
 

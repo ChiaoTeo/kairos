@@ -143,7 +143,7 @@ class SimulatedExecutionAdapter:
             self._reject_intent(intent, context, f"missing price field: {self.price_field}")
             return None
 
-        current = self.coordinator.ledger.positions(self.account.account).get(str(intent.instrument_id), Decimal("0"))
+        current = self.coordinator.ledger.positions(self.account.book).get(str(intent.instrument_id), Decimal("0"))
         delta = intent.target_quantity - current
         if delta == 0:
             context.intents.record(IntentEvent(intent.intent_id, IntentEventKind.ACCEPTED, context.now))

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
+from kairospy.application.account_books import default_account_books
 from kairospy.application.launch import LaunchAccountBinding, LaunchAccountDirectory
 from kairospy.application.modes import RuntimeMode
 from kairospy.application.runtime.launch import RuntimeLaunchResult
@@ -22,7 +23,7 @@ from kairospy.application.service.modes.paper.config import ConfiguredPaper, Pap
 from kairospy.application.service.modes.paper.execution import PaperExecutionService
 from kairospy.application.service.modes.common import ConfiguredAccount
 from kairospy.config import LaunchAccountConfig
-from kairospy.core.account import AccountBookKind, AccountCapability, AccountContext, AccountFeeSchedule, AccountRef, Environment, account_current_view_key
+from kairospy.core.account import AccountBookKind, AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, Environment, account_current_view_key
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.reference import MarketResolver
 from kairospy.infrastructure.integrations.payloads import CcxtAccountPayloadAdapter
@@ -242,7 +243,7 @@ class LiveAccountResources:
         read_ref = account_config.read_credential_ref()
         trade_broker = broker if trade_ref == read_ref else broker_factory(primary_broker, trade_ref)
         primary_book = _primary_book(configured.launch_accounts, default=configured.market)
-        account = AccountContext(AccountRef(primary_broker, account_config.account_id, primary_book), Environment.LIVE)
+        account = AccountContext(AccountBookRef(primary_broker, account_config.account_id, primary_book), Environment.LIVE)
         directory = _launch_account_directory(
             configured.launch_accounts,
             account_configs=configured.launch_account_configs,
@@ -323,13 +324,13 @@ def _launch_account_directory(
     default_book: object,
 ) -> LaunchAccountDirectory:
     if not accounts:
-        return LaunchAccountDirectory.from_contexts((AccountContext(AccountRef(fallback_broker, fallback.account_id, default_book), environment),))
+        return LaunchAccountDirectory.from_contexts((AccountContext(AccountBookRef(fallback_broker, fallback.account_id, default_book), environment),))
     bindings: list[LaunchAccountBinding] = []
     for alias, config in accounts.items():
         account_config = account_configs.get(alias, fallback)
         broker = account_config.venue or fallback_broker
-        books = config.books or (str(default_book),)
-        contexts = tuple(AccountContext(AccountRef(broker, account_config.account_id, book), environment) for book in books)
+        books = config.books or default_account_books(broker, fallback=str(default_book))
+        contexts = tuple(AccountContext(AccountBookRef(broker, account_config.account_id, book), environment) for book in books)
         bindings.append(LaunchAccountBinding(alias, config.index, contexts, ref=config.ref, trade=config.trade))
     return LaunchAccountDirectory(tuple(bindings))
 
@@ -341,13 +342,13 @@ def _capabilities(
     fallback: ConfiguredAccount | None = None,
 ) -> tuple[AccountCapability, ...]:
     return tuple(
-        _capability(context.account, trade=binding.trade and _account_can_trade_with_credential(binding, account_configs, fallback))
+        _capability(context.book, trade=binding.trade and _account_can_trade_with_credential(binding, account_configs, fallback))
         for binding in directory.bindings
         for context in binding.books
     )
 
 
-def _capability(book: AccountRef, *, trade: bool = True) -> AccountCapability:
+def _capability(book: AccountBookRef, *, trade: bool = True) -> AccountCapability:
     route = account_book_route(book, provider=str(book.broker))
     kind = str(book.book)
     can_hold_position = kind not in {AccountBookKind.FUNDING.value, AccountBookKind.EARN.value}
@@ -365,7 +366,7 @@ def _routes(
     for binding in directory.bindings:
         can_trade = binding.trade and _account_can_trade_with_credential(binding, account_configs, fallback)
         for context in binding.books:
-            route = account_book_route(context.account, provider=str(context.identity.broker))
+            route = account_book_route(context.book, provider=str(context.identity.broker))
             routes.append(
                 AccountBookRoute(
                     route.book,
@@ -387,7 +388,7 @@ def _fees(
     for binding in directory.bindings:
         account_config = account_configs.get(binding.alias, fallback)
         for context in binding.books:
-            schedules.append(AccountFeeSchedule(context.account, maker=account_config.fee_rate, taker=account_config.fee_rate))
+            schedules.append(AccountFeeSchedule(context.book, maker=account_config.fee_rate, taker=account_config.fee_rate))
     return tuple(schedules)
 
 
@@ -436,7 +437,7 @@ def _account_can_trade_with_credential(
 
 
 def _broker_resolver(brokers: Mapping[tuple[str, str], BrokerClient]):
-    def resolve(account: AccountRef) -> BrokerClient | None:
+    def resolve(account: AccountBookRef) -> BrokerClient | None:
         return brokers.get((str(account.broker), str(account.account_id)))
 
     return resolve

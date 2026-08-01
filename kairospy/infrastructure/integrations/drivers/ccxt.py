@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Callable, Iterable, Mapping
@@ -140,6 +141,28 @@ class CcxtDriver:
             if callable(close):
                 close()
 
+    def fetch_binance_spot_delist_schedule(
+        self,
+        *,
+        params: Mapping[str, object] | None = None,
+    ) -> Iterable[Mapping[str, object]]:
+        options = dict(params or {})
+        api_key = str(options.pop("api_key", "") or os.getenv("BINANCE_API_KEY") or "").strip()
+        if not api_key:
+            raise ValueError("Binance spot delist schedule requires BINANCE_API_KEY")
+        exchange = (self.exchange_factory or _default_exchange)("binance")
+        try:
+            setattr(exchange, "apiKey", api_key)
+            fetch = getattr(exchange, "sapiGetSpotDelistSchedule", None) or getattr(exchange, "sapi_get_spot_delist_schedule", None)
+            if not callable(fetch):
+                raise NotImplementedError("ccxt binance does not expose sapiGetSpotDelistSchedule")
+            rows = fetch(_exchange_params(options))
+            return tuple(_binance_delist_schedule_row(row) for row in rows if isinstance(row, Mapping))
+        finally:
+            close = getattr(exchange, "close", None)
+            if callable(close):
+                close()
+
     def fetch_ticker(
         self,
         exchange_id: str,
@@ -267,9 +290,11 @@ class CcxtDriver:
                 close()
 
     def fetch_balance(self, exchange_id: str, *, params: Mapping[str, object] | None = None) -> Mapping[str, object]:
+        options = dict(params or {})
         exchange = (self.exchange_factory or _default_exchange)(exchange_id)
         try:
-            return exchange.fetch_balance(params or {})
+            _configure_balance_markets(exchange, exchange_id)
+            return exchange.fetch_balance(options)
         finally:
             close = getattr(exchange, "close", None)
             if callable(close):
@@ -728,6 +753,14 @@ def _configure_exchange_market(exchange: Any, exchange_id: str, params: Mapping[
         options["defaultType"] = market_type
 
 
+def _configure_balance_markets(exchange: Any, exchange_id: str) -> None:
+    if exchange_id != "binance":
+        return
+    options = getattr(exchange, "options", None)
+    if isinstance(options, dict):
+        options["fetchMarkets"] = ["spot"]
+
+
 def _ccxt_market_type(exchange_id: str, market_type: str) -> str | None:
     normalized = market_type.strip().lower()
     if exchange_id == "binance" and normalized in {"swap", "perp", "perpetual", "future", "futures"}:
@@ -777,6 +810,23 @@ def _market_from_flags(row: Mapping[str, object]) -> str | None:
     if row.get("option") is True:
         return "option"
     return None
+
+
+def _binance_delist_schedule_row(row: Mapping[str, object]) -> Mapping[str, object]:
+    value = dict(row)
+    delist_time = value.get("delistTime") or value.get("delist_time")
+    if delist_time is None:
+        raise ValueError(f"Binance delist schedule row is missing delistTime: {row!r}")
+    symbols = value.get("symbols")
+    if not isinstance(symbols, list):
+        raise ValueError(f"Binance delist schedule row is missing symbols: {row!r}")
+    at = datetime.fromtimestamp(int(delist_time) / 1000, tz=timezone.utc)
+    return {
+        "delist_time": at.isoformat(),
+        "delist_time_ms": int(delist_time),
+        "symbols": tuple(str(item) for item in symbols),
+        "raw": value,
+    }
 
 
 def _optional_millis(value: object | None) -> int | None:

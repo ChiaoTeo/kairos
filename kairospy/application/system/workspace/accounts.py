@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Any, Mapping
 import tomllib
 
+from kairospy.application.account_books import default_account_books
 from kairospy.config import ConfigError
-from kairospy.core.account import AccountAlias, AccountBookKind, AccountDirectory, AccountIdentity, AccountRef
+from kairospy.core.account import AccountAlias, AccountBookRef, AccountDirectory, AccountIdentity
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,8 +18,8 @@ class AccountBookRecord:
     alias: str | None = None
     values: Mapping[str, object] = field(default_factory=dict)
 
-    def to_ref(self, identity: AccountIdentity) -> AccountRef:
-        return AccountRef(identity, book=self.kind, qualifier=self.qualifier)
+    def to_ref(self, identity: AccountIdentity) -> AccountBookRef:
+        return AccountBookRef(identity, book=self.kind, qualifier=self.qualifier)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -88,6 +89,7 @@ class AccountRecord:
             credential_values = {key: _redact_secret(key, value) for key, value in credential_values.items()}
         return {
             "account_id": self.account_id,
+            "broker": self.provider,
             "provider": self.provider,
             "environment": self.environment,
             "venue": self.venue,
@@ -151,7 +153,7 @@ def _load_account_file(path: Path) -> AccountRecord:
     if not isinstance(account, Mapping):
         raise ConfigError(f"[account] table is required in account config: {path}")
     account_id = _optional_text(account.get("id")) or path.stem
-    provider = _required_text(account.get("provider"), f"{path}: account.provider")
+    provider = _optional_text(account.get("provider")) or _required_text(account.get("broker"), f"{path}: account.broker")
     environment = _required_text(account.get("environment"), f"{path}: account.environment")
     credential = values.get("credential")
     permissions = values.get("permissions")
@@ -191,8 +193,11 @@ def _account_books(account: Mapping[str, object], values: Mapping[str, object]) 
                 )
             )
         return tuple(records)
-    market = _optional_text(account.get("market")) or AccountBookKind.DEFAULT.value
-    return (AccountBookRecord(market, market),)
+    provider = _optional_text(account.get("provider")) or _optional_text(account.get("broker")) or ""
+    market = _optional_text(account.get("market"))
+    if market is not None:
+        return (AccountBookRecord(market, market),)
+    return tuple(AccountBookRecord(book, book) for book in default_account_books(provider))
 
 
 def _account_credentials(values: Mapping[str, object]) -> tuple[AccountCredentialRecord, ...]:
@@ -249,7 +254,7 @@ def _account_key(identity: AccountIdentity) -> str:
     return ".".join(_key_part(part) for part in (identity.broker, identity.account_id) if part)
 
 
-def _book_key(book: AccountRef) -> str:
+def _book_key(book: AccountBookRef) -> str:
     return ".".join(_key_part(part) for part in book.book_key.split(":") if part)
 
 

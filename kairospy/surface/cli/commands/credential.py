@@ -23,7 +23,7 @@ def list_credentials(
 @credential_app.command("create")
 def create_credential(
     credential_id: str = typer.Argument(...),
-    provider: str = typer.Option(..., "--provider"),
+    provider: str = typer.Option(..., "--broker", "--provider"),
     kind: str | None = typer.Option(None, "--kind"),
     api_key: str | None = typer.Option(None, "--api-key"),
     api_secret: str | None = typer.Option(None, "--api-secret"),

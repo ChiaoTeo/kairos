@@ -8,7 +8,7 @@ from uuid import UUID
 
 from kairospy.core.reference import InstrumentId
 
-from .model import AccountRef
+from .model import AccountBookRef
 
 
 class AccountEventKind(StrEnum):
@@ -24,7 +24,7 @@ class AccountEventKind(StrEnum):
 @dataclass(frozen=True, slots=True)
 class AccountEvent:
     event_id: UUID
-    account: AccountRef
+    account: AccountBookRef
     kind: AccountEventKind
     occurred_at: datetime
     currency: str
@@ -64,7 +64,7 @@ class AccountLedger:
     def events(self) -> tuple[AccountEvent, ...]:
         return tuple(self._events)
 
-    def cash(self, account: AccountRef) -> dict[str, Decimal]:
+    def cash(self, account: AccountBookRef) -> dict[str, Decimal]:
         balances: dict[str, Decimal] = {}
         for event in self._events:
             if event.account != account or event.cash_delta == 0:
@@ -72,7 +72,7 @@ class AccountLedger:
             balances[event.currency] = balances.get(event.currency, Decimal("0")) + event.cash_delta
         return {currency: amount for currency, amount in balances.items() if amount != 0}
 
-    def positions(self, account: AccountRef) -> dict[str, Decimal]:
+    def positions(self, account: AccountBookRef) -> dict[str, Decimal]:
         positions: dict[str, Decimal] = {}
         for event in self._events:
             if event.account != account or event.position_delta == 0 or event.instrument_id is None:

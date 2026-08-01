@@ -66,7 +66,7 @@ class OrderFacade:
             _write_journal(workspace, account, "place_dry_run", request, payload)
             return payload
         _require_live_confirmation(account, confirm_live=confirm_live)
-        result = self._broker(account).create_order(symbol, side=side, type=type_, amount=amount, price=price, params=params)
+        result = self._trade_broker(account).create_order(symbol, side=side, type=type_, amount=amount, price=price, params=params)
         payload = {"dry_run": False, "request": request, "result": result}
         _write_journal(workspace, account, "place", request, payload)
         return payload
@@ -124,7 +124,7 @@ class OrderFacade:
             _write_journal(workspace, account, "cancel_dry_run", request, payload)
             return payload
         _require_live_confirmation(account, confirm_live=confirm_live)
-        result = self._broker(account).cancel_order(order_id, symbol=symbol, params=params)
+        result = self._trade_broker(account).cancel_order(order_id, symbol=symbol, params=params)
         payload = {"dry_run": False, "request": request, "result": result}
         _write_journal(workspace, account, "cancel", request, payload)
         return payload
@@ -228,7 +228,13 @@ class OrderFacade:
         )
 
     def _broker(self, account: AccountRecord):
-        return broker(_exchange(account), DriverName.ccxt, credential=account.credential)
+        return broker(_exchange(account), DriverName.ccxt, credential=_read_credential_ref(account))
+
+    def _trade_broker(self, account: AccountRecord):
+        credential = _trade_credential_ref(account)
+        if credential is None:
+            raise ValueError(f"account {account.account_id} has no trade credential")
+        return broker(_exchange(account), DriverName.ccxt, credential=credential)
 
 
 def _account(account_id: str) -> tuple[KairosWorkspace, AccountRecord]:
@@ -245,6 +251,23 @@ def _exchange(account: AccountRecord) -> ExchangeName:
         return ExchangeName(value)
     except ValueError as error:
         raise ValueError(f"unsupported order account venue/provider: {value}") from error
+
+
+def _read_credential_ref(account: AccountRecord) -> str | None:
+    for credential in account.credentials:
+        if credential.role == "readonly" and credential.ref:
+            return credential.ref
+    for credential in account.credentials:
+        if credential.ref:
+            return credential.ref
+    return account.credential
+
+
+def _trade_credential_ref(account: AccountRecord) -> str | None:
+    for credential in account.credentials:
+        if credential.role == "trade" and credential.ref:
+            return credential.ref
+    return account.credential if not account.credentials else None
 
 
 def _require_live_confirmation(account: AccountRecord, *, confirm_live: bool) -> None:

@@ -36,13 +36,12 @@ from kairospy.infrastructure.integrations.payloads.ccxt_market import (
     ccxt_trade_update,
     ephemeral_market_ref,
 )
-from kairospy.infrastructure.integrations.drivers import BinanceReferenceDriver, CcxtDriver
+from kairospy.infrastructure.integrations.drivers import CcxtDriver
 
 
 @dataclass(frozen=True, slots=True)
 class BinanceMarketDataConnector:
     driver: CcxtDriver = field(default_factory=CcxtDriver)
-    reference_driver: BinanceReferenceDriver = field(default_factory=BinanceReferenceDriver)
     name: str = "binance"
     exchange_id: str = "binance"
 
@@ -76,7 +75,7 @@ class BinanceMarketDataConnector:
         *,
         params: Mapping[str, object] | None = None,
     ) -> Iterable[Mapping[str, object]]:
-        return self.reference_driver.fetch_delist_schedule(params=params)
+        return self.driver.fetch_binance_spot_delist_schedule(params=params)
 
     def fetch_delist_events(
         self,

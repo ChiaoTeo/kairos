@@ -44,13 +44,13 @@ uv sync --group dev
 按需安装可选能力：
 
 ```bash
-uv sync --extra crypto --extra query --extra tui --group dev
+uv sync --extra crypto --extra query --group dev
 ```
 
 如果你更习惯 pip，也可以在虚拟环境中安装本地包：
 
 ```bash
-python -m pip install -e ".[crypto,query,tui]"
+python -m pip install -e ".[crypto,query]"
 python -m pip install pytest
 ```
 
@@ -103,37 +103,53 @@ uv run kairospy system account trade-release main
 uv run kairospy timeline open --latest binance-spot-btc-sma-backtest
 ```
 
-## 账户引用与交易锁
+进入交互式命令 shell：
+
+```bash
+uv run kairospy shell
+```
+
+`kairospy app` 和 `kairospy tui` 目前保留为隐藏的兼容/实验入口，项目默认推荐使用普通 CLI 和 `kairospy shell`。
+
+## 账户、Book 与交易锁
+
+领域模型把交易所账户身份和账户内 book 分开表达：
+
+- `AccountIdentity` 表示一个真实账户身份，例如 `binance:main`。
+- `AccountBookRef` 表示该账户内的一个具体 book/钱包/子账本，例如 `binance:main:spot` 或 `binance:main:usd_m_futures`。
 
 通过 `kairospy account create` 创建的账户会写入 `.kairos/accounts/<account>.toml`。paper/live launch 可以在配置中引用这些账户：
 
 ```toml
 [accounts.main]
 ref = "main"
-books = ["spot"]
 trade = true
 
 [accounts.shadow]
 ref = "main"
-books = ["spot"]
 trade = false
 ```
 
-账户可以被多个 launch 重复引用，但同一账户同一时间只有一个 launch 可以持有交易锁并下单。`trade = false` 表示只读引用：可以读取账户数据，但不会申请交易锁，也不会被标记为可下单。
+账户可以被多个 launch 重复引用，但同一账户同一时间只有一个 launch 可以持有交易锁并下单。`trade = false` 表示只读引用：可以读取账户数据，但不会申请交易锁，也不会被标记为可下单。launch account 默认展开 broker 支持的全部 book；如果某个 launch 只想管理少数 book，可以额外写 `books = ["spot"]` 作为过滤。
 
 内置 system runtime 的 launch id 固定为 `kairos-system`。它启动后会加载 workspace 中的全部账户，并尝试占有当前未被锁定的可交易账户；被其他 launch 锁定的账户仍可读取状态，但 system 下单前会重新检查账户锁，只有锁归当前 system instance 时才允许交易。
 
 live 账户可以配置多个具名 credential：
 
 ```bash
-uv run kairospy account create main --provider binance --environment live --credential-role readonly --api-key ... --api-secret ...
-uv run kairospy credential create binance_read --provider binance --api-key ... --api-secret ...
-uv run kairospy credential create binance_trade --provider binance --api-key ... --api-secret ...
+uv run kairospy account create main --broker binance --environment live --credential-role readonly --api-key ... --api-secret ...
+uv run kairospy credential create binance_read --broker binance --api-key ... --api-secret ...
+uv run kairospy credential create binance_trade --broker binance --api-key ... --api-secret ...
 uv run kairospy account credential-add main readonly --ref binance_read
 uv run kairospy account credential-add main trade --ref binance_trade
 ```
 
 ```toml
+[account]
+id = "main"
+broker = "binance"
+environment = "live"
+
 [credentials.readonly]
 ref = "binance_read"
 
@@ -143,7 +159,19 @@ ref = "binance_trade"
 
 如果账户只有 `readonly` key，live launch 会使用它读取账户数据，但不会把该账户标记为可交易，也不会支持下单。添加 key 时，`account credential-add` 默认会校验 role 和账户身份；确实只想先写入配置时可以使用 `--no-check`。
 
-API key 不通过环境变量注入。`credential create` 会写入 `.kairos/credentials/<credential_id>.toml`，账户配置只保存 credential id 引用。`account create` 直接传 `--api-key`/`--api-secret` 时也会创建同名 credential 文件，并在账户里写入 `[credentials.readonly]` 或 `[credentials.trade]`；可以用 `--credential <credential_id>` 指定 credential id。
+API key 不通过环境变量注入。`credential create` 会写入 `.kairos/credentials/<credential_id>.toml`，账户配置只保存 credential id 引用。`account create` 直接传 `--api-key`/`--api-secret` 时也会创建同名 credential 文件，并在账户里写入 `[credentials.readonly]` 或 `[credentials.trade]`；可以用 `--credential <credential_id>` 指定 credential id。旧的 `provider`、`venue`、`market`、`currency` 字段仍可读取；新生成的账户文件默认只写必要字段。
+
+直接查询账户余额使用单数 `balance`：
+
+```bash
+uv run kairospy account balance main
+uv run kairospy account balance main --book spot
+uv run kairospy account balance main --book spot --book usd_m_futures
+uv run kairospy account balance main --include-zero
+uv run kairospy account balance main --page 2 --page-size 50
+```
+
+`account balance` 默认查询 broker 支持的全部 book，并过滤 free/used/total 全为 0 的资产；`--book` 可重复传入以限制查询范围。每个 book 独立查询，某个 book 因权限或账户类型失败时不会阻断其它 book，失败项会显示在 `Balance Errors` 中。分页结果会在 text 和 JSON 输出中带上 `page` metadata。
 
 ## 🧪 示例配置
 

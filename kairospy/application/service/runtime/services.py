@@ -155,8 +155,8 @@ class RuntimeAccountViewProjectionService:
         latest_equity: Decimal | None = None,
         initial_equity: Decimal | None = None,
     ) -> AccountCurrentView:
-        state = self.port.state(context.account)
-        snapshot = self.port.snapshot(context.account)
+        state = self.port.state(context.book)
+        snapshot = self.port.snapshot(context.book)
         balances = _balances(state, snapshot)
         margins = _margins(state, snapshot)
         liabilities = _liabilities(state, snapshot)
@@ -204,8 +204,8 @@ class RuntimeAccountViewProjectionService:
             book=context.book,
             event_count=event_count,
             last_event_time=last_event_time,
-            account_state=self.port.state(context.account),
-            snapshot=self.port.snapshot(context.account),
+            account_state=self.port.state(context.book),
+            snapshot=self.port.snapshot(context.book),
             metadata=metadata,
         )
 
@@ -264,10 +264,10 @@ class RuntimeAccountProjectionService:
     settlement_currency: str = "USD"
 
     def cash(self, currency: str | None = None) -> Decimal:
-        return self.coordinator.ledger.cash(self.account.account).get(currency or self.cash_currency, Decimal("0"))
+        return self.coordinator.ledger.cash(self.account.book).get(currency or self.cash_currency, Decimal("0"))
 
     def positions(self) -> dict[str, Decimal]:
-        return dict(self.coordinator.ledger.positions(self.account.account))
+        return dict(self.coordinator.ledger.positions(self.account.book))
 
     def record_funding(
         self,
@@ -281,7 +281,7 @@ class RuntimeAccountProjectionService:
         self.coordinator.ledger.record(
             AccountEvent(
                 uuid4(),
-                self.account.account,
+                self.account.book,
                 AccountEventKind.FUNDING,
                 occurred_at,
                 currency,

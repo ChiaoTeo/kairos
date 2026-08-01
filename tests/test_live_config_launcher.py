@@ -265,7 +265,7 @@ def test_configured_live_selects_account_ref(tmp_path) -> None:
     )
     result = TradingSystemLauncher().launch_configured_live(configured)
 
-    assert result.account.account.account_id == "alt"
+    assert result.account.book.account_id == "alt"
     assert configured.normalized_config["account"]["account_id"] == "alt"
 
 

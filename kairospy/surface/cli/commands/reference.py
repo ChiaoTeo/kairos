@@ -155,16 +155,19 @@ def sync_binance(
     root: str | None = typer.Option(None, "--root"),
     driver_name: DriverName = typer.Option(DriverName.ccxt, "--driver"),
     market: str = typer.Option("spot", "--market"),
-    include_delist_schedule: bool = typer.Option(True, "--include-delist-schedule/--no-delist-schedule"),
+    include_delist_schedule: bool = typer.Option(False, "--include-delist-schedule/--no-delist-schedule"),
     as_of: str | None = typer.Option(None, "--as-of"),
 ) -> None:
-    _sync_binance(
-        root=root,
-        market=market,
-        driver_name=driver_name,
-        include_delist_schedule=include_delist_schedule,
-        at=_time(as_of),
-    )
+    try:
+        _sync_binance(
+            root=root,
+            market=market,
+            driver_name=driver_name,
+            include_delist_schedule=include_delist_schedule,
+            at=_time(as_of),
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
 
 
 @sync_app.command("hyperliquid")

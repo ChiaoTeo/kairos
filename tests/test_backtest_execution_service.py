@@ -119,8 +119,8 @@ def test_backtest_execution_service_fills_target_position_from_market_quote(tmp_
     session.process(event)
 
     assert kernel.intents.get("intent-1").status is IntentStatus.SATISFIED
-    assert coordinator.ledger.positions(account.account)[market.instrument_id] == Decimal("2")
-    assert coordinator.ledger.cash(account.account)["USDT"] == Decimal("798")
+    assert coordinator.ledger.positions(account.book)[market.instrument_id] == Decimal("2")
+    assert coordinator.ledger.cash(account.book)["USDT"] == Decimal("798")
     assert execution.fills[0].price == Decimal("101")
     assert kernel.views.require("execution.current").total_orders == 1
     assert kernel.views.require("order.current").state.latest_order.status == "filled"
@@ -215,8 +215,8 @@ def test_backtest_execution_service_supports_short_target_and_funding_cashflow(t
     session.process(funding_event)
 
     assert kernel.intents.get("intent-1").status is IntentStatus.SATISFIED
-    assert coordinator.ledger.positions(account.account)[market.instrument_id] == Decimal("-2")
-    assert coordinator.ledger.cash(account.account)["USDT"] == Decimal("1202.00")
+    assert coordinator.ledger.positions(account.book)[market.instrument_id] == Decimal("-2")
+    assert coordinator.ledger.cash(account.book)["USDT"] == Decimal("1202.00")
     assert execution.fills[0].side.value == "sell"
     account_view = kernel.views.require("account.current.backtest.backtest.main")
     assert account_view.cash == Decimal("1202.00")

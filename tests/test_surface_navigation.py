@@ -25,6 +25,21 @@ def test_interactive_product_order_is_stable() -> None:
     ]
 
 
+def test_interactive_help_exposes_only_stable_shell_entrypoint() -> None:
+    result = CliRunner().invoke(app, ["--help"], catch_exceptions=False)
+
+    assert "shell" in result.output
+    assert "app" not in result.output
+    assert "tui" not in result.output
+
+
+def test_shell_surface_labels_global_commands() -> None:
+    screen = AppSession(surface_name="shell").screen()
+
+    assert "reload shell state" in screen
+    assert "exit shell" in screen
+
+
 def test_navigation_matches_longest_group_context() -> None:
     root = root_command(app)
     names = AppSession()._root_names()
@@ -131,9 +146,9 @@ def test_shell_account_create_enters_interactive_wizard(tmp_path, monkeypatch) -
     text = path.read_text(encoding="utf-8")
     assert calls == []
     assert session.account_create_wizard is None
-    assert 'provider = "okx"' in text
+    assert 'broker = "okx"' in text
     assert 'environment = "testnet"' in text
-    assert 'market = "spot"' in text
+    assert 'market = "spot"' not in text
     assert "created account:" in stdout.getvalue()
 
 
@@ -146,3 +161,36 @@ def test_shell_account_create_direct_uses_command_executor() -> None:
 
     assert session.account_create_wizard is None
     assert calls == [["account", "create", "binance_paper", "--provider", "binance", "--environment", "paper"]]
+
+
+def test_shell_streaming_executor_writes_during_command() -> None:
+    stdout = StringIO()
+    calls: list[list[str]] = []
+
+    def execute(argv: list[str], output) -> int:
+        calls.append(argv)
+        output.write("streamed\n")
+        return 0
+
+    session = AppSession(stdout=stdout, streaming_command_executor=execute)
+    session.handle("account")
+
+    assert session.handle("balance main --book spot") is False
+
+    assert calls == [["account", "balance", "main", "--book", "spot"]]
+    assert "--- kairospy account balance main --book spot\nstreamed\n---\n" in stdout.getvalue()
+
+
+def test_shell_streaming_executor_errors_do_not_exit_session() -> None:
+    stdout = StringIO()
+
+    def execute(argv: list[str], output) -> int:
+        raise RuntimeError("network unavailable")
+
+    session = AppSession(stdout=stdout, streaming_command_executor=execute)
+    session.handle("reference")
+
+    assert session.handle("sync binance") is False
+    assert session.context_path == ("reference", "sync")
+    assert "error: network unavailable" in stdout.getvalue()
+    assert "Command exited with status 1" in stdout.getvalue()

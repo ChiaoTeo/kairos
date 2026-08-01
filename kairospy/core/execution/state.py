@@ -9,8 +9,8 @@ from uuid import UUID
 from kairospy.core.account import (
     AccountEvent,
     AccountEventKind,
+    AccountBookRef,
     AccountLedger,
-    AccountRef,
     AccountContext,
     Environment,
 )
@@ -109,7 +109,7 @@ def _order_state_from_dict(value: Mapping[str, object]) -> OrderState:
 def _account_event_to_dict(event: AccountEvent) -> dict[str, object]:
     return {
         "event_id": str(event.event_id),
-        "account": _account_ref_to_dict(event.account),
+        "account": _account_book_to_dict(event.account),
         "kind": event.kind.value,
         "occurred_at": event.occurred_at.isoformat(),
         "currency": event.currency,
@@ -123,7 +123,7 @@ def _account_event_to_dict(event: AccountEvent) -> dict[str, object]:
 def _account_event_from_dict(value: Mapping[str, object]) -> AccountEvent:
     return AccountEvent(
         UUID(str(value["event_id"])),
-        _account_ref_from_dict(_mapping(value["account"])),
+        _account_book_from_dict(_mapping(value["account"])),
         AccountEventKind(str(value["kind"])),
         _datetime(value["occurred_at"]),
         str(value["currency"]),
@@ -137,7 +137,7 @@ def _account_event_from_dict(value: Mapping[str, object]) -> AccountEvent:
 def _reservation_to_dict(reservation: Reservation) -> dict[str, object]:
     return {
         "reservation_id": reservation.reservation_id,
-        "account": _account_ref_to_dict(reservation.account),
+        "account": _account_book_to_dict(reservation.account),
         "currency": reservation.currency,
         "amount": str(reservation.amount),
         "reason": reservation.reason,
@@ -150,7 +150,7 @@ def _reservation_to_dict(reservation: Reservation) -> dict[str, object]:
 def _reservation_from_dict(value: Mapping[str, object]) -> Reservation:
     return Reservation(
         str(value["reservation_id"]),
-        _account_ref_from_dict(_mapping(value["account"])),
+        _account_book_from_dict(_mapping(value["account"])),
         str(value["currency"]),
         Decimal(str(value["amount"])),
         str(value["reason"]),
@@ -161,14 +161,14 @@ def _reservation_from_dict(value: Mapping[str, object]) -> Reservation:
 
 
 def _account_context_to_dict(context: AccountContext) -> dict[str, object]:
-    return {"account": _account_ref_to_dict(context.account), "environment": context.environment.value}
+    return {"account": _account_book_to_dict(context.book), "environment": context.environment.value}
 
 
 def _account_context_from_dict(value: Mapping[str, object]) -> AccountContext:
-    return AccountContext(_account_ref_from_dict(_mapping(value["account"])), Environment(str(value["environment"])))
+    return AccountContext(_account_book_from_dict(_mapping(value["account"])), Environment(str(value["environment"])))
 
 
-def _account_ref_to_dict(account: AccountRef) -> dict[str, object]:
+def _account_book_to_dict(account: AccountBookRef) -> dict[str, object]:
     return {
         "broker": str(account.broker),
         "account_id": str(account.account_id),
@@ -178,8 +178,8 @@ def _account_ref_to_dict(account: AccountRef) -> dict[str, object]:
     }
 
 
-def _account_ref_from_dict(value: Mapping[str, object]) -> AccountRef:
-    return AccountRef(
+def _account_book_from_dict(value: Mapping[str, object]) -> AccountBookRef:
+    return AccountBookRef(
         str(value["broker"]),
         str(value["account_id"]),
         str(value.get("book") or value.get("segment") or ""),

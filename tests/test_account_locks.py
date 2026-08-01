@@ -54,8 +54,8 @@ def test_read_only_paper_launch_can_reference_locked_account(tmp_path: Path, mon
     assert result.mode.value == "paper"
     assert manager.get("binance.main").launch_id == "trader"
     capabilities = result.views.require("account.capabilities").capabilities
-    assert len(capabilities) == 1
-    assert capabilities[0].can_trade is False
+    assert len(capabilities) == 6
+    assert all(capability.can_trade is False for capability in capabilities)
     lease.release()
 
 
@@ -154,6 +154,40 @@ def test_system_runtime_acquires_free_trade_lock(tmp_path: Path, monkeypatch: py
         assert lock is not None
         assert lock.launch_id == "kairos-system"
         assert runtime.views.require("account.capabilities").capabilities[0].can_trade is True
+    finally:
+        authority.release()
+        runtime.close()
+
+
+def test_system_runtime_does_not_trade_live_account_with_readonly_credential(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_project(tmp_path)
+    accounts = tmp_path / ".kairos" / "accounts"
+    accounts.mkdir(parents=True, exist_ok=True)
+    (accounts / "main.toml").write_text(
+        "\n".join(
+            [
+                "[account]",
+                'id = "main"',
+                'broker = "binance"',
+                'environment = "live"',
+                "",
+                "[credentials.readonly]",
+                'ref = "binance_read"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manager = AccountLeaseManager(tmp_path / ".kairos" / "state" / "account-locks")
+
+    runtime, authority = _start_system_runtime(tmp_path)
+
+    try:
+        books = runtime.views.require("account.books").books
+        capabilities = runtime.views.require("account.capabilities").capabilities
+        assert {book.book_kind for book in books} == {"spot", "cross_margin", "isolated_margin", "usd_m_futures", "coin_m_futures", "funding"}
+        assert all(capability.can_trade is False for capability in capabilities)
+        assert manager.get("binance.main") is None
     finally:
         authority.release()
         runtime.close()

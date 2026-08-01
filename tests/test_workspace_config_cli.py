@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from io import StringIO
+from pathlib import Path
 
 from typer.testing import CliRunner
 
 from kairospy.application.system.workspace import KairosWorkspace
+import kairospy.application.system.facade.account as account_facade
 import kairospy.surface.cli.commands.account as account_product
 from kairospy.infrastructure.integrations.connectors.exchange.okx.market_data import _okx_config
 from kairospy.surface.cli import app, execute_argv
@@ -88,6 +90,31 @@ def test_workspace_account_registry_exposes_declared_books(tmp_path, monkeypatch
     assert str(directory.require("hedge_perp").book) == "usd_m_futures"
 
 
+def test_workspace_account_accepts_minimal_broker_account(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_workspace_manifest(tmp_path)
+    account_root = tmp_path / ".kairos" / "accounts"
+    account_root.mkdir(parents=True)
+    (account_root / "binance_live.toml").write_text(
+        "\n".join(
+            [
+                "[account]",
+                'id = "binance_zhaoqian888666"',
+                'broker = "binance"',
+                'environment = "live"',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    account = KairosWorkspace.resolve().accounts.get("binance_zhaoqian888666")
+
+    assert account.provider == "binance"
+    assert account.venue == "binance"
+    assert [book.kind for book in account.books] == ["spot", "cross_margin", "isolated_margin", "usd_m_futures", "coin_m_futures", "funding"]
+
+
 def test_account_cli_lists_and_redacts_local_account(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _write_workspace_manifest(tmp_path)
@@ -112,6 +139,8 @@ def test_account_cli_lists_and_redacts_local_account(tmp_path, monkeypatch) -> N
 
     assert result.exit_code == 0
     payload = json.loads(result.output)
+    assert payload["broker"] == "binance"
+    assert payload["provider"] == "binance"
     assert payload["credential_values"]["api_key"] == "<redacted>"
     assert payload["credential_values"]["api_secret"] == "<redacted>"
 
@@ -140,8 +169,55 @@ def test_account_cli_lists_accounts_as_readable_table(tmp_path, monkeypatch) -> 
     result = CliRunner().invoke(account_app, ["list"], catch_exceptions=False)
 
     assert result.exit_code == 0
-    assert "ID             PROVIDER  ENV    VENUE    MARKET  CCY   CASH  FEE    CREDENTIAL" in result.output
-    assert "binance_paper  binance   paper  binance  spot    USDT  1000  0.001  -" in result.output
+    assert "ID             BROKER   ENV    VENUE    MARKET  CCY   CASH  FEE    CREDENTIAL" in result.output
+    assert "binance_paper  binance  paper  binance  spot    USDT  1000  0.001  -" in result.output
+
+
+def test_account_cli_schema_uses_broker_language() -> None:
+    result = CliRunner().invoke(account_app, ["schema", "binance"], catch_exceptions=False)
+    schemas = CliRunner().invoke(account_app, ["schemas"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert "Account Schema binance" in result.output
+    assert "balance_books" in result.output
+    assert "default_book" not in result.output
+    assert "default_market" not in result.output
+    assert schemas.exit_code == 0
+    assert "Account Schemas" in schemas.output
+    assert "binance" in schemas.output
+
+
+def test_account_cli_list_shows_named_credentials(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_workspace_manifest(tmp_path)
+    account_root = tmp_path / ".kairos" / "accounts"
+    account_root.mkdir(parents=True)
+    (account_root / "binance_live.toml").write_text(
+        "\n".join(
+            [
+                "[account]",
+                'broker = "binance"',
+                'environment = "live"',
+                "",
+                "[credentials.readonly]",
+                'ref = "binance_read"',
+                "",
+                "[credentials.trade]",
+                'ref = "binance_trade"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(account_app, ["list"], catch_exceptions=False)
+    show = CliRunner().invoke(account_app, ["show", "binance_live", "--format", "text"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert "readonly:binance_read,trade:binance_trade" in result.output
+    assert show.exit_code == 0
+    assert "broker       binance" in show.output
+    assert "readonly binance_read" in show.output
+    assert "trade    binance_trade" in show.output
 
 
 def test_account_cli_reads_balance_through_configured_account(tmp_path, monkeypatch) -> None:
@@ -153,9 +229,100 @@ def test_account_cli_reads_balance_through_configured_account(tmp_path, monkeypa
         "\n".join(
             [
                 "[account]",
-                'provider = "binance"',
+                'broker = "binance"',
                 'environment = "testnet"',
-                'venue = "binance"',
+                "",
+                "[credentials.readonly]",
+                'ref = "binance_read"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    seen = []
+
+    class FakeBroker:
+        def fetch_balance(self, *, params=None):
+            seen.append(dict(params or {}))
+            return {
+                "free": {"USDT": "100", "ZERO": "0"},
+                "used": {"USDT": "0", "ZERO": "0"},
+                "total": {"USDT": "100", "ZERO": "0"},
+            }
+
+    def fake_broker(exchange_name, driver_name, *, credential=None):
+        assert credential == "binance_read"
+        return FakeBroker()
+
+    monkeypatch.setattr(account_facade, "broker", fake_broker)
+
+    result = CliRunner().invoke(account_app, ["balance", "binance_testnet", "--book", "spot"], catch_exceptions=False)
+
+    assert result.exit_code == 0
+    assert seen == [{}]
+    assert "Balances  binance_testnet  books=spot" in result.output
+    assert "USDT" in result.output
+    assert "ZERO" not in result.output
+    assert "page 1/1  rows 1/1" in result.output
+    assert "Querying balances for binance_testnet" in result.stderr
+    assert "[1/1] spot done" in result.stderr
+
+
+def test_account_cli_balance_defaults_to_all_books_and_paginates(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_workspace_manifest(tmp_path)
+    account_root = tmp_path / ".kairos" / "accounts"
+    account_root.mkdir(parents=True)
+    (account_root / "binance_live.toml").write_text(
+        "\n".join(
+            [
+                "[account]",
+                'broker = "binance"',
+                'environment = "live"',
+                "",
+                "[credentials.readonly]",
+                'ref = "binance_read"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    seen_params = []
+
+    class FakeBroker:
+        def fetch_balance(self, *, params=None):
+            values = dict(params or {})
+            seen_params.append(values)
+            label = str(values.get("type") or "default").upper()
+            return {"free": {label: "1"}, "used": {label: "0"}, "total": {label: "1"}}
+
+    monkeypatch.setattr(account_facade, "broker", lambda exchange_name, driver_name, *, credential=None: FakeBroker())
+
+    result = CliRunner().invoke(account_app, ["balance", "binance_live", "--page-size", "2", "--format", "json"], catch_exceptions=False)
+
+    payload = json.loads(result.output)
+    assert result.exit_code == 0
+    assert payload["books"] == ["spot", "cross_margin", "isolated_margin", "usd_m_futures", "coin_m_futures", "funding"]
+    assert len(seen_params) == 6
+    assert seen_params[0] == {}
+    assert seen_params[-1] == {"type": "funding"}
+    assert payload["page"] == {"page": 1, "page_size": 2, "total_rows": 6, "total_pages": 3}
+    assert len(payload["rows"]) == 2
+    assert "Querying balances" not in result.output
+
+
+def test_account_cli_balance_continues_when_a_book_fails(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_workspace_manifest(tmp_path)
+    account_root = tmp_path / ".kairos" / "accounts"
+    account_root.mkdir(parents=True)
+    (account_root / "binance_live.toml").write_text(
+        "\n".join(
+            [
+                "[account]",
+                'broker = "binance"',
+                'environment = "live"',
+                "",
+                "[credentials.readonly]",
+                'ref = "binance_read"',
             ]
         ),
         encoding="utf-8",
@@ -163,14 +330,66 @@ def test_account_cli_reads_balance_through_configured_account(tmp_path, monkeypa
 
     class FakeBroker:
         def fetch_balance(self, *, params=None):
-            return {"total": {"USDT": "100"}}
+            if dict(params or {}).get("type") == "funding":
+                raise RuntimeError("funding permission denied")
+            return {"free": {"USDT": "1"}, "used": {"USDT": "0"}, "total": {"USDT": "1"}}
 
-    monkeypatch.setattr(account_product._ACCOUNTS, "_broker", lambda account: FakeBroker())
+    monkeypatch.setattr(account_facade, "broker", lambda exchange_name, driver_name, *, credential=None: FakeBroker())
 
-    result = CliRunner().invoke(account_app, ["balance", "binance_testnet"], catch_exceptions=False)
+    result = CliRunner().invoke(account_app, ["balance", "binance_live", "--book", "spot", "--book", "funding"], catch_exceptions=False)
 
     assert result.exit_code == 0
-    assert json.loads(result.output)["balance"]["total"]["USDT"] == "100"
+    assert "USDT" in result.output
+    assert "Balance Errors" in result.output
+    assert "RuntimeError" in result.output
+    assert "diag-" in result.output
+    assert "funding permission denied" in result.output
+    diagnostic_path = next((tmp_path / ".kairos" / "logs" / "cli").glob("*.jsonl"))
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert diagnostic["operation"] == "account.balance.fetch_book"
+    assert diagnostic["context"]["book"] == "funding"
+    assert diagnostic["context"]["params"] == {"type": "funding"}
+    assert diagnostic["error_type"] == "RuntimeError"
+
+
+def test_account_cli_balance_errors_include_diagnostics_in_json(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_workspace_manifest(tmp_path)
+    account_root = tmp_path / ".kairos" / "accounts"
+    account_root.mkdir(parents=True)
+    (account_root / "binance_live.toml").write_text(
+        "\n".join(
+            [
+                "[account]",
+                'broker = "binance"',
+                'environment = "live"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    class FakeBroker:
+        def fetch_balance(self, *, params=None):
+            raise RuntimeError("permission denied")
+
+    monkeypatch.setattr(account_facade, "broker", lambda exchange_name, driver_name, *, credential=None: FakeBroker())
+
+    result = CliRunner().invoke(
+        account_app,
+        ["balance", "binance_live", "--book", "spot", "--params-json", '{"api_secret":"abc"}', "--format", "json"],
+        catch_exceptions=False,
+    )
+
+    payload = json.loads(result.output)
+    error = payload["errors"][0]
+    assert result.exit_code == 0
+    assert error["error_type"] == "RuntimeError"
+    assert error["diagnostic_id"].startswith("diag-")
+    assert error["duration_ms"] >= 0
+    diagnostic = json.loads(Path(error["diagnostic_path"]).read_text(encoding="utf-8").splitlines()[-1])
+    assert diagnostic["id"] == error["diagnostic_id"]
+    assert diagnostic["context"]["account"] == "binance_live"
+    assert diagnostic["context"]["params"]["api_secret"] == "<redacted>"
 
 
 def test_account_cli_snapshot_and_doctor_use_local_account(tmp_path, monkeypatch) -> None:
@@ -459,7 +678,10 @@ def test_account_cli_creates_local_account_file(tmp_path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert path.exists()
     text = path.read_text(encoding="utf-8")
-    assert 'provider = "binance"' in text
+    assert 'broker = "binance"' in text
+    assert 'provider = "binance"' not in text
+    assert 'venue = "binance"' not in text
+    assert 'market = "spot"' not in text
     assert 'fee_rate = "0.001"' in text
     operations = (project / ".kairos" / "state" / "operations.jsonl").read_text(encoding="utf-8").splitlines()
     assert json.loads(operations[-1])["action"] == "account.create"
@@ -492,10 +714,10 @@ def test_account_cli_creates_paper_account_with_simulated_fields(tmp_path, monke
     path = project / ".kairos" / "accounts" / "binance_paper_spot.toml"
     text = path.read_text(encoding="utf-8")
     assert result.exit_code == 0
-    assert 'provider = "binance"' in text
+    assert 'broker = "binance"' in text
     assert 'environment = "paper"' in text
-    assert 'venue = "binance"' in text
-    assert 'market = "spot"' in text
+    assert 'venue = "binance"' not in text
+    assert 'market = "spot"' not in text
     assert 'cash = "5000"' in text
     assert 'fee_rate = "0.001"' in text
     assert "[credential]" not in text
@@ -530,19 +752,22 @@ def test_account_cli_creates_provider_specific_okx_fields(tmp_path, monkeypatch)
     text = path.read_text(encoding="utf-8")
     credential_text = credential_path.read_text(encoding="utf-8")
     assert result.exit_code == 0
-    assert 'provider = "okx"' in text
-    assert 'market = "spot"' in text
+    assert 'broker = "okx"' in text
+    assert 'market = "spot"' not in text
     assert "cash =" not in text
     assert "fee_rate =" not in text
     assert "[credentials.readonly]" in text
     assert 'ref = "okx_live_spot"' in text
     assert "[credential]" not in text
+    assert 'broker = "okx"' in credential_text
+    assert 'provider = "okx"' not in credential_text
     assert 'kind = "api_key_secret_passphrase"' in credential_text
     assert 'passphrase = "phrase"' in credential_text
 
     show = CliRunner().invoke(account_app, ["show", "okx_live_spot", "--format", "json"], catch_exceptions=False)
     payload = json.loads(show.output)
     assert payload["credential"] is None
+    assert payload["broker"] == "okx"
     assert payload["credentials"][0]["name"] == "readonly"
     assert payload["credentials"][0]["ref"] == "okx_live_spot"
 
@@ -578,6 +803,7 @@ def test_account_cli_create_can_write_key_to_explicit_credential_id(tmp_path, mo
     assert result.exit_code == 0
     assert "[credentials.readonly]" in account_text
     assert 'ref = "okx_trade"' in account_text
+    assert 'broker = "okx"' in credential_text
     assert 'api_key = "key"' in credential_text
     assert 'api_secret = "secret"' in credential_text
 
@@ -660,10 +886,16 @@ def test_credential_cli_creates_local_secret_file_and_redacts_show(tmp_path, mon
     payload = json.loads(show.output)
     assert create.exit_code == 0
     assert path.exists()
+    assert 'broker = "okx"' in text
+    assert 'provider = "okx"' not in text
     assert 'api_key = "key"' in text
+    assert payload["broker"] == "okx"
+    assert payload["provider"] == "okx"
     assert payload["values"]["api_key"] == "<redacted>"
     assert payload["values"]["api_secret"] == "<redacted>"
-    assert json.loads(listed.output)["count"] == 1
+    listed_payload = json.loads(listed.output)
+    assert listed_payload["count"] == 1
+    assert listed_payload["credentials"][0]["broker"] == "okx"
     assert oct(path.stat().st_mode & 0o777) == "0o600"
 
 
@@ -798,6 +1030,23 @@ def test_account_cli_modifies_account_fields_without_touching_credentials(tmp_pa
     assert "[credentials.readonly]" in text
 
 
+def test_account_cli_modify_accepts_broker_alias(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "demo"
+    CliRunner().invoke(app, ["project", "init", str(project)], catch_exceptions=False)
+    monkeypatch.chdir(project)
+    CliRunner().invoke(
+        account_app,
+        ["create", "broker_alias", "--broker", "binance", "--environment", "live"],
+        catch_exceptions=False,
+    )
+
+    result = CliRunner().invoke(account_app, ["modify", "broker_alias", "--broker", "okx"], catch_exceptions=False)
+
+    account = KairosWorkspace.resolve().accounts.get("broker_alias")
+    assert result.exit_code == 0
+    assert account.provider == "okx"
+
+
 def test_account_cli_modify_rejects_live_simulated_fields(tmp_path, monkeypatch) -> None:
     project = tmp_path / "demo"
     CliRunner().invoke(app, ["project", "init", str(project)], catch_exceptions=False)
@@ -880,10 +1129,11 @@ def test_account_cli_creates_provider_specific_hyperliquid_fields(tmp_path, monk
     text = path.read_text(encoding="utf-8")
     credential_text = credential_path.read_text(encoding="utf-8")
     assert result.exit_code == 0
-    assert 'provider = "hyperliquid"' in text
-    assert 'market = "swap"' in text
+    assert 'broker = "hyperliquid"' in text
+    assert 'market = "swap"' not in text
     assert "[credentials.readonly]" in text
     assert 'ref = "hl_perp"' in text
+    assert 'broker = "hyperliquid"' in credential_text
     assert 'kind = "wallet_private_key"' in credential_text
     assert 'wallet_address = "0xabc"' in credential_text
     assert 'private_key = "0xdef"' in credential_text
@@ -900,7 +1150,7 @@ def test_account_cli_interactive_create_guides_required_fields(tmp_path, monkeyp
     result = CliRunner().invoke(
         account_app,
         ["create", "--interactive"],
-        input="\n".join(["binance_paper", "binance", "paper", "", "", "", "", "y"]) + "\n",
+        input="\n".join(["binance_paper", "binance", "paper", "", "", "", "y"]) + "\n",
         catch_exceptions=False,
     )
 
@@ -909,9 +1159,9 @@ def test_account_cli_interactive_create_guides_required_fields(tmp_path, monkeyp
     assert result.exit_code == 0
     assert "Account create wizard" in result.output
     assert f"created account: {path}" in result.output
-    assert 'provider = "binance"' in text
+    assert 'broker = "binance"' in text
     assert 'environment = "paper"' in text
-    assert 'market = "spot"' in text
+    assert 'market = "spot"' not in text
     assert 'cash = "100000"' in text
 
 

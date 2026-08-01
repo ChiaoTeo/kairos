@@ -197,7 +197,7 @@ class LivePrivateStreamCollector:
             self.coordinator.ledger.record(
                 AccountEvent(
                     uuid4(),
-                    self.account.account,
+                    self.account.book,
                     classify_balance_delta(raw, delta),
                     at,
                     currency,

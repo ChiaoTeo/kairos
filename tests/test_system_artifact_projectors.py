@@ -7,7 +7,7 @@ from kairospy.application.runtime.orchestration.pipeline import RuntimeProjectio
 from kairospy.application.runtime.processors.system import runtime_processors
 from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.application.system.projectors import TimelineProjector
-from kairospy.core.account import AccountContext, AccountRef, Environment
+from kairospy.core.account import AccountContext, AccountBookRef, Environment
 from kairospy.core.execution import ExecutionCoordinator, FillReport, cash_order_request
 from kairospy.core.intent import IntentJournal
 from kairospy.core.order import OrderSide
@@ -16,7 +16,7 @@ from kairospy.core.views import ViewStore
 
 def test_timeline_projector_order_triggers_follow_execution_state_deltas() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    context = AccountContext(AccountRef("paper", "main"), Environment.PAPER)
+    context = AccountContext(AccountBookRef("paper", "main"), Environment.PAPER)
     execution = ExecutionCoordinator()
     intents = IntentJournal()
     services = RuntimeApplicationServices.from_dependencies(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Sequence, TextIO
@@ -11,6 +12,7 @@ from typer._click.exceptions import ClickException as TyperClickException
 from typer.main import get_command
 
 from kairospy.application.system.facade.context import ProjectNotFound, set_cli_context
+from kairospy.application.system.diagnostics import record_exception
 from kairospy.surface.cli.commands import (
     account_app,
     config_app,
@@ -48,6 +50,7 @@ def main_options(
     profile: str | None = typer.Option(None, "--profile"),
     output: OutputFormat | None = typer.Option(None, "--output"),
     verbose: bool = typer.Option(False, "--verbose"),
+    debug: bool = typer.Option(False, "--debug", help="Write diagnostic logs and show tracebacks for unexpected errors."),
 ) -> None:
     set_cli_context(cwd=cwd, profile=profile)
     ctx.obj = RootOptions(
@@ -55,34 +58,39 @@ def main_options(
         profile=profile,
         output=output,
         verbose=verbose,
+        debug=debug,
     )
 
 
-@app.command("shell")
+@app.command("shell", help="Open the stable interactive command shell.")
 def shell(
     command: list[str] | None = typer.Option(None, "--command"),
 ) -> None:
     _shell(command)
 
 
-@app.command("app")
+@app.command("app", hidden=True, help="Compatibility alias for the interactive command shell.")
 def app_command(
     command: list[str] | None = typer.Option(None, "--command"),
 ) -> None:
     _app(command)
 
 
-@app.command("tui", hidden=True)
+@app.command("tui", hidden=True, help="Experimental Rich-rendered interactive shell.")
 def tui() -> None:
     from kairospy.surface.interactive.tui import RichTui
 
     RichTui(command_executor=_execute_product_command).run()
 
 
-def _app(command: list[str] | None = None) -> None:
+def _app(command: list[str] | None = None, *, surface_name: str = "app") -> None:
     from kairospy.surface.interactive.tui import TextTui
 
-    session = TextTui(command_executor=_execute_product_command)
+    session = TextTui(
+        command_executor=_execute_product_command,
+        streaming_command_executor=_execute_product_command_streaming,
+        surface_name=surface_name,
+    )
     if command:
         for line in command:
             if session.handle(line):
@@ -92,7 +100,7 @@ def _app(command: list[str] | None = None) -> None:
 
 
 def _shell(command: list[str] | None = None) -> None:
-    _app(command)
+    _app(command, surface_name="shell")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -116,8 +124,13 @@ def _execute_product_command(argv: list[str]) -> tuple[int, str]:
     return exit_code, output.getvalue()
 
 
+def _execute_product_command_streaming(argv: list[str], stdout: TextIO) -> int:
+    return _invoke_app(argv, stdout)
+
+
 def _invoke_app(argv: Sequence[str], stdout: TextIO) -> int:
     command = get_command(app)
+    debug = "--debug" in argv
     try:
         with redirect_stdout(stdout), redirect_stderr(stdout):
             command.main(args=list(argv), prog_name="kairospy", standalone_mode=False)
@@ -133,6 +146,15 @@ def _invoke_app(argv: Sequence[str], stdout: TextIO) -> int:
     except SystemExit as error:
         code = error.code
         return code if isinstance(code, int) else 1
+    except Exception as error:
+        diagnostic = record_exception(error, operation="cli.command", command=" ".join(argv), context={"argv": list(argv)})
+        stdout.write(f"Unexpected error: {error}\n")
+        stdout.write(f"Diagnostic {diagnostic['diagnostic_id']}: {diagnostic['diagnostic_path']}\n")
+        if debug:
+            stdout.write(traceback.format_exc())
+        else:
+            stdout.write("Run with --debug for traceback details.\n")
+        return 1
     return 0
 
 

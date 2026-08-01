@@ -19,7 +19,7 @@ from kairospy.application.ports import DataSubscription, MarketDataSubscriptionS
 from kairospy.application.service.runtime import RuntimeAccountService, RuntimeAccountViewProjectionService, RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.application.service.modes.backtest import BacktestExecutionService
 from kairospy.application.service.domain.reference import catalog_from_market_rows
-from kairospy.core.account import AccountBalance, AccountBookKind, AccountCapability, AccountContext, AccountFeeSchedule, AccountRef, AccountSnapshot, AccountSource, AccountState, Environment
+from kairospy.core.account import AccountBalance, AccountBookKind, AccountCapability, AccountContext, AccountFeeSchedule, AccountBookRef, AccountSnapshot, AccountSource, AccountState, Environment
 from kairospy.core.execution import ExecutionCoordinator, cash_order_request
 from kairospy.core.intent import IntentJournal
 from kairospy.core.market import Bar, OptionGreeks, OrderBookSnapshot, PriceLevel, Quote, RateObservation, TradePrint
@@ -86,7 +86,7 @@ class FakeAccountService:
     schema = ViewSchema(key, "system", mutability="runtime_writable")
 
     def __init__(self) -> None:
-        self.context = AccountContext(AccountRef("paper", "main"), Environment.PAPER)
+        self.context = AccountContext(AccountBookRef("paper", "main"), Environment.PAPER)
         self._snapshot = AccountSnapshot(
             self.context,
             balances=(AccountBalance.from_total_locked("USDT", Decimal("1000"), Decimal("0"), source=AccountSource.SIMULATED),),
@@ -113,16 +113,16 @@ class FakeAccountService:
     def directory(self) -> LaunchAccountDirectory:
         return LaunchAccountDirectory.from_contexts((self.context,))
 
-    def capabilities(self, account: AccountRef | None = None) -> tuple[AccountCapability, ...]:
+    def capabilities(self, account: AccountBookRef | None = None) -> tuple[AccountCapability, ...]:
         return ()
 
-    def fees(self, account: AccountRef | None = None) -> tuple[AccountFeeSchedule, ...]:
+    def fees(self, account: AccountBookRef | None = None) -> tuple[AccountFeeSchedule, ...]:
         return ()
 
-    def snapshot(self, account: AccountRef | None = None) -> AccountSnapshot | None:
+    def snapshot(self, account: AccountBookRef | None = None) -> AccountSnapshot | None:
         return self._snapshot
 
-    def state(self, account: AccountRef | None = None) -> AccountState | None:
+    def state(self, account: AccountBookRef | None = None) -> AccountState | None:
         return self._state
 
     def update_snapshot(self, snapshot: AccountSnapshot) -> None:
@@ -172,10 +172,10 @@ class ExplodingSnapshotUpdateAccountService(FakeAccountService):
 
 class FakeMultiAccountService:
     def __init__(self) -> None:
-        self.spot = AccountContext(AccountRef("binance", "main", AccountBookKind.SPOT), Environment.PAPER)
-        self.perp = AccountContext(AccountRef("okx", "hedge", "swap"), Environment.PAPER)
+        self.spot = AccountContext(AccountBookRef("binance", "main", AccountBookKind.SPOT), Environment.PAPER)
+        self.perp = AccountContext(AccountBookRef("okx", "hedge", "swap"), Environment.PAPER)
         self._states = {
-            self.spot.account: AccountState(
+            self.spot.book: AccountState(
                 self.spot,
                 (AccountBalance.from_total_locked("USDT", Decimal("1000"), Decimal("0"), source=AccountSource.SIMULATED),),
                 (),
@@ -184,7 +184,7 @@ class FakeMultiAccountService:
                 datetime(2026, 1, 1, tzinfo=timezone.utc),
                 AccountSource.SIMULATED,
             ),
-            self.perp.account: AccountState(
+            self.perp.book: AccountState(
                 self.perp,
                 (AccountBalance.from_total_locked("USDT", Decimal("500"), Decimal("0"), source=AccountSource.SIMULATED),),
                 (),
@@ -205,10 +205,10 @@ class FakeMultiAccountService:
     def directory(self) -> LaunchAccountDirectory:
         return LaunchAccountDirectory.from_contexts(self.accounts())
 
-    def capabilities(self, account: AccountRef | None = None) -> tuple[AccountCapability, ...]:
+    def capabilities(self, account: AccountBookRef | None = None) -> tuple[AccountCapability, ...]:
         return ()
 
-    def snapshot(self, account: AccountRef | None = None) -> AccountSnapshot | None:
+    def snapshot(self, account: AccountBookRef | None = None) -> AccountSnapshot | None:
         state = self.state(account)
         if state is None:
             return None
@@ -222,22 +222,22 @@ class FakeMultiAccountService:
             source=state.source,
         )
 
-    def state(self, account: AccountRef | None = None) -> AccountState | None:
+    def state(self, account: AccountBookRef | None = None) -> AccountState | None:
         if account is None:
             return None
         return self._states.get(account)
 
-    def fees(self, account: AccountRef | None = None) -> tuple[AccountFeeSchedule, ...]:
+    def fees(self, account: AccountBookRef | None = None) -> tuple[AccountFeeSchedule, ...]:
         fees = (
-            AccountFeeSchedule(self.spot.account, Decimal("0.001"), Decimal("0.0015")),
-            AccountFeeSchedule(self.perp.account, Decimal("0.0002"), Decimal("0.0005")),
+            AccountFeeSchedule(self.spot.book, Decimal("0.001"), Decimal("0.0015")),
+            AccountFeeSchedule(self.perp.book, Decimal("0.0002"), Decimal("0.0005")),
         )
         if account is None:
             return fees
         return tuple(item for item in fees if item.book == account)
 
     def update_snapshot(self, snapshot: AccountSnapshot) -> None:
-        self._states[snapshot.context.account] = AccountState(
+        self._states[snapshot.context.book] = AccountState(
             snapshot.context,
             snapshot.balances,
             snapshot.margins,
@@ -572,8 +572,8 @@ def test_account_current_view_state_does_not_update_snapshots() -> None:
 
 
 def test_launch_account_directory_resolves_alias_index_and_book() -> None:
-    spot = AccountContext(AccountRef("binance", "main", AccountBookKind.SPOT), Environment.PAPER)
-    funding = AccountContext(AccountRef("binance", "main", AccountBookKind.FUNDING), Environment.PAPER)
+    spot = AccountContext(AccountBookRef("binance", "main", AccountBookKind.SPOT), Environment.PAPER)
+    funding = AccountContext(AccountBookRef("binance", "main", AccountBookKind.FUNDING), Environment.PAPER)
     directory = LaunchAccountDirectory((LaunchAccountBinding("account1", 0, (spot, funding), ref="binance_main"),))
 
     assert directory.require("account1").require_book(AccountBookKind.SPOT) == spot
@@ -685,10 +685,10 @@ def test_runtime_context_target_position_prefers_reference_views() -> None:
 def test_strategy_account_reader_rejects_ambiguous_book_kind() -> None:
     views = ViewStore()
     account = FakeMultiAccountService()
-    account.perp = AccountContext(AccountRef("okx", "hedge", AccountBookKind.SPOT), Environment.PAPER)
+    account.perp = AccountContext(AccountBookRef("okx", "hedge", AccountBookKind.SPOT), Environment.PAPER)
     account._states = {
-        account.spot.account: account._states[account.spot.account],
-        account.perp.account: AccountState(
+        account.spot.book: account._states[account.spot.book],
+        account.perp.book: AccountState(
             account.perp,
             (AccountBalance.from_total_locked("USDT", Decimal("500"), Decimal("0"), source=AccountSource.SIMULATED),),
             (),
@@ -710,8 +710,8 @@ def test_strategy_account_reader_rejects_ambiguous_book_kind() -> None:
 
     with pytest.raises(ValueError, match="multiple account books match account key: spot"):
         context.accounts.book("spot")
-    assert context.account("binance.main").book("spot").cash == Decimal("1000")
-    assert context.account("okx.hedge").book("spot").cash == Decimal("500")
+        assert context.account("binance.main").book("spot").cash == Decimal("1000")
+        assert context.account("okx.hedge").book("spot").cash == Decimal("500")
     assert context.accounts.book("okx.hedge.spot").cash == Decimal("500")
 
 
@@ -809,7 +809,7 @@ def test_reference_port_publishes_market_resolution_views() -> None:
 
 def test_kernel_wires_runtime_ports_to_view_states() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    context = AccountContext(AccountRef("paper", "main"), Environment.PAPER)
+    context = AccountContext(AccountBookRef("paper", "main"), Environment.PAPER)
     execution = ExecutionCoordinator()
     execution.plan_order(
         cash_order_request(
@@ -885,7 +885,7 @@ def test_kernel_accepts_runtime_stores_and_application_services() -> None:
 
 def test_system_risk_execution_and_order_views_are_business_panels() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    context = AccountContext(AccountRef("paper", "main"), Environment.PAPER)
+    context = AccountContext(AccountBookRef("paper", "main"), Environment.PAPER)
     execution = ExecutionCoordinator()
     execution.plan_order(
         cash_order_request(

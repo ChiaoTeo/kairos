@@ -21,7 +21,7 @@ from kairospy.core.account import (
     AccountFeesView,
     AccountFeeSchedule,
     AccountPortfolioView,
-    AccountRef,
+    AccountBookRef,
     AccountSnapshot,
     AccountViewKeys,
     account_portfolio_schema,
@@ -147,7 +147,7 @@ def _account_snapshot_event(event: RuntimeEnvelope) -> AccountSnapshot | None:
     return event.payload if isinstance(event.payload, AccountSnapshot) else None
 
 
-def _default_capability(book: AccountRef) -> AccountCapability:
+def _default_capability(book: AccountBookRef) -> AccountCapability:
     kind = str(book.book)
     can_trade = kind not in {AccountBookKind.FUNDING.value, AccountBookKind.EARN.value}
     can_hold_position = kind not in {AccountBookKind.FUNDING.value, AccountBookKind.EARN.value}

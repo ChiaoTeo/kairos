@@ -18,6 +18,7 @@ class RichTui:
         console: Any | None = None,
         context: SurfaceContext | None = None,
         command_executor: CommandExecutor | None = None,
+        surface_name: str = "tui",
     ) -> None:
         from rich.console import Console
 
@@ -27,6 +28,7 @@ class RichTui:
             stdout=self.output,
             context=context,
             command_executor=command_executor,
+            surface_name=surface_name,
         )
         self.message = ""
 
@@ -85,11 +87,15 @@ class TextTui:
         stdout: TextIO | None = None,
         context: SurfaceContext | None = None,
         command_executor: CommandExecutor | None = None,
+        streaming_command_executor: Any | None = None,
+        surface_name: str = "app",
     ) -> None:
         self.session = AppSession(
             stdout=stdout,
             context=context,
             command_executor=command_executor,
+            streaming_command_executor=streaming_command_executor,
+            surface_name=surface_name,
         )
 
     def run(self) -> None:

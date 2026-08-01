@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from kairospy.application.ports import AccountPort, TradingExecutionPort
 from kairospy.application.system.workspace import AccountLease, AccountLeaseError, AccountLeaseManager
-from kairospy.core.account import AccountCapability, AccountContext, AccountRef, AccountSnapshot, AccountState
+from kairospy.core.account import AccountBookRef, AccountCapability, AccountContext, AccountSnapshot, AccountState
 from kairospy.core.intent import IntentEvent, IntentEventKind, TradeIntent
 from kairospy.core.order import OrderEvent, OrderEventKind, OrderRequest, OrderState
 from kairospy.application.protocol import RuntimeEnvelope
@@ -29,7 +29,7 @@ class AccountTradeAuthority:
 
     def acquire_available(self, accounts: tuple[AccountContext, ...]) -> None:
         for context in accounts:
-            key = _account_key(context.account)
+            key = _account_key(context.book)
             self._contexts[key] = context
             if self._lease_still_owned(key):
                 continue
@@ -51,14 +51,14 @@ class AccountTradeAuthority:
         record = self.manager.get(key)
         return record is not None and record.launch_instance_id == self.launch_instance_id and not record.stale
 
-    def can_trade(self, account: AccountRef) -> bool:
+    def can_trade(self, account: AccountBookRef) -> bool:
         context = self._contexts.get(_account_key(account))
         if context is not None:
             self.acquire_available((context,))
         record = self.manager.get(_account_key(account))
         return record is not None and record.launch_instance_id == self.launch_instance_id and not record.stale
 
-    def reject_reason(self, account: AccountRef) -> str:
+    def reject_reason(self, account: AccountBookRef) -> str:
         if self.can_trade(account):
             return ""
         record = self.manager.get(_account_key(account))
@@ -87,17 +87,19 @@ class AuthorizingAccountPort(AccountPort):
     def directory(self):
         return self.port.directory()
 
-    def snapshot(self, account: AccountRef | None = None) -> AccountSnapshot | None:
+    def snapshot(self, account: AccountBookRef | None = None) -> AccountSnapshot | None:
         return self.port.snapshot(account)
 
-    def state(self, account: AccountRef | None = None) -> AccountState | None:
+    def state(self, account: AccountBookRef | None = None) -> AccountState | None:
         return self.port.state(account)
 
-    def capabilities(self, account: AccountRef | None = None) -> tuple[AccountCapability, ...]:
-        self.authority.acquire_available(self.accounts())
-        return tuple(_authorized_capability(item, authority=self.authority) for item in self.port.capabilities(account))
+    def capabilities(self, account: AccountBookRef | None = None) -> tuple[AccountCapability, ...]:
+        capabilities = tuple(self.port.capabilities(account))
+        tradable_books = {capability.book for capability in capabilities if capability.can_trade}
+        self.authority.acquire_available(tuple(context for context in self.accounts() if context.book in tradable_books))
+        return tuple(_authorized_capability(item, authority=self.authority) for item in capabilities)
 
-    def fees(self, account: AccountRef | None = None):
+    def fees(self, account: AccountBookRef | None = None):
         return self.port.fees(account)
 
 
@@ -114,7 +116,7 @@ class AuthorizingTradingExecutionService(TradingExecutionPort):
     def execute_intent(self, intent: TradeIntent, context: object, *, hook: str = "") -> object:
         account = _resolve_intent_account(self.port, intent)
         if account is not None:
-            reason = self.authority.reject_reason(account.account)
+            reason = self.authority.reject_reason(account.book)
             if reason:
                 _reject_intent(context, intent, reason)
                 return None
@@ -132,7 +134,7 @@ class AuthorizingTradingExecutionService(TradingExecutionPort):
         venue_snapshot: AccountSnapshot | None = None,
         at: datetime,
     ) -> OrderState:
-        reason = self.authority.reject_reason(request.context.account)
+        reason = self.authority.reject_reason(request.context.book)
         if reason:
             return _reject_order(self.coordinator, request, at=at, reason=reason)
         kwargs = {
@@ -150,7 +152,7 @@ class AuthorizingTradingExecutionService(TradingExecutionPort):
     def submit_order(self, order_id: str, *, at: datetime, params: Mapping[str, object] | None = None) -> OrderState:
         request = _order_request(self.coordinator, order_id)
         if request is not None:
-            reason = self.authority.reject_reason(request.context.account)
+            reason = self.authority.reject_reason(request.context.book)
             if reason:
                 return _reject_existing_order(self.coordinator, order_id, at=at, reason=reason)
         return self.port.submit_order(order_id, at=at, params=params)
@@ -158,7 +160,7 @@ class AuthorizingTradingExecutionService(TradingExecutionPort):
     def cancel_order(self, order_id: str, *, at: datetime, params: Mapping[str, object] | None = None) -> OrderState:
         request = _order_request(self.coordinator, order_id)
         if request is not None:
-            reason = self.authority.reject_reason(request.context.account)
+            reason = self.authority.reject_reason(request.context.book)
             if reason:
                 return _reject_existing_order(self.coordinator, order_id, at=at, reason=reason)
         return self.port.cancel_order(order_id, at=at, params=params)
@@ -214,7 +216,7 @@ def _order_request(coordinator: object, order_id: str) -> OrderRequest | None:
         return None
 
 
-def _account_key(account: AccountRef) -> str:
+def _account_key(account: AccountBookRef) -> str:
     return ".".join(_key_part(part) for part in (account.broker, account.account_id) if part)
 
 

@@ -36,7 +36,7 @@ class CredentialFacade:
         resolved_kind = kind or (schema.credential_kind if schema is not None else None)
         values = {
             "id": credential_id,
-            "provider": provider_value,
+            "broker": provider_value,
             "kind": resolved_kind,
             "api_key": api_key,
             "api_secret": api_secret,
@@ -51,7 +51,7 @@ class CredentialFacade:
         if path.exists() and not force:
             raise ValueError(f"credential already exists: {path}")
         write_credential_file(path, values)
-        workspace.operations.append("credential.create", target={"credential": credential_id}, payload={"path": path, "provider": provider_value})
+        workspace.operations.append("credential.create", target={"credential": credential_id}, payload={"path": path, "broker": provider_value})
         return str(path)
 
     def show(self, credential_id: str, *, reveal_secrets: bool) -> dict[str, object]:

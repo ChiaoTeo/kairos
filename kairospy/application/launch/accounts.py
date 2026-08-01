@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from kairospy.core.account import AccountContext, AccountRef
+from kairospy.core.account import AccountBookRef, AccountContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,17 +35,17 @@ class LaunchAccountBinding:
                 return self.books[0]
             raise ValueError(f"multiple books are available for account: {self.alias}; pass a book key")
         key = _book_key_text(book)
-        matches = tuple(context for context in self.books if key in _book_match_keys(context.account))
+        matches = tuple(context for context in self.books if key in _book_match_keys(context.book))
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
             raise ValueError(f"multiple books match account {self.alias!r} and book {key!r}")
         raise KeyError(f"unknown account book: {self.alias}.{key}")
 
-    def default_book(self, preferred: AccountRef | None = None) -> AccountContext:
+    def default_book(self, preferred: AccountBookRef | None = None) -> AccountContext:
         if preferred is not None:
             for context in self.books:
-                if context.account == preferred:
+                if context.book == preferred:
                     return context
         return self.require_book(None)
 
@@ -129,10 +129,10 @@ class LaunchAccountDirectory:
             raise ValueError("multiple launch accounts are available; pass an account key")
         if book is not None:
             return binding.require_book(book)
-        return binding.default_book(None if default is None else default.account)
+        return binding.default_book(None if default is None else default.book)
 
 
-def _book_match_keys(book: AccountRef) -> set[str]:
+def _book_match_keys(book: AccountBookRef) -> set[str]:
     return {
         str(book.book),
         book.qualifier,

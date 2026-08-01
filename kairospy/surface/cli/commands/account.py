@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
+import time
 from typing import Mapping
 
 import typer
@@ -11,7 +12,7 @@ from kairospy.application.modes import RuntimeMode
 from kairospy.application.system.facade.account import AccountFacade
 from kairospy.application.launch.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchFacade
 from kairospy.surface.interactive.account import run_account_create_wizard
-from kairospy.surface.cli.options import OutputFormat
+from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.cli.output import write_cli_result
 
 
@@ -41,11 +42,11 @@ def schemas(
 @account_app.command("schema")
 def schema(
     ctx: typer.Context,
-    provider: str = typer.Argument(...),
+    broker_name: str = typer.Argument(..., metavar="broker"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     try:
-        payload = _ACCOUNTS.schema(provider)
+        payload = _ACCOUNTS.schema(broker_name)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     write_cli_result(ctx, payload, output_format=output_format, text=_render_schema)
@@ -54,10 +55,10 @@ def schema(
 @account_app.command("create")
 def create_account(
     account_id: str | None = typer.Argument(None),
-    provider: str | None = typer.Option(None, "--provider"),
+    provider: str | None = typer.Option(None, "--broker", "--provider"),
     environment: str | None = typer.Option(None, "--environment"),
     venue: str | None = typer.Option(None, "--venue"),
-    market: str | None = typer.Option(None, "--market"),
+    market: str | None = typer.Option(None, "--market", hidden=True),
     currency: str = typer.Option("USD", "--currency"),
     cash: str | None = typer.Option(None, "--cash", help="Initial simulated cash; only written for non-live accounts"),
     fee_rate: str = typer.Option("0", "--fee-rate", help="Commission rate charged on filled notional, for example 0.001"),
@@ -89,7 +90,7 @@ def create_account(
     if account_id is None:
         raise typer.BadParameter("account_id is required for direct creation; use --interactive for guided setup")
     if provider is None:
-        raise typer.BadParameter("--provider is required for direct creation; use --interactive for guided setup")
+        raise typer.BadParameter("--broker is required for direct creation; use --interactive for guided setup")
     if environment is None:
         raise typer.BadParameter("--environment is required for direct creation; use --interactive for guided setup")
     try:
@@ -137,7 +138,7 @@ def add_credential(
 @account_app.command("modify")
 def modify_account(
     account_id: str = typer.Argument(...),
-    provider: str | None = typer.Option(None, "--provider"),
+    provider: str | None = typer.Option(None, "--broker", "--provider"),
     environment: str | None = typer.Option(None, "--environment"),
     venue: str | None = typer.Option(None, "--venue"),
     currency: str | None = typer.Option(None, "--currency"),
@@ -197,14 +198,28 @@ def show_account(
 def balance(
     ctx: typer.Context,
     account_id: str = typer.Argument(...),
+    books: list[str] | None = typer.Option(None, "--book", help="Account book to query; repeat for multiple books. Defaults to all supported books."),
+    include_zero: bool = typer.Option(False, "--include-zero", help="Include assets whose free/used/total balances are all zero."),
+    page: int = typer.Option(1, "--page", min=1),
+    page_size: int = typer.Option(50, "--page-size", min=1),
     params_json: str | None = typer.Option(None, "--params-json"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
+    resolved_output = resolve_output(ctx, output_format, default=OutputFormat.text)
+    progress = _balance_progress_reporter() if resolved_output is OutputFormat.text else None
     try:
-        payload = _ACCOUNTS.balance(account_id, params=_params(params_json))
+        payload = _ACCOUNTS.balance(
+            account_id,
+            books=books,
+            include_zero=include_zero,
+            page=page,
+            page_size=page_size,
+            params=_params(params_json),
+            progress=progress,
+        )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
+    write_cli_result(ctx, payload, output_format=resolved_output, default=OutputFormat.text, text=_render_balance)
 
 
 @account_app.command("current")
@@ -404,6 +419,35 @@ def _params(value: str | None) -> Mapping[str, object] | None:
     return payload
 
 
+def _balance_progress_reporter():
+    started_at: dict[str, float] = {}
+
+    def report(event: Mapping[str, object]) -> None:
+        name = str(event.get("event") or "")
+        if name == "start":
+            books = ", ".join(str(item) for item in event.get("books", ()))
+            typer.echo(f"Querying balances for {event.get('account')} ({event.get('total')} books): {books}", err=True)
+            return
+        if name == "book_start":
+            book = str(event.get("book"))
+            started_at[book] = time.monotonic()
+            typer.echo(f"  [{event.get('index')}/{event.get('total')}] {book} ...", err=True)
+            return
+        if name in {"book_done", "book_error"}:
+            book = str(event.get("book"))
+            elapsed = time.monotonic() - started_at.get(book, time.monotonic())
+            if name == "book_done":
+                typer.echo(f"  [{event.get('index')}/{event.get('total')}] {book} done ({event.get('rows')} rows, {elapsed:.1f}s)", err=True)
+            else:
+                typer.echo(
+                    f"  [{event.get('index')}/{event.get('total')}] {book} failed "
+                    f"({elapsed:.1f}s, {event.get('diagnostic_id')}): {event.get('error')}",
+                    err=True,
+                )
+
+    return report
+
+
 def _runtime_account_query(
     kind: str,
     *,
@@ -471,7 +515,7 @@ def _render_accounts(result: object) -> str:
                     _lock_label(account.get("lock")),
                 )
             )
-    return "\n".join(["Accounts", *_table(("ID", "PROVIDER", "ENV", "VENUE", "MARKET", "CCY", "CASH", "FEE", "CREDENTIAL", "TRADE_LOCK"), rows)])
+    return "\n".join(["Accounts", *_table(("ID", "BROKER", "ENV", "VENUE", "MARKET", "CCY", "CASH", "FEE", "CREDENTIAL", "TRADE_LOCK"), rows)])
 
 
 def _render_schemas(result: object) -> str:
@@ -484,9 +528,10 @@ def _render_schemas(result: object) -> str:
         if isinstance(schema, Mapping):
             required = ", ".join(schema["required_credential_fields"])
             optional = ", ".join(schema["optional_fields"]) or "-"
+            books = ", ".join(str(book) for book in schema.get("balance_books", ())) or "-"
             lines.append(
-                f"  {schema['provider']:<12} venue={schema['venue']:<12} "
-                f"market={schema['default_market']:<5} required={required} optional={optional}"
+                f"  {schema.get('broker', schema.get('provider')):<12} venue={schema['venue']:<12} "
+                f"balance_books={books:<70} required={required} optional={optional}"
             )
     return "\n".join(lines)
 
@@ -494,9 +539,9 @@ def _render_schemas(result: object) -> str:
 def _render_schema(result: object) -> str:
     payload = _payload(result)
     return "\n".join([
-        f"Account Schema {payload['provider']}",
+        f"Account Schema {payload.get('broker', payload.get('provider'))}",
         f"  venue             {payload['venue']}",
-        f"  default_market    {payload['default_market']}",
+        f"  balance_books     {', '.join(str(book) for book in payload.get('balance_books', ())) or '-'}",
         f"  credential.kind   {payload['credential_kind']}",
         f"  required          {', '.join(payload['required_credential_fields'])}",
         f"  optional          {', '.join(payload['optional_fields']) or '-'}",
@@ -505,14 +550,74 @@ def _render_schema(result: object) -> str:
 
 def _render_show(result: object) -> str:
     payload = _payload(result)
-    return "\n".join([
+    lines = [
         f"Account {payload['account_id']}",
-        f"  provider     {payload['provider']}",
+        f"  broker       {payload.get('broker', payload.get('provider'))}",
         f"  environment  {payload['environment']}",
         f"  venue        {payload['venue']}",
-        f"  market       {payload['market']}",
         f"  source       {payload['source_path']}",
-    ])
+    ]
+    if payload.get("market"):
+        lines.insert(4, f"  legacy_book  {payload['market']}")
+    credentials = payload.get("credentials")
+    if isinstance(credentials, list) and credentials:
+        lines.append("  credentials")
+        for credential in credentials:
+            if isinstance(credential, Mapping):
+                lines.append(f"    {_display(credential.get('name')):<8} {_display(credential.get('ref'))}")
+    return "\n".join(lines)
+
+
+def _render_balance(result: object) -> str:
+    payload = _payload(result)
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        raise TypeError("account balance renderer expected rows list")
+    page = payload.get("page")
+    if not isinstance(page, Mapping):
+        raise TypeError("account balance renderer expected page mapping")
+    title = f"Balances  {payload.get('account')}  books={', '.join(str(item) for item in payload.get('books', []))}"
+    lines = [title]
+    if rows:
+        table_rows = []
+        for row in rows:
+            if isinstance(row, Mapping):
+                table_rows.append(
+                    (
+                        _display(row.get("book")),
+                        _display(row.get("asset")),
+                        _display(row.get("free")),
+                        _display(row.get("used")),
+                        _display(row.get("total")),
+                    )
+                )
+        lines.extend(_table(("BOOK", "ASSET", "FREE", "USED", "TOTAL"), table_rows))
+    else:
+        lines.append("  none")
+    errors = payload.get("errors")
+    if isinstance(errors, list) and errors:
+        error_rows = []
+        for error in errors:
+            if isinstance(error, Mapping):
+                error_rows.append(
+                    (
+                        _display(error.get("book")),
+                        _display(error.get("error_type")),
+                        _display(error.get("duration_ms")),
+                        _display(error.get("diagnostic_id")),
+                        _display(error.get("error")),
+                    )
+                )
+        lines.extend(["", "Balance Errors", *_table(("BOOK", "TYPE", "MS", "DIAGNOSTIC", "ERROR"), error_rows)])
+    lines.append(
+        "page {}/{}  rows {}/{}".format(
+            page.get("page"),
+            page.get("total_pages"),
+            len(rows),
+            page.get("total_rows"),
+        )
+    )
+    return "\n".join(lines)
 
 
 def _render_doctor(result: object) -> str:
@@ -605,6 +710,20 @@ def _simulated_value(account: Mapping[str, object], key: str) -> str:
 
 
 def _credential_label(account: Mapping[str, object]) -> str:
+    credentials = account.get("credentials")
+    if isinstance(credentials, list) and credentials:
+        labels = []
+        for credential in credentials:
+            if not isinstance(credential, Mapping):
+                continue
+            name = str(credential.get("name") or "").strip()
+            ref = str(credential.get("ref") or "").strip()
+            if name and ref:
+                labels.append(f"{name}:{ref}")
+            elif ref:
+                labels.append(ref)
+        if labels:
+            return ",".join(labels)
     credential = account.get("credential")
     if isinstance(credential, str) and credential.strip():
         return credential.strip()

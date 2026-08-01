@@ -271,12 +271,26 @@ def _optional_text(value: object) -> str | None:
 
 
 def _tradable_books(account: object) -> list[str]:
+    if not _account_has_trade_credential(account):
+        return []
     books = []
     for book in tuple(getattr(account, "books", ()) or ()):
         ref = book.to_ref(getattr(account, "identity"))
         if account_book_route(ref, provider=str(ref.broker)).can_trade:
             books.append(str(ref.book))
     return books
+
+
+def _account_has_trade_credential(account: object) -> bool:
+    credentials = tuple(getattr(account, "credentials", ()) or ())
+    if credentials:
+        return any(getattr(credential, "role", "") == "trade" and getattr(credential, "ref", None) for credential in credentials)
+    if getattr(account, "credential", None) or getattr(account, "credential_values", None):
+        return True
+    environment = str(getattr(account, "environment", "")).strip().lower()
+    if environment in {"live", "testnet"}:
+        return False
+    return True
 
 
 def _trade_state(lock: object, *, owned_by_system: bool) -> str:

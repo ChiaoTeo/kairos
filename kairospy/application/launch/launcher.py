@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Callable, Mapping, TypeVar
 
+from kairospy.application.account_books import default_account_books
 from kairospy.application.protocol import RuntimeEnvelope, RuntimeLine
 from kairospy.application.modes import RuntimeMode
 from kairospy.application.runtime.launch import RuntimeLaunchResult
@@ -33,7 +34,7 @@ from kairospy.application.system.workspace import AccountRecord, KairosWorkspace
 from kairospy.application.strategy import CliStrategyBase, Strategy
 from kairospy.application.system.session import SystemCommandDispatcher, SystemCommandFileQueue, SystemCommandResult
 from kairospy.config import LaunchAccountConfig
-from kairospy.core.account import AccountBookKind, AccountCapability, AccountContext, AccountFeeSchedule, AccountIdentity, AccountRef, Environment
+from kairospy.core.account import AccountBookKind, AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, AccountIdentity, Environment
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.config import SYSTEM_LAUNCH_ID
 
@@ -126,7 +127,7 @@ class TradingSystemLauncher:
             cash_currency="USD",
             broker=str(primary.identity.broker),
             environment=primary.environment,
-            book=primary.account.book,
+            book=primary.book.book,
         )
         coordinator = ExecutionCoordinator()
         capabilities = _system_capabilities(directory)
@@ -547,7 +548,7 @@ def _system_account_directory(workspace: KairosWorkspace) -> LaunchAccountDirect
     for index, record in enumerate(workspace.accounts.list()):
         contexts = tuple(_system_account_context(record, book) for book in record.books)
         if contexts:
-            bindings.append(LaunchAccountBinding(record.account_id, index, contexts, ref=record.account_id))
+            bindings.append(LaunchAccountBinding(record.account_id, index, contexts, ref=record.account_id, trade=_record_has_trade_credential(record)))
     return LaunchAccountDirectory(tuple(bindings))
 
 
@@ -563,30 +564,48 @@ def _environment(value: object) -> Environment:
 
 
 def _tradable_contexts(directory: LaunchAccountDirectory) -> tuple[AccountContext, ...]:
-    return tuple(context for context in directory.contexts() if account_book_route(context.account, provider=str(context.account.broker)).can_trade)
+    return tuple(
+        context
+        for binding in directory.bindings
+        if binding.trade
+        for context in binding.books
+        if account_book_route(context.book, provider=str(context.book.broker)).can_trade
+    )
 
 
 def _system_capabilities(directory: LaunchAccountDirectory) -> tuple[AccountCapability, ...]:
     capabilities: list[AccountCapability] = []
-    for context in directory.contexts():
-        route = account_book_route(context.account, provider=str(context.account.broker))
-        kind = str(context.account.book)
-        can_hold_position = kind not in {AccountBookKind.FUNDING.value, AccountBookKind.EARN.value}
-        can_borrow = kind in {AccountBookKind.CROSS_MARGIN.value, AccountBookKind.ISOLATED_MARGIN.value}
-        capabilities.append(
-            AccountCapability(
-                context.account,
-                can_trade=route.can_trade,
-                can_hold_cash=True,
-                can_hold_position=can_hold_position,
-                can_borrow=can_borrow,
+    for binding in directory.bindings:
+        for context in binding.books:
+            route = account_book_route(context.book, provider=str(context.book.broker))
+            kind = str(context.book.book)
+            can_hold_position = kind not in {AccountBookKind.FUNDING.value, AccountBookKind.EARN.value}
+            can_borrow = kind in {AccountBookKind.CROSS_MARGIN.value, AccountBookKind.ISOLATED_MARGIN.value}
+            capabilities.append(
+                AccountCapability(
+                    context.book,
+                    can_trade=binding.trade and route.can_trade,
+                    can_hold_cash=True,
+                    can_hold_position=can_hold_position,
+                    can_borrow=can_borrow,
+                )
             )
-        )
     return tuple(capabilities)
 
 
 def _system_fees(directory: LaunchAccountDirectory) -> tuple[AccountFeeSchedule, ...]:
-    return tuple(AccountFeeSchedule(context.account, maker=Decimal("0"), taker=Decimal("0")) for context in directory.contexts())
+    return tuple(AccountFeeSchedule(context.book, maker=Decimal("0"), taker=Decimal("0")) for context in directory.contexts())
+
+
+def _record_has_trade_credential(account: AccountRecord) -> bool:
+    credentials = tuple(account.credentials)
+    if credentials:
+        return any(credential.role == "trade" and credential.ref for credential in credentials)
+    if account.credential or account.credential_values:
+        return True
+    if account.environment.strip().lower() in {"live", "testnet"}:
+        return False
+    return True
 
 
 def _trade_lease_accounts(configured: object) -> tuple[tuple[AccountIdentity, str], ...]:
@@ -615,9 +634,9 @@ def _trade_lease_accounts(configured: object) -> tuple[tuple[AccountIdentity, st
 
 
 def _launch_account_can_trade(launch_account: LaunchAccountConfig, account: ConfiguredAccount, configured: object) -> bool:
-    books = launch_account.books or (_default_trade_book(configured),)
+    books = launch_account.books or default_account_books(account.venue, fallback=_default_trade_book(configured))
     for book in books:
-        ref = AccountRef(account.venue, account.account_id, book)
+        ref = AccountBookRef(account.venue, account.account_id, book)
         if account_book_route(ref, provider=str(ref.broker)).can_trade:
             return True
     return False

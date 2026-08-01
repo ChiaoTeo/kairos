@@ -34,9 +34,16 @@ def test_launch_daemon_stop_command_writes_command_file(tmp_path) -> None:
         ["daemon", "stop", "--root", str(tmp_path), "--mode", "backtest", "--launch-id", "launch-1"],
         catch_exceptions=False,
     )
+    json_result = CliRunner().invoke(
+        launch_app,
+        ["daemon", "stop", "--root", str(tmp_path), "--mode", "backtest", "--launch-id", "launch-1", "--format", "json"],
+        catch_exceptions=False,
+    )
 
     assert result.exit_code == 0
-    assert '"desired_state": "stopped"' in result.output
+    assert "desired_state  stopped" in result.output
+    assert json_result.exit_code == 0
+    assert json.loads(json_result.output)["desired_state"] == "stopped"
     assert (tmp_path / "backtest" / "launch-1" / "command.json").exists()
     assert tuple((tmp_path / "backtest" / "launch-1" / "commands").glob("*.json"))
 

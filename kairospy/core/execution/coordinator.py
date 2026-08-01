@@ -9,9 +9,9 @@ from uuid import uuid4
 from kairospy.core.account import (
     AccountEvent,
     AccountEventKind,
+    AccountBookRef,
     AccountContext,
     AccountLedger,
-    AccountRef,
     AccountSnapshot,
     AccountState,
     derive_account_state,
@@ -80,7 +80,7 @@ class ExecutionCoordinator:
         ledger: AccountLedger | None = None,
         reservations: ReservationBook | None = None,
         broker: BrokerGateway | None = None,
-        broker_resolver: Callable[[AccountRef], BrokerGateway | None] | None = None,
+        broker_resolver: Callable[[AccountBookRef], BrokerGateway | None] | None = None,
         broker_symbol_resolver: Callable[[object], str] | None = None,
     ) -> None:
         self.orders = orders or OrderJournal()
@@ -127,7 +127,7 @@ class ExecutionCoordinator:
             amount = margin_notional / margin_leverage
         reservation = Reservation(
             request.reservation_id or request.order_id,
-            request.context.account,
+            request.context.book,
             reserve_currency,
             amount,
             "order margin pre-submit hold" if margin_notional is not None else "order pre-submit hold",
@@ -160,7 +160,7 @@ class ExecutionCoordinator:
         if at.tzinfo is None:
             raise ValueError("submit timestamp must be timezone-aware")
         state = self.orders.record(OrderEvent(order_id, OrderEventKind.SUBMITTED, at))
-        broker = self._broker_for(state.request.context.account)
+        broker = self._broker_for(state.request.context.book)
         if broker is None:
             return state
         try:
@@ -208,7 +208,7 @@ class ExecutionCoordinator:
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
         state = self.request_cancel(order_id, at=at)
-        broker = self._broker_for(state.request.context.account)
+        broker = self._broker_for(state.request.context.book)
         if broker is None:
             return state
         if not state.order_venue_id:
@@ -228,7 +228,7 @@ class ExecutionCoordinator:
             return self.cancel_confirmed(order_id, at=at)
         return state
 
-    def _broker_for(self, account: AccountRef) -> BrokerGateway | None:
+    def _broker_for(self, account: AccountBookRef) -> BrokerGateway | None:
         if self.broker_resolver is None:
             return self.broker
         selected = self.broker_resolver(account)
@@ -249,7 +249,7 @@ class ExecutionCoordinator:
         self.ledger.record(
             AccountEvent(
                 uuid4(),
-                state.request.context.account,
+                state.request.context.book,
                 AccountEventKind.FILL,
                 report.occurred_at,
                 report.settlement_currency,
@@ -263,7 +263,7 @@ class ExecutionCoordinator:
             self.ledger.record(
                 AccountEvent(
                     uuid4(),
-                    state.request.context.account,
+                    state.request.context.book,
                     AccountEventKind.FEE,
                     report.occurred_at,
                     report.fee_currency or report.settlement_currency,

@@ -9,7 +9,7 @@ from kairospy.core.account import (
     AccountBalance,
     AccountContext,
     AccountCurrentView,
-    AccountRef,
+    AccountBookRef,
     AccountSource,
     Environment,
     PositionSnapshot,
@@ -43,7 +43,7 @@ def test_runtime_context_accounts_uses_shared_account_query_service() -> None:
 
 def _account_views() -> ViewStore:
     views = ViewStore()
-    account = AccountContext(AccountRef("binance", "main", "spot"), Environment.PAPER)
+    account = AccountContext(AccountBookRef("binance", "main", "spot"), Environment.PAPER)
     key = "account.current.paper.binance.main.spot"
     views.register(account_current_schema(key))
     views.put_runtime(

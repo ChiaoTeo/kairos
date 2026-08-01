@@ -90,6 +90,26 @@ def test_configured_paper_accepts_launch_account_references(tmp_path) -> None:
     assert result.views.require("account.capabilities").capabilities[1].can_trade is False
 
 
+def test_configured_paper_launch_account_without_books_defaults_to_all_broker_books(tmp_path) -> None:
+    config_path = _write_paper_project(tmp_path, account_venue="binance")
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8").replace('[account]\nref = "main"\n', '[accounts.main]\nref = "main"\n'),
+        encoding="utf-8",
+    )
+
+    configured = configured_paper(config_path, account_resolver=_resolver(config_path))
+    result = TradingSystemLauncher().launch_configured_paper(configured)
+
+    assert [book.book_kind for book in result.views.require("account.books").books] == [
+        "spot",
+        "cross_margin",
+        "isolated_margin",
+        "usd_m_futures",
+        "coin_m_futures",
+        "funding",
+    ]
+
+
 def test_configured_paper_launch_accounts_resolve_distinct_workspace_accounts(tmp_path) -> None:
     config_path = _write_paper_project(tmp_path)
     _write_account("okx-main", venue="okx", cash=500, currency="USDT", index=1, fee_rate="0.002")
@@ -164,7 +184,7 @@ def test_configured_paper_selects_account_id_for_streaming_feed(tmp_path) -> Non
     configured = configured_paper(config_path, market_feed_factory=lambda venue: FakePaperFeed(), account_resolver=_resolver(config_path))
     result = TradingSystemLauncher().launch_configured_paper(configured)
 
-    assert result.account.account.account_id == "alt"
+    assert result.account.book.account_id == "alt"
     assert configured.normalized_config["account"]["cash"] == 500
     assert configured.normalized_config["account"]["fee_rate"] == Decimal("0.001")
 
@@ -187,7 +207,7 @@ def test_configured_paper_can_use_exchange_venue_paper_account_for_event_source(
 
     result = TradingSystemLauncher().launch_configured_paper(configured_paper(config_path, account_resolver=_resolver(config_path)))
 
-    assert str(result.account.account.broker) == "binance"
+    assert str(result.account.book.broker) == "binance"
     assert result.mode.value == "paper"
 
 

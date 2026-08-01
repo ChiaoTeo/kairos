@@ -12,7 +12,7 @@ from kairospy.application.service.domain.execution import JsonExecutionStateStor
 from kairospy.application.service.modes.paper import PaperAccountService
 from kairospy.application.service.runtime import RuntimeApplicationServices, RuntimeServiceDependencies
 from kairospy.application.service.runtime.execution import ApplyExecutionUpdateUseCase
-from kairospy.core.account import AccountBookKind, AccountContext, AccountRef, AccountSource, Environment
+from kairospy.core.account import AccountBookKind, AccountContext, AccountBookRef, AccountSource, Environment
 from kairospy.core.execution import ExecutionCoordinator, ExecutionUpdate
 from kairospy.core.intent import IntentEvent, IntentEventKind, IntentJournal, IntentStatus, target_position_intent
 from kairospy.core.order import OrderEventKind, OrderRequest, OrderSide, OrderType
@@ -100,7 +100,7 @@ def test_json_execution_state_store_round_trips_snapshot(tmp_path) -> None:
 
 
 def test_account_ref_models_identity_book_and_legacy_segment() -> None:
-    account = AccountRef("binance", "main", AccountBookKind.USD_M_FUTURES)
+    account = AccountBookRef("binance", "main", AccountBookKind.USD_M_FUTURES)
 
     assert str(account.broker) == "binance"
     assert str(account.account_id) == "main"
@@ -133,8 +133,8 @@ def test_order_id_preserves_intent_context_and_resolves_order_venue_id() -> None
 
 def test_execution_coordinator_resolves_broker_by_order_account() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    binance = AccountRef("binance", "main", AccountBookKind.SPOT)
-    okx = AccountRef("okx", "hedge", AccountBookKind.USD_M_FUTURES)
+    binance = AccountBookRef("binance", "main", AccountBookKind.SPOT)
+    okx = AccountBookRef("okx", "hedge", AccountBookKind.USD_M_FUTURES)
     binance_broker = FakeBroker()
     okx_broker = FakeBroker()
     coordinator = ExecutionCoordinator(
@@ -162,7 +162,7 @@ def test_execution_coordinator_resolves_broker_by_order_account() -> None:
 
 def test_apply_execution_update_use_case_updates_order_ledger_and_intent() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    account = AccountContext(AccountRef("binance", "main", AccountBookKind.SPOT), Environment.LIVE)
+    account = AccountContext(AccountBookRef("binance", "main", AccountBookKind.SPOT), Environment.LIVE)
     coordinator = ExecutionCoordinator(broker=FakeBroker(), broker_symbol_resolver=lambda symbol: "ETH/USDT")
     intents = IntentJournal()
     intent = target_position_intent(
@@ -205,13 +205,13 @@ def test_apply_execution_update_use_case_updates_order_ledger_and_intent() -> No
 
     assert state.status.value == "filled"
     assert coordinator.orders.get(request.order_id).status.value == "filled"
-    assert coordinator.ledger.cash(account.account)["USDT"] == Decimal("-101")
+    assert coordinator.ledger.cash(account.book)["USDT"] == Decimal("-101")
     assert intents.get(intent.intent_id).status is IntentStatus.SATISFIED
 
 
 def test_execution_runtime_update_drives_coordinator_intent_and_views() -> None:
     now = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    account = AccountContext(AccountRef("binance", "main", AccountBookKind.SPOT), Environment.LIVE)
+    account = AccountContext(AccountBookRef("binance", "main", AccountBookKind.SPOT), Environment.LIVE)
     coordinator = ExecutionCoordinator(broker=FakeBroker(), broker_symbol_resolver=lambda symbol: "ETH/USDT")
     intents = IntentJournal()
     intent = target_position_intent(
@@ -264,7 +264,7 @@ def test_execution_runtime_update_drives_coordinator_intent_and_views() -> None:
     asyncio.run(kernel.run(RuntimeLine((event,))))
 
     assert coordinator.orders.get(request.order_id).status.value == "filled"
-    assert coordinator.ledger.cash(account.account)["USDT"] == Decimal("-101")
+    assert coordinator.ledger.cash(account.book)["USDT"] == Decimal("-101")
     assert intents.get(intent.intent_id).status is IntentStatus.SATISFIED
     assert kernel.views.require("execution.current").latest_order.status == "filled"
     assert kernel.views.require("order.current").state.latest_order.status == "filled"

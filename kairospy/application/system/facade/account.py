@@ -6,12 +6,18 @@ from datetime import datetime, timezone
 from decimal import Decimal
 import json
 from pathlib import Path
-from typing import Mapping, Sequence
+import time
+from typing import Callable, Mapping, Sequence
 
+from kairospy.application.account_books import default_account_books
+from kairospy.application.system.diagnostics import record_exception
 from kairospy.application.system.facade.context import workspace as resolve_workspace
 from kairospy.application.system.facade.resources import DriverName, ExchangeName, broker
 from kairospy.application.system.workspace import AccountRecord, write_credential_file
 from kairospy.config import ConfigError
+from kairospy.core.account import AccountBookKind, AccountBookRef
+from kairospy.application.service.domain.account.routing import account_book_route
+from kairospy.application.pagination import PageRequest, paginate
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +64,6 @@ PROVIDER_ALIASES = {
     "ouyi": "okx",
 }
 
-
 class AccountFacade:
     def list_accounts(self) -> dict[str, object]:
         store = resolve_workspace().accounts
@@ -73,8 +78,8 @@ class AccountFacade:
     def schemas(self) -> dict[str, object]:
         return {"schemas": {name: _schema_payload(schema) for name, schema in ACCOUNT_SCHEMAS.items()}}
 
-    def schema(self, provider: str) -> dict[str, object]:
-        return _schema_payload(_provider_schema(provider))
+    def schema(self, broker_name: str) -> dict[str, object]:
+        return _schema_payload(_provider_schema(broker_name))
 
     def create(
         self,
@@ -142,7 +147,7 @@ class AccountFacade:
                 credential_path,
                 {
                     "id": credential_id,
-                    "provider": provider_schema.provider,
+                    "broker": provider_schema.provider,
                     "kind": resolved_credential_kind,
                     **credential_field_values,
                 },
@@ -154,6 +159,7 @@ class AccountFacade:
                 environment=environment,
                 venue=venue or provider_schema.venue,
                 market=market or provider_schema.default_market,
+                default_market=provider_schema.default_market,
                 currency=currency,
                 cash=parsed_cash if parsed_cash is not None else (Decimal("100000") if include_simulated_fields else None),
                 fee_rate=parsed_fee_rate if include_fee_rate else None,
@@ -308,9 +314,88 @@ class AccountFacade:
             workspace.operations.append("account.lock.release.manual", target={"account": account.account_id}, payload={"stale_only": stale_only, "force": force})
         return {"account": account.account_id, "account_key": account.account_key, "released": released}
 
-    def balance(self, account_id: str, *, params: Mapping[str, object] | None) -> dict[str, object]:
+    def balance(
+        self,
+        account_id: str,
+        *,
+        books: Sequence[str] | None,
+        include_zero: bool,
+        page: int,
+        page_size: int,
+        params: Mapping[str, object] | None,
+        progress: Callable[[dict[str, object]], None] | None = None,
+    ) -> dict[str, object]:
         account = _account(account_id)
-        return {"account": account.account_id, "balance": self._broker(account).fetch_balance(params=params)}
+        selected_books = _balance_books(account, books)
+        client = self._broker(account)
+        raw_by_book: dict[str, Mapping[str, object]] = {}
+        errors: list[dict[str, object]] = []
+        rows: list[dict[str, object]] = []
+        if progress is not None:
+            progress({"event": "start", "account": account.account_id, "books": list(selected_books), "total": len(selected_books)})
+        for index, book in enumerate(selected_books, start=1):
+            route = account_book_route(AccountBookRef(account.venue or account.provider, account.account_id, book), provider=account.provider, base_params=params)
+            if progress is not None:
+                progress({"event": "book_start", "book": book, "index": index, "total": len(selected_books), "params": dict(route.balance_params)})
+            started_at = time.monotonic()
+            try:
+                raw = client.fetch_balance(params=route.balance_params)
+            except Exception as error:
+                elapsed_ms = int((time.monotonic() - started_at) * 1000)
+                diagnostic = record_exception(
+                    error,
+                    operation="account.balance.fetch_book",
+                    command="account balance",
+                    context={
+                        "account": account.account_id,
+                        "broker": account.provider,
+                        "venue": account.venue,
+                        "book": book,
+                        "params": dict(route.balance_params),
+                        "duration_ms": elapsed_ms,
+                    },
+                )
+                errors.append(
+                    {
+                        "book": book,
+                        "error": str(error),
+                        "error_type": diagnostic["error_type"],
+                        "params": dict(route.balance_params),
+                        "duration_ms": elapsed_ms,
+                        "diagnostic_id": diagnostic["diagnostic_id"],
+                        "diagnostic_path": diagnostic["diagnostic_path"],
+                    }
+                )
+                if progress is not None:
+                    progress(
+                        {
+                            "event": "book_error",
+                            "book": book,
+                            "index": index,
+                            "total": len(selected_books),
+                            "error": str(error),
+                            "error_type": diagnostic["error_type"],
+                            "diagnostic_id": diagnostic["diagnostic_id"],
+                            "duration_ms": elapsed_ms,
+                        }
+                    )
+                continue
+            raw_by_book[book] = raw
+            book_rows = _balance_rows(account, book=book, balance=raw, include_zero=include_zero)
+            rows.extend(book_rows)
+            if progress is not None:
+                progress({"event": "book_done", "book": book, "index": index, "total": len(selected_books), "rows": len(book_rows)})
+        paged_rows, page_result = paginate(rows, PageRequest(page=page, page_size=page_size))
+        return {
+            "account": account.account_id,
+            "broker": account.provider,
+            "books": list(selected_books),
+            "rows": list(paged_rows),
+            "page": page_result.to_dict(),
+            "raw": {book: dict(value) for book, value in raw_by_book.items()},
+            "errors": errors,
+            "balance": raw_by_book.get(selected_books[0]) if len(selected_books) == 1 else None,
+        }
 
     def open_orders(
         self,
@@ -343,7 +428,7 @@ class AccountFacade:
         account = _account(account_id)
         issues: list[str] = []
         if not account.provider:
-            issues.append("provider is required")
+            issues.append("broker is required")
         try:
             provider_schema = _provider_schema(account.provider)
         except ValueError as error:
@@ -362,7 +447,7 @@ class AccountFacade:
         return {"account": account.to_dict(), "valid": not issues, "issues": issues}
 
     def _broker(self, account: AccountRecord):
-        return broker(_exchange(account), DriverName.ccxt, credential=account.credential)
+        return broker(_exchange(account), DriverName.ccxt, credential=_read_credential_ref(account))
 
     def _credential_broker(self, account: AccountRecord, ref: str):
         return broker(_exchange(account), DriverName.ccxt, credential=ref)
@@ -405,13 +490,91 @@ def _exchange(account: AccountRecord) -> ExchangeName:
         raise ValueError(f"unsupported account venue/provider: {value}") from error
 
 
+def _balance_books(account: AccountRecord, books: Sequence[str] | None) -> tuple[str, ...]:
+    requested = tuple(book.strip().lower().replace("-", "_") for book in books or () if book.strip())
+    if requested:
+        return requested
+    provider = account.provider.strip().lower()
+    return default_account_books(provider, fallback=account.market or AccountBookKind.SPOT.value)
+
+
+def _balance_rows(account: AccountRecord, *, book: str, balance: Mapping[str, object], include_zero: bool) -> list[dict[str, object]]:
+    assets = sorted(_balance_assets(balance))
+    rows: list[dict[str, object]] = []
+    for asset in assets:
+        free = _balance_amount(balance, asset, "free")
+        used = _balance_amount(balance, asset, "used")
+        total = _balance_amount(balance, asset, "total")
+        if not include_zero and _all_zero(free, used, total):
+            continue
+        rows.append(
+            {
+                "account": account.account_id,
+                "broker": account.provider,
+                "book": book,
+                "asset": asset,
+                "free": str(free),
+                "used": str(used),
+                "total": str(total),
+            }
+        )
+    return rows
+
+
+def _balance_assets(balance: Mapping[str, object]) -> set[str]:
+    assets: set[str] = set()
+    for key in ("free", "used", "total"):
+        values = balance.get(key)
+        if isinstance(values, Mapping):
+            assets.update(str(asset) for asset in values)
+    for asset, values in balance.items():
+        if asset in {"free", "used", "total", "info", "timestamp", "datetime"}:
+            continue
+        if isinstance(values, Mapping):
+            assets.add(str(asset))
+    return assets
+
+
+def _balance_amount(balance: Mapping[str, object], asset: str, key: str) -> Decimal:
+    values = balance.get(key)
+    if isinstance(values, Mapping) and asset in values:
+        return _decimal_or_zero(values.get(asset))
+    asset_values = balance.get(asset)
+    if isinstance(asset_values, Mapping) and key in asset_values:
+        return _decimal_or_zero(asset_values.get(key))
+    return Decimal("0")
+
+
+def _all_zero(*values: Decimal) -> bool:
+    return all(value == 0 for value in values)
+
+
+def _decimal_or_zero(value: object) -> Decimal:
+    if value in (None, ""):
+        return Decimal("0")
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return Decimal("0")
+
+
+def _read_credential_ref(account: AccountRecord) -> str | None:
+    for credential in account.credentials:
+        if credential.role == "readonly" and credential.ref:
+            return credential.ref
+    for credential in account.credentials:
+        if credential.ref:
+            return credential.ref
+    return account.credential
+
+
 def _provider_schema(provider: str) -> AccountProviderSchema:
     normalized = _normalize_provider(provider)
     try:
         return ACCOUNT_SCHEMAS[normalized]
     except KeyError as error:
         supported = ", ".join(sorted(ACCOUNT_SCHEMAS))
-        raise ValueError(f"unsupported account provider: {provider}; supported: {supported}") from error
+        raise ValueError(f"unsupported account broker: {provider}; supported: {supported}") from error
 
 
 def _normalize_provider(provider: str) -> str:
@@ -420,9 +583,12 @@ def _normalize_provider(provider: str) -> str:
 
 
 def _schema_payload(schema: AccountProviderSchema) -> dict[str, object]:
+    balance_books = default_account_books(schema.provider, fallback=schema.default_market)
     return {
+        "broker": schema.provider,
         "provider": schema.provider,
         "venue": schema.venue,
+        "balance_books": list(balance_books),
         "default_market": schema.default_market,
         "credential_kind": schema.credential_kind,
         "credential_fields": list(schema.credential_fields),
@@ -503,6 +669,7 @@ def _account_template(
     environment: str,
     venue: str,
     market: str | None,
+    default_market: str,
     currency: str,
     cash: Decimal | None,
     fee_rate: Decimal | None,
@@ -517,13 +684,15 @@ def _account_template(
     lines = [
         "[account]",
         f'id = "{account_id}"',
-        f'provider = "{provider}"',
+        f'broker = "{provider}"',
         f'environment = "{environment}"',
-        f'venue = "{venue}"',
     ]
-    if market is not None:
+    if venue != provider:
+        lines.append(f'venue = "{venue}"')
+    if market is not None and market != default_market:
         lines.append(f'market = "{market}"')
-    lines.append(f'currency = "{currency}"')
+    if currency != "USD":
+        lines.append(f'currency = "{currency}"')
     if cash is not None:
         lines.append(f'cash = "{cash}"')
     if fee_rate is not None:

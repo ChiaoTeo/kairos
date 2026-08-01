@@ -12,11 +12,11 @@ class CommandView(Protocol):
     argv_prefix: tuple[str, ...]
 
 
-def render_home_screen(snapshot: SurfaceSnapshot, commands: tuple[CommandView, ...]) -> str:
+def render_home_screen(snapshot: SurfaceSnapshot, commands: tuple[CommandView, ...], *, surface_name: str = "app") -> str:
     return "\n\n".join([
         render_surface_overview(snapshot),
         render_command_registry("Products", commands),
-        render_global_commands(),
+        render_global_commands(surface_name=surface_name),
     ])
 
 
@@ -58,11 +58,11 @@ def render_command_detail(command: CommandView) -> str:
     ])
 
 
-def render_global_commands() -> str:
+def render_global_commands(*, surface_name: str = "app") -> str:
     return _render_command_rows((
         ("<#>|<product>", "open command context"),
-        ("refresh", "reload app state"),
-        ("quit", "exit app"),
+        ("refresh", f"reload {surface_name} state"),
+        ("quit", f"exit {surface_name}"),
     ))
 
 

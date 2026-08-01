@@ -258,6 +258,47 @@ def test_execute_argv_returns_usage_errors_without_raising() -> None:
     assert "Got unexpected extra argument" in output.getvalue()
 
 
+def test_execute_argv_records_diagnostic_for_unexpected_errors(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def fail():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("kairospy.surface.cli.commands.account._ACCOUNTS.list_accounts", fail)
+    output = StringIO()
+
+    exit_code = execute_argv(["account", "list"], output)
+
+    text = output.getvalue()
+    assert exit_code == 1
+    assert "Unexpected error: boom" in text
+    assert "Diagnostic diag-" in text
+    assert "Run with --debug" in text
+    assert "Traceback" not in text
+    diagnostic_path = next((tmp_path / ".kairos" / "logs" / "cli").glob("*.jsonl"))
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert diagnostic["operation"] == "cli.command"
+    assert diagnostic["error_type"] == "RuntimeError"
+
+
+def test_execute_argv_debug_prints_traceback_for_unexpected_errors(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    def fail():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("kairospy.surface.cli.commands.account._ACCOUNTS.list_accounts", fail)
+    output = StringIO()
+
+    exit_code = execute_argv(["--debug", "account", "list"], output)
+
+    text = output.getvalue()
+    assert exit_code == 1
+    assert "Diagnostic diag-" in text
+    assert "Traceback" in text
+    assert "RuntimeError: boom" in text
+
+
 def test_app_launch_workspace_prompt_has_default_launch_state(tmp_path) -> None:
     session = AppSession(
         stdout=StringIO(),

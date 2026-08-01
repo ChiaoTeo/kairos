@@ -59,7 +59,7 @@ class AccountIdentity:
 
 
 @dataclass(frozen=True, slots=True, order=True, init=False)
-class AccountRef:
+class AccountBookRef:
     identity: AccountIdentity
     book: AccountBookKind | str = AccountBookKind.DEFAULT
     qualifier: str = ""
@@ -115,22 +115,24 @@ class AccountRef:
         return f"{self.identity.value}{suffix}"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class AccountContext:
-    account: AccountRef
+    book: AccountBookRef
     environment: Environment
+
+    def __init__(self, book: AccountBookRef, environment: Environment) -> None:
+        if book is None:
+            raise ValueError("account book is required")
+        object.__setattr__(self, "book", book)
+        object.__setattr__(self, "environment", environment)
 
     @property
     def identity(self) -> AccountIdentity:
-        return self.account.identity
-
-    @property
-    def book(self) -> AccountRef:
-        return self.account
+        return self.book.identity
 
     @property
     def value(self) -> str:
-        return f"{self.environment}:{self.account.value}"
+        return f"{self.environment}:{self.book.value}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,7 +273,7 @@ class AccountSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class AccountCapability:
-    book: AccountRef
+    book: AccountBookRef
     can_trade: bool = False
     can_hold_cash: bool = True
     can_hold_position: bool = False
@@ -284,7 +286,7 @@ class AccountCapability:
 
 @dataclass(frozen=True, slots=True)
 class AccountFeeSchedule:
-    book: AccountRef
+    book: AccountBookRef
     maker: Decimal
     taker: Decimal
     source: str = "configured"
@@ -303,7 +305,7 @@ class AccountFeeSchedule:
 @dataclass(frozen=True, slots=True)
 class AccountAlias:
     key: str
-    book: AccountRef
+    book: AccountBookRef
     role: str = ""
 
     def __post_init__(self) -> None:
@@ -322,17 +324,17 @@ class AccountDirectory:
             raise ValueError("account alias keys must be unique")
 
     @classmethod
-    def from_books(cls, books: tuple[AccountRef, ...]) -> "AccountDirectory":
+    def from_books(cls, books: tuple[AccountBookRef, ...]) -> "AccountDirectory":
         return cls(tuple(AccountAlias(_default_alias_key(book), book) for book in books))
 
-    def require(self, key: str) -> AccountRef:
+    def require(self, key: str) -> AccountBookRef:
         label = _required_text(key, "account alias key")
         for alias in self.aliases:
             if alias.key == label:
                 return alias.book
         raise KeyError(f"unknown account alias: {label}")
 
-    def key_for(self, book: AccountRef) -> str | None:
+    def key_for(self, book: AccountBookRef) -> str | None:
         for alias in self.aliases:
             if alias.book == book:
                 return alias.key
@@ -362,7 +364,7 @@ def _book(value: object) -> AccountBookKind | str:
         return text
 
 
-def _default_alias_key(book: AccountRef) -> str:
+def _default_alias_key(book: AccountBookRef) -> str:
     if book.book != AccountBookKind.DEFAULT:
         return str(book.book)
     return str(book.account_id)
@@ -372,12 +374,12 @@ __all__ = [
     "AccountAlias",
     "AccountBalance",
     "AccountBookKind",
+    "AccountBookRef",
     "AccountCapability",
     "AccountContext",
     "AccountDirectory",
     "AccountFeeSchedule",
     "AccountIdentity",
-    "AccountRef",
     "AccountSnapshot",
     "AccountSource",
     "Environment",

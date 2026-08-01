@@ -11,10 +11,10 @@ from kairospy.core.views import ViewFieldSchema, ViewSchema
 from .model import (
     AccountBalance,
     AccountBookKind,
+    AccountBookRef,
     AccountCapability,
     AccountContext,
     AccountFeeSchedule,
-    AccountRef,
     AccountSnapshot,
     AccountSource,
     LiabilitySnapshot,
@@ -50,11 +50,11 @@ class AccountViewKeys:
             "account",
             "current",
             context.environment.value,
-            context.account.broker,
-            context.account.account_id,
+            context.book.broker,
+            context.book.account_id,
         ]
-        if context.account.segment:
-            parts.extend(context.account.book_key.split(":"))
+        if context.book.segment:
+            parts.extend(context.book.book_key.split(":"))
         return ".".join(_key_part(part) for part in parts)
 
     @staticmethod
@@ -63,11 +63,11 @@ class AccountViewKeys:
             "account",
             "detail",
             context.environment.value,
-            context.account.broker,
-            context.account.account_id,
+            context.book.broker,
+            context.book.account_id,
         ]
-        if context.account.segment:
-            parts.extend(context.account.book_key.split(":"))
+        if context.book.segment:
+            parts.extend(context.book.book_key.split(":"))
         return ".".join(_key_part(part) for part in parts)
 
     @staticmethod
@@ -122,7 +122,7 @@ class AccountFeesView:
 class AccountCurrentView:
     context: AccountContext
     identity: object | None = None
-    book: AccountRef | None = None
+    book: AccountBookRef | None = None
     book_kind: str = ""
     book_qualifier: str = ""
     event_count: int = 0
@@ -146,7 +146,7 @@ class AccountCurrentView:
 class AccountDetailView:
     context: AccountContext
     identity: object | None = None
-    book: AccountRef | None = None
+    book: AccountBookRef | None = None
     event_count: int = 0
     last_event_time: datetime | None = None
     account_state: AccountState | None = None

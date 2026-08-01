@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from kairospy.core.account import AccountRef
+from kairospy.core.account import AccountBookRef
 
 
 class ReservationStatus(StrEnum):
@@ -18,7 +18,7 @@ class ReservationStatus(StrEnum):
 @dataclass(frozen=True, slots=True)
 class Reservation:
     reservation_id: str
-    account: AccountRef
+    account: AccountBookRef
     currency: str
     amount: Decimal
     reason: str
@@ -56,7 +56,7 @@ class ReservationBook:
     def reflect(self, reservation_id: str) -> Reservation:
         return self._transition(reservation_id, ReservationStatus.REFLECTED)
 
-    def active_amounts(self, account: AccountRef) -> dict[str, Decimal]:
+    def active_amounts(self, account: AccountBookRef) -> dict[str, Decimal]:
         totals: dict[str, Decimal] = {}
         for reservation in self._reservations.values():
             if reservation.account != account or reservation.status is not ReservationStatus.HELD:

@@ -8,8 +8,8 @@ from typing import Protocol
 from .ledger import AccountLedger
 from .model import (
     AccountBalance,
+    AccountBookRef,
     AccountContext,
-    AccountRef,
     AccountSnapshot,
     AccountSource,
     LiabilitySnapshot,
@@ -20,7 +20,7 @@ from .model import (
 
 
 class AccountHoldSource(Protocol):
-    def active_amounts(self, account: AccountRef) -> dict[str, Decimal]:
+    def active_amounts(self, account: AccountBookRef) -> dict[str, Decimal]:
         ...
 
 
@@ -51,7 +51,7 @@ def derive_account_state(
 ) -> AccountState:
     if venue is not None and venue.context != context:
         raise ValueError("venue snapshot context does not match account state context")
-    account = context.account
+    account = context.book
 
     stale = _is_stale(venue, max_snapshot_age_seconds, now)
     if venue is not None:

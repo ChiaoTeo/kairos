@@ -88,6 +88,45 @@ def test_live_order_submit_requires_confirmation(tmp_path, monkeypatch) -> None:
     assert "live order submission requires --confirm-live" in result.output
 
 
+def test_order_submit_requires_trade_credential(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    _write_workspace_manifest(tmp_path)
+    account_root = tmp_path / ".kairos" / "accounts"
+    account_root.mkdir(parents=True)
+    (account_root / "binance_testnet.toml").write_text(
+        "\n".join(
+            [
+                "[account]",
+                'broker = "binance"',
+                'environment = "testnet"',
+                "",
+                "[credentials.readonly]",
+                'ref = "binance_read"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        order_app,
+        [
+            "place",
+            "--account",
+            "binance_testnet",
+            "--symbol",
+            "BTC/USDT",
+            "--side",
+            "buy",
+            "--qty",
+            "0.01",
+            "--submit",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "has no trade credential" in result.output
+
+
 def test_order_show_reads_local_order_journal(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _write_workspace_manifest(tmp_path)

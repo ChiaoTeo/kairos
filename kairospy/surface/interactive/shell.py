@@ -27,6 +27,7 @@ from kairospy.surface.interactive.system import (
 
 
 CommandExecutor = Callable[[list[str]], tuple[int, str]]
+StreamingCommandExecutor = Callable[[list[str], TextIO], int]
 
 
 class CommandView:
@@ -44,12 +45,16 @@ class AppSession:
         stdout: TextIO | None = None,
         context: SurfaceContext | None = None,
         command_executor: CommandExecutor | None = None,
+        streaming_command_executor: StreamingCommandExecutor | None = None,
         command_root: CommandInfo | None = None,
+        surface_name: str = "app",
     ) -> None:
         self.stdout = stdout or sys.stdout
         self.context = context or SurfaceContext(product="home")
         self.command_executor = command_executor or _missing_executor
+        self.streaming_command_executor = streaming_command_executor
         self.command_root = command_root or _default_command_root()
+        self.surface_name = surface_name
         self.context_path: tuple[str, ...] = ()
         self.system_session: InteractiveSystemSession | None = None
         self.account_create_wizard: AccountCreateWizard | None = None
@@ -66,23 +71,23 @@ class AppSession:
         return command_at(self.command_root, self.context_path)
 
     def banner(self) -> str:
-        return "Kairos app. Navigate Typer command contexts; commands keep the same argv semantics as the plain CLI."
+        return f"Kairos {self.surface_name}. Navigate Typer command contexts; commands keep the same argv semantics as the plain CLI."
 
     def prompt(self) -> str:
         if self.account_create_wizard is not None:
-            return "kairos/app/account/create> "
+            return f"kairos/{self.surface_name}/account/create> "
         if self.system_session is not None:
-            return "kairos/app/system> "
+            return f"kairos/{self.surface_name}/system> "
         if not self.context_path:
-            return "kairos/app> "
-        return f"kairos/app/{'/'.join(self.context_path)}> "
+            return f"kairos/{self.surface_name}> "
+        return f"kairos/{self.surface_name}/{'/'.join(self.context_path)}> "
 
     def screen(self) -> str:
         snapshot = self.context.snapshot()
         node = self._current_view()
         product = self.product
         if node is None or product is None:
-            return render_home_screen(snapshot, self._root_views())
+            return render_home_screen(snapshot, self._root_views(), surface_name=self.surface_name)
         return render_context_screen(snapshot, node, self._child_views(self.context_path))
 
     def run(self) -> None:
@@ -245,12 +250,20 @@ class AppSession:
         product = self.product
         if not self.context_path or product is None:
             return
-        exit_code, output = self.command_executor([*self.context_path, *parts])
-        self._write(_command_output_header((*self.context_path, *parts)))
-        if output:
-            self.stdout.write(output)
-            if not output.endswith("\n"):
-                self.stdout.write("\n")
+        argv = [*self.context_path, *parts]
+        self._write(_command_output_header(tuple(argv)))
+        try:
+            if self.streaming_command_executor is not None:
+                exit_code = self.streaming_command_executor(argv, self.stdout)
+            else:
+                exit_code, output = self.command_executor(argv)
+                if output:
+                    self.stdout.write(output)
+                    if not output.endswith("\n"):
+                        self.stdout.write("\n")
+        except Exception as error:
+            exit_code = 1
+            self._write(f"error: {error}")
         if exit_code:
             self._write(f"Command exited with status {exit_code}")
         self._write(_COMMAND_OUTPUT_FOOTER)
@@ -330,4 +343,5 @@ __all__ = [
     "AppSession",
     "CommandView",
     "product_for_token",
+    "StreamingCommandExecutor",
 ]

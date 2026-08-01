@@ -23,6 +23,7 @@ class CredentialRecord:
             values = {key: _redact_secret(key, value) for key, value in values.items()}
         return {
             "credential_id": self.credential_id,
+            "broker": self.provider,
             "provider": self.provider,
             "kind": self.kind,
             "source_path": str(self.source_path) if self.source_path is not None else None,
@@ -73,7 +74,7 @@ def _load_credential_file(path: Path) -> CredentialRecord:
     if not isinstance(credential, Mapping):
         raise ConfigError(f"[credential] table is required in credential config: {path}")
     credential_id = _optional_text(credential.get("id")) or path.stem
-    provider = _required_text(credential.get("provider"), f"{path}: credential.provider")
+    provider = _optional_text(credential.get("broker")) or _required_text(credential.get("provider"), f"{path}: credential.broker or credential.provider")
     return CredentialRecord(
         credential_id=credential_id,
         provider=provider,

@@ -100,6 +100,38 @@ def test_system_command_dispatcher_reports_account_trade_status(tmp_path, monkey
     assert account["tradable_books"] == ["spot"]
 
 
+def test_system_command_dispatcher_reports_readonly_live_account_untradable(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    kairos = tmp_path / ".kairos"
+    accounts = kairos / "accounts"
+    accounts.mkdir(parents=True, exist_ok=True)
+    (kairos / "kairos.toml").write_text("[project]\nname = \"test\"\n", encoding="utf-8")
+    (accounts / "main.toml").write_text(
+        "\n".join(
+            [
+                "[account]",
+                'id = "main"',
+                'broker = "binance"',
+                'environment = "live"',
+                "",
+                "[credentials.readonly]",
+                'ref = "binance_read"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    instance = tmp_path / ".kairos" / "launches" / "system" / "kairos-system" / "instances" / "system-1"
+    instance.mkdir(parents=True)
+    (instance / "state.json").write_text(json.dumps({"launch_instance_id": "system-1"}), encoding="utf-8")
+
+    result = SystemCommandDispatcher(instance).dispatch(SystemCommand.create("account.trade-status"))
+
+    account = result.result["accounts"][0]
+    assert account["trade_state"] == "available"
+    assert account["can_trade"] is False
+    assert account["tradable_books"] == []
+
+
 def test_system_command_dispatcher_reports_occupied_trade_status(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     _write_workspace_account(tmp_path)

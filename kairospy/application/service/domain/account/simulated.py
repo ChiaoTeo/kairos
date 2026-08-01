@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from kairospy.core.account import AccountBookKind, AccountContext, AccountRef, Environment
+from kairospy.core.account import AccountBookKind, AccountBookRef, AccountContext, Environment
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,7 +29,7 @@ class SimulatedAccount:
 
     @property
     def context(self) -> AccountContext:
-        return AccountContext(AccountRef(self.broker, self.account_id, self.book), self.environment)
+        return AccountContext(AccountBookRef(self.broker, self.account_id, self.book), self.environment)
 
 
 __all__ = ["SimulatedAccount"]

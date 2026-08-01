@@ -116,7 +116,7 @@ class TraceProcessor:
         self._risk_snapshots.append(
             RiskSnapshot(
                 time=at,
-                account_id=str(getattr(self.account.account, "value", self.account.account)),
+                account_id=str(self.account.book.value),
                 cash=cash,
                 equity=equity,
                 gross_notional=gross_notional,

@@ -35,12 +35,9 @@ class AccountCreateWizard:
             case "account_id":
                 return "account id: "
             case "provider":
-                return f"provider [{'/'.join(sorted(ACCOUNT_SCHEMAS))}]: "
+                return f"broker [{'/'.join(sorted(ACCOUNT_SCHEMAS))}]: "
             case "environment":
                 return "environment [paper/testnet/live] (paper): "
-            case "market":
-                schema = ACCOUNT_SCHEMAS[self._provider()]
-                return f"market ({schema.default_market}): "
             case "currency":
                 return "currency (USD): "
             case "cash":
@@ -89,9 +86,9 @@ class AccountCreateWizard:
             case "provider":
                 provider = value.lower().replace("-", "_")
                 if not provider:
-                    raise ValueError("provider is required")
+                    raise ValueError("broker is required")
                 if provider not in ACCOUNT_SCHEMAS:
-                    raise ValueError(f"unsupported provider: {value}; supported: {', '.join(sorted(ACCOUNT_SCHEMAS))}")
+                    raise ValueError(f"unsupported broker: {value}; supported: {', '.join(sorted(ACCOUNT_SCHEMAS))}")
                 self.fields["provider"] = provider
                 self.current = "environment"
             case "environment":
@@ -99,9 +96,6 @@ class AccountCreateWizard:
                 if environment not in _ENVIRONMENTS:
                     raise ValueError(f"environment must be one of: {', '.join(_ENVIRONMENTS)}")
                 self.fields["environment"] = environment
-                self.current = "market"
-            case "market":
-                self.fields["market"] = value or ACCOUNT_SCHEMAS[self._provider()].default_market
                 self.current = "currency"
             case "currency":
                 self.fields["currency"] = value.upper() if value else "USD"
@@ -152,7 +146,7 @@ class AccountCreateWizard:
                 provider=self._required("provider"),
                 environment=self._required("environment"),
                 venue=None,
-                market=self.fields.get("market"),
+                market=None,
                 currency=self._required("currency"),
                 cash=self.fields.get("cash"),
                 fee_rate=self.fields.get("fee_rate") or "0",
@@ -200,9 +194,8 @@ class AccountCreateWizard:
         lines = [
             "Account summary",
             f"  id:          {self.fields.get('account_id')}",
-            f"  provider:    {self.fields.get('provider')}",
+            f"  broker:      {self.fields.get('provider')}",
             f"  environment: {self.fields.get('environment')}",
-            f"  market:      {self.fields.get('market')}",
             f"  currency:    {self.fields.get('currency')}",
         ]
         if self.fields.get("cash") is not None:

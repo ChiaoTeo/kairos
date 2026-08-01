@@ -22,6 +22,7 @@ class RootOptions:
     profile: str | None = None
     output: OutputFormat | None = None
     verbose: bool = False
+    debug: bool = False
 
 
 def root_options(ctx: typer.Context) -> RootOptions:
