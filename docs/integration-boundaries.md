@@ -85,9 +85,9 @@ kairospy/infrastructure/integrations/
 
 ### Application / Services Layer
 
-`integrations/application/` 放 integration bounded context 内部的 application services。它们可以依赖 integration domain、connector factory、credential resolver、registry 和 adapter，并向 launch composition 提供 KairosPy 上层 application 所需的 port implementation。
+`integrations/application/` 放 integration bounded context 内部的领域 application service。当前按业务领域使用 concrete service：`MarketIntegrationApplicationService`、`OrderIntegrationApplicationService`、`AccountIntegrationApplicationService`、`ReferenceIntegrationApplicationService`。它们可以依赖 integration domain、connector factory、credential resolver、registry 和 adapter，并向 launch composition 提供 KairosPy 上层 application 所需的具体行为实现。
 
-`integrations/services/` 是当前过渡目录，可视为 integration application layer 的旧命名。新能力优先放入 `integrations/application/<capability>.py`；旧 `services/resolver.py`、`services/registry.py` 后续应按 capability 拆分或迁移。
+`integrations/services/` 是当前过渡目录，可视为 integration application layer 的旧命名。新能力优先收敛到 `integrations/application/<domain>.py`；旧 `services/resolver.py`、`services/registry.py` 后续应逐步成为领域 service 的内部实现细节。
 
 适合：
 
@@ -96,10 +96,10 @@ kairospy/infrastructure/integrations/
 - `IntegrationFactory`
 - `CredentialResolver`
 - `CapabilityRouter`
-- `OrderIntegrationService`
-- `MarketIntegrationService`
-- `AccountIntegrationService`
-- `ReferenceIntegrationService`
+- `MarketIntegrationApplicationService`
+- `OrderIntegrationApplicationService`
+- `AccountIntegrationApplicationService`
+- `ReferenceIntegrationApplicationService`
 
 这些 service 负责回答：
 
@@ -107,7 +107,7 @@ kairospy/infrastructure/integrations/
 给定 MarketRef / AccountBookRef / ReferenceSourceRef，需要哪个 participant、product line、capability 和 connector factory？
 ```
 
-它们也可以进一步返回上层 application 定义的 port implementation：
+它不应主要提供“返回 port implementation”的 factory 方法。下面是需要收敛掉的旧方向：
 
 ```text
 OrderIntegrationService.execution_port(AccountBookRef) -> OrderExecutionPort
@@ -115,9 +115,9 @@ MarketIntegrationService.market_stream_port(MarketRef) -> MarketStreamPort
 ReferenceIntegrationService.reference_catalog_port(ReferenceSourceRef) -> ReferenceCatalogPort
 ```
 
-注意：port 的定义权属于 `kairospy/application/usecases/<area>`，integration application layer 只负责实现、选择和组装。普通 business use case 不直接依赖 `integrations/application`；由 `application/support/launch/composition` 调用它并完成注入。
+优先让 concrete domain service 自己实现消费方需要的结构行为，例如 market streaming 的 `watch_*_updates` 或 order execution 的 `submit`。Protocol 的定义权属于消费方，但 integration application layer 不应为了返回 Protocol 再额外增加一层 factory。普通 business use case 不直接依赖 `integrations/application`；由 `application/support/launch/composition` 构造 concrete domain service 并完成注入。
 
-它们不负责：
+它不负责：
 
 - live / paper / backtest lifecycle；
 - RuntimeKernel 装配；
@@ -764,10 +764,10 @@ broker_for_book(book, credential) -> narrow raw account/execution capability
 reference_data(ReferenceSourceRef(...)) -> RawReferenceGateway
 ```
 
-当前实现的转换链路是：
+当前过渡实现的转换链路是：
 
 ```text
-RawMarketDataGateway -> MarketStreamAdapter -> MarketStreamGateway -> MarketRuntime
+RawMarketDataGateway -> MarketIntegrationApplicationService -> MarketRuntime
 RawReferenceGateway -> ReferenceCatalogAdapter -> ReferenceCatalogSource -> reference use case
 raw account/order gateways -> account payload adapter -> account runtime/service
 ```

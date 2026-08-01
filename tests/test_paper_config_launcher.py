@@ -239,7 +239,9 @@ def test_configured_paper_supports_hyperliquid_default_market_feed(tmp_path) -> 
 
     assert configured.market_data.feed_resolver is not None
     spec = MarketDataSubscriptionSpec(MarketRef.ephemeral(venue="hyperliquid", market="swap", source_symbol="BTC/USDC:USDC"), (Quote,))
-    assert isinstance(configured.market_data.feed_resolver(spec).feed, HyperliquidMarketDataConnector)
+    feed = configured.market_data.feed_resolver(spec)
+    assert feed is not None
+    assert isinstance(feed._adapter(spec.market).feed, HyperliquidMarketDataConnector)
     assert "market" not in configured.normalized_config
 
 
@@ -263,9 +265,11 @@ def test_configured_paper_routes_binance_equity_quotes_to_equity_feed(tmp_path) 
 
     assert configured.market_data.feed_resolver is not None
     spec = MarketDataSubscriptionSpec(MarketRef.ephemeral(venue="binance", market="equity", source_symbol="AAPL"), (Quote,))
-    feed = configured.market_data.feed_resolver(spec).feed
-    assert isinstance(feed, BinanceEquityMarketDataConnector)
-    assert feed.client.api_key == "paper-key"
+    feed = configured.market_data.feed_resolver(spec)
+    assert feed is not None
+    raw_feed = feed._adapter(spec.market).feed
+    assert isinstance(raw_feed, BinanceEquityMarketDataConnector)
+    assert raw_feed.client.api_key == "paper-key"
     assert "market" not in configured.normalized_config
 
 

@@ -125,8 +125,8 @@ def test_default_broker_for_book_routes_binance_equity_to_broker_connector() -> 
     equity = default_broker_for_book(AccountBookRef("binance", "main", "equity"), None, mode_label="live", error_type=RuntimeError)
     spot = default_broker_for_book(AccountBookRef("binance", "main", "spot"), None, mode_label="live", error_type=RuntimeError)
 
-    assert isinstance(equity, BinanceEquityBroker)
-    assert isinstance(spot, BinanceBroker)
+    assert isinstance(equity._account_client(), BinanceEquityBroker)
+    assert isinstance(spot._account_client(), BinanceBroker)
 
 
 def test_binance_broker_has_no_exchange_reexport_module() -> None:
@@ -138,7 +138,7 @@ def test_default_market_feed_for_subscription_routes_binance_equity_to_broker_pr
 
     feed = default_market_feed_for_subscription(spec, mode_label="live", error_type=RuntimeError)
 
-    assert isinstance(feed.feed, BinanceEquityMarketDataConnector)
+    assert isinstance(feed._adapter(spec.market).feed, BinanceEquityMarketDataConnector)
 
 
 def test_integration_resolver_routes_by_capability_and_source() -> None:

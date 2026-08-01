@@ -273,7 +273,7 @@ broker factory 已经以 `AccountBookRef` 为入口，而不是 `(venue, credent
 `StreamingMarketDataService` 已支持 feed resolver：
 
 ```text
-MarketFeedResolver.resolve(market_ref) -> MarketStreamGateway
+MarketFeedResolver.resolve(market_ref) -> MarketIntegrationApplicationService
 ```
 
 解析规则：

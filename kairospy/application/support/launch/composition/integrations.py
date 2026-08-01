@@ -6,17 +6,15 @@ from typing import TypeVar
 from kairospy.application.usecases.account.bootstrap import AccountBootstrapGateway
 from kairospy.application.support.launch.config.common.integrations import FeedConfig
 from kairospy.application.usecases.market.subscriptions import MarketDataSubscriptionSpec
-from kairospy.application.support.runtime.services.market.feed import MarketStreamGateway
 from kairospy.core.account import AccountBookRef
-from kairospy.infrastructure.integrations.adapters.market_stream import MarketStreamAdapter
+from kairospy.infrastructure.integrations.application import AccountIntegrationApplicationService, MarketIntegrationApplicationService
 from kairospy.infrastructure.integrations.services.credentials import credential_exists
-from kairospy.infrastructure.integrations.services.resolver import DEFAULT_INTEGRATION_RESOLVER
 
 ConfigErrorT = TypeVar("ConfigErrorT", bound=Exception)
 
 
-def default_market_feed(venue: str, *, mode_label: str, error_type: type[ConfigErrorT]) -> MarketStreamGateway:
-    return MarketStreamAdapter(DEFAULT_INTEGRATION_RESOLVER.market_feed(venue, mode_label=mode_label, error_type=error_type))
+def default_market_feed(venue: str, *, mode_label: str, error_type: type[ConfigErrorT]) -> MarketIntegrationApplicationService:
+    return MarketIntegrationApplicationService(venue=venue, mode_label=mode_label, error_type=error_type)
 
 
 def default_market_feed_for_subscription(
@@ -25,24 +23,22 @@ def default_market_feed_for_subscription(
     credential: str | None = None,
     mode_label: str,
     error_type: type[ConfigErrorT],
-) -> MarketStreamGateway:
-    return MarketStreamAdapter(
-        DEFAULT_INTEGRATION_RESOLVER.market_feed_for_market(
-            str(spec.market.venue),
-            str(spec.market.market),
-            credential=credential,
-            mode_label=mode_label,
-            error_type=error_type,
-        )
+) -> MarketIntegrationApplicationService:
+    return MarketIntegrationApplicationService(
+        venue=str(spec.market.venue),
+        market=str(spec.market.market),
+        credential=credential,
+        mode_label=mode_label,
+        error_type=error_type,
     )
 
 
 def default_broker(venue: str, credential: str | None, *, mode_label: str, error_type: type[ConfigErrorT]) -> AccountBootstrapGateway:
-    return DEFAULT_INTEGRATION_RESOLVER.broker(venue, credential, mode_label=mode_label, error_type=error_type)
+    return AccountIntegrationApplicationService(AccountBookRef(venue, "main"), credential=credential, mode_label=mode_label, error_type=error_type)
 
 
 def default_broker_for_book(book: AccountBookRef, credential: str | None, *, mode_label: str, error_type: type[ConfigErrorT]) -> AccountBootstrapGateway:
-    return DEFAULT_INTEGRATION_RESOLVER.broker_for_book(book, credential, mode_label=mode_label, error_type=error_type)
+    return AccountIntegrationApplicationService(book, credential=credential, mode_label=mode_label, error_type=error_type)
 
 
 def configured_market_feed_for_subscription(
@@ -51,7 +47,7 @@ def configured_market_feed_for_subscription(
     feeds: Mapping[str, FeedConfig],
     mode_label: str,
     error_type: type[ConfigErrorT],
-) -> MarketStreamGateway:
+) -> MarketIntegrationApplicationService:
     feed = _feed_for_venue(feeds, str(spec.market.venue))
     if feed is None:
         venue = str(spec.market.venue)

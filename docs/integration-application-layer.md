@@ -11,7 +11,7 @@
 
 ## 核心结论
 
-Integration 不是只向上层暴露 connector。Integration 应该通过自己的 application layer，按能力提供上层所需的抽象实现。
+Integration 不是只向上层暴露 connector，也不应该再增加一层“返回 Protocol 的 factory service”。Integration 应该按业务领域提供 concrete application service，直接承接上层 runtime / use case 当前需要的集成行为。
 
 目标形态：
 
@@ -19,16 +19,16 @@ Integration 不是只向上层暴露 connector。Integration 应该通过自己�
 kairospy/application/usecases/<area>
   defines application-facing Port / Request / Result
 
-kairospy/infrastructure/integrations/application/<capability>
+kairospy/infrastructure/integrations/application/<domain>.py
   resolves external participant/product/capability
   builds connector/gateway/translator
-  returns an implementation of the application-facing Port
+  implements the application/runtime-facing behavior directly
 
 kairospy/infrastructure/integrations/adapters
-  adapts connector/gateway output into the application-facing Port
+  adapts connector/gateway output when translation is still large enough to justify a helper
 ```
 
-也就是说，`integration/application/order.py` 可以提供 `OrderExecutionPort` 的实现，但 `OrderExecutionPort` 的定义权仍属于 `kairospy/application/usecases/execution`。
+也就是说，`MarketIntegrationApplicationService` 可以实现 `MarketStreamGateway` 这类 application/runtime 需要的结构行为，但不应该提供 `market_stream_gateway(...) -> MarketStreamGateway` 这样的二次抽象。Protocol 的定义权仍属于消费方；integration application 只提供领域 concrete service。
 
 ## 推荐目录
 
@@ -45,12 +45,10 @@ kairospy/infrastructure/integrations/
     errors.py
 
   application/
-    order.py
     market.py
+    order.py
     account.py
     reference.py
-    registry.py
-    factories.py
     credentials.py
     health.py
 
@@ -70,7 +68,7 @@ kairospy/infrastructure/integrations/
   protocols.py
 ```
 
-当前 `integrations/services/` 可以视为这个 application layer 的过渡形态。新代码优先按 `integrations/application/<capability>.py` 组织；旧 `services/resolver.py`、`services/registry.py` 后续应迁移或拆分到 `application/registry.py`、`application/factories.py` 和各 capability service。
+当前 `integrations/services/` 可以视为这个 application layer 的过渡形态。新代码优先收敛到 `integrations/application/<domain>.py` 的领域 service。旧 `services/resolver.py`、`services/registry.py` 后续应逐步变成领域 service 的内部实现细节，而不是对 launch composition 暴露的新入口。
 
 ## 依赖方向
 
@@ -81,14 +79,17 @@ application/usecases/execution
   -> core
   -> local OrderExecutionPort
 
+infrastructure/integrations/application/market
 infrastructure/integrations/application/order
-  -> application/usecases/execution.OrderExecutionPort
+infrastructure/integrations/application/account
+infrastructure/integrations/application/reference
+  -> application/runtime or usecase local Protocols only as structural contracts
   -> integrations/domain
-  -> integrations/adapters/order_execution
+  -> integrations/adapters
   -> integrations/connectors
 
 application/support/launch/composition
-  -> infrastructure/integrations/application/order
+  -> infrastructure/integrations/application.<Domain>IntegrationApplicationService
 ```
 
 禁止：
@@ -104,7 +105,7 @@ application/usecases/execution
   -> infrastructure/integrations/protocols
 ```
 
-普通 business use case 不直接依赖 integration application service。它只依赖自己定义的 port。`launch/composition` 是集中调用 integration application service 并注入实现的地方。
+普通 business use case 不直接依赖 integration application service。它只依赖自己定义的本地 contract。`launch/composition` 是集中构造 integration application service 并注入 concrete service 的地方。
 
 ## 分层职责
 
@@ -154,49 +155,47 @@ class OrderExecutionPort(Protocol):
 
 ### Integration Application Provides the Implementation
 
-Integration application service 是 integration context 对 composition 暴露的服务门面。它负责：
+Integration application service 是 integration context 对 composition 暴露的 concrete 服务。它负责：
 
 - 把 `AccountBookRef`、`MarketRef`、`ReferenceSourceRef` 等上层业务引用解析成 integration binding；
 - 根据 `ParticipantRef`、`ProductLine`、`CapabilityRef` 选择 connector factory；
 - 解析 credential scope；
 - 创建 connector/gateway/translator；
-- 包装 adapter；
-- 返回上层 application port 的实现。
+- 使用 adapter 或 translator；
+- 直接实现上层 application/runtime 当前需要的行为。
 
 示例：
 
 ```python
 @dataclass(frozen=True, slots=True)
-class OrderIntegrationService:
+class OrderIntegrationApplicationService:
     resolver: IntegrationResolver
 
-    def execution_port(
+    def submit_order(
         self,
-        account: AccountBookRef,
-        *,
-        credential: str | None = None,
-    ) -> OrderExecutionPort:
+        request: OrderSubmissionRequest,
+    ) -> OrderSubmissionResult:
         connector = self.resolver.order_execution_for_book(
-            account,
-            credential=credential,
+            request.account,
         )
-        return BrokerOrderExecutionAdapter(connector)
+        response = connector.create_order(...)
+        return translate_order_submission(response)
 ```
 
 调用方应是 composition：
 
 ```python
-order_port = order_integrations.execution_port(account_book, credential=credential)
-live_execution = LiveOrderExecutionUseCase(order_port)
+orders = OrderIntegrationApplicationService(book=account_book, credential=credential)
+live_execution = LiveOrderExecutionUseCase(orders)
 ```
 
 ### Adapter Translates Connector Language
 
-Adapter 是 anti-corruption layer。它把 connector 的外部系统语言转换成 application port 语言。
+Adapter 是 anti-corruption helper，不是必须独立存在的一层。只有当外部 payload 翻译足够复杂、多个入口复用、或者测试需要隔离时，才保留 adapter；否则翻译逻辑可以直接内聚在领域 integration application service 的私有方法里。
 
 ```text
 BinanceEquityBroker.create_order(...)
-  -> BrokerOrderExecutionAdapter.submit(...)
+  -> OrderIntegrationApplicationService.submit(...)
   -> OrderSubmissionResult
 ```
 
@@ -215,21 +214,23 @@ Adapter 不应该：
 - 写 persistence store；
 - 输出 CLI/TUI payload。
 
-## Capability Services
+## Domain Services
 
-Integration application layer 应按 capability 分文件，而不是做一个越来越大的万能 resolver。
+Integration application layer 按业务领域拆 concrete service，而不是用一个万能 service，也不是按每个低层 capability 预先拆成大量 factory。
 
-### order.py
-
-负责订单相关外部能力：
+领域 service 负责当前 application/runtime 需要的对应集成行为：
 
 ```text
-execution_port(account) -> OrderExecutionPort
-order_query_port(account) -> OrderQueryPort
-private_order_stream_port(account) -> PrivateOrderStreamPort
+MarketIntegrationApplicationService.watch_ticker_updates(...)
+MarketIntegrationApplicationService.watch_order_book_updates(...)
+OrderIntegrationApplicationService.submit(...)
+OrderIntegrationApplicationService.fetch_open_orders(...)
+AccountIntegrationApplicationService.fetch_balance(...)
+AccountIntegrationApplicationService.watch_balance(...)
+ReferenceIntegrationApplicationService.fetch_catalog(...)
 ```
 
-它可以解析：
+它们可以在内部解析：
 
 ```text
 AccountBookRef("binance:equity")
@@ -240,17 +241,7 @@ AccountBookRef("binance:equity")
   -> BrokerOrderExecutionAdapter
 ```
 
-### market.py
-
-负责行情相关外部能力：
-
-```text
-market_stream_port(market) -> MarketStreamPort
-bar_history_port(source) -> BarHistoryPort
-market_snapshot_port(market) -> MarketSnapshotPort
-```
-
-它可以解析：
+行情链路同理：
 
 ```text
 MarketRef("binance:spot:BTC/USDT")
@@ -261,26 +252,7 @@ MarketRef("binance:spot:BTC/USDT")
   -> MarketStreamAdapter
 ```
 
-### account.py
-
-负责账户相关外部能力：
-
-```text
-account_snapshot_port(account) -> AccountSnapshotPort
-account_bootstrap_port(account) -> AccountBootstrapPort
-private_account_stream_port(account) -> PrivateAccountStreamPort
-```
-
-### reference.py
-
-负责 reference 和 catalog 相关外部能力：
-
-```text
-reference_catalog_port(source) -> ReferenceCatalogPort
-reference_refresh_source(source) -> ReferenceRefreshSource
-```
-
-它可以解析：
+reference 链路：
 
 ```text
 ReferenceSourceRef("provider", "massive")
@@ -292,30 +264,32 @@ ReferenceSourceRef("provider", "massive")
 
 ## Naming Rules
 
-Integration application service 使用 capability service 命名：
+Integration application service 使用领域 concrete service 命名：
 
 ```text
-OrderIntegrationService
-MarketIntegrationService
-AccountIntegrationService
-ReferenceIntegrationService
+MarketIntegrationApplicationService
+OrderIntegrationApplicationService
+AccountIntegrationApplicationService
+ReferenceIntegrationApplicationService
 ```
 
-方法名返回上层 port 时，用 port 语义：
+公开方法名使用业务行为，不使用 factory / port-returning 语义：
 
 ```text
-execution_port
-market_stream_port
-account_snapshot_port
-reference_catalog_port
+watch_ticker_updates
+submit_order
+bootstrap_account
+fetch_reference_catalog
 ```
 
-不要在 integration application service 的公开方法上暴露 SDK 语言：
+不要在 integration application service 的公开方法上暴露 SDK 语言，也不要新增返回 Protocol 的方法：
 
 ```text
 create_order_client
 fetch_balance_client
 watch_ticker_gateway
+market_stream_gateway
+execution_port
 ```
 
 这些命名可以保留在 connector/gateway 内部。
@@ -327,13 +301,11 @@ watch_ticker_gateway
 ```text
 workspace/config/mode
   -> application/support/launch/composition
-  -> integrations/application/order.OrderIntegrationService
+  -> integrations/application.OrderIntegrationApplicationService
   -> integrations/domain.IntegrationBinding
-  -> integrations/application/registry.CapabilityRegistry
-  -> integrations/application/factories.ConnectorFactory
+  -> integrations/services/resolver or future internal resolver
   -> integrations/connectors/broker/binance/BinanceEquityExecutionConnector
-  -> integrations/adapters/order_execution.BrokerOrderExecutionAdapter
-  -> application/usecases/execution.OrderExecutionPort
+  -> optional translator/adapter
   -> application/usecases/execution.LiveOrderExecutionUseCase
 ```
 
@@ -341,8 +313,8 @@ workspace/config/mode
 
 ```text
 Use case owns the abstraction.
-Integration application supplies the implementation.
-Launch composition wires them together.
+Integration domain application service is the concrete implementation.
+Launch composition injects the concrete domain service.
 ```
 
 ## Relationship with Integration Domain
@@ -391,22 +363,22 @@ BinanceSpotMarketDataConnector
   capability = market_data
 ```
 
-`integrations/application/order.py` 可以选择这些 connector，并把它们包装成 `OrderExecutionPort`。
+`OrderIntegrationApplicationService` 可以选择这些 connector，并直接实现订单提交行为。
 
 不要让上层 composition 直接到处 new connector。composition 应调用 integration application service。
 
 ## Migration Guidance
 
-从当前结构迁移时，按 capability 逐步做，不要先机械移动所有文件。
+从当前结构迁移时，按领域切片逐步做，不要先机械移动所有文件，也不要把每个低层 capability 都变成一个新的 service 文件。
 
 每个切片完成以下事项：
 
-1. 在 `application/usecases/<area>` 确认或收窄上层 port。
-2. 在 `integrations/adapters/` 实现该 port。
-3. 在 `integrations/application/<capability>.py` 增加 service 方法，返回 port implementation。
-4. 让 `application/support/launch/composition` 调用 integration application service。
-5. 删除 composition 中直接 new connector 的代码。
-6. 删除旧 resolver 中对应硬编码分支，或改为只服务新 capability service。
+1. 在消费方确认是否真的需要 Protocol；只保留 runtime/usecase 本地需要的最小结构约束。
+2. 在对应领域 integration application service 上直接实现该行为。
+3. 只有翻译逻辑复杂或复用明确时，才保留 `integrations/adapters/` helper。
+4. 让 `application/support/launch/composition` 构造 concrete domain integration application service。
+5. 删除 composition 中直接 new connector 或直接包 adapter 的代码。
+6. 删除旧 resolver 中对应硬编码分支，或改为只服务领域 service 的内部解析。
 
 优先迁移顺序：
 

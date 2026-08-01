@@ -27,8 +27,7 @@ from kairospy.config import LaunchAccountConfig
 from kairospy.core.account import AccountBookKind, AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, Environment, account_current_view_key
 from kairospy.core.execution import ExecutionCoordinator
 from kairospy.core.reference import MarketResolver
-from kairospy.infrastructure.integrations.payloads import CcxtAccountPayloadAdapter
-from kairospy.infrastructure.integrations.adapters.order_execution import BrokerOrderExecutionAdapter
+from kairospy.infrastructure.integrations.application import AccountIntegrationApplicationService, OrderIntegrationApplicationService
 from kairospy.infrastructure.integrations.domain import broker_book_can_trade, broker_book_params
 from kairospy.application.usecases.account.bootstrap import AccountBootstrapGateway
 
@@ -282,7 +281,7 @@ class LiveAccountResources:
             coordinator,
             broker=broker,
             broker_resolver=read_broker_resolver,
-            parser=CcxtAccountPayloadAdapter(market_resolver),
+            parser=AccountIntegrationApplicationService(account.book, market_resolver=market_resolver),
             stream=broker if configured.private_sync.enabled else None,
             stream_resolver=read_broker_resolver if configured.private_sync.enabled else None,
             max_balance_events=configured.private_sync.max_balance_events,
@@ -296,7 +295,12 @@ class LiveAccountResources:
         execution = LiveExecutionService(
             coordinator,
             account=account,
-            order_execution=BrokerOrderExecutionAdapter(trade_broker, broker_resolver=trade_broker_resolver),
+            order_execution=_live_order_execution(
+                account.book,
+                credential=trade_ref,
+                custom_client=trade_broker if configured.broker_factory is not None else None,
+                custom_client_resolver=trade_broker_resolver if configured.broker_factory is not None else None,
+            ),
             symbol_resolver=market_resolver.broker_symbol,
             snapshot_provider=account_service.snapshot,
             safety_policy=configured.safety_policy,
@@ -308,6 +312,23 @@ class LiveAccountResources:
 
 def _default_live_broker(book: AccountBookRef, credential: str | None) -> AccountBootstrapGateway:
     return default_broker_for_book(book, credential, mode_label="live", error_type=LiveConfigurationError)
+
+
+def _live_order_execution(
+    book: AccountBookRef,
+    *,
+    credential: str | None,
+    custom_client: object | None = None,
+    custom_client_resolver: object | None = None,
+) -> OrderIntegrationApplicationService:
+    return OrderIntegrationApplicationService(
+        book,
+        credential=credential,
+        mode_label="live",
+        error_type=LiveConfigurationError,
+        client=custom_client,
+        client_resolver=custom_client_resolver,  # type: ignore[arg-type]
+    )
 
 
 def _primary_book(accounts: Mapping[str, LaunchAccountConfig], *, default: str) -> str:
