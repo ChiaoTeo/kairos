@@ -8,10 +8,10 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.support.launch.modes import RuntimeMode
-from kairospy.application.support.system.browsing import ListQuery
-from kairospy.application.support.system.facade.account import AccountFacade
-from kairospy.application.support.launch.control.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchFacade
+from kairospy.application.support.system.application.control import RuntimeMode
+from kairospy.application.support.system.application.browsing import ListQuery
+from kairospy.application.support.system.application.facade.account import AccountFacade
+from kairospy.application.support.system.application.control.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchFacade
 from kairospy.surface.interactive.account import run_account_create_wizard
 from kairospy.surface.tui import ResourceList, ResourceListBrowser
 from kairospy.surface.cli.options import OutputFormat, resolve_output
@@ -172,7 +172,7 @@ def list_account_credentials(
     ctx: typer.Context,
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
-    from kairospy.application.support.system.facade.credential import CredentialFacade
+    from kairospy.application.support.system.application.facade.credential import CredentialFacade
 
     payload = CredentialFacade().list_credentials()
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
@@ -193,7 +193,7 @@ def create_account_credential(
     field_values: list[str] | None = typer.Option(None, "--field", help="Extra credential field as key=value"),
     force: bool = typer.Option(False, "--force"),
 ) -> None:
-    from kairospy.application.support.system.facade.credential import CredentialFacade
+    from kairospy.application.support.system.application.facade.credential import CredentialFacade
 
     try:
         typer.echo(
@@ -223,7 +223,7 @@ def show_account_credential(
     reveal_secrets: bool = typer.Option(False, "--reveal-secrets"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
-    from kairospy.application.support.system.facade.credential import CredentialFacade
+    from kairospy.application.support.system.application.facade.credential import CredentialFacade
 
     try:
         payload = CredentialFacade().show(credential_id, reveal_secrets=reveal_secrets)
@@ -234,7 +234,7 @@ def show_account_credential(
 
 @account_credential_app.command("delete")
 def delete_account_credential(credential_id: str = typer.Argument(...), force: bool = typer.Option(False, "--force")) -> None:
-    from kairospy.application.support.system.facade.credential import CredentialFacade
+    from kairospy.application.support.system.application.facade.credential import CredentialFacade
 
     try:
         typer.echo(CredentialFacade().delete(credential_id, force=force))

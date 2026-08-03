@@ -4,7 +4,7 @@ from textual.app import ComposeResult
 from textual.containers import Horizontal
 from textual.widgets import Input
 
-from kairospy.application.support.system.browsing import ListQuery, parse_filters
+from kairospy.application.support.system.application.browsing import ListQuery, parse_filters
 
 
 class QueryBar(Horizontal):

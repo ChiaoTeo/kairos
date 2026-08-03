@@ -6,7 +6,7 @@ import sys
 
 import typer
 
-from kairospy.application.support.system.facade.reference import (
+from kairospy.application.support.system.application.facade.reference import (
     AssetType,
     Broker,
     Exchange,
@@ -28,14 +28,14 @@ from kairospy.application.support.system.facade.reference import (
     refresh_exchange_reference,
     refresh_exchange_reference_with_delist_schedule,
     refresh_provider_reference,
-    exchange,
+    public_market_access,
     provider,
-    reference_client,
+    reference_access,
     sync_lifecycle_events,
     reference_store,
 )
-from kairospy.application.support.system.facade.context import ProjectNotFound
-from kairospy.application.support.system.browsing import ListQuery, query_rows
+from kairospy.application.support.system.application.facade.context import ProjectNotFound
+from kairospy.application.support.system.application.browsing import ListQuery, query_rows
 from kairospy.surface.tui import ResourceList, ResourceListBrowser
 from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.rendering.terminal import write_jsonl
@@ -421,12 +421,12 @@ def _reference_client(source_kind: str, source_name: str, *, market: str | None,
     if source_kind in {"exchange", "broker"}:
         if driver_name is not DriverName.ccxt:
             raise ValueError(f"{source_kind} reference source requires ccxt driver")
-        return exchange(ExchangeName(source_name), driver_name)
+        return public_market_access(ExchangeName(source_name), driver_name)
     if source_kind == "provider" and source_name == ProviderName.massive.value:
         if driver_name is not DriverName.massive:
             raise ValueError("massive provider requires massive driver")
         return provider(ProviderName(source_name), driver_name)
-    return reference_client(source_kind, source_name, market=market, driver_name=driver_name)
+    return reference_access(source_kind, source_name, market=market, driver_name=driver_name)
 
 
 @markets_app.command("list")

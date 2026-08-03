@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from kairospy.application.support.system.facade.account import ACCOUNT_SCHEMAS, AccountFacade
+from kairospy.application.support.system.application.facade.account import ACCOUNT_SCHEMAS, AccountFacade
 
 
 _ENVIRONMENTS = ("paper", "testnet", "live")

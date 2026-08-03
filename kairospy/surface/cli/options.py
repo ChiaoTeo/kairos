@@ -6,7 +6,7 @@ from pathlib import Path
 
 import typer
 
-from kairospy.application.support.system.facade.context import profile_cli_format, workspace_cli_format
+from kairospy.application.support.system.application.facade.context import profile_cli_format, workspace_cli_format
 
 
 class OutputFormat(StrEnum):

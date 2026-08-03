@@ -1,0 +1,96 @@
+# Examples
+
+这些示例对应当前的模块边界：
+
+| 示例 | 说明 | 是否访问真实 Binance |
+| --- | --- | --- |
+| `market/binance_spot_trade_stream.py` | 直接使用 Integration connection 监听 BTCUSDT trade | 是 |
+| `market/binance_spot_runtime.py` | 通过 Market runtime service 订阅并消费 Binance 行情 | 是 |
+| `strategies/binance_equity_aapl_quote.py` + `configs/binance_equity_aapl_quote_live.toml` | 策略持续打印 Binance 股票 AAPL bid/ask | 是 |
+| `strategies/btc_sma.py` + `configs/btc_sma_backtest.toml` | 通过 launch/composition 运行一个最小 SMA 回测 | 否 |
+| `strategies/binance_btc_hold_paper.py` + `configs/binance_btc_hold_paper.toml` | 首个 trade 买入，持有 10 分钟后卖出 | 是 |
+
+## 1. 直接监听 Binance connection
+
+```bash
+uv run --extra crypto-realtime python examples/market/binance_spot_trade_stream.py --events 5
+```
+
+这个示例只展示 Integration application 的连接能力，不创建 strategy、account
+或 runtime。它适合检查 WebSocket、连接能力和 payload translator。
+
+## 2. 监听 Market runtime
+
+```bash
+uv run --extra crypto-realtime python examples/market/binance_spot_runtime.py --events 5
+```
+
+这个示例展示：
+
+```text
+IntegrationConnectionAssembly
+  -> PublicMarketAccess
+  -> LiveMarketDataService
+  -> MarketDataSubscriptionSpec
+  -> RuntimeEnvelope
+```
+
+## 3. 运行最小回测
+
+```bash
+uv run kairospy launch diagnose validate examples/configs/btc_sma_backtest.toml
+uv run kairospy launch start examples/configs/btc_sma_backtest.toml
+```
+
+该示例只覆盖 backtest composition，不需要 Binance API credential。真实交易前，
+应先修改配置中的数据范围并完成 backtest/paper 验证。
+
+## 4. Binance BTC 10 分钟 paper 策略
+
+先创建一个本地 paper 账户：
+
+```bash
+uv run kairospy account create paper_btc \
+  --broker binance --environment paper --book spot \
+  --currency USDT --cash 10000
+```
+
+然后启动：
+
+```bash
+uv run --extra crypto-realtime kairospy launch start \
+  examples/configs/binance_btc_hold_paper.toml
+```
+
+策略使用行情事件时间计时，而不是本地 sleep：首个 `TradePrint` 触发买入，
+后续事件时间达到 10 分钟后发出目标仓位为 0 的卖出 intent。如果 10 分钟内
+没有新行情，策略会在下一条行情到达时退出。
+
+## 5. Binance 股票 AAPL 行情策略
+
+Binance Stocks Trading 的行情接口需要 API key。先创建一个只读 credential 和
+一个 live 账户（API secret 只用于账户/credential 配置，不会写入策略）：
+
+```bash
+uv run kairospy account credential create binance_read \
+  --broker binance --api-key "$BINANCE_API_KEY" --api-secret "$BINANCE_API_SECRET"
+uv run kairospy account create aapl_reader \
+  --broker binance --environment live \
+  --credential binance_read --credential-role readonly
+```
+
+然后运行：
+
+```bash
+uv run kairospy launch start \
+  examples/configs/binance_equity_aapl_quote_live.toml
+```
+
+策略通过 `context.subscribe(..., Quote)` 订阅 AAPL。由于 Binance 股票行情目前
+通过 REST 最新报价接口提供，integration 会在后台轮询并把每次有效报价送到
+策略的 `on_data`，默认间隔约 5 秒。
+
+## 依赖说明
+
+真实行情示例需要项目的 `crypto-realtime` optional extra。若运行环境通过 SOCKS
+代理访问网络，还需要额外安装 `python-socks`。

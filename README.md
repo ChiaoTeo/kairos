@@ -66,19 +66,19 @@ uv run kairos --help
 校验一个回测配置：
 
 ```bash
-uv run kairospy launch diagnose validate examples/configs/binance_spot_btc_sma_backtest.toml
+uv run kairospy launch diagnose validate examples/configs/btc_sma_backtest.toml
 ```
 
 解释 launch 配置：
 
 ```bash
-uv run kairospy launch diagnose explain examples/configs/binance_spot_btc_sma_backtest.toml
+uv run kairospy launch diagnose explain examples/configs/btc_sma_backtest.toml
 ```
 
 启动回测：
 
 ```bash
-uv run kairospy launch start examples/configs/binance_spot_btc_sma_backtest.toml
+uv run kairospy launch start examples/configs/btc_sma_backtest.toml
 ```
 
 查看运行状态和日志：
@@ -201,24 +201,16 @@ uv run kairospy account query balance main --page 2 --page-size 50
 
 ## 🧪 示例配置
 
-`examples/configs/` 中包含几类可参考配置：
+`examples/` 中包含三类与当前架构对应的示例：
 
 | 文件 | 用途 |
 | --- | --- |
-| `binance_spot_btc_sma_backtest.toml` | BTC/USDT SMA 现货策略回测 |
-| `binance_equity_aapl_paper.toml` | 使用 Binance equity quote 的 AAPL 本地纸交易示例 |
-| `binance_btc_funding_arbitrage_backtest.toml` | BTC 资金费率套利回测 |
-| `binance_hot_funding_arbitrage_backtest.toml` | 多币种资金费率套利回测 |
-| `news_factor_backtest.toml` | 新闻因子策略回测 |
-| `paper-printer.toml` | Binance spot 纸交易配置 |
+| `examples/market/binance_spot_trade_stream.py` | Integration connection 直接监听 Binance Spot trade |
+| `examples/market/binance_spot_runtime.py` | Market runtime 订阅并消费 Binance Spot trade |
+| `examples/strategies/btc_sma.py` | 最小 SMA strategy |
+| `examples/configs/btc_sma_backtest.toml` | 使用 composition/launch 运行 SMA 回测 |
 
-运行 Binance equity paper 示例前，先创建一个模拟 Binance equity book 的本地账户：
-
-```bash
-uv run kairospy account create binance_paper_equity --broker binance --environment paper --book equity --currency USDC --cash 100000
-uv run kairospy account credential create binance_read --broker binance --api-key ...
-uv run kairospy launch start examples/configs/binance_equity_aapl_paper.toml
-```
+更多运行说明见 [`examples/README.md`](examples/README.md)。
 
 ## 🖼️ 时间线前端
 

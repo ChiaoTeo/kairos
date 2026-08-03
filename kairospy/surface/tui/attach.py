@@ -13,8 +13,8 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import Button, DataTable, Footer, Header, Input, Label, RichLog, Static, Switch, TabPane, TabbedContent, Tree
 
-from kairospy.application.support.launch.control.attach import LaunchAttachSession
-from kairospy.application.support.launch.modes import RuntimeMode
+from kairospy.application.support.system.application.control.attach import LaunchAttachSession
+from kairospy.application.support.system.application.control import RuntimeMode
 
 
 ATTACH_APP_CSS = """

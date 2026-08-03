@@ -1,13 +1,6 @@
-from __future__ import annotations
+"""Integration application package boundary.
 
-from .account import AccountIntegrationApplicationService
-from .market import MarketIntegrationApplicationService
-from .order import OrderIntegrationApplicationService
-from .reference import ReferenceIntegrationApplicationService
+Import the stable API from its owning files, not from this package root.
+"""
 
-__all__ = [
-    "AccountIntegrationApplicationService",
-    "MarketIntegrationApplicationService",
-    "OrderIntegrationApplicationService",
-    "ReferenceIntegrationApplicationService",
-]
+__all__: list[str] = []

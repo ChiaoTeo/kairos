@@ -9,9 +9,9 @@ from typing import Mapping
 
 from prettytable import PrettyTable
 
-from kairospy.application.support.launch.modes import RuntimeMode
-from kairospy.application.support.system.session.commands import cli_command_envelope
-from kairospy.application.support.launch.control.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchFacade
+from kairospy.application.support.system.application.control import RuntimeMode
+from kairospy.application.support.system.application.session.commands import cli_command_envelope
+from kairospy.application.support.system.application.control.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchFacade
 
 
 class InteractiveSystemSession:

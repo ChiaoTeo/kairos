@@ -9,7 +9,7 @@ from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Input, Label
 
-from kairospy.application.support.system.browsing import ListQuery, query_rows
+from kairospy.application.support.system.application.browsing import ListQuery, query_rows
 from kairospy.surface.tui.models import ResourceList
 from kairospy.surface.tui.widgets import JsonDetail, QueryBar, ResourceTable, query_summary
 

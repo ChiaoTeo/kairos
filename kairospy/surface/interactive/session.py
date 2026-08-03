@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
-from kairospy.application.support.system.facade.project import ProjectFacade
+from kairospy.application.support.system.application.facade.project import ProjectFacade
 
 
 @dataclass(frozen=True, slots=True)

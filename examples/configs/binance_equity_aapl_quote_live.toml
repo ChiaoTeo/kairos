@@ -1,0 +1,14 @@
+[launch]
+id = "example-binance-equity-aapl-quote"
+mode = "live"
+strategy = "examples.strategies.binance_equity_aapl_quote:strategy"
+
+# Live launch still needs an account reference so the standard launch
+# lifecycle can be composed. The strategy only reads market data.
+[account]
+ref = "aapl_reader"
+
+[feeds.binance_equity]
+venue = "binance"
+market = "equity"
+credential = "binance_read"

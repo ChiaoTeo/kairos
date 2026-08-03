@@ -4,7 +4,7 @@ import json
 import sys
 from typing import Mapping, Sequence, TextIO
 
-from kairospy.application.support.system.browsing import ListQuery, query_rows
+from kairospy.application.support.system.application.browsing import ListQuery, query_rows
 from kairospy.surface.tui.app import ResourceBrowserApp
 from kairospy.surface.tui.models import DetailReader, ResourceList, SaveEditor
 

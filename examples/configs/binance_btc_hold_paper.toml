@@ -1,0 +1,18 @@
+[launch]
+id = "example-binance-btc-hold-paper"
+mode = "paper"
+strategy = "examples.strategies.binance_btc_hold_paper:strategy"
+
+[strategy.params]
+quantity = "0.001"
+hold_minutes = 10
+
+[account]
+ref = "paper_btc"
+
+[feeds.binance_spot]
+venue = "binance"
+market = "spot"
+
+[execution]
+price_field = "price"

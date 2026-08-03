@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from kairospy.core.intent import Intent
+from kairospy.domain.intent import Intent
 
-from .context import Context
-from .events import Signal
+from .domain.context import Context
+from .domain.events import Signal
 
 
 class Strategy(Protocol):

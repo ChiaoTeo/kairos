@@ -1,0 +1,1 @@
+"""Launch domain model."""

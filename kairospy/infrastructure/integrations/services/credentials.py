@@ -4,8 +4,6 @@ from pathlib import Path
 from typing import Mapping
 import tomllib
 
-from kairospy.config import find_manifest_path
-
 
 def credential_value(credential: str | None, suffix: str, *fallback_env: str) -> str | None:
     _ = fallback_env
@@ -52,7 +50,7 @@ def _credential_file_value(credential: str | None, suffix: str) -> str | None:
 
 def _credential_path(credential_id: str) -> Path | None:
     try:
-        manifest = find_manifest_path(Path.cwd())
+        manifest = _find_manifest_path(Path.cwd())
     except Exception:
         manifest = None
     if manifest is not None:
@@ -64,6 +62,18 @@ def _credential_path(credential_id: str) -> Path | None:
         path = root / ".kairos" / "credentials" / f"{credential_id}.toml"
         if path.exists():
             return path
+    return None
+
+
+def _find_manifest_path(start: str | Path | None = None) -> Path | None:
+    current = Path.cwd() if start is None else Path(start)
+    current = current.expanduser().resolve()
+    if current.is_file():
+        current = current.parent
+    for directory in (current, *current.parents):
+        candidate = directory / ".kairos" / "kairos.toml"
+        if candidate.exists():
+            return candidate
     return None
 
 

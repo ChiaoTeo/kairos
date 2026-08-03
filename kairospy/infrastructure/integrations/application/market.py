@@ -1,81 +1,58 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Iterable, Mapping
+from dataclasses import dataclass, field
+from datetime import datetime
+from types import MappingProxyType
+from typing import Protocol
 
-from kairospy.core.market import MarketEvent
-from kairospy.core.reference import MarketRef
-from kairospy.infrastructure.integrations.adapters.market_stream import MarketStreamAdapter
-from kairospy.infrastructure.integrations.services.resolver import DEFAULT_INTEGRATION_RESOLVER, IntegrationResolver
+from kairospy.domain.market import Bar, MarketEvent, MarketSelector, Quote
+from kairospy.domain.reference import MarketRef, ReferenceCatalog
+from kairospy.infrastructure.integrations.application.connections import IntegrationConnection
 
 
 @dataclass(frozen=True, slots=True)
-class MarketIntegrationApplicationService:
-    """Concrete market integration service exposed to application composition."""
+class ConnectionMarketSubscriptionRequest:
+    market: MarketRef
+    selector: MarketSelector
+    identity: str
+    params: Mapping[str, object] = field(default_factory=dict)
 
-    resolver: IntegrationResolver = DEFAULT_INTEGRATION_RESOLVER
-    venue: str | None = None
-    market: str | None = None
-    credential: str | None = None
-    mode_label: str = "runtime"
-    error_type: type[Exception] = ValueError
+    def __post_init__(self) -> None:
+        if not self.identity.strip():
+            raise ValueError("market subscription identity is required")
+        object.__setattr__(self, "params", MappingProxyType(dict(self.params)))
 
-    async def watch_ticker_updates(
+
+class MarketDataConnection(IntegrationConnection, Protocol):
+    """Business methods exposed by a market-data request connection."""
+    def latest_quote(self, symbol: str) -> Quote | None: ...
+
+    def bars(
         self,
         symbol: str,
         *,
-        market: MarketRef,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[MarketEvent]:
-        async for item in self._adapter(market).watch_ticker_updates(symbol, market=market, params=params):
-            yield item
-
-    async def watch_order_book_updates(
-        self,
-        symbol: str,
-        *,
-        market: MarketRef,
-        limit: int | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[MarketEvent]:
-        async for item in self._adapter(market).watch_order_book_updates(symbol, market=market, limit=limit, params=params):
-            yield item
-
-    async def watch_trades_updates(
-        self,
-        symbol: str,
-        *,
-        market: MarketRef,
-        since: object | None = None,
-        limit: int = 50,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[MarketEvent]:
-        async for item in self._adapter(market).watch_trades_updates(symbol, market=market, since=since, limit=limit, params=params):
-            yield item
-
-    async def watch_option_greeks_updates(
-        self,
-        symbol: str,
-        *,
-        market: MarketRef,
-        params: Mapping[str, object] | None = None,
-    ) -> AsyncIterator[MarketEvent]:
-        async for item in self._adapter(market).watch_option_greeks_updates(symbol, market=market, params=params):
-            yield item
-
-    def _adapter(self, market: MarketRef) -> MarketStreamAdapter:
-        resolved_venue = self.venue or str(market.venue)
-        if self.market is None:
-            feed = self.resolver.market_feed(resolved_venue, mode_label=self.mode_label, error_type=self.error_type)
-        else:
-            feed = self.resolver.market_feed_for_market(
-                resolved_venue,
-                self.market,
-                credential=self.credential,
-                mode_label=self.mode_label,
-                error_type=self.error_type,
-            )
-        return MarketStreamAdapter(feed)
+        timeframe: str = "1m",
+        since: datetime | None = None,
+        until: datetime | None = None,
+        limit: int = 1000,
+    ) -> Iterable[Bar]: ...
 
 
-__all__ = ["MarketIntegrationApplicationService"]
+
+class ReferenceDataConnection(IntegrationConnection, Protocol):
+    def catalog(self, *, as_of: datetime, market: str | None = None) -> ReferenceCatalog: ...
+
+
+class MarketStreamConnection(IntegrationConnection, Protocol):
+    async def subscribe(self, request: ConnectionMarketSubscriptionRequest) -> "MarketStreamSubscription": ...
+    async def unsubscribe(self, subscription_id: str) -> None: ...
+
+
+class MarketStreamSubscription(Protocol):
+    subscription_id: str
+
+    def events(self) -> AsyncIterator[MarketEvent]: ...
+
+
+__all__ = ["ConnectionMarketSubscriptionRequest", "MarketDataConnection", "ReferenceDataConnection", "MarketStreamConnection", "MarketStreamSubscription"]
