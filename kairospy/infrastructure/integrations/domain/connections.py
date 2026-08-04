@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from .bindings import IntegrationBinding
-from .participants import ParticipantRef
+from .bindings import AccessScope, IntegrationBinding, TransportKind
+from .capabilities import IntegrationCapability
+from .routes import IntegrationRoute
+from kairospy.domain.reference import ParticipantRef
 from .products import ProductFamily
 
 
@@ -22,14 +24,21 @@ class ConnectionLifecycle(StrEnum):
 @dataclass(frozen=True, slots=True)
 class ConnectionIdentity:
     connection_id: str
+    route: IntegrationRoute
     product: ProductFamily | None
-    participants: tuple[ParticipantRef, ...]
+    access: AccessScope
+    transport: TransportKind
+    capability: IntegrationCapability
 
     def __post_init__(self) -> None:
         if not self.connection_id.strip():
             raise ValueError("connection id is required")
-        if not self.participants:
-            raise ValueError("connection requires at least one participant")
+        if not self.route.participants:
+            raise ValueError("connection requires at least one route participant")
+
+    @property
+    def participants(self) -> tuple[ParticipantRef, ...]:
+        return self.route.participants
 
 
 @dataclass(frozen=True, slots=True)

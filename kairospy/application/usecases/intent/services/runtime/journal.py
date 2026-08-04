@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from kairospy.application.support.runtime.domain.events import RuntimeEnvelope
+from kairospy.application.support.messaging import Message
 from kairospy.domain.intent import IntentJournalView, IntentStateSummary, IntentViewKeys, SYSTEM_INTENTS_SCHEMA
 from kairospy.application.usecases.intent.protocol import IntentJournalPort
 
@@ -13,7 +13,7 @@ class IntentJournalViewState:
         self.strategy_id = strategy_id
         self.intents = intents
 
-    def on_event(self, event: RuntimeEnvelope) -> None:
+    def on_event(self, event: Message) -> None:
         return None
 
     def view(self) -> IntentJournalView:

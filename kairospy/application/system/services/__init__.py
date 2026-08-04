@@ -1,3 +1,1 @@
-"""Internal system service packages."""
-
-__all__: list[str] = []
+"""Private runtime services for the system application."""

@@ -8,9 +8,10 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.support.system.application.control.facade import LaunchAlreadyActiveError, LaunchFacade, RuntimeMode, TradingConfigurationError, record_payload
-from kairospy.application.support.system.application.control.attach import LaunchAttachSession, read_file_chunk
-from kairospy.application.support.system.application.browsing import ListQuery
+from kairospy.application.support.launch.application.control.facade import LaunchAlreadyActiveError, RuntimeMode, TradingConfigurationError, record_payload
+from kairospy.application.support.composition.application.launch import launch_application
+from kairospy.application.support.launch.application.control.attach import LaunchAttachSession, read_file_chunk
+from kairospy.application.support.query.browsing import ListQuery
 from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.cli.output import write_cli_result
 from kairospy.surface.cli.commands.timeline import timeline_app
@@ -28,7 +29,7 @@ launch_app.add_typer(targets_app, name="targets")
 launch_app.add_typer(diagnose_app, name="diagnose")
 launch_app.add_typer(replay_app, name="replay")
 launch_app.add_typer(timeline_app, name="timeline")
-_RUNS = LaunchFacade()
+_RUNS = launch_application()
 
 
 @targets_app.command("add")
@@ -252,7 +253,7 @@ def artifacts(
 def events(
     ctx: typer.Context,
     strategy_path: str = typer.Option(..., "--strategy", help="Strategy import path: module:callable"),
-    events_path: Path = typer.Option(..., "--events", help="JSONL RuntimeEnvelope file"),
+    events_path: Path = typer.Option(..., "--events", help="JSONL Message file"),
     launch_id: str = typer.Option("kairos-launch", "--launch-id"),
     mode: RuntimeMode = typer.Option(RuntimeMode.BACKTEST, "--mode"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
@@ -327,9 +328,9 @@ def _echo_launch_result(result: object, *, output_format: OutputFormat) -> None:
     typer.echo(
         "\n".join([
             f"Launch {getattr(result, 'mode').value}:{getattr(result, 'launch_id')}",
-            f"  strategy  {runtime.strategy_id}",
+            f"  strategy  {runtime.program_id}",
             f"  events    {runtime.event_count}",
-            f"  intents   {runtime.intent_count}",
+            f"  intents   {_intent_count(result)}",
             f"  equity    {payload.get('final_equity') or ''}",
             f"  pnl       {payload.get('net_profit') or ''}",
         ])
@@ -360,19 +361,23 @@ def _launch_result_payload(result: object, *, runtime: object) -> dict[str, obje
     return {
         "launch_id": getattr(result, "launch_id"),
         "mode": getattr(result, "mode"),
-        "strategy_id": getattr(runtime, "strategy_id", None),
+        "strategy_id": getattr(runtime, "program_id", None),
         "event_count": getattr(runtime, "event_count", None),
-        "intent_count": getattr(runtime, "intent_count", None),
+        "intent_count": _intent_count(result),
         "fills": len(getattr(result, "fills", ())),
         "trades": len(getattr(result, "trades", ())),
-        "decision_trace_count": len(getattr(result, "decision_trace", ())),
-        "risk_snapshot_count": len(getattr(result, "risk_snapshots", ())),
         "initial_equity": getattr(result, "initial_equity", None),
         "final_equity": getattr(result, "final_equity", None),
         "net_profit": getattr(result, "net_profit", None),
         "total_return": getattr(result, "total_return", None),
         "metrics": getattr(result, "metrics", {}),
     }
+
+
+def _intent_count(result: object) -> int | None:
+    intents = getattr(result, "intents", None)
+    listing = getattr(intents, "list", None)
+    return len(listing()) if callable(listing) else None
 
 
 def _write_json(payload: Mapping[str, object]) -> None:

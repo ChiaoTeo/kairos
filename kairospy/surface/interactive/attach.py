@@ -9,8 +9,8 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.support.system.application.control.attach import LaunchAttachSession, heartbeat_age_seconds
-from kairospy.application.support.system.application.control import RuntimeMode
+from kairospy.application.support.launch.application.control.attach import LaunchAttachSession, heartbeat_age_seconds
+from kairospy.application.support.launch.application.control import RuntimeMode
 from kairospy.surface.interactive.line_reader import default_line_reader
 
 

@@ -1,3 +1,3 @@
-from .registry import ConnectionServiceFactory, ConnectionServiceRegistry
+from .registry import GatewayFactory, GatewayRegistry
 
-__all__ = ["ConnectionServiceFactory", "ConnectionServiceRegistry"]
+__all__ = ["GatewayFactory", "GatewayRegistry"]

@@ -4,15 +4,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping, Protocol
 
-from kairospy.application.support.system.application.config import LaunchAccountConfig
-from kairospy.application.support.runtime.domain.modes import RuntimeMode
+from kairospy.application.support.launch.application.config.launch import LaunchAccountConfig
+from kairospy.application.support.launch.domain.modes import RuntimeMode
 from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
 from kairospy.application.usecases.market.application.sources import IterableMarketEventSource
 from kairospy.application.usecases.strategy.protocol import Strategy
 from kairospy.domain.account import AccountContext
-from kairospy.infrastructure.integrations.application.market import MarketStreamConnection
+from kairospy.application.usecases.market.application.feed import MarketStreamConnection
 
-from kairospy.application.support.launch.domain.config.common import (
+from kairospy.application.support.launch.application.config.common import (
     AccountPerformanceMixin,
     AccountResolver,
     ConfiguredAccount,
@@ -59,8 +59,6 @@ class PaperLaunchResult(AccountPerformanceMixin):
     account_view: object | None
     fills: tuple[object, ...] = ()
     trades: tuple[object, ...] = ()
-    decision_trace: tuple[object, ...] = ()
-    risk_snapshots: tuple[object, ...] = ()
     metrics: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -151,7 +149,11 @@ def configured_paper(
         paper_config=paper,
         execution_config=execution_config,
         feeds=feeds_config,
-        managed_market_feed_resolver=market_feed_factory is None and market_feed_resolver is None,
+        managed_market_feed_resolver=(
+            market_feed_factory is None
+            and market_feed_resolver is None
+            and market_feed_resolver_builder is None
+        ),
     )
 
 

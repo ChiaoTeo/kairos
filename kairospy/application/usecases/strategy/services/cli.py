@@ -42,26 +42,20 @@ class CliStrategyBase(StrategyBase):
         return None
 
     def on_cli_command(self, context: Context, command: CliCommand, signal: object) -> None:
-        if command.name == "trace":
-            context.trace(str(command.args.get("name") or "cli"), dict(command.args.get("payload") or {}))
-            return None
         if command.name == "target_position":
             self.target_position(context, command)
             return None
         if command.name == "account.current":
-            view = context.accounts.current(_optional_text(command.args.get("account")))
-            context.trace("account.current", {"account": command.args.get("account"), "view": view})
+            context.accounts.current(_optional_text(command.args.get("account")))
             return None
         if command.name == "account.balance":
-            balance = context.accounts.balance(str(command.args.get("currency") or ""), account=_optional_text(command.args.get("account")))
-            context.trace("account.balance", {"account": command.args.get("account"), "currency": command.args.get("currency"), "balance": balance})
+            context.accounts.balance(str(command.args.get("currency") or ""), account=_optional_text(command.args.get("account")))
             return None
         if command.name == "account.position":
             instrument = command.args.get("instrument")
             if instrument is None:
                 raise ValueError("account.position requires instrument")
-            position = context.accounts.position(instrument, account=_optional_text(command.args.get("account")))
-            context.trace("account.position", {"account": command.args.get("account"), "instrument": instrument, "position": position})
+            context.accounts.position(instrument, account=_optional_text(command.args.get("account")))
             return None
         raise ValueError(f"unsupported cli strategy command: {command.name}")
 

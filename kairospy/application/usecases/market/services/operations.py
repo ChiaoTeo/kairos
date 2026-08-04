@@ -74,6 +74,32 @@ class MarketDataOperationsService:
                 partition=self.partition_for(resolved),
             )
 
+    def persist_historical(
+        self,
+        spec: MarketDataSpec,
+        observations: Iterable[object],
+        *,
+        mode: str = "append",
+    ) -> Path:
+        if spec.kind not in {"ohlcv", "funding_rate"}:
+            raise ValueError(f"unsupported historical data kind: {spec.kind}")
+        resolved = self.resolve(spec)
+        if spec.kind == "funding_rate":
+            return self.store.write_funding_rates(
+                resolved.dataset_id,
+                observations,
+                market=resolved.market_ref,
+                mode=mode,
+                partition=self.partition_for(resolved),
+            )
+        return self.store.write_bars(
+            resolved.dataset_id,
+            observations,
+            market=resolved.market_ref,
+            mode=mode,
+            partition=self.partition_for(resolved),
+        )
+
     def ensure(
         self,
         spec: MarketDataSpec,

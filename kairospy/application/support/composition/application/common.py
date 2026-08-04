@@ -4,17 +4,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 
-from kairospy.application.support.runtime.application.launch.lifecycle import TradingLifecycle
-from kairospy.application.support.runtime.application.launch.resources import TradingRuntimeResources
-from kairospy.application.support.runtime.domain.modes import RuntimeMode
-from kairospy.application.support.runtime.application.launch import RuntimeLaunchResult
-from kairospy.application.usecases.reference.application.runtime import ReferenceCatalogService
-from kairospy.application.support.system.application.workspace import KairosWorkspace
+from kairospy.application.support.launch.application.lifecycle import TradingLifecycle
+from kairospy.application.system.application.resources import TradingSystemResources
+from kairospy.application.support.launch.domain.modes import RuntimeMode
+from kairospy.application.support.launch.application.runtime import LaunchRuntimeResult
+from kairospy.application.usecases.reference.application.component import ReferenceApplication
+from kairospy.application.usecases.workspace.domain.workspace import KairosWorkspace
 from kairospy.application.usecases.strategy.protocol import Strategy
 from kairospy.infrastructure.persistence.application.reference import SqliteReferenceStore
+from kairospy.infrastructure.messaging import InMemoryMessageBus
+from kairospy.application.support.composition.application.resources import DriverName, ExchangeName, reference_access
 
 
-RuntimeLauncher = Callable[..., RuntimeLaunchResult]
+RuntimeLauncher = Callable[..., LaunchRuntimeResult]
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,9 +32,9 @@ class ComposedLaunch:
     strategy: Strategy
     launch_directory: Path
     normalized_config: Mapping[str, object]
-    resources: TradingRuntimeResources
+    resources: TradingSystemResources
     lifecycle: object | None
-    build_result: Callable[[RuntimeLaunchResult], object]
+    build_result: Callable[[LaunchRuntimeResult], object]
 
 
 def reference_runtime(
@@ -40,13 +42,30 @@ def reference_runtime(
     *,
     default_venue: str | None = None,
     default_market: str | None = None,
-) -> ReferenceCatalogService:
+) -> ReferenceApplication:
     workspace = KairosWorkspace.resolve(start)
-    return ReferenceCatalogService(
+    venue = optional_default_text(default_venue)
+    market = optional_default_text(default_market)
+    source = None
+    if venue is None or venue.casefold() == ExchangeName.binance.value:
+        source = reference_access(
+            "exchange",
+            ExchangeName.binance.value,
+            market=market or "spot",
+            driver_name=DriverName.ccxt,
+        )
+    return ReferenceApplication(
         SqliteReferenceStore(workspace.reference_root),
-        default_venue=optional_default_text(default_venue),
-        default_market=optional_default_text(default_market),
+        default_venue=venue or ExchangeName.binance.value,
+        default_market=market or "spot",
+        source=source,
     )
+
+
+def in_memory_message_bus() -> InMemoryMessageBus:
+    """Create the default per-launch bus at the composition boundary."""
+
+    return InMemoryMessageBus()
 
 
 def optional_default_text(value: object) -> str | None:
@@ -57,4 +76,4 @@ def optional_default_text(value: object) -> str | None:
     return None
 
 
-__all__ = ["ComposedLaunch", "RuntimeLauncher", "optional_default_text", "reference_runtime"]
+__all__ = ["ComposedLaunch", "RuntimeLauncher", "in_memory_message_bus", "optional_default_text", "reference_runtime"]

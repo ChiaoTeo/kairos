@@ -4,7 +4,6 @@ from typing import Protocol
 
 from kairospy.domain.account import AccountScopeReader, AccountViewReader
 from kairospy.domain.market import MarketViewReader
-from kairospy.domain.reference import ReferenceViewReader
 
 
 class StrategyViewSource(Protocol):
@@ -33,22 +32,15 @@ class StrategyViews:
     def accounts(self) -> AccountViewReader:
         return AccountViewReader(self.source)
 
-    @property
-    def reference(self) -> ReferenceViewReader:
-        return ReferenceViewReader(self.source)
-
-
 StrategyMarketViews = MarketViewReader
 StrategyAccountViews = AccountViewReader
 StrategyAccountScope = AccountScopeReader
-StrategyReferenceViews = ReferenceViewReader
 
 
 __all__ = [
     "StrategyAccountScope",
     "StrategyAccountViews",
     "StrategyMarketViews",
-    "StrategyReferenceViews",
     "StrategyViewSource",
     "StrategyViews",
 ]

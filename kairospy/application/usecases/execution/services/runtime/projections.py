@@ -41,10 +41,10 @@ class TradingRuntimeExecutionService:
     def schemas(self) -> tuple[object, ...]:
         return (EXECUTION_CURRENT_SCHEMA, EXECUTION_FILLS_SCHEMA)
 
-    def submit_intent(self, intent: TradeIntent, context: object) -> object:
+    def execute_intent(self, intent: TradeIntent, context: object) -> object:
         if self.port is None:
             raise RuntimeError("runtime trading execution service has no intent executor")
-        return self.port.submit_intent(intent, context)  # type: ignore[arg-type]
+        return self.port.execute_intent(intent, context)  # type: ignore[arg-type]
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,8 +75,8 @@ class RuntimeExecutionService:
     def schemas(self) -> tuple[object, ...]:
         return _require_trading_execution(self.trading).schemas()
 
-    def submit_intent(self, intent: TradeIntent, context: object) -> object:
-        return _require_trading_execution(self.trading).submit_intent(intent, context)
+    def execute_intent(self, intent: TradeIntent, context: object) -> object:
+        return _require_trading_execution(self.trading).execute_intent(intent, context)
 
 
 def _require_execution_projection(service: ExecutionProjectionService | None) -> ExecutionProjectionService:

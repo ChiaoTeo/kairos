@@ -11,11 +11,15 @@ from kairospy.application.usecases.execution.services.runtime.projections import
 from kairospy.application.usecases.execution.services.runtime.simulated import SimulatedExecutionRuntimeService
 from kairospy.application.usecases.execution.services.simulation import ImmediateFillModel, PercentageCommissionModel
 from kairospy.application.usecases.execution.services.coordinator import ExecutionCoordinator
+from kairospy.application.usecases.execution.domain.policy import ExecutionSafetyPolicy
+from kairospy.application.usecases.execution.domain.simulation import BasisPointSlippageModel
+from kairospy.application.usecases.risk.application.budget import RiskApplication
+from kairospy.application.usecases.risk.application.runtime import build_risk_application
 from .component import ExecutionApplication
 
 
-def build_execution_coordinator() -> ExecutionCoordinator:
-    return ExecutionCoordinator()
+def build_execution_coordinator(*, risk: RiskApplication | None = None) -> ExecutionCoordinator:
+    return ExecutionCoordinator(risk=risk or build_risk_application())
 
 
 def build_backtest_runtime(coordinator: object, **kwargs: object) -> BacktestExecutionService:
@@ -26,8 +30,8 @@ def build_paper_runtime(coordinator: object, **kwargs: object) -> PaperExecution
     return PaperExecutionService(coordinator, **kwargs)
 
 
-def build_live_runtime(**kwargs: object) -> LiveExecutionService:
-    return LiveExecutionService(**kwargs)
+def build_live_runtime(coordinator: object, **kwargs: object) -> LiveExecutionService:
+    return LiveExecutionService(coordinator, **kwargs)
 
 
 def build_simulated_runtime(coordinator: object, **kwargs: object) -> SimulatedExecutionRuntimeService:
@@ -61,4 +65,6 @@ __all__ = [
     "build_paper_runtime",
     "build_simulated_runtime",
     "execution_runtime_adapters",
+    "ExecutionSafetyPolicy",
+    "BasisPointSlippageModel",
 ]

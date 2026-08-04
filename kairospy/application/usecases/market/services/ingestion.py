@@ -19,7 +19,7 @@ from kairospy.domain.market import (
 from .sources import market_event_from_row, parse_event_time
 
 
-class MarketEnvelope(Protocol):
+class MarketMessage(Protocol):
     domain: object
     kind: object
     time: datetime
@@ -28,20 +28,20 @@ class MarketEnvelope(Protocol):
 
 
 class MarketIngestionService:
-    def event_from_envelope(self, envelope: MarketEnvelope) -> MarketEvent | None:
-        if str(envelope.domain) not in {"market", "data"}:
+    def event_from_message(self, message: MarketMessage) -> MarketEvent | None:
+        if str(message.domain) not in {"market", "data"}:
             return None
-        payload = envelope.payload
+        payload = message.payload
         if isinstance(payload, MarketEvent):
             return payload
         if isinstance(payload, (Quote, OrderBookSnapshot, OrderBookDelta, Bar, TradePrint, RateObservation, OptionGreeks)):
             return self.event_from_value(
                 payload,
-                available_at=envelope.time,
-                sequence=envelope.sequence,
+                available_at=message.time,
+                sequence=message.sequence,
             )
         if isinstance(payload, dict):
-            return self.event_from_row(payload, sequence=envelope.sequence, stream=str(payload.get("source") or envelope.kind))
+            return self.event_from_row(payload, sequence=message.sequence, stream=str(payload.get("source") or message.kind))
         return None
 
     def event_from_row(self, row: dict[str, object], *, sequence: int, stream: str) -> MarketEvent | None:
@@ -74,4 +74,4 @@ class MarketIngestionService:
         return parse_event_time(value)
 
 
-__all__ = ["MarketEnvelope", "MarketIngestionService"]
+__all__ = ["MarketMessage", "MarketIngestionService"]

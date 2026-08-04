@@ -1,38 +1,28 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-
 from kairospy.application.support.launch.application.configuration import ConfiguredLive
-from kairospy.application.support.runtime.domain.modes import RuntimeMode
-from kairospy.application.support.runtime.domain.connections import DefaultConnectionManager
-from kairospy.application.usecases.market.application.runtime import LiveMarketDataService
-from kairospy.application.usecases.account.application.runtime import LiveAccountService
+from kairospy.application.support.launch.application.results import live_result
+from kairospy.application.support.composition.application.lifecycle import LiveConfiguredLifecycle
+from kairospy.application.support.launch.domain.modes import RuntimeMode
+from kairospy.application.actor.support.services.connections import IntegrationConnectionScope
+from kairospy.application.usecases.market.application.runtime import build_live_market
+from kairospy.application.system.application.business import SystemApplication
 from kairospy.application.support.composition.application.accounts import LiveAccountResources
-from kairospy.application.support.composition.application.integrations import integration_application, market_request_connections, market_stream_connections
-from kairospy.infrastructure.persistence.application.runtime_state import JsonLiveRuntimeStateStore
+from kairospy.application.support.composition.application.integrations import integration_application, market_integration_runtime
 
-from .common import ComposedLaunch, reference_runtime
+from .common import ComposedLaunch, in_memory_message_bus, reference_runtime
+from .runtime import compose_runtime_assembly
 
 
 class LiveComposition:
     def compose(self, configured: ConfiguredLive) -> ComposedLaunch:
-        connections = DefaultConnectionManager()
+        connections = IntegrationConnectionScope()
         integration = integration_application()
-        stream_connections = market_stream_connections(
-            configured.feeds, mode_label="live", application=integration,
-        ) if configured.managed_market_feed_resolver else {}
-        request_connections = market_request_connections(
-            configured.feeds, mode_label="live", application=integration,
-        ) if configured.managed_market_feed_resolver else {}
-        for connection_id, connection in stream_connections.items():
-            connections.register(connection_id, connection, role="market_stream")
-        for connection_id, connection in request_connections.items():
-            connections.register(connection_id, connection, role="market_request")
-        market_data = LiveMarketDataService(
+        market_runtime = market_integration_runtime(connections, application=integration, mode=RuntimeMode.LIVE) if configured.managed_market_feed_resolver else None
+        market_data = build_live_market(
             feed_resolver=None if configured.managed_market_feed_resolver else configured.market_feed_resolver,
             source_name=configured.source_name,
-            stream_connections=stream_connections,
+            integration_runtime=market_runtime,
         )
         market_data.set_connection_manager(connections)
         account_resources = LiveAccountResources.from_configured(configured, integration_application=integration)
@@ -42,9 +32,9 @@ class LiveComposition:
             account_resources.account.connections = connections
         else:
             account_resources.account.set_connection_manager(connections)
-        from kairospy.application.support.runtime.application.launch.resources import TradingRuntimeResources
-        launch_resources = TradingRuntimeResources(
-            source=market_data,
+        from kairospy.application.system.application.resources import TradingSystemResources
+        launch_resources = TradingSystemResources(
+            business=SystemApplication(),
             data=market_data,
             account=account_resources.account,
             reference=reference_runtime(
@@ -54,10 +44,8 @@ class LiveComposition:
             ),
             trading_execution=account_resources.execution,
             connection_scope=connections,
-            market_stream_connections=stream_connections,
-            market_request_connections=request_connections,
-            account_connections={key: value for key, value in account_resources.integration_connections.items() if ".account." in key},
-            execution_connections={key: value for key, value in account_resources.integration_connections.items() if ".execution." in key},
+            message_bus=in_memory_message_bus(),
+            assembly=compose_runtime_assembly(),
         )
         return ComposedLaunch(
             mode=RuntimeMode.LIVE,
@@ -67,25 +55,8 @@ class LiveComposition:
             normalized_config=configured.normalized_config,
             resources=launch_resources,
             lifecycle=LiveConfiguredLifecycle(configured.state_path, account=account_resources.account, coordinator=account_resources.coordinator),
-            build_result=lambda runtime: account_resources.build_result(configured, runtime),
+            build_result=lambda runtime: live_result(configured, account_resources, runtime),
         )
 
 
-class LiveConfiguredLifecycle:
-    def __init__(self, state_path: Path, *, account: LiveAccountService, coordinator: object) -> None:
-        self.account = account
-        self.coordinator = coordinator
-        self.state_store = JsonLiveRuntimeStateStore(state_path)
-
-    def prepare(self) -> None:
-        snapshot = self.state_store.load()
-        if snapshot is not None:
-            snapshot.restore_execution_into(self.coordinator)
-            self.account.private_stream_state.restore_checkpoint(snapshot.private_stream)
-        self.account.refresh()
-
-    def complete(self) -> None:
-        self.state_store.save(self.coordinator, self.account.private_stream_state.checkpoint())
-
-
-__all__ = ["LiveComposition", "LiveConfiguredLifecycle"]
+__all__ = ["LiveComposition"]

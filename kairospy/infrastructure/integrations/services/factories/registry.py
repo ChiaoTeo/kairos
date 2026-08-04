@@ -3,104 +3,99 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from kairospy.infrastructure.integrations.application.connections import (
-    IntegrationConnection,
-    IntegrationConnectionSpec,
-)
+from kairospy.infrastructure.integrations.application.connections import IntegrationConnection, IntegrationConnectionSpec
 from kairospy.infrastructure.integrations.domain import (
     BrokerId,
+    BrokerRef,
     ExchangeId,
-    ParticipantKind,
-    ParticipantRef,
+    ExchangeRef,
+    IntegrationCapability,
+    IntegrationRoute,
     ProductFamily,
     ProviderId,
+    ProviderRef,
+    TransportKind,
 )
-from kairospy.infrastructure.integrations.services.connection_services.binance_spot import (
-    BinanceSpotConnectionService,
-    MassiveMarketConnectionService,
-)
-from kairospy.infrastructure.integrations.services.connection_services.binance_equity import BinanceEquityConnectionService
+from kairospy.infrastructure.integrations.services.gateways.binance.equity.public_rest import BinanceEquityPublicRestGateway, BinanceEquityPublicStreamGateway
+from kairospy.infrastructure.integrations.services.gateways.binance.spot.private_rest import BinanceSpotAccountGateway, BinanceSpotExecutionGateway
+from kairospy.infrastructure.integrations.services.gateways.binance.spot.public_rest import BinanceSpotPublicRestGateway
+from kairospy.infrastructure.integrations.services.gateways.binance.spot.public_stream import BinanceSpotPublicStreamGateway
+from kairospy.infrastructure.integrations.services.gateways.binance.spot.user_stream import BinanceSpotAccountStreamGateway, BinanceSpotExecutionStreamGateway
+from kairospy.infrastructure.integrations.services.gateways.ccxt.market import CcxtMarketGateway
+from kairospy.infrastructure.integrations.services.gateways.ibkr.execution import IBKRExecutionGateway
+from kairospy.infrastructure.integrations.services.gateways.massive.market import MassiveOptionsGateway, MassiveReferenceGateway, MassiveStocksGateway
 
 
-ConnectionServiceFactory = Callable[[IntegrationConnectionSpec], IntegrationConnection]
+GatewayFactory = Callable[[IntegrationConnectionSpec], IntegrationConnection]
+_Key = tuple[IntegrationRoute, ProductFamily | None, IntegrationCapability | None, TransportKind | None]
 
 
 @dataclass(slots=True)
-class ConnectionServiceRegistry:
-    _factories: dict[tuple[tuple[ParticipantRef, ...], ProductFamily | None], ConnectionServiceFactory] = field(default_factory=dict)
+class GatewayRegistry:
+    _factories: dict[_Key, GatewayFactory] = field(default_factory=dict)
 
     @classmethod
-    def with_builtins(cls) -> "ConnectionServiceRegistry":
+    def with_builtins(cls) -> "GatewayRegistry":
         registry = cls()
-        registry.register(
-            participants=(
-                ParticipantRef(ParticipantKind.EXCHANGE, ExchangeId.BINANCE),
-                ParticipantRef(ParticipantKind.BROKER, BrokerId.BINANCE),
-            ),
-            product=ProductFamily.SPOT,
-            factory=BinanceSpotConnectionService,
-        )
-        registry.register(
-            participants=(ParticipantRef(ParticipantKind.EXCHANGE, ExchangeId.BINANCE),),
-            product=ProductFamily.SPOT,
-            factory=BinanceSpotConnectionService,
-        )
-        registry.register(
-            participants=(ParticipantRef(ParticipantKind.EXCHANGE, ExchangeId.BINANCE),),
-            product=ProductFamily.EQUITY,
-            factory=BinanceEquityConnectionService,
-        )
-        registry.register(
-            participants=(ParticipantRef(ParticipantKind.BROKER, BrokerId.BINANCE),),
-            product=ProductFamily.SPOT,
-            factory=BinanceSpotConnectionService,
-        )
-        registry.register(
-            participants=(
-                ParticipantRef(ParticipantKind.PROVIDER, ProviderId.MASSIVE),
-                ParticipantRef(ParticipantKind.BROKER, BrokerId.BINANCE),
-            ),
-            product=ProductFamily.SPOT,
-            factory=BinanceSpotConnectionService,
-        )
-        registry.register(
-            participants=(
-                ParticipantRef(ParticipantKind.PROVIDER, ProviderId.MASSIVE),
-                ParticipantRef(ParticipantKind.BROKER, BrokerId.BINANCE),
-                ParticipantRef(ParticipantKind.EXCHANGE, ExchangeId.BINANCE),
-            ),
-            product=ProductFamily.SPOT,
-            factory=BinanceSpotConnectionService,
-        )
-        registry.register(
-            participants=(ParticipantRef(ParticipantKind.PROVIDER, ProviderId.MASSIVE),),
-            product=None,
-            factory=MassiveMarketConnectionService,
-        )
+        binance = IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE))
+        registry.register(route=binance, product=ProductFamily.SPOT, capability=IntegrationCapability.MARKET_DATA, transport=TransportKind.REST, factory=BinanceSpotPublicRestGateway().open)
+        registry.register(route=binance, product=ProductFamily.SPOT, capability=IntegrationCapability.MARKET_STREAM, transport=TransportKind.MARKET_STREAM, factory=BinanceSpotPublicStreamGateway().open)
+
+        for route in (
+            IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
+            IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE), broker=BrokerRef(BrokerId.BINANCE)),
+        ):
+            registry.register(route=route, product=ProductFamily.SPOT, capability=IntegrationCapability.ACCOUNT_READ, transport=TransportKind.REST, factory=BinanceSpotAccountGateway().open)
+            registry.register(route=route, product=ProductFamily.SPOT, capability=IntegrationCapability.ACCOUNT_STREAM, transport=TransportKind.USER_STREAM, factory=BinanceSpotAccountStreamGateway().open)
+            registry.register(route=route, product=ProductFamily.SPOT, capability=IntegrationCapability.EXECUTION_STREAM, transport=TransportKind.USER_STREAM, factory=BinanceSpotExecutionStreamGateway().open)
+            registry.register(route=route, product=ProductFamily.SPOT, capability=IntegrationCapability.ORDER_ENTRY, transport=TransportKind.REST, factory=BinanceSpotExecutionGateway().open)
+
+        registry.register(route=binance, product=ProductFamily.EQUITY, capability=IntegrationCapability.MARKET_DATA, transport=TransportKind.REST, factory=BinanceEquityPublicRestGateway().open)
+        registry.register(route=binance, product=ProductFamily.EQUITY, capability=IntegrationCapability.MARKET_STREAM, transport=TransportKind.MARKET_STREAM, factory=BinanceEquityPublicStreamGateway().open)
+        for exchange in (ExchangeId.BINANCE, ExchangeId.OKX, ExchangeId.HYPERLIQUID):
+            registry.register(route=IntegrationRoute(exchange=ExchangeRef(exchange)), product=ProductFamily.USD_M_FUTURES, factory=CcxtMarketGateway().open)
+        for exchange in (ExchangeId.OKX, ExchangeId.HYPERLIQUID):
+            registry.register(route=IntegrationRoute(exchange=ExchangeRef(exchange)), product=ProductFamily.SPOT, factory=CcxtMarketGateway().open)
+        registry.register(route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.OKX)), product=ProductFamily.EQUITY, factory=CcxtMarketGateway().open)
+        registry.register(route=IntegrationRoute(broker=BrokerRef(BrokerId.IBKR)), product=ProductFamily.EQUITY, factory=IBKRExecutionGateway().open)
+        registry.register(route=IntegrationRoute(provider=ProviderRef(ProviderId.MASSIVE), broker=BrokerRef(BrokerId.BINANCE)), product=ProductFamily.SPOT, capability=IntegrationCapability.MARKET_DATA, transport=TransportKind.REST, factory=BinanceSpotPublicRestGateway().open)
+        registry.register(route=IntegrationRoute(provider=ProviderRef(ProviderId.MASSIVE), broker=BrokerRef(BrokerId.BINANCE), exchange=ExchangeRef(ExchangeId.BINANCE)), product=ProductFamily.SPOT, capability=IntegrationCapability.MARKET_DATA, transport=TransportKind.REST, factory=BinanceSpotPublicRestGateway().open)
+        massive = IntegrationRoute(provider=ProviderRef(ProviderId.MASSIVE))
+        registry.register(route=massive, product=ProductFamily.EQUITY, factory=MassiveStocksGateway().open)
+        registry.register(route=massive, product=ProductFamily.OPTIONS, factory=MassiveOptionsGateway().open)
+        registry.register(route=massive, product=None, factory=MassiveReferenceGateway().open)
         return registry
 
     def register(
         self,
         *,
-        participants: tuple[ParticipantRef, ...],
+        route: IntegrationRoute,
         product: ProductFamily | None,
-        factory: ConnectionServiceFactory,
+        factory: GatewayFactory,
+        capability: IntegrationCapability | None = None,
+        transport: TransportKind | None = None,
     ) -> None:
-        key = (_canonical_participants(participants), product)
+        key = (route, product, capability, transport)
         if key in self._factories:
-            raise ValueError(f"connection service already registered: {key!r}")
+            raise ValueError(f"integration gateway already registered: {key!r}")
         self._factories[key] = factory
 
     def create(self, spec: IntegrationConnectionSpec) -> IntegrationConnection:
-        key = ((spec.participant,), spec.product)
-        factory = self._factories.get(key)
-        if factory is None:
-            raise LookupError(f"no connection service for participants={participants!r}, product={spec.product!r}")
+        exact = self._factories.get((spec.route, spec.product, spec.capability, spec.transport))
+        if exact is not None:
+            return exact(spec)
+        candidates = [
+            (len(route.participants) * 10 + int(capability is not None) + int(transport is not None), factory)
+            for (route, product, capability, transport), factory in self._factories.items()
+            if product in {spec.product, None}
+            and capability in {spec.capability, None}
+            and transport in {spec.transport, None}
+            and set(route.participants).issubset(set(spec.route.participants))
+        ]
+        if not candidates:
+            raise LookupError(f"no integration gateway for route={spec.route!r}, product={spec.product!r}, capability={spec.capability!r}, transport={spec.transport!r}")
+        _, factory = max(candidates, key=lambda item: item[0])
         return factory(spec)
 
 
-def _canonical_participants(participants: tuple[ParticipantRef, ...]) -> tuple[ParticipantRef, ...]:
-    return tuple(sorted(set(participants), key=lambda item: (item.kind.value, item.id.value)))
-
-
-__all__ = ["ConnectionServiceFactory", "ConnectionServiceRegistry"]
+__all__ = ["GatewayFactory", "GatewayRegistry"]

@@ -1,7 +1,7 @@
-from .base import CompositeConnectionComponent, ConnectionComponent, ConnectionService
+from .connection import CompositeConnectionComponent, Connection, ConnectionComponent
 
 __all__ = [
     "ConnectionComponent",
-    "ConnectionService",
+    "Connection",
     "CompositeConnectionComponent",
 ]

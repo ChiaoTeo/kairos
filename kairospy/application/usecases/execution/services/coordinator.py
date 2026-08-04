@@ -28,6 +28,12 @@ from kairospy.domain.order import (
 from kairospy.domain.reference import InstrumentId
 
 from kairospy.domain.execution import ExecutionUpdate, Reservation, ReservationBook, reserve_cash_order, reserve_margin_order
+from kairospy.application.usecases.risk.application.budget import (
+    RiskApplication,
+    RiskAssessmentRequest,
+    RiskReservationRequest,
+)
+from kairospy.application.usecases.risk.domain import BudgetRef, RiskDecision, RiskMetric, RiskUsage
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,10 +68,12 @@ class ExecutionCoordinator:
         orders: OrderJournal | None = None,
         ledger: AccountLedger | None = None,
         reservations: ReservationBook | None = None,
+        risk: RiskApplication | None = None,
     ) -> None:
         self.orders = orders or OrderJournal()
         self.ledger = ledger or AccountLedger()
         self.reservations = reservations or ReservationBook()
+        self.risk = risk
 
     def plan_order(
         self,
@@ -77,12 +85,14 @@ class ExecutionCoordinator:
         margin_leverage: Decimal = Decimal("1"),
         margin_instrument_id: InstrumentId | str | None = None,
         venue_snapshot: AccountSnapshot | None = None,
+        risk_amount: Decimal | None = None,
+        risk_metric: RiskMetric = RiskMetric.NOTIONAL,
         at: datetime,
     ) -> OrderState:
         if at.tzinfo is None:
             raise ValueError("plan timestamp must be timezone-aware")
         state = self.orders.plan(request)
-        if reserve_currency is None and reserve_amount is None and margin_notional is None:
+        if reserve_currency is None and reserve_amount is None and margin_notional is None and risk_amount is None:
             return state
         if margin_notional is not None:
             if not reserve_currency:
@@ -91,26 +101,54 @@ class ExecutionCoordinator:
                 raise ValueError("margin_notional must be positive")
             if reserve_amount is not None:
                 raise ValueError("reserve_amount and margin_notional cannot be supplied together")
-        elif not reserve_currency or reserve_amount is None:
+        elif (reserve_currency is not None or reserve_amount is not None) and (
+            not reserve_currency or reserve_amount is None
+        ):
             raise ValueError("reserve_currency and reserve_amount must be supplied together")
-        projection = derive_account_state(
-            request.context,
-            ledger=self.ledger,
-            venue=venue_snapshot,
-            holds=self.reservations,
-        )
+        projection = derive_account_state(request.context, ledger=self.ledger, venue=venue_snapshot, holds=self.reservations)
         amount = reserve_amount
         if margin_notional is not None:
             amount = margin_notional / margin_leverage
-        reservation = Reservation(
-            request.reservation_id or request.order_id,
-            request.context.book,
-            reserve_currency,
-            amount,
-            "order margin pre-submit hold" if margin_notional is not None else "order pre-submit hold",
-            at,
-            order_id=request.order_id,
-        )
+        if amount is not None:
+            reservation = Reservation(
+                request.reservation_id or request.order_id,
+                request.context.book,
+                reserve_currency,
+                amount,
+                "order margin pre-submit hold" if margin_notional is not None else "order pre-submit hold",
+                at,
+                order_id=request.order_id,
+            )
+        risk_reservation_id = request.reservation_id or request.order_id
+        if self.risk is not None:
+            selected_metric = RiskMetric.MARGIN if margin_notional is not None else risk_metric
+            selected_amount = amount if amount is not None else risk_amount
+            risk_request = RiskAssessmentRequest(
+                request.order_id,
+                (
+                    RiskUsage(
+                        selected_metric,
+                        selected_amount or Decimal("0"),
+                        (
+                            BudgetRef("account", request.context.book.value),
+                            BudgetRef("instrument", str(request.instrument_id)),
+                        ),
+                    ),
+                ),
+                at,
+            )
+            assessment = self.risk.assess(risk_request)
+            if assessment.decision is not RiskDecision.ALLOWED:
+                reason = "; ".join(assessment.violations or ("order must be reduced",))
+                self.orders.record(OrderEvent(request.order_id, OrderEventKind.REJECTED, at, reason=f"risk budget: {reason}"))
+                return self.orders.get(request.order_id)
+            try:
+                self.risk.reserve(RiskReservationRequest(risk_reservation_id, risk_request))
+            except ValueError as error:
+                self.orders.record(OrderEvent(request.order_id, OrderEventKind.REJECTED, at, reason=f"risk budget: {error}"))
+                return self.orders.get(request.order_id)
+        if amount is None:
+            return self.orders.record(OrderEvent(request.order_id, OrderEventKind.RESERVED, at))
         if margin_notional is None:
             check = reserve_cash_order(self.reservations, reservation, projection)
         else:
@@ -123,6 +161,7 @@ class ExecutionCoordinator:
                 leverage=margin_leverage,
             )
         if not check.accepted:
+            self._release_risk(risk_reservation_id)
             self.orders.record(OrderEvent(request.order_id, OrderEventKind.REJECTED, at, reason=check.reason))
             return self.orders.get(request.order_id)
         return self.orders.record(OrderEvent(request.order_id, OrderEventKind.RESERVED, at))
@@ -249,13 +288,31 @@ class ExecutionCoordinator:
         try:
             self.reservations.release(reservation_id)
         except KeyError:
-            return
+            pass
+        self._release_risk(reservation_id)
 
     def _consume_reservation(self, state: OrderState) -> None:
         reservation_id = state.request.reservation_id or state.request.order_id
         try:
             self.reservations.consume(reservation_id)
         except KeyError:
+            pass
+        self._consume_risk(reservation_id)
+
+    def _release_risk(self, reservation_id: str) -> None:
+        if self.risk is None:
+            return
+        try:
+            self.risk.release(reservation_id)
+        except (KeyError, ValueError):
+            return
+
+    def _consume_risk(self, reservation_id: str) -> None:
+        if self.risk is None:
+            return
+        try:
+            self.risk.consume(reservation_id)
+        except (KeyError, ValueError):
             return
 
     def _import_execution_update(self, update: ExecutionUpdate) -> OrderState:
@@ -325,4 +382,3 @@ def _cash_delta(side: OrderSide, quantity: Decimal, price: Decimal) -> Decimal:
 
 
 __all__ = ["ExecutionCoordinator", "FillReport", "cash_order_request"]
-

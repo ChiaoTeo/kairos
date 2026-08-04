@@ -10,19 +10,17 @@ import argparse
 import asyncio
 from collections.abc import Sequence
 
-from kairospy.application.support.composition.application.integrations import connect_binance_spot
+from kairospy.application.support.composition.application.integrations import connect_binance_spot_public
+from kairospy.application.usecases.market.application.integration import MarketFeedSubscriptionRequest
 from kairospy.domain.market import TradePrint
 from kairospy.domain.reference import MarketRef
-from kairospy.infrastructure.integrations.application.connections import ConnectionMarketSubscriptionRequest, RuntimeMode
+from kairospy.infrastructure.integrations.application.connections import RuntimeMode
 
 
 async def listen(symbol: str, limit: int) -> None:
-    assembly = connect_binance_spot("example.binance.spot.public", market=True, mode=RuntimeMode.LIVE)
-    access = assembly.capabilities.public_market
-    if access is None:
-        raise RuntimeError("Binance connection did not provide public market capability")
-    remote = await access.subscribe(
-        ConnectionMarketSubscriptionRequest(
+    connection = connect_binance_spot_public("example.binance.spot.public", mode=RuntimeMode.LIVE)
+    remote = await connection.subscribe(
+        MarketFeedSubscriptionRequest(
             market=MarketRef.ephemeral(venue="binance", market="spot", source_symbol=symbol),
             selector=TradePrint,
             identity=f"example.binance.trade.{symbol.lower()}",
@@ -36,7 +34,7 @@ async def listen(symbol: str, limit: int) -> None:
             if count >= limit:
                 break
     finally:
-        await access.unsubscribe(remote.subscription_id)
+        await connection.unsubscribe(remote.subscription_id)
 
 
 def main(argv: Sequence[str] | None = None) -> None:

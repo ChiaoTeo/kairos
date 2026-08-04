@@ -16,6 +16,9 @@ from kairospy.application.usecases.account.services.runtime.projections import (
     account_projection,
 )
 from kairospy.application.usecases.account.services.runtime.simulated import SimulatedAccountService
+from kairospy.application.usecases.account.domain.simulated import SimulatedAccount
+from kairospy.application.usecases.account.domain.routing import AccountBookRoute, account_book_route
+from kairospy.application.usecases.account.domain.books import default_account_books
 
 __all__ = [
     "BacktestAccountService",
@@ -24,5 +27,9 @@ __all__ = [
     "RuntimeAccountService",
     "RuntimeAccountViewProjectionService",
     "SimulatedAccountService",
+    "SimulatedAccount",
+    "AccountBookRoute",
+    "account_book_route",
+    "default_account_books",
     "account_projection",
 ]

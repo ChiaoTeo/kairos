@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -7,7 +8,14 @@ from decimal import Decimal
 from kairospy.application.usecases.execution.services.orders import ExecutionOrderService, SymbolResolver
 from kairospy.application.usecases.execution.services.projections import ExecutionProjectionService
 from kairospy.application.usecases.execution.services.updates import ExecutionUpdateService
-from kairospy.domain.account import AccountSnapshot
+from kairospy.application.usecases.execution.services.intents import ExecutionIntentService
+from kairospy.application.usecases.execution.domain.policy import ExecutionSafetyPolicy
+from kairospy.application.usecases.execution.services.coordinator import ExecutionCoordinator
+from kairospy.application.usecases.risk.application.budget import RiskApplication
+from kairospy.application.usecases.risk.domain import RiskMetric
+from kairospy.infrastructure.integrations.application.execution import OrderConnection
+from kairospy.domain.account import AccountBookRef, AccountSnapshot
+from kairospy.domain.account import AccountContext
 from kairospy.domain.execution import ExecutionCurrentView, ExecutionFillsView, ExecutionUpdate
 from kairospy.domain.intent import IntentJournal, TradeIntent
 from kairospy.domain.order import OrderRequest, OrderState
@@ -23,6 +31,8 @@ class PlanOrderCommand:
     margin_leverage: Decimal = Decimal("1")
     margin_instrument_id: str | None = None
     venue_snapshot: AccountSnapshot | None = None
+    risk_amount: Decimal | None = None
+    risk_metric: RiskMetric = RiskMetric.NOTIONAL
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,34 +48,45 @@ class CancelOrderCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class ExecuteIntentCommand:
+    intent: TradeIntent
+    context: object
+    account: AccountContext
+    current_quantity: Decimal
+    account_snapshot: AccountSnapshot | None = None
+    order_options: Mapping[str, object] | None = None
+    safety_policy: ExecutionSafetyPolicy | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionApplication:
     """Stable application API for the execution bounded context."""
 
     _orders: ExecutionOrderService
     _updates: ExecutionUpdateService
     _projections: ExecutionProjectionService
-    _intent_execution: object | None = None
 
     @classmethod
     def compose(
         cls,
-        coordinator: object,
+        coordinator: ExecutionCoordinator,
         *,
-        order_execution: object | None = None,
+        order_connection: OrderConnection | Mapping[AccountBookRef, OrderConnection] | None = None,
         symbol_resolver: SymbolResolver | None = None,
         intents: IntentJournal | None = None,
         fills_source: object | None = None,
-        intent_execution: object | None = None,
+        risk: RiskApplication | None = None,
     ) -> "ExecutionApplication":
+        if risk is not None:
+            coordinator.risk = risk
         return cls(
             ExecutionOrderService(
                 coordinator,
-                order_execution=order_execution,
+                order_connection=order_connection,
                 symbol_resolver=symbol_resolver,
             ),
             ExecutionUpdateService(coordinator, intents=intents),
             ExecutionProjectionService(coordinator, fills_source=fills_source),
-            intent_execution,
         )
 
     def plan_order(self, command: PlanOrderCommand) -> OrderState:
@@ -77,6 +98,8 @@ class ExecutionApplication:
             margin_leverage=command.margin_leverage,
             margin_instrument_id=command.margin_instrument_id,
             venue_snapshot=command.venue_snapshot,
+            risk_amount=command.risk_amount if command.risk_amount is not None else _risk_amount(command.request, None),
+            risk_metric=command.risk_metric,
             at=command.at,
         )
 
@@ -85,6 +108,48 @@ class ExecutionApplication:
 
     def cancel_order(self, command: CancelOrderCommand) -> OrderState:
         return self._orders.cancel(command.order_id, at=command.at)
+
+    def execute_intent(self, command: ExecuteIntentCommand) -> OrderState | None:
+        intents = ExecutionIntentService()
+        now = getattr(command.context, "now", None)
+        if now is None:
+            return None
+        plan = intents.plan_target_position_order(
+            command.intent,
+            command.context,
+            account=command.account,
+            current_quantity=command.current_quantity,
+            order_id=f"{command.intent.intent_id}-order",
+        )
+        if plan is None:
+            return None
+        reason = (command.safety_policy or ExecutionSafetyPolicy()).reject_reason(plan.request)
+        if reason:
+            intents.reject(command.context, command.intent, reason, order_ids=(plan.request.order_id,))
+            return None
+        order = self._orders.plan(
+            plan.request,
+            venue_snapshot=command.account_snapshot,
+            risk_amount=_risk_amount(plan.request, command.order_options),
+            at=now,
+            **_margin_args(command.order_options, plan.request.instrument_id),
+        )
+        intents.planned(command.context, command.intent, order_ids=(order.order_id,))
+        if order.status.value == "rejected":
+            intents.fail(command.context, command.intent, order.reason, order_ids=(order.order_id,))
+            return order
+        submitted = self._orders.submit(
+            order.order_id,
+            at=now,
+            params=command.order_options,
+        )
+        if submitted.status.value in {"rejected", "unknown"}:
+            intents.fail(command.context, command.intent, submitted.reason, order_ids=(submitted.order_id,))
+        elif submitted.status.terminal:
+            intents.satisfy(command.context, command.intent, order_ids=(submitted.order_id,))
+        else:
+            intents.ordering(command.context, command.intent, order_ids=(submitted.order_id,))
+        return submitted
 
     def apply_update(self, update: ExecutionUpdate) -> OrderState:
         return self._updates.apply(update)
@@ -95,10 +160,14 @@ class ExecutionApplication:
     def fills_view(self) -> ExecutionFillsView:
         return self._projections.fills_view()
 
-    def submit_intent(self, intent: TradeIntent, context: object) -> object:
-        if self._intent_execution is None:
-            raise RuntimeError("execution application has no intent execution port")
-        return self._intent_execution.submit_intent(intent, context)
+    def orders(self, account: AccountBookRef | None = None) -> tuple[OrderState, ...]:
+        states = self._orders.coordinator.orders.states
+        if account is None:
+            return states
+        return tuple(state for state in states if state.request.context.book == account)
+
+    def current_quantity(self, account: AccountBookRef, instrument_id: object) -> Decimal:
+        return self._orders.coordinator.ledger.positions(account).get(str(instrument_id), Decimal("0"))
 
     def runtime_adapters(self) -> tuple[ExecutionUpdateService, ExecutionProjectionService]:
         """Assembly-only access for the business runtime adapter."""
@@ -107,6 +176,33 @@ class ExecutionApplication:
 __all__ = [
     "CancelOrderCommand",
     "ExecutionApplication",
+    "ExecuteIntentCommand",
     "PlanOrderCommand",
     "SubmitOrderCommand",
 ]
+
+
+def _margin_args(params: Mapping[str, object] | None, instrument_id: object) -> dict[str, object]:
+    values = params or {}
+    currency = values.get("marginCurrency") or values.get("margin_currency")
+    notional = values.get("marginNotional") or values.get("margin_notional")
+    if currency is None and notional is None:
+        return {}
+    if currency is None or notional is None:
+        raise ValueError("marginCurrency and marginNotional must be supplied together")
+    return {
+        "reserve_currency": str(currency),
+        "margin_notional": Decimal(str(notional)),
+        "margin_leverage": Decimal(str(values.get("marginLeverage") or values.get("margin_leverage") or "1")),
+        "margin_instrument_id": str(values.get("marginInstrumentId") or values.get("margin_instrument_id") or instrument_id),
+    }
+
+
+def _risk_amount(request: OrderRequest, params: Mapping[str, object] | None) -> Decimal | None:
+    values = params or {}
+    explicit = values.get("riskNotional") or values.get("risk_notional")
+    if explicit is not None:
+        return Decimal(str(explicit))
+    if request.limit_price is None:
+        return None
+    return request.quantity * request.limit_price

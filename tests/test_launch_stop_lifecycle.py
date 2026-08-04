@@ -5,7 +5,8 @@ import unittest
 
 from kairospy.application.support.launch.application.launcher import bind_stop_signal
 from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
-from kairospy.application.usecases.market.services.runtime.streaming import StreamingMarketDataService
+from kairospy.application.usecases.market.application.runtime import build_market_runtime
+from kairospy.application.usecases.market.application.component import MarketApplication
 from kairospy.domain.market import TradePrint
 from kairospy.domain.reference import MarketRef
 
@@ -53,9 +54,10 @@ class LaunchStopLifecycleTests(unittest.TestCase):
                 async def unsubscribe(self, subscription_id: str) -> None:
                     unsubscribed.append(subscription_id)
 
-            data = StreamingMarketDataService(
+            data = build_market_runtime(
                 source_name="test",
                 stream_connections={"binance": Feed()},
+                market_service=MarketApplication(),
             )
             data.subscribe(
                 MarketDataSubscriptionSpec(
@@ -100,9 +102,10 @@ class LaunchStopLifecycleTests(unittest.TestCase):
                 async def unsubscribe(self, subscription_id: str) -> None:
                     return None
 
-            data = StreamingMarketDataService(
+            data = build_market_runtime(
                 source_name="test",
                 stream_connections={"binance": Feed()},
+                market_service=MarketApplication(),
             )
             data.subscribe(
                 MarketDataSubscriptionSpec(

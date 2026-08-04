@@ -1,3 +1,11 @@
+"""Private translation helpers for provider/catalog input rows.
+
+This module is intentionally not part of the reference application API. It
+converts external row-shaped input into domain catalog objects and should be
+replaced by a concrete infrastructure adapter when a provider needs a stable
+translation boundary.
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping

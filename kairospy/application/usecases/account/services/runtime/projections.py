@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
 
-from kairospy.application.support.runtime.domain.accounts import RuntimeAccountDirectory
+from kairospy.application.usecases.account.application.directory import AccountDirectory
 from kairospy.application.usecases.account.services.snapshots import AccountSnapshotService
 from kairospy.domain.account import (
     AccountBalance,
@@ -30,13 +30,13 @@ from kairospy.domain.account import (
 class RuntimeAccountViewProjectionService:
     runtime: object
     catalog: object | None = None
-    account_directory: RuntimeAccountDirectory | None = None
+    account_directory: AccountDirectory | None = None
 
-    def directory(self) -> RuntimeAccountDirectory:
+    def directory(self) -> AccountDirectory:
         if self.account_directory is not None:
             return self.account_directory
         if self.catalog is not None:
-            return RuntimeAccountDirectory.from_contexts(tuple(self.catalog.accounts()))
+            return AccountDirectory.from_contexts(tuple(self.catalog.accounts()))
         raise RuntimeError("runtime account catalog is required")
 
     def capabilities(self) -> tuple[AccountCapability, ...]:
@@ -118,15 +118,15 @@ class RuntimeAccountViewProjectionService:
 @dataclass(frozen=True, slots=True)
 class RuntimeAccountProjectionService:
     account: AccountContext
-    coordinator: object
+    ledger: object
     cash_currency: str = "USD"
     settlement_currency: str = "USD"
 
     def cash(self, currency: str | None = None) -> Decimal:
-        return self.coordinator.ledger.cash(self.account.book).get(currency or self.cash_currency, Decimal("0"))
+        return self.ledger.cash(self.account.book).get(currency or self.cash_currency, Decimal("0"))
 
     def positions(self) -> dict[str, Decimal]:
-        return dict(self.coordinator.ledger.positions(self.account.book))
+        return dict(self.ledger.positions(self.account.book))
 
     def record_funding(
         self,
@@ -137,7 +137,7 @@ class RuntimeAccountProjectionService:
         instrument_id: str,
         reference_id: str,
     ) -> None:
-        self.coordinator.ledger.record(
+        self.ledger.record(
             AccountEvent(
                 uuid4(),
                 self.account.book,
@@ -161,7 +161,7 @@ class RuntimeAccountService:
         if self.snapshots is not None:
             self.snapshots.apply(snapshot)
 
-    def directory(self) -> RuntimeAccountDirectory:
+    def directory(self) -> AccountDirectory:
         return _require_account_views(self.views).directory()
 
     def capabilities(self) -> tuple[AccountCapability, ...]:
@@ -245,9 +245,9 @@ class RuntimeAccountService:
 def account_projection(
     account: object | None,
     catalog: object | None,
-    execution: object | None,
+    ledger: object | None,
 ) -> RuntimeAccountProjectionService | None:
-    if account is None or catalog is None or execution is None:
+    if account is None or catalog is None or ledger is None:
         return None
     accounts = catalog.accounts()
     if len(accounts) != 1:
@@ -256,7 +256,7 @@ def account_projection(
     cash_currency = str(getattr(service_account, "cash_currency", "") or "USD")
     return RuntimeAccountProjectionService(
         account=accounts[0],
-        coordinator=execution,
+        ledger=ledger,
         cash_currency=cash_currency,
         settlement_currency=cash_currency,
     )

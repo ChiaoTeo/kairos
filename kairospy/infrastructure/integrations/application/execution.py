@@ -25,6 +25,7 @@ class ConnectionOrderSubmissionRequest:
     quantity: Decimal
     limit_price: Decimal | None = None
     options: ConnectionOrderOptions | None = None
+    client_order_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

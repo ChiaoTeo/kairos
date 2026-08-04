@@ -7,52 +7,55 @@ from decimal import Decimal
 import os
 from pathlib import Path
 
-from kairospy.application.support.composition.application.common import reference_runtime
-from kairospy.application.support.composition.application.runtime_services import compose_runtime_assembly
-from kairospy.application.support.composition.services.accounts_authority import (
-    AccountTradeAuthority,
-    AuthorizingAccountRuntime,
-    AuthorizingTradingExecutionService,
+from kairospy.application.support.composition.application.common import in_memory_message_bus, reference_runtime
+from kairospy.application.support.composition.application.runtime import compose_runtime_assembly
+from kairospy.application.system.application.business import SystemApplication
+from kairospy.application.actor.account.application.authority import (
+    authorize_account_runtime,
+    authorize_trading_execution,
+    build_trade_authority,
+    build_trade_authority_lifecycle,
 )
-from kairospy.application.support.runtime.application.launch.lifecycle import TradingLifecycle
-from kairospy.application.support.runtime.application.launch.resources import TradingRuntimeResources
-from kairospy.application.support.runtime.domain.accounts import RuntimeAccountBinding, RuntimeAccountDirectory
-from kairospy.application.support.runtime.domain.connections import DefaultConnectionManager
-from kairospy.application.support.system.application.workspace import AccountRecord, KairosWorkspace
+from kairospy.application.support.launch.application.lifecycle import TradingLifecycle
+from kairospy.application.system.application.resources import TradingSystemResources
+from kairospy.application.usecases.account.application.directory import AccountBinding, AccountDirectory
+from kairospy.application.actor.support.services.connections import IntegrationConnectionScope
+from kairospy.application.usecases.workspace.domain.workspace import AccountRecord, KairosWorkspace
 from kairospy.application.usecases.account.application.provisioning import AccountProvisioningService
 from kairospy.application.usecases.account.application.runtime import SimulatedAccountService
-from kairospy.application.usecases.account.domain.routing import account_book_route
-from kairospy.application.usecases.account.domain.simulated import SimulatedAccount
+from kairospy.application.usecases.account.application.runtime import account_book_route, SimulatedAccount
 from kairospy.application.usecases.execution.application.runtime import build_execution_coordinator, build_simulated_runtime
 from kairospy.domain.account import AccountCapability, AccountContext, AccountFeeSchedule, Environment
 
 
 @dataclass(frozen=True, slots=True)
 class ComposedSystem:
-    resources: TradingRuntimeResources
+    resources: TradingSystemResources
     lifecycle: TradingLifecycle
 
 
-def compose_system(*, launch_directory: Path, launch_id: str, source: object) -> ComposedSystem:
+def compose_system(*, launch_directory: Path, launch_id: str, producer_source: object) -> ComposedSystem:
     workspace = KairosWorkspace.resolve(launch_directory)
-    connections = DefaultConnectionManager()
+    connections = IntegrationConnectionScope()
     directory = _system_account_directory(workspace)
     launch_instance_id = os.environ.get("KAIROS_LAUNCH_INSTANCE_ID") or f"{launch_id}:{os.getpid()}"
-    authority = AccountTradeAuthority(
+    authority = build_trade_authority(
         workspace.account_locks,
         launch_id=launch_id,
         launch_instance_id=launch_instance_id,
         mode="system",
     )
-    authority.acquire_available(_tradable_contexts(directory))
+    authority_lifecycle = build_trade_authority_lifecycle(authority, _tradable_contexts(directory))
     if not directory.bindings:
-        resources = TradingRuntimeResources(
-            source=source,  # type: ignore[arg-type]
+        resources = TradingSystemResources(
+            business=SystemApplication(),
+            input_streams=(producer_source,),  # type: ignore[arg-type]
             reference=reference_runtime(launch_directory),
             connection_scope=connections,
+            message_bus=in_memory_message_bus(),
             assembly=compose_runtime_assembly(),
         )
-        return ComposedSystem(resources, _SystemTradeAuthorityLifecycle(authority))
+        return ComposedSystem(resources, authority_lifecycle)
 
     primary = directory.bindings[0].books[0]
     account = SimulatedAccount(
@@ -66,7 +69,7 @@ def compose_system(*, launch_directory: Path, launch_id: str, source: object) ->
     coordinator = build_execution_coordinator()
     account_service = SimulatedAccountService(
         account,
-        coordinator,
+        coordinator.ledger,
         directory=directory,
         capabilities=_system_capabilities(directory),
         fees=_system_fees(directory),
@@ -78,35 +81,26 @@ def compose_system(*, launch_directory: Path, launch_id: str, source: object) ->
         price_field="close",
         directory=directory,
     )
-    resources = TradingRuntimeResources(
-        source=source,  # type: ignore[arg-type]
-        account=AuthorizingAccountRuntime(account_service, authority),
+    resources = TradingSystemResources(
+        business=SystemApplication(),
+        input_streams=(producer_source,),  # type: ignore[arg-type]
+        account=authorize_account_runtime(account_service, authority),
         reference=reference_runtime(launch_directory),
-        trading_execution=AuthorizingTradingExecutionService(execution, authority),
+        trading_execution=authorize_trading_execution(execution, authority),
         connection_scope=connections,
+        message_bus=in_memory_message_bus(),
         assembly=compose_runtime_assembly(),
     )
-    return ComposedSystem(resources, _SystemTradeAuthorityLifecycle(authority))
+    return ComposedSystem(resources, authority_lifecycle)
 
 
-class _SystemTradeAuthorityLifecycle:
-    def __init__(self, authority: AccountTradeAuthority) -> None:
-        self._authority = authority
-
-    def prepare(self) -> None:
-        return None
-
-    def complete(self) -> None:
-        self._authority.release()
-
-
-def _system_account_directory(workspace: KairosWorkspace) -> RuntimeAccountDirectory:
-    bindings: list[RuntimeAccountBinding] = []
+def _system_account_directory(workspace: KairosWorkspace) -> AccountDirectory:
+    bindings: list[AccountBinding] = []
     for index, record in enumerate(workspace.accounts.list()):
         contexts = tuple(_system_account_context(record, book) for book in record.books)
         if contexts:
             bindings.append(
-                RuntimeAccountBinding(
+                AccountBinding(
                     record.account_id,
                     index,
                     contexts,
@@ -114,7 +108,7 @@ def _system_account_directory(workspace: KairosWorkspace) -> RuntimeAccountDirec
                     trade=_record_has_trade_credential(record),
                 )
             )
-    return RuntimeAccountDirectory(tuple(bindings))
+    return AccountDirectory(tuple(bindings))
 
 
 def _system_account_context(record: AccountRecord, book: object) -> AccountContext:
@@ -127,7 +121,7 @@ def _environment(value: object) -> Environment:
     return Environment({"sandbox": "testnet"}.get(text, text))
 
 
-def _tradable_contexts(directory: RuntimeAccountDirectory) -> tuple[AccountContext, ...]:
+def _tradable_contexts(directory: AccountDirectory) -> tuple[AccountContext, ...]:
     return tuple(
         context
         for binding in directory.bindings
@@ -137,7 +131,7 @@ def _tradable_contexts(directory: RuntimeAccountDirectory) -> tuple[AccountConte
     )
 
 
-def _system_capabilities(directory: RuntimeAccountDirectory) -> tuple[AccountCapability, ...]:
+def _system_capabilities(directory: AccountDirectory) -> tuple[AccountCapability, ...]:
     provisioning = AccountProvisioningService()
     return tuple(
         provisioning.capability(context.book, trade_enabled=binding.trade)
@@ -146,7 +140,7 @@ def _system_capabilities(directory: RuntimeAccountDirectory) -> tuple[AccountCap
     )
 
 
-def _system_fees(directory: RuntimeAccountDirectory) -> tuple[AccountFeeSchedule, ...]:
+def _system_fees(directory: AccountDirectory) -> tuple[AccountFeeSchedule, ...]:
     provisioning = AccountProvisioningService()
     return tuple(provisioning.fee_schedule(context.book, fee_rate=Decimal("0")) for context in directory.contexts())
 

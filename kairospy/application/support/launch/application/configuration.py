@@ -6,19 +6,19 @@ but callers use this module as the stable application boundary.
 
 from __future__ import annotations
 
-from kairospy.application.support.launch.domain.config.backtest import (
+from kairospy.application.support.launch.application.config.backtest import (
     BacktestConfigurationError,
     BacktestLaunchResult,
     ConfiguredBacktest,
     configured_backtest,
 )
-from kairospy.application.support.launch.domain.config.common import (
+from kairospy.application.support.launch.application.config.common import (
     ConfiguredAccount,
     ConfiguredCredential,
     FeedConfig,
     slippage_model,
 )
-from kairospy.application.support.launch.domain.config.live import (
+from kairospy.application.support.launch.application.config.live import (
     BrokerFactory,
     ConfiguredLive,
     LiveConfigurationError,
@@ -26,19 +26,30 @@ from kairospy.application.support.launch.domain.config.live import (
     MarketFeedFactory as LiveMarketFeedFactory,
     configured_live,
 )
-from kairospy.application.support.launch.domain.config.paper import (
+from kairospy.application.support.launch.application.config.paper import (
     ConfiguredPaper,
     MarketFeedFactory as PaperMarketFeedFactory,
     PaperConfigurationError,
     PaperLaunchResult,
     configured_paper,
 )
-from kairospy.application.support.system.application.config import ConfigError, LaunchConfig, load_launch_config
+from kairospy.application.support.launch.application.config.launch import (
+    AccountConfig,
+    ConfigError,
+    LaunchAccountConfig,
+    LaunchConfig,
+    RESERVED_LAUNCH_IDS,
+    SYSTEM_LAUNCH_ID,
+    load_launch_config,
+)
+from kairospy.application.usecases.workspace.domain.config import CONFIG_FILENAME, find_manifest_path
 
 __all__ = [
     "BacktestConfigurationError",
     "BacktestLaunchResult",
     "BrokerFactory",
+    "AccountConfig",
+    "CONFIG_FILENAME",
     "ConfigError",
     "ConfiguredAccount",
     "ConfiguredBacktest",
@@ -47,6 +58,9 @@ __all__ = [
     "ConfiguredPaper",
     "FeedConfig",
     "LaunchConfig",
+    "LaunchAccountConfig",
+    "RESERVED_LAUNCH_IDS",
+    "SYSTEM_LAUNCH_ID",
     "LiveConfigurationError",
     "LiveLaunchResult",
     "LiveMarketFeedFactory",
@@ -56,6 +70,7 @@ __all__ = [
     "configured_backtest",
     "configured_live",
     "configured_paper",
+    "find_manifest_path",
     "load_launch_config",
     "slippage_model",
 ]

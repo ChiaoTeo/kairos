@@ -5,10 +5,11 @@ from datetime import datetime
 from kairospy.domain.execution import ExecutionUpdate
 from kairospy.domain.intent import IntentEvent, IntentEventKind, IntentJournal, IntentState, IntentStatus
 from kairospy.domain.order import OrderState, OrderStatus
+from kairospy.application.usecases.execution.services.coordinator import ExecutionCoordinator
 
 
 class ExecutionUpdateService:
-    def __init__(self, coordinator: object, *, intents: IntentJournal | None = None) -> None:
+    def __init__(self, coordinator: ExecutionCoordinator, *, intents: IntentJournal | None = None) -> None:
         self.coordinator = coordinator
         self.intents = intents
 
@@ -67,4 +68,3 @@ def _path_to_ordering(status: IntentStatus) -> tuple[IntentEventKind, ...]:
 
 
 __all__ = ["ExecutionUpdateService"]
-

@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-from typing import Protocol, cast
+from typing import cast
 
 from kairospy.domain.account import AccountSnapshot
-
-
-class AccountSnapshotStore(Protocol):
-    def update_snapshot(self, snapshot: AccountSnapshot) -> None:
-        ...
+from kairospy.application.usecases.account.protocol import AccountSnapshotStore
 
 
 class AccountSnapshotService:

@@ -5,12 +5,12 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Mapping
 
-from kairospy.application.support.runtime.domain.modes import RuntimeMode
+from kairospy.application.support.launch.domain.modes import RuntimeMode
 from kairospy.application.usecases.market.application.replay import ReplayMarketDataPolicy
 from kairospy.application.usecases.strategy.protocol import Strategy
 from kairospy.domain.account import AccountContext
 
-from kairospy.application.support.launch.domain.config.common import (
+from kairospy.application.support.launch.application.config.common import (
     AccountPerformanceMixin,
     jsonable as common_jsonable,
     load_required_launch_config,
@@ -37,8 +37,6 @@ class BacktestLaunchResult(AccountPerformanceMixin):
     fills: tuple[object, ...] = ()
     equity_curve: tuple[object, ...] = ()
     trades: tuple[object, ...] = ()
-    decision_trace: tuple[object, ...] = ()
-    risk_snapshots: tuple[object, ...] = ()
     metrics: Mapping[str, object] = field(default_factory=dict)
 
 

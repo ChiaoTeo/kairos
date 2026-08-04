@@ -1,90 +1,21 @@
 from __future__ import annotations
 
-from kairospy.application.support.runtime.application.dispatch.context import RuntimeContext
-from kairospy.application.support.runtime.services.orchestration.state import RuntimeFrame, RuntimeLaunchResult, Callback
-from kairospy.application.support.runtime.domain.events import RuntimeEnvelope
-from kairospy.application.usecases.strategy.protocol import Strategy
-from kairospy.domain.intent import Intent, IntentJournal
+from typing import Protocol
+
+from kairospy.application.support.runtime.services.orchestration.state import RuntimeFrame, RuntimeResult
+from kairospy.application.support.messaging import Message
 
 
-class RuntimeDispatcher:
-    def __init__(
-        self,
-        *,
-        strategy: Strategy,
-        intents: IntentJournal,
-        context: RuntimeContext,
-    ) -> None:
-        self.strategy = strategy
-        self.intents = intents
-        self.context = context
+class RuntimeDispatcherPort(Protocol):
+    """Generic runtime callback port implemented by a business usecase."""
 
-    def start(self, frame: RuntimeFrame) -> None:
-        self._call(frame, "on_start", self.context.bind(None))
+    context: object
 
-    def process(self, frame: RuntimeFrame, event: RuntimeEnvelope) -> None:
-        self._ensure_active(frame)
-        frame.event_count += 1
-        frame.last_event = event
-        context = self.context.bind(event)
-        hook = hook_for(event)
-        if hook is None:
-            frame.callbacks.append(Callback("runtime", event.sequence, ()))
-            return
-        if hook == "on_intent":
-            if not isinstance(event.payload, Intent):
-                raise TypeError("intent runtime envelope payload must implement Intent")
-            self._call(frame, hook, context, event.payload, event=event)
-            return
-        self._call(frame, hook, context, event, event=event)
-
-    def finish(self, frame: RuntimeFrame) -> RuntimeLaunchResult:
-        self._ensure_active(frame)
-        self._call(frame, "on_end", self.context.bind(frame.last_event))
-        frame.finished = True
-        return RuntimeLaunchResult(
-            strategy_id=self.strategy.strategy_id,
-            event_count=frame.event_count,
-            callbacks=tuple(frame.callbacks),
-            intent_count=len(self.intents.list(strategy_id=self.strategy.strategy_id)),
-            last_event=frame.last_event,
-        )
-
-    def _call(
-        self,
-        frame: RuntimeFrame,
-        hook: str,
-        context: RuntimeContext,
-        *args: object,
-        event: RuntimeEnvelope | None = None,
-    ) -> None:
-        returned = getattr(self.strategy, hook)(context, *args)
-        if returned is not None:
-            raise TypeError(f"{hook} must return None; emit intents with context.intent()")
-        frame.callbacks.append(
-            Callback(
-                hook,
-                None if event is None else event.sequence,
-                tuple(str(intent.intent_id) for intent in context.emitted_intents),
-            )
-        )
-
-    @staticmethod
-    def _ensure_active(frame: RuntimeFrame) -> None:
-        if frame.finished:
-            raise RuntimeError("runtime session is already finished")
+    def start(self, frame: RuntimeFrame) -> None: ...
+    def process(self, frame: RuntimeFrame, event: Message, *, hook: str | None) -> object | None: ...
+    def finish(self, frame: RuntimeFrame) -> RuntimeResult: ...
 
 
-def hook_for(event: RuntimeEnvelope) -> str | None:
-    if event.domain in {"market", "data"}:
-        return "on_data"
-    if event.domain == "clock":
-        return "on_clock"
-    if event.domain == "system":
-        return "on_system"
-    if event.domain == "intent":
-        return "on_intent"
-    return None
+RuntimeDispatcher = RuntimeDispatcherPort
 
-
-__all__ = ["RuntimeDispatcher", "hook_for"]
+__all__ = ["RuntimeDispatcher", "RuntimeDispatcherPort"]

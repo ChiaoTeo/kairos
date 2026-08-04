@@ -5,11 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from kairospy.application.support.runtime.domain.accounts import RuntimeAccountDirectory
-from kairospy.application.usecases.execution.services.intents import ExecutionIntentService
+from kairospy.application.usecases.account.application.directory import AccountDirectory
+from kairospy.application.usecases.execution.application.component import ExecutionApplication, ExecuteIntentCommand
+from kairospy.application.usecases.execution.protocol import ExecutionUpdateSource
+from kairospy.application.usecases.execution.services.coordinator import ExecutionCoordinator
 from kairospy.application.usecases.execution.services.orders import ExecutionOrderService, SymbolResolver, margin_plan_args
 from kairospy.application.usecases.execution.domain.policy import ExecutionSafetyPolicy
-from kairospy.application.support.runtime.domain.events import RuntimeEnvelope
+from kairospy.application.support.messaging import Message
 from kairospy.domain.account import AccountBookRef, AccountContext, AccountSnapshot
 from kairospy.domain.intent import TradeIntent
 from kairospy.domain.order import OrderEvent, OrderEventKind, OrderRequest, OrderState
@@ -17,68 +19,48 @@ from kairospy.domain.order import OrderEvent, OrderEventKind, OrderRequest, Orde
 
 @dataclass(frozen=True, slots=True)
 class LiveExecutionService:
-    coordinator: object
+    coordinator: ExecutionCoordinator
     account: AccountContext | None = None
-    order_execution: object | None = None
+    order_connection: object | None = None
     symbol_resolver: SymbolResolver | None = None
     account_state: object | None = None
     safety_policy: ExecutionSafetyPolicy | None = None
     order_params: Mapping[str, object] | None = None
-    directory: RuntimeAccountDirectory | None = None
+    directory: AccountDirectory | None = None
     routes: tuple[object, ...] = ()
+    update_source: ExecutionUpdateSource | None = None
+    update_symbol: str | None = None
+    _event_sequence: int = 0
 
-    async def events(self) -> AsyncIterator[RuntimeEnvelope]:
-        if False:
-            yield
+    async def events(self) -> AsyncIterator[Message]:
+        if self.update_source is None or self.account is None:
+            return
+        async for update in self.update_source.events(self.account, symbol=self.update_symbol):
+            self._event_sequence += 1
+            yield Message(topic="execution.update", payload=update, published_at=update.observed_at, producer="execution.service", producer_sequence=self._event_sequence)
 
-    def submit_intent(self, intent: TradeIntent, context: object) -> bool:
+    def execute_intent(self, intent: TradeIntent, context: object) -> bool:
         if getattr(context, "now", None) is None:
             return False
         account = self._resolve_account(intent)
-        if account is not None and not self._can_trade(account.book):
-            ExecutionIntentService().reject(context, intent, _not_tradable_reason(account.book))  # type: ignore[arg-type]
-            return True
         selected = self._require_account(account)
         order_params = self._order_params(selected.book)
-        intents = ExecutionIntentService()
         current = self.coordinator.ledger.positions(selected.book).get(str(intent.instrument_id), Decimal("0"))
-        plan = intents.plan_target_position_order(
-            intent,
-            context,  # type: ignore[arg-type]
-            account=selected,
-            current_quantity=current,
-            order_id=f"{intent.intent_id}-live-order",
+        ExecutionApplication.compose(
+            self.coordinator,
+            order_connection=self.order_connection,
+            symbol_resolver=self.symbol_resolver,
+        ).execute_intent(
+            ExecuteIntentCommand(
+                intent=intent,
+                context=context,
+                account=selected,
+                current_quantity=current,
+                account_snapshot=self._snapshot(selected.book),
+                order_options=order_params,
+                safety_policy=self.safety_policy,
+            )
         )
-        if plan is None:
-            return True
-
-        request = plan.request
-        safety_reason = (self.safety_policy or ExecutionSafetyPolicy()).reject_reason(request)
-        if safety_reason:
-            intents.reject(context, intent, safety_reason, order_ids=(request.order_id,))  # type: ignore[arg-type]
-            return True
-
-        orders = self._orders()
-        state = orders.plan(
-            request,
-            venue_snapshot=self._snapshot(selected.book),
-            at=context.now,  # type: ignore[attr-defined]
-            **margin_plan_args(order_params, request.instrument_id),
-        )
-        intents.planned(context, intent, order_ids=(state.order_id,))  # type: ignore[arg-type]
-        if state.status.value == "rejected":
-            intents.fail(context, intent, state.reason, order_ids=(state.order_id,))  # type: ignore[arg-type]
-            return True
-
-        state = orders.submit(
-            state.request.order_id,
-            at=context.now,  # type: ignore[attr-defined]
-            params=order_params,
-        )
-        if state.status.value in {"rejected", "unknown"}:
-            intents.fail(context, intent, state.reason, order_ids=(state.order_id,))  # type: ignore[arg-type]
-        else:
-            intents.ordering(context, intent, order_ids=(state.order_id,))  # type: ignore[arg-type]
         return True
 
     def plan_order(
@@ -93,10 +75,6 @@ class LiveExecutionService:
         venue_snapshot: AccountSnapshot | None = None,
         at: datetime,
     ) -> OrderState:
-        if not self._can_trade(request.context.book):
-            state = self.coordinator.orders.plan(request)
-            self.coordinator.orders.record(OrderEvent(state.order_id, OrderEventKind.REJECTED, at, reason=_not_tradable_reason(request.context.book)))
-            return self.coordinator.orders.get(state.order_id)
         return self._orders().plan(
             request,
             reserve_currency=reserve_currency,
@@ -115,11 +93,6 @@ class LiveExecutionService:
         at: datetime,
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
-        state = self.coordinator.orders.get(order_id)
-        if not self._can_trade(state.request.context.book):
-            return self.coordinator.orders.record(
-                OrderEvent(order_id, OrderEventKind.REJECTED, at, reason=_not_tradable_reason(state.request.context.book))
-            )
         return self._orders().submit(order_id, at=at, params=params)
 
     def cancel_order(
@@ -129,17 +102,12 @@ class LiveExecutionService:
         at: datetime,
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
-        state = self.coordinator.orders.get(order_id)
-        if not self._can_trade(state.request.context.book):
-            return self.coordinator.orders.record(
-                OrderEvent(order_id, OrderEventKind.REJECTED, at, reason=_not_tradable_reason(state.request.context.book))
-            )
         return self._orders().cancel(order_id, at=at, params=params)
 
     def _orders(self) -> ExecutionOrderService:
         return ExecutionOrderService(
             self.coordinator,
-            order_execution=self.order_execution,
+            order_connection=self.order_connection,
             symbol_resolver=self.symbol_resolver,
         )
 
@@ -174,13 +142,5 @@ class LiveExecutionService:
             if route.book == account:
                 return route
         return None
-
-    def _can_trade(self, account: AccountBookRef) -> bool:
-        route = self._route(account)
-        return True if route is None else route.can_trade
-
-def _not_tradable_reason(account: AccountBookRef) -> str:
-    return f"account {account.value} is not tradable with the selected credential"
-
 
 __all__ = ["LiveExecutionService"]

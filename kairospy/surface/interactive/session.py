@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
-from kairospy.application.support.system.application.facade.project import ProjectFacade
+from kairospy.application.usecases.workspace.application.project import ProjectAdminApplication
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +51,7 @@ class SurfaceContext:
         product: str = "top",
         refresh_interval_seconds: float = 2.0,
         stale_after_seconds: float = 5.0,
-        project_facade: ProjectFacade | None = None,
+        project_facade: ProjectAdminApplication | None = None,
     ) -> None:
         if refresh_interval_seconds <= 0:
             raise ValueError("refresh_interval_seconds must be positive")
@@ -60,7 +60,7 @@ class SurfaceContext:
         self.product = product
         self.refresh_interval_seconds = refresh_interval_seconds
         self.stale_after_seconds = stale_after_seconds
-        self._project_facade = project_facade or ProjectFacade()
+        self._project_facade = project_facade or ProjectAdminApplication()
         self._snapshot: SurfaceSnapshot | None = None
 
     def set_product(self, product: str) -> None:

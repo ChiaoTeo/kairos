@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from kairospy.application.support.system.application.facade.account import ACCOUNT_SCHEMAS, AccountFacade
+from kairospy.application.usecases.account.application.schemas import ACCOUNT_SCHEMAS
+from kairospy.application.usecases.account.application.commands import AccountCommandApplication
+from kairospy.application.support.composition.application.cli import build_account_command
 
 
 _ENVIRONMENTS = ("paper", "testnet", "live")
@@ -22,7 +24,7 @@ class WizardEcho(Protocol):
 
 @dataclass(slots=True)
 class AccountCreateWizard:
-    facade: AccountFacade = field(default_factory=AccountFacade)
+    facade: AccountCommandApplication = field(default_factory=build_account_command)
     fields: dict[str, str | None] = field(default_factory=dict)
     credential_fields: dict[str, str] = field(default_factory=dict)
     current: str = "account_id"
@@ -226,9 +228,9 @@ def run_account_create_wizard(
     *,
     prompt: WizardPrompt,
     echo: WizardEcho,
-    facade: AccountFacade | None = None,
+    facade: AccountCommandApplication | None = None,
 ) -> int:
-    wizard = AccountCreateWizard(facade=facade or AccountFacade())
+    wizard = AccountCreateWizard(facade=facade or build_account_command())
     message = wizard.start()
     while not wizard.complete:
         answer = prompt(message)

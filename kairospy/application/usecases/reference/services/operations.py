@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Mapping
 
 from kairospy.domain.reference import Asset, AssetId, AssetType, EntityId, LifecycleEvent
+from kairospy.application.usecases.reference.protocol import ReferenceStore
 
 from .catalogs import ReferenceCatalogService
 from .provider import EquityProviderRefreshService, ReferenceDataRefreshService
@@ -20,8 +21,30 @@ class ReferenceProviderRefreshResult:
 ReferenceSourceRefreshResult = ReferenceProviderRefreshResult
 
 
+@dataclass(slots=True)
+class ReferenceRefreshWorkflow:
+    """Private refresh workflow used by the reference application facade."""
+
+    store: ReferenceStore
+
+    def exchange(self, source: object, **kwargs: object) -> ReferenceSourceRefreshResult:
+        return refresh_exchange_reference(self.store, source, **kwargs)  # type: ignore[arg-type]
+
+    def exchange_with_delist_schedule(self, source: object, **kwargs: object) -> ReferenceSourceRefreshResult:
+        return refresh_exchange_reference_with_delist_schedule(self.store, source, **kwargs)  # type: ignore[arg-type]
+
+    def provider(self, source: object, **kwargs: object) -> ReferenceSourceRefreshResult:
+        return refresh_provider_reference(self.store, source, **kwargs)  # type: ignore[arg-type]
+
+    def equity(self, source: object, **kwargs: object) -> ReferenceProviderRefreshResult:
+        return refresh_equity_provider(self.store, source, **kwargs)  # type: ignore[arg-type]
+
+    def lifecycle_events(self, source: object, **kwargs: object) -> tuple[LifecycleEvent, ...]:
+        return sync_lifecycle_events(self.store, source, **kwargs)  # type: ignore[arg-type]
+
+
 def add_asset(
-    store: object,
+    store: ReferenceStore,
     *,
     symbol: str,
     asset_type: AssetType | str,
@@ -45,7 +68,7 @@ def add_asset(
 
 
 def refresh_instrument_provider(
-    store: object,
+    store: ReferenceStore,
     provider: object,
     *,
     as_of: datetime,
@@ -64,7 +87,7 @@ def refresh_instrument_provider(
 
 
 def refresh_exchange_reference(
-    store: object,
+    store: ReferenceStore,
     exchange: object,
     *,
     as_of: datetime,
@@ -83,7 +106,7 @@ def refresh_exchange_reference(
 
 
 def refresh_instrument_provider_with_delist_schedule(
-    store: object,
+    store: ReferenceStore,
     provider: object,
     *,
     as_of: datetime,
@@ -108,7 +131,7 @@ def refresh_instrument_provider_with_delist_schedule(
 
 
 def refresh_exchange_reference_with_delist_schedule(
-    store: object,
+    store: ReferenceStore,
     exchange: object,
     *,
     as_of: datetime,
@@ -129,7 +152,7 @@ def refresh_exchange_reference_with_delist_schedule(
 
 
 def refresh_equity_provider(
-    store: object,
+    store: ReferenceStore,
     provider: object,
     *,
     as_of: datetime,
@@ -146,7 +169,7 @@ def refresh_equity_provider(
 
 
 def refresh_provider_reference(
-    store: object,
+    store: ReferenceStore,
     provider: object,
     *,
     as_of: datetime,
@@ -181,6 +204,7 @@ def sync_lifecycle_events(
 
 __all__ = [
     "ReferenceProviderRefreshResult",
+    "ReferenceRefreshWorkflow",
     "ReferenceSourceRefreshResult",
     "add_asset",
     "refresh_exchange_reference",

@@ -7,7 +7,7 @@ from typing import Mapping
 from typing import Protocol
 from typing import TypeVar
 
-from kairospy.application.support.system.application.config import AccountConfig
+from kairospy.application.support.launch.application.config.launch import AccountConfig
 
 from .config import account_selector, optional_int, optional_text
 

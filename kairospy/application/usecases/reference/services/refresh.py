@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from kairospy.domain.reference import LifecycleEvent, MarketDefinition, ReferenceCatalog
+from kairospy.application.usecases.reference.protocol import ReferenceStore
 from kairospy.application.usecases.reference.services.catalogs import ReferenceCatalogService
 
 from ..domain.transition import apply_catalog_snapshot
@@ -19,7 +20,7 @@ class ReferenceRefreshResult:
 
 @dataclass(slots=True)
 class ReferenceRefreshService:
-    store: object | ReferenceCatalogService
+    store: ReferenceStore | ReferenceCatalogService
 
     @property
     def catalogs(self) -> ReferenceCatalogService:

@@ -5,14 +5,14 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Mapping, Protocol
 
-from kairospy.application.support.system.application.config import LaunchAccountConfig
-from kairospy.application.support.runtime.domain.modes import RuntimeMode
+from kairospy.application.support.launch.application.config.launch import LaunchAccountConfig
+from kairospy.application.support.launch.domain.modes import RuntimeMode
 from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
 from kairospy.application.usecases.strategy.protocol import Strategy
 from kairospy.domain.account import AccountBookRef, AccountContext
-from kairospy.infrastructure.integrations.application.market import MarketStreamConnection
+from kairospy.application.usecases.market.application.feed import MarketStreamConnection
 
-from kairospy.application.support.launch.domain.config.common import (
+from kairospy.application.support.launch.application.config.common import (
     AccountPerformanceMixin,
     AccountResolver,
     ConfiguredAccount,
@@ -26,7 +26,7 @@ from kairospy.application.support.launch.domain.config.common import (
     strategy_params as common_strategy_params,
     table as common_table,
 )
-from kairospy.application.usecases.execution.domain.policy import ExecutionSafetyPolicy
+from kairospy.application.usecases.execution.application.runtime import ExecutionSafetyPolicy
 
 
 class LiveConfigurationError(ValueError):
@@ -64,8 +64,6 @@ class LiveLaunchResult(AccountPerformanceMixin):
     account_view: object | None
     fills: tuple[object, ...] = ()
     trades: tuple[object, ...] = ()
-    decision_trace: tuple[object, ...] = ()
-    risk_snapshots: tuple[object, ...] = ()
     metrics: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -129,7 +127,11 @@ def configured_live(
         market_feed_resolver=feed_resolver,
         source_name=str(live.get("source_name") or f"{venue}-live"),
         feeds=feeds_config,
-        managed_market_feed_resolver=market_feed_factory is None and market_feed_resolver is None,
+        managed_market_feed_resolver=(
+            market_feed_factory is None
+            and market_feed_resolver is None
+            and market_feed_resolver_builder is None
+        ),
         account_config=account_config,
         launch_account_configs=launch_account_configs,
         broker_factory=broker_factory,

@@ -1,0 +1,12 @@
+[launch]
+id = "example-massive-spy-option-quote"
+mode = "paper"
+strategy = "examples.strategies.massive_spy_option_quote:strategy"
+
+[account]
+ref = "paper"
+
+[feeds.massive_options]
+venue = "massive"
+market = "option"
+credential = "massive_stocks"

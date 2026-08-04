@@ -5,16 +5,18 @@ from typing import Mapping
 from kairospy.application.usecases.market.application.resolver import MarketDataResolver
 from kairospy.application.usecases.market.domain.specs import MarketDataSpec
 from kairospy.application.support.launch.application.configuration import ConfiguredBacktest
-from kairospy.application.support.runtime.domain.modes import RuntimeMode
-from kairospy.application.support.runtime.domain.components import RuntimeComponents
-from kairospy.application.support.runtime.domain.connections import DefaultConnectionManager
-from kairospy.application.usecases.market.application.runtime import BacktestMarketDataService
+from kairospy.application.support.launch.application.results import backtest_result
+from kairospy.application.support.launch.domain.modes import RuntimeMode
+from kairospy.application.actor.support.services.connections import IntegrationConnectionScope
+from kairospy.application.usecases.market.application.runtime import BacktestMarketDataService, build_backtest_market
+from kairospy.application.system.application.business import SystemApplication
 from kairospy.application.support.composition.application.resources import DriverName, ExchangeName, public_market_access
 from kairospy.application.support.composition.application.accounts import BacktestAccountResources
 from kairospy.domain.reference import MarketResolver
 from kairospy.infrastructure.persistence.application.market_data import DataStore
 
-from .common import ComposedLaunch, optional_default_text, reference_runtime
+from .common import ComposedLaunch, in_memory_message_bus, optional_default_text, reference_runtime
+from .runtime import compose_runtime_assembly
 
 
 class BacktestComposition:
@@ -22,23 +24,20 @@ class BacktestComposition:
         data = backtest_market_data_service(configured)
         self._configure_market_downloads(configured, data)
         account_resources = BacktestAccountResources.from_configured(configured)
-        connections = DefaultConnectionManager()
-        from kairospy.application.support.runtime.application.launch.resources import TradingRuntimeResources
+        connections = IntegrationConnectionScope()
+        from kairospy.application.system.application.resources import TradingSystemResources
 
-        resources = TradingRuntimeResources(
-            source=data,
-            components=RuntimeComponents(
-                market=data,
-                account=account_resources.account,
-                account_catalog=account_resources.account,
-                execution=account_resources.execution,
-                reference=reference_runtime(
-                    configured.launch_directory,
-                    default_venue=_backtest_default_venue(configured.backtest_config),
-                    default_market=_backtest_default_market(configured.backtest_config),
-                ),
+        resources = TradingSystemResources(
+            business=SystemApplication(),
+            data=data,
+            reference=reference_runtime(
+                configured.launch_directory,
+                default_venue=_backtest_default_venue(configured.backtest_config),
+                default_market=_backtest_default_market(configured.backtest_config),
             ),
             connection_scope=connections,
+            message_bus=in_memory_message_bus(),
+            assembly=compose_runtime_assembly(),
         )
         return ComposedLaunch(
             mode=RuntimeMode.BACKTEST,
@@ -48,7 +47,7 @@ class BacktestComposition:
             normalized_config=configured.normalized_config,
             resources=resources,
             lifecycle=None,
-            build_result=lambda runtime: account_resources.build_result(configured, runtime),
+            build_result=lambda runtime: backtest_result(configured, account_resources, runtime),
         )
 
     def _configure_market_downloads(self, configured: ConfiguredBacktest, data: BacktestMarketDataService) -> None:
@@ -56,13 +55,17 @@ class BacktestComposition:
             return
 
         def factory(spec: MarketDataSpec):
-            return public_market_access(_exchange_name(spec.venue), DriverName.ccxt)
+            return public_market_access(
+                _exchange_name(spec.venue),
+                DriverName.ccxt,
+                product=_product_family(spec.market),
+            )
 
         data.set_historical_client_factory(factory)
 
 
 def backtest_market_data_service(configured: ConfiguredBacktest) -> BacktestMarketDataService:
-    return BacktestMarketDataService(
+    return build_backtest_market(
         DataStore(configured.data_root, storage_format=configured.storage_format),
         resolver=MarketDataResolver(
             MarketResolver(
@@ -90,6 +93,17 @@ def _exchange_name(value: object) -> ExchangeName:
         return ExchangeName(str(value))
     except ValueError as error:
         raise ValueError(f"unsupported exchange: {value}") from error
+
+
+def _product_family(value: object) -> object:
+    from kairospy.infrastructure.integrations.domain import ProductFamily
+
+    text = str(value).strip().lower()
+    if text in {"equity", "stock", "stocks"}:
+        return ProductFamily.EQUITY
+    if text in {"swap", "perp", "perpetual", "future", "futures", "usd_margined_futures"}:
+        return ProductFamily.USD_M_FUTURES
+    return ProductFamily.SPOT
 
 
 __all__ = ["BacktestComposition", "backtest_market_data_service"]

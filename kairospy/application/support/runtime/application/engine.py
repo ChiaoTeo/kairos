@@ -2,53 +2,43 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from kairospy.application.support.runtime.application.launch import RuntimeLaunchSession
-from kairospy.application.support.runtime.application.projection import RuntimeProjector
-from kairospy.application.support.runtime.domain.components import RuntimeComponents
-from kairospy.application.support.runtime.domain.modes import RuntimeMode
-from kairospy.application.support.runtime.services.orchestration.kernel import RuntimeKernel
-from kairospy.application.support.runtime.services.orchestration.state import RuntimeStores, RuntimeStep
-from kairospy.application.usecases.strategy.protocol import Strategy
-from kairospy.domain.intent import IntentJournal
+from kairospy.application.support.runtime.services.orchestration.kernel import RuntimeKernel, RuntimeSession
+from kairospy.application.support.runtime.services.orchestration.state import Callback, RuntimeCycle, RuntimeFrame, RuntimeResult, RuntimeStores
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeEngineSpec:
-    launch_id: str
-    mode: RuntimeMode | str
-    strategy: Strategy
-    components: RuntimeComponents | None = None
+    program_id: str
+    dispatcher_factory: object
+    system_call: object | None = None
     stores: RuntimeStores | None = None
-    processors: RuntimeProjector | None = None
-
-    def __post_init__(self) -> None:
-        if not self.launch_id.strip():
-            raise ValueError("launch_id is required")
-        object.__setattr__(self, "mode", RuntimeMode(self.mode))
+    reference: object | None = None
 
 
-def create_runtime_launch_session(spec: RuntimeEngineSpec) -> RuntimeLaunchSession:
-    components = spec.components or RuntimeComponents()
-    stores = spec.stores or RuntimeStores(intents=IntentJournal())
-    if spec.processors is None:
-        raise ValueError("runtime processors must be supplied by composition")
+def create_runtime_kernel(spec: RuntimeEngineSpec) -> RuntimeKernel:
+    stores = spec.stores or RuntimeStores()
     kernel = RuntimeKernel(
-        spec.strategy,
-        components=components,
+        spec.dispatcher_factory,
+        program_id=spec.program_id,
+        system_call=spec.system_call,
         stores=stores,
-        processors=spec.processors,
+        reference=spec.reference,
     )
-    return RuntimeLaunchSession(
-        launch_id=spec.launch_id,
-        mode=spec.mode,
-        kernel=kernel,
-        session=kernel.start(),
-    )
+    return kernel
+
+
+def create_runtime_session(spec: RuntimeEngineSpec):
+    """Create the public runtime session without exposing orchestration services."""
+    return create_runtime_kernel(spec).start()
 
 
 __all__ = [
     "RuntimeEngineSpec",
     "RuntimeStores",
-    "RuntimeStep",
-    "create_runtime_launch_session",
+    "RuntimeCycle",
+    "RuntimeSession",
+    "RuntimeFrame",
+    "RuntimeResult",
+    "Callback",
+    "create_runtime_session",
 ]

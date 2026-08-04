@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kairospy.application.support.system.application.artifacts import LaunchOutput
+from kairospy.application.support.launch.application.artifacts import LaunchOutput
 from kairospy.infrastructure.persistence.application.artifacts import LaunchInstanceStore
 
 
@@ -17,7 +17,6 @@ def launch_output(
         launch_id=launch_id,
         mode=mode,
         write_legacy_jsonl=write_legacy_jsonl,
-        launch_directory=launch_directory,
         store=LaunchInstanceStore(launch_directory),
     )
 

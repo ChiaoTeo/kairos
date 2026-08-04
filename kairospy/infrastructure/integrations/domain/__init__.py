@@ -3,6 +3,7 @@ from .bindings import (
     IntegrationBinding,
     TransportKind,
 )
+from .capabilities import IntegrationCapability
 from .connections import (
     ConnectionHealth,
     ConnectionIdentity,
@@ -11,7 +12,7 @@ from .connections import (
     RemoteSubscriptionSnapshot,
 )
 from .credentials import CredentialRef
-from .participants import (
+from kairospy.domain.reference import (
     BrokerId,
     BrokerRef,
     ExchangeId,
@@ -24,10 +25,12 @@ from .participants import (
 )
 from .policies import binding_is_public
 from .products import ProductFamily
+from .routes import AdapterRef, IntegrationRoute
 from .updates import IntegrationEvent
 
 __all__ = [
     "AccessScope",
+    "AdapterRef",
     "BrokerId",
     "BrokerRef",
     "ConnectionHealth",
@@ -38,7 +41,9 @@ __all__ = [
     "ExchangeId",
     "ExchangeRef",
     "IntegrationBinding",
+    "IntegrationCapability",
     "IntegrationEvent",
+    "IntegrationRoute",
     "ParticipantId",
     "ParticipantKind",
     "ParticipantRef",

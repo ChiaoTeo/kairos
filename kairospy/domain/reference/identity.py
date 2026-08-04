@@ -83,6 +83,17 @@ class ProviderId(ReferenceId):
     pass
 
 
+# Stable symbolic names for the built-in reference identifiers.  These are
+# values of the shared ReferenceId types, not Integration-specific enums.
+ExchangeId.BINANCE = ExchangeId("binance")  # type: ignore[attr-defined]
+ExchangeId.OKX = ExchangeId("okx")  # type: ignore[attr-defined]
+ExchangeId.HYPERLIQUID = ExchangeId("hyperliquid")  # type: ignore[attr-defined]
+BrokerId.BINANCE = BrokerId("binance")  # type: ignore[attr-defined]
+BrokerId.OKX = BrokerId("okx")  # type: ignore[attr-defined]
+BrokerId.IBKR = BrokerId("ibkr")  # type: ignore[attr-defined]
+ProviderId.MASSIVE = ProviderId("massive")  # type: ignore[attr-defined]
+
+
 def reference_slug(value: object) -> str:
     text = str(value).strip().lower()
     return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", text)).strip("_")

@@ -5,7 +5,7 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.support.system.application.facade.config import ConfigFacade
+from kairospy.application.usecases.workspace.application.configuration import ConfigAdminApplication
 from kairospy.surface.cli.options import OutputFormat
 from kairospy.surface.cli.output import write_cli_result
 
@@ -13,7 +13,7 @@ from kairospy.surface.cli.output import write_cli_result
 config_app = typer.Typer(no_args_is_help=True, help="Workspace configuration commands")
 profile_app = typer.Typer(no_args_is_help=True, help="Local CLI profile commands")
 config_app.add_typer(profile_app, name="profile")
-_CONFIG = ConfigFacade()
+_CONFIG = ConfigAdminApplication()
 
 
 @config_app.command("paths")

@@ -6,14 +6,18 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Protocol
 
-from kairospy.application.usecases.execution.services.intents import ExecutionIntentService
-from kairospy.domain.account import AccountContext
 from kairospy.application.usecases.execution.services.coordinator import ExecutionCoordinator, FillReport
 from kairospy.application.usecases.execution.domain.result import SimulatedFill
 from kairospy.domain.intent import TradeIntent
 from kairospy.domain.market import Bar, Quote, RateObservation, TradePrint
 from kairospy.domain.order import OrderEvent, OrderEventKind, OrderRequest, OrderSide, OrderType
 from kairospy.application.usecases.execution.domain.simulation import BasisPointSlippageModel
+from kairospy.infrastructure.integrations.application.execution import (
+    ConnectionOrderCancelRequest,
+    ConnectionOrderCancelResult,
+    ConnectionOrderSubmissionRequest,
+    ConnectionOrderSubmissionResult,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,79 +82,60 @@ class PercentageCommissionModel:
         return max(quantity * price * self.rate, self.minimum)
 
 
-class SimulatedExecutionService:
+class SimulatedOrderConnection:
+    """Integration-shaped connection used by simulated execution.
+
+    The execution application still creates and submits an order through the
+    same connection contract as live execution. This connection only replaces
+    the external venue with a deterministic fill model.
+    """
+
     def __init__(
         self,
         *,
-        account: AccountContext,
+        coordinator: ExecutionCoordinator,
+        context: object,
+        intent: TradeIntent,
         cash_currency: str,
         price_field: str,
-        coordinator: ExecutionCoordinator,
-        fill_model: FillModel | None = None,
-        slippage_model: SlippageModel | None = None,
-        commission_model: CommissionModel | None = None,
+        fill_model: FillModel,
+        slippage_model: SlippageModel,
+        commission_model: CommissionModel,
     ) -> None:
-        if not cash_currency.strip():
-            raise ValueError("simulated execution requires cash_currency")
-        if not price_field.strip():
-            raise ValueError("simulated execution requires price_field")
-        self.account = account
+        self.coordinator = coordinator
+        self.context = context
+        self.intent = intent
         self.cash_currency = cash_currency
         self.price_field = price_field
-        self.coordinator = coordinator
-        self.fill_model = fill_model or ImmediateFillModel()
-        self.slippage_model = slippage_model or NoSlippageModel()
-        self.commission_model = commission_model or PercentageCommissionModel()
-        self.intents = ExecutionIntentService()
-        self._order_number = 0
+        self.fill_model = fill_model
+        self.slippage_model = slippage_model
+        self.commission_model = commission_model
+        self.last_fill: SimulatedFill | None = None
 
-    def submit_intent(self, intent: TradeIntent, context: object) -> SimulatedFill | None:
-        if context.now is None:
-            return None
-
-        current = self.coordinator.ledger.positions(self.account.book).get(str(intent.instrument_id), Decimal("0"))
-        plan = self.intents.plan_target_position_order(
-            intent,
-            context,
-            account=self.account,
-            current_quantity=current,
-            order_id=self._next_order_id(intent.intent_id),
-        )
-        if plan is None:
-            return None
-        request = plan.request
-        side = request.side
-        quantity = request.quantity
-        order_id = request.order_id
-        price = self._price(context, intent)
-        if price is None:
-            self.intents.reject(context, intent, f"missing price field: {self.price_field}", order_ids=(order_id,))
-            return None
-
-        self.coordinator.plan_order(request, at=context.now)
-        self.intents.planned(context, intent, order_ids=(order_id,))
-        self.coordinator.submit_order(order_id, at=context.now)
-        self.intents.ordering(context, intent, order_ids=(order_id,))
-
-        market_payload = self._market_payload(context, intent)
-        candidate = self.fill_model.fill(request, market_price=price, payload=market_payload)
+    def submit(self, request: ConnectionOrderSubmissionRequest) -> ConnectionOrderSubmissionResult:
+        order_id = request.client_order_id
+        if not order_id:
+            raise ValueError("simulated order submission requires client_order_id")
+        state = self.coordinator.orders.get(order_id)
+        payload = self._market_payload()
+        raw_price = self._projected_market_value(payload)
+        venue_id = f"simulated.{order_id}"
+        if raw_price is None:
+            self.coordinator.orders.record(OrderEvent(order_id, OrderEventKind.REJECTED, self.context.now, reason=f"missing price field: {self.price_field}"))
+            return ConnectionOrderSubmissionResult(venue_id, "REJECTED")
+        candidate = self.fill_model.fill(state.request, market_price=raw_price, payload=payload)
         if candidate is None:
-            self.coordinator.orders.record(OrderEvent(order_id, OrderEventKind.REJECTED, context.now, reason="not filled"))
-            self.intents.reject(context, intent, "order was not filled by fill model", order_ids=(order_id,))
-            return None
-        fill_quantity = min(candidate.quantity, quantity)
-        if fill_quantity <= 0:
-            self.coordinator.orders.record(OrderEvent(order_id, OrderEventKind.REJECTED, context.now, reason="zero fill"))
-            self.intents.reject(context, intent, "fill model returned zero quantity", order_ids=(order_id,))
-            return None
-        fill_price = self.slippage_model.price(side, candidate.price, payload=market_payload)
-        fee = self.commission_model.fee(side=side, quantity=fill_quantity, price=fill_price, payload=market_payload)
-        cash_delta = fill_quantity * fill_price if side is OrderSide.SELL else -(fill_quantity * fill_price)
-        updated_order = self.coordinator.ingest_fill(
+            self.coordinator.orders.record(OrderEvent(order_id, OrderEventKind.REJECTED, self.context.now, reason="order was not filled by fill model"))
+            return ConnectionOrderSubmissionResult(venue_id, "REJECTED")
+        quantity = min(candidate.quantity, state.request.quantity)
+        fill_price = self.slippage_model.price(state.request.side, candidate.price, payload=payload)
+        fee = self.commission_model.fee(side=state.request.side, quantity=quantity, price=fill_price, payload=payload)
+        cash_delta = quantity * fill_price if state.request.side is OrderSide.SELL else -(quantity * fill_price)
+        updated = self.coordinator.ingest_fill(
             FillReport(
                 order_id,
-                context.now,
-                fill_quantity,
+                self.context.now,
+                quantity,
                 fill_price,
                 self.cash_currency,
                 cash_delta=cash_delta,
@@ -158,41 +143,28 @@ class SimulatedExecutionService:
                 fee_amount=fee,
             )
         )
-        fill = SimulatedFill(order_id, str(intent.intent_id), str(intent.instrument_id), side, fill_quantity, fill_price, fee, context.now)
-        if updated_order.status.terminal:
-            self.intents.satisfy(context, intent, order_ids=(order_id,))
-        else:
-            self.intents.partially_filled(context, intent, order_ids=(order_id,))
-        return fill
+        self.last_fill = SimulatedFill(order_id, str(self.intent.intent_id), str(self.intent.instrument_id), state.request.side, quantity, fill_price, fee, self.context.now)
+        return ConnectionOrderSubmissionResult(venue_id, updated.status.value.upper())
 
-    def _price(self, context: object, intent: TradeIntent) -> Decimal | None:
-        raw_price = self._projected_market_value(context, intent)
-        return None if raw_price is None else Decimal(str(raw_price))
+    def cancel(self, request: ConnectionOrderCancelRequest) -> ConnectionOrderCancelResult:
+        state = self.coordinator.orders.get_by_order_venue_id(request.order_venue_id)
+        self.coordinator.cancel_confirmed(state.order_id, at=self.context.now)
+        return ConnectionOrderCancelResult(request.order_venue_id, "CANCELED")
 
-    def _projected_market_value(self, context: object, intent: TradeIntent) -> object | None:
-        payload = self._market_payload(context, intent)
-        for key in (self.price_field, f"bar.{self.price_field}", f"trade.{self.price_field}", f"quote.{self.price_field}", f"rate.{self.price_field}"):
-            if key in payload:
-                return payload[key]
-        return None
-
-    def _market_payload(self, context: object, intent: TradeIntent) -> Mapping[str, object]:
-        market = getattr(context, "market")
+    def _market_payload(self) -> Mapping[str, object]:
+        market = getattr(self.context, "market")
         values: dict[str, object] = {}
-        for prefix, window in (
-            ("quote", market.quotes(intent.market_id or intent.instrument_id)),
-            ("bar", market.bars(intent.market_id or intent.instrument_id)),
-            ("trade", market.trades(intent.market_id or intent.instrument_id)),
-            ("rate", market.rates(intent.market_id or intent.instrument_id)),
-        ):
+        for prefix, window in (("quote", market.quotes(self.intent.market_id or self.intent.instrument_id)), ("bar", market.bars(self.intent.market_id or self.intent.instrument_id)), ("trade", market.trades(self.intent.market_id or self.intent.instrument_id)), ("rate", market.rates(self.intent.market_id or self.intent.instrument_id))):
             item = getattr(window, "latest", None)
             if item is not None:
                 values.update(_market_model_payload(prefix, item))
         return values
 
-    def _next_order_id(self, intent_id: object) -> str:
-        self._order_number += 1
-        return f"{intent_id}-order-{self._order_number}"
+    def _projected_market_value(self, payload: Mapping[str, object]) -> Decimal | None:
+        for key in (self.price_field, f"bar.{self.price_field}", f"trade.{self.price_field}", f"quote.{self.price_field}", f"rate.{self.price_field}"):
+            if key in payload:
+                return Decimal(str(payload[key]))
+        return None
 
 
 def _limit_crosses(order: OrderRequest, market_price: Decimal) -> bool:
@@ -259,7 +231,7 @@ __all__ = [
     "ImmediateFillModel",
     "NoSlippageModel",
     "PercentageCommissionModel",
-    "SimulatedExecutionService",
+    "SimulatedOrderConnection",
     "SimulatedFill",
     "SlippageModel",
 ]

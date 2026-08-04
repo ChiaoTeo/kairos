@@ -4,8 +4,9 @@ from pathlib import Path
 
 import typer
 
-from kairospy.application.support.system.application.control.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchAlreadyActiveError, LaunchFacade
-from kairospy.application.support.system.application.control.attach import LaunchAttachSession
+from kairospy.application.support.launch.application.control.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchAlreadyActiveError
+from kairospy.application.support.composition.application.launch import launch_application
+from kairospy.application.support.launch.application.control.attach import LaunchAttachSession
 from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.cli.output import write_cli_result
 from kairospy.surface.interactive.attach import RuntimeAttachShell
@@ -15,7 +16,7 @@ from kairospy.surface.tui.attach import RuntimeAttachApp
 system_app = typer.Typer(no_args_is_help=True, help="Built-in system runtime commands")
 system_account_app = typer.Typer(no_args_is_help=True, help="System account commands")
 system_app.add_typer(system_account_app, name="account")
-_RUNS = LaunchFacade()
+_RUNS = launch_application()
 
 
 @system_app.command("up")

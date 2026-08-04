@@ -7,9 +7,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from kairospy.domain.account import AccountContext, AccountSnapshot, AccountState
-from kairospy.domain.order import OrderState
-
-from .bootstrap import AccountBootstrapResult, AccountBootstrapService
+from .read import AccountReadResult, AccountReadService
 
 
 class AccountEventFactory(Protocol):
@@ -27,7 +25,7 @@ class AccountDifference:
 
 @dataclass(frozen=True, slots=True)
 class AccountReconciliationResult:
-    bootstrap: AccountBootstrapResult
+    read: AccountReadResult
     differences: tuple[AccountDifference, ...]
     event: object
 
@@ -35,8 +33,7 @@ class AccountReconciliationResult:
 @dataclass(frozen=True, slots=True)
 class AccountReconciliationService:
     account: AccountContext
-    gateway: object
-    coordinator: object
+    reader: object
     account_event: AccountEventFactory
 
     def reconcile(
@@ -51,30 +48,27 @@ class AccountReconciliationService:
         observed_at = at or datetime.now(timezone.utc)
         if observed_at.tzinfo is None:
             raise ValueError("reconciliation timestamp must be timezone-aware")
-        bootstrap = AccountBootstrapService(self.gateway, self.coordinator).bootstrap(
+        read = AccountReadService(self.reader).read(
             self.account,
             symbol=symbol,
             at=observed_at,
-            balance_params=balance_params,
-            order_params=order_params,
+            options={**dict(balance_params or {}), **dict(order_params or {})},
         )
         differences = (
             ()
             if previous is None
             else compare_account_state(
                 previous,
-                bootstrap.snapshot,
-                pending_orders=self.coordinator.orders.active_for_context(self.account),
+                read.snapshot,
             )
         )
-        return AccountReconciliationResult(bootstrap, differences, self.account_event(observed_at, bootstrap.snapshot))
+        return AccountReconciliationResult(read, differences, self.account_event(observed_at, read.snapshot))
 
 
 def compare_account_state(
     local: AccountState,
     external: AccountSnapshot,
     *,
-    pending_orders: tuple[OrderState, ...] = (),
     tolerance: Decimal = Decimal("0.00000001"),
 ) -> tuple[AccountDifference, ...]:
     if local.context != external.context:
@@ -119,18 +113,6 @@ def compare_account_state(
             differences.append(AccountDifference("open_order.quantity", order_id, left.quantity, right.quantity))
         if abs(left.reserved_amount - right.reserved_amount) > tolerance:
             differences.append(AccountDifference("open_order.reserved_amount", order_id, left.reserved_amount, right.reserved_amount))
-
-    for state in sorted(pending_orders, key=lambda item: item.order_venue_id or item.request.order_venue_id or item.order_id):
-        order_venue_id = state.order_venue_id or state.request.order_venue_id
-        if not order_venue_id:
-            continue
-        external_order = external_open_orders.get(order_venue_id)
-        if external_order is None:
-            differences.append(AccountDifference("pending_order.venue_present", order_venue_id, Decimal("1"), Decimal("0")))
-            continue
-        remaining = state.remaining_quantity
-        if abs(remaining - external_order.quantity) > tolerance:
-            differences.append(AccountDifference("pending_order.remaining_quantity", order_venue_id, remaining, external_order.quantity))
 
     return tuple(differences)
 

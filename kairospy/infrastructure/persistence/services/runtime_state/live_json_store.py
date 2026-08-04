@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 from typing import Mapping, Protocol
 
-from kairospy.application.usecases.account.domain.private_stream import PrivateStreamCheckpoint
-from kairospy.application.usecases.execution.domain.state import ExecutionStateOwner, ExecutionStateSnapshot
+from kairospy.application.usecases.account.application.private_stream import PrivateStreamCheckpoint
+from kairospy.application.usecases.execution.application.state import ExecutionStateOwner, ExecutionStateSnapshot
 
 
 @dataclass(frozen=True, slots=True)

@@ -6,7 +6,7 @@ import sys
 
 import typer
 
-from kairospy.application.support.system.application.facade.reference import (
+from kairospy.application.usecases.reference.application.commands import (
     AssetType,
     Broker,
     Exchange,
@@ -15,7 +15,7 @@ from kairospy.application.support.system.application.facade.reference import (
     DriverName,
     ExchangeName,
     ProviderName,
-    add_asset,
+    ReferenceCommandApplication,
     asset_to_primitive,
     entity_to_primitive,
     instrument_to_primitive,
@@ -25,17 +25,10 @@ from kairospy.application.support.system.application.facade.reference import (
     reference_brokers,
     reference_exchanges,
     reference_providers,
-    refresh_exchange_reference,
-    refresh_exchange_reference_with_delist_schedule,
-    refresh_provider_reference,
-    public_market_access,
-    provider,
-    reference_access,
-    sync_lifecycle_events,
-    reference_store,
 )
-from kairospy.application.support.system.application.facade.context import ProjectNotFound
-from kairospy.application.support.system.application.browsing import ListQuery, query_rows
+from kairospy.application.support.composition.application.cli import build_reference_application, build_reference_command
+from kairospy.application.usecases.workspace.application.context import ProjectNotFound
+from kairospy.application.support.query.browsing import ListQuery, query_rows
 from kairospy.surface.tui import ResourceList, ResourceListBrowser
 from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.rendering.terminal import write_jsonl
@@ -53,6 +46,12 @@ reference_app.add_typer(participants_app, name="participants")
 reference_app.add_typer(assets_app, name="assets")
 reference_app.add_typer(markets_app, name="markets")
 reference_app.add_typer(events_app, name="events")
+
+_REFERENCE = build_reference_command()
+
+
+def reference_application(root: str | None = None):
+    return build_reference_application(root)
 
 
 _EXCHANGE_COLUMNS = ("exchange_id", "name", "aliases", "default_markets", "mic", "country", "timezone", "entity_id")
@@ -86,8 +85,7 @@ def add_asset_command(
 ) -> None:
     at = _time(effective_from)
     try:
-        item = add_asset(
-            reference_store(root),
+        item = reference_application(root).add_asset(
             symbol=symbol,
             asset_type=asset_type,
             asset_id=asset_id,
@@ -116,7 +114,7 @@ def list_assets(
 ) -> None:
     at = _time(as_of)
     rows = []
-    for item in reference_store(root).load_catalog().assets():
+    for item in reference_application(root).catalog().assets():
         if active_only and not item.active_at(at):
             continue
         if asset_type is not None and item.asset_type is not asset_type:
@@ -161,7 +159,7 @@ def show_asset(
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     at = _time(as_of)
-    item = reference_store(root).load_catalog().maybe_get_asset(asset_id, at)
+    item = reference_application(root).catalog().maybe_get_asset(asset_id, at)
     if item is None:
         raise typer.BadParameter(f"unknown asset identifier: {asset_id}")
     _write_asset_rows(ctx, (asset_to_primitive(item),), output_format=output_format)
@@ -250,9 +248,7 @@ def _sync_binance(
     ctx: typer.Context,
     output_format: OutputFormat | None,
 ) -> None:
-    store = reference_store(root)
-    provider_result = refresh_exchange_reference_with_delist_schedule(
-        store,
+    provider_result = reference_application(root).refresh_exchange_with_delist_schedule(
         _reference_client("exchange", ExchangeName.binance.value, market=market, driver_name=driver_name),
         as_of=at,
         venue=ExchangeName.binance.value,
@@ -286,8 +282,7 @@ def _sync_hyperliquid(
     ctx: typer.Context,
     output_format: OutputFormat | None,
 ) -> None:
-    result = refresh_exchange_reference(
-        reference_store(root),
+    result = reference_application(root).refresh_exchange(
         _reference_client("exchange", ExchangeName.hyperliquid.value, market=market, driver_name=driver_name),
         as_of=at,
         venue=ExchangeName.hyperliquid.value,
@@ -318,8 +313,7 @@ def _sync_massive(
     ctx: typer.Context,
     output_format: OutputFormat | None,
 ) -> None:
-    result = refresh_provider_reference(
-        reference_store(root),
+    result = reference_application(root).refresh_provider(
         _reference_client("provider", ProviderName.massive.value, market=market, driver_name=driver_name),
         as_of=at,
         venue=venue,
@@ -355,7 +349,7 @@ def _write_sync_result(
     output_format: OutputFormat | None,
     scheduled_events: int | None = None,
 ) -> None:
-    catalog = reference_store(root).load_catalog()
+    catalog = reference_application(root).catalog()
     payload: dict[str, object] = {
         "time": at.isoformat(),
         "source_kind": source_kind,
@@ -396,8 +390,7 @@ def sync_events(
     if end_at <= start_at:
         raise typer.BadParameter("end must be after start")
     try:
-        events = sync_lifecycle_events(
-            reference_store(root),
+        events = reference_application(root).sync_lifecycle_events(
             _reference_client("provider", ProviderName.massive.value, market=None, driver_name=driver_name),
             ticker=ticker,
             start=start_at,
@@ -421,12 +414,12 @@ def _reference_client(source_kind: str, source_name: str, *, market: str | None,
     if source_kind in {"exchange", "broker"}:
         if driver_name is not DriverName.ccxt:
             raise ValueError(f"{source_kind} reference source requires ccxt driver")
-        return public_market_access(ExchangeName(source_name), driver_name)
+        return _REFERENCE.public_market_access(ExchangeName(source_name), driver_name)
     if source_kind == "provider" and source_name == ProviderName.massive.value:
         if driver_name is not DriverName.massive:
             raise ValueError("massive provider requires massive driver")
-        return provider(ProviderName(source_name), driver_name)
-    return reference_access(source_kind, source_name, market=market, driver_name=driver_name)
+        return _REFERENCE.provider(ProviderName(source_name), driver_name)
+    return _REFERENCE.reference_access(source_kind, source_name, market=market, driver_name=driver_name)
 
 
 @markets_app.command("list")
@@ -498,7 +491,7 @@ def events(
 ) -> None:
     if ctx.invoked_subcommand is not None:
         return
-    rows = [lifecycle_event_to_primitive(item) for item in reference_store(root).load_events()]
+    rows = [lifecycle_event_to_primitive(item) for item in reference_application(root).lifecycle_events()]
     rows = rows[:50 if limit is None else limit]
     _write_reference_rows(ctx, tuple(rows), output_format=output_format)
 
@@ -533,7 +526,7 @@ def query(
 ) -> None:
     at = _time(as_of)
     needle = None if text is None else text.casefold()
-    catalog = reference_store(root).load_catalog()
+    catalog = reference_application(root).catalog()
     rows: list[dict[str, object]] = []
     if kind in (ReferenceKind.all, ReferenceKind.entity):
         rows.extend(
@@ -577,7 +570,7 @@ def query(
     if kind in (ReferenceKind.all, ReferenceKind.event):
         rows.extend(
             {"kind": "event", **lifecycle_event_to_primitive(item)}
-            for item in reference_store(root).load_events()
+            for item in reference_application(root).lifecycle_events()
             if _matches_event(item, needle=needle, venue=venue, market=market, status=status, active_only=active_only)
         )
     _write_reference_rows(ctx, tuple(rows[:limit]), output_format=output_format)
@@ -594,7 +587,7 @@ def search(
 ) -> None:
     at = _time(as_of)
     needle = query.casefold()
-    catalog = reference_store(root).load_catalog()
+    catalog = reference_application(root).catalog()
     rows: list[dict[str, object]] = []
     for item in catalog.list_markets(at=at):
         if _matches(needle, str(item.market_id), str(item.instrument_id), str(item.listing_id), item.venue, item.market, item.source_symbol):
@@ -623,7 +616,7 @@ def resolve(
 ) -> None:
     at = _time(as_of)
     try:
-        item = reference_store(root).load_catalog().resolve_market(symbol, venue=venue, market=market, at=at)
+        item = reference_application(root).catalog().resolve_market(symbol, venue=venue, market=market, at=at)
     except KeyError as error:
         raise typer.BadParameter(str(error)) from error
     _write_reference_rows(ctx, (market_to_primitive(item),), output_format=output_format)
@@ -649,7 +642,7 @@ def _write_identifier(
     output_format: OutputFormat | None,
 ) -> None:
     at = _time(as_of)
-    catalog = reference_store(root).load_catalog()
+    catalog = reference_application(root).catalog()
     rows: list[dict[str, object]] = []
     entity_item = catalog.maybe_get_entity(identifier, at)
     if entity_item is not None:
@@ -689,12 +682,12 @@ def _write_catalog_status(
     output_format: OutputFormat | None,
 ) -> None:
     at = _time(as_of)
-    store = reference_store(root)
-    catalog = store.load_catalog()
+    app = reference_application(root)
+    catalog = app.catalog()
     payload = {
-        "root": str(store.root),
-        "database": str(store.database_path),
-        "exists": store.database_path.exists(),
+        "root": root,
+        "database": None,
+        "exists": bool(catalog.entities() or catalog.assets() or catalog.instruments() or catalog.listings() or catalog.markets() or app.lifecycle_events()),
         "as_of": at.isoformat(),
         "entities": len(catalog.entities()),
         "assets": len(catalog.assets()),
@@ -702,7 +695,7 @@ def _write_catalog_status(
         "listings": len(catalog.listings()),
         "markets": len(catalog.markets()),
         "active_markets": len(catalog.list_markets(at=at, active_only=True)),
-        "events": len(store.load_events()),
+        "events": len(app.lifecycle_events()),
     }
     _write_reference_rows(ctx, (payload,), output_format=output_format)
 
@@ -723,7 +716,7 @@ def _write_markets(
     output_format: OutputFormat | None,
 ) -> None:
     at = _time(as_of)
-    catalog = reference_store(root).load_catalog()
+    catalog = reference_application(root).catalog()
     rows = [
         market_to_primitive(item)
         for item in catalog.list_markets(at=at, venue=venue, market=market, status=status, active_only=active_only)
@@ -747,7 +740,7 @@ def _asset_rows(
     at = _time(as_of)
     rows = [
         asset_to_primitive(item)
-        for item in reference_store(root).load_catalog().assets()
+        for item in reference_application(root).catalog().assets()
         if (not active_only or item.active_at(at)) and (asset_type is None or item.asset_type is asset_type)
     ]
     rows.sort(key=lambda row: str(row["asset_id"]))
@@ -766,7 +759,7 @@ def _market_rows(
     at = _time(as_of)
     return tuple(
         market_to_primitive(item)
-        for item in reference_store(root).load_catalog().list_markets(
+        for item in reference_application(root).catalog().list_markets(
             at=at,
             venue=venue,
             market=market,

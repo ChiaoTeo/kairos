@@ -4,7 +4,7 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.support.system.application.facade.project import ProjectFacade
+from kairospy.application.usecases.workspace.application.project import ProjectAdminApplication
 from kairospy.surface.cli.options import OutputFormat
 from kairospy.surface.cli.output import write_cli_result
 from kairospy.surface.cli.commands.config import config_app
@@ -12,7 +12,7 @@ from kairospy.surface.cli.commands.config import config_app
 
 project_app = typer.Typer(no_args_is_help=True, help="Project workspace commands")
 project_app.add_typer(config_app, name="config")
-_PROJECTS = ProjectFacade()
+_PROJECTS = ProjectAdminApplication()
 
 
 @project_app.command("init")

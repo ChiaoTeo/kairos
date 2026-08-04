@@ -1,0 +1,13 @@
+[launch]
+id = "example-compare-binance-hyperliquid-btc"
+mode = "live"
+strategy = "examples.strategies.compare_binance_hyperliquid_btc:strategy"
+
+# Required by the live launch configuration parser.  Market connections are
+# created dynamically by the strategy subscriptions.
+[live]
+
+# Replace this with an existing account reference in your workspace.
+# The strategy only reads public market data and does not place orders.
+[account]
+ref = "aapl_reader"

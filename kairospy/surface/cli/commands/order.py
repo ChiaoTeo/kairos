@@ -6,16 +6,17 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.support.system.application.control import RuntimeMode
-from kairospy.application.support.system.application.facade.order import OrderFacade
-from kairospy.application.support.system.application.browsing import ListQuery
+from kairospy.application.support.launch.application.control import RuntimeMode
+from kairospy.application.usecases.execution.application.commands import OrderCommandApplication
+from kairospy.application.support.composition.application.cli import build_order_command
+from kairospy.application.support.query.browsing import ListQuery
 from kairospy.surface.cli.options import OutputFormat
 from kairospy.surface.cli.output import write_cli_result
 from kairospy.surface.tui import ResourceList, ResourceListBrowser
 
 
 order_app = typer.Typer(no_args_is_help=True, help="Order commands")
-_ORDERS = OrderFacade()
+_ORDERS = build_order_command()
 
 
 @order_app.command("open")
@@ -302,10 +303,7 @@ def _open_order_rows(
     params: Mapping[str, object] | None,
 ) -> tuple[Mapping[str, object], ...]:
     payload = _ORDERS.open_orders(account_id=account_id, symbol=symbol, limit=limit, params=params)
-    rows = payload.get("orders", ())
-    if not isinstance(rows, (tuple, list)):
-        return ()
-    return tuple(row for row in rows if isinstance(row, Mapping))
+    return tuple(row for row in payload.orders if isinstance(row, Mapping))
 
 
 __all__ = ["order_app"]

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Protocol, Sequence
 
-from kairospy.application.support.system.application.browsing import ListQuery
+from kairospy.application.support.query.browsing import ListQuery
 
 
 class DetailReader(Protocol):

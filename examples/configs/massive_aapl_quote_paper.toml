@@ -1,0 +1,12 @@
+[launch]
+id = "example-massive-aapl-quote"
+mode = "paper"
+strategy = "examples.strategies.massive_aapl_quote:strategy"
+
+[account]
+ref = "paper"
+
+[feeds.massive_stocks]
+venue = "massive"
+market = "equity"
+credential = "massive_stocks"

@@ -9,9 +9,10 @@ from typing import Mapping
 
 from prettytable import PrettyTable
 
-from kairospy.application.support.system.application.control import RuntimeMode
-from kairospy.application.support.system.application.session.commands import cli_command_envelope
-from kairospy.application.support.system.application.control.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchFacade
+from kairospy.application.support.launch.application.control import RuntimeMode
+from kairospy.application.support.launch.application.commands import cli_command_message
+from kairospy.application.support.launch.application.control.facade import DEFAULT_SYSTEM_LAUNCH_ID, LaunchApplication
+from kairospy.application.support.composition.application.launch import launch_application
 
 
 class InteractiveSystemSession:
@@ -21,12 +22,12 @@ class InteractiveSystemSession:
         strategy_path: str = "kairospy.application.usecases.strategy:CliStrategyBase",
         launch_id: str = DEFAULT_SYSTEM_LAUNCH_ID,
         mode: RuntimeMode = RuntimeMode.SYSTEM,
-        launches: LaunchFacade | None = None,
+        launches: LaunchApplication | None = None,
     ) -> None:
         self.strategy_path = strategy_path
         self.launch_id = launch_id
         self.mode = mode
-        self._launches = launches or LaunchFacade()
+        self._launches = launches or launch_application()
         self._runtime = self._launches.open_system_session(strategy_path=strategy_path, launch_id=launch_id, mode=mode)
         self._sequence = 1
         self._closed = False
@@ -34,7 +35,7 @@ class InteractiveSystemSession:
     def handle(self, line: str) -> str:
         command = parse_system_command(line)
         self._runtime.process(
-            cli_command_envelope(
+            cli_command_message(
                 str(command["command"]),
                 command["args"],  # type: ignore[arg-type]
                 time=datetime.now(timezone.utc),
@@ -64,12 +65,6 @@ def parse_system_command(line: str) -> dict[str, object]:
         if len(parts) < 2:
             raise ValueError("command requires a CliStrategy command name")
         return {"command": parts[1], "args": _json_object(parts[2]) if len(parts) > 2 else {}}
-    if parts[0] == "trace":
-        values = _parse_options(parts[1:])
-        name = values.pop("name", values.pop("_0", "cli"))
-        payload = values.pop("payload", values.pop("_1", "{}"))
-        _reject_extra(values)
-        return {"command": "trace", "args": {"name": name, "payload": _json_object(str(payload))}}
     if parts[:2] == ["account", "current"]:
         values = _parse_options(parts[2:])
         account = values.pop("account", values.pop("_0", None))
@@ -129,9 +124,9 @@ def render_system_result(result: object) -> str:
         [
             f"launch_id: {getattr(result, 'launch_id', None)}",
             f"mode: {mode}",
-            f"strategy: {getattr(runtime, 'strategy_id', None)}",
+            f"strategy: {getattr(runtime, 'program_id', None)}",
             f"events: {getattr(runtime, 'event_count', None)}",
-            f"intents: {getattr(runtime, 'intent_count', None)}",
+            f"intents: {_intent_count(result)}",
         ]
     )
 
@@ -139,14 +134,9 @@ def render_system_result(result: object) -> str:
 def render_command_result(command: Mapping[str, object], runtime: object) -> str:
     name = str(command.get("command") or "")
     if name.startswith("account."):
-        return _render_account_command(name, runtime)
+        return _render_account_command(name, runtime, command)
     if name == "target_position":
         return _render_latest_intent(runtime)
-    if name == "trace":
-        trace = _latest_trace(runtime)
-        payload = {} if trace is None else _mapping(getattr(trace, "payload", None))
-        label = "trace" if trace is None else getattr(trace, "name", "trace")
-        return f"{label}: {_compact(payload)}"
     return f"ok {name}"
 
 
@@ -157,7 +147,6 @@ def system_help_text() -> str:
             "account balance CURRENCY [--account ACCOUNT]",
             "account position INSTRUMENT [--account ACCOUNT]",
             "order target-position INSTRUMENT QUANTITY [--account ACCOUNT] [--book BOOK] [--limit-price PRICE]",
-            "trace NAME '{\"key\":\"value\"}'",
             "command CLI_COMMAND '{\"arg\":\"value\"}'",
             "exit-system",
         ]
@@ -185,18 +174,27 @@ def _parse_options(parts: list[str]) -> dict[str, object]:
     return values
 
 
-def _render_account_command(name: str, runtime: object) -> str:
-    trace = _latest_trace(runtime)
-    payload = {} if trace is None else _mapping(getattr(trace, "payload", None))
+def _render_account_command(name: str, runtime: object, command: Mapping[str, object]) -> str:
+    view = _latest_account_view(runtime)
     if name == "account.current":
-        return _render_account_current(payload.get("view"))
+        return _render_account_current(view)
     if name == "account.balance":
-        currency = payload.get("currency")
-        return _render_balance(payload.get("balance"), title=f"account.balance {currency}")
+        currency = str(_mapping(command.get("args")).get("currency") or "")
+        balance = next((item for item in tuple(_field(view, "balances") or ()) if str(_field(item, "currency")) == currency), None)
+        return _render_balance(balance, title=f"account.balance {currency}")
     if name == "account.position":
-        instrument = payload.get("instrument")
-        return _render_position(payload.get("position"), title=f"account.position {instrument}")
+        instrument = str(_mapping(command.get("args")).get("instrument") or "")
+        position = next((item for item in tuple(_field(view, "positions") or ()) if str(_field(item, "instrument_id", _field(item, "instrument"))) == instrument), None)
+        return _render_position(position, title=f"account.position {instrument}")
     return f"ok {name}"
+
+
+def _latest_account_view(runtime: object) -> object | None:
+    views = getattr(runtime, "views", None)
+    if views is None:
+        return None
+    keys = tuple(key for key in views.envelopes() if str(key).startswith("account.current."))
+    return None if not keys else views.get(keys[-1], None)
 
 
 def _render_latest_intent(runtime: object) -> str:
@@ -216,13 +214,6 @@ def _render_latest_intent(runtime: object) -> str:
     if limit_price is not None:
         parts.append(f"limit_price={limit_price}")
     return "target_position: " + " ".join(parts)
-
-
-def _latest_trace(runtime: object) -> object | None:
-    views = getattr(runtime, "views", None)
-    view = None if views is None else views.get("strategy.decision_trace", None)
-    records = tuple(getattr(view, "records", ()) or ())
-    return records[-1] if records else None
 
 
 def _render_account_current(view: object) -> str:

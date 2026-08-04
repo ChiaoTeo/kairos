@@ -3,42 +3,36 @@ from __future__ import annotations
 from typing import Mapping
 
 from kairospy.application.support.launch.application.configuration import ConfiguredPaper
-from kairospy.application.support.runtime.domain.modes import RuntimeMode
-from kairospy.application.support.runtime.domain.connections import DefaultConnectionManager
-from kairospy.application.usecases.market.application.runtime import PaperMarketDataService, RuntimeIterableMarketEventSource
+from kairospy.application.support.launch.application.results import paper_result
+from kairospy.application.support.launch.domain.modes import RuntimeMode
+from kairospy.application.actor.support.services.connections import IntegrationConnectionScope
+from kairospy.application.usecases.market.application.runtime import PaperMarketDataService, RuntimeIterableMarketEventSource, build_paper_market
+from kairospy.application.system.application.business import SystemApplication
 from kairospy.application.support.composition.application.accounts import PaperAccountResources
-from kairospy.application.support.composition.application.integrations import integration_application, market_request_connections, market_stream_connections
+from kairospy.application.support.composition.application.integrations import integration_application, market_integration_runtime
 
-from .common import ComposedLaunch, optional_default_text, reference_runtime
+from .common import ComposedLaunch, in_memory_message_bus, optional_default_text, reference_runtime
+from .runtime import compose_runtime_assembly
 
 
 class PaperComposition:
     def compose(self, configured: ConfiguredPaper) -> ComposedLaunch:
-        connections = DefaultConnectionManager()
+        connections = IntegrationConnectionScope()
         integration = integration_application()
-        stream_connections = market_stream_connections(
-            configured.feeds,
-            mode_label="paper",
-            application=integration,
-        ) if configured.managed_market_feed_resolver and configured.source is None else {}
-        request_connections = market_request_connections(
-            configured.feeds,
-            mode_label="paper",
-            application=integration,
-        ) if configured.managed_market_feed_resolver and configured.source is None else {}
-        for connection_id, connection in stream_connections.items():
-            connections.register(connection_id, connection, role="market_stream")
-        for connection_id, connection in request_connections.items():
-            connections.register(connection_id, connection, role="market_request")
+        market_runtime = (
+            market_integration_runtime(connections, application=integration, mode=RuntimeMode.PAPER)
+            if configured.managed_market_feed_resolver and configured.source is None
+            else None
+        )
         market_data = _market_data(configured)
-        market_data.stream_connections = dict(stream_connections)
-        if stream_connections:
+        market_data.integration_runtime = market_runtime
+        if market_runtime is not None:
             market_data.feed_resolver = None
         market_data.set_connection_manager(connections)
         resources = PaperAccountResources.from_configured(configured)
-        from kairospy.application.support.runtime.application.launch.resources import TradingRuntimeResources
-        launch_resources = TradingRuntimeResources(
-            source=market_data,
+        from kairospy.application.system.application.resources import TradingSystemResources
+        launch_resources = TradingSystemResources(
+            business=SystemApplication(),
             data=market_data,
             account=resources.account,
             reference=reference_runtime(
@@ -48,8 +42,8 @@ class PaperComposition:
             ),
             trading_execution=resources.execution,
             connection_scope=connections,
-            market_stream_connections=stream_connections,
-            market_request_connections=request_connections,
+            message_bus=in_memory_message_bus(),
+            assembly=compose_runtime_assembly(),
         )
         return ComposedLaunch(
             mode=RuntimeMode.PAPER,
@@ -59,7 +53,7 @@ class PaperComposition:
             normalized_config=configured.normalized_config,
             resources=launch_resources,
             lifecycle=None,
-            build_result=lambda runtime: resources.build_result(configured, runtime),
+            build_result=lambda runtime: paper_result(configured, resources, runtime),
         )
 
 
@@ -72,11 +66,11 @@ def _paper_default_market(config: Mapping[str, object]) -> str:
 
 def _market_data(configured: ConfiguredPaper) -> PaperMarketDataService:
     if configured.source is not None:
-        return PaperMarketDataService(
+        return build_paper_market(
             RuntimeIterableMarketEventSource(configured.source),
             source_name=configured.source_name,
         )
-    return PaperMarketDataService(
+    return build_paper_market(
         feed_resolver=configured.market_feed_resolver,
         source_name=configured.source_name,
     )

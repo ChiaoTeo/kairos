@@ -1,6 +1,6 @@
 from __future__ import annotations
 
 from .journal import IntentJournalViewState
-from .processor import IntentProcessor
+from .projector import IntentProjector
 
-__all__ = ["IntentJournalViewState", "IntentProcessor"]
+__all__ = ["IntentJournalViewState", "IntentProjector"]

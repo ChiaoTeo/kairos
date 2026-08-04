@@ -6,8 +6,8 @@ from typing import Mapping
 
 import typer
 
-from kairospy.application.support.system.application.facade.context import workspace as resolve_workspace
-from kairospy.application.support.system.application.control import RuntimeMode
+from kairospy.application.usecases.workspace.application.context import workspace as resolve_workspace
+from kairospy.application.support.launch.application.control import RuntimeMode
 from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.rendering.writer import write_result
 from kairospy.surface.timeline import TimelineDataLoader, find_latest_instance, list_instances, serve_timeline
@@ -127,7 +127,7 @@ def _render_instances(payload: Mapping[str, object]) -> str:
     rows = payload.get("instances")
     if not isinstance(rows, list) or not rows:
         return "Timeline Launches\n  none"
-    columns = ("mode", "launch_id", "launch_instance_id", "trace", "risk", "equity", "directory")
+    columns = ("mode", "launch_id", "launch_instance_id", "equity", "directory")
     table_rows = [_instance_row(row) for row in rows if isinstance(row, Mapping)]
     widths = {column: max(len(column), *(len(str(row.get(column, "-"))) for row in table_rows)) for column in columns}
     lines = [
@@ -145,8 +145,6 @@ def _instance_row(row: Mapping[str, object]) -> dict[str, object]:
         "mode": row.get("mode") or "-",
         "launch_id": row.get("launch_id") or "-",
         "launch_instance_id": row.get("launch_instance_id") or "-",
-        "trace": row.get("decision_trace_count") or 0,
-        "risk": row.get("risk_snapshot_count") or 0,
         "equity": row.get("equity_count") or 0,
         "directory": row.get("directory") or "-",
     }

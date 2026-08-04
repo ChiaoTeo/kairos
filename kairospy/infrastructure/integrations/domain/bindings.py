@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from .participants import ParticipantKind, ParticipantRef
+from kairospy.domain.reference import ParticipantKind, ParticipantRef
 from .products import ProductFamily
 
 

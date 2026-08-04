@@ -51,6 +51,14 @@ class SqliteReferenceStore:
             raise TypeError(f"reference catalog store contains {type(value).__name__}, expected ReferenceCatalog")
         return value
 
+    def has_catalog(self) -> bool:
+        if not self.database_path.exists():
+            return False
+        with sqlite_connection(self.database_path) as connection:
+            _ensure_schema(connection)
+            row = connection.execute("SELECT 1 FROM reference_blobs WHERE name = 'catalog'").fetchone()
+        return row is not None
+
     def append_events(self, events: Iterable[LifecycleEvent]) -> Path:
         existing = [*self.load_events(), *tuple(events)]
         with sqlite_connection(self.database_path) as connection:

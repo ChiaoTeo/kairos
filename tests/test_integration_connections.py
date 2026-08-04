@@ -9,32 +9,39 @@ import unittest
 from kairospy.infrastructure.integrations.application.assembly import DefaultIntegrationConnectionApplication
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec
 from kairospy.infrastructure.integrations.application.connections import RuntimeMode
-from kairospy.infrastructure.integrations.services.clients.binance_spot import (
+from kairospy.infrastructure.integrations.services.gateways.binance.spot.client import (
     BinanceRequestError,
     BinanceSpotRequestClient,
     BinanceSpotRestClient,
 )
-from kairospy.infrastructure.integrations.services.clients.binance_equity import (
+from kairospy.infrastructure.integrations.services.gateways.binance.equity.client import (
     BinanceEquityRequestError,
     BinanceEquityRestClient,
 )
-from kairospy.infrastructure.integrations.services.operations.binance_equity import BinanceEquityMarketOperations
-from kairospy.infrastructure.integrations.services.translators.binance_equity import BinanceEquityPayloadTranslator
-from kairospy.infrastructure.integrations.services.connection_services.binance_equity_stream import BinanceEquityPollingConnection
+from kairospy.infrastructure.integrations.services.gateways.binance.equity.operations import BinanceEquityMarketOperations
+from kairospy.infrastructure.integrations.services.gateways.binance.equity.normalizers import BinanceEquityNormalizers
+from kairospy.infrastructure.integrations.services.gateways.binance.equity.public_stream import BinanceEquityPollingConnection
 from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
-from kairospy.application.usecases.market.application.runtime import LiveMarketDataService
-from kairospy.infrastructure.integrations.application.market import ConnectionMarketSubscriptionRequest
+from kairospy.application.usecases.market.application.runtime import build_live_market
+from kairospy.application.usecases.market.application.component import MarketApplication
+from kairospy.application.system.application.business import SystemBusinessRuntime
+from kairospy.application.usecases.market.application.integration import MarketFeedSubscriptionRequest
 from kairospy.application.support.composition.application.integrations import connect_binance_equity
-from kairospy.application.support.runtime.domain.components import RuntimeComponents
-from kairospy.application.support.runtime.services.orchestration.kernel import RuntimeKernel
+from kairospy.application.usecases.strategy.application.runtime import build_strategy_runtime_session
+from kairospy.application.actor.market.application import MarketActor
+from kairospy.application.actor.account.application import AccountActor
+from kairospy.application.actor.monitor.application.output import MonitorOutputCoordinator
+from kairospy.application.actor.support.services.connections import DefaultConnectionManager
 from kairospy.infrastructure.integrations.services.drivers.websocket import WebSocketDriver
-from kairospy.infrastructure.integrations.services.streams.binance_spot import BinanceSpotMarketStream
-from kairospy.infrastructure.integrations.services.translators.binance_spot import BinanceSpotPayloadTranslator
-from kairospy.infrastructure.integrations.services.connections.base import ConnectionService
+from kairospy.infrastructure.integrations.services.gateways.binance.spot.stream import BinanceSpotMarketStream
+from kairospy.infrastructure.integrations.services.gateways.binance.spot.public_stream import BinanceSpotPublicStreamConnection
+from kairospy.infrastructure.integrations.services.gateways.binance.spot.normalizers import BinanceSpotNormalizers
+from kairospy.infrastructure.integrations.services.connections.connection import Connection
 from kairospy.infrastructure.integrations.domain import ConnectionLifecycle
 from kairospy.domain.account import AccountBookKind, AccountBookRef, AccountContext, Environment
-from kairospy.domain.market import Quote
+from kairospy.domain.market import Quote, TradePrint
 from kairospy.domain.reference import MarketRef
+from kairospy.domain.intent import IntentJournal
 from kairospy.infrastructure.integrations.domain import (
     AccessScope,
     BrokerId,
@@ -42,6 +49,8 @@ from kairospy.infrastructure.integrations.domain import (
     CredentialRef,
     ExchangeId,
     ExchangeRef,
+    IntegrationCapability,
+    IntegrationRoute,
     ParticipantKind,
     ParticipantRef,
     ProductFamily,
@@ -51,7 +60,39 @@ from kairospy.infrastructure.integrations.domain import (
 )
 
 
+def _business_runtime(intents: IntentJournal) -> SystemBusinessRuntime:
+    return SystemBusinessRuntime(
+        output=MonitorOutputCoordinator(actors=(), monitor_output=object()),
+        account_actor=AccountActor(None, None, intents=intents),
+    )
+
+
 class IntegrationConnectionTests(unittest.TestCase):
+    def test_system_connection_scope_is_the_authoritative_lifecycle(self) -> None:
+        class Resource:
+            def __init__(self) -> None:
+                self.starts = 0
+                self.stops = 0
+
+            def start(self) -> None:
+                self.starts += 1
+
+            def stop(self) -> None:
+                self.stops += 1
+
+        resource = Resource()
+        scope = DefaultConnectionManager()
+        scope.register("market", resource, role="market_stream")
+
+        scope.start()
+        scope.start()
+        assert resource.starts == 1
+        assert scope.health()["connections"] == 1
+
+        scope.stop()
+        assert resource.stops == 1
+        assert scope.health()["status"] == "stopped"
+
     def test_binance_equity_polling_connection_emits_quote_to_market_runtime(self) -> None:
         class Response:
             status_code = 200
@@ -69,7 +110,7 @@ class IntegrationConnectionTests(unittest.TestCase):
         async def scenario() -> object:
             spec = IntegrationConnectionSpec(
                 connection_id="binance-equity-test",
-                participant=ExchangeRef(ExchangeId.BINANCE).participant,
+                route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
                 product=ProductFamily.EQUITY,
                 access=AccessScope.PUBLIC,
                 transport=TransportKind.MARKET_STREAM,
@@ -79,7 +120,7 @@ class IntegrationConnectionTests(unittest.TestCase):
             client.api_key = "key"
             connection = BinanceEquityPollingConnection(spec, client=client)
             market = MarketRef.ephemeral(venue="binance", market="equity", source_symbol="AAPL")
-            request = ConnectionMarketSubscriptionRequest(market, Quote.select(), "test", {"poll_seconds": 0.001})
+            request = MarketFeedSubscriptionRequest(market, Quote.select(), "test", {"poll_seconds": 0.001})
             remote = await connection.subscribe(request)
             event = await anext(remote.events())
             await connection.unsubscribe(remote.subscription_id)
@@ -94,7 +135,7 @@ class IntegrationConnectionTests(unittest.TestCase):
         connection = connect_binance_equity("test.binance.equity")
         self.assertIsInstance(connection, BinanceEquityPollingConnection)
 
-    def test_binance_equity_market_runtime_delivers_quote_envelope(self) -> None:
+    def test_binance_equity_market_runtime_delivers_quote_message(self) -> None:
         class Response:
             status_code = 200
             content = b'{"symbol":"AAPL","bidPrice":"180.50","askPrice":"180.52","bidSize":100,"askSize":200}'
@@ -111,7 +152,7 @@ class IntegrationConnectionTests(unittest.TestCase):
         async def scenario() -> object:
             spec = IntegrationConnectionSpec(
                 connection_id="binance-equity-runtime-test",
-                participant=ExchangeRef(ExchangeId.BINANCE).participant,
+                route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
                 product=ProductFamily.EQUITY,
                 access=AccessScope.PUBLIC,
                 transport=TransportKind.MARKET_STREAM,
@@ -121,7 +162,8 @@ class IntegrationConnectionTests(unittest.TestCase):
             client.api_key = "key"
             connection = BinanceEquityPollingConnection(spec, client=client)
             market = MarketRef.ephemeral(venue="binance", market="equity", source_symbol="AAPL")
-            data = LiveMarketDataService(feed=connection, source_name="binance-equity")
+            market_service = MarketApplication()
+            data = build_live_market(feed=connection, source_name="binance-equity", market_service=market_service)
             data.subscribe(MarketDataSubscriptionSpec(market, (Quote,), params={"poll_seconds": 0.001}))
             envelope = await anext(data.events())
             return envelope
@@ -145,19 +187,6 @@ class IntegrationConnectionTests(unittest.TestCase):
         class Driver:
             def request(self, method: str, url: str, *, params: dict[str, object], headers: dict[str, str]) -> Response:
                 return Response()
-
-        class Projectors:
-            def register_views(self, views) -> None:
-                return None
-
-            def publish_views(self, views, *, as_of=None) -> None:
-                return None
-
-            def on_event(self, event) -> None:
-                return None
-
-            def on_intents(self, intents, context, hook) -> None:
-                return None
 
         class Stop:
             stopped = False
@@ -195,7 +224,7 @@ class IntegrationConnectionTests(unittest.TestCase):
         async def scenario() -> Strategy:
             spec = IntegrationConnectionSpec(
                 connection_id="binance-equity-strategy-test",
-                participant=ExchangeRef(ExchangeId.BINANCE).participant,
+                route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
                 product=ProductFamily.EQUITY,
                 access=AccessScope.PUBLIC,
                 transport=TransportKind.MARKET_STREAM,
@@ -205,16 +234,29 @@ class IntegrationConnectionTests(unittest.TestCase):
             client.api_key = "key"
             connection = BinanceEquityPollingConnection(spec, client=client)
             market = MarketRef.ephemeral(venue="binance", market="equity", source_symbol="AAPL")
-            data = LiveMarketDataService(feed=connection, source_name="binance-equity")
+            market_service = MarketApplication()
+            data = build_live_market(feed=connection, source_name="binance-equity", market_service=market_service)
             data.subscribe(MarketDataSubscriptionSpec(market, (Quote,), params={"poll_seconds": 0.001}))
             stop = Stop()
             data.set_stop_signal(stop)
             strategy = Strategy(market, stop)
-            await RuntimeKernel(
-                strategy,
-                components=RuntimeComponents(market=data),
-                processors=Projectors(),
-            ).run()
+            interaction = MarketActor(None, None, market_service=market_service)
+            intents = IntentJournal()
+            runtime = build_strategy_runtime_session(strategy, system_call=interaction)
+            callback = _business_runtime(intents)
+            events = data.events()
+            async for event in events:
+                instruction = callback.on_message(event)
+                if instruction.dispatch_strategy:
+                    cycle = runtime.process(event, hook=instruction.strategy_hook)
+                    output = cycle.output
+                    callback.on_strategy_result(
+                        event,
+                        hook=instruction.strategy_hook or "",
+                        intents=tuple(getattr(output, "intents", ())),
+                        context=getattr(output, "context", None),
+                    )
+            await data.close() if hasattr(data, "close") else None
             return strategy
 
         strategy = asyncio.run(scenario())
@@ -266,10 +308,10 @@ class IntegrationConnectionTests(unittest.TestCase):
 
         client = BinanceEquityRestClient(driver=Driver())  # type: ignore[arg-type]
         client.api_key = "key"
-        self.assertIsNone(BinanceEquityPayloadTranslator().latest_quote(client.get("/sapi/v1/equity/market/quote")))
+        self.assertIsNone(BinanceEquityNormalizers().latest_quote(client.get("/sapi/v1/equity/market/quote")))
 
     def test_binance_equity_quote_translates_to_quote_model(self) -> None:
-        quote = BinanceEquityPayloadTranslator().latest_quote(
+        quote = BinanceEquityNormalizers().latest_quote(
             {"symbol": "AAPL", "bidPrice": "180.50", "askPrice": "180.52", "bidSize": 100, "askSize": 200},
             observed_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
         )
@@ -401,8 +443,53 @@ class IntegrationConnectionTests(unittest.TestCase):
         self.assertEqual(asyncio.run(scenario()), {"e": "trade", "s": "BTCUSDT"})
         self.assertEqual(urls, ["wss://stream.binance.com:9443/ws/btcusdt@trade"])
 
+    def test_binance_public_stream_connection_subscribes_through_gateway(self) -> None:
+        class Session:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self) -> str:
+                if self.closed:
+                    raise StopAsyncIteration
+                self.closed = True
+                return '{"e":"trade","s":"BTCUSDT","t":1700000000000,"p":"100.25","q":"0.5","m":false}'
+
+            async def close(self) -> None:
+                self.closed = True
+
+        session = Session()
+        urls: list[str] = []
+
+        async def connector(url: str) -> Session:
+            urls.append(url)
+            return session
+
+        async def scenario() -> object:
+            spec = IntegrationConnectionSpec(
+                connection_id="binance-spot-public-stream",
+                route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
+                product=ProductFamily.SPOT,
+                access=AccessScope.PUBLIC,
+                transport=TransportKind.MARKET_STREAM,
+                mode=RuntimeMode.PAPER,
+            )
+            connection = BinanceSpotPublicStreamConnection(spec)
+            connection.stream.driver = WebSocketDriver(connector=connector)
+            market = MarketRef.ephemeral(venue="binance", market="spot", source_symbol="BTCUSDT")
+            remote = await connection.subscribe(MarketFeedSubscriptionRequest(market, TradePrint.select(), "test"))
+            event = await anext(remote.events())
+            await connection.unsubscribe(remote.subscription_id)
+            return event
+
+        event = asyncio.run(scenario())
+        self.assertEqual(event.value.market_key, "binance_spot_btcusdt")
+        self.assertEqual(urls, ["wss://stream.binance.com:9443/ws/btcusdt@trade"])
+
     def test_binance_public_payload_translator_returns_system_models(self) -> None:
-        translator = BinanceSpotPayloadTranslator()
+        translator = BinanceSpotNormalizers()
         bars = tuple(
             translator.bars(
                 [[1700000000000, "100", "110", "90", "105", "12"]],
@@ -438,7 +525,7 @@ class IntegrationConnectionTests(unittest.TestCase):
         self.assertEqual(snapshot.balances[0].total, 12)
 
     def test_binance_public_stream_payload_translates_to_market_event(self) -> None:
-        translator = BinanceSpotPayloadTranslator()
+        translator = BinanceSpotNormalizers()
         market = MarketRef.ephemeral(
             venue="binance", market="spot", source_symbol="BTCUSDT"
         )
@@ -451,7 +538,7 @@ class IntegrationConnectionTests(unittest.TestCase):
         self.assertEqual(str(event.value.price), "100")
 
     def test_binance_private_order_event_translates_to_execution_update(self) -> None:
-        translator = BinanceSpotPayloadTranslator()
+        translator = BinanceSpotNormalizers()
         context = AccountContext(AccountBookRef("binance", "live", AccountBookKind.SPOT), Environment.LIVE)
         update = translator.execution_update(
             {
@@ -492,7 +579,7 @@ class IntegrationConnectionTests(unittest.TestCase):
     def test_binance_spot_connection_is_system_scoped(self) -> None:
         spec = IntegrationConnectionSpec(
             connection_id="binance-spot-live",
-            participant=BrokerRef(BrokerId.BINANCE).participant,
+            route=IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
             product=ProductFamily.SPOT,
             access=AccessScope.PRIVATE,
             transport=TransportKind.REST,
@@ -506,9 +593,25 @@ class IntegrationConnectionTests(unittest.TestCase):
         self.assertEqual(connection.identity.participants, (BrokerRef(BrokerId.BINANCE).participant,))
         self.assertEqual(connection.access, AccessScope.PRIVATE)
         self.assertEqual(connection.transport, TransportKind.REST)
-        self.assertTrue(hasattr(connection, "bootstrap"))
-        self.assertTrue(hasattr(connection, "submit"))
-        self.assertTrue(hasattr(connection, "cancel"))
+        self.assertTrue(hasattr(connection, "read_account"))
+        self.assertFalse(hasattr(connection, "submit"))
+        self.assertFalse(hasattr(connection, "cancel"))
+
+        execution = DefaultIntegrationConnectionApplication().connect(
+            IntegrationConnectionSpec(
+                connection_id="binance-spot-execution-live",
+                route=IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
+                product=ProductFamily.SPOT,
+                access=AccessScope.PRIVATE,
+                transport=TransportKind.REST,
+                capability=IntegrationCapability.ORDER_ENTRY,
+                credential=CredentialRef("binance-live"),
+                mode=RuntimeMode.LIVE,
+            )
+        )
+        self.assertFalse(hasattr(execution, "read_account"))
+        self.assertTrue(hasattr(execution, "submit"))
+        self.assertTrue(hasattr(execution, "cancel"))
 
         async def scenario() -> None:
             await connection.start()
@@ -521,7 +624,7 @@ class IntegrationConnectionTests(unittest.TestCase):
     def test_connection_is_one_public_link(self) -> None:
         spec = IntegrationConnectionSpec(
             connection_id="binance-spot-access",
-            participant=ExchangeRef(ExchangeId.BINANCE).participant,
+            route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
             product=ProductFamily.SPOT,
             access=AccessScope.PUBLIC,
             transport=TransportKind.MARKET_STREAM,
@@ -543,7 +646,7 @@ class IntegrationConnectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             IntegrationConnectionSpec(
                 connection_id="missing-credential",
-                participant=BrokerRef(BrokerId.BINANCE).participant,
+                route=IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
                 product=ProductFamily.SPOT,
                 access=AccessScope.PRIVATE,
                 transport=TransportKind.REST,
@@ -553,7 +656,7 @@ class IntegrationConnectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             IntegrationConnectionSpec(
                 connection_id="",
-                participant=ExchangeRef(ExchangeId.BINANCE).participant,
+                route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
                 product=ProductFamily.SPOT,
                 access=AccessScope.PUBLIC,
                 transport=TransportKind.REST,
@@ -581,13 +684,13 @@ class IntegrationConnectionTests(unittest.TestCase):
         second = Component(fail=True)
         spec = IntegrationConnectionSpec(
             connection_id="rollback",
-            participant=ExchangeRef(ExchangeId.BINANCE).participant,
+            route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
             product=ProductFamily.SPOT,
             access=AccessScope.PUBLIC,
             transport=TransportKind.REST,
             mode=RuntimeMode.PAPER,
         )
-        connection = ConnectionService(spec, components=(first, second))
+        connection = Connection(spec, components=(first, second))
         with self.assertRaises(RuntimeError):
             asyncio.run(connection.start())
         self.assertTrue(first.started)
@@ -597,7 +700,7 @@ class IntegrationConnectionTests(unittest.TestCase):
     def test_binding_transport_is_typed(self) -> None:
         spec = IntegrationConnectionSpec(
             connection_id="binance-spot-paper",
-            participant=ExchangeRef(ExchangeId.BINANCE).participant,
+            route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
             product=ProductFamily.SPOT,
             access=AccessScope.PUBLIC,
             transport=TransportKind.REST,
@@ -620,7 +723,7 @@ class IntegrationConnectionTests(unittest.TestCase):
     def test_provider_connection_is_public_only(self) -> None:
         spec = IntegrationConnectionSpec(
             connection_id="massive-market",
-            participant=ProviderRef(ProviderId.MASSIVE).participant,
+            route=IntegrationRoute(provider=ProviderRef(ProviderId.MASSIVE)),
             product=None,
             access=AccessScope.PUBLIC,
             transport=TransportKind.REST,
@@ -635,7 +738,7 @@ class IntegrationConnectionTests(unittest.TestCase):
         public = DefaultIntegrationConnectionApplication().connect(
             IntegrationConnectionSpec(
                 connection_id="massive-market",
-                participant=ProviderRef(ProviderId.MASSIVE).participant,
+                route=IntegrationRoute(provider=ProviderRef(ProviderId.MASSIVE)),
                 product=None,
                 access=AccessScope.PUBLIC,
                 transport=TransportKind.REST,
@@ -645,7 +748,7 @@ class IntegrationConnectionTests(unittest.TestCase):
         private = DefaultIntegrationConnectionApplication().connect(
             IntegrationConnectionSpec(
                 connection_id="binance-private",
-                participant=BrokerRef(BrokerId.BINANCE).participant,
+                route=IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
                 product=ProductFamily.SPOT,
                 access=AccessScope.PRIVATE,
                 transport=TransportKind.REST,
@@ -659,7 +762,7 @@ class IntegrationConnectionTests(unittest.TestCase):
     def test_exchange_only_connection_does_not_create_private_account_access(self) -> None:
         spec = IntegrationConnectionSpec(
             connection_id="binance-public-market",
-            participant=ExchangeRef(ExchangeId.BINANCE).participant,
+            route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
             product=ProductFamily.SPOT,
             access=AccessScope.PUBLIC,
             transport=TransportKind.REST,

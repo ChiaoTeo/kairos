@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
-from kairospy.application.usecases.execution.domain.state import ExecutionStateOwner, ExecutionStateSnapshot
+from kairospy.application.usecases.execution.application.state import ExecutionStateOwner, ExecutionStateSnapshot
 
 
 @dataclass(frozen=True, slots=True)

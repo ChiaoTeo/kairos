@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from kairospy.domain.reference.catalog import ReferenceCatalog
+from kairospy.domain.market.selection import MarketSelection, MarketSelectionQuery
+from kairospy.domain.reference import MarketRef
 from kairospy.domain.reference.model import InstrumentType
 from kairospy.domain.reference.universe import Universe, UniverseQuery
 
@@ -54,6 +56,28 @@ class ReferenceUniverseService:
         if options.limit is not None:
             markets = markets[: options.limit]
         return Universe(name, tuple(markets), at)
+
+    def select_markets(self, query: MarketSelectionQuery) -> MarketSelection:
+        as_of = query.as_of or datetime.now(timezone.utc)
+        universe = self.select(
+            "strategy-query",
+            at=as_of,
+            query=UniverseQuery(
+                venue=query.venue,
+                market=query.market,
+                status=query.status,
+                instrument_type=query.instrument_type,
+                base_asset_id=query.base_asset_id,
+                quote_asset_id=query.quote_asset_id,
+                symbols=query.symbols,
+                limit=query.limit,
+            ),
+        )
+        return MarketSelection(
+            markets=tuple(MarketRef.from_definition(item) for item in universe.markets),
+            as_of=as_of,
+            query=query,
+        )
 
 
 UniverseSelector = ReferenceUniverseService

@@ -8,12 +8,12 @@ from typing import Mapping
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from kairospy.application.support.runtime.domain.modes import RuntimeMode
-from kairospy.application.support.runtime.domain.sources import AsyncEventSource, ClockEventSource, CsvEventSource, IntervalClockSource, IterableEventSource, RealtimeClockSource
+from kairospy.application.support.launch.domain.modes import RuntimeMode
+from kairospy.application.support.launch.application.sources import AsyncEventSource, ClockEventSource, CsvEventSource, IntervalClockSource, IterableEventSource, RealtimeClockSource
 from kairospy.application.usecases.strategy.application.entrypoint import StrategyEntrypoint, load_strategy_entrypoint
-from .builder import LaunchBuilder
-from kairospy.application.support.system.application.workspace import KairosWorkspace
-from kairospy.application.support.system.application.config import CONFIG_FILENAME, ConfigError, LaunchConfig, find_manifest_path, load_launch_config
+from kairospy.application.usecases.workspace.domain.workspace import KairosWorkspace
+from kairospy.application.support.launch.application.configuration import ConfigError, LaunchConfig, load_launch_config
+from kairospy.application.usecases.workspace.domain.config import CONFIG_FILENAME, find_manifest_path
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,9 +176,6 @@ class LaunchEnvironment:
             return parsed.replace(tzinfo=self.timezone)
         return parsed
 
-    def builder(self) -> LaunchBuilder:
-        return LaunchBuilder(self)
-
     def load_strategy(self, ref: str | None = None) -> StrategyEntrypoint:
         strategy_ref = ref or self.launch_config.strategy
         if strategy_ref is None:
@@ -189,10 +186,6 @@ class LaunchEnvironment:
             env=self,
             params=self.strategy_params,
         )
-
-    def launch(self, *, strategy: object, sources: object = (), clocks: object = (), echo: bool = False):
-        return self.builder().strategy(strategy).sources(sources).clocks(clocks).echo(echo).launch()  # type: ignore[arg-type]
-
 
 def _params(values: Mapping[str, object]) -> dict[str, object]:
     value = values.get("params")

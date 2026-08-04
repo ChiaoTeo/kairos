@@ -1,28 +1,97 @@
-"""Runtime-facing assembly entry points for the market usecase."""
+"""Runtime-facing assembly API for the market usecase.
+
+The implementations live under ``market.services``.  Composition may use
+these narrow constructors, while generic runtime code only receives the
+resulting event source and the market application capability.
+"""
 
 from __future__ import annotations
 
-from kairospy.application.usecases.market.services.runtime.common import RuntimeMarketDataServiceView
-from kairospy.application.usecases.market.services.runtime.modes.backtest import BacktestMarketDataService
-from kairospy.application.usecases.market.services.runtime.modes.live import LiveMarketDataService, LiveMarketDataServiceView
-from kairospy.application.usecases.market.services.runtime.modes.paper import PaperMarketDataService, PaperMarketDataServiceView
-from kairospy.application.usecases.market.services.runtime.projections import (
-    RuntimeMarketProjectionService,
-    RuntimeMarketService,
+from typing import Mapping
+
+from kairospy.application.usecases.market.application.component import MarketApplication
+from kairospy.application.usecases.market.application.feed import MarketStreamConnection
+from kairospy.application.usecases.market.services.runtime import (
+    BacktestMarketDataService,
+    LiveMarketDataService,
+    PaperMarketDataService,
+    ReplayMarketDataRuntimeService,
+    RuntimeIterableMarketEventSource,
+    RuntimeMarketDataServiceView,
 )
-from kairospy.application.usecases.market.services.runtime.replay import RuntimeIterableMarketEventSource, ReplayMarketDataRuntimeService
-from kairospy.application.usecases.market.services.runtime.streaming import StreamingMarketDataService
+
+
+def build_live_market(
+    source: object | None = None,
+    *,
+    feed: MarketStreamConnection | None = None,
+    feed_resolver: object | None = None,
+    source_name: str = "live",
+    connections: object | None = None,
+    stream_connections: Mapping[str, MarketStreamConnection] | None = None,
+    market_service: MarketApplication | None = None,
+    integration_runtime: object | None = None,
+) -> LiveMarketDataService:
+    return LiveMarketDataService(
+        source,
+        feed=feed,
+        feed_resolver=feed_resolver,
+        source_name=source_name,
+        connections=connections,
+        stream_connections=stream_connections,
+        market_service=market_service,
+        integration_runtime=integration_runtime,
+    )
+
+
+def build_paper_market(
+    source: object | None = None,
+    *,
+    feed: MarketStreamConnection | None = None,
+    feed_resolver: object | None = None,
+    source_name: str = "paper",
+    connections: object | None = None,
+    stream_connections: Mapping[str, MarketStreamConnection] | None = None,
+    market_service: MarketApplication | None = None,
+    integration_runtime: object | None = None,
+) -> PaperMarketDataService:
+    return PaperMarketDataService(
+        source,
+        feed=feed,
+        feed_resolver=feed_resolver,
+        source_name=source_name,
+        connections=connections,
+        stream_connections=stream_connections,
+        market_service=market_service,
+        integration_runtime=integration_runtime,
+    )
+
+
+def build_backtest_market(*args: object, **kwargs: object) -> BacktestMarketDataService:
+    return BacktestMarketDataService(*args, **kwargs)
+
+
+def build_replay_market(*args: object, **kwargs: object) -> ReplayMarketDataRuntimeService:
+    return ReplayMarketDataRuntimeService(*args, **kwargs)
+
+
+def build_market_runtime(*args: object, **kwargs: object):
+    """Build the generic streaming adapter for market-usecase hosts."""
+    from kairospy.application.usecases.market.services.runtime import MarketRuntimeService
+
+    return MarketRuntimeService(*args, **kwargs)
+
 
 __all__ = [
     "BacktestMarketDataService",
     "LiveMarketDataService",
-    "LiveMarketDataServiceView",
     "PaperMarketDataService",
-    "PaperMarketDataServiceView",
     "ReplayMarketDataRuntimeService",
     "RuntimeIterableMarketEventSource",
     "RuntimeMarketDataServiceView",
-    "RuntimeMarketProjectionService",
-    "RuntimeMarketService",
-    "StreamingMarketDataService",
+    "build_backtest_market",
+    "build_live_market",
+    "build_market_runtime",
+    "build_paper_market",
+    "build_replay_market",
 ]

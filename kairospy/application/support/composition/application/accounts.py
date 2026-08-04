@@ -3,13 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Mapping
 
-from kairospy.application.usecases.account.domain.books import default_account_books
+from kairospy.application.usecases.account.application.runtime import default_account_books
 from kairospy.application.usecases.account.application.provisioning import AccountProvisioningService
-from kairospy.application.support.runtime.domain.accounts import RuntimeAccountBinding, RuntimeAccountDirectory
-from kairospy.application.support.runtime.domain.modes import RuntimeMode
-from kairospy.application.support.runtime.application.launch import RuntimeLaunchResult
-from kairospy.application.usecases.account.domain.simulated import SimulatedAccount
-from kairospy.application.usecases.account.domain.routing import AccountBookRoute, account_book_route
+from kairospy.application.usecases.account.application.directory import AccountBinding, AccountDirectory
+from kairospy.application.usecases.account.application.runtime import SimulatedAccount, AccountBookRoute, account_book_route
 from kairospy.application.usecases.execution.application.runtime import (
     build_backtest_runtime,
     build_execution_coordinator,
@@ -19,24 +16,24 @@ from kairospy.application.usecases.execution.application.runtime import (
     build_paper_runtime,
 )
 from kairospy.application.usecases.account.application.runtime import BacktestAccountService
-from kairospy.application.support.launch.application.configuration import BacktestLaunchResult, ConfiguredBacktest
-from kairospy.application.support.composition.services.backtest_metrics import MetricsModel, closed_trades_from_fills, equity_point_from_account_view
-from kairospy.application.support.composition.application.integrations import connect_binance_spot, integration_application
+from kairospy.application.support.launch.application.configuration import ConfiguredBacktest
+from kairospy.application.support.composition.application.integrations import connect_binance_spot_account, connect_binance_spot_execution, integration_application
 from kairospy.application.support.launch.application.configuration import slippage_model
 from kairospy.application.usecases.account.application.runtime import LiveAccountService
-from kairospy.application.usecases.account.application.bootstrap import (
-    AccountBootstrapGatewayData,
-    AccountBootstrapRequest,
-)
-from kairospy.application.support.launch.application.configuration import ConfiguredLive, LiveConfigurationError, LiveLaunchResult
+from kairospy.application.usecases.account.protocol import AccountLoginPort, AccountLoginRequest, AccountLoginResult, AccountReadRequest, AccountSession
+from kairospy.application.support.launch.application.configuration import ConfiguredLive, LiveConfigurationError
 from kairospy.application.usecases.account.application.runtime import PaperAccountService
-from kairospy.application.support.launch.application.configuration import ConfiguredPaper, PaperLaunchResult, ConfiguredAccount
-from kairospy.application.support.system.application.config import LaunchAccountConfig
-from kairospy.domain.account import AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, Environment, account_current_view_key
+from kairospy.application.support.launch.application.configuration import ConfiguredPaper, ConfiguredAccount
+from kairospy.application.support.launch.application.configuration import LaunchAccountConfig
+from kairospy.domain.account import AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, Environment
 from kairospy.domain.reference import MarketResolver
-from kairospy.infrastructure.integrations.application.account import ConnectionAccountBootstrapRequest, AccountConnection, AccountStreamConnection
+from kairospy.infrastructure.integrations.application.account import (
+    ConnectionAccountReadRequest,
+    ConnectionAccountStreamRequest,
+    AccountConnection,
+    AccountStreamConnection,
+)
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionApplication, IntegrationConnectionSpec, RuntimeMode as IntegrationRuntimeMode
-from kairospy.infrastructure.integrations.application.execution import OrderConnection
 from kairospy.infrastructure.integrations.domain import (
     AccessScope,
     BrokerId,
@@ -44,6 +41,8 @@ from kairospy.infrastructure.integrations.domain import (
     CredentialRef,
     ExchangeId,
     ExchangeRef,
+    IntegrationCapability,
+    IntegrationRoute,
     ProductFamily,
     TransportKind,
 )
@@ -53,29 +52,6 @@ from kairospy.infrastructure.integrations.domain import (
 class BacktestAccountResources:
     account: BacktestAccountService
     execution: object
-
-    def build_result(self, configured: ConfiguredBacktest, runtime: RuntimeLaunchResult) -> BacktestLaunchResult:
-        account_config = self.account.account
-        account_view = runtime.views.get(account_current_view_key(account_config.context), None)
-        fills = self.execution.fills
-        equity_curve = _equity_curve(runtime)
-        trades = closed_trades_from_fills(fills)
-        metrics = MetricsModel().evaluate(equity_curve, trades, initial_equity=account_config.initial_cash)
-        return BacktestLaunchResult(
-            launch_id=configured.launch_id,
-            mode=RuntimeMode.BACKTEST,
-            runtime=runtime.runtime,
-            views=runtime.views,
-            intents=runtime.intents,
-            account=account_config.context,
-            account_view=account_view,
-            fills=fills,
-            equity_curve=equity_curve,
-            trades=trades,
-            decision_trace=_decision_trace(runtime),
-            risk_snapshots=_risk_snapshots(runtime),
-            metrics=metrics,
-        )
 
     @classmethod
     def from_configured(cls, configured: ConfiguredBacktest) -> "BacktestAccountResources":
@@ -89,7 +65,7 @@ class BacktestAccountResources:
             price_field=account_config.price_field,
         )
         coordinator = build_execution_coordinator()
-        account_service = BacktestAccountService(account, coordinator)
+        account_service = BacktestAccountService(account, coordinator.ledger)
         execution = build_backtest_runtime(
             coordinator,
             account=account.context,
@@ -102,85 +78,11 @@ class BacktestAccountResources:
         return cls(account_service, execution)
 
 
-def _equity_curve(runtime: RuntimeLaunchResult) -> tuple[object, ...]:
-    equity_view = runtime.views.get("account.equity_curve", None)
-    points = tuple(getattr(equity_view, "points", ()) or ())
-    if points:
-        return points
-    risk_curve = _risk_equity_curve(runtime)
-    if risk_curve:
-        return risk_curve
-    account_keys = tuple(key for key in runtime.views.envelopes() if key.startswith("account.current."))
-    account_view = runtime.views.get(account_keys[0], None) if account_keys else None
-    return tuple(
-        item
-        for item in (
-            equity_point_from_account_view(
-                None if runtime.runtime.last_event is None else runtime.runtime.last_event.time,
-                account_view,
-            ),
-        )
-        if item is not None
-    )
-
-
-def _decision_trace(runtime: RuntimeLaunchResult) -> tuple[object, ...]:
-    view = runtime.views.get("strategy.decision_trace", None)
-    return tuple(getattr(view, "records", ()) or ())
-
-
-def _risk_snapshots(runtime: RuntimeLaunchResult) -> tuple[object, ...]:
-    view = runtime.views.get("account.risk_snapshots", None)
-    return tuple(getattr(view, "snapshots", ()) or ())
-
-
-def _risk_equity_curve(runtime: RuntimeLaunchResult) -> tuple[object, ...]:
-    return tuple(
-        item
-        for item in (
-            equity_point_from_account_view(getattr(snapshot, "time", None), _RiskEquityView(snapshot))
-            for snapshot in _risk_snapshots(runtime)
-        )
-        if item is not None
-    )
-
-
-class _RiskEquityView:
-    def __init__(self, snapshot: object) -> None:
-        self.equity = getattr(snapshot, "equity", None)
-        self.cash = getattr(snapshot, "cash", None)
-        self.positions = tuple(_RiskPositionView(position) for position in tuple(getattr(snapshot, "positions", ()) or ()))
-
-
-class _RiskPositionView:
-    def __init__(self, position: object) -> None:
-        self.instrument_id = getattr(position, "instrument_id", "")
-        self.quantity = getattr(position, "quantity", 0)
-
 
 @dataclass(frozen=True, slots=True)
 class PaperAccountResources:
     account: PaperAccountService
     execution: object
-
-    def build_result(self, configured: ConfiguredPaper, runtime: RuntimeLaunchResult) -> PaperLaunchResult:
-        account_context = self.account.account.context
-        fills = tuple(self.execution.fills)
-        account_view = runtime.views.get(account_current_view_key(account_context), None)
-        return PaperLaunchResult(
-            launch_id=configured.launch_id,
-            mode=RuntimeMode.PAPER,
-            runtime=runtime.runtime,
-            views=runtime.views,
-            intents=runtime.intents,
-            account=account_context,
-            account_view=account_view,
-            fills=fills,
-            trades=(),
-            decision_trace=_decision_trace(runtime),
-            risk_snapshots=_risk_snapshots(runtime),
-            metrics={},
-        )
 
     @classmethod
     def from_configured(cls, configured: ConfiguredPaper) -> "PaperAccountResources":
@@ -207,9 +109,9 @@ class PaperAccountResources:
         )
         capabilities = _capabilities(directory)
         fees = _fees(directory, configured.launch_account_configs, fallback=account_config)
-        account_service = PaperAccountService(account, coordinator, directory=directory, capabilities=capabilities, fees=fees)
+        account_service = PaperAccountService(account, coordinator.ledger, directory=directory, capabilities=capabilities, fees=fees)
         execution = build_paper_runtime(
-            coordinator,
+            coordinator.ledger,
             account=account.context,
             cash_currency=account.cash_currency,
             price_field=account.price_field,
@@ -234,21 +136,6 @@ class LiveAccountResources:
     coordinator: object
     integration_connections: Mapping[str, object] = field(default_factory=dict)
 
-    def build_result(self, configured: ConfiguredLive, runtime: RuntimeLaunchResult) -> LiveLaunchResult:
-        account_context = self.account.account
-        account_view = runtime.views.get(account_current_view_key(account_context), None)
-        return LiveLaunchResult(
-            launch_id=configured.launch_id,
-            mode=RuntimeMode.LIVE,
-            runtime=runtime.runtime,
-            views=runtime.views,
-            intents=runtime.intents,
-            account=account_context,
-            account_view=account_view,
-            decision_trace=_decision_trace(runtime),
-            risk_snapshots=_risk_snapshots(runtime),
-        )
-
     @classmethod
     def from_configured(
         cls,
@@ -256,7 +143,11 @@ class LiveAccountResources:
         *,
         integration_application: IntegrationConnectionApplication | None = None,
     ) -> "LiveAccountResources":
-        if integration_application is not None and configured.broker_factory is None:
+        if configured.broker_factory is None:
+            if integration_application is None:
+                from kairospy.application.support.composition.application.integrations import integration_application as build_integration_application
+
+                integration_application = build_integration_application()
             return _from_configured_integration(cls, configured, integration_application)
         if integration_application is None:
             from kairospy.application.support.composition.application.integrations import integration_application as build_integration_application
@@ -302,7 +193,7 @@ class LiveAccountResources:
             role="trade",
             existing=read_clients,
         )
-        read_brokers = _account_bootstrap_gateways(read_clients, account_application)
+        read_brokers = _account_readers(read_clients, account_application)
         broker = read_brokers[account.book]
         private_streams = _account_private_streams(read_clients, account_application)
         account_gateway_resolver = _MappedLiveAccountGatewayResolver(read_brokers, private_streams)
@@ -313,8 +204,9 @@ class LiveAccountResources:
         routes = _routes(directory, configured.launch_account_configs, fallback=account_config)
         account_service = LiveAccountService(
             account,
-            coordinator,
+            coordinator.ledger,
             broker=broker,
+            login_port=_MappedAccountLoginPort(read_brokers, private_streams),
             gateway_resolver=account_gateway_resolver,
             parser=parser,
             stream=private_streams.get(account.book) if configured.private_sync.enabled else None,
@@ -329,7 +221,7 @@ class LiveAccountResources:
         execution = build_live_runtime(
             coordinator,
             account=account,
-            order_execution=_live_order_execution(
+            order_connection=_live_order_connection(
                 account.book,
                 credential=trade_ref,
                 custom_client=trade_broker if configured.broker_factory is not None else None,
@@ -377,10 +269,11 @@ def _from_configured_integration(
             rest_connection = integration.connect(
                 IntegrationConnectionSpec(
                     connection_id=f"live.binance.spot.{book.value}.private-rest",
-                    participant=BrokerRef(BrokerId.BINANCE).participant,
+                    route=IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
                     product=ProductFamily.SPOT,
                     access=AccessScope.PRIVATE,
                     transport=TransportKind.REST,
+                    capability=IntegrationCapability.ACCOUNT_READ,
                     credential=credential,
                     mode=IntegrationRuntimeMode.LIVE,
                 )
@@ -388,19 +281,33 @@ def _from_configured_integration(
             stream_connection = integration.connect(
                 IntegrationConnectionSpec(
                     connection_id=f"live.binance.spot.{book.value}.private-stream",
-                    participant=BrokerRef(BrokerId.BINANCE).participant,
+                    route=IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
                     product=ProductFamily.SPOT,
                     access=AccessScope.PRIVATE,
                     transport=TransportKind.USER_STREAM,
+                    capability=IntegrationCapability.ACCOUNT_STREAM,
                     credential=credential,
                     mode=IntegrationRuntimeMode.LIVE,
                 )
             )
             read_connections[book] = rest_connection
             private_connections[book] = stream_connection
-            execution_connections[book] = rest_connection
+            execution_connection = integration.connect(
+                IntegrationConnectionSpec(
+                    connection_id=f"live.binance.spot.{book.value}.execution-rest",
+                    route=IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
+                    product=ProductFamily.SPOT,
+                    access=AccessScope.PRIVATE,
+                    transport=TransportKind.REST,
+                    capability=IntegrationCapability.ORDER_ENTRY,
+                    credential=credential,
+                    mode=IntegrationRuntimeMode.LIVE,
+                )
+            )
+            execution_connections[book] = execution_connection
             resources[rest_connection.identity.connection_id] = rest_connection
             resources[stream_connection.identity.connection_id] = stream_connection
+            resources[execution_connection.identity.connection_id] = execution_connection
     if not read_connections:
         raise LiveConfigurationError("live account configuration produced no account connections")
     coordinator = build_execution_coordinator()
@@ -409,15 +316,16 @@ def _from_configured_integration(
     capabilities = _capabilities(directory, configured.launch_account_configs, fallback=account_config)
     fees = _fees(directory, configured.launch_account_configs, fallback=account_config)
     routes = _routes(directory, configured.launch_account_configs, fallback=account_config)
-    bootstrap_gateways = {
-        book: _AccountBootstrapGateway(access)
+    account_readers = {
+        book: _AccountReader(access)
         for book, access in read_connections.items()
     }
-    account_gateway_resolver = _MappedLiveAccountGatewayResolver(bootstrap_gateways, private_connections)
+    account_gateway_resolver = _MappedLiveAccountGatewayResolver(account_readers, private_connections)
     account_service = LiveAccountService(
         account,
-        coordinator,
+        coordinator.ledger,
         broker=primary_read,
+        login_port=_MappedAccountLoginPort(account_readers, private_connections),
         gateway_resolver=account_gateway_resolver,
         # Integration private streams now return typed snapshots and
         # ExecutionUpdate values; no vendor payload translator crosses here.
@@ -434,7 +342,8 @@ def _from_configured_integration(
     execution = build_live_runtime(
         coordinator,
         account=account,
-        order_execution=_MappedExecutionPort(execution_connections),
+        order_connection=execution_connections,
+        update_source=_MappedExecutionUpdateSource(execution_connections),
         symbol_resolver=market_resolver.broker_symbol,
         account_state=account_service,
         safety_policy=configured.safety_policy,
@@ -445,11 +354,8 @@ def _from_configured_integration(
 
 
 def _default_live_broker(book: AccountBookRef, credential: str | None) -> object:
-    connection = connect_binance_spot(
+    connection = connect_binance_spot_account(
         f"live.binance.spot.{book.value}.{credential or 'default'}",
-        market=False,
-        account=True,
-        execution=True,
         credential=credential,
         mode=IntegrationRuntimeMode.LIVE,
     )
@@ -460,7 +366,7 @@ def _live_broker_factory():
     return _default_live_broker
 
 
-def _live_order_execution(
+def _live_order_connection(
     book: AccountBookRef,
     *,
     credential: str | None,
@@ -470,7 +376,11 @@ def _live_order_execution(
 ) -> object:
     if custom_client is not None or custom_client_resolver is not None:
         raise ValueError("custom live clients are not supported by the Binance Spot connection assembly")
-    return _default_live_broker(book, credential)
+    return connect_binance_spot_execution(
+        f"live.binance.spot.{book.value}.execution.{credential or 'default'}",
+        credential=credential,
+        mode=IntegrationRuntimeMode.LIVE,
+    )
 
 
 def _primary_book(accounts: Mapping[str, LaunchAccountConfig], *, default: str) -> str:
@@ -488,21 +398,21 @@ def _launch_account_directory(
     fallback_broker: str,
     environment: Environment,
     default_book: object,
-) -> RuntimeAccountDirectory:
+) -> AccountDirectory:
     if not accounts:
-        return RuntimeAccountDirectory.from_contexts((AccountContext(AccountBookRef(fallback_broker, fallback.account_id, default_book), environment),))
-    bindings: list[RuntimeAccountBinding] = []
+        return AccountDirectory.from_contexts((AccountContext(AccountBookRef(fallback_broker, fallback.account_id, default_book), environment),))
+    bindings: list[AccountBinding] = []
     for alias, config in accounts.items():
         account_config = account_configs.get(alias, fallback)
         broker = account_config.venue or fallback_broker
         books = config.books or default_account_books(broker, fallback=str(default_book))
         contexts = tuple(AccountContext(AccountBookRef(broker, account_config.account_id, book), environment) for book in books)
-        bindings.append(RuntimeAccountBinding(alias, config.index, contexts, ref=config.ref, trade=config.trade))
-    return RuntimeAccountDirectory(tuple(bindings))
+        bindings.append(AccountBinding(alias, config.index, contexts, ref=config.ref, trade=config.trade))
+    return AccountDirectory(tuple(bindings))
 
 
 def _capabilities(
-    directory: RuntimeAccountDirectory,
+    directory: AccountDirectory,
     account_configs: Mapping[str, ConfiguredAccount] | None = None,
     *,
     fallback: ConfiguredAccount | None = None,
@@ -529,7 +439,7 @@ def configured_account_book_route(
 
 
 def _routes(
-    directory: RuntimeAccountDirectory,
+    directory: AccountDirectory,
     account_configs: Mapping[str, ConfiguredAccount],
     *,
     fallback: ConfiguredAccount,
@@ -551,7 +461,7 @@ def _routes(
 
 
 def _fees(
-    directory: RuntimeAccountDirectory,
+    directory: AccountDirectory,
     account_configs: Mapping[str, ConfiguredAccount],
     *,
     fallback: ConfiguredAccount,
@@ -565,7 +475,7 @@ def _fees(
 
 
 def _live_brokers(
-    directory: RuntimeAccountDirectory,
+    directory: AccountDirectory,
     account_configs: Mapping[str, ConfiguredAccount],
     *,
     fallback: ConfiguredAccount,
@@ -598,7 +508,7 @@ def _live_brokers(
 
 
 def _account_can_trade_with_credential(
-    binding: RuntimeAccountBinding,
+    binding: AccountBinding,
     account_configs: Mapping[str, ConfiguredAccount] | None,
     fallback: ConfiguredAccount | None,
 ) -> bool:
@@ -610,67 +520,115 @@ def _account_can_trade_with_credential(
     return account.has_trade_credential()
 
 
-def _account_bootstrap_gateways(
+def _account_readers(
     clients: Mapping[AccountBookRef, object],
     application,
 ) -> Mapping[AccountBookRef, AccountConnection]:
     del application
-    return dict(clients)  # type: ignore[return-value]
+    return {book: _AccountReader(connection) for book, connection in clients.items()}
 
 
 def _account_private_streams(clients: Mapping[AccountBookRef, object], application):
     del application
-    return dict(clients)
+    return {book: _AccountStreamAdapter(connection) for book, connection in clients.items()}
 
 
 @dataclass(frozen=True, slots=True)
 class _MappedLiveAccountGatewayResolver:
-    bootstrap_gateways: Mapping[AccountBookRef, object]
+    account_readers: Mapping[AccountBookRef, object]
     private_streams: Mapping[AccountBookRef, object]
 
-    def resolve_bootstrap_gateway(self, account: AccountBookRef) -> object | None:
-        return self.bootstrap_gateways.get(account)
+    def resolve_account_reader(self, account: AccountBookRef) -> object | None:
+        return self.account_readers.get(account)
 
     def resolve_private_stream(self, account: AccountBookRef) -> object | None:
         return self.private_streams.get(account)
 
 
 @dataclass(frozen=True, slots=True)
-class _AccountBootstrapGateway:
+class _MappedAccountLoginPort:
+    readers: Mapping[AccountBookRef, object]
+    streams: Mapping[AccountBookRef, object]
+
+    def login(self, request: AccountLoginRequest) -> AccountLoginResult:
+        reader = self.readers.get(request.context.book)
+        if reader is None:
+            raise RuntimeError(f"no account reader configured for account: {request.context.book.value}")
+        observed_at = request.observed_at
+        if observed_at is None:
+            raise ValueError("account login requires an observed_at timestamp")
+        snapshot = reader.read_account(
+            AccountReadRequest(
+                context=request.context,
+                observed_at=observed_at,
+                fetch_orders=True,
+            )
+        )
+        stream = self.streams.get(request.context.book)
+        connection_ids = request.connection_ids or tuple(
+            value
+            for value in (getattr(reader, "identity", None), getattr(stream, "identity", None))
+            if value is not None
+        )
+        ids = tuple(getattr(value, "connection_id", str(value)) for value in connection_ids)
+        return AccountLoginResult(
+            AccountSession(
+                session_id=f"account.{request.context.book.value}",
+                account=request.context.book,
+                connection_ids=ids,
+                logged_in_at=observed_at,
+            ),
+            snapshot,
+        )
+
+    def logout(self, session: AccountSession) -> None:
+        del session
+
+
+@dataclass(frozen=True, slots=True)
+class _AccountReader:
     """Composition adapter from account-usecase requests to Integration DTOs."""
 
     access: AccountConnection
 
-    def bootstrap(self, request: AccountBootstrapRequest) -> AccountBootstrapGatewayData:
-        data = self.access.bootstrap(
-            ConnectionAccountBootstrapRequest(
+    def read_account(self, request: AccountReadRequest):
+        data = self.access.read_account(
+            ConnectionAccountReadRequest(
                 context=request.context,
                 observed_at=request.observed_at,
                 symbol=request.symbol,
                 fetch_orders=request.fetch_orders,
             )
         )
-        return AccountBootstrapGatewayData(
-            snapshot=data.snapshot,
-            imported_updates=(),
+        return data.snapshot
+
+
+@dataclass(frozen=True, slots=True)
+class _AccountStreamAdapter:
+    connection: AccountStreamConnection
+
+    def account_snapshots(self, context: AccountContext, *, open_orders: tuple[object, ...] = ()):
+        return self.connection.account_snapshots(
+            ConnectionAccountStreamRequest(
+                context=context,
+                open_orders=tuple(open_orders),
+            )
         )
 
 
 @dataclass(frozen=True, slots=True)
-class _MappedExecutionPort:
+class _MappedExecutionUpdateSource:
     connections: Mapping[AccountBookRef, object]
 
-    def submit(self, request):
-        connection = self.connections.get(request.account)
+    def events(self, account: AccountContext, *, symbol: str | None = None):
+        connection = self.connections.get(account.book)
         if connection is None:
-            raise RuntimeError(f"no execution connection configured for account: {request.account.value}")
-        return connection.submit(request)
-
-    def cancel(self, request):
-        connection = self.connections.get(request.account)
-        if connection is None:
-            raise RuntimeError(f"no execution connection configured for account: {request.account.value}")
-        return connection.cancel(request)
+            raise RuntimeError(f"no execution connection configured for account: {account.book.value}")
+        request = ConnectionAccountStreamRequest(
+            context=account,
+            symbol=symbol,
+        )
+        return connection.execution_updates(request)
 
 
 def _client_resolver(clients: Mapping[AccountBookRef, object]):

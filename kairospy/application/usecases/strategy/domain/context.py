@@ -8,10 +8,26 @@ from kairospy.domain.account import AccountViewReader
 from kairospy.domain.intent import Intent, TradeIntent
 from kairospy.domain.market import MarketSelector, MarketViewReader
 from kairospy.domain.reference import MarketRef
-from kairospy.domain.reference import ExchangeId, MarketTypeId, ReferenceViewReader
+from kairospy.domain.market.selection import MarketSelection, MarketSelectionQuery
+from kairospy.domain.reference import ExchangeId, MarketTypeId
 
 
-class Context(Protocol):
+class StrategyReferenceCapability(Protocol):
+    def query(self, request: MarketSelectionQuery) -> MarketSelection:
+        ...
+
+    def resolve(
+        self,
+        value: object,
+        *,
+        venue: str | None = None,
+        market: str | None = None,
+        as_of: datetime | None = None,
+    ) -> object:
+        ...
+
+
+class StrategyContextProtocol(Protocol):
     @property
     def now(self) -> datetime | None:
         ...
@@ -22,11 +38,7 @@ class Context(Protocol):
     ) -> None:
         ...
 
-    def trace(
-        self,
-        name: str,
-        payload: Mapping[str, object],
-    ) -> None:
+    def submit(self, command: object) -> object:
         ...
 
     @overload
@@ -54,7 +66,7 @@ class Context(Protocol):
     def unsubscribe(
         self,
         subscription: object,
-    ) -> None:
+    ) -> object:
         ...
 
     def target_position(
@@ -88,10 +100,13 @@ class Context(Protocol):
         ...
 
     @property
-    def reference(self) -> ReferenceViewReader:
+    def reference(self) -> StrategyReferenceCapability:
         ...
 
 
-StrategyContext = Context
+# Compatibility aliases for strategy implementations migrating from the
+# shorter names. New strategy contracts use StrategyContextProtocol.
+Context = StrategyContextProtocol
+StrategyContext = StrategyContextProtocol
 
-__all__ = ["Context", "StrategyContext"]
+__all__ = ["Context", "StrategyContext", "StrategyContextProtocol"]

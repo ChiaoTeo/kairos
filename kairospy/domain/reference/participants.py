@@ -1,10 +1,66 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Mapping
 
 from .identity import BrokerId, EntityId, ExchangeId, ProviderId
+
+
+class ParticipantKind(StrEnum):
+    EXCHANGE = "exchange"
+    BROKER = "broker"
+    PROVIDER = "provider"
+
+
+ParticipantId = ExchangeId | BrokerId | ProviderId
+
+
+@dataclass(frozen=True, slots=True)
+class ParticipantRef:
+    """Shared identity of an external exchange, broker, or provider."""
+
+    kind: ParticipantKind
+    id: ParticipantId
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.id, (ExchangeId, BrokerId, ProviderId)):
+            raise TypeError("participant id must be a shared reference identifier")
+        expected = {
+            ParticipantKind.EXCHANGE: ExchangeId,
+            ParticipantKind.BROKER: BrokerId,
+            ParticipantKind.PROVIDER: ProviderId,
+        }[self.kind]
+        if not isinstance(self.id, expected):
+            raise TypeError(f"{self.kind.value} participant requires {expected.__name__}")
+
+
+@dataclass(frozen=True, slots=True)
+class ExchangeRef:
+    id: ExchangeId
+
+    @property
+    def participant(self) -> ParticipantRef:
+        return ParticipantRef(ParticipantKind.EXCHANGE, self.id)
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerRef:
+    id: BrokerId
+
+    @property
+    def participant(self) -> ParticipantRef:
+        return ParticipantRef(ParticipantKind.BROKER, self.id)
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderRef:
+    id: ProviderId
+
+    @property
+    def participant(self) -> ParticipantRef:
+        return ParticipantRef(ParticipantKind.PROVIDER, self.id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -266,9 +322,11 @@ __all__ = [
     "BINANCE_BROKER",
     "Broker",
     "BrokerId",
+    "BrokerRef",
     "DEFAULT_PARTICIPANTS",
     "Exchange",
     "ExchangeId",
+    "ExchangeRef",
     "HYPERLIQUID",
     "MASSIVE",
     "NASDAQ",
@@ -277,8 +335,12 @@ __all__ = [
     "OKX",
     "OKX_BROKER",
     "ParticipantRegistry",
+    "ParticipantId",
+    "ParticipantKind",
+    "ParticipantRef",
     "Provider",
     "ProviderId",
+    "ProviderRef",
     "brokers",
     "exchanges",
     "providers",

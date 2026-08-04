@@ -6,8 +6,9 @@ import argparse
 import asyncio
 from collections.abc import Sequence
 
-from kairospy.application.support.composition.application.integrations import connect_binance_spot
-from kairospy.application.usecases.market.application.runtime import LiveMarketDataService
+from kairospy.application.support.composition.application.integrations import market_integration_runtime
+from kairospy.application.usecases.market.application.runtime import build_live_market
+from kairospy.application.system.core.application.connections import IntegrationConnectionScope
 from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
 from kairospy.domain.market import TradePrint
 from kairospy.domain.reference import MarketRef
@@ -24,12 +25,14 @@ class StopAfter:
 
 
 async def listen(symbol: str, limit: int) -> None:
-    assembly = connect_binance_spot("example.binance.spot.runtime", market=True, mode=RuntimeMode.LIVE)
-    access = assembly.capabilities.public_market
-    if access is None:
-        raise RuntimeError("Binance connection did not provide public market capability")
+    connections = IntegrationConnectionScope()
+    integration_runtime = market_integration_runtime(connections, mode=RuntimeMode.LIVE)
     market = MarketRef.ephemeral(venue="binance", market="spot", source_symbol=symbol)
-    data = LiveMarketDataService(feed=access, source_name="binance-spot-example")
+    data = build_live_market(
+        source_name="binance-spot-example",
+        connections=connections,
+        integration_runtime=integration_runtime,
+    )
     data.subscribe(MarketDataSubscriptionSpec(market=market, selectors=(TradePrint,), identity=f"example.market.runtime.{symbol.lower()}"))
     stop = StopAfter(limit)
     data.set_stop_signal(stop)

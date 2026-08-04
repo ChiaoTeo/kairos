@@ -45,6 +45,23 @@ class DataSubscription:
     spec: MarketDataSubscriptionSpec
 
 
+@dataclass(frozen=True, slots=True)
+class MarketDataSubscriptionGroupSpec:
+    """A batch of market subscription intents sharing one strategy identity."""
+
+    specs: tuple[MarketDataSubscriptionSpec, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "specs", tuple(self.specs))
+        if not self.specs:
+            raise ValueError("subscription group cannot be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class DataSubscriptionGroup:
+    subscriptions: tuple[DataSubscription, ...]
+
+
 class MarketSubscriptionService:
     def __init__(self) -> None:
         self._subscriptions: dict[str, DataSubscription] = {}
@@ -90,7 +107,9 @@ def _key_part(value: object) -> str:
 
 __all__ = [
     "DataSubscription",
+    "DataSubscriptionGroup",
     "MarketDataSubscriptionSpec",
+    "MarketDataSubscriptionGroupSpec",
     "MarketSubscriptionService",
     "subscription_summary",
 ]

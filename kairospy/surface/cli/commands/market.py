@@ -8,7 +8,8 @@ from typing import Mapping, TextIO
 
 import typer
 
-from kairospy.application.support.system.application.facade.market import DriverName, ExchangeName, MarketDataFacade, StorageFormat
+from kairospy.application.support.composition.application.cli import build_market_commands
+from kairospy.application.usecases.market.application.commands import DriverName, ExchangeName, StorageFormat
 from kairospy.surface.cli.options import OutputFormat
 from kairospy.surface.cli.output import write_cli_result
 from kairospy.surface.cli.options import resolve_output
@@ -34,7 +35,14 @@ market_app.add_typer(source_app, name="source")
 market_app.add_typer(data_app, name="data")
 market_app.add_typer(dataset_app, name="dataset")
 market_app.add_typer(stream_app, name="stream")
-_MARKET_DATA = MarketDataFacade()
+_MARKET_COMMANDS = build_market_commands()
+_DATASETS = _MARKET_COMMANDS.datasets
+_MARKET_SOURCE = _MARKET_COMMANDS.source
+_MARKET_HISTORICAL = _MARKET_COMMANDS.historical
+_MARKET_QUERY = _MARKET_COMMANDS.query
+_MARKET_REPLAY = _MARKET_COMMANDS.replay
+_MARKET_STREAM = _MARKET_COMMANDS.stream
+_MARKET_PREFETCH = _MARKET_COMMANDS.prefetch
 
 
 class StreamKind(str, Enum):
@@ -56,7 +64,7 @@ def capabilities(
     driver_name: DriverName = typer.Option(DriverName.ccxt, "--driver"),
     output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
-    payload = _MARKET_DATA.capabilities(exchange_name=exchange_name, market=market, driver_name=driver_name)
+    payload = _MARKET_SOURCE.capabilities(exchange_name=exchange_name, market=market, driver_name=driver_name)
     write_cli_result(ctx, payload, output_format=output_format, text=_render_capabilities)
 
 
@@ -72,7 +80,7 @@ def check(
     driver_name: DriverName = typer.Option(DriverName.ccxt, "--driver"),
     output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
-    payload = _MARKET_DATA.check(
+    payload = _MARKET_SOURCE.check(
         symbol=symbol,
         exchange_name=exchange_name,
         market=market,
@@ -103,7 +111,7 @@ def download(
     if kind is not HistoricalKind.ohlcv:
         raise typer.BadParameter(f"unsupported historical data kind: {kind.value}")
     try:
-        path = _MARKET_DATA.download(
+        path = _MARKET_HISTORICAL.download(
             symbol=symbol,
             dataset=dataset,
             root=root,
@@ -134,7 +142,7 @@ def prefetch(
     output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
     try:
-        payload = _MARKET_DATA.prefetch_backtest(
+        payload = _MARKET_PREFETCH.prefetch(
             config_path=config_path,
             driver_name=driver_name,
             limit=limit,
@@ -153,7 +161,7 @@ def list_datasets(
     storage_format: StorageFormat | None = typer.Option(None, "--format"),
     output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
-    payload = _MARKET_DATA.list_datasets(root=root, storage_format=storage_format)
+    payload = _DATASETS.list(root=root, storage_format=storage_format)
     write_cli_result(ctx, payload, output_format=output_format, text=_render_datasets)
 
 
@@ -166,7 +174,7 @@ def inspect_dataset(
     sample: int = typer.Option(3, "--sample"),
     output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
-    payload = _MARKET_DATA.inspect_dataset(dataset=dataset, root=root, storage_format=storage_format, sample=sample)
+    payload = _DATASETS.inspect(dataset, root=root, storage_format=storage_format, sample=sample)
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
@@ -179,7 +187,7 @@ def alias_dataset(
     storage_format: StorageFormat | None = typer.Option(None, "--format"),
     output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
-    payload = _MARKET_DATA.alias_dataset(dataset=dataset, alias=alias, root=root, storage_format=storage_format)
+    payload = _DATASETS.alias(dataset, alias, root=root, storage_format=storage_format)
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_alias)
 
 
@@ -193,7 +201,7 @@ def prune(
     storage_format: StorageFormat | None = typer.Option(None, "--format"),
     output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
-    result = _MARKET_DATA.prune(dataset=dataset, start=start, end=end, root=root, storage_format=storage_format)
+    result = _DATASETS.prune(dataset, start, end, root=root, storage_format=storage_format)
     write_cli_result(ctx, result, output_format=output_format, default=OutputFormat.json)
 
 
@@ -215,7 +223,7 @@ def read(
     output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
     try:
-        rows = _MARKET_DATA.read(
+        rows = _MARKET_QUERY.read(
             dataset=dataset,
             root=root,
             storage_format=storage_format,
@@ -253,7 +261,7 @@ def replay(
 ) -> None:
     output = resolve_output(ctx, output_format, default=OutputFormat.jsonl)
     try:
-        _MARKET_DATA.replay(
+        _MARKET_REPLAY.replay(
             dataset=dataset,
             root=root,
             storage_format=storage_format,
@@ -310,7 +318,7 @@ def persist(
     try:
         resolved_dataset = dataset or dataset_option
         count = asyncio.run(
-            _MARKET_DATA.persist(
+            _MARKET_STREAM.persist(
                 dataset=resolved_dataset,
                 kind=None if kind is None else kind.value,
                 symbol=symbol,
@@ -338,7 +346,7 @@ def doctor(
     output_format: OutputFormat | None = typer.Option(None, "--output"),
 ) -> None:
     try:
-        payload = _MARKET_DATA.doctor(exchange_name=exchange_name, driver_name=driver_name)
+        payload = _MARKET_SOURCE.doctor(exchange_name=exchange_name, driver_name=driver_name)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_doctor)
@@ -386,7 +394,7 @@ def stream_events(
     poll_seconds: float,
 ) -> AsyncIterable[Mapping[str, object]]:
     try:
-        return _MARKET_DATA.stream_events(
+        return _MARKET_STREAM.stream_events(
             dataset=dataset,
             exchange_name=exchange_name,
             driver_name=driver_name,

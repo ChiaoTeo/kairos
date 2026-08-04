@@ -11,7 +11,7 @@ from kairospy.infrastructure.integrations.application.connections import Integra
 
 
 @dataclass(frozen=True, slots=True)
-class ConnectionAccountBootstrapRequest:
+class ConnectionAccountReadRequest:
     context: AccountContext
     observed_at: datetime
     symbol: str | None = None
@@ -19,7 +19,7 @@ class ConnectionAccountBootstrapRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class ConnectionAccountBootstrapData:
+class ConnectionAccountReadData:
     snapshot: AccountSnapshot
 
 
@@ -31,7 +31,7 @@ class ConnectionAccountStreamRequest:
 
 
 class AccountConnection(IntegrationConnection, Protocol):
-    def bootstrap(self, request: ConnectionAccountBootstrapRequest) -> ConnectionAccountBootstrapData: ...
+    def read_account(self, request: ConnectionAccountReadRequest) -> ConnectionAccountReadData: ...
 
 
 class AccountStreamConnection(IntegrationConnection, Protocol):
@@ -43,8 +43,8 @@ class OrderUpdateConnection(IntegrationConnection, Protocol):
 
 
 __all__ = [
-    "ConnectionAccountBootstrapRequest",
-    "ConnectionAccountBootstrapData",
+    "ConnectionAccountReadRequest",
+    "ConnectionAccountReadData",
     "ConnectionAccountStreamRequest",
     "AccountConnection",
     "AccountStreamConnection",

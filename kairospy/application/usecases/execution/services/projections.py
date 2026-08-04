@@ -10,11 +10,12 @@ from kairospy.domain.execution import (
     ExecutionOrderSummary,
 )
 from kairospy.domain.order import OrderState
+from kairospy.application.usecases.execution.services.coordinator import ExecutionCoordinator
 
 
 @dataclass(frozen=True, slots=True)
 class ExecutionProjectionService:
-    coordinator: object
+    coordinator: ExecutionCoordinator
     fills_source: object | None = None
 
     def order_states(self) -> tuple[OrderState, ...]:
@@ -106,4 +107,3 @@ def _optional_text(value: object) -> str | None:
 
 
 __all__ = ["ExecutionProjectionService"]
-

@@ -2,6 +2,6 @@
 
 from __future__ import annotations
 
-from kairospy.application.support.system.services.system import TradingSystem, TradingSystemSession
+from kairospy.application.system.services.system import TradingSystem, TradingSystemSession
 
 __all__ = ["TradingSystem", "TradingSystemSession"]

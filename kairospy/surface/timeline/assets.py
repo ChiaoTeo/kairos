@@ -19,7 +19,7 @@ HTML = """<!doctype html>
       </header>
       <section class="chart-band">
         <div class="chart-head">
-          <strong>Equity / Risk</strong>
+          <strong>Equity</strong>
           <span id="range-label"></span>
         </div>
         <canvas id="chart" height="220"></canvas>
@@ -39,9 +39,7 @@ HTML = """<!doctype html>
         </aside>
         <section class="detail">
           <div class="tabs">
-            <button class="tab active" data-tab="decision" type="button">Decision</button>
-            <button class="tab" data-tab="risk" type="button">Risk</button>
-            <button class="tab" data-tab="fills" type="button">Fills</button>
+            <button class="tab active" data-tab="fills" type="button">Fills</button>
             <button class="tab" data-tab="intents" type="button">Intents</button>
             <button class="tab" data-tab="raw" type="button">Raw</button>
           </div>
@@ -222,7 +220,7 @@ pre {
 """
 
 JS = """
-const state = { data: null, index: 0, tab: "decision" };
+const state = { data: null, index: 0, tab: "fills" };
 
 const $ = (id) => document.getElementById(id);
 const fmt = (value) => value === null || value === undefined || value === "" ? "-" : String(value);
@@ -270,7 +268,6 @@ function renderAll() {
     ["Final Equity", data.summary.final_equity],
     ["Net PnL", data.summary.net_profit],
     ["Events", data.summary.event_count],
-    ["Trace", data.instance.counts.decisionTrace],
   ].map(([label, value]) => `<div class="metric"><span>${label}</span><strong>${fmt(value)}</strong></div>`).join("");
   const range = data.instance.timeRange || {};
   $("range-label").textContent = `${fmt(range.start)} to ${fmt(range.end)}`;
@@ -334,61 +331,9 @@ function atTime(rows, time) {
 function renderDetail() {
   const time = state.data.timeline[state.index]?.time;
   const records = state.data.records;
-  if (state.tab === "decision") return renderDecision(time, records);
-  if (state.tab === "risk") return renderRisk(time, records);
   if (state.tab === "fills") return renderRows("Fills", atTime(records.fills, time), ["occurred_at", "instrument_id", "side", "quantity", "price", "fee", "intent_id"]);
   if (state.tab === "intents") return renderIntents(time, records);
   renderRaw(time, records);
-}
-
-function renderDecision(time, records) {
-  const traces = atTime(records.decisionTrace, time);
-  if (!traces.length) {
-    $("detail-panel").innerHTML = '<p class="empty">No strategy decision trace at this timestamp.</p>';
-    return;
-  }
-  $("detail-panel").innerHTML = traces.map((trace) => {
-    const payload = trace.payload || {};
-    const decision = payload.decision || {};
-    return `
-      <div class="grid">
-        <div class="kv"><span>Action</span><strong>${fmt(decision.action)}</strong></div>
-        <div class="kv"><span>Reason</span><strong>${fmt(decision.reason)}</strong></div>
-        <div class="kv"><span>Symbol</span><strong>${fmt(payload.symbol)}</strong></div>
-        <div class="kv"><span>Funding Rate</span><strong>${fmt(payload.funding_rate)}</strong></div>
-        <div class="kv"><span>Basis</span><strong>${fmt(payload.basis)}</strong></div>
-        <div class="kv"><span>Net Funding</span><strong>${fmt(payload.net_funding_rate)}</strong></div>
-        <div class="kv"><span>Spot Price</span><strong>${fmt(payload.spot_price)}</strong></div>
-        <div class="kv"><span>Swap Price</span><strong>${fmt(payload.swap_price)}</strong></div>
-      </div>
-      <pre>${escapeHtml(JSON.stringify(trace, null, 2))}</pre>
-    `;
-  }).join("");
-}
-
-function renderRisk(time, records) {
-  const risk = atOrBefore(records.riskSnapshots, time);
-  if (!risk) {
-    $("detail-panel").innerHTML = '<p class="empty">No risk snapshot at or before this timestamp.</p>';
-    return;
-  }
-  const positions = Array.isArray(risk.positions) ? risk.positions : [];
-  const rates = Array.isArray(risk.funding_rates) ? risk.funding_rates : [];
-  $("detail-panel").innerHTML = `
-    <div class="grid">
-      <div class="kv"><span>Snapshot Time</span><strong>${fmt(risk.time)}</strong></div>
-      <div class="kv"><span>Equity</span><strong>${fmt(risk.equity)}</strong></div>
-      <div class="kv"><span>Cash</span><strong>${fmt(risk.cash)}</strong></div>
-      <div class="kv"><span>Gross Notional</span><strong>${fmt(risk.gross_notional)}</strong></div>
-      <div class="kv"><span>Net Notional</span><strong>${fmt(risk.net_notional)}</strong></div>
-      <div class="kv"><span>Positions</span><strong>${positions.length}</strong></div>
-      <div class="kv"><span>Funding Rates</span><strong>${rates.length}</strong></div>
-      <div class="kv"><span>Account</span><strong>${fmt(risk.account_id)}</strong></div>
-    </div>
-    ${table("Positions", positions, ["instrument_id", "quantity", "mark_price", "notional"])}
-    ${table("Funding Rates", rates, ["time", "market_id", "instrument_id", "rate", "mark_price"])}
-    <pre>${escapeHtml(JSON.stringify(risk, null, 2))}</pre>
-  `;
 }
 
 function renderIntents(time, records) {
@@ -417,8 +362,6 @@ function renderIntents(time, records) {
 function renderRaw(time, records) {
   const payload = {
     time,
-    decisionTrace: atTime(records.decisionTrace, time),
-    riskSnapshot: atOrBefore(records.riskSnapshots, time),
     equity: atOrBefore(records.equity, time),
     fills: atTime(records.fills, time),
     intents: atTime(records.intents, time),

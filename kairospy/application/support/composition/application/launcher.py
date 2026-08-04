@@ -15,7 +15,7 @@ from kairospy.application.support.launch.application.configuration import (
     ConfiguredLive,
     ConfiguredPaper,
 )
-from kairospy.application.support.runtime.domain.modes import RuntimeMode
+from kairospy.application.support.launch.domain.modes import RuntimeMode
 
 from .backtest import BacktestComposition
 from .common import ComposedLaunch

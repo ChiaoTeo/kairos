@@ -6,12 +6,13 @@ from typing import Mapping
 
 from kairospy.domain.reference import Asset, AssetId, AssetType, EntityId, LifecycleEvent, ReferenceCatalog
 from kairospy.domain.reference.identity import reference_slug
+from ..protocol import ReferenceStore
 
 
 
 @dataclass(slots=True)
 class ReferenceCatalogService:
-    store: object
+    store: ReferenceStore
     _catalog: ReferenceCatalog | None = field(default=None, init=False, repr=False)
     _lifecycle_events: tuple[LifecycleEvent, ...] | None = field(default=None, init=False, repr=False)
 
@@ -19,6 +20,13 @@ class ReferenceCatalogService:
         if reload or self._catalog is None:
             self._catalog = self.store.load_catalog()
         return self._catalog
+
+    def has_catalog(self) -> bool:
+        marker = getattr(self.store, "has_catalog", None)
+        if callable(marker):
+            return bool(marker())
+        catalog = self.catalog()
+        return bool(catalog.entities() or catalog.markets())
 
     def save_catalog(self, catalog: ReferenceCatalog) -> ReferenceCatalog:
         self.store.save_catalog(catalog)

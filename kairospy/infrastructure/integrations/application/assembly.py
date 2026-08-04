@@ -7,12 +7,12 @@ from kairospy.infrastructure.integrations.application.connections import (
     IntegrationConnectionApplication,
     IntegrationConnectionSpec,
 )
-from kairospy.infrastructure.integrations.services.factories.registry import ConnectionServiceRegistry
+from kairospy.infrastructure.integrations.services.factories.registry import GatewayRegistry
 
 
 @dataclass(slots=True)
 class DefaultIntegrationConnectionApplication(IntegrationConnectionApplication):
-    registry: ConnectionServiceRegistry = field(default_factory=ConnectionServiceRegistry.with_builtins)
+    registry: GatewayRegistry = field(default_factory=GatewayRegistry.with_builtins)
 
     def connect(self, spec: IntegrationConnectionSpec) -> IntegrationConnection:
         return self.registry.create(spec)

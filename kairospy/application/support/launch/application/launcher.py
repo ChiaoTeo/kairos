@@ -5,34 +5,29 @@ from decimal import Decimal
 import importlib
 import json
 import os
-from dataclasses import dataclass, replace
+import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping, Protocol, TypeVar
 
-from kairospy.application.usecases.account.domain.books import default_account_books
-from kairospy.application.support.runtime.domain.events import RuntimeEnvelope
-from kairospy.application.support.runtime.domain.lines import RuntimeLine
-from kairospy.application.support.runtime.domain.modes import RuntimeMode
-from kairospy.application.support.runtime.application.launch import RuntimeLaunchResult
-from kairospy.application.support.composition.application.launcher import ConfiguredLaunchComposer, market_feed_resolver_builder
-from kairospy.application.support.composition.application.system import compose_system
-from kairospy.application.support.composition.application.artifacts import launch_output
-from kairospy.application.support.composition.application.common import reference_runtime
-from kairospy.application.support.composition.application.runtime_services import compose_runtime_assembly
-from kairospy.application.support.launch.application.configuration import BacktestConfigurationError, BacktestLaunchResult, BrokerFactory, ConfiguredAccount, ConfiguredBacktest, ConfiguredCredential, ConfiguredLive, ConfiguredPaper, LiveConfigurationError, LiveLaunchResult, LiveMarketFeedFactory, PaperConfigurationError, PaperLaunchResult, PaperMarketFeedFactory, configured_backtest, configured_live, configured_paper
-from kairospy.application.support.system.application.artifacts import LaunchOutputLog, write_launch_log_section
-from kairospy.application.support.runtime.application.launch.resources import TradingRuntimeResources, TradingLaunchSpec
-from kairospy.application.support.system.application.runtime import TradingSystem, TradingSystemSession
-from kairospy.application.support.system.application.workspace import AccountRecord, KairosWorkspace
-from kairospy.application.usecases.strategy.application.cli import CliStrategyBase
+from kairospy.application.usecases.account.application.runtime import default_account_books
+from kairospy.application.support.messaging import Message
+from kairospy.application.support.launch.domain.identity import LaunchIdentity
+from kairospy.application.support.launch.domain.modes import RuntimeMode
+from kairospy.application.support.launch.application.runtime import LaunchRuntimeResult
+from kairospy.application.support.launch.application.configuration import ConfiguredAccount, ConfiguredCredential
+from kairospy.application.support.launch.application.artifacts import LaunchOutputLog, write_launch_log_section
+from kairospy.application.system.application.resources import TradingLaunchSpec, TradingSystemResources
+from kairospy.application.system.application.runtime import TradingSystem
+from kairospy.application.usecases.workspace.domain.workspace import AccountRecord, KairosWorkspace
 from kairospy.application.usecases.strategy.protocol import Strategy
-from kairospy.application.support.system.application.session import SystemCommandDispatcher, SystemCommandFileQueue, SystemCommandResult
-from kairospy.application.support.launch.application.protocol import StopSignalBindable
-from kairospy.application.support.runtime.domain.connections import DefaultConnectionManager
-from kairospy.application.support.system.application.config import ConfigError, LaunchAccountConfig, load_launch_config
+from kairospy.application.support.launch.application.system_commands import SystemCommandDispatcher
+from kairospy.application.support.launch.application.commands import SystemCommandResult
+from kairospy.application.support.launch.services.command_queue import SystemCommandFileQueue
+from kairospy.application.support.launch.application.protocol import LaunchTarget, LaunchTargetDescriptor, StopSignalBindable
+from kairospy.application.support.launch.application.configuration import LaunchAccountConfig
 from kairospy.domain.account import AccountBookRef, AccountIdentity
-from kairospy.application.usecases.account.domain.routing import account_book_route
-from kairospy.application.support.system.application.config import SYSTEM_LAUNCH_ID
+from kairospy.application.usecases.account.application.runtime import account_book_route
 
 
 _LAUNCH_INSTANCE_ID_ENV = "KAIROS_LAUNCH_INSTANCE_ID"
@@ -59,214 +54,7 @@ def bind_stop_signal(market_data: object, stop_requested: Callable[[], bool]) ->
     market_data.set_stop_signal(stop_requested)
 
 
-@dataclass(frozen=True, slots=True)
-class LaunchTarget:
-    """A resolved launch target for the system control plane.
-
-    The configured mode object stays private to launch application. Callers
-    only need the target identity, its planned directory and ``run``.
-    """
-
-    mode: RuntimeMode
-    launch_id: str
-    launch_directory: Path
-    _runner: Callable[[], object]
-    _bind_stop: Callable[[Callable[[], bool]], None]
-
-    def run(self) -> object:
-        return self._runner()
-
-    def bind_stop(self, stop_requested: Callable[[], bool]) -> None:
-        self._bind_stop(stop_requested)
-
-
-@dataclass(frozen=True, slots=True)
-class LaunchTargetDescriptor:
-    mode: RuntimeMode
-    launch_id: str
-    launch_directory: Path
-
-
 class TradingSystemLauncher:
-    def __init__(self, composer: ConfiguredLaunchComposer | None = None) -> None:
-        self._composer = composer or ConfiguredLaunchComposer()
-
-    def describe_target(self, *, mode: RuntimeMode, config_path: str | Path) -> LaunchTargetDescriptor:
-        try:
-            launch_config = load_launch_config(Path(config_path))
-            launch_config.require_mode(mode.value)
-        except ConfigError as error:
-            raise TradingConfigurationError(str(error)) from error
-        mode_config = launch_config.values.get(mode.value)
-        if not isinstance(mode_config, Mapping):
-            mode_config = {}
-        launches_root_value = mode_config.get("launches_root")
-        launches_root = Path(".kairos/launches").resolve() if launches_root_value is None else _resolve_path(launches_root_value, root=launch_config.root)
-        return LaunchTargetDescriptor(
-            mode=mode,
-            launch_id=launch_config.launch_id,
-            launch_directory=launches_root / mode.value / launch_config.launch_id,
-        )
-
-    def launch_app_system(
-        self,
-        *,
-        launch_id: str = SYSTEM_LAUNCH_ID,
-        launch_directory: str | Path | None = None,
-    ) -> RuntimeLaunchResult:
-        if launch_id != SYSTEM_LAUNCH_ID:
-            raise ValueError(f"system launch id is fixed: {SYSTEM_LAUNCH_ID}")
-        directory = Path(launch_directory) if launch_directory is not None else Path(".kairos/launches") / RuntimeMode.SYSTEM.value / launch_id
-        composed = compose_system(
-            launch_directory=directory,
-            launch_id=launch_id,
-            source=_SystemCommandEventLine(directory),
-        )
-        return self._launch_configured(
-            launch_id=launch_id,
-            mode=RuntimeMode.SYSTEM,
-            strategy=CliStrategyBase(),
-            launch_directory=directory,
-            normalized_config={
-                "launch": {"id": launch_id, "mode": RuntimeMode.SYSTEM.value, "strategy": "builtin:CliStrategyBase"},
-                "system": {"builtin": True, "interactive": True},
-            },
-            resources=composed.resources,
-            lifecycle=composed.lifecycle,
-        )
-
-    def launch_backtest_config(self, config_path: str | Path) -> BacktestLaunchResult:
-        try:
-            configured = configured_backtest(Path(config_path))
-        except BacktestConfigurationError as error:
-            raise TradingConfigurationError(str(error)) from error
-        return self.launch_configured_backtest(configured)
-
-    def resolve_target(
-        self,
-        *,
-        mode: RuntimeMode,
-        config_path: str | Path,
-        strategy_ref: str | None = None,
-        launch_directory: str | Path | None = None,
-    ) -> LaunchTarget:
-        """Resolve a config into a runnable target without starting it.
-
-        This is the application boundary used by system control. Mode
-        configuration and composition details remain inside launch.
-        """
-        path = Path(config_path)
-        stop_requested_holder: list[Callable[[], bool] | None] = [None]
-        try:
-            if mode is RuntimeMode.BACKTEST:
-                configured: object = configured_backtest(path, strategy_ref=strategy_ref)
-                runner = lambda: self.launch_configured_backtest(configured, stop_requested=stop_requested_holder[0])  # type: ignore[arg-type]
-            elif mode is RuntimeMode.PAPER:
-                configured = configured_paper(
-                    path,
-                    market_feed_resolver_builder=self._market_feed_resolver_builder("paper"),
-                    account_resolver=self._account_resolver(path),
-                    strategy_ref=strategy_ref,
-                )
-                runner = lambda: self.launch_configured_paper(configured, stop_requested=stop_requested_holder[0])  # type: ignore[arg-type]
-            elif mode is RuntimeMode.LIVE:
-                configured = configured_live(
-                    path,
-                    market_feed_resolver_builder=self._market_feed_resolver_builder("live"),
-                    account_resolver=self._account_resolver(path),
-                    strategy_ref=strategy_ref,
-                )
-                runner = lambda: self.launch_configured_live(configured, stop_requested=stop_requested_holder[0])  # type: ignore[arg-type]
-            else:
-                raise ValueError("config targets support backtest, paper, and live modes")
-        except (BacktestConfigurationError, PaperConfigurationError, LiveConfigurationError) as error:
-            raise TradingConfigurationError(str(error)) from error
-
-        if launch_directory is not None:
-            directory = Path(launch_directory)
-            configured = replace(configured, launch_directory=directory)
-            if isinstance(configured, ConfiguredLive):
-                configured = replace(configured, state_path=directory / "live_state.json")
-            if isinstance(configured, ConfiguredBacktest):
-                runner = lambda: self.launch_configured_backtest(configured, stop_requested=stop_requested_holder[0])  # type: ignore[arg-type]
-            elif isinstance(configured, ConfiguredPaper):
-                runner = lambda: self.launch_configured_paper(configured, stop_requested=stop_requested_holder[0])  # type: ignore[arg-type]
-            else:
-                runner = lambda: self.launch_configured_live(configured, stop_requested=stop_requested_holder[0])  # type: ignore[arg-type]
-
-        def bind_stop(stop_requested: Callable[[], bool]) -> None:
-            stop_requested_holder[0] = stop_requested
-
-        return LaunchTarget(
-            mode=mode,
-            launch_id=str(getattr(configured, "launch_id")),
-            launch_directory=Path(getattr(configured, "launch_directory")),
-            _runner=runner,
-            _bind_stop=bind_stop,
-        )
-
-    def launch_configured_backtest(
-        self,
-        configured: ConfiguredBacktest,
-        *,
-        stop_requested: Callable[[], bool] | None = None,
-    ) -> BacktestLaunchResult:
-        return self._run_composed(self._composer.backtest(configured), configured, stop_requested=stop_requested)
-
-    def launch_paper_config(
-        self,
-        config_path: str | Path,
-        *,
-        market_feed_factory: PaperMarketFeedFactory | None = None,
-    ) -> PaperLaunchResult:
-        try:
-            path = Path(config_path)
-            configured = configured_paper(
-                path,
-                market_feed_factory=market_feed_factory,
-                market_feed_resolver_builder=None if market_feed_factory is not None else self._market_feed_resolver_builder("paper"),
-                account_resolver=self._account_resolver(path),
-            )
-        except PaperConfigurationError as error:
-            raise TradingConfigurationError(str(error)) from error
-        return self.launch_configured_paper(configured)
-
-    def launch_configured_paper(
-        self,
-        configured: ConfiguredPaper,
-        *,
-        stop_requested: Callable[[], bool] | None = None,
-    ) -> PaperLaunchResult:
-        return self._run_composed(self._composer.paper(configured), configured, stop_requested=stop_requested)
-
-    def launch_live_config(
-        self,
-        config_path: str | Path,
-        *,
-        market_feed_factory: LiveMarketFeedFactory | None = None,
-        broker_factory: BrokerFactory | None = None,
-    ) -> LiveLaunchResult:
-        try:
-            path = Path(config_path)
-            configured = configured_live(
-                path,
-                market_feed_factory=market_feed_factory,
-                market_feed_resolver_builder=None if market_feed_factory is not None else self._market_feed_resolver_builder("live"),
-                broker_factory=broker_factory,
-                account_resolver=self._account_resolver(path),
-            )
-            return self.launch_configured_live(configured)
-        except LiveConfigurationError as error:
-            raise TradingConfigurationError(str(error)) from error
-
-    def launch_configured_live(
-        self,
-        configured: ConfiguredLive,
-        *,
-        stop_requested: Callable[[], bool] | None = None,
-    ) -> LiveLaunchResult:
-        return self._run_composed(self._composer.live(configured), configured, stop_requested=stop_requested)
-
     def _run_composed(
         self,
         composed: object,
@@ -279,9 +67,8 @@ class TradingSystemLauncher:
         Lease ownership, runtime lifecycle, status logging, and artifacts are
         launch concerns and intentionally stay out of composition.
         """
-        from kairospy.application.support.composition.application.common import ComposedLaunch
-
-        if not isinstance(composed, ComposedLaunch):
+        required = ("resources", "launch_id", "mode", "strategy", "launch_directory", "normalized_config", "lifecycle", "build_result")
+        if any(not hasattr(composed, name) for name in required):
             raise TypeError("composition must return ComposedLaunch")
         if stop_requested is not None:
             bind_stop_signal(composed.resources.data, stop_requested)
@@ -298,67 +85,38 @@ class TradingSystemLauncher:
             )
             result = composed.build_result(runtime)
             self._write_account_status(composed.launch_directory, result)
-            self._write_artifacts(composed.launch_directory, result, composed.normalized_config)
+            self._write_artifacts(composed.launch_directory, result, composed.normalized_config, composed.resources.assembly)
             return result
 
-        return self._with_account_leases(configured, composed.mode, run)
+        return self._with_account_leases(configured, composed.mode, run) if configured is not None else run()
 
-    def launch_events(
+    def run_composed(self, composed: object, configured: object | None = None, *, stop_requested: Callable[[], bool] | None = None) -> object:
+        """Execute a composition-owned resource graph under launch lifecycle."""
+
+        return self._run_composed(composed, configured, stop_requested=stop_requested)
+
+    def run_resources(
         self,
         *,
-        strategy_path: str,
-        events_path: str | Path,
-        launch_id: str = "kairos-launch",
-        mode: RuntimeMode | str = RuntimeMode.BACKTEST,
-        launch_directory: str | Path | None = None,
-    ) -> RuntimeLaunchResult:
-        runtime_mode = mode if isinstance(mode, RuntimeMode) else RuntimeMode(str(mode))
-        strategy = self._load_strategy(strategy_path)
-        event_path = Path(events_path)
-        connections = DefaultConnectionManager()
+        launch_id: str,
+        mode: RuntimeMode,
+        strategy: Strategy,
+        launch_directory: Path,
+        normalized_config: Mapping[str, object],
+        resources: TradingSystemResources,
+        lifecycle: object | None = None,
+    ) -> LaunchRuntimeResult:
+        """Run an already assembled resource graph."""
+
         return self._launch_configured(
             launch_id=launch_id,
-            mode=runtime_mode,
+            mode=mode,
             strategy=strategy,
-            launch_directory=Path(launch_directory) if launch_directory is not None else Path(".kairos/launches") / runtime_mode.value / launch_id,
-            normalized_config={
-                "launch": {"id": launch_id, "mode": runtime_mode.value, "strategy": strategy_path},
-                "events": {"source": str(event_path)},
-            },
-            resources=TradingRuntimeResources(
-                source=RuntimeLine(self._read_event_jsonl(event_path)),
-                reference=reference_runtime(event_path),
-                connection_scope=connections,
-            ),
+            launch_directory=launch_directory,
+            normalized_config=normalized_config,
+            resources=resources,
+            lifecycle=lifecycle,
         )
-
-    def open_system_session(
-        self,
-        *,
-        strategy_path: str,
-        launch_id: str = "kairos-system-session",
-        mode: RuntimeMode | str = RuntimeMode.BACKTEST,
-        launch_directory: str | Path | None = None,
-    ) -> TradingSystemSession:
-        runtime_mode = mode if isinstance(mode, RuntimeMode) else RuntimeMode(str(mode))
-        strategy = self._load_strategy(strategy_path)
-        return TradingSystem(
-            TradingLaunchSpec(
-                launch_id=launch_id,
-                mode=runtime_mode,
-                strategy=strategy,
-                launch_directory=Path(launch_directory) if launch_directory is not None else Path(".kairos/launches") / runtime_mode.value / launch_id,
-                normalized_config={
-                    "launch": {"id": launch_id, "mode": runtime_mode.value, "strategy": strategy_path},
-                    "system": {"interactive": True},
-                },
-                resources=TradingRuntimeResources(
-                    reference=reference_runtime(launch_directory),
-                    connection_scope=DefaultConnectionManager(),
-                    assembly=compose_runtime_assembly(),
-                ),
-            )
-        ).start()
 
     def _launch_configured(
         self,
@@ -368,36 +126,35 @@ class TradingSystemLauncher:
         strategy: Strategy,
         launch_directory: Path,
         normalized_config: Mapping[str, object],
-        resources: TradingRuntimeResources,
+        resources: TradingSystemResources,
         lifecycle: object | None = None,
-    ) -> RuntimeLaunchResult:
+    ) -> LaunchRuntimeResult:
+        identity = LaunchIdentity(launch_id, mode)
         write_launch_log_section(
             launch_directory,
             "Launch Environment",
             {
-                "launch_id": launch_id,
-                "mode": mode.value,
+                "launch_id": identity.launch_id,
+                "mode": identity.mode.value,
+                "launch_instance_id": _launch_instance_id(launch_id),
                 "launch_directory": launch_directory,
                 "strategy_id": getattr(strategy, "strategy_id", None),
             },
         )
         write_launch_log_section(launch_directory, "System Status", {"phase": "starting"})
-        resources = TradingRuntimeResources(
-            source=resources.source,
-            components=resources.components,
+        resources = TradingSystemResources(
+            business=resources.business,
+            input_streams=resources.input_streams,
             data=resources.data,
             account=resources.account,
             reference=resources.reference,
             trading_execution=resources.trading_execution,
             connection_scope=resources.connection_scope,
-            market_stream_connections=resources.market_stream_connections,
-            market_request_connections=resources.market_request_connections,
-            account_connections=resources.account_connections,
-            execution_connections=resources.execution_connections,
-            reference_connections=resources.reference_connections,
-            assembly=resources.assembly or compose_runtime_assembly(),
+            message_bus=resources.message_bus,
+            assembly=resources.assembly,
         )
-        with LaunchOutputLog(launch_directory):
+        terminal_output = sys.stdout if getattr(sys.stdout, "isatty", lambda: False)() else None
+        with LaunchOutputLog(launch_directory, stdout=terminal_output, stderr=terminal_output):
             result = TradingSystem(
                 TradingLaunchSpec(
                     launch_id=launch_id,
@@ -415,8 +172,9 @@ class TradingSystemLauncher:
             {
                 "phase": "stopped",
                 "events": getattr(result.runtime, "event_count", None),
-                "intents": getattr(result.runtime, "intent_count", None),
+                "intents": _intent_count(result),
             },
+            stdout=terminal_output,
         )
         return result
 
@@ -428,9 +186,9 @@ class TradingSystemLauncher:
         strategy: Strategy,
         launch_directory: Path,
         normalized_config: Mapping[str, object],
-        resources: TradingRuntimeResources,
+        resources: TradingSystemResources,
         lifecycle: object | None,
-    ) -> RuntimeLaunchResult:
+    ) -> LaunchRuntimeResult:
         return self._launch_configured(
             launch_id=launch_id,
             mode=mode,
@@ -441,7 +199,7 @@ class TradingSystemLauncher:
             lifecycle=lifecycle,
         )
 
-    def _load_strategy(self, path: str) -> Strategy:
+    def load_strategy(self, path: str) -> Strategy:
         if ":" not in path:
             raise ValueError("strategy must use module:callable")
         module_name, callable_name = path.split(":", 1)
@@ -452,8 +210,16 @@ class TradingSystemLauncher:
             raise ValueError("strategy object must expose strategy_id")
         return strategy
 
-    def _write_artifacts(self, launch_directory: Path, result: object, normalized_config: Mapping[str, object]) -> None:
-        launch_output(launch_directory).write_result(result=result, normalized_config=normalized_config)
+    def _write_artifacts(
+        self,
+        launch_directory: Path,
+        result: object,
+        normalized_config: Mapping[str, object],
+        assembly: object | None,
+    ) -> None:
+        if assembly is None or not callable(getattr(assembly, "output", None)):
+            raise TypeError("launch resources must provide an output assembly")
+        assembly.output(launch_directory).write_result(result=result, normalized_config=normalized_config)
 
     def _write_account_status(self, launch_directory: Path, result: object) -> None:
         account_view = getattr(result, "account_view", None)
@@ -469,10 +235,10 @@ class TradingSystemLauncher:
             },
         )
 
-    def _read_event_jsonl(self, path: Path) -> tuple[RuntimeEnvelope, ...]:
+    def read_event_jsonl(self, path: Path) -> tuple[Message, ...]:
         if not path.exists():
             raise ValueError(f"events file does not exist: {path}")
-        events: list[RuntimeEnvelope] = []
+        events: list[Message] = []
         for index, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
             if not line.strip():
                 continue
@@ -482,16 +248,13 @@ class TradingSystemLauncher:
             events.append(self._event_from_mapping(row, fallback_sequence=index))
         return tuple(events)
 
-    def _account_resolver(self, config_path: Path):
+    def account_resolver(self, config_path: Path):
         workspace = KairosWorkspace.resolve(config_path)
 
         def resolve(account_ref: str) -> ConfiguredAccount:
             return _configured_account_from_record(workspace.accounts.get(account_ref), workspace=workspace)
 
         return resolve
-
-    def _market_feed_resolver_builder(self, mode_label: str):
-        return market_feed_resolver_builder(mode_label, error_type=TradingConfigurationError)
 
     def _with_account_leases(self, configured: object, mode: RuntimeMode, run: LaunchRun[ResultT]) -> ResultT:
         accounts = _trade_lease_accounts(configured)
@@ -519,15 +282,15 @@ class TradingSystemLauncher:
                 payload={"accounts": [identity.value for identity, _environment in accounts]},
             )
 
-    def _event_from_mapping(self, row: Mapping[str, object], *, fallback_sequence: int) -> RuntimeEnvelope:
+    def _event_from_mapping(self, row: Mapping[str, object], *, fallback_sequence: int) -> Message:
         raw_time = row.get("time")
         if not isinstance(raw_time, str):
             raise ValueError("event time must be an ISO-8601 string")
-        return RuntimeEnvelope(
-            domain=str(row.get("domain") or row.get("stream") or "data"),
-            kind=str(row.get("kind") or "event"),
-            time=datetime.fromisoformat(raw_time),
-            sequence=int(row.get("sequence") or fallback_sequence),
+        return Message(
+            topic=f"{str(row.get('domain') or row.get('stream') or 'data')}.{str(row.get('kind') or 'event')}",
+            published_at=datetime.fromisoformat(raw_time),
+            producer="cli.events",
+            producer_sequence=int(row.get("sequence") or fallback_sequence),
             payload=row.get(
                 "payload",
                 {key: value for key, value in row.items() if key not in {"domain", "stream", "kind", "time", "sequence"}},
@@ -535,7 +298,7 @@ class TradingSystemLauncher:
         )
 
 
-class _SystemCommandEventLine:
+class SystemCommandProducer:
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self.queue = SystemCommandFileQueue(directory)
@@ -559,12 +322,12 @@ class _SystemCommandEventLine:
                         return
                     self.queue.respond(result)
                     continue
-                yield RuntimeEnvelope(
-                    "system",
-                    "cli.command",
-                    command.requested_at,
-                    sequence,
-                    {"command": command.kind, "args": dict(command.payload)},
+                yield Message(
+                    topic="system.cli.command",
+                    published_at=command.requested_at,
+                    producer="system.commands",
+                    producer_sequence=sequence,
+                    payload={"command": command.kind, "args": dict(command.payload)},
                 )
                 sequence += 1
                 self.queue.respond(SystemCommandResult.accepted(command, {"processed": True}))
@@ -574,12 +337,12 @@ class _SystemCommandEventLine:
                 now = time.monotonic()
                 if now >= next_idle:
                     next_idle = now + 1.0
-                    yield RuntimeEnvelope(
-                        "system",
-                        "system.idle",
-                        datetime.now().astimezone(),
-                        sequence,
-                        {"status": "running"},
+                    yield Message(
+                        topic="system.idle",
+                        published_at=datetime.now().astimezone(),
+                        producer="system.commands",
+                        producer_sequence=sequence,
+                        payload={"status": "running"},
                     )
                     sequence += 1
                     continue
@@ -711,6 +474,12 @@ def _launch_instance_id(launch_id: str) -> str:
     if value is not None and value.strip():
         return value.strip()
     return f"{launch_id}:{os.getpid()}"
+
+
+def _intent_count(result: object) -> int | None:
+    intents = getattr(result, "intents", None)
+    listing = getattr(intents, "list", None)
+    return len(listing()) if callable(listing) else None
 
 
 def _decimal_value(value: object) -> Decimal:

@@ -9,10 +9,10 @@ from typing import Literal, Mapping, Protocol
 from kairospy.application.usecases.market.domain.datasets import parse_market_dataset_id
 from kairospy.domain.market import Bar, OrderBookSnapshot, Quote, RateObservation, TradePrint
 
-from .operations import MarketDataOperationsService
 from .sources import parse_event_time
 from ..domain.specs import MarketDataSpec
 from ..domain.subscriptions import DataSubscription, MarketDataSubscriptionSpec
+from ..protocol import MarketDataReader, MarketDataWriter
 
 
 BacktestMissingDataAction = Literal["error", "download", "skip"]
@@ -44,13 +44,15 @@ class ReplayMarketDataPolicy:
 class MarketReplayService:
     def __init__(
         self,
-        operations: MarketDataOperationsService,
+        reader: MarketDataReader,
         *,
+        writer: MarketDataWriter | None = None,
         policy: ReplayMarketDataPolicy | None = None,
         historical_client: object | None = None,
         historical_client_factory: HistoricalClientFactory | None = None,
     ) -> None:
-        self.operations = operations
+        self.reader = reader
+        self.writer = writer
         self.policy = policy
         self.historical_client = historical_client
         self.historical_client_factory = historical_client_factory
@@ -68,16 +70,18 @@ class MarketReplayService:
         rows: list[Mapping[str, object]] = []
         missing: list[str] = []
         for spec in specs_from_subscription(subscription.spec, start=self.policy.start, end=self.policy.end):
-            resolved = self.operations.resolve(spec)
-            spec_rows = tuple(self.operations.read(spec))
+            resolved = self.reader.resolve(spec)
+            spec_rows = tuple(self.reader.read(spec))
             if not spec_rows:
                 missing.append(resolved.dataset_id)
                 if self.policy.on_missing == "download":
                     client = self._historical_client(spec)
                     if client is None:
                         raise RuntimeError(f"historical data is missing and no historical client is configured: {resolved.dataset_id}")
-                    self.operations.download(spec, client)
-                    spec_rows = tuple(self.operations.read(spec))
+                    if self.writer is None:
+                        raise RuntimeError("historical data is missing and no data writer is configured")
+                    self.writer.download(spec, client)
+                    spec_rows = tuple(self.reader.read(spec))
                 if self.policy.on_missing == "error" and not spec_rows:
                     raise RuntimeError(f"historical data is missing: {resolved.dataset_id}")
             rows.extend(spec_rows)

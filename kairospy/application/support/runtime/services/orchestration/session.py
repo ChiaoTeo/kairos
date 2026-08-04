@@ -1,54 +1,48 @@
 from __future__ import annotations
 
 from kairospy.application.support.runtime.application.dispatch.dispatcher import RuntimeDispatcher
-from kairospy.application.support.runtime.services.orchestration.pipeline import RuntimeProjectionPipeline
-from kairospy.application.support.runtime.services.orchestration.state import RuntimeFrame, RuntimeLaunchResult, RuntimeStep
-from kairospy.application.support.runtime.domain.events import RuntimeEnvelope
-from kairospy.application.support.runtime.domain.lines import RuntimeEventLine, close_event_line
+from kairospy.application.support.runtime.services.orchestration.state import RuntimeCycle, RuntimeFrame, RuntimeResult
+from kairospy.application.support.messaging import Message
 from kairospy.application.support.runtime.application.views import ViewStore
 
 
 class RuntimeSession:
-    def __init__(self, dispatcher: RuntimeDispatcher, pipeline: RuntimeProjectionPipeline, frame: RuntimeFrame) -> None:
+    def __init__(
+        self,
+        dispatcher: RuntimeDispatcher,
+        views: ViewStore,
+        frame: RuntimeFrame,
+        system_call: object | None = None,
+    ) -> None:
         self.dispatcher = dispatcher
-        self.pipeline = pipeline
+        self.views = views
         self.frame = frame
+        self.system_call = system_call
 
-    def process(self, event: RuntimeEnvelope) -> tuple[RuntimeStep, ...]:
-        self.pipeline.on_event(event)
-        steps = [RuntimeStep("event", as_of=event.time, event=event, views=_view_snapshot(self.pipeline.views))]
-        self.dispatcher.process(self.frame, event)
-        hook = self.frame.callbacks[-1].hook if self.frame.callbacks else ""
-        intents = tuple(self.dispatcher.context.emitted_intents)
-        traces = tuple(self.dispatcher.context.emitted_traces)
-        self.pipeline.on_intents(intents, self.dispatcher.context, hook)
-        if intents or traces:
-            steps.append(
-                RuntimeStep(
-                    "decision",
-                    as_of=getattr(self.dispatcher.context, "now", None),
-                    event=event,
-                    intents=intents,
-                    traces=traces,
-                    context=self.dispatcher.context,
-                    hook=hook,
-                    views=_view_snapshot(self.pipeline.views),
-                )
-            )
-        return tuple(steps)
+    @property
+    def is_finished(self) -> bool:
+        return self.frame.finished
+    def observe(self, event: Message) -> RuntimeCycle:
+        """Record an external event without deciding whether strategy runs."""
+        return RuntimeCycle(as_of=event.time, event=event, views=_view_snapshot(self.views))
 
-    def finish(self) -> RuntimeLaunchResult:
+    def process(self, event: Message, *, hook: str | None = None) -> RuntimeCycle:
+        """Run one strategy cycle selected by the owning System."""
+        output = self.dispatcher.process(self.frame, event, hook=hook)
+        return RuntimeCycle(
+            as_of=event.time,
+            event=event,
+            dispatched=output is not None,
+            hook=hook if output is not None else None,
+            output=output,
+            views=_view_snapshot(self.views),
+        )
+
+    def finish(self) -> RuntimeResult:
         return self.dispatcher.finish(self.frame)
 
-    async def run(self, source: RuntimeEventLine) -> RuntimeLaunchResult:
-        events = source.events()
-        try:
-            async for event in events:
-                self.process(event)
-        finally:
-            await close_event_line(events)
-        return self.finish()
-
+    def stop(self) -> None:
+        self.frame.finished = True
 
 __all__ = ["RuntimeSession"]
 
