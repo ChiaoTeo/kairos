@@ -18,14 +18,15 @@ from kairospy.domain.market import (
     RateObservation,
     TradePrint,
 )
+from kairospy.application.usecases.market.application.requests import MarketDataRow, MarketTime
 
 
 @dataclass(frozen=True, slots=True)
 class IterableMarketEventSource:
     stream: str
-    rows: tuple[Mapping[str, object], ...]
+    rows: tuple[MarketDataRow, ...]
 
-    def __init__(self, stream: str, rows: Iterable[Mapping[str, object]]) -> None:
+    def __init__(self, stream: str, rows: Iterable[MarketDataRow]) -> None:
         if not stream.strip():
             raise ValueError("event source stream is required")
         object.__setattr__(self, "stream", stream)
@@ -41,7 +42,7 @@ class IterableMarketEventSource:
 @dataclass(frozen=True, slots=True)
 class AsyncIterableMarketEventSource:
     stream: str
-    rows: AsyncIterable[Mapping[str, object]]
+    rows: AsyncIterable[MarketDataRow]
     limit: int | None = None
 
     def __post_init__(self) -> None:
@@ -62,7 +63,7 @@ class AsyncIterableMarketEventSource:
                 yield event
 
 
-def market_event_from_row(row: Mapping[str, object], *, sequence: int, stream: str) -> MarketEvent | None:
+def market_event_from_row(row: MarketDataRow, *, sequence: int, stream: str) -> MarketEvent | None:
     if "time" not in row:
         raise ValueError("event rows require a time field")
     event_time = parse_event_time(row["time"])
@@ -73,7 +74,7 @@ def market_event_from_row(row: Mapping[str, object], *, sequence: int, stream: s
 
 
 def _market_event_from_row(
-    row: Mapping[str, object],
+    row: MarketDataRow,
     *,
     event_time: datetime,
     sequence: int,
@@ -109,7 +110,7 @@ def _market_event_from_row(
     )
 
 
-def _subject(row: Mapping[str, object]) -> tuple[str, str] | None:
+def _subject(row: MarketDataRow) -> tuple[str, str] | None:
     if row.get("subject_type") is not None and row.get("subject_id") is not None:
         return str(row["subject_type"]), str(row["subject_id"])
     kind = str(row.get("kind") or "")
@@ -125,7 +126,7 @@ def _subject(row: Mapping[str, object]) -> tuple[str, str] | None:
 
 
 def _market_value_from_row(
-    row: Mapping[str, object],
+    row: MarketDataRow,
     *,
     subject_id: str,
     event_time: datetime,
@@ -248,7 +249,7 @@ def _row_payload(row: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def parse_event_time(value: object) -> datetime:
+def parse_event_time(value: MarketTime) -> datetime:
     if isinstance(value, datetime):
         event_time = value
     else:

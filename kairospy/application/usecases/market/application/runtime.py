@@ -7,10 +7,19 @@ resulting event source and the market application capability.
 
 from __future__ import annotations
 
-from typing import Iterable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from typing import Protocol
 
 from kairospy.application.usecases.market.application.component import MarketApplication
-from kairospy.application.usecases.market.application.feed import MarketStreamConnection
+from kairospy.application.usecases.market.application.feed import MarketFeedResolver, MarketStreamConnection, StopSignal
+from kairospy.application.usecases.market.application.integration import MarketIntegrationRuntime
+from kairospy.application.usecases.market.protocol import MarketHistoricalClient
+from kairospy.application.usecases.market.protocol import MarketDataStore
+from kairospy.application.usecases.market.application.resolver import MarketDataResolver
+from kairospy.application.usecases.market.services.replay import HistoricalClientFactory, ReplayMarketDataPolicy
+from kairospy.application.actor.support.connections import ConnectionManager
+from kairospy.domain.market import MarketEvent
+from kairospy.application.support.messaging import Message
 from kairospy.application.usecases.market.services.runtime import (
     BacktestMarketDataService,
     LiveMarketDataService,
@@ -22,18 +31,23 @@ from kairospy.application.usecases.market.services.runtime import (
 from kairospy.application.usecases.market.domain.specs import MarketDataSpec
 
 
+class MarketRuntimeSource(Protocol):
+    def events(self) -> AsyncIterator[MarketEvent | Message]:
+        ...
+
+
 def build_live_market(
-    source: object | None = None,
+    source: MarketRuntimeSource | None = None,
     *,
     feed: MarketStreamConnection | None = None,
-    feed_resolver: object | None = None,
+    feed_resolver: MarketFeedResolver | None = None,
     source_name: str = "live",
-    connections: object | None = None,
+    connections: ConnectionManager | None = None,
     stream_connections: Mapping[str, MarketStreamConnection] | None = None,
     market_service: MarketApplication | None = None,
-    integration_runtime: object | None = None,
+    integration_runtime: MarketIntegrationRuntime | None = None,
     warmup_specs: Iterable[MarketDataSpec] = (),
-    warmup_client_factory: object | None = None,
+    warmup_client_factory: Callable[[MarketDataSpec], MarketHistoricalClient] | None = None,
 ) -> LiveMarketDataService:
     return LiveMarketDataService(
         source,
@@ -50,17 +64,17 @@ def build_live_market(
 
 
 def build_paper_market(
-    source: object | None = None,
+    source: MarketRuntimeSource | None = None,
     *,
     feed: MarketStreamConnection | None = None,
-    feed_resolver: object | None = None,
+    feed_resolver: MarketFeedResolver | None = None,
     source_name: str = "paper",
-    connections: object | None = None,
+    connections: ConnectionManager | None = None,
     stream_connections: Mapping[str, MarketStreamConnection] | None = None,
     market_service: MarketApplication | None = None,
-    integration_runtime: object | None = None,
+    integration_runtime: MarketIntegrationRuntime | None = None,
     warmup_specs: Iterable[MarketDataSpec] = (),
-    warmup_client_factory: object | None = None,
+    warmup_client_factory: Callable[[MarketDataSpec], MarketHistoricalClient] | None = None,
 ) -> PaperMarketDataService:
     return PaperMarketDataService(
         source,
@@ -76,19 +90,70 @@ def build_paper_market(
     )
 
 
-def build_backtest_market(*args: object, **kwargs: object) -> BacktestMarketDataService:
-    return BacktestMarketDataService(*args, **kwargs)
+def build_backtest_market(
+    store: MarketDataStore,
+    *,
+    resolver: MarketDataResolver | None = None,
+    policy: ReplayMarketDataPolicy | None = None,
+    historical_client: MarketHistoricalClient | None = None,
+    historical_client_factory: HistoricalClientFactory | None = None,
+) -> BacktestMarketDataService:
+    return BacktestMarketDataService(
+        store,
+        resolver=resolver,
+        policy=policy,
+        historical_client=historical_client,
+        historical_client_factory=historical_client_factory,
+    )
 
 
-def build_replay_market(*args: object, **kwargs: object) -> ReplayMarketDataRuntimeService:
-    return ReplayMarketDataRuntimeService(*args, **kwargs)
+def build_replay_market(
+    store: MarketDataStore,
+    *,
+    resolver: MarketDataResolver | None = None,
+    policy: ReplayMarketDataPolicy | None = None,
+    historical_client: MarketHistoricalClient | None = None,
+    historical_client_factory: HistoricalClientFactory | None = None,
+) -> ReplayMarketDataRuntimeService:
+    return ReplayMarketDataRuntimeService(
+        store,
+        resolver=resolver,
+        policy=policy,
+        historical_client=historical_client,
+        historical_client_factory=historical_client_factory,
+    )
 
 
-def build_market_runtime(*args: object, **kwargs: object):
+def build_market_runtime(
+    source: MarketRuntimeSource | None = None,
+    *,
+    feed: MarketStreamConnection | None = None,
+    feed_resolver: MarketFeedResolver | None = None,
+    source_name: str,
+    mode_label: str = "streaming",
+    connections: ConnectionManager | None = None,
+    stream_connections: Mapping[str, MarketStreamConnection] | None = None,
+    market_service: MarketApplication | None = None,
+    integration_runtime: MarketIntegrationRuntime | None = None,
+    warmup_specs: Iterable[MarketDataSpec] = (),
+    warmup_client_factory: HistoricalClientFactory | None = None,
+) -> "MarketRuntimeService":
     """Build the generic streaming adapter for market-usecase hosts."""
     from kairospy.application.usecases.market.services.runtime import MarketRuntimeService
 
-    return MarketRuntimeService(*args, **kwargs)
+    return MarketRuntimeService(
+        source,
+        feed=feed,
+        feed_resolver=feed_resolver,
+        source_name=source_name,
+        mode_label=mode_label,
+        connections=connections,
+        stream_connections=stream_connections,
+        market_service=market_service,
+        integration_runtime=integration_runtime,
+        warmup_specs=warmup_specs,
+        warmup_client_factory=warmup_client_factory,
+    )
 
 
 __all__ = [
@@ -96,6 +161,7 @@ __all__ = [
     "LiveMarketDataService",
     "PaperMarketDataService",
     "ReplayMarketDataRuntimeService",
+    "MarketRuntimeSource",
     "RuntimeIterableMarketEventSource",
     "RuntimeMarketDataServiceView",
     "build_backtest_market",

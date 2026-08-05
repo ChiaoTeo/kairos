@@ -16,8 +16,8 @@ from kairospy.application.usecases.risk.application.budget import RiskApplicatio
 from kairospy.application.usecases.risk.application.budget import RiskAssessmentRequest
 from kairospy.application.usecases.risk.domain import BudgetRef, RiskMetric, RiskUsage
 from kairospy.infrastructure.integrations.application.execution import OrderConnection
-from kairospy.domain.account import AccountBookRef, AccountSnapshot
-from kairospy.domain.account import AccountContext
+from kairospy.domain.account import AccountSegment, AccountSnapshot
+from kairospy.domain.account import AccountRuntimeContext
 from kairospy.domain.execution import ExecutionCurrentView, ExecutionFillsView, ExecutionUpdate
 from kairospy.domain.intent import IntentJournal, TradeIntent
 from kairospy.domain.order import OrderRequest, OrderState
@@ -53,7 +53,7 @@ class CancelOrderCommand:
 class ExecuteIntentCommand:
     intent: TradeIntent
     context: object
-    account: AccountContext
+    account: AccountRuntimeContext
     current_quantity: Decimal
     account_snapshot: AccountSnapshot | None = None
     order_options: Mapping[str, object] | None = None
@@ -87,7 +87,7 @@ class ExecutionApplication:
         cls,
         coordinator: ExecutionCoordinator,
         *,
-        order_connection: OrderConnection | Mapping[AccountBookRef, OrderConnection] | None = None,
+        order_connection: OrderConnection | Mapping[AccountSegment, OrderConnection] | None = None,
         symbol_resolver: SymbolResolver | None = None,
         intents: IntentJournal | None = None,
         fills_source: object | None = None,
@@ -231,13 +231,13 @@ class ExecutionApplication:
     def fills_view(self) -> ExecutionFillsView:
         return self._projections.fills_view()
 
-    def orders(self, account: AccountBookRef | None = None) -> tuple[OrderState, ...]:
+    def orders(self, account: AccountSegment | None = None) -> tuple[OrderState, ...]:
         states = self._orders.coordinator.orders.states
         if account is None:
             return states
-        return tuple(state for state in states if state.request.context.book == account)
+        return tuple(state for state in states if state.request.context.segment == account)
 
-    def current_quantity(self, account: AccountBookRef, instrument_id: object) -> Decimal:
+    def current_quantity(self, account: AccountSegment, instrument_id: object) -> Decimal:
         return self._orders.coordinator.ledger.positions(account).get(str(instrument_id), Decimal("0"))
 
     def runtime_adapters(self) -> tuple[ExecutionUpdateService, ExecutionProjectionService]:
@@ -279,7 +279,7 @@ def _risk_request(
                 metric,
                 amount or Decimal("0"),
                 (
-                    BudgetRef("account", request.context.book.value),
+                    BudgetRef("account", request.context.segment.value),
                     BudgetRef("instrument", str(request.instrument_id)),
                 ),
             ),

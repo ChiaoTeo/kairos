@@ -1,4 +1,4 @@
-"""Account-only private stream collection.
+"""ExternalAccount-only private stream collection.
 
 Execution updates from a shared user stream belong to the execution usecase;
 this collector deliberately consumes only account snapshots.
@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from kairospy.application.usecases.account.domain.private_stream import PrivateStreamCheckpoint
-from kairospy.domain.account import AccountContext, AccountSnapshot
+from kairospy.domain.account import AccountRuntimeContext, AccountSnapshot
 
 
 @dataclass(slots=True)
@@ -38,7 +38,7 @@ class LivePrivateStreamState:
         return state
 
     def accept_balance(self, snapshot: AccountSnapshot) -> bool:
-        key = f"{snapshot.context.book.value}:{snapshot.observed_at.isoformat()}"
+        key = f"{snapshot.context.segment.value}:{snapshot.observed_at.isoformat()}"
         if key in self._seen_balance_events:
             return False
         self._seen_balance_events.add(key)
@@ -48,7 +48,7 @@ class LivePrivateStreamState:
 @dataclass(slots=True)
 class AccountPrivateStreamCollector:
     gateway: object
-    account: AccountContext
+    account: AccountRuntimeContext
     account_event: object
     incident_event: object
     state: LivePrivateStreamState = field(default_factory=LivePrivateStreamState)

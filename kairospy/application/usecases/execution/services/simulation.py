@@ -101,7 +101,7 @@ class SimulatedOrderConnection:
         coordinator: ExecutionCoordinator,
         context: object,
         intent: TradeIntent,
-        cash_currency: str,
+        settlement_asset: str,
         price_field: str,
         fill_model: FillModel,
         slippage_model: SlippageModel,
@@ -113,7 +113,7 @@ class SimulatedOrderConnection:
         self.coordinator = coordinator
         self.context = context
         self.intent = intent
-        self.cash_currency = cash_currency
+        self.settlement_asset = settlement_asset
         self.price_field = price_field
         self.fill_model = fill_model
         self.slippage_model = slippage_model
@@ -204,7 +204,7 @@ class SimulatedOrderConnection:
             return Decimal("0")
         fill_price = self.slippage_model.price(self._state.side, candidate.price, payload=payload)
         fee = self.commission_model.fee(side=self._state.side, quantity=quantity, price=fill_price, payload=payload)
-        cash_delta = quantity * fill_price if self._state.side is OrderSide.SELL else -(quantity * fill_price)
+        balance_delta = quantity * fill_price if self._state.side is OrderSide.SELL else -(quantity * fill_price)
         reason = self._buying_power_reason(quantity, fill_price, fee)
         if reason is not None:
             self._rejected = True
@@ -240,9 +240,9 @@ class SimulatedOrderConnection:
             filled_quantity=self._filled_quantity,
             fill_quantity=quantity,
             fill_price=fill_price,
-            settlement_currency=self.cash_currency,
-            cash_delta=cash_delta,
-            fee_currency=self.cash_currency if fee else None,
+            settlement_currency=self.settlement_asset,
+            balance_delta=balance_delta,
+            fee_currency=self.settlement_asset if fee else None,
             fee_amount=fee,
             source="simulated_exchange",
             metadata={"trade_id": f"{self._venue_id}:{marker}:{self._filled_quantity}"},
@@ -256,8 +256,8 @@ class SimulatedOrderConnection:
     def _buying_power_reason(self, quantity: Decimal, price: Decimal, fee: Decimal) -> str | None:
         if self._state is None or self._state.side is OrderSide.SELL:
             return None
-        cash = self.coordinator.ledger.cash(self._state.context.book).get(self.cash_currency, Decimal("0"))
-        held = self.coordinator.reservations.active_amounts(self._state.context.book).get(self.cash_currency, Decimal("0"))
+        available_balance = self.coordinator.ledger.balances(self._state.context.segment).get(self.settlement_asset, Decimal("0"))
+        held = self.coordinator.reservations.active_amounts(self._state.context.segment).get(self.settlement_asset, Decimal("0"))
         reservation_id = self._state.reservation_id or self._state.order_id
         own_hold = next(
             (
@@ -268,7 +268,7 @@ class SimulatedOrderConnection:
             Decimal("0"),
         )
         required = quantity * price + fee
-        if cash - held + own_hold < required:
+        if available_balance - held + own_hold < required:
             return "insufficient simulated buying power"
         return None
 

@@ -7,7 +7,10 @@ from typing import Mapping
 from kairospy.application.support.messaging import Message
 from kairospy.application.usecases.market.application.component import MarketApplication
 from kairospy.application.usecases.market.application.data import DataSubscription, MarketDataSubscriptionSpec
-from kairospy.application.usecases.market.application.feed import MarketStreamConnection
+from kairospy.application.usecases.market.application.feed import MarketFeedResolver, MarketStreamConnection, StopSignal
+from kairospy.application.usecases.market.application.integration import MarketIntegrationRuntime
+from kairospy.application.usecases.market.protocol import MarketHistoricalClient
+from kairospy.application.usecases.market.services.replay import HistoricalClientFactory
 from kairospy.application.actor.support.connections import ConnectionManager
 from kairospy.domain.market import MarketEvent
 from kairospy.domain.market import MarketSubject, Bar
@@ -21,18 +24,18 @@ from kairospy.application.usecases.market.services.runtime.view import RuntimeMa
 class MarketRuntimeService:
     def __init__(
         self,
-        source: object | None = None,
+        source: "MarketRuntimeSource | None" = None,
         *,
         feed: MarketStreamConnection | None = None,
-        feed_resolver: object | None = None,
+        feed_resolver: MarketFeedResolver | None = None,
         source_name: str,
         mode_label: str = "streaming",
         connections: ConnectionManager | None = None,
         stream_connections: Mapping[str, MarketStreamConnection] | None = None,
         market_service: MarketApplication | None = None,
-        integration_runtime: object | None = None,
+        integration_runtime: MarketIntegrationRuntime | None = None,
         warmup_specs: Iterable[MarketDataSpec] = (),
-        warmup_client_factory: object | None = None,
+        warmup_client_factory: HistoricalClientFactory | None = None,
     ) -> None:
         if source is None and feed is None and feed_resolver is None and not stream_connections and integration_runtime is None:
             raise ValueError(f"{mode_label} market data service requires a runtime source or integration feed")
@@ -48,11 +51,11 @@ class MarketRuntimeService:
         self.warmup_specs = tuple(warmup_specs)
         self.warmup_client_factory = warmup_client_factory
         self._sequence = 0
-        self._stop_signal: object | None = None
+        self._stop_signal: Callable[[], bool] | StopSignal | None = None
         if self.feed is not None and self.connections is not None:
             self.connections.register(f"{self.mode_label}.market_feed.default", self.feed, role="market_feed")
 
-    def set_stop_signal(self, stop_signal: Callable[[], bool] | object | None) -> None:
+    def set_stop_signal(self, stop_signal: Callable[[], bool] | StopSignal | None) -> None:
         self._stop_signal = stop_signal
 
     def set_connection_manager(self, connections: ConnectionManager | None) -> None:
@@ -60,7 +63,7 @@ class MarketRuntimeService:
         if self.feed is not None and self.connections is not None:
             self.feed = self.connections.register(f"{self.mode_label}.market_feed.default", self.feed, role="market_feed")
 
-    def set_feed_resolver(self, feed_resolver: object | None) -> None:
+    def set_feed_resolver(self, feed_resolver: MarketFeedResolver | None) -> None:
         self.feed_resolver = feed_resolver
 
     def set_market_service(self, market_service: MarketApplication) -> None:
@@ -69,7 +72,7 @@ class MarketRuntimeService:
         self.market_service = market_service
         market_service.attach_feed(
             MarketFeedApplicationService(
-                market_service.subscriptions,
+                market_service,
                 feed=self.feed,
                 feed_resolver=self.feed_resolver,
                 stream_connections=self.stream_connections,
@@ -145,11 +148,8 @@ class MarketRuntimeService:
             progress(total, total, specs[-1], f"degraded failed={failed}")
         return tuple(messages)
 
-    def _fetch_bars(self, spec: MarketDataSpec, client: object) -> Iterable[Bar]:
-        fetch = getattr(client, "bars", None)
-        if not callable(fetch):
-            raise TypeError("market warmup historical client must provide bars()")
-        return fetch(
+    def _fetch_bars(self, spec: MarketDataSpec, client: MarketHistoricalClient) -> Iterable[Bar]:
+        return client.bars(
             spec.symbol,
             timeframe=spec.timeframe or "1m",
             since=spec.start,
@@ -162,7 +162,7 @@ class MarketRuntimeService:
         service = self.market_service
         if service is None:
             return ()
-        subscriptions = getattr(getattr(service, "subscriptions", None), "subscriptions", None)
+        subscriptions = getattr(service, "subscriptions", None)
         if not callable(subscriptions):
             return ()
         specs: list[MarketDataSpec] = []
@@ -194,7 +194,7 @@ class MarketRuntimeService:
                 ))
         return tuple(specs)
 
-    def _warmup_client(self, spec: MarketDataSpec) -> object | None:
+    def _warmup_client(self, spec: MarketDataSpec) -> MarketHistoricalClient | None:
         factory = self.warmup_client_factory
         if callable(factory):
             return factory(spec)
@@ -233,13 +233,13 @@ class MarketRuntimeService:
         return RuntimeMarketDataServiceView(self.source_name, len(subscriptions), subscriptions)
 
     def subscribe(self, spec: MarketDataSubscriptionSpec) -> DataSubscription:
-        return self._require_market_service().subscriptions.subscribe(spec)
+        return self._require_market_service().subscribe(spec)
 
     def unsubscribe(self, subscription: DataSubscription | str) -> None:
-        self._require_market_service().subscriptions.unsubscribe(subscription)
+        self._require_market_service().unsubscribe(subscription)
 
     def subscriptions(self) -> tuple[DataSubscription, ...]:
-        return self._require_market_service().subscriptions.subscriptions()
+        return self._require_market_service().subscriptions()
 
     async def _feed_events(self) -> AsyncIterator[Message]:
         if self.stream_connections or self.feed is not None or self.feed_resolver is not None or self.integration_runtime is not None:
@@ -251,7 +251,7 @@ class MarketRuntimeService:
     async def _connection_events(self) -> AsyncIterator[Message]:
         market_service = self._require_market_service()
         feed = MarketFeedApplicationService(
-            market_service.subscriptions,
+            market_service,
             feed=self.feed,
             feed_resolver=self.feed_resolver,
             stream_connections=self.stream_connections,

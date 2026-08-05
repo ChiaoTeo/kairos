@@ -4,14 +4,26 @@ from datetime import datetime
 from datetime import timezone
 
 from kairospy.application.usecases.reference.application.query import ReferenceQuery, ReferenceSelection
-from kairospy.application.usecases.reference.protocol import ReferenceCatalogSource, ReferenceStore
+from kairospy.application.usecases.reference.application.requests import (
+    ReferenceCatalogRequest,
+    ReferenceLifecycleSyncRequest,
+    ReferenceRefreshRequest,
+)
+from kairospy.application.usecases.reference.application.results import ReferenceProviderRefreshResult, ReferenceRefreshResult
+from kairospy.application.usecases.reference.protocol import (
+    ReferenceCatalogDelistSource,
+    ReferenceCatalogSource,
+    ReferenceLifecycleSource,
+    ReferenceStore,
+)
 from kairospy.application.usecases.reference.services.catalogs import ReferenceCatalogService
 from kairospy.application.usecases.reference.services.operations import ReferenceRefreshWorkflow
 from kairospy.application.usecases.reference.services.projections import ReferenceProjectionService
 from kairospy.application.usecases.reference.services.refresh import ReferenceRefreshService
 from kairospy.application.usecases.reference.services.resolution import ReferenceResolutionService
 from kairospy.application.usecases.reference.services.universe import ReferenceUniverseService
-from kairospy.domain.reference import LifecycleEvent, MarketDefinition, MarketRef, MarketResolver, OptionContractRef, ReferenceCatalog
+from kairospy.domain.reference import Asset, AssetId, AssetType, EntityId, FinancialProductDefinition, FinancialProductType, LifecycleEvent, MarketDefinition, MarketId, MarketRef, MarketResolver, OptionContractRef, ReferenceCatalog, SymbolRef
+from kairospy.application.support.runtime.application.views import ViewStore
 from kairospy.domain.market.selection import MarketSelectionQuery
 
 
@@ -57,7 +69,7 @@ class ReferenceApplication:
 
     def resolve(
         self,
-        value: object | MarketRef,
+        value: SymbolRef | MarketRef | str,
         *,
         venue: str | None = None,
         market: str | None = None,
@@ -69,7 +81,7 @@ class ReferenceApplication:
             self.catalog(), default_venue=self._default_venue, default_market=self._default_market
         ).resolve(value, venue=venue, market=market, as_of=as_of)
 
-    def market_definition(self, market_id: object, *, at: datetime) -> MarketDefinition | None:
+    def market_definition(self, market_id: MarketId | str, *, at: datetime) -> MarketDefinition | None:
         """Return the effective market contract used by execution rule checks."""
         if not self._ready:
             self.ensure_ready()
@@ -102,7 +114,7 @@ class ReferenceApplication:
             ))
         return tuple(contracts)
 
-    def ensure_ready(self):
+    def ensure_ready(self) -> ReferenceCatalog:
         """Ensure a usable catalog exists before a strategy is started.
 
         A concrete store may expose ``has_catalog`` to distinguish an absent
@@ -124,17 +136,49 @@ class ReferenceApplication:
         self._ready = True
         return catalog
 
-    def add_asset(self, **kwargs):
-        return self._catalogs.add_asset(**kwargs)
+    def add_asset(
+        self,
+        *,
+        symbol: str,
+        asset_type: AssetType | str,
+        effective_from: datetime,
+        asset_id: AssetId | str | None = None,
+        name: str | None = None,
+        issuer_id: EntityId | str | None = None,
+        metadata: dict[str, object] | None = None,
+        replace_existing: bool = False,
+    ) -> Asset:
+        return self._catalogs.add_asset(
+            symbol=symbol,
+            asset_type=asset_type,
+            effective_from=effective_from,
+            asset_id=asset_id,
+            name=name,
+            issuer_id=issuer_id,
+            metadata=metadata,
+            replace_existing=replace_existing,
+        )
 
-    def refresh_exchange(self, source, **kwargs):
-        return self._refresh_workflow.exchange(source, **kwargs)
+    def add_financial_product(self, product: FinancialProductDefinition, *, replace_existing: bool = False) -> FinancialProductDefinition:
+        return self._catalogs.add_financial_product(product, replace_existing=replace_existing)
 
-    def refresh_exchange_with_delist_schedule(self, source, **kwargs):
-        return self._refresh_workflow.exchange_with_delist_schedule(source, **kwargs)
+    def financial_products(
+        self,
+        *,
+        at: datetime,
+        product_type: FinancialProductType | str | None = None,
+        asset_id: str | None = None,
+    ) -> tuple[FinancialProductDefinition, ...]:
+        return self.catalog().list_financial_products(at=at, product_type=product_type, asset_id=asset_id)
 
-    def refresh_provider(self, source, **kwargs):
-        return self._refresh_workflow.provider(source, **kwargs)
+    def refresh_exchange(self, source: ReferenceCatalogSource, request: ReferenceRefreshRequest) -> ReferenceProviderRefreshResult:
+        return self._refresh_workflow.exchange(source, request)
+
+    def refresh_exchange_with_delist_schedule(self, source: ReferenceCatalogDelistSource, request: ReferenceRefreshRequest) -> ReferenceProviderRefreshResult:
+        return self._refresh_workflow.exchange_with_delist_schedule(source, request)
+
+    def refresh_provider(self, source: ReferenceCatalogSource, request: ReferenceRefreshRequest) -> ReferenceProviderRefreshResult:
+        return self._refresh_workflow.provider(source, request)
 
     def refresh_options(
         self,
@@ -142,16 +186,14 @@ class ReferenceApplication:
         *,
         underlying: str = "SPY",
         as_of: datetime | None = None,
-    ):
+    ) -> ReferenceRefreshResult:
         """Refresh option contract identity into the Reference catalog."""
         selected = source or self._source
         if selected is None:
             raise RuntimeError("option reference refresh requires a catalog source")
         observed_at = as_of or datetime.now(timezone.utc)
         snapshot = selected.catalog(
-            as_of=observed_at,
-            market="option",
-            params={"underlying": underlying},
+            ReferenceCatalogRequest(as_of=observed_at, market="option", underlying=underlying)
         )
         result = self._refresh.refresh_snapshot(
             snapshot,
@@ -162,24 +204,24 @@ class ReferenceApplication:
         self._ready = True
         return result
 
-    def refresh_equity(self, source, **kwargs):
-        return self._refresh_workflow.equity(source, **kwargs)
+    def refresh_equity(self, source: ReferenceCatalogSource, request: ReferenceRefreshRequest) -> ReferenceProviderRefreshResult:
+        return self._refresh_workflow.equity(source, request)
 
-    def sync_lifecycle_events(self, source, **kwargs):
-        return self._refresh_workflow.lifecycle_events(source, **kwargs)
+    def sync_lifecycle_events(self, source: ReferenceLifecycleSource, request: ReferenceLifecycleSyncRequest) -> tuple[LifecycleEvent, ...]:
+        return self._refresh_workflow.lifecycle_events(source, request)
 
-    def register_views(self, views, *, as_of: datetime | None = None) -> None:
+    def register_views(self, views: ViewStore, *, as_of: datetime | None = None) -> None:
         ReferenceProjectionService(self.catalog(), self.lifecycle_events()).register_views(views, as_of=as_of)
 
-    def publish_views(self, views, *, as_of: datetime | None = None) -> None:
+    def publish_views(self, views: ViewStore, *, as_of: datetime | None = None) -> None:
         ReferenceProjectionService(self.catalog(), self.lifecycle_events()).publish_views(views, as_of=as_of)
 
-    def bootstrap(self, *, as_of: datetime | None = None):
+    def bootstrap(self, *, as_of: datetime | None = None) -> ReferenceRefreshResult | None:
         if self._source is None:
             return None
         observed_at = as_of or datetime.now(timezone.utc)
         return self._refresh.refresh_snapshot(
-            self._source.catalog(as_of=observed_at, market=self._default_market),
+            self._source.catalog(ReferenceCatalogRequest(as_of=observed_at, market=self._default_market)),
             as_of=observed_at,
             venue=self._default_venue,
             market=self._default_market,

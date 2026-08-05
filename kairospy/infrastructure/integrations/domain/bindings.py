@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from kairospy.domain.reference import ParticipantKind, ParticipantRef
+from kairospy.domain.reference import AssetType, ParticipantKind, ParticipantRef
 from .products import ProductFamily
 
 
@@ -25,6 +25,7 @@ class IntegrationBinding:
     product: ProductFamily | None
     access: AccessScope
     transport: TransportKind
+    asset_type: AssetType | None = None
 
     def __post_init__(self) -> None:
         if self.access is AccessScope.PUBLIC and self.participant.kind not in {

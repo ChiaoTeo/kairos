@@ -14,9 +14,10 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from kairospy.domain.market import Bar, MarketEvent, MarketSubject, Quote, TradePrint
+from kairospy.domain.market import Bar, MarketEvent, MarketSubject, Quote, RateObservation, TradePrint
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec
 from kairospy.application.usecases.market.application.integration import MarketFeedSubscriptionRequest
+from kairospy.application.usecases.market.application.requests import MarketOptions, MarketTime
 from kairospy.infrastructure.integrations.domain import ProductFamily
 from kairospy.infrastructure.integrations.services.connections.connection import Connection
 from kairospy.infrastructure.integrations.services.credentials import credential_value
@@ -60,14 +61,14 @@ class CcxtMarketConnection(Connection):
         symbol: str,
         *,
         timeframe: str = "1m",
-        since: datetime | None = None,
-        until: datetime | None = None,
+        since: MarketTime | None = None,
+        until: MarketTime | None = None,
         limit: int = 1000,
-        adapter_options: Mapping[str, object] | None = None,
+        adapter_options: MarketOptions | None = None,
     ) -> Iterable[Bar]:
         kwargs = {
             "timeframe": timeframe,
-            "since": None if since is None else int(since.timestamp() * 1000),
+            "since": _millis(since),
             "limit": limit,
         }
         if adapter_options:
@@ -77,7 +78,8 @@ class CcxtMarketConnection(Connection):
             if not isinstance(row, (list, tuple)) or len(row) < 6:
                 continue
             observed_at = datetime.fromtimestamp(float(row[0]) / 1000, tz=timezone.utc)
-            if until is not None and observed_at > until:
+            until_at = _timestamp(until) if until is not None else None
+            if until_at is not None and observed_at > until_at:
                 continue
             yield Bar(
                 instrument_id=_instrument_id(self._symbol(symbol)),
@@ -97,16 +99,17 @@ class CcxtMarketConnection(Connection):
         self,
         symbol: str,
         *,
-        since: object | None = None,
-        until: object | None = None,
+        since: MarketTime | None = None,
+        until: MarketTime | None = None,
         limit: int = 1000,
-        adapter_options: Mapping[str, object] | None = None,
-    ) -> Iterable[object]:
+        adapter_options: MarketOptions | None = None,
+    ) -> Iterable[RateObservation]:
         client = self._client()
         method = getattr(client, "fetch_funding_rate_history", None)
         if not callable(method):
             current = client.fetch_funding_rate(self._symbol(symbol))
-            return () if current is None else (current,)
+            value = _funding_rate(current, symbol=symbol, source=self._exchange_id)
+            return () if value is None else (value,)
         rows = method(
             self._symbol(symbol),
             since=_millis(since),
@@ -114,9 +117,20 @@ class CcxtMarketConnection(Connection):
             params=dict(adapter_options or {}),
         )
         if until is None:
-            return rows or ()
+            return tuple(
+                value
+                for row in rows or ()
+                for value in (_funding_rate(row, symbol=symbol, source=self._exchange_id),)
+                if value is not None
+            )
         until_ms = _millis(until)
-        return tuple(row for row in rows or () if isinstance(row, Mapping) and (row.get("timestamp") is None or int(row["timestamp"]) <= int(until_ms)))
+        return tuple(
+            value
+            for row in rows or ()
+            if isinstance(row, Mapping) and (row.get("timestamp") is None or int(row["timestamp"]) <= int(until_ms))
+            for value in (_funding_rate(row, symbol=symbol, source=self._exchange_id),)
+            if value is not None
+        )
 
     async def subscribe(self, request: MarketFeedSubscriptionRequest) -> "CcxtMarketSubscription":
         subscription = CcxtMarketSubscription(
@@ -342,6 +356,23 @@ def _trade(payload: object, *, symbol: str, market_type: str, source: str) -> Tr
     )
 
 
+def _funding_rate(payload: object, *, symbol: str, source: str) -> RateObservation | None:
+    if not isinstance(payload, Mapping):
+        return None
+    observed_at = _timestamp(payload.get("timestamp") or payload.get("datetime"))
+    value = payload.get("fundingRate") or payload.get("funding_rate") or payload.get("rate")
+    if observed_at is None or value is None:
+        return None
+    return RateObservation(
+        rate_id=f"{source}:{symbol}:{int(observed_at.timestamp() * 1000)}",
+        time=observed_at,
+        rate=Decimal(str(value)),
+        source=source,
+        basis="funding_rate",
+        market_id=None,
+    )
+
+
 def _timestamp(value: object) -> datetime | None:
     if value is None:
         return None
@@ -361,6 +392,14 @@ def _millis(value: object | None) -> int | None:
         return None
     if isinstance(value, datetime):
         return int(value.timestamp() * 1000)
+    if isinstance(value, str):
+        text = value.strip()
+        if len(text) == 10:
+            text = f"{text}T00:00:00+00:00"
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000)
     try:
         return int(value)
     except (TypeError, ValueError) as error:

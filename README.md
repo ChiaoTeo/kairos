@@ -31,7 +31,7 @@ flowchart LR
     CLI["Typer CLI<br/>kairospy / kairos"] --> Launch["Launch Facade"]
     Launch --> Runtime["Runtime Orchestration"]
     Runtime --> Strategy["Strategy Entrypoint"]
-    Runtime --> Services["Market / Account / Execution Services"]
+    Runtime --> Services["Market / ExternalAccount / Execution Services"]
     Services --> Core["Core Domain Models"]
     Services --> Integrations["Exchange & Data Integrations"]
     Runtime --> Artifacts["Artifacts & Timeline Data"]
@@ -142,14 +142,16 @@ Shell 层级约定：
 
 `kairospy tui` 目前是实验入口，项目默认推荐使用普通 CLI 和 `kairospy shell`。
 
-## 账户、Book 与交易锁
+## 账户、Scope 与交易锁
 
-领域模型把交易所账户身份和账户内 book 分开表达：
+账户状态所有权、刷新与查询契约见 [`docs/account-read-design.md`](docs/account-read-design.md)。
 
-- `AccountIdentity` 表示一个真实账户身份，例如 `binance:main`。
-- `AccountBookRef` 表示该账户内的一个具体 book/钱包/子账本，例如 `binance:main:spot` 或 `binance:main:usd_m_futures`。
+领域模型把交易所账户身份和账户内 segment 分开表达：
 
-通过 `kairospy account create` 创建的账户会写入 `.kairos/accounts/<account>.toml`。paper/live launch 可以在配置中引用这些账户：
+- `ExternalAccountIdentity` 表示一个真实账户身份，例如 `binance:main`。
+- `AccountSegment` 表示该账户内的一个具体资金/交易分区，例如 `binance:remote:spot` 或 `binance:remote:usd_m_futures`。
+
+通过 API credential 连接交易所后，系统会发现远端账户并将本地 binding 写入 `.kairos/accounts/<binding>.toml`。应用不会创建 Binance 账户：
 
 ```toml
 [accounts.main]
@@ -161,20 +163,19 @@ ref = "main"
 trade = false
 ```
 
-账户可以被多个 launch 重复引用，但同一账户同一时间只有一个 launch 可以持有交易锁并下单。`trade = false` 表示只读引用：可以读取账户数据，但不会申请交易锁，也不会被标记为可下单。launch account 默认展开 broker 支持的全部 book；如果某个 launch 只想管理少数 book，可以额外写 `books = ["spot"]` 作为过滤。
+账户可以被多个 launch 重复引用，但同一账户同一时间只有一个 launch 可以持有交易锁并下单。`trade = false` 表示只读引用：可以读取账户数据，但不会申请交易锁，也不会被标记为可下单。launch account 默认展开已发现的全部 segment；如果某个 launch 只想管理少数 segment，可以额外写 `segments = ["spot"]` 作为过滤。
 
 Binance 产品按账户 book 分开管理：`spot`、`usd_m_futures`、`options` 和 `earn`。USDⓈ-M Futures 的行情、账户和标准订单优先使用可注入的 CCXT 连接；BTC 期权和 Simple Earn 使用 Binance 原生 API，因为它们分别包含期权合约/结算语义和理财产品申赎语义。示例见 [`examples/configs/binance_products_live.toml`](examples/configs/binance_products_live.toml)。
 
 内置 system runtime 的 launch id 固定为 `kairos-system`。它启动后会加载 workspace 中的全部账户，并尝试占有当前未被锁定的可交易账户；被其他 launch 锁定的账户仍可读取状态，但 system 下单前会重新检查账户锁，只有锁归当前 system instance 时才允许交易。
 
-live 账户可以配置多个具名 credential：
+live 账户通过 credential 连接和发现：
 
 ```bash
-uv run kairospy account create main --broker binance --environment live --credential-role readonly --api-key ... --api-secret ...
 uv run kairospy account credential create binance_read --broker binance --api-key ... --api-secret ...
 uv run kairospy account credential create binance_trade --broker binance --api-key ... --api-secret ...
-uv run kairospy account credential add main readonly --ref binance_read
-uv run kairospy account credential add main trade --ref binance_trade
+uv run kairospy account connect --broker binance --environment live --credential binance_read --alias main
+uv run kairospy account connect --broker binance --environment live --credential binance_trade --credential-role trade --alias main
 ```
 
 ```toml
@@ -190,21 +191,57 @@ ref = "binance_read"
 ref = "binance_trade"
 ```
 
-如果账户只有 `readonly` key，live launch 会使用它读取账户数据，但不会把该账户标记为可交易，也不会支持下单。添加 key 时，`account credential add` 默认会校验 role 和账户身份；确实只想先写入配置时可以使用 `--no-check`。
+如果需要交易权限，应将 trade credential 作为同一远端账户的另一个访问凭据绑定；credential 不是另一个账户。连接时系统会校验私有读取权限，并记录远端身份和已发现 segment。
 
-API key 不通过环境变量注入。`account credential create` 会写入 `.kairos/credentials/<credential_id>.toml`，账户配置只保存 credential id 引用。`account create` 直接传 `--api-key`/`--api-secret` 时也会创建同名 credential 文件，并在账户里写入 `[credentials.readonly]` 或 `[credentials.trade]`；可以用 `--credential <credential_id>` 指定 credential id。旧的 `provider`、`venue`、`market`、`currency` 字段仍可读取；新生成的账户文件默认只写必要字段。
+API key 不通过环境变量注入。`account credential create` 只保存凭据；`account connect` 才建立本地远端账户 binding。`--alias` 只是本地显示名，不是交易所账户 ID。旧的 `provider`、`venue`、`market`、`currency` 字段仍可读取；新生成的 binding 文件默认只写发现所需字段。
+
+查询交易所实际返回的账号类型、权限和可用分区：
+
+```bash
+uv run kairospy account inspect main
+```
+
+`configured_segments` 是本地配置，`discovered_segments` 是本次凭据探测得到的分区；查询时应以发现结果为准。
+
+创建 paper/backtest 模拟账户时，初始状态使用多资产余额，不使用单一 `cash`：
+
+```bash
+uv run kairospy account simulate paper_demo \
+  --balance USDT=10000 \
+  --balance USDC=5000 \
+  --balance BTC=0.25
+```
+
+真实交易所账户由 API key 绑定，`account connect` 不创建账户，也不接受初始余额。保证金账户的多币种抵押物由交易所账户快照提供。
 
 直接查询账户余额使用单数 `balance`：
 
 ```bash
 uv run kairospy account query balance main
-uv run kairospy account query balance main --book spot
-uv run kairospy account query balance main --book spot --book usd_m_futures
+uv run kairospy account query balance main --segment spot
+uv run kairospy account query balance main --segment spot --segment usd_m_futures
 uv run kairospy account query balance main --include-zero
 uv run kairospy account query balance main --page 2 --page-size 50
 ```
 
-`account query balance` 默认查询 broker 支持的全部 book，并过滤 free/used/total 全为 0 的资产；`--book` 可重复传入以限制查询范围。每个 book 独立查询，某个 book 因权限或账户类型失败时不会阻断其它 book，失败项会显示在 `Balance Errors` 中。分页结果会在 text 和 JSON 输出中带上 `page` metadata。
+`account query balance` 默认查询已绑定的全部 segment，并过滤 free/used/total 全为 0 的资产；`--segment` 可重复传入以限制查询范围。每个 segment 独立查询，某个 segment 因权限或账户类型失败时不会阻断其它 segment，失败项会显示在 `Balance Errors` 中。分页结果会在 text 和 JSON 输出中带上 `page` metadata。
+
+直接查询仓位也不依赖已启动的 System：
+
+```bash
+uv run kairospy account query positions main --segment usd_m_futures
+uv run kairospy account query positions main --segment coin_m_futures --symbol BTC/USD:BTC
+```
+
+`account query` 下的命令都直接面向已绑定的 ExternalAccount。需要读取已启动 Account Actor 的运行时投影时，使用显式的 System 命令：
+
+```bash
+uv run kairospy system account current main
+uv run kairospy system account balances main
+uv run kairospy system account positions main
+```
+
+这三条命令依赖运行中的 System，用于观察运行时状态，不用于验证交易所 API 账号连接。
 
 ## 🧪 示例配置
 

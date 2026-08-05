@@ -13,13 +13,13 @@ ref = "binance_read"
 [credentials.trade]
 ref = "binance_trade"
 
-# The account actor creates one typed connection per book.  Spot remains
+# The account actor creates one typed connection per account segment.  Spot remains
 # native Binance, USD-M Futures uses the injectable CCXT adapter, Options uses
 # the Binance Options API, and Earn uses Binance Simple Earn REST.
 [accounts.main]
 ref = "main"
 trade = true
-books = ["spot", "usd_m_futures", "options", "earn"]
+segments = ["spot", "usd_m_futures", "options", "earn"]
 
 [feeds.binance_btc_perpetual]
 venue = "binance"
@@ -28,4 +28,3 @@ market = "usd_margined_futures"
 [feeds.binance_btc_options]
 venue = "binance"
 market = "options"
-

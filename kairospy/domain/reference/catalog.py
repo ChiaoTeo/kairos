@@ -5,11 +5,14 @@ from dataclasses import replace
 from datetime import datetime
 from typing import TypeVar
 
-from .identity import AssetId, InstrumentId, ListingId, MarketId
+from .identity import AssetId, FinancialProductId, InstrumentId, ListingId, MarketId
 from .model import (
     Asset,
+    FinancialProductDefinition,
     Entity,
     InstrumentDefinition,
+    FinancialProductStatus,
+    FinancialProductType,
     LifecycleEvent,
     LifecycleEventType,
     ListingDefinition,
@@ -30,12 +33,14 @@ class ReferenceCatalog:
         instruments: Iterable[InstrumentDefinition] = (),
         listings: Iterable[ListingDefinition] = (),
         markets: Iterable[MarketDefinition] = (),
+        financial_products: Iterable[FinancialProductDefinition] = (),
     ) -> None:
         self._entities: dict[str, list[Entity]] = {}
         self._assets: dict[str, list[Asset]] = {}
         self._instruments: dict[str, list[InstrumentDefinition]] = {}
         self._listings: dict[str, list[ListingDefinition]] = {}
         self._markets: dict[str, list[MarketDefinition]] = {}
+        self._financial_products: dict[str, list[FinancialProductDefinition]] = {}
         for item in entities:
             self.add_entity(item)
         for item in assets:
@@ -46,6 +51,8 @@ class ReferenceCatalog:
             self.add_listing(item)
         for item in markets:
             self.add_market(item)
+        for item in financial_products:
+            self.add_financial_product(item)
 
     def add_entity(self, entity: Entity) -> Entity:
         _add_version(self._entities, str(entity.entity_id), entity)
@@ -67,6 +74,10 @@ class ReferenceCatalog:
         _add_version(self._markets, str(market.market_id), market)
         return market
 
+    def add_financial_product(self, product: FinancialProductDefinition) -> FinancialProductDefinition:
+        _add_version(self._financial_products, str(product.product_id), product)
+        return product
+
     def get_entity(self, entity_id: str, at: datetime) -> Entity:
         return _get_active(self._entities, str(entity_id), at)
 
@@ -82,6 +93,9 @@ class ReferenceCatalog:
     def get_market(self, market_id: MarketId | str, at: datetime) -> MarketDefinition:
         return _get_active(self._markets, str(market_id), at)
 
+    def get_financial_product(self, product_id: FinancialProductId | str, at: datetime) -> FinancialProductDefinition:
+        return _get_active(self._financial_products, str(product_id), at)
+
     def maybe_get_entity(self, entity_id: str, at: datetime) -> Entity | None:
         return _maybe_get_active(self._entities, str(entity_id), at)
 
@@ -96,6 +110,28 @@ class ReferenceCatalog:
 
     def maybe_get_market(self, market_id: MarketId | str, at: datetime) -> MarketDefinition | None:
         return _maybe_get_active(self._markets, str(market_id), at)
+
+    def maybe_get_financial_product(self, product_id: FinancialProductId | str, at: datetime) -> FinancialProductDefinition | None:
+        return _maybe_get_active(self._financial_products, str(product_id), at)
+
+    def list_financial_products(
+        self,
+        *,
+        at: datetime,
+        product_type: FinancialProductType | str | None = None,
+        asset_id: AssetId | str | None = None,
+        status: FinancialProductStatus | str | None = None,
+    ) -> tuple[FinancialProductDefinition, ...]:
+        values = _active_values(self._financial_products, at)
+        if product_type is not None:
+            expected = getattr(product_type, "value", str(product_type))
+            values = [item for item in values if item.product_type.value == expected]
+        if asset_id is not None:
+            values = [item for item in values if str(item.asset_id) == str(asset_id)]
+        if status is not None:
+            expected = getattr(status, "value", str(status))
+            values = [item for item in values if item.status.value == expected]
+        return tuple(sorted(values, key=lambda item: str(item.product_id)))
 
     def active_listings(
         self,
@@ -177,12 +213,18 @@ class ReferenceCatalog:
         self._end_version(self._markets, str(market.market_id), current, effective_at)
         self.add_market(replace(market, effective_from=effective_at))
 
+    def supersede_financial_product(self, product: FinancialProductDefinition, effective_at: datetime) -> None:
+        current = self.get_financial_product(product.product_id, effective_at)
+        self._end_version(self._financial_products, str(product.product_id), current, effective_at)
+        self.add_financial_product(replace(product, effective_from=effective_at))
+
     def snapshot(self, *, at: datetime) -> Mapping[str, object]:
         return {
             "assets": {str(item.asset_id): item for item in _active_values(self._assets, at)},
             "instruments": {str(item.instrument_id): item for item in _active_values(self._instruments, at)},
             "listings": {str(item.listing_id): item for item in _active_values(self._listings, at)},
             "markets": {str(item.market_id): item for item in _active_values(self._markets, at)},
+            "financial_products": {str(item.product_id): item for item in _active_values(self._financial_products, at)},
         }
 
     def entities(self) -> tuple[Entity, ...]:
@@ -199,6 +241,9 @@ class ReferenceCatalog:
 
     def markets(self) -> tuple[MarketDefinition, ...]:
         return tuple(item for versions in self._markets.values() for item in versions)
+
+    def financial_products(self) -> tuple[FinancialProductDefinition, ...]:
+        return tuple(item for versions in self._financial_products.values() for item in versions)
 
     @staticmethod
     def diff_markets(

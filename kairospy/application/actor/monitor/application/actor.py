@@ -66,6 +66,18 @@ class MonitorActor(BusinessActor):
             self._supervisor = payload
         self.projectors.on_event(message)
         self.projectors.reconcile_alerts(message.time)
+        if isinstance(payload, (ActorLifecycleEvent, SupervisorLifecycleEvent)) and self.bus is not None:
+            await self.bus.publish(
+                Message(
+                    "monitor.lifecycle",
+                    payload,
+                    message.time,
+                    "monitor.actor",
+                    self._next_sequence(),
+                    correlation_id=message.correlation_id,
+                    causation_id=message.message_id,
+                )
+            )
         if self.bus is not None:
             for topic, alert in self.projectors.drain_alert_facts():
                 await self.bus.publish(

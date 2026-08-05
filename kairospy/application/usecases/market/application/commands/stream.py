@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterable, AsyncIterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 
 from kairospy.application.usecases.market.application.operations import MarketDataOperationsService
 from kairospy.application.usecases.market.application.data import MarketDataSpec
 from kairospy.application.usecases.market.application.data import parse_market_dataset_id
 from kairospy.application.usecases.market.application.resolver import MarketDataResolver
-from .resources import DriverName, ExchangeName, MarketCommandResources, StorageFormat
+from kairospy.application.usecases.market.application.requests import MarketDataRow
+from .resources import DriverName, ExchangeName, MarketCommandResources, MarketStreamClient, StorageFormat
 
 
 class MarketStreamCommandService:
@@ -28,10 +29,10 @@ class MarketStreamCommandService:
         book_limit: int | None,
         trade_limit: int,
         poll_seconds: float,
-    ) -> AsyncIterable[Mapping[str, object]]:
+    ) -> AsyncIterable[MarketDataRow]:
         request = _live_request(dataset, kind, symbol, exchange_name, None)
-        client = self._resources.public_market_access(request.exchange_name, driver_name)
-        params: dict[str, object] = {"poll_seconds": poll_seconds}
+        client: MarketStreamClient = self._resources.stream_market_access(request.exchange_name, driver_name)
+        params: dict[str, str | int | float | bool | None] = {"poll_seconds": poll_seconds}
         if limit is not None:
             params["max_events"] = limit
         if request.kind == "ticker":

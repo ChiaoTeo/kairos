@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
-from kairospy.domain.account import AccountContext
+from kairospy.domain.account import AccountRuntimeContext
 from kairospy.domain.intent import IntentEvent, IntentEventKind, IntentKind, TradeIntent
 from kairospy.domain.order import OrderRequest, OrderSide, OrderType
 
@@ -21,7 +21,7 @@ class ExecutionIntentService:
         intent: TradeIntent,
         context: object,
         *,
-        account: AccountContext,
+        account: AccountRuntimeContext,
         current_quantity: Decimal,
         order_id: str,
         record_events: bool = True,

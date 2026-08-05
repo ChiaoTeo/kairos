@@ -10,7 +10,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping, Protocol, TypeVar
 
-from kairospy.application.usecases.account.application.runtime import default_account_books
+from kairospy.application.usecases.account.application.runtime import default_account_segments
+from kairospy.domain.account import ExternalAccountIdentity, account_segment_from_name
 from kairospy.application.support.messaging import Message
 from kairospy.application.support.launch.domain.identity import LaunchIdentity
 from kairospy.application.support.launch.domain.modes import RuntimeMode
@@ -19,15 +20,17 @@ from kairospy.application.support.launch.application.configuration import Config
 from kairospy.application.support.launch.application.artifacts import LaunchOutputLog, write_launch_log_section
 from kairospy.application.system.application.resources import TradingLaunchSpec, TradingSystemResources
 from kairospy.application.system.application.runtime import TradingSystem
-from kairospy.application.usecases.workspace.domain.workspace import AccountRecord, KairosWorkspace
+from kairospy.application.usecases.workspace.application.workspace import KairosWorkspace
+from kairospy.application.usecases.workspace.application.leases import AccountLeaseSubject
+from kairospy.application.usecases.account.application.configuration import AccountRecord, AccountStore
 from kairospy.application.usecases.strategy.protocol import Strategy
 from kairospy.application.support.launch.application.system_commands import SystemCommandDispatcher
 from kairospy.application.support.launch.application.commands import SystemCommandResult
 from kairospy.application.support.launch.services.command_queue import SystemCommandFileQueue
 from kairospy.application.support.launch.application.protocol import LaunchTarget, LaunchTargetDescriptor, StopSignalBindable
 from kairospy.application.support.launch.application.configuration import LaunchAccountConfig
-from kairospy.domain.account import AccountBookRef, AccountIdentity
-from kairospy.application.usecases.account.application.runtime import account_book_route
+from kairospy.domain.account import AccountSegment, ExternalAccountIdentity
+from kairospy.application.usecases.account.application.runtime import account_segment_route
 
 
 _LAUNCH_INSTANCE_ID_ENV = "KAIROS_LAUNCH_INSTANCE_ID"
@@ -231,9 +234,9 @@ class TradingSystemLauncher:
         account_view = getattr(result, "account_view", None)
         write_launch_log_section(
             launch_directory,
-            "Account Status",
+            "ExternalAccount Status",
             {
-                "cash": getattr(account_view, "cash", None),
+                "selected_balance": getattr(account_view, "selected_balance", None),
                 "equity": getattr(account_view, "equity", None),
                 "initial_equity": getattr(account_view, "initial_equity", None),
                 "net_profit": getattr(account_view, "net_profit", None),
@@ -258,7 +261,7 @@ class TradingSystemLauncher:
         workspace = KairosWorkspace.resolve(config_path)
 
         def resolve(account_ref: str) -> ConfiguredAccount:
-            return _configured_account_from_record(workspace.accounts.get(account_ref), workspace=workspace)
+            return _configured_account_from_record(AccountStore.load(workspace.accounts_root).get(account_ref), workspace=workspace)
 
         return resolve
 
@@ -268,7 +271,7 @@ class TradingSystemLauncher:
             return run()
         workspace = KairosWorkspace.resolve(getattr(configured, "launch_directory", None))
         leases = workspace.account_locks.acquire_many(
-            accounts,
+            tuple((AccountLeaseSubject(str(identity.broker), str(identity.account_id)), environment) for identity, environment in accounts),
             launch_id=str(getattr(configured, "launch_id")),
             launch_instance_id=_launch_instance_id(str(getattr(configured, "launch_id"))),
             mode=mode.value,
@@ -409,8 +412,7 @@ def _configured_account_from_record(account: AccountRecord, *, workspace: Kairos
         account.account_id,
         _int_value(account.values.get("index", 0)),
         account.venue or account.broker,
-        _decimal_value(account.values.get("cash", "100000")),
-        str(account.values.get("currency", "USD")),
+        account.initial_balances,
         environment=str(account.environment),
         fee_rate=_decimal_value(account.values.get("fee_rate", "0")),
         credential=account.credential,
@@ -427,11 +429,11 @@ def _configured_account_from_record(account: AccountRecord, *, workspace: Kairos
     )
 
 
-def _trade_lease_accounts(configured: object) -> tuple[tuple[AccountIdentity, str], ...]:
+def _trade_lease_accounts(configured: object) -> tuple[tuple[ExternalAccountIdentity, str], ...]:
     launch_accounts = getattr(configured, "launch_accounts", None)
     primary = getattr(configured, "account_config", None)
     configured_accounts = getattr(configured, "launch_account_configs", None)
-    selected: dict[tuple[str, str], tuple[AccountIdentity, str]] = {}
+    selected: dict[tuple[str, str], tuple[ExternalAccountIdentity, str]] = {}
     if isinstance(launch_accounts, Mapping) and launch_accounts:
         for alias, launch_account in launch_accounts.items():
             if not isinstance(launch_account, LaunchAccountConfig) or not launch_account.trade:
@@ -444,24 +446,24 @@ def _trade_lease_accounts(configured: object) -> tuple[tuple[AccountIdentity, st
                 and account.has_trade_credential()
                 and _launch_account_can_trade(launch_account, account, configured)
             ):
-                identity = AccountIdentity(account.venue, account.account_id)
+                identity = ExternalAccountIdentity(account.venue, account.account_id)
                 selected.setdefault((str(identity.broker), str(identity.account_id)), (identity, account.environment))
     elif isinstance(primary, ConfiguredAccount) and primary.has_trade_credential():
-        identity = AccountIdentity(primary.venue, primary.account_id)
+        identity = ExternalAccountIdentity(primary.venue, primary.account_id)
         selected.setdefault((str(identity.broker), str(identity.account_id)), (identity, primary.environment))
     return tuple(selected.values())
 
 
 def _launch_account_can_trade(launch_account: LaunchAccountConfig, account: ConfiguredAccount, configured: object) -> bool:
-    books = launch_account.books or default_account_books(account.venue, fallback=_default_trade_book(configured))
-    for book in books:
-        ref = AccountBookRef(account.venue, account.account_id, book)
-        if account_book_route(ref, broker=ref.broker).can_trade:
+    segments = launch_account.segments or default_account_segments(account.venue, fallback=_default_trade_scope(configured))
+    for segment in segments:
+        ref = account_segment_from_name(ExternalAccountIdentity(account.venue, account.account_id), segment)
+        if account_segment_route(ref, broker=ref.broker).can_trade:
             return True
     return False
 
 
-def _default_trade_book(configured: object) -> str:
+def _default_trade_scope(configured: object) -> str:
     for source_name in ("market",):
         value = getattr(configured, source_name, None)
         if isinstance(value, str) and value.strip():

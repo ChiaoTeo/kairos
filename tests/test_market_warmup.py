@@ -5,8 +5,7 @@ from decimal import Decimal
 
 from kairospy.application.usecases.market.application.runtime import build_live_market
 from kairospy.application.usecases.market.application.component import MarketApplication
-from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
-from kairospy.application.usecases.market.domain.specs import MarketDataSpec
+from kairospy.application.usecases.market.application.requests import MarketDataSpec, MarketDataSubscriptionSpec
 from kairospy.domain.market import Bar, Quote
 from kairospy.domain.reference import MarketRef
 from kairospy.infrastructure.persistence.application.market_data import DataStore

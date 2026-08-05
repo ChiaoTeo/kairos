@@ -5,6 +5,7 @@ from pathlib import Path
 from kairospy.application.support.launch.application.control import LaunchControl
 from kairospy.application.usecases.workspace.application.context import current_cwd, workspace as resolve_workspace, workspace_config
 from kairospy.application.usecases.workspace.domain.workspace import OperationJournal
+from kairospy.application.usecases.account.application.configuration import AccountStore
 
 
 class ProjectAdminApplication:
@@ -36,7 +37,7 @@ class ProjectAdminApplication:
             "timezone": workspace.manifest.timezone_name,
             "language": workspace.manifest.language,
             "workspace_root": str(workspace.workspace_root),
-            "accounts": len(workspace.accounts.list()),
+            "accounts": len(AccountStore.load(workspace.accounts_root).list()),
             "launches": len(workspace.launch_index.list()),
             "market_datasets": _count_files(workspace.data_root, (".jsonl", ".json", ".parquet", ".csv")),
             "reference_root": str(workspace.reference_root),

@@ -9,7 +9,7 @@ from kairospy.infrastructure.integrations.services.gateways.binance.spot.client 
 
 @dataclass(slots=True)
 class BinanceSpotAccountOperations:
-    """Account snapshot and account-query operations over a private client."""
+    """ExternalAccount snapshot and account-query operations over a private client."""
 
     client: BinanceSpotRestClient
 

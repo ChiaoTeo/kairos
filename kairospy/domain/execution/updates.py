@@ -6,7 +6,7 @@ from decimal import Decimal
 from types import MappingProxyType
 from typing import Mapping
 
-from kairospy.domain.account import AccountContext
+from kairospy.domain.account import AccountRuntimeContext
 from kairospy.domain.order import OrderEventKind, OrderSide, OrderType
 from kairospy.domain.reference import InstrumentId, MarketId
 
@@ -17,7 +17,7 @@ class ExecutionUpdate:
     kind: OrderEventKind
     order_venue_id: str = ""
     order_id: str | None = None
-    context: AccountContext | None = None
+    context: AccountRuntimeContext | None = None
     instrument_id: InstrumentId | str | None = None
     market_id: MarketId | str | None = None
     side: OrderSide | None = None
@@ -29,7 +29,7 @@ class ExecutionUpdate:
     fill_quantity: Decimal | None = None
     fill_price: Decimal | None = None
     settlement_currency: str | None = None
-    cash_delta: Decimal | None = None
+    balance_delta: Decimal | None = None
     fee_currency: str | None = None
     fee_amount: Decimal = Decimal("0")
     reason: str = ""

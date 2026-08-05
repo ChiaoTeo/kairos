@@ -8,6 +8,7 @@ from kairospy.application.usecases.market.application.resolver import ResolvedMa
 from kairospy.application.usecases.market.domain.datasets import MarketPartition
 from kairospy.application.usecases.market.domain.specs import MarketDataSpec
 from kairospy.application.usecases.market.protocol import MarketDataReader
+from kairospy.application.usecases.market.application.requests import MarketDataRow
 
 
 class MarketDataQueryApplicationService:
@@ -19,7 +20,7 @@ class MarketDataQueryApplicationService:
     def resolve(self, spec: MarketDataSpec) -> ResolvedMarketData:
         return self._reader.resolve(spec)
 
-    def read(self, spec: MarketDataSpec, *, columns: Iterable[str] | None = None) -> list[dict[str, object]]:
+    def read(self, spec: MarketDataSpec, *, columns: Iterable[str] | None = None) -> list[MarketDataRow]:
         return self._reader.read(spec, columns=columns)
 
     def partition_for(self, resolved: ResolvedMarketData) -> MarketPartition:

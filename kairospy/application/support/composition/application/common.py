@@ -9,7 +9,7 @@ from kairospy.application.system.application.resources import TradingSystemResou
 from kairospy.application.support.launch.domain.modes import RuntimeMode
 from kairospy.application.support.launch.application.runtime import LaunchRuntimeResult
 from kairospy.application.usecases.reference.application.component import ReferenceApplication
-from kairospy.application.usecases.workspace.domain.workspace import KairosWorkspace
+from kairospy.application.usecases.workspace.application.workspace import KairosWorkspace
 from kairospy.application.usecases.strategy.protocol import Strategy
 from kairospy.infrastructure.persistence.application.reference import SqliteReferenceStore
 from kairospy.infrastructure.messaging import InMemoryMessageBus

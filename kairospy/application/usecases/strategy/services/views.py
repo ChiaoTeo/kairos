@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from kairospy.domain.account import AccountScopeReader, AccountViewReader
+from kairospy.domain.account import ExternalAccountReader, AccountViewReader
 from kairospy.domain.market import MarketViewReader
 
 
@@ -34,11 +34,11 @@ class StrategyViews:
 
 StrategyMarketViews = MarketViewReader
 StrategyAccountViews = AccountViewReader
-StrategyAccountScope = AccountScopeReader
+StrategyAccountSegment = ExternalAccountReader
 
 
 __all__ = [
-    "StrategyAccountScope",
+    "StrategyAccountSegment",
     "StrategyAccountViews",
     "StrategyMarketViews",
     "StrategyViewSource",

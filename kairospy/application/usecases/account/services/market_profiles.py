@@ -1,4 +1,4 @@
-"""Account market profile usecase implementation."""
+"""ExternalAccount market profile usecase implementation."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from kairospy.application.usecases.account.protocol import (
     AccountMarketProfilePort,
     AccountMarketProfileRequest,
 )
-from kairospy.domain.account import AccountBookRef, AccountContext, AccountMarketProfile
+from kairospy.domain.account import AccountSegment, AccountRuntimeContext, AccountMarketProfile
 from kairospy.domain.reference import MarketRef
 
 
@@ -21,7 +21,7 @@ class AccountMarketProfileService:
 
     def read(
         self,
-        account: AccountContext,
+        account: AccountRuntimeContext,
         market: MarketRef,
         *,
         at: datetime | None = None,
@@ -38,13 +38,13 @@ class AccountMarketProfileService:
 
 
 def account_context_for(
-    accounts: tuple[AccountContext, ...],
-    account: AccountBookRef,
-) -> AccountContext:
+    accounts: tuple[AccountRuntimeContext, ...],
+    account: AccountSegment,
+) -> AccountRuntimeContext:
     for context in accounts:
-        if context.book == account:
+        if context.segment == account:
             return context
-    raise KeyError(f"unknown account book: {account.value}")
+    raise KeyError(f"unknown account segment: {account.value}")
 
 
 __all__ = ["AccountMarketProfileService", "account_context_for"]

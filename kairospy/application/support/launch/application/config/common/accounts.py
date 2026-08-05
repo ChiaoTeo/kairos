@@ -38,8 +38,7 @@ class ConfiguredAccount:
     account_id: str
     index: int
     venue: str
-    cash: Decimal
-    currency: str
+    initial_balances: tuple[tuple[str, Decimal], ...]
     fee_rate: Decimal = Decimal("0")
     credential: str | None = None
     credential_role: str = "trade"
@@ -88,8 +87,7 @@ class AccountConfigRegistry:
                 account.account_id,
                 account.index,
                 account.venue,
-                account.cash,
-                account.currency,
+                account.initial_balances,
                 environment="",
                 fee_rate=account.fee_rate,
                 credential=account.credential,

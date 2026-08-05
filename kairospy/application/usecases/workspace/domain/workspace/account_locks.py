@@ -9,14 +9,23 @@ import shutil
 import socket
 from typing import Mapping
 
-from kairospy.domain.account import AccountIdentity
-
-
 DEFAULT_STALE_AFTER_SECONDS = 60.0
 
 
 class AccountLeaseError(ValueError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class AccountLeaseSubject:
+    """Minimal workspace-owned identity used only for a trading lease."""
+
+    broker: str
+    account_id: str
+
+    @property
+    def key(self) -> str:
+        return account_lock_key(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +100,7 @@ class AccountLeaseManager:
 
     def acquire_many(
         self,
-        accounts: tuple[tuple[AccountIdentity, str], ...],
+        accounts: tuple[tuple[AccountLeaseSubject, str], ...],
         *,
         launch_id: str,
         launch_instance_id: str,
@@ -123,7 +132,7 @@ class AccountLeaseManager:
 
     def acquire(
         self,
-        identity: AccountIdentity,
+        identity: AccountLeaseSubject,
         *,
         environment: str,
         launch_id: str,
@@ -200,7 +209,7 @@ class AccountLeaseManager:
     def _record(
         self,
         key: str,
-        identity: AccountIdentity,
+        identity: AccountLeaseSubject,
         *,
         environment: str,
         launch_id: str,
@@ -270,7 +279,7 @@ class AccountLeaseManager:
         return not _pid_alive(record.pid)
 
 
-def account_lock_key(identity: AccountIdentity) -> str:
+def account_lock_key(identity: AccountLeaseSubject) -> str:
     return ".".join(_key_part(part) for part in (identity.broker, identity.account_id) if part)
 
 
@@ -311,6 +320,7 @@ def _key_part(value: object) -> str:
 __all__ = [
     "AccountLease",
     "AccountLeaseError",
+    "AccountLeaseSubject",
     "AccountLeaseManager",
     "AccountLeaseRecord",
     "AccountLeaseSet",

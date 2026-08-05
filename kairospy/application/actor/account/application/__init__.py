@@ -1,4 +1,4 @@
-"""Account Actor application entrypoints."""
+"""ExternalAccount Actor application entrypoints."""
 
 from .actor import AccountActor
 from .commands import (
@@ -8,6 +8,8 @@ from .commands import (
     ExecuteIntentCommand,
     RecordIntentsCommand,
     RefreshAccountMarketProfileCommand,
+    QueryAccountCommand,
+    RefreshAccountCommand,
 )
 from .assembly import (
     AccountActorCapabilities,
@@ -32,4 +34,6 @@ __all__ = [
     "ExecuteIntentCommand",
     "RecordIntentsCommand",
     "RefreshAccountMarketProfileCommand",
+    "QueryAccountCommand",
+    "RefreshAccountCommand",
 ]

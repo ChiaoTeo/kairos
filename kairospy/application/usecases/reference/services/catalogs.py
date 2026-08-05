@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Mapping
 
-from kairospy.domain.reference import Asset, AssetId, AssetType, EntityId, LifecycleEvent, ReferenceCatalog
+from kairospy.domain.reference import Asset, AssetId, AssetType, EntityId, FinancialProductDefinition, LifecycleEvent, ReferenceCatalog
 from kairospy.domain.reference.identity import reference_slug
 from ..protocol import ReferenceStore
 
@@ -26,7 +26,7 @@ class ReferenceCatalogService:
         if callable(marker):
             return bool(marker())
         catalog = self.catalog()
-        return bool(catalog.entities() or catalog.markets())
+        return bool(catalog.entities() or catalog.markets() or catalog.financial_products())
 
     def save_catalog(self, catalog: ReferenceCatalog) -> ReferenceCatalog:
         self.store.save_catalog(catalog)
@@ -78,6 +78,18 @@ class ReferenceCatalogService:
         self.save_catalog(catalog)
         return asset
 
+    def add_financial_product(self, product: FinancialProductDefinition, *, replace_existing: bool = False) -> FinancialProductDefinition:
+        catalog = self.catalog()
+        current = catalog.maybe_get_financial_product(product.product_id, product.effective_from)
+        if current is not None:
+            if not replace_existing:
+                raise ValueError(f"financial product already exists at {product.effective_from.isoformat()}: {product.product_id}")
+            catalog.supersede_financial_product(product, product.effective_from)
+        else:
+            catalog.add_financial_product(product)
+        self.save_catalog(catalog)
+        return product
+
     def snapshot(self, *, as_of: datetime, reload: bool = False) -> ReferenceCatalog:
         catalog = self.catalog(reload=reload)
         return ReferenceCatalog(
@@ -86,6 +98,7 @@ class ReferenceCatalogService:
             instruments=tuple(catalog.snapshot(at=as_of)["instruments"].values()),
             listings=tuple(catalog.snapshot(at=as_of)["listings"].values()),
             markets=tuple(catalog.snapshot(at=as_of)["markets"].values()),
+            financial_products=tuple(catalog.snapshot(at=as_of)["financial_products"].values()),
         )
 
 

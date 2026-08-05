@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from kairospy.application.support.composition.application.resources import command_resources, market_command_resources
-from kairospy.application.usecases.account.application.commands import AccountCommandApplication
+from kairospy.application.usecases.account.application.administration import AccountAdministrationApplication
+from kairospy.application.usecases.account.application.connection import AccountConnectionApplication
+from kairospy.application.usecases.account.application.live_queries import AccountLiveQueryApplication
+from kairospy.application.usecases.account.application.locks import AccountLeaseApplication
+from kairospy.application.usecases.account.application.model import AccountModelApplication
+from kairospy.application.usecases.account.application.simulation import AccountSimulationApplication
 from kairospy.application.usecases.execution.application.commands import OrderCommandApplication
 from kairospy.application.usecases.reference.application.commands import ReferenceCommandApplication
 from kairospy.application.usecases.reference.application.component import ReferenceApplication
@@ -31,8 +36,26 @@ class MarketCommandServices:
     prefetch: MarketBacktestPrefetchCommandService
 
 
-def build_account_command() -> AccountCommandApplication:
-    return AccountCommandApplication(command_resources())  # type: ignore[arg-type]
+@dataclass(frozen=True, slots=True)
+class AccountCommandServices:
+    administration: AccountAdministrationApplication
+    connection: AccountConnectionApplication
+    queries: AccountLiveQueryApplication
+    simulation: AccountSimulationApplication
+    leases: AccountLeaseApplication
+    model: AccountModelApplication
+
+
+def build_account_command() -> AccountCommandServices:
+    resources = command_resources()
+    return AccountCommandServices(
+        administration=AccountAdministrationApplication(),
+        connection=AccountConnectionApplication(resources),  # type: ignore[arg-type]
+        queries=AccountLiveQueryApplication(resources),  # type: ignore[arg-type]
+        simulation=AccountSimulationApplication(),
+        leases=AccountLeaseApplication(),
+        model=AccountModelApplication(),
+    )
 
 
 def build_order_command() -> OrderCommandApplication:
@@ -64,6 +87,7 @@ def build_market_commands() -> MarketCommandServices:
 
 __all__ = [
     "MarketCommandServices",
+    "AccountCommandServices",
     "build_account_command",
     "build_market_commands",
     "build_order_command",

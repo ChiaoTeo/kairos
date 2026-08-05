@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
+from pathlib import Path
 
 from kairospy.application.usecases.market.application.data import DataSubscription, MarketDataSpec, MarketDataSubscriptionSpec, MarketPartition, ResolvedMarketData
 from kairospy.application.usecases.market.protocol import MarketDataReader, MarketDataWriter, MarketSubscriptionState
 from kairospy.application.usecases.market.application.resolver import MarketDataResolver
+from kairospy.application.usecases.market.application.requests import MarketDataRow, MarketOptions
+from kairospy.application.usecases.market.protocol import MarketDataStore, MarketHistoricalClient
 from kairospy.application.usecases.market.services.operations import MarketDataOperationsService
 from kairospy.application.usecases.market.services.replay import HistoricalClientFactory, MarketReplayService, ReplayMarketDataPolicy
 from kairospy.application.usecases.market.services.replay import replay_rows, specs_from_subscription
@@ -17,14 +20,14 @@ class MarketReplayApplicationService:
 
     def __init__(
         self,
-        store: object | None = None,
+        store: MarketDataStore | None = None,
         *,
         reader: MarketDataReader | None = None,
         writer: MarketDataWriter | None = None,
         subscription_state: MarketSubscriptionState | None = None,
         resolver: MarketDataResolver | None = None,
         policy: ReplayMarketDataPolicy | None = None,
-        historical_client: object | None = None,
+        historical_client: MarketHistoricalClient | None = None,
         historical_client_factory: HistoricalClientFactory | None = None,
     ) -> None:
         operations = None
@@ -58,17 +61,17 @@ class MarketReplayApplicationService:
     def resolve(self, spec: MarketDataSpec) -> ResolvedMarketData:
         return self._reader.resolve(spec)
 
-    def read(self, spec: MarketDataSpec) -> list[dict[str, object]]:
+    def read(self, spec: MarketDataSpec) -> list[MarketDataRow]:
         return self._reader.read(spec)
 
     def download(
         self,
         spec: MarketDataSpec,
-        client: object,
+        client: MarketHistoricalClient,
         *,
         mode: str = "append",
-        options: Mapping[str, object] | None = None,
-    ) -> object:
+        options: MarketOptions | None = None,
+    ) -> Path:
         if self._writer is None:
             raise RuntimeError("market replay requires a data writer for download")
         return self._writer.download(spec, client, mode=mode, options=options)
@@ -91,7 +94,7 @@ class MarketReplayApplicationService:
             return ()
         return self._subscriptions.subscriptions()
 
-    def rows_for_subscriptions(self, subscriptions: Iterable[DataSubscription]) -> tuple[Mapping[str, object], ...]:
+    def rows_for_subscriptions(self, subscriptions: Iterable[DataSubscription]) -> tuple[MarketDataRow, ...]:
         return self._replay.rows_for_subscriptions(subscriptions)
 
 

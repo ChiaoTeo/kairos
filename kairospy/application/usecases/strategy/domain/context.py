@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Mapping, Protocol, Sequence, overload
 
 from kairospy.domain.account import AccountViewReader
+from kairospy.domain.account import AccountModel
 from kairospy.domain.intent import Intent, TradeIntent
 from kairospy.domain.market import MarketSelector, MarketViewReader
 from kairospy.domain.reference import MarketRef
@@ -80,7 +81,7 @@ class StrategyContextProtocol(Protocol):
         quantity: Decimal | str | int | float,
         *,
         account: int | str | None = None,
-        book: object | None = None,
+        account_segment: str | None = None,
         limit_price: Decimal | str | int | float | None = None,
         reason: str = "",
         intent_id: str | None = None,

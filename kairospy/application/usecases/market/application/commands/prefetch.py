@@ -11,6 +11,9 @@ from .source import MarketSourceQueryService
 from .resources import DriverName, ExchangeName, MarketCommandResources
 from kairospy.application.usecases.market.application.runtime import build_backtest_market
 from kairospy.application.usecases.market.application.data import MarketDataSpec
+from kairospy.application.usecases.market.application.requests import MarketPrefetchDownload, MarketPrefetchResult, MarketTime
+from kairospy.application.usecases.market.domain.subscriptions import DataSubscription, MarketDataSubscriptionSpec
+from kairospy.application.support.messaging import Message
 from kairospy.application.usecases.market.application.replay import specs_from_subscription
 from kairospy.application.usecases.market.application.resolver import MarketDataResolver
 from kairospy.application.usecases.strategy.application.context import StrategyContext
@@ -38,11 +41,11 @@ class _PlanningInteraction:
         if not hasattr(command.payload, "market"):
             handle._reject("market.subscribe requires a typed subscription specification")
             return _result(handle)
-        subscription = self.market.subscriptions.subscribe(command.payload)  # type: ignore[arg-type]
+        subscription = self.market.subscribe(command.payload)  # type: ignore[arg-type]
         handle._accept({"subscription_id": subscription.key})
         return _result(handle)
 
-    def apply_event(self, event: object) -> None:
+    def apply_event(self, event: Message) -> None:
         return None
 
 
@@ -75,7 +78,7 @@ class MarketBacktestPrefetchCommandService:
         limit: int,
         mode: str,
         dry_run: bool = False,
-    ) -> dict[str, object]:
+    ) -> MarketPrefetchResult:
         try:
             configured = configured_backtest(Path(config_path))
         except BacktestConfigurationError as error:
@@ -95,7 +98,7 @@ class MarketBacktestPrefetchCommandService:
             policy=configured.market_policy,
         )
         source_query = MarketSourceQueryService(self._resources)
-        downloads: list[dict[str, object]] = []
+        downloads: list[MarketPrefetchDownload] = []
         for subscription in subscriptions:
             for spec in _historical_specs(subscription.spec, configured.market_policy.start, configured.market_policy.end, limit):
                 exchange_name = _exchange_name(spec.venue)
@@ -111,7 +114,7 @@ class MarketBacktestPrefetchCommandService:
                 if not capability["valid"]:
                     raise ValueError(str(capability.get("reason") or "historical market data is not supported"))
                 resolved = data.resolve(spec)
-                path = None if dry_run else data.download(spec, self._resources.public_market_access(exchange_name, driver_name), mode=mode)
+                path = None if dry_run else data.download(spec, self._resources.historical_market_access(exchange_name, driver_name), mode=mode)
                 downloads.append(
                     {
                         "subscription": subscription.key,
@@ -133,12 +136,12 @@ class MarketBacktestPrefetchCommandService:
             "config": str(Path(config_path)),
             "dry_run": dry_run,
             "count": len(downloads),
-            "plan": downloads,
-            "downloads": () if dry_run else downloads,
+            "plan": tuple(downloads),
+            "downloads": () if dry_run else tuple(downloads),
         }
 
     @staticmethod
-    def _subscriptions(strategy: Strategy) -> tuple[object, ...]:
+    def _subscriptions(strategy: Strategy) -> tuple[DataSubscription, ...]:
         interaction = _PlanningInteraction(MarketApplication())
         context = StrategyContext(
             strategy.strategy_id,
@@ -146,10 +149,10 @@ class MarketBacktestPrefetchCommandService:
             views=ViewStore(),
         )
         strategy.on_start(context)
-        return tuple(interaction.market.subscriptions.subscriptions())
+        return tuple(interaction.market.subscriptions())
 
 
-def _historical_specs(subscription: object, start: object, end: object, limit: int) -> tuple[MarketDataSpec, ...]:
+def _historical_specs(subscription: MarketDataSubscriptionSpec, start: MarketTime, end: MarketTime, limit: int) -> tuple[MarketDataSpec, ...]:
     specs = specs_from_subscription(subscription, start=start, end=end)
     if any(spec.kind != "ohlcv" for spec in specs):
         kinds = ", ".join(sorted({spec.kind for spec in specs}))

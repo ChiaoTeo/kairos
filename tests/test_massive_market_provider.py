@@ -7,12 +7,12 @@ from decimal import Decimal
 
 from kairospy.application.usecases.market.application.runtime import build_live_market
 from kairospy.application.usecases.market.application.component import MarketApplication
-from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
+from kairospy.application.usecases.market.application.requests import MarketDataSubscriptionSpec
 from kairospy.domain.market import Quote
 from kairospy.domain.reference import MarketRef
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec, RuntimeMode
 from kairospy.application.usecases.market.application.integration import MarketFeedSubscriptionRequest
-from kairospy.infrastructure.integrations.domain import AccessScope, IntegrationRoute, ProviderId, ProviderRef, ProductFamily, TransportKind
+from kairospy.infrastructure.integrations.domain import AccessScope, AssetType, IntegrationRoute, ProviderId, ProviderRef, ProductFamily, TransportKind
 from kairospy.infrastructure.integrations.services.gateways.massive.market import (
     MassiveOptionsMarketStreamConnection,
     MassiveStockMarketStreamConnection,
@@ -69,7 +69,8 @@ def test_strategy_market_subscription_receives_massive_aapl_quote() -> None:
         IntegrationConnectionSpec(
             connection_id="massive-stocks-stream",
             route=IntegrationRoute(provider=ProviderRef(ProviderId.MASSIVE)),
-            product=ProductFamily.EQUITY,
+                product=ProductFamily.SPOT,
+                asset_type=AssetType.EQUITY,
             access=AccessScope.PUBLIC,
             transport=TransportKind.MARKET_STREAM,
             mode=RuntimeMode.PAPER,
@@ -112,7 +113,8 @@ def test_massive_provider_connection_is_not_an_exchange() -> None:
         IntegrationConnectionSpec(
             connection_id="massive-stocks-stream",
             route=IntegrationRoute(provider=ProviderRef(ProviderId.MASSIVE)),
-            product=ProductFamily.EQUITY,
+                product=ProductFamily.SPOT,
+                asset_type=AssetType.EQUITY,
             access=AccessScope.PUBLIC,
             transport=TransportKind.MARKET_STREAM,
             mode=RuntimeMode.PAPER,

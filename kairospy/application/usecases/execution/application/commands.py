@@ -15,9 +15,10 @@ from kairospy.application.support.launch.application.control.facade import Launc
 from kairospy.application.usecases.execution.application.ports import OrderCommandResources
 from kairospy.application.usecases.execution.application.results import OrderActionResult, OrderJournalResult, OrderQueryResult, OrderRuntimeResult
 from kairospy.infrastructure.integrations.application.execution import ConnectionOrderCancelRequest, ConnectionOrderOptions, ConnectionOrderSubmissionRequest
-from kairospy.application.usecases.workspace.domain.workspace import AccountRecord, KairosWorkspace
-from kairospy.application.usecases.workspace.domain.config import ConfigError
-from kairospy.domain.account import AccountBookKind, AccountBookRef
+from kairospy.application.usecases.workspace.application.workspace import KairosWorkspace
+from kairospy.application.usecases.account.application.configuration import AccountRecord, AccountStore
+from kairospy.application.usecases.workspace.application.workspace import ConfigError
+from kairospy.domain.account import ExternalAccountIdentity, AccountSegment, account_segment_from_name
 from kairospy.domain.order import OrderSide, OrderType
 
 
@@ -77,7 +78,7 @@ class OrderCommandApplication:
         _require_live_confirmation(account, confirm_live=confirm_live)
         result = self._order_connection(account).submit(
             ConnectionOrderSubmissionRequest(
-                account=_account_book_ref(account),
+                account=_account_segment_ref(account),
                 symbol=symbol,
                 side=OrderSide(side),
                 order_type=OrderType(type_),
@@ -145,7 +146,7 @@ class OrderCommandApplication:
         _require_live_confirmation(account, confirm_live=confirm_live)
         result = self._order_connection(account).cancel(
             ConnectionOrderCancelRequest(
-                account=_account_book_ref(account),
+                account=_account_segment_ref(account),
                 order_venue_id=order_id,
                 symbol=symbol,
                 options=_connection_options(params),
@@ -218,7 +219,7 @@ class OrderCommandApplication:
         connection = self._order_connection(account)
         cancel_result = connection.cancel(
             ConnectionOrderCancelRequest(
-                account=_account_book_ref(account),
+                account=_account_segment_ref(account),
                 order_venue_id=order_id,
                 symbol=symbol,
                 options=_connection_options(params),
@@ -226,7 +227,7 @@ class OrderCommandApplication:
         )
         create_result = connection.submit(
             ConnectionOrderSubmissionRequest(
-                account=_account_book_ref(account),
+                account=_account_segment_ref(account),
                 symbol=symbol,
                 side=OrderSide(side),
                 order_type=OrderType(type_),
@@ -271,13 +272,13 @@ class OrderCommandApplication:
         ))
 
     def _order_query_client(self, account: AccountRecord):
-        return self._resources.account_query_access(_account_book_ref(account), "ccxt", credential=_read_credential_ref(account))
+        return self._resources.account_query_access(_account_segment_ref(account), "ccxt", credential=_read_credential_ref(account))
 
     def _order_connection(self, account: AccountRecord):
         credential = _trade_credential_ref(account)
         if credential is None:
             raise ValueError(f"account {account.account_id} has no trade credential")
-        return self._resources.execution_access(_account_book_ref(account), "ccxt", credential=credential)
+        return self._resources.execution_access(_account_segment_ref(account), "ccxt", credential=credential)
 
 
 def _connection_options(params: Mapping[str, object]) -> ConnectionOrderOptions | None:
@@ -338,20 +339,23 @@ def _decimal_option(params: Mapping[str, object], *keys: str) -> Decimal | None:
 def _account(account_id: str) -> tuple[KairosWorkspace, AccountRecord]:
     workspace = resolve_workspace()
     try:
-        return workspace, workspace.accounts.get(account_id)
+        return workspace, AccountStore.load(workspace.accounts_root).get(account_id)
     except ConfigError as error:
         raise ValueError(str(error)) from error
 
 
-def _account_book_ref(account: AccountRecord) -> AccountBookRef:
-    return AccountBookRef(account.venue or account.broker, account.account_id, account.market or _first_account_book(account) or AccountBookKind.SPOT.value)
+def _account_segment_ref(account: AccountRecord) -> AccountSegment:
+    selected = account.default_segment or _first_account_segment(account) or "spot"
+    return account_segment_from_name(ExternalAccountIdentity(account.venue or account.broker, account.account_id), selected)
 
 
-def _first_account_book(account: AccountRecord) -> str | None:
-    if not account.books:
+def _first_account_segment(account: AccountRecord) -> str | None:
+    if not account.scopes:
         return None
-    value = account.books[0].kind or account.books[0].key
-    return value or None
+    scope = account.scopes[0]
+    if scope.product_family is not None:
+        return scope.product_family.value
+    return scope.model.value
 
 
 def _read_credential_ref(account: AccountRecord) -> str | None:

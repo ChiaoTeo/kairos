@@ -11,6 +11,7 @@ from kairospy.application.usecases.account.application.accounts import AccountAp
 from kairospy.application.usecases.account.application.directory import AccountDirectory
 from kairospy.application.usecases.account.services.runtime.projections import RuntimeAccountService, RuntimeAccountViewProjectionService
 from kairospy.application.usecases.account.services.runtime.modes.paper import PaperAccountService
+from kairospy.application.usecases.account.application.runtime import InitialAssetBalance
 from kairospy.application.usecases.account.protocol import AccountLoginRequest, AccountLoginResult, AccountSession
 from kairospy.application.usecases.execution.application.component import ExecutionApplication, ExecuteIntentCommand, PlanOrderCommand, SubmitOrderCommand
 from kairospy.application.usecases.execution.application.state import ExecutionStateSnapshot
@@ -26,9 +27,9 @@ from kairospy.application.support.runtime.application.views import ViewStore
 from kairospy.application.support.messaging import Message
 from kairospy.application.usecases.strategy.application.context import StrategyContext
 from kairospy.application.system.application.business import SystemBusinessRuntime
-from kairospy.application.usecases.account.application.queries import AccountQueryService
+from kairospy.application.usecases.account.application.queries import AccountViewQueryService
 from kairospy.infrastructure.integrations.application.execution import ConnectionOrderCancelRequest, ConnectionOrderCancelResult, ConnectionOrderSubmissionRequest, ConnectionOrderSubmissionResult
-from kairospy.domain.account import AccountBookRef, AccountContext, AccountEvent, AccountEventKind, Environment
+from kairospy.domain.account import AccountSegment, AccountRuntimeContext, AccountEvent, AccountEventKind, Environment
 from kairospy.domain.order import OrderRequest, OrderSide, OrderStatus, OrderType
 from kairospy.domain.execution import ExecutionUpdate
 from kairospy.domain.market import OrderBookChange, OrderBookDelta, OrderBookSnapshot, PriceLevel, Quote
@@ -42,20 +43,20 @@ AT = datetime(2026, 1, 1, tzinfo=timezone.utc)
 @dataclass
 class LoginPort:
     def login(self, request: AccountLoginRequest) -> AccountLoginResult:
-        return AccountLoginResult(AccountSession("session-1", request.context.book, logged_in_at=request.observed_at))
+        return AccountLoginResult(AccountSession("session-1", request.context.segment, logged_in_at=request.observed_at))
 
     def logout(self, session: AccountSession) -> None:
         return None
 
 
 def test_account_login_is_a_session_usecase() -> None:
-    context = AccountContext(AccountBookRef("binance", "acct"), Environment.LIVE)
+    context = AccountRuntimeContext(AccountSegment("binance", "acct"), Environment.LIVE)
     account = AccountApplicationService((context,), login_port=LoginPort())
 
-    result = account.login(context.book, credential_ref="credential-1", at=AT)
+    result = account.login(context.segment, credential_ref="credential-1", at=AT)
 
     assert result.session.session_id == "session-1"
-    assert result.session.account == context.book
+    assert result.session.account == context.segment
 
 
 class OrderEntry:
@@ -87,11 +88,11 @@ class OutputProbe:
 
 
 def test_execution_converts_intent_to_order_and_delegates_submit() -> None:
-    context = AccountContext(AccountBookRef("binance", "acct"), Environment.LIVE)
+    context = AccountRuntimeContext(AccountSegment("binance", "acct"), Environment.LIVE)
     intent = target_position_intent(
         strategy_id="strategy-1",
         instrument_id="BTCUSDT",
-        account_book="spot",
+        account_segment="spot",
         target_quantity=Decimal("1"),
         at=AT,
         intent_id="intent-1",
@@ -157,7 +158,7 @@ def test_account_commands_use_the_actor_mailbox() -> None:
 
 
 def test_account_view_reflects_execution_pending_orders_and_fills() -> None:
-    context = AccountContext(AccountBookRef("binance", "acct"), Environment.PAPER)
+    context = AccountRuntimeContext(AccountSegment("binance", "acct"), Environment.PAPER)
     coordinator = build_execution_coordinator()
     account_service = AccountApplicationService((context,), ledger=coordinator.ledger)
     account_runtime = RuntimeAccountService(
@@ -192,9 +193,9 @@ def test_account_view_reflects_execution_pending_orders_and_fills() -> None:
         PlanOrderCommand(order, AT)
     )
     projectors.publish_views(views, as_of=AT)
-    pending = AccountQueryService(views).pending_orders(account=context.book.value)
+    pending = AccountViewQueryService(views).pending_orders(account=context.segment.value)
     assert tuple(item.order_id for item in pending) == ("order-view-1",)
-    assert tuple(item.order_id for item in AccountQueryService(views).open_orders(account=context.book.value)) == ("order-view-1",)
+    assert tuple(item.order_id for item in AccountViewQueryService(views).open_orders(account=context.segment.value)) == ("order-view-1",)
 
     execution_application.submit_order(
         SubmitOrderCommand("order-view-1", AT)
@@ -216,20 +217,20 @@ def test_account_view_reflects_execution_pending_orders_and_fills() -> None:
             fill_quantity=Decimal("1"),
             fill_price=Decimal("100"),
             settlement_currency="USD",
-            cash_delta=Decimal("-100"),
+            balance_delta=Decimal("-100"),
         )
     )
     projectors.publish_views(views, as_of=AT)
 
-    assert AccountQueryService(views).pending_orders(account=context.book.value) == ()
+    assert AccountViewQueryService(views).pending_orders(account=context.segment.value) == ()
     strategy = StrategyContext("strategy-1", views=views)
-    position = strategy.accounts.position("BTCUSDT", account=context.book.value)
+    position = strategy.accounts.position("BTCUSDT", account=context.segment.value)
     assert position is not None
     assert position.quantity == Decimal("1")
 
 
 def test_duplicate_execution_fill_is_applied_to_ledger_once() -> None:
-    context = AccountContext(AccountBookRef("binance", "acct"), Environment.PAPER)
+    context = AccountRuntimeContext(AccountSegment("binance", "acct"), Environment.PAPER)
     coordinator = build_execution_coordinator()
     execution = ExecutionApplication.compose(coordinator)
     order = OrderRequest(
@@ -253,18 +254,18 @@ def test_duplicate_execution_fill_is_applied_to_ledger_once() -> None:
         fill_quantity=Decimal("1"),
         fill_price=Decimal("100"),
         settlement_currency="USD",
-        cash_delta=Decimal("-100"),
+        balance_delta=Decimal("-100"),
         metadata={"trade_id": "trade-dedup-1"},
     )
     first = execution.apply_update(fill)
     second = execution.apply_update(fill)
 
     assert first == second
-    assert coordinator.ledger.positions(context.book)["BTCUSDT"] == Decimal("1")
+    assert coordinator.ledger.positions(context.segment)["BTCUSDT"] == Decimal("1")
 
 
 def test_account_actor_cancel_intent_cancels_linked_order() -> None:
-    context = AccountContext(AccountBookRef("binance", "acct"), Environment.LIVE)
+    context = AccountRuntimeContext(AccountSegment("binance", "acct"), Environment.LIVE)
     intent = target_position_intent(
         strategy_id="strategy-cancel",
         instrument_id="BTCUSDT",
@@ -283,10 +284,10 @@ def test_account_actor_cancel_intent_cancels_linked_order() -> None:
     )
 
     class Accounts:
-        def accounts(self) -> tuple[AccountContext, ...]:
+        def accounts(self) -> tuple[AccountRuntimeContext, ...]:
             return (context,)
 
-        def snapshot(self, account: AccountBookRef):
+        def snapshot(self, account: AccountSegment):
             return None
 
     actor = AccountActor(
@@ -308,7 +309,7 @@ def test_account_actor_cancel_intent_cancels_linked_order() -> None:
     canceled = actor.cancel_intent(intent.intent_id, at=AT)
 
     assert canceled.status is IntentStatus.CANCELED
-    assert execution.orders(context.book)[0].status.value == "canceled"
+    assert execution.orders(context.segment)[0].status.value == "canceled"
 
 
 def test_strategy_context_reads_intent_projection_from_runtime_views() -> None:
@@ -340,16 +341,15 @@ def test_strategy_context_reads_intent_projection_from_runtime_views() -> None:
 def test_paper_execution_fills_from_market_view_and_satisfies_intent() -> None:
     account = SimulatedAccount(
         "paper-account",
-        Decimal("1000"),
+        initial_balances=(InitialAssetBalance("USD", Decimal("1000")),),
         broker="paper",
         environment=Environment.PAPER,
-        cash_currency="USD",
     )
     coordinator = build_execution_coordinator()
     execution = PaperExecutionService(
         coordinator,
         account=account.context,
-        cash_currency="USD",
+        settlement_asset="USD",
         price_field="ask",
     )
     quote = Quote("BTCUSDT", AT, bid=Decimal("99"), ask=Decimal("100"))
@@ -390,20 +390,19 @@ def test_paper_execution_fills_from_market_view_and_satisfies_intent() -> None:
 
     asyncio.run(drain())
     assert execution.fills[-1].quantity == Decimal("2")
-    assert coordinator.ledger.positions(account.context.book)["BTCUSDT"] == Decimal("2")
+    assert coordinator.ledger.positions(account.context.segment)["BTCUSDT"] == Decimal("2")
     assert journal.get("paper-intent").status is IntentStatus.SATISFIED
 
 
 def test_paper_cancel_emits_cancel_confirmation_before_pending_fill() -> None:
     account = SimulatedAccount(
         "paper-cancel-account",
-        Decimal("1000"),
+        initial_balances=(InitialAssetBalance("USD", Decimal("1000")),),
         broker="paper",
         environment=Environment.PAPER,
-        cash_currency="USD",
     )
     coordinator = build_execution_coordinator()
-    execution = PaperExecutionService(coordinator, account=account.context, cash_currency="USD", price_field="ask")
+    execution = PaperExecutionService(coordinator, account=account.context, settlement_asset="USD", price_field="ask")
     quote = Quote("BTCUSDT", AT, bid=Decimal("99"), ask=Decimal("100"))
     window = SimpleNamespace(latest=quote)
     market = SimpleNamespace(
@@ -439,20 +438,19 @@ def test_paper_cancel_emits_cancel_confirmation_before_pending_fill() -> None:
     asyncio.run(drain_cancel())
 
     assert coordinator.orders.get("paper-cancel-intent-order").status.value == "canceled"
-    assert coordinator.ledger.positions(account.context.book) == {}
+    assert coordinator.ledger.positions(account.context.segment) == {}
     assert journal.get("paper-cancel-intent").status is IntentStatus.CANCELED
 
 
 def test_paper_orderbook_consumes_liquidity_and_keeps_intent_open_until_filled() -> None:
     account = SimulatedAccount(
         "paper-book-account",
-        Decimal("1000"),
+        initial_balances=(InitialAssetBalance("USD", Decimal("1000")),),
         broker="paper",
         environment=Environment.PAPER,
-        cash_currency="USD",
     )
     coordinator = build_execution_coordinator()
-    execution = PaperExecutionService(coordinator, account=account.context, cash_currency="USD", price_field="ask")
+    execution = PaperExecutionService(coordinator, account=account.context, settlement_asset="USD", price_field="ask")
     intent = target_position_intent(
         strategy_id="paper-book-strategy",
         instrument_id="BTCUSDT",
@@ -501,7 +499,7 @@ def test_paper_orderbook_consumes_liquidity_and_keeps_intent_open_until_filled()
         await actor.process(await anext(events))
         first_status = coordinator.orders.get("paper-book-intent-order").status
         first_intent_status = journal.get("paper-book-intent").status
-        first_position = coordinator.ledger.positions(account.context.book)["BTCUSDT"]
+        first_position = coordinator.ledger.positions(account.context.segment)["BTCUSDT"]
 
         await actor.process(Message("market.orderbook.delta", second_book, AT, "test", 2))
         await actor.process(await anext(events))
@@ -514,7 +512,7 @@ def test_paper_orderbook_consumes_liquidity_and_keeps_intent_open_until_filled()
 
     assert coordinator.orders.get("paper-book-intent-order").status is OrderStatus.FILLED
     assert journal.get("paper-book-intent").status is IntentStatus.SATISFIED
-    assert coordinator.ledger.positions(account.context.book)["BTCUSDT"] == Decimal("3")
+    assert coordinator.ledger.positions(account.context.segment)["BTCUSDT"] == Decimal("3")
 
     sell_intent = target_position_intent(
         strategy_id="paper-book-strategy",
@@ -540,19 +538,18 @@ def test_paper_orderbook_consumes_liquidity_and_keeps_intent_open_until_filled()
 
     asyncio.run(apply_sell())
     assert execution.fills[-1].price == Decimal("98")
-    assert coordinator.ledger.positions(account.context.book)["BTCUSDT"] == Decimal("2")
+    assert coordinator.ledger.positions(account.context.segment)["BTCUSDT"] == Decimal("2")
 
 
 def test_paper_orderbook_does_not_double_count_top_level_liquidity() -> None:
     account = SimulatedAccount(
         "paper-liquidity-account",
-        Decimal("1000"),
+        initial_balances=(InitialAssetBalance("USD", Decimal("1000")),),
         broker="paper",
         environment=Environment.PAPER,
-        cash_currency="USD",
     )
     coordinator = build_execution_coordinator()
-    execution = PaperExecutionService(coordinator, account=account.context, cash_currency="USD", price_field="ask")
+    execution = PaperExecutionService(coordinator, account=account.context, settlement_asset="USD", price_field="ask")
     journal = IntentJournal()
     intents = tuple(
         target_position_intent(
@@ -591,7 +588,7 @@ def test_paper_orderbook_does_not_double_count_top_level_liquidity() -> None:
         await actor.process(await anext(events))
 
     asyncio.run(apply_market())
-    assert coordinator.ledger.positions(account.context.book)["BTCUSDT"] == Decimal("1")
+    assert coordinator.ledger.positions(account.context.segment)["BTCUSDT"] == Decimal("1")
     assert coordinator.orders.get("paper-liquidity-intent-1-order").status is OrderStatus.FILLED
     assert coordinator.orders.get("paper-liquidity-intent-2-order").status is OrderStatus.ACKNOWLEDGED
     assert execution._events.empty()
@@ -600,13 +597,12 @@ def test_paper_orderbook_does_not_double_count_top_level_liquidity() -> None:
 def test_paper_rejects_buy_intent_when_market_price_exceeds_cash() -> None:
     account = SimulatedAccount(
         "paper-buying-power-account",
-        Decimal("1000"),
+        initial_balances=(InitialAssetBalance("USD", Decimal("1000")),),
         broker="paper",
         environment=Environment.PAPER,
-        cash_currency="USD",
     )
     coordinator = build_execution_coordinator()
-    execution = PaperExecutionService(coordinator, account=account.context, cash_currency="USD", price_field="ask")
+    execution = PaperExecutionService(coordinator, account=account.context, settlement_asset="USD", price_field="ask")
     journal = IntentJournal()
     intent = target_position_intent(
         strategy_id="paper-buying-power-strategy",
@@ -630,17 +626,16 @@ def test_paper_rejects_buy_intent_when_market_price_exceeds_cash() -> None:
 
     assert coordinator.orders.get("paper-buying-power-intent-order").status is OrderStatus.REJECTED
     assert journal.get(intent.intent_id).status is IntentStatus.FAILED
-    assert coordinator.ledger.positions(account.context.book) == {}
-    assert coordinator.ledger.cash(account.context.book)["USD"] == Decimal("1000")
+    assert coordinator.ledger.positions(account.context.segment) == {}
+    assert coordinator.ledger.balances(account.context.segment)["USD"] == Decimal("1000")
 
 
 def test_paper_applies_reference_market_rules_at_submission() -> None:
     account = SimulatedAccount(
         "paper-rules-account",
-        Decimal("1000"),
+        initial_balances=(InitialAssetBalance("USD", Decimal("1000")),),
         broker="paper",
         environment=Environment.PAPER,
-        cash_currency="USD",
     )
     coordinator = build_execution_coordinator()
     reference = SimpleNamespace(
@@ -655,7 +650,7 @@ def test_paper_applies_reference_market_rules_at_submission() -> None:
     execution = PaperExecutionService(
         coordinator,
         account=account.context,
-        cash_currency="USD",
+        settlement_asset="USD",
         price_field="ask",
         market_reference=reference,
     )
@@ -688,10 +683,9 @@ def test_paper_applies_reference_market_rules_at_submission() -> None:
 def test_execution_state_restore_preserves_paper_account_ledger_identity() -> None:
     account = SimulatedAccount(
         "paper-restore-account",
-        Decimal("1000"),
+        initial_balances=(InitialAssetBalance("USD", Decimal("1000")),),
         broker="paper",
         environment=Environment.PAPER,
-        cash_currency="USD",
     )
     coordinator = build_execution_coordinator()
     account_service = PaperAccountService(account, coordinator.ledger)
@@ -699,11 +693,11 @@ def test_execution_state_restore_preserves_paper_account_ledger_identity() -> No
     coordinator.ledger.record(
         AccountEvent(
             uuid4(),
-            account.context.book,
+            account.context.segment,
             AccountEventKind.DEPOSIT,
             AT,
             "USD",
-            cash_delta=Decimal("10"),
+            balance_delta=Decimal("10"),
         )
     )
 
@@ -716,14 +710,13 @@ def test_execution_state_restore_preserves_paper_account_ledger_identity() -> No
 def test_cancel_execution_update_releases_paper_reservation() -> None:
     account = SimulatedAccount(
         "paper-reservation-account",
-        Decimal("1000"),
+        initial_balances=(InitialAssetBalance("USD", Decimal("1000")),),
         broker="paper",
         environment=Environment.PAPER,
-        cash_currency="USD",
     )
     coordinator = ExecutionCoordinator()
     PaperAccountService(account, coordinator.ledger)
-    execution = PaperExecutionService(coordinator, account=account.context, cash_currency="USD", price_field="ask")
+    execution = PaperExecutionService(coordinator, account=account.context, settlement_asset="USD", price_field="ask")
     request = OrderRequest(
         "paper-reserved-order",
         account.context,
@@ -738,7 +731,7 @@ def test_cancel_execution_update_releases_paper_reservation() -> None:
         reserve_amount=Decimal("100"),
         at=AT,
     )
-    assert coordinator.reservations.active_amounts(account.context.book) == {"USD": Decimal("100")}
+    assert coordinator.reservations.active_amounts(account.context.segment) == {"USD": Decimal("100")}
 
     execution.cancel_order(request.order_id, at=AT)
     events = execution.events()
@@ -749,4 +742,4 @@ def test_cancel_execution_update_releases_paper_reservation() -> None:
 
     asyncio.run(drain_cancel())
 
-    assert coordinator.reservations.active_amounts(account.context.book) == {}
+    assert coordinator.reservations.active_amounts(account.context.segment) == {}

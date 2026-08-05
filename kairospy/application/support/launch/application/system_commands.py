@@ -8,10 +8,12 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
-from kairospy.application.usecases.account.application.queries import AccountQueryService
+from kairospy.application.usecases.account.application.queries import AccountViewQueryService
 from kairospy.application.usecases.account.application.trading import AccountTradeAuthorizationRequest, AccountTradeAuthorizationResult, TradingAuthorizationService, trade_lock_state
 from kairospy.application.usecases.execution.application.query import ExecutionOrderQueries
-from kairospy.application.usecases.workspace.domain.workspace import KairosWorkspace
+from kairospy.application.usecases.workspace.application.workspace import KairosWorkspace
+from kairospy.application.usecases.workspace.application.leases import AccountLeaseSubject
+from kairospy.application.usecases.account.application.configuration import AccountStore
 from kairospy.application.support.launch.application.configuration import SYSTEM_LAUNCH_ID
 from kairospy.domain.views import ViewEnvelope
 
@@ -42,7 +44,7 @@ class SystemCommandDispatcher:
         return SystemCommandResult.accepted(command, {"desired_state": "stopped", "reason": reason})
 
     def _account_query(self, command: SystemCommand) -> SystemCommandResult:
-        service = AccountQueryService(_ArtifactViewSource(self.directory))
+        service = AccountViewQueryService(_ArtifactViewSource(self.directory))
         account = _optional_text(command.payload.get("account"))
         if command.kind == "account.current":
             result = {"account": account, "current": service.current(account)}
@@ -64,22 +66,22 @@ class SystemCommandDispatcher:
         account_filter = _optional_text(command.payload.get("account"))
         system_instance_id = _system_instance_id(self.directory)
         rows = []
-        for account in workspace.accounts.list():
+        for account in AccountStore.load(workspace.accounts_root).list():
             if account_filter is not None and account_filter not in {account.account_id, account.account_key}:
                 continue
             lock = workspace.account_locks.get(account.account_key)
             owned_by_system = lock is not None and system_instance_id is not None and lock.launch_instance_id == system_instance_id
-            tradable_books = _tradable_books(account)
+            tradable_scopes = _tradable_scopes(account)
             can_trade = any(
-                _trade_authorization(account, book, lock=lock, owned_by_system=owned_by_system).allowed
-                for book in tuple(getattr(account, "books", ()) or ())
+                _trade_authorization(account, record.to_scope(account.identity), lock=lock, owned_by_system=owned_by_system).allowed
+                for record in tuple(getattr(account, "segments", ()) or ())
             )
             rows.append(
                 {
                     "account": account.account_id,
                     "account_key": account.account_key,
                     "environment": account.environment,
-                    "tradable_books": tradable_books,
+                    "tradable_scopes": tradable_scopes,
                     "trade_state": trade_lock_state(lock, owned=owned_by_system),
                     "can_trade": can_trade,
                     "lock": None if lock is None else lock.to_dict(),
@@ -96,7 +98,7 @@ class SystemCommandDispatcher:
         system_instance_id = _system_instance_id(self.directory)
         if system_instance_id is None:
             return SystemCommandResult.rejected(command, "system instance id is unavailable")
-        if not _tradable_books(account):
+        if not _tradable_scopes(account):
             return SystemCommandResult.accepted(
                 command,
                 {
@@ -109,7 +111,7 @@ class SystemCommandDispatcher:
             )
         try:
             lock = workspace.account_locks.acquire(
-                account.identity,
+                AccountLeaseSubject(str(account.identity.broker), str(account.identity.account_id)),
                 environment=account.environment,
                 launch_id=SYSTEM_LAUNCH_ID,
                 launch_instance_id=system_instance_id,
@@ -276,23 +278,24 @@ def _optional_text(value: object) -> str | None:
     return text or None
 
 
-def _tradable_books(account: object) -> list[str]:
-    books = []
-    for book in tuple(getattr(account, "books", ()) or ()):
-        ref = book.to_ref(getattr(account, "identity"))
-        if _trade_authorization(account, book).allowed:
-            books.append(str(ref.book))
-    return books
+def _tradable_scopes(account: object) -> list[str]:
+    segments = []
+    identity = getattr(account, "identity")
+    for record in tuple(getattr(account, "segments", ()) or ()):
+        segment = record.to_scope(identity)
+        if _trade_authorization(account, segment).allowed:
+            segments.append(segment.segment_id)
+    return segments
 
 
 def _trade_authorization(
     account: object,
-    book: object,
+    segment: object,
     *,
     lock: object | None = None,
     owned_by_system: bool = False,
 ) -> AccountTradeAuthorizationResult:
-    ref = book.to_ref(getattr(account, "identity"))
+    ref = segment
     return TradingAuthorizationService(str(ref.broker)).authorize(
         AccountTradeAuthorizationRequest(
             ref,
@@ -325,7 +328,7 @@ def _require_workspace_account(workspace: KairosWorkspace, value: object) -> obj
     account = _optional_text(value)
     if account is None:
         raise ValueError("account is required")
-    for record in workspace.accounts.list():
+    for record in AccountStore.load(workspace.accounts_root).list():
         if account in {record.account_id, record.account_key}:
             return record
     raise ValueError(f"unknown account: {account}")

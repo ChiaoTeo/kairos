@@ -7,7 +7,7 @@ from types import MappingProxyType
 from collections.abc import Iterable, Mapping
 
 from kairospy.domain.market import Bar, MarketEvent, MarketSubject, OrderBookSnapshot, PriceLevel, Quote, TradePrint
-from kairospy.domain.account import AccountBalance, AccountContext, AccountSnapshot, AccountSource, OpenOrderSnapshot
+from kairospy.domain.account import AccountBalance, AccountRuntimeContext, AccountSnapshot, AccountSource, OpenOrderSnapshot
 from kairospy.domain.execution import ExecutionUpdate
 from kairospy.domain.order import OrderEventKind, OrderSide, OrderType, OrderState
 from kairospy.domain.reference import ReferenceCatalog
@@ -108,7 +108,7 @@ class BinanceSpotNormalizers:
     def order_result(self, payload: Mapping[str, object]) -> BinanceTranslatedEvent:
         return _translate("order", payload)
 
-    def execution_update(self, payload: Mapping[str, object], *, context: AccountContext) -> ExecutionUpdate:
+    def execution_update(self, payload: Mapping[str, object], *, context: AccountRuntimeContext) -> ExecutionUpdate:
         symbol = _text(payload.get("s")) or "UNKNOWN"
         market = MarketRef.ephemeral(venue="binance", market="spot", source_symbol=symbol)
         status = _order_event_kind(payload.get("X"), payload.get("x"))
@@ -137,7 +137,7 @@ class BinanceSpotNormalizers:
             fill_quantity=fill_quantity if fill_quantity and fill_quantity > 0 else None,
             fill_price=fill_price if fill_quantity and fill_quantity > 0 else None,
             settlement_currency=_quote_currency(symbol),
-            cash_delta=None,
+            balance_delta=None,
             fee_currency=_text(payload.get("N")) or None,
             fee_amount=commission,
             reason=_text(payload.get("r")),
@@ -145,10 +145,10 @@ class BinanceSpotNormalizers:
             metadata={"symbol": symbol, "event_type": payload.get("x")},
         )
 
-    def ingest_order_update(self, coordinator: object, context: AccountContext, raw: Mapping[str, object]) -> OrderState:
+    def ingest_order_update(self, coordinator: object, context: AccountRuntimeContext, raw: Mapping[str, object]) -> OrderState:
         return coordinator.apply_execution_update(self.execution_update(raw, context=context))
 
-    def ingest_trade_update(self, coordinator: object, context: AccountContext, raw: Mapping[str, object]) -> OrderState:
+    def ingest_trade_update(self, coordinator: object, context: AccountRuntimeContext, raw: Mapping[str, object]) -> OrderState:
         return coordinator.apply_execution_update(self.execution_update(raw, context=context))
 
     def bars(self, payload: object, *, symbol: str, timeframe: str) -> Iterable[Bar]:
@@ -157,7 +157,7 @@ class BinanceSpotNormalizers:
         market = MarketRef.ephemeral(venue="binance", market="spot", source_symbol=symbol)
         return (_bar(row, market=market, timeframe=timeframe) for row in payload)
 
-    def account_snapshot(self, payload: object, *, context: AccountContext, observed_at: datetime, open_orders: object = ()) -> AccountSnapshot:
+    def account_snapshot(self, payload: object, *, context: AccountRuntimeContext, observed_at: datetime, open_orders: object = ()) -> AccountSnapshot:
         if not isinstance(payload, Mapping):
             raise ValueError("Binance account response must be an object")
         values = payload.get("balances")
@@ -177,7 +177,7 @@ class BinanceSpotNormalizers:
 
     def balance_snapshot(
         self,
-        context: AccountContext,
+        context: AccountRuntimeContext,
         raw_balance: Mapping[str, object],
         *,
         at: datetime,

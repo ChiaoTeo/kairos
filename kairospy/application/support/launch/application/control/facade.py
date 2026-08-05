@@ -17,6 +17,7 @@ from kairospy.application.support.launch.domain.modes import RuntimeMode
 from kairospy.application.usecases.workspace.application.context import workspace as resolve_workspace
 from kairospy.application.system.application.runtime import TradingSystemSession
 from kairospy.application.support.launch.application.configuration import SYSTEM_LAUNCH_ID, load_launch_config
+from kairospy.application.usecases.account.application.configuration import AccountStore
 
 
 DEFAULT_SYSTEM_LAUNCH_ID = SYSTEM_LAUNCH_ID
@@ -109,7 +110,7 @@ class LaunchApplication:
         account_source = None
         if account_ref:
             try:
-                account_source = str(workspace.accounts.get(account_ref).source_path)
+                account_source = str(AccountStore.load(workspace.accounts_root).get(account_ref).source_path)
             except Exception:
                 account_source = None
         return {

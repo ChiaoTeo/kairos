@@ -14,7 +14,7 @@ from kairospy.infrastructure.integrations.application.execution import (
     ConnectionOrderSubmissionRequest,
     OrderConnection,
 )
-from kairospy.domain.account import AccountBookRef
+from kairospy.domain.account import AccountSegment
 from kairospy.domain.account import AccountSnapshot
 from kairospy.domain.order import OrderRequest, OrderState, OrderType
 from kairospy.application.usecases.risk.domain import RiskMetric
@@ -30,7 +30,7 @@ class ExecutionOrderService:
         self,
         coordinator: ExecutionCoordinator,
         *,
-        order_connection: OrderConnection | Mapping[AccountBookRef, OrderConnection] | None = None,
+        order_connection: OrderConnection | Mapping[AccountSegment, OrderConnection] | None = None,
         symbol_resolver: SymbolResolver | None = None,
     ) -> None:
         self.coordinator = coordinator
@@ -72,13 +72,13 @@ class ExecutionOrderService:
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
         state = self.coordinator.submit_order(order_id, at=at)
-        connection = self._connection_for(state.request.context.book)
+        connection = self._connection_for(state.request.context.segment)
         if connection is None:
             return state
         try:
             result = connection.submit(
                 ConnectionOrderSubmissionRequest(
-                    account=state.request.context.book,
+                    account=state.request.context.segment,
                     symbol=self._symbol_for(state.request.market_id or state.request.instrument_id),
                     side=state.request.side,
                     order_type=state.request.order_type,
@@ -107,7 +107,7 @@ class ExecutionOrderService:
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
         state = self.coordinator.cancel_order(order_id, at=at)
-        connection = self._connection_for(state.request.context.book)
+        connection = self._connection_for(state.request.context.segment)
         if connection is None:
             return state
         if not state.order_venue_id:
@@ -115,7 +115,7 @@ class ExecutionOrderService:
         try:
             result = connection.cancel(
                 ConnectionOrderCancelRequest(
-                    account=state.request.context.book,
+                    account=state.request.context.segment,
                     order_venue_id=state.order_venue_id,
                     symbol=self._symbol_for(state.request.market_id or state.request.instrument_id),
                     options=_connection_options(broker_order_params(params)),
@@ -133,7 +133,7 @@ class ExecutionOrderService:
             raise ValueError(f"empty broker symbol for instrument: {instrument_id}")
         return symbol
 
-    def _connection_for(self, account: AccountBookRef) -> OrderConnection | None:
+    def _connection_for(self, account: AccountSegment) -> OrderConnection | None:
         connections = self.order_connection
         if connections is None:
             return None

@@ -6,15 +6,17 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 from kairospy.application.usecases.account.application.schemas import ACCOUNT_SCHEMAS
+from kairospy.application.usecases.account.application.results import AccountCredentialListResult, AccountCredentialResult
 from kairospy.application.usecases.workspace.application.context import workspace as resolve_workspace
-from kairospy.application.usecases.workspace.domain.workspace import CredentialRecord, write_credential_file
-from kairospy.application.usecases.workspace.domain.config import ConfigError
+from kairospy.application.usecases.workspace.application.workspace import CredentialRecord, write_credential_file
+from kairospy.application.usecases.workspace.application.workspace import ConfigError
 
 
 class CredentialAdminApplication:
-    def list_credentials(self) -> dict[str, object]:
+    def list_credentials(self) -> AccountCredentialListResult:
         store = resolve_workspace().credentials
-        return {"credentials": [record.to_dict() for record in store.list()], "count": len(store.list()), "root": str(store.root)}
+        values = tuple(record.to_dict() for record in store.list())
+        return AccountCredentialListResult(values, len(values), str(store.root))
 
     def create(
         self,
@@ -56,9 +58,9 @@ class CredentialAdminApplication:
         workspace.operations.append("credential.create", target={"credential": credential_id}, payload={"path": path, "broker": broker_value})
         return str(path)
 
-    def show(self, credential_id: str, *, reveal_secrets: bool) -> dict[str, object]:
+    def show(self, credential_id: str, *, reveal_secrets: bool) -> AccountCredentialResult:
         credential = _credential(credential_id)
-        return credential.to_dict(include_secret_values=reveal_secrets)
+        return AccountCredentialResult(credential.to_dict(include_secret_values=reveal_secrets))
 
     def delete(self, credential_id: str, *, force: bool) -> str:
         _ = force

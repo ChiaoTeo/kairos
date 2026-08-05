@@ -8,11 +8,14 @@ from typing import Protocol
 from .ledger import AccountLedger
 from .model import (
     AccountBalance,
-    AccountBookRef,
-    AccountContext,
+    CollateralBalance,
+    AccountSegment,
+    AccountRuntimeContext,
     AccountSnapshot,
     AccountSource,
+    AssetCode,
     LiabilitySnapshot,
+    LeverageState,
     MarginState,
     OpenOrderSnapshot,
     PositionSnapshot,
@@ -20,13 +23,13 @@ from .model import (
 
 
 class AccountHoldSource(Protocol):
-    def active_amounts(self, account: AccountBookRef) -> dict[str, Decimal]:
+    def active_amounts(self, account: AccountSegment) -> dict[str, Decimal]:
         ...
 
 
 @dataclass(frozen=True, slots=True)
 class AccountState:
-    context: AccountContext
+    context: AccountRuntimeContext
     balances: tuple[AccountBalance, ...]
     margins: tuple[MarginState, ...]
     positions: tuple[PositionSnapshot, ...]
@@ -35,13 +38,19 @@ class AccountState:
     source: AccountSource
     stale: bool = False
     liabilities: tuple[LiabilitySnapshot, ...] = ()
+    leverage: tuple[LeverageState, ...] = ()
+    collaterals: tuple[CollateralBalance, ...] = ()
 
-    def balance(self, currency: str) -> AccountBalance | None:
+    def __post_init__(self) -> None:
+        if any(item.segment != self.context.segment for item in self.leverage):
+            raise ValueError("account state leverage segment does not match context segment")
+
+    def balance(self, currency: AssetCode | str) -> AccountBalance | None:
         return next((item for item in self.balances if item.currency == currency), None)
 
 
 def derive_account_state(
-    context: AccountContext,
+    context: AccountRuntimeContext,
     *,
     ledger: AccountLedger | None = None,
     venue: AccountSnapshot | None = None,
@@ -51,13 +60,15 @@ def derive_account_state(
 ) -> AccountState:
     if venue is not None and venue.context != context:
         raise ValueError("venue snapshot context does not match account state context")
-    account = context.book
+    account = context.segment
 
     stale = _is_stale(venue, max_snapshot_age_seconds, now)
     if venue is not None:
         balances = {item.currency: item for item in venue.balances}
         margins = venue.margins
         liabilities = venue.liabilities
+        leverage = venue.leverage
+        collaterals = venue.collaterals
         positions = {item.instrument_id: item for item in venue.positions}
         open_orders = {item.order_id: item for item in venue.open_orders}
         observed_at = venue.observed_at
@@ -66,13 +77,15 @@ def derive_account_state(
         balances = {}
         margins = ()
         liabilities = ()
+        leverage = ()
+        collaterals = ()
         positions = {}
         open_orders = {}
         observed_at = None
         source = AccountSource.LEDGER
 
     if ledger is not None and venue is None:
-        for currency, amount in ledger.cash(account).items():
+        for currency, amount in ledger.balances(account).items():
             balances[currency] = AccountBalance.from_total_locked(
                 currency,
                 amount,
@@ -112,6 +125,8 @@ def derive_account_state(
         source,
         stale,
         tuple(liabilities),
+        tuple(leverage),
+        tuple(collaterals),
     )
 
 

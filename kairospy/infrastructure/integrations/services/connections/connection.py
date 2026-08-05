@@ -36,6 +36,7 @@ class Connection(IntegrationConnection):
             connection_id=self.spec.connection_id,
             route=self.spec.route,
             product=self.spec.product,
+            asset_type=self.spec.asset_type,
             access=self.spec.access,
             transport=self.spec.transport,
             capability=self.spec.capability,

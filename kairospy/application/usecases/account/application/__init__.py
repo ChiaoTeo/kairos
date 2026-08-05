@@ -1,1 +1,1 @@
-"""Public application package for the account usecase."""
+"""ExternalAccount application modules are imported explicitly by use-case name."""

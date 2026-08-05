@@ -10,7 +10,7 @@ from kairospy.application.usecases.execution.application.runtime import build_ex
 from kairospy.application.usecases.risk.application.budget import RiskApplication
 from kairospy.application.usecases.risk.domain import BudgetRef, RiskBudget, RiskMetric
 from kairospy.domain.account import AccountSnapshot, AccountSource, MarginScope, MarginState
-from kairospy.domain.account import AccountBookRef, AccountContext, Environment
+from kairospy.domain.account import AccountSegment, AccountRuntimeContext, Environment
 from kairospy.domain.order import OrderRequest, OrderSide, OrderStatus, OrderType
 
 
@@ -18,7 +18,7 @@ def test_execution_application_is_the_business_entrypoint() -> None:
     application = ExecutionApplication.compose(build_execution_coordinator())
     request = OrderRequest(
         "order-1",
-        AccountContext(AccountBookRef("broker", "account"), Environment.PAPER),
+        AccountRuntimeContext(AccountSegment("broker", "account"), Environment.PAPER),
         "instrument:BTC:USD",
         OrderSide.BUY,
         Decimal("1"),
@@ -41,13 +41,13 @@ def test_default_execution_composition_installs_risk_application() -> None:
 
 
 def test_execution_reserves_risk_budget_before_margin_reservation() -> None:
-    context = AccountContext(AccountBookRef("broker", "account"), Environment.PAPER)
+    context = AccountRuntimeContext(AccountSegment("broker", "account"), Environment.PAPER)
     risk = RiskApplication()
     risk.configure(
         (
             RiskBudget(
                 "account-margin",
-                BudgetRef("account", context.book.value),
+                BudgetRef("account", context.segment.value),
                 RiskMetric.MARGIN,
                 Decimal("50"),
             ),
@@ -94,13 +94,13 @@ def test_execution_reserves_risk_budget_before_margin_reservation() -> None:
 
 
 def test_limit_order_can_use_risk_budget_without_cash_parameters() -> None:
-    context = AccountContext(AccountBookRef("broker", "account"), Environment.PAPER)
+    context = AccountRuntimeContext(AccountSegment("broker", "account"), Environment.PAPER)
     risk = RiskApplication()
     risk.configure(
         (
             RiskBudget(
                 "account-notional",
-                BudgetRef("account", context.book.value),
+                BudgetRef("account", context.segment.value),
                 RiskMetric.NOTIONAL,
                 Decimal("100"),
             ),

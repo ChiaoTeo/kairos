@@ -1,30 +1,53 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from datetime import date, datetime
+from enum import StrEnum
+from typing import Mapping, TypeAlias
+
+from kairospy.domain.reference import ProviderId
+
+
+MarketTime = date | datetime | str
+MarketOptionValue: TypeAlias = str | int | float | bool | None
+MarketOptions: TypeAlias = Mapping[str, MarketOptionValue]
+
+
+class MarketDataKind(StrEnum):
+    OHLCV = "ohlcv"
+    FUNDING_RATE = "funding_rate"
+    TICKER = "ticker"
+    QUOTE = "quote"
+    ORDERBOOK = "orderbook"
+    TRADES = "trades"
+    OPTION_GREEKS = "option_greeks"
+    RATE = "rate"
+    EVENT = "event"
 
 
 @dataclass(frozen=True, slots=True)
 class MarketDataSpec:
     symbol: str
-    kind: str
+    kind: MarketDataKind | str
     venue: str | None = None
     market: str | None = None
     timeframe: str | None = None
-    start: object | None = None
-    end: object | None = None
+    start: MarketTime | None = None
+    end: MarketTime | None = None
     limit: int | None = None
     dataset: str | None = None
     stream: str | None = None
+    provider: ProviderId | str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "symbol", _required_text(self.symbol, "symbol"))
-        object.__setattr__(self, "kind", _required_text(self.kind, "kind").lower())
+        object.__setattr__(self, "kind", MarketDataKind(_required_text(self.kind, "kind").lower()))
         object.__setattr__(self, "venue", _optional_text(self.venue))
         object.__setattr__(self, "market", _optional_text(self.market))
         object.__setattr__(self, "timeframe", _optional_text(self.timeframe))
         object.__setattr__(self, "dataset", _optional_text(self.dataset))
         object.__setattr__(self, "stream", _optional_text(self.stream))
+        object.__setattr__(self, "provider", None if self.provider is None else ProviderId(str(self.provider).strip()))
         if self.limit is not None and self.limit < 0:
             raise ValueError("limit cannot be negative")
 
@@ -48,6 +71,7 @@ class MarketDataSpec:
             limit=_optional_int(values.get("limit"), "data.limit"),
             dataset=_optional_text(values.get("dataset")),
             stream=_optional_text(values.get("stream")),
+            provider=_optional_text(values.get("provider")),
         )
 
     def with_defaults(self, *, venue: str | None = None, market: str | None = None) -> "MarketDataSpec":
@@ -62,6 +86,7 @@ class MarketDataSpec:
             limit=self.limit,
             dataset=self.dataset,
             stream=self.stream,
+            provider=self.provider,
         )
 
 
@@ -88,4 +113,4 @@ def _optional_int(value: object, source: str) -> int | None:
     return parsed
 
 
-__all__ = ["MarketDataSpec"]
+__all__ = ["MarketDataKind", "MarketDataSpec", "MarketOptionValue", "MarketOptions", "MarketTime"]

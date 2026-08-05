@@ -22,6 +22,7 @@ from kairospy.infrastructure.integrations.application.connections import (
 )
 from kairospy.infrastructure.integrations.domain import (
     AccessScope,
+    AssetType,
     BrokerId,
     BrokerRef,
     CredentialRef,
@@ -33,7 +34,6 @@ from kairospy.infrastructure.integrations.domain import (
     ProviderId,
     ProviderRef,
     TransportKind,
-    AdapterRef,
     IntegrationRoute,
 )
 
@@ -73,6 +73,8 @@ class SystemMarketIntegrationRuntime:
     def create_data(self, request: MarketDataConnectionRequest) -> MarketDataConnection:
         spec = request.spec
         params = {**dict(request.params), "product": spec.market or "spot", "exchange": spec.venue or ""}
+        if spec.provider is not None:
+            params["provider"] = str(spec.provider)
         connection_id = str(request.connection_id or params.get("connection_id") or f"market.{params['exchange']}.{params['product']}.data")
         existing = self.scope.get(connection_id)
         if existing is not None:
@@ -105,8 +107,6 @@ class SystemMarketIntegrationRuntime:
         values = dict(feed_values or {})
         if request.provider is not None:
             values["provider"] = request.provider
-        if request.adapter is not None:
-            values["adapter"] = request.adapter
         if request.credential is not None:
             values["credential"] = request.credential
         return self._spec_values(
@@ -121,6 +121,7 @@ class SystemMarketIntegrationRuntime:
 
     def _spec_values(self, params: dict[str, object], connection_id: str, *, transport: TransportKind) -> IntegrationConnectionSpec:
         exchange_name = str(params.get("exchange") or "").lower()
+        product_name = str(params.get("product") or "spot").lower()
         provider_name = str(params.get("provider") or (exchange_name if exchange_name == "massive" else "")).lower()
         # OKEX is the historical spelling still present in some user-facing
         # configurations; the integration identity is canonicalized to OKX.
@@ -140,11 +141,11 @@ class SystemMarketIntegrationRuntime:
                 exchange=exchange_ref,
                 broker=broker_ref,
                 provider=provider_ref,
-                adapter=None if params.get("adapter") is None else AdapterRef(str(params["adapter"])),
             ),
             product=_product(params.get("product") or "spot"),
             access=AccessScope.PUBLIC,
             transport=transport,
+            asset_type=_asset_type(product_name),
             credential=None if credential is None else CredentialRef(str(credential)),
             mode=RuntimeMode(str(params.get("mode") or self.mode.value)),
         )
@@ -172,10 +173,17 @@ def _product(value: object) -> ProductFamily:
     if text in {"swap", "perp", "perpetual", "future", "futures", "usd_margined_futures", "usd-margined-futures"}:
         return ProductFamily.USD_M_FUTURES
     if text in {"equity", "stock", "stocks"}:
-        return ProductFamily.EQUITY
+        return ProductFamily.SPOT
     if text in {"option", "options"}:
         return ProductFamily.OPTIONS
     return ProductFamily.SPOT
+
+
+def _asset_type(value: object) -> AssetType | None:
+    text = str(value).strip().lower()
+    if text in {"equity", "stock", "stocks"}:
+        return AssetType.EQUITY
+    return None
 
 
 def _require_stream(value: object, connection_id: str) -> MarketStreamConnection:

@@ -6,6 +6,7 @@ from typing import Mapping
 
 from kairospy.application.usecases.workspace.application.context import current_profile_name, workspace as resolve_workspace
 from kairospy.application.support.launch.application.configuration import load_launch_config
+from kairospy.application.usecases.account.application.configuration import AccountStore
 
 
 class ConfigAdminApplication:
@@ -27,7 +28,7 @@ class ConfigAdminApplication:
         issues: list[str] = []
         if workspace.manifest_path is None:
             issues.append(".kairos/kairos.toml was not found; using built-in defaults")
-        accounts = workspace.accounts.list()
+        accounts = AccountStore.load(workspace.accounts_root).list()
         for account in accounts:
             if account.environment == "live" and not account.credential_values and not account.credential and not account.credentials:
                 issues.append(f"live account {account.account_id} has no credential metadata")
@@ -35,7 +36,7 @@ class ConfigAdminApplication:
             "valid": not issues,
             "issues": issues,
             "workspace": workspace.to_dict(),
-            "accounts": {"count": len(accounts), "root": str(workspace.accounts.root)},
+            "accounts": {"count": len(accounts), "root": str(workspace.accounts_root)},
             "launches": {"count": len(workspace.launch_index.list()), "path": str(workspace.launch_index.path)},
         }
 
@@ -51,7 +52,7 @@ class ConfigAdminApplication:
         account_source = None
         if account_ref:
             try:
-                account_source = str(workspace.accounts.get(account_ref).source_path)
+                account_source = str(AccountStore.load(workspace.accounts_root).get(account_ref).source_path)
             except Exception:
                 account_source = None
         return {

@@ -25,6 +25,8 @@ class TradingSystemResources:
     # Actor composition owns and interprets this dependency. System only carries it through.
     connection_scope: object | None = None
     message_bus: MessageBus | None = None
+    notifications: object | None = None
+    notification_settings: object | None = None
     assembly: LaunchAssembly | None = None
     business: SystemBusinessFactory | None = None
 

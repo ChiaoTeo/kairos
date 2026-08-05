@@ -50,6 +50,13 @@ class RiskReservationResult:
 
 
 @dataclass(frozen=True, slots=True)
+class RiskReservationChangeResult:
+    """Typed result for consuming or releasing an existing reservation."""
+
+    reservation: RiskReservation
+
+
+@dataclass(frozen=True, slots=True)
 class RiskSnapshot:
     budgets: tuple[RiskBudget, ...]
     reservations: tuple[RiskReservation, ...]
@@ -90,11 +97,11 @@ class RiskApplication:
         stored = self._ledger.reserve(reservation, usages=request.assessment.usages)
         return RiskReservationResult(stored, assessment.decision, assessment.violations)
 
-    def release(self, reservation_id: str) -> RiskReservation:
-        return self._ledger.release(reservation_id)
+    def release(self, reservation_id: str) -> RiskReservationChangeResult:
+        return RiskReservationChangeResult(self._ledger.release(reservation_id))
 
-    def consume(self, reservation_id: str) -> RiskReservation:
-        return self._ledger.consume(reservation_id)
+    def consume(self, reservation_id: str) -> RiskReservationChangeResult:
+        return RiskReservationChangeResult(self._ledger.consume(reservation_id))
 
     def snapshot(self, *, as_of: datetime | None = None) -> RiskSnapshot:
         return RiskSnapshot(self._ledger.budgets(), self._ledger.reservations(), as_of)
@@ -106,5 +113,6 @@ __all__ = [
     "RiskAssessmentResult",
     "RiskReservationRequest",
     "RiskReservationResult",
+    "RiskReservationChangeResult",
     "RiskSnapshot",
 ]

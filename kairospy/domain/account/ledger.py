@@ -8,7 +8,7 @@ from uuid import UUID
 
 from kairospy.domain.reference import InstrumentId
 
-from .model import AccountBookRef
+from .model import AccountSegment, AssetCode
 
 
 class AccountEventKind(StrEnum):
@@ -24,11 +24,11 @@ class AccountEventKind(StrEnum):
 @dataclass(frozen=True, slots=True)
 class AccountEvent:
     event_id: UUID
-    account: AccountBookRef
+    account: AccountSegment
     kind: AccountEventKind
     occurred_at: datetime
-    currency: str
-    cash_delta: Decimal = Decimal("0")
+    currency: AssetCode | str
+    balance_delta: Decimal = Decimal("0")
     instrument_id: InstrumentId | str | None = None
     position_delta: Decimal = Decimal("0")
     reference_id: str = ""
@@ -36,13 +36,12 @@ class AccountEvent:
     def __post_init__(self) -> None:
         if self.occurred_at.tzinfo is None:
             raise ValueError("account event timestamp must be timezone-aware")
-        if not self.currency.strip():
-            raise ValueError("account event currency cannot be empty")
+        object.__setattr__(self, "currency", self.currency if isinstance(self.currency, AssetCode) else AssetCode(self.currency))
         object.__setattr__(self, "instrument_id", None if self.instrument_id is None else _id(self.instrument_id, InstrumentId, "instrument_id"))
         if self.position_delta and not self.instrument_id:
             raise ValueError("position delta requires instrument_id")
-        if self.cash_delta == 0 and self.position_delta == 0:
-            raise ValueError("account event must change cash or position")
+        if self.balance_delta == 0 and self.position_delta == 0:
+            raise ValueError("account event must change an asset balance or position")
 
 
 class AccountLedger:
@@ -71,15 +70,15 @@ class AccountLedger:
         for event in events:
             self.record(event)
 
-    def cash(self, account: AccountBookRef) -> dict[str, Decimal]:
-        balances: dict[str, Decimal] = {}
+    def balances(self, account: AccountSegment) -> dict[AssetCode, Decimal]:
+        balances: dict[AssetCode, Decimal] = {}
         for event in self._events:
-            if event.account != account or event.cash_delta == 0:
+            if event.account != account or event.balance_delta == 0:
                 continue
-            balances[event.currency] = balances.get(event.currency, Decimal("0")) + event.cash_delta
+            balances[event.currency] = balances.get(event.currency, Decimal("0")) + event.balance_delta
         return {currency: amount for currency, amount in balances.items() if amount != 0}
 
-    def positions(self, account: AccountBookRef) -> dict[str, Decimal]:
+    def positions(self, account: AccountSegment) -> dict[str, Decimal]:
         positions: dict[str, Decimal] = {}
         for event in self._events:
             if event.account != account or event.position_delta == 0 or event.instrument_id is None:

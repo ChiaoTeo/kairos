@@ -39,7 +39,11 @@ class AssetId(ReferenceId):
     pass
 
 
-class AccountId(ReferenceId):
+class ExternalAccountId(ReferenceId):
+    pass
+
+
+class AccountSegmentId(ReferenceId):
     pass
 
 
@@ -48,6 +52,10 @@ class IntentId(ReferenceId):
 
 
 class InstrumentId(ReferenceId):
+    pass
+
+
+class FinancialProductId(ReferenceId):
     pass
 
 
@@ -94,19 +102,21 @@ BrokerId.IBKR = BrokerId("ibkr")  # type: ignore[attr-defined]
 ProviderId.MASSIVE = ProviderId("massive")  # type: ignore[attr-defined]
 
 
-def reference_slug(value: object) -> str:
+def reference_slug(value: ReferenceId | str) -> str:
     text = str(value).strip().lower()
     return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", text)).strip("_")
 
 
 __all__ = [
-    "AccountId",
+    "ExternalAccountId",
+    "AccountSegmentId",
     "AssetId",
     "BrokerId",
     "EntityId",
     "ExchangeId",
     "IntentId",
     "InstrumentId",
+    "FinancialProductId",
     "ListingId",
     "MarketId",
     "MarketTypeId",

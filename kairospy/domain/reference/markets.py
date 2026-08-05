@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .catalog import ReferenceCatalog
-from .identity import ExchangeId, InstrumentId, MarketId, MarketTypeId, SourceSymbol, reference_slug
-from .model import MarketDefinition
+from .identity import ExchangeId, InstrumentId, MarketId, MarketTypeId, ReferenceId, SourceSymbol, reference_slug
+from .model import AssetType, MarketDefinition, ProductFamily
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,7 +28,7 @@ class SymbolRef:
     @classmethod
     def parse(
         cls,
-        value: object,
+        value: SourceSymbol | str,
         *,
         venue: str | None = None,
         market: str | None = None,
@@ -58,6 +58,7 @@ class MarketRef:
     venue: ExchangeId | str
     market: MarketTypeId | str
     source_symbol: SourceSymbol | str
+    asset_type: AssetType | str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "market_id", _id(self.market_id, MarketId, "market_id"))
@@ -65,6 +66,10 @@ class MarketRef:
         object.__setattr__(self, "venue", _id(self.venue, ExchangeId, "venue"))
         object.__setattr__(self, "market", _id(self.market, MarketTypeId, "market"))
         object.__setattr__(self, "source_symbol", _id(self.source_symbol, SourceSymbol, "source_symbol"))
+        asset_type = self.asset_type
+        if asset_type is None:
+            asset_type = _asset_type_for_market(self.market)
+        object.__setattr__(self, "asset_type", None if asset_type is None else _id(asset_type, AssetType, "asset_type"))
 
     @classmethod
     def from_definition(cls, market: MarketDefinition) -> "MarketRef":
@@ -75,10 +80,11 @@ class MarketRef:
             venue=market.venue,
             market=market.market,
             source_symbol=market.source_symbol,
+            asset_type=_asset_type_for_market(market.market),
         )
 
     @classmethod
-    def ephemeral(cls, *, venue: str, market: str, source_symbol: str) -> "MarketRef":
+    def ephemeral(cls, *, venue: str, market: str, source_symbol: str, asset_type: AssetType | str | None = None) -> "MarketRef":
         venue = _required_text(venue, "venue")
         market = _required_text(market, "market")
         source_symbol = _required_text(source_symbol, "source_symbol")
@@ -95,6 +101,7 @@ class MarketRef:
             venue=venue,
             market=market,
             source_symbol=source_symbol,
+            asset_type=asset_type,
         )
 
     def identity_fields(self) -> dict[str, object]:
@@ -106,6 +113,8 @@ class MarketRef:
             "exchange_id": str(self.exchange_id),
             "market": str(self.market),
             "market_type": str(self.market_type),
+            "product_family": self.product_family.value,
+            "asset_type": None if self.asset_type is None else str(self.asset_type),
             "source_symbol": str(self.source_symbol),
         }
 
@@ -116,6 +125,17 @@ class MarketRef:
     @property
     def market_type(self) -> MarketTypeId:
         return self.market
+
+    @property
+    def product_family(self) -> ProductFamily:
+        value = str(self.market).strip().lower().replace("-", "_")
+        if value in {"swap", "perp", "perpetual", "future", "futures", "usd_m_futures", "usd_margined_futures"}:
+            return ProductFamily.USD_M_FUTURES
+        if value in {"coin_m", "coinm", "coin_m_futures", "coin_margined_futures"}:
+            return ProductFamily.COIN_M_FUTURES
+        if value in {"option", "options"}:
+            return ProductFamily.OPTIONS
+        return ProductFamily.SPOT
 
 
 class MarketResolver:
@@ -139,7 +159,7 @@ class MarketResolver:
             for market in catalog.list_markets(at=self.as_of):
                 self.add(MarketRef.from_definition(market))
 
-    def add(self, market: MarketRef, *aliases: object) -> MarketRef:
+    def add(self, market: MarketRef, *aliases: str | ReferenceId | SymbolRef) -> MarketRef:
         self._by_key[market.market_key] = market
         keys = {
             self._key(market.source_symbol, venue=market.venue, market=market.market),
@@ -157,7 +177,7 @@ class MarketResolver:
 
     def resolve(
         self,
-        value: object | MarketRef,
+        value: SymbolRef | MarketRef | str,
         *,
         venue: str | None = None,
         market: str | None = None,
@@ -169,7 +189,7 @@ class MarketResolver:
             raw_market_key = self._aliases.get(raw_key)
             if raw_market_key is not None:
                 return self._by_key[raw_market_key]
-        ref = SymbolRef.parse(
+        ref = value if isinstance(value, SymbolRef) else SymbolRef.parse(
             value,
             venue=venue or self.default_venue,
             market=market or self.default_market,
@@ -190,7 +210,7 @@ class MarketResolver:
             raise KeyError(f"unknown market reference: {ref.symbol}")
         return self.add(MarketRef.ephemeral(venue=str(ref.venue), market=str(ref.market), source_symbol=str(ref.symbol)))
 
-    def broker_symbol(self, value: object | MarketRef) -> str:
+    def broker_symbol(self, value: SymbolRef | MarketRef | str) -> str:
         return str(self.resolve(value).source_symbol)
 
     def snapshot(self) -> dict[str, object]:
@@ -231,6 +251,15 @@ def _split_symbol(symbol: str) -> tuple[str | None, str | None]:
             left, right = symbol.split(separator, 1)
             return left.strip() or None, right.strip() or None
     return symbol.strip() or None, None
+
+
+def _asset_type_for_market(value: object) -> AssetType | None:
+    text = str(value).strip().lower().replace("-", "_")
+    if text in {"equity", "stock", "stocks"}:
+        return AssetType.EQUITY
+    if text in {"spot", "swap", "perp", "perpetual", "future", "futures", "usd_m_futures", "usd_margined_futures", "coin_m_futures", "coin_margined_futures", "options", "option"}:
+        return AssetType.CRYPTO
+    return None
 
 
 __all__ = ["MarketRef", "MarketResolver", "SymbolRef"]

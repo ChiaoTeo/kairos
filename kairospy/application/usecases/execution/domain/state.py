@@ -9,10 +9,13 @@ from uuid import UUID
 from kairospy.domain.account import (
     AccountEvent,
     AccountEventKind,
-    AccountBookRef,
+    AccountSegment,
     AccountLedger,
-    AccountContext,
+    AccountRuntimeContext,
     Environment,
+    ExternalAccountIdentity,
+    AccountModel,
+    ProductFamily,
 )
 from kairospy.domain.order import OrderJournal, OrderOrigin, OrderRequest, OrderSide, OrderState, OrderStatus, OrderType
 
@@ -123,11 +126,11 @@ def _order_state_from_dict(value: Mapping[str, object]) -> OrderState:
 def _account_event_to_dict(event: AccountEvent) -> dict[str, object]:
     return {
         "event_id": str(event.event_id),
-        "account": _account_book_to_dict(event.account),
+        "account": _account_segment_to_dict(event.account),
         "kind": event.kind.value,
         "occurred_at": event.occurred_at.isoformat(),
-        "currency": event.currency,
-        "cash_delta": str(event.cash_delta),
+        "currency": str(event.currency),
+        "balance_delta": str(event.balance_delta),
         "instrument_id": None if event.instrument_id is None else str(event.instrument_id),
         "position_delta": str(event.position_delta),
         "reference_id": event.reference_id,
@@ -137,11 +140,11 @@ def _account_event_to_dict(event: AccountEvent) -> dict[str, object]:
 def _account_event_from_dict(value: Mapping[str, object]) -> AccountEvent:
     return AccountEvent(
         UUID(str(value["event_id"])),
-        _account_book_from_dict(_mapping(value["account"])),
+        _account_segment_from_dict(_mapping(value["account"])),
         AccountEventKind(str(value["kind"])),
         _datetime(value["occurred_at"]),
         str(value["currency"]),
-        cash_delta=Decimal(str(value.get("cash_delta") or "0")),
+        balance_delta=Decimal(str(value.get("balance_delta") or "0")),
         instrument_id=_optional_text(value.get("instrument_id")),
         position_delta=Decimal(str(value.get("position_delta") or "0")),
         reference_id=str(value.get("reference_id") or ""),
@@ -151,7 +154,7 @@ def _account_event_from_dict(value: Mapping[str, object]) -> AccountEvent:
 def _reservation_to_dict(reservation: Reservation) -> dict[str, object]:
     return {
         "reservation_id": reservation.reservation_id,
-        "account": _account_book_to_dict(reservation.account),
+        "account": _account_segment_to_dict(reservation.account),
         "currency": reservation.currency,
         "amount": str(reservation.amount),
         "reason": reservation.reason,
@@ -164,7 +167,7 @@ def _reservation_to_dict(reservation: Reservation) -> dict[str, object]:
 def _reservation_from_dict(value: Mapping[str, object]) -> Reservation:
     return Reservation(
         str(value["reservation_id"]),
-        _account_book_from_dict(_mapping(value["account"])),
+        _account_segment_from_dict(_mapping(value["account"])),
         str(value["currency"]),
         Decimal(str(value["amount"])),
         str(value["reason"]),
@@ -174,30 +177,32 @@ def _reservation_from_dict(value: Mapping[str, object]) -> Reservation:
     )
 
 
-def _account_context_to_dict(context: AccountContext) -> dict[str, object]:
-    return {"account": _account_book_to_dict(context.book), "environment": context.environment.value}
+def _account_context_to_dict(context: AccountRuntimeContext) -> dict[str, object]:
+    return {"account": _account_segment_to_dict(context.segment), "environment": context.environment.value}
 
 
-def _account_context_from_dict(value: Mapping[str, object]) -> AccountContext:
-    return AccountContext(_account_book_from_dict(_mapping(value["account"])), Environment(str(value["environment"])))
+def _account_context_from_dict(value: Mapping[str, object]) -> AccountRuntimeContext:
+    return AccountRuntimeContext(_account_segment_from_dict(_mapping(value["account"])), Environment(str(value["environment"])))
 
 
-def _account_book_to_dict(account: AccountBookRef) -> dict[str, object]:
+def _account_segment_to_dict(account: AccountSegment) -> dict[str, object]:
     return {
         "broker": str(account.broker),
         "account_id": str(account.account_id),
-        "book": str(account.book),
+        "segment_id": account.segment_id,
+        "model": account.model.value,
+        "product_family": None if account.product_family is None else account.product_family.value,
         "qualifier": account.qualifier,
-        "segment": account.segment,
     }
 
 
-def _account_book_from_dict(value: Mapping[str, object]) -> AccountBookRef:
-    return AccountBookRef(
-        str(value["broker"]),
-        str(value["account_id"]),
-        str(value.get("book") or value.get("segment") or ""),
-        str(value.get("qualifier") or ""),
+def _account_segment_from_dict(value: Mapping[str, object]) -> AccountSegment:
+    return AccountSegment(
+        ExternalAccountIdentity(str(value["broker"]), str(value["account_id"])),
+        str(value.get("segment_id") or value["account_id"]),
+        model=AccountModel(str(value.get("model") or AccountModel.NO_MARGIN.value)),
+        product_family=None if value.get("product_family") is None else ProductFamily(str(value["product_family"])),
+        qualifier=str(value.get("qualifier") or ""),
     )
 
 

@@ -16,7 +16,7 @@ from kairospy.application.usecases.execution.application.component import Execut
 from kairospy.application.usecases.execution.application.runtime import build_execution_coordinator
 from kairospy.application.usecases.risk.application.budget import RiskApplication, RiskAssessmentRequest, RiskReservationRequest
 from kairospy.application.usecases.risk.domain import BudgetRef, RiskBudget, RiskMetric, RiskUsage
-from kairospy.domain.account import AccountBookRef, AccountContext, Environment
+from kairospy.domain.account import AccountSegment, AccountRuntimeContext, Environment
 from kairospy.domain.intent import IntentJournal, IntentStatus, target_position_intent
 from kairospy.domain.execution import ExecutionUpdate
 from kairospy.domain.order import OrderEventKind
@@ -25,19 +25,19 @@ from kairospy.infrastructure.messaging import InMemoryMessageBus
 
 
 AT = datetime(2026, 1, 1, tzinfo=timezone.utc)
-ACCOUNT = AccountContext(AccountBookRef("paper", "account"), Environment.PAPER)
+ACCOUNT = AccountRuntimeContext(AccountSegment("paper", "account"), Environment.PAPER)
 
 
 def _risk(limit: str = "100") -> RiskApplication:
     risk = RiskApplication()
-    risk.configure((RiskBudget("account-notional", BudgetRef("account", ACCOUNT.book.value), RiskMetric.NOTIONAL, Decimal(limit)),))
+    risk.configure((RiskBudget("account-notional", BudgetRef("account", ACCOUNT.segment.value), RiskMetric.NOTIONAL, Decimal(limit)),))
     return risk
 
 
 def _request(request_id: str, amount: str) -> RiskAssessmentRequest:
     return RiskAssessmentRequest(
         request_id,
-        (RiskUsage(RiskMetric.NOTIONAL, Decimal(amount), (BudgetRef("account", ACCOUNT.book.value),)),),
+        (RiskUsage(RiskMetric.NOTIONAL, Decimal(amount), (BudgetRef("account", ACCOUNT.segment.value),)),),
         AT,
     )
 
@@ -92,10 +92,10 @@ def test_account_actor_asks_risk_actor_before_creating_order() -> None:
     execution = ExecutionApplication.compose(coordinator, intents=journal)
 
     class Accounts:
-        def accounts(self) -> tuple[AccountContext, ...]:
+        def accounts(self) -> tuple[AccountRuntimeContext, ...]:
             return (ACCOUNT,)
 
-        def snapshot(self, account: AccountBookRef) -> None:
+        def snapshot(self, account: AccountSegment) -> None:
             return None
 
     actor = AccountActor(
@@ -109,7 +109,7 @@ def test_account_actor_asks_risk_actor_before_creating_order() -> None:
     intent = target_position_intent(
         strategy_id="risk-strategy",
         instrument_id="BTCUSDT",
-        account_book=ACCOUNT.book.book_key,
+        account_segment=ACCOUNT.segment.key,
         target_quantity=Decimal("2"),
         limit_price=Decimal("60"),
         at=AT,
@@ -143,10 +143,10 @@ def test_account_actor_releases_risk_reservation_on_cancel_update() -> None:
     execution = ExecutionApplication.compose(coordinator, intents=journal)
 
     class Accounts:
-        def accounts(self) -> tuple[AccountContext, ...]:
+        def accounts(self) -> tuple[AccountRuntimeContext, ...]:
             return (ACCOUNT,)
 
-        def snapshot(self, account: AccountBookRef) -> None:
+        def snapshot(self, account: AccountSegment) -> None:
             return None
 
     actor = AccountActor(
@@ -160,7 +160,7 @@ def test_account_actor_releases_risk_reservation_on_cancel_update() -> None:
     intent = target_position_intent(
         strategy_id="risk-release-strategy",
         instrument_id="BTCUSDT",
-        account_book=ACCOUNT.book.book_key,
+        account_segment=ACCOUNT.segment.key,
         target_quantity=Decimal("1"),
         limit_price=Decimal("40"),
         at=AT,

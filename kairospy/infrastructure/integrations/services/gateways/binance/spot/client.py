@@ -76,6 +76,8 @@ class BinanceSpotRestClient:
         payload = _response_payload(response)
         if response.status_code >= 400:
             code, message = _error_payload(payload)
+            if _is_html_error(message):
+                message = f"Binance returned a non-JSON error page (HTTP {response.status_code}); the endpoint may be unavailable for this account or region"
             raise BinanceRequestError(message or f"Binance request failed with HTTP {response.status_code}", code=code, status_code=response.status_code, payload=payload)
         return payload
 
@@ -164,6 +166,11 @@ def _optional_int(value: object) -> int | None:
         return None if value is None else int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _is_html_error(message: str) -> bool:
+    normalized = message.lstrip().lower()
+    return normalized.startswith("<!doctype html") or normalized.startswith("<html")
 
 
 __all__ = ["BinanceRequestError", "BinanceSpotRequestClient", "BinanceSpotRestClient"]

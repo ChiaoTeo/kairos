@@ -1,17 +1,17 @@
-# Account market profiles
+# ExternalAccount market profiles
 
 账户交易费率和交易模式按以下维度解析：
 
 ```text
-account identity + account book + market
+account identity + account segment + market
 ```
 
-策略只读取 Account application 投影，不访问交易所连接：
+策略只读取 ExternalAccount application 投影，不访问交易所连接：
 
 ```python
 profile = (
     context.accounts[0]
-    .book("usd_m_futures")
+    .segment("usd_m_futures")
     .market("BTC/USDT:USDT")
     .profile
 )
@@ -31,14 +31,18 @@ fee.payment.discount
 2. `MarketFeeRule`：交易品种/交易市场自身的费率规则。
 3. `FeePaymentRule`：手续费币种和折扣规则，例如 BNB 抵扣。
 
-Integration 通过 `AccountMarketProfileConnection` 查询交易所事实，Account
-Usecase 将其转换为 `AccountMarketProfile`，Account Actor 通过
+Integration 通过 `AccountMarketProfileConnection` 查询交易所事实，ExternalAccount
+Usecase 将其转换为 `AccountMarketProfile`，并将其归属于具体 `AccountSegment`，ExternalAccount Actor 通过
 `RefreshAccountMarketProfileCommand` 刷新并发布
 `account.market_profile.updated` 事件。策略读取的是 Actor 投影的最新快照，
 而不是在策略回调中直接发起网络请求。
 
 `AccountFeeResolution.combination` 记录交易所适配器采用的组合语义；不同交易所
 不应被强制使用同一个费率合并算法。
+
+`AccountMarketProfile` 是 segment + market 的规则投影，不代表账号本身，也不负责描述
+账号模式切换、余额、仓位或杠杆状态。账号级费率规则可以被多个 segment 复用，但最终解析
+结果必须明确记录使用的 `ExternalAccountIdentity`、`AccountSegment`、`ProductFamily` 和观察时间。
 
 ## Live credentials and supported venues
 

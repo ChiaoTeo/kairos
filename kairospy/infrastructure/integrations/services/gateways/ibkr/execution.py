@@ -17,7 +17,7 @@ from typing import Protocol
 
 from kairospy.domain.account import (
     AccountBalance,
-    AccountContext,
+    AccountRuntimeContext,
     AccountSnapshot,
     AccountSource,
     MarginState,
@@ -26,7 +26,7 @@ from kairospy.domain.account import (
 )
 from kairospy.domain.execution import ExecutionUpdate
 from kairospy.domain.order import OrderEventKind, OrderSide, OrderType
-from kairospy.domain.reference import MarketRef
+from kairospy.domain.reference import AssetType, MarketRef, ProductFamily
 from kairospy.infrastructure.integrations.application.account import (
     ConnectionAccountReadData,
     ConnectionAccountReadRequest,
@@ -142,7 +142,7 @@ class IBKRAccountConnection(Connection):
         super().__init__(spec, components=(_AsyncDriverResource(self.gateway),))
 
     def read_account(self, request: ConnectionAccountReadRequest) -> ConnectionAccountReadData:
-        account_id = str(request.context.book.account_id)
+        account_id = str(request.context.segment.account_id)
         values = self.gateway.account_values(account_id=account_id)
         positions = self.gateway.positions(account_id=account_id)
         orders = self.gateway.open_orders(account_id=account_id) if request.fetch_orders else ()
@@ -156,7 +156,7 @@ class IBKRExecutionStreamConnection(Connection, OrderUpdateConnection):
         super().__init__(spec, components=(_AsyncDriverResource(self.gateway),))
 
     async def execution_updates(self, request: ConnectionAccountStreamRequest, *, trades_only: bool = False) -> AsyncIterator[ExecutionUpdate]:
-        async for event in self.gateway.execution_events(account_id=str(request.context.book.account_id), symbol=request.symbol):
+        async for event in self.gateway.execution_events(account_id=str(request.context.segment.account_id), symbol=request.symbol):
             if trades_only and event.fill_quantity is None:
                 continue
             yield _execution_update(event, request.context)
@@ -174,7 +174,7 @@ class IBKRAccountStreamConnection(Connection, AccountStreamConnection):
     async def account_snapshots(self, request: ConnectionAccountStreamRequest) -> AsyncIterator[AccountSnapshot]:
         while True:
             now = datetime.now(timezone.utc)
-            account_id = str(request.context.book.account_id)
+            account_id = str(request.context.segment.account_id)
             values = self.gateway.account_values(account_id=account_id)
             positions = self.gateway.positions(account_id=account_id)
             orders = self.gateway.open_orders(account_id=account_id)
@@ -329,14 +329,14 @@ def _account_snapshot(request, values, positions, orders) -> AccountSnapshot:
     balances = (AccountBalance.from_free_locked(currency, free_cash, max(total_cash - free_cash, Decimal("0")), source=AccountSource.VENUE),) if total_cash or free_cash else ()
     margin = by_tag.get("MaintMarginReq")
     margins = () if margin is None else (MarginState(currency, max(margin.value, Decimal("0")), max(margin.value, Decimal("0")), AccountSource.VENUE, available=max(free_cash, Decimal("0"))),)
-    venue = str(request.context.book.broker)
+    venue = str(request.context.segment.broker)
     return AccountSnapshot(request.context, balances=balances, margins=margins, positions=tuple(PositionSnapshot(_instrument(venue, item.symbol), item.quantity, AccountSource.VENUE, average_price=item.average_price, margin_currency=item.currency) for item in positions), open_orders=tuple(OpenOrderSnapshot(item.order_id, _instrument(venue, item.symbol), str(item.side), item.quantity - item.filled_quantity, AccountSource.VENUE) for item in orders if item.quantity > item.filled_quantity), observed_at=request.observed_at, source=AccountSource.VENUE)
 
 
-def _execution_update(event: IBKRExecutionEvent, context: AccountContext) -> ExecutionUpdate:
+def _execution_update(event: IBKRExecutionEvent, context: AccountRuntimeContext) -> ExecutionUpdate:
     filled = event.filled_quantity or Decimal("0")
     kind = _event_kind(event.status, filled, event.remaining_quantity)
-    return ExecutionUpdate(observed_at=event.observed_at or datetime.now(timezone.utc), kind=kind, order_venue_id=event.order_id, context=context, instrument_id=_instrument(str(context.book.broker), event.symbol), side=event.side, quantity=event.quantity, order_type=event.order_type, limit_price=event.limit_price, filled_quantity=event.filled_quantity, remaining_quantity=event.remaining_quantity, fill_quantity=event.fill_quantity, fill_price=event.fill_price, fee_currency=event.fee_currency, fee_amount=event.fee_amount, reason=event.reason, source="ibkr", metadata={"execution_id": event.execution_id} if event.execution_id else {})
+    return ExecutionUpdate(observed_at=event.observed_at or datetime.now(timezone.utc), kind=kind, order_venue_id=event.order_id, context=context, instrument_id=_instrument(str(context.segment.broker), event.symbol), side=event.side, quantity=event.quantity, order_type=event.order_type, limit_price=event.limit_price, filled_quantity=event.filled_quantity, remaining_quantity=event.remaining_quantity, fill_quantity=event.fill_quantity, fill_price=event.fill_price, fee_currency=event.fee_currency, fee_amount=event.fee_amount, reason=event.reason, source="ibkr", metadata={"execution_id": event.execution_id} if event.execution_id else {})
 
 
 def _trade_event(trade) -> IBKRExecutionEvent:
@@ -393,7 +393,8 @@ def _decimal(value: object) -> Decimal:
 
 
 def _validate(spec: IntegrationConnectionSpec, capability: IntegrationCapability) -> None:
-    if spec.product is not None and str(spec.product) != "equity": raise ValueError("IBKR broker gateway currently supports equity only")
+    if spec.product is not ProductFamily.SPOT or spec.asset_type is not AssetType.EQUITY:
+        raise ValueError("IBKR broker gateway currently supports spot equity only")
     if spec.access.value != "private" or spec.transport is not TransportKind.REQUEST_API or spec.capability is not capability:
         raise ValueError(f"IBKR gateway requires private request_api {capability.value}")
 

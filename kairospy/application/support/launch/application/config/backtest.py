@@ -8,7 +8,7 @@ from typing import Mapping
 from kairospy.application.support.launch.domain.modes import RuntimeMode
 from kairospy.application.usecases.market.application.replay import ReplayMarketDataPolicy
 from kairospy.application.usecases.strategy.protocol import Strategy
-from kairospy.domain.account import AccountContext
+from kairospy.domain.account import AccountRuntimeContext
 
 from kairospy.application.support.launch.application.config.common import (
     AccountPerformanceMixin,
@@ -32,7 +32,7 @@ class BacktestLaunchResult(AccountPerformanceMixin):
     runtime: object
     views: object
     intents: object
-    account: AccountContext
+    account: AccountRuntimeContext
     account_view: object | None
     fills: tuple[object, ...] = ()
     equity_curve: tuple[object, ...] = ()
@@ -43,8 +43,7 @@ class BacktestLaunchResult(AccountPerformanceMixin):
 @dataclass(frozen=True, slots=True)
 class BacktestAccountConfig:
     account_id: str
-    cash: Decimal
-    currency: str
+    initial_balances: tuple[tuple[str, Decimal], ...]
     fee_rate: Decimal
     price_field: str
 
@@ -71,12 +70,12 @@ def configured_backtest(config_path: Path, *, strategy_ref: str | None = None) -
     strategy_params = _strategy_params(values)
     backtest = _table(values.get("backtest"), "backtest")
     timeline_config = _table(values.get("timeline"), "timeline") if values.get("timeline") is not None else {}
+    notifications_config = _table(values.get("notifications"), "notifications") if values.get("notifications") is not None else {}
     execution_config = _table(values.get("execution"), "execution") if values.get("execution") is not None else {}
     account_defaults = launch_config.account_defaults
     account_config = BacktestAccountConfig(
         account_id=launch_config.launch_id,
-        cash=account_defaults.cash,
-        currency=account_defaults.currency,
+        initial_balances=account_defaults.initial_balances,
         fee_rate=account_defaults.fee_rate,
         price_field=str(backtest.get("price_field", "close")),
     )
@@ -100,6 +99,7 @@ def configured_backtest(config_path: Path, *, strategy_ref: str | None = None) -
             storage_format=storage_format,
             market_policy=market_policy,
             timeline=timeline_config,
+            notifications=notifications_config,
         ),
         data_root=data_root,
         storage_format=storage_format,
@@ -170,6 +170,7 @@ def _normalized_config(
     storage_format: str,
     market_policy: ReplayMarketDataPolicy,
     timeline: Mapping[str, object],
+    notifications: Mapping[str, object],
 ) -> Mapping[str, object]:
     return {
         "launch": {"id": launch_id, "mode": RuntimeMode.BACKTEST.value, "strategy": strategy},
@@ -185,13 +186,13 @@ def _normalized_config(
             },
         },
         "account": {
-            "cash": account.cash,
-            "currency": account.currency,
+            "initial_balances": dict(account.initial_balances),
             "fee_rate": account.fee_rate,
             "price_field": account.price_field,
         },
         "execution": dict(execution),
         "timeline": dict(timeline),
+        "notifications": dict(notifications),
     }
 
 

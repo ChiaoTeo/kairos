@@ -2,13 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Protocol, cast
-
 from kairospy.domain.account import AccountSnapshot
-
-
-class AccountSnapshotStore(Protocol):
-    def update_snapshot(self, snapshot: AccountSnapshot) -> None: ...
+from kairospy.application.usecases.account.protocol import AccountSnapshotStore
 
 
 class AccountSnapshotService:
@@ -16,10 +11,10 @@ class AccountSnapshotService:
         self._store = store
 
     @classmethod
-    def from_store(cls, store: object | None) -> "AccountSnapshotService | None":
+    def from_store(cls, store: AccountSnapshotStore | None) -> "AccountSnapshotService | None":
         if store is None:
             return None
-        return cls(cast(AccountSnapshotStore, store)) if callable(getattr(store, "update_snapshot", None)) else cls(None)
+        return cls(store)
 
     def apply(self, snapshot: AccountSnapshot) -> None:
         if self._store is not None:

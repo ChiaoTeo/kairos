@@ -1,11 +1,11 @@
-"""Account login application API."""
+"""ExternalAccount login application API."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from kairospy.application.usecases.account.protocol import AccountLoginPort, AccountLoginRequest, AccountLoginResult, AccountSession
-from kairospy.domain.account import AccountContext
+from kairospy.domain.account import AccountRuntimeContext
 
 
 class AccountLoginApplicationService:
@@ -14,7 +14,7 @@ class AccountLoginApplicationService:
 
     def login(
         self,
-        context: AccountContext,
+        context: AccountRuntimeContext,
         *,
         credential_ref: str | None = None,
         connection_ids: tuple[str, ...] = (),

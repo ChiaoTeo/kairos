@@ -21,7 +21,7 @@ class IntentStateSummary:
     updated_at: datetime | None = None
     strategy_id: str | None = None
     account_id: str | None = None
-    account_book: str | None = None
+    account_segment: str | None = None
     order_ids: tuple[str, ...] = ()
     target_quantity: Decimal | None = None
     reason: str = ""

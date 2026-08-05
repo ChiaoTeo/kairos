@@ -14,6 +14,7 @@ from kairospy.infrastructure.persistence.application.market_data import DataStor
 
 from .common import ComposedLaunch, in_memory_message_bus, reference_runtime
 from .runtime import compose_runtime_assembly
+from .notifications import build_notification_application, notification_runtime_settings
 
 
 class LiveComposition:
@@ -59,6 +60,8 @@ class LiveComposition:
             trading_execution=account_resources.execution,
             connection_scope=connections,
             message_bus=in_memory_message_bus(),
+            notifications=build_notification_application(configured.normalized_config),
+            notification_settings=notification_runtime_settings(configured.normalized_config),
             assembly=compose_runtime_assembly(),
         )
         return ComposedLaunch(

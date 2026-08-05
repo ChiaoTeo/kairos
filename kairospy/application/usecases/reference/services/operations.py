@@ -5,20 +5,24 @@ from datetime import datetime
 from typing import Mapping
 
 from kairospy.domain.reference import Asset, AssetId, AssetType, EntityId, LifecycleEvent
-from kairospy.application.usecases.reference.protocol import ReferenceStore
+from kairospy.application.usecases.reference.application.requests import (
+    ReferenceDelistRequest,
+    ReferenceLifecycleSyncRequest,
+    ReferenceRefreshRequest,
+)
+from kairospy.application.usecases.reference.application.results import ReferenceProviderRefreshResult, ReferenceRefreshResult, ReferenceSourceRefreshResult
+from kairospy.application.usecases.reference.protocol import (
+    ReferenceCatalogDelistSource,
+    ReferenceCatalogSource,
+    ReferenceDelistScheduleSource,
+    ReferenceLifecycleRequest,
+    ReferenceLifecycleSource,
+    ReferenceStore,
+)
 
 from .catalogs import ReferenceCatalogService
 from .provider import EquityProviderRefreshService, ReferenceDataRefreshService
-from .refresh import ReferenceRefreshResult, ReferenceRefreshService
-
-
-@dataclass(frozen=True, slots=True)
-class ReferenceProviderRefreshResult:
-    refresh: ReferenceRefreshResult
-    scheduled_events: tuple[LifecycleEvent, ...] = ()
-
-
-ReferenceSourceRefreshResult = ReferenceProviderRefreshResult
+from .refresh import ReferenceRefreshService
 
 
 @dataclass(slots=True)
@@ -27,20 +31,65 @@ class ReferenceRefreshWorkflow:
 
     store: ReferenceStore
 
-    def exchange(self, source: object, **kwargs: object) -> ReferenceSourceRefreshResult:
-        return refresh_exchange_reference(self.store, source, **kwargs)  # type: ignore[arg-type]
+    def exchange(self, source: ReferenceCatalogSource, request: ReferenceRefreshRequest) -> ReferenceSourceRefreshResult:
+        return refresh_exchange_reference(
+            self.store,
+            source,
+            as_of=request.as_of,
+            venue=_required_venue(request),
+            market=request.market,
+        )
 
-    def exchange_with_delist_schedule(self, source: object, **kwargs: object) -> ReferenceSourceRefreshResult:
-        return refresh_exchange_reference_with_delist_schedule(self.store, source, **kwargs)  # type: ignore[arg-type]
+    def exchange_with_delist_schedule(self, source: ReferenceCatalogDelistSource, request: ReferenceRefreshRequest) -> ReferenceSourceRefreshResult:
+        return refresh_exchange_reference_with_delist_schedule(
+            self.store,
+            source,
+            as_of=request.as_of,
+            venue=_required_venue(request),
+            market=_required_market(request),
+            include_delist_schedule=request.include_delist_schedule,
+        )
 
-    def provider(self, source: object, **kwargs: object) -> ReferenceSourceRefreshResult:
-        return refresh_provider_reference(self.store, source, **kwargs)  # type: ignore[arg-type]
+    def provider(self, source: ReferenceCatalogSource, request: ReferenceRefreshRequest) -> ReferenceSourceRefreshResult:
+        return refresh_provider_reference(
+            self.store,
+            source,
+            as_of=request.as_of,
+            venue=request.venue,
+            market=request.market,
+            params={"asset_class": request.asset_class} if request.asset_class else None,
+        )
 
-    def equity(self, source: object, **kwargs: object) -> ReferenceProviderRefreshResult:
-        return refresh_equity_provider(self.store, source, **kwargs)  # type: ignore[arg-type]
+    def equity(self, source: ReferenceCatalogSource, request: ReferenceRefreshRequest) -> ReferenceProviderRefreshResult:
+        return refresh_equity_provider(
+            self.store,
+            source,
+            as_of=request.as_of,
+            venue=request.venue,
+            params={"asset_class": request.asset_class} if request.asset_class else None,
+        )
 
-    def lifecycle_events(self, source: object, **kwargs: object) -> tuple[LifecycleEvent, ...]:
-        return sync_lifecycle_events(self.store, source, **kwargs)  # type: ignore[arg-type]
+    def lifecycle_events(self, source: ReferenceLifecycleSource, request: ReferenceLifecycleSyncRequest) -> tuple[LifecycleEvent, ...]:
+        return sync_lifecycle_events(
+            self.store,
+            source,
+            ticker=request.ticker,
+            start=request.start,
+            end=request.end,
+            venue=request.venue,
+        )
+
+
+def _required_venue(request: ReferenceRefreshRequest) -> str:
+    if request.venue is None or not request.venue.strip():
+        raise ValueError("reference refresh requires a venue")
+    return request.venue
+
+
+def _required_market(request: ReferenceRefreshRequest) -> str:
+    if request.market is None or not request.market.strip():
+        raise ValueError("reference refresh with delist schedule requires a market")
+    return request.market
 
 
 def add_asset(
@@ -69,7 +118,7 @@ def add_asset(
 
 def refresh_instrument_provider(
     store: ReferenceStore,
-    provider: object,
+    provider: ReferenceCatalogSource,
     *,
     as_of: datetime,
     venue: str | None = None,
@@ -88,7 +137,7 @@ def refresh_instrument_provider(
 
 def refresh_exchange_reference(
     store: ReferenceStore,
-    exchange: object,
+    exchange: ReferenceCatalogSource,
     *,
     as_of: datetime,
     venue: str,
@@ -107,7 +156,7 @@ def refresh_exchange_reference(
 
 def refresh_instrument_provider_with_delist_schedule(
     store: ReferenceStore,
-    provider: object,
+    provider: ReferenceCatalogDelistSource,
     *,
     as_of: datetime,
     venue: str,
@@ -124,15 +173,17 @@ def refresh_instrument_provider_with_delist_schedule(
         params=params,
     )
     schedule_events: tuple[LifecycleEvent, ...] = ()
-    if include_delist_schedule and hasattr(provider, "fetch_delist_events"):
-        schedule_events = tuple(provider.fetch_delist_events(catalog=result.refresh.catalog, market=market))
+    if include_delist_schedule:
+        schedule_events = tuple(
+            provider.fetch_delist_events(ReferenceDelistRequest(catalog=result.refresh.catalog, market=market))
+        )
         store.append_events(schedule_events)
     return ReferenceProviderRefreshResult(result.refresh, schedule_events)
 
 
 def refresh_exchange_reference_with_delist_schedule(
     store: ReferenceStore,
-    exchange: object,
+    exchange: ReferenceCatalogDelistSource,
     *,
     as_of: datetime,
     venue: str,
@@ -153,7 +204,7 @@ def refresh_exchange_reference_with_delist_schedule(
 
 def refresh_equity_provider(
     store: ReferenceStore,
-    provider: object,
+    provider: ReferenceCatalogSource,
     *,
     as_of: datetime,
     venue: str | None = None,
@@ -170,7 +221,7 @@ def refresh_equity_provider(
 
 def refresh_provider_reference(
     store: ReferenceStore,
-    provider: object,
+    provider: ReferenceCatalogSource,
     *,
     as_of: datetime,
     venue: str | None = None,
@@ -186,18 +237,20 @@ def refresh_provider_reference(
 
 
 def sync_lifecycle_events(
-    store: object,
-    provider: object,
+    store: ReferenceStore,
+    provider: ReferenceLifecycleSource,
     *,
     ticker: str,
     start: datetime,
     end: datetime,
     venue: str | None = None,
 ) -> tuple[LifecycleEvent, ...]:
-    if not hasattr(provider, "fetch_lifecycle_events"):
-        raise ValueError("provider does not support lifecycle events")
     catalog = store.load_catalog()
-    events = tuple(provider.fetch_lifecycle_events(ticker, start=start, end=end, catalog=catalog, venue=venue))
+    events = tuple(
+        provider.fetch_lifecycle_events(
+            ReferenceLifecycleRequest(ticker=ticker, start=start, end=end, catalog=catalog, venue=venue)
+        )
+    )
     store.append_events(events)
     return events
 

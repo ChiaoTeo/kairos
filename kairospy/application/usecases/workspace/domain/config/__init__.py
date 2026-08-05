@@ -16,8 +16,6 @@ VALID_STORAGE_FORMATS = frozenset({"parquet", "jsonl"})
 DEFAULT_PROJECT_TIMEZONE = "UTC"
 DEFAULT_PROJECT_LANGUAGE = "en"
 VALID_PROJECT_LANGUAGES = frozenset({"en", "zh-CN"})
-DEFAULT_ACCOUNT_CASH = Decimal("100000")
-DEFAULT_ACCOUNT_CURRENCY = "USD"
 DEFAULT_ACCOUNT_FEE_RATE = Decimal("0")
 
 
@@ -93,8 +91,7 @@ class KairosConfig:
 
 @dataclass(frozen=True, slots=True)
 class AccountDefaults:
-    cash: Decimal = DEFAULT_ACCOUNT_CASH
-    currency: str = DEFAULT_ACCOUNT_CURRENCY
+    initial_balances: tuple[tuple[str, Decimal], ...] = ()
     fee_rate: Decimal = DEFAULT_ACCOUNT_FEE_RATE
 
 
@@ -151,7 +148,7 @@ def _string_tuple(value: object, source: str) -> tuple[str, ...]:
     if isinstance(value, str):
         text = value.strip()
         if not text:
-            raise ConfigError(f"{source} must not contain empty book names")
+            raise ConfigError(f"{source} must not contain empty account scope names")
         return (text,)
     if not isinstance(value, list):
         raise ConfigError(f"{source} must be a string or list of strings")

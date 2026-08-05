@@ -4,12 +4,13 @@ from datetime import datetime
 
 from kairospy.domain.market import Quote
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec
-from kairospy.infrastructure.integrations.domain import AccessScope, ProductFamily, TransportKind
+from kairospy.infrastructure.integrations.domain import AccessScope, AssetType, ProductFamily, TransportKind
 from .client import BinanceEquityRestClient
 from kairospy.infrastructure.integrations.services.connections.connection import Connection
 from .operations import BinanceEquityMarketOperations
 from kairospy.infrastructure.integrations.services.gateways.binance.equity.normalizers import BinanceEquityNormalizers
 from kairospy.infrastructure.integrations.services.gateways.binance.equity.public_stream import BinanceEquityPollingConnection
+from kairospy.application.usecases.reference.application.requests import ReferenceCatalogRequest
 
 
 class BinanceEquityPublicRestConnection(Connection):
@@ -22,8 +23,11 @@ class BinanceEquityPublicRestConnection(Connection):
     def latest_quote(self, symbol: str) -> Quote | None:
         return self.normalizers.latest_quote(self.operations.latest_quote(symbol))
 
-    def catalog(self, *, as_of: datetime, market: str | None = None):
-        return self.normalizers.catalog(self.operations.exchange_info(symbol=market), as_of=as_of)
+    def catalog(self, request: ReferenceCatalogRequest):
+        return self.normalizers.catalog(
+            self.operations.exchange_info(symbol=request.market),
+            as_of=request.as_of,
+        )
 
 
 class BinanceEquityPublicRestGateway:
@@ -39,7 +43,7 @@ class BinanceEquityPublicStreamGateway:
 
 
 def _validate_public_equity(spec: IntegrationConnectionSpec, transport: TransportKind) -> None:
-    if spec.product is not ProductFamily.EQUITY or spec.access is not AccessScope.PUBLIC or spec.transport is not transport:
+    if spec.product is not ProductFamily.SPOT or spec.asset_type is not AssetType.EQUITY or spec.access is not AccessScope.PUBLIC or spec.transport is not transport:
         raise ValueError(f"Binance Equity gateway requires {transport.value} equity transport")
 
 

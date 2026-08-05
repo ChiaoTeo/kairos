@@ -70,7 +70,7 @@ class CliStrategyBase(StrategyBase):
             instrument,
             Decimal(str(quantity)),
             account=_optional_text(command.args.get("account")),
-            book=command.args.get("book"),
+            account_segment=_optional_text(command.args.get("account_segment")),
             limit_price=None if command.args.get("limit_price") is None else Decimal(str(command.args["limit_price"])),
             reason=str(command.args.get("reason") or "cli target_position"),
             intent_id=_optional_text(command.args.get("intent_id")),

@@ -5,13 +5,13 @@ from datetime import datetime, timezone
 from dataclasses import replace
 from decimal import Decimal
 
-from kairospy.domain.account import AccountBookRef, AccountContext, Environment
+from kairospy.domain.account import AccountModel, AccountSegment, AccountRuntimeContext, Environment, ProductFamily as AccountProductFamily
 from kairospy.domain.execution import ExecutionUpdate
 from kairospy.domain.order import OrderSide, OrderType
 from kairospy.infrastructure.integrations.application.account import ConnectionAccountReadRequest, ConnectionAccountStreamRequest
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec, RuntimeMode
 from kairospy.infrastructure.integrations.application.execution import ConnectionOrderCancelRequest, ConnectionOrderSubmissionRequest
-from kairospy.infrastructure.integrations.domain import AccessScope, BrokerId, BrokerRef, IntegrationCapability, IntegrationRoute, ProductFamily, TransportKind
+from kairospy.infrastructure.integrations.domain import AccessScope, AssetType, BrokerId, BrokerRef, IntegrationCapability, IntegrationRoute, ProductFamily, TransportKind
 from kairospy.infrastructure.integrations.services.gateways.ibkr.execution import (
     IBKRAccountConnection,
     IBKRAccountStreamConnection,
@@ -68,7 +68,8 @@ def _spec() -> IntegrationConnectionSpec:
     return IntegrationConnectionSpec(
         connection_id="ibkr-paper-equity",
         route=IntegrationRoute(broker=BrokerRef(BrokerId.IBKR)),
-        product=ProductFamily.EQUITY,
+        product=ProductFamily.SPOT,
+        asset_type=AssetType.EQUITY,
         access=AccessScope.PRIVATE,
         transport=TransportKind.REQUEST_API,
         mode=RuntimeMode.PAPER,
@@ -93,7 +94,7 @@ def test_registry_selects_explicit_ibkr_account_and_execution_stream_connections
 def test_ibkr_order_connection_maps_canonical_order_dtos() -> None:
     gateway = _FakeGateway()
     connection = IBKRExecutionConnection(_spec(), gateway=gateway)
-    account = AccountBookRef("ibkr", "paper-account", "equity")
+    account = AccountSegment("ibkr", "paper-account", AccountModel.NO_MARGIN, AccountProductFamily.SPOT)
     result = connection.submit(
         ConnectionOrderSubmissionRequest(
             account=account,
@@ -125,7 +126,7 @@ def test_ibkr_connection_adapts_sync_driver_lifecycle() -> None:
 def test_ibkr_account_connection_maps_account_values_positions_and_orders() -> None:
     gateway = _FakeGateway()
     connection = IBKRAccountConnection(replace(_spec(), capability=IntegrationCapability.ACCOUNT_READ), gateway=gateway)
-    context = AccountContext(AccountBookRef("ibkr", "paper-account", "equity"), Environment.PAPER)
+    context = AccountRuntimeContext(AccountSegment("ibkr", "paper-account", AccountModel.NO_MARGIN, AccountProductFamily.SPOT), Environment.PAPER)
     snapshot = connection.read_account(ConnectionAccountReadRequest(context=context, observed_at=datetime.now(timezone.utc))).snapshot
     assert snapshot.balances[0].free == Decimal("8000")
     assert snapshot.positions[0].quantity == Decimal("2")
@@ -133,9 +134,9 @@ def test_ibkr_account_connection_maps_account_values_positions_and_orders() -> N
 
 
 def test_ibkr_execution_stream_maps_fill_to_domain_update() -> None:
-    spec = IntegrationConnectionSpec(connection_id="ibkr-stream", route=IntegrationRoute(broker=BrokerRef(BrokerId.IBKR)), product=ProductFamily.EQUITY, access=AccessScope.PRIVATE, transport=TransportKind.REQUEST_API, mode=RuntimeMode.PAPER, capability=IntegrationCapability.EXECUTION_STREAM)
+    spec = IntegrationConnectionSpec(connection_id="ibkr-stream", route=IntegrationRoute(broker=BrokerRef(BrokerId.IBKR)), product=ProductFamily.SPOT, asset_type=AssetType.EQUITY, access=AccessScope.PRIVATE, transport=TransportKind.REQUEST_API, mode=RuntimeMode.PAPER, capability=IntegrationCapability.EXECUTION_STREAM)
     connection = IBKRExecutionStreamConnection(spec, gateway=_FakeGateway())
-    context = AccountContext(AccountBookRef("ibkr", "paper-account", "equity"), Environment.PAPER)
+    context = AccountRuntimeContext(AccountSegment("ibkr", "paper-account", AccountModel.NO_MARGIN, AccountProductFamily.SPOT), Environment.PAPER)
 
     async def read_one() -> ExecutionUpdate:
         async for update in connection.execution_updates(ConnectionAccountStreamRequest(context=context)):
@@ -148,7 +149,7 @@ def test_ibkr_execution_stream_maps_fill_to_domain_update() -> None:
 
 
 def test_ibkr_broker_is_selected_by_composition_for_account_and_execution() -> None:
-    book = AccountBookRef("ibkr", "paper-account", "equity")
+    book = AccountSegment("ibkr", "paper-account", AccountModel.NO_MARGIN, AccountProductFamily.SPOT)
     assert isinstance(private_account_access(book, DriverName.ibkr), IBKRAccountConnection)
     assert isinstance(account_read_access(book, DriverName.ibkr), IBKRAccountConnection)
     assert isinstance(execution_access(book, DriverName.ibkr), IBKRExecutionConnection)

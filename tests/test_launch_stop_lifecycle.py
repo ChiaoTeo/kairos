@@ -4,7 +4,7 @@ import asyncio
 import unittest
 
 from kairospy.application.support.launch.application.launcher import bind_stop_signal
-from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
+from kairospy.application.usecases.market.application.requests import MarketDataSubscriptionSpec
 from kairospy.application.usecases.market.application.runtime import build_market_runtime
 from kairospy.application.usecases.market.application.component import MarketApplication
 from kairospy.domain.market import TradePrint

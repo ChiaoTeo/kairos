@@ -7,7 +7,7 @@ from enum import StrEnum
 from .bindings import AccessScope, IntegrationBinding, TransportKind
 from .capabilities import IntegrationCapability
 from .routes import IntegrationRoute
-from kairospy.domain.reference import ParticipantRef
+from kairospy.domain.reference import AssetType, ParticipantRef
 from .products import ProductFamily
 
 
@@ -26,6 +26,7 @@ class ConnectionIdentity:
     connection_id: str
     route: IntegrationRoute
     product: ProductFamily | None
+    asset_type: AssetType | None
     access: AccessScope
     transport: TransportKind
     capability: IntegrationCapability
@@ -64,6 +65,11 @@ class ConnectionState:
             for binding in self.bindings
         ):
             raise ValueError("connection binding product does not match connection identity")
+        if self.identity.asset_type is not None and any(
+            binding.asset_type is not None and binding.asset_type is not self.identity.asset_type
+            for binding in self.bindings
+        ):
+            raise ValueError("connection binding asset type does not match connection identity")
 
 
 @dataclass(frozen=True, slots=True)

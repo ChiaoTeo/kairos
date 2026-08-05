@@ -9,6 +9,11 @@ from kairospy.application.usecases.market.application.resolver import ResolvedMa
 from kairospy.application.usecases.market.domain.specs import MarketDataSpec
 from kairospy.application.usecases.market.protocol import MarketDataWriter
 from kairospy.application.usecases.market.services.ingestion import MarketIngestionService as _MarketIngestionService
+from kairospy.application.support.messaging import Message
+from kairospy.application.usecases.market.application.requests import MarketDataRow
+from kairospy.application.usecases.market.application.requests import MarketOptions
+from kairospy.application.usecases.market.protocol import MarketHistoricalClient
+from kairospy.domain.market import Bar, MarketEvent, RateObservation
 
 
 class MarketIngestionApplicationService:
@@ -18,19 +23,19 @@ class MarketIngestionApplicationService:
         self._writer = writer
         self._events = _MarketIngestionService()
 
-    def event_from_message(self, message: object) -> object | None:
-        return self._events.event_from_message(message)  # type: ignore[arg-type]
+    def event_from_message(self, message: Message) -> MarketEvent | None:
+        return self._events.event_from_message(message)
 
-    def event_from_row(self, row: dict[str, object], *, sequence: int, stream: str) -> object | None:
+    def event_from_row(self, row: MarketDataRow, *, sequence: int, stream: str) -> MarketEvent | None:
         return self._events.event_from_row(row, sequence=sequence, stream=stream)
 
     def download(
         self,
         spec: MarketDataSpec,
-        client: object,
+        client: MarketHistoricalClient,
         *,
         mode: str = "append",
-        options: Mapping[str, object] | None = None,
+        options: MarketOptions | None = None,
     ) -> Path:
         if self._writer is None:
             raise RuntimeError("market ingestion application requires a data application service")
@@ -39,7 +44,7 @@ class MarketIngestionApplicationService:
     def persist_historical(
         self,
         spec: MarketDataSpec,
-        observations: Iterable[object],
+        observations: Iterable[Bar | RateObservation],
         *,
         mode: str = "append",
     ) -> Path:
@@ -50,7 +55,7 @@ class MarketIngestionApplicationService:
     async def persist(
         self,
         spec: MarketDataSpec,
-        events: AsyncIterable[Mapping[str, object]],
+        events: AsyncIterable[MarketEvent],
         *,
         limit: int | None = None,
     ) -> int:
@@ -61,10 +66,10 @@ class MarketIngestionApplicationService:
     def ensure(
         self,
         spec: MarketDataSpec,
-        client: object | None = None,
+        client: MarketHistoricalClient | None = None,
         *,
         mode: str = "append",
-        options: Mapping[str, object] | None = None,
+        options: MarketOptions | None = None,
     ) -> ResolvedMarketData:
         if self._writer is None:
             raise RuntimeError("market ingestion application requires a data application service")

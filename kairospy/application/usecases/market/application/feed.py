@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator, Callable, Mapping
-from typing import Protocol
+from typing import Awaitable, Protocol
 
-from kairospy.application.usecases.market.application.subscriptions import MarketSubscriptionApplicationService
 from kairospy.application.usecases.market.domain.planning import MarketFeedWatchPlan
 from kairospy.application.usecases.market.domain.subscriptions import DataSubscription, MarketDataSubscriptionSpec
 from kairospy.application.usecases.market.application.integration import (
@@ -14,6 +13,7 @@ from kairospy.application.usecases.market.application.integration import (
     MarketFeedSubscriptionRequest,
     MarketStreamConnectionRequest,
     MarketStreamConnection,
+    MarketIntegrationRuntime,
 )
 from kairospy.domain.market import MarketEvent, MarketSelector
 
@@ -21,6 +21,13 @@ from kairospy.domain.market import MarketEvent, MarketSelector
 class MarketFeedResolver(Protocol):
     def resolve_market_feed(self, spec: MarketDataSubscriptionSpec) -> MarketStreamConnection | None:
         ...
+
+
+class MarketFeedSubscriptionState(Protocol):
+    def subscribe(self, spec: MarketDataSubscriptionSpec) -> DataSubscription: ...
+    def unsubscribe(self, subscription: DataSubscription | str) -> None: ...
+    def subscriptions(self) -> tuple[DataSubscription, ...]: ...
+    def feed_watches(self, subscription: DataSubscription) -> tuple[MarketFeedWatchPlan, ...]: ...
 
 
 class _StopRequested(Exception):
@@ -37,13 +44,13 @@ class MarketFeedApplicationService:
 
     def __init__(
         self,
-        subscriptions: MarketSubscriptionApplicationService,
+        subscriptions: MarketFeedSubscriptionState,
         *,
         feed: MarketStreamConnection | None = None,
         feed_resolver: MarketFeedResolver | None = None,
         stream_connections: Mapping[str, MarketStreamConnection] | None = None,
-        integration_runtime: object | None = None,
-        stop_signal: Callable[[], bool] | object | None = None,
+        integration_runtime: MarketIntegrationRuntime | None = None,
+        stop_signal: Callable[[], bool] | "StopSignal" | None = None,
     ) -> None:
         self.subscriptions = subscriptions
         self.feed = feed
@@ -118,7 +125,6 @@ class MarketFeedApplicationService:
                 market=plan.market,
                 connection_id=str(plan.params["connection_id"]) if plan.params.get("connection_id") is not None else None,
                 provider=str(plan.params["provider"]) if plan.params.get("provider") is not None else None,
-                adapter=str(plan.params["adapter"]) if plan.params.get("adapter") is not None else None,
                 credential=str(plan.params["credential"]) if plan.params.get("credential") is not None else None,
             )
             connection_id = plan.params.get("connection_id")
@@ -155,8 +161,8 @@ class MarketFeedApplicationService:
             return None
         raise RuntimeError(f"multiple market stream connections require connection_id: venue={plan.market.venue}")
 
-    async def _await_stop_aware(self, awaitable: object) -> MarketFeedSubscription:
-        task = asyncio.ensure_future(awaitable)  # type: ignore[arg-type]
+    async def _await_stop_aware(self, awaitable: Awaitable[MarketFeedSubscription]) -> MarketFeedSubscription:
+        task = asyncio.ensure_future(awaitable)
         try:
             while not task.done():
                 if self._should_stop():
@@ -181,7 +187,12 @@ class MarketFeedApplicationService:
         return bool(should_stop())
 
 
-def _connection_matches_venue(connection: object, venue: object) -> bool:
+class StopSignal(Protocol):
+    def should_stop(self) -> bool:
+        ...
+
+
+def _connection_matches_venue(connection: MarketStreamConnection, venue: str) -> bool:
     identity = getattr(connection, "identity", None)
     if identity is not None:
         return any(str(participant.id) == str(venue) for participant in identity.participants)

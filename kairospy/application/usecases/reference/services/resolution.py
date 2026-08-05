@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from kairospy.domain.reference import MarketDefinition, MarketRef, MarketResolver, ReferenceCatalog
+from kairospy.domain.reference import MarketDefinition, MarketRef, MarketResolver, ReferenceCatalog, SymbolRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +25,7 @@ class ReferenceResolutionService:
 
     def resolve(
         self,
-        value: object | MarketRef,
+        value: SymbolRef | MarketRef | str,
         *,
         venue: str | None = None,
         market: str | None = None,
@@ -53,7 +53,7 @@ class ReferenceResolutionService:
             at=as_of or datetime.now(timezone.utc),
         )
 
-    def broker_symbol(self, value: object | MarketRef, *, as_of: datetime | None = None) -> str:
+    def broker_symbol(self, value: SymbolRef | MarketRef | str, *, as_of: datetime | None = None) -> str:
         return self.resolver(as_of=as_of).broker_symbol(value)
 
 

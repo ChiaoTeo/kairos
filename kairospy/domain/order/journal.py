@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 
-from kairospy.domain.account.model import AccountContext
+from kairospy.domain.account.model import AccountRuntimeContext
 from kairospy.domain.reference import InstrumentId, MarketId
 
 from .model import OrderEvent, OrderOrigin, OrderRequest, OrderSide, OrderState, OrderStatus, OrderType
@@ -65,7 +65,7 @@ class OrderJournal:
     def import_order_venue_open_order(
         self,
         *,
-        context: AccountContext,
+        context: AccountRuntimeContext,
         order_venue_id: str,
         instrument_id: InstrumentId | str,
         side: OrderSide | str,
@@ -128,7 +128,7 @@ class OrderJournal:
         resolved_order_id = self._resolve_order_id(order_id, None)
         return OrderRecord(self.get(order_id), tuple(self._events.get(resolved_order_id, ())))
 
-    def active_for_context(self, context: AccountContext) -> tuple[OrderState, ...]:
+    def active_for_context(self, context: AccountRuntimeContext) -> tuple[OrderState, ...]:
         return tuple(
             state
             for state in self._states.values()

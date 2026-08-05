@@ -4,14 +4,14 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Mapping
 
-from kairospy.domain.account import AccountBalance, AccountContext, AccountSnapshot, AccountSource
+from kairospy.domain.account import AccountBalance, AccountRuntimeContext, AccountSnapshot, AccountSource, AssetCode
 
 
 def account_baseline_snapshot(
-    context: AccountContext,
+    context: AccountRuntimeContext,
     *,
     at: datetime,
-    currency: str,
+    currency: AssetCode | str,
     equity: Decimal | str | int | float,
     source: AccountSource = AccountSource.SIMULATED,
     metadata: Mapping[str, object] | None = None,

@@ -6,7 +6,8 @@ from datetime import datetime
 
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec
 from kairospy.application.usecases.market.application.integration import MarketFeedSubscriptionRequest
-from kairospy.infrastructure.integrations.domain import ProductFamily
+from kairospy.application.usecases.market.application.requests import MarketOptions, MarketTime
+from kairospy.infrastructure.integrations.domain import AssetType, ProductFamily
 from kairospy.infrastructure.integrations.services.connections.connection import Connection
 from kairospy.infrastructure.integrations.services.credentials import credential_value
 from kairospy.infrastructure.integrations.services.drivers.websocket import WebSocketDriver
@@ -17,6 +18,7 @@ from .stream import (
 from .client import MassiveStocksRestClient
 from kairospy.domain.market import Bar
 from kairospy.application.usecases.reference.application.builders import catalog_from_market_snapshot
+from kairospy.application.usecases.reference.application.requests import ReferenceCatalogRequest
 from kairospy.infrastructure.integrations.services.gateways.massive.normalizers import MassiveStockNormalizers
 
 
@@ -76,7 +78,7 @@ class MassiveOptionsMarketDataConnection(Connection):
         since: datetime | str | None = None,
         until: datetime | str | None = None,
         limit: int = 1000,
-        adapter_options: Mapping[str, object] | None = None,
+        adapter_options: MarketOptions | None = None,
     ) -> Iterable[Bar]:
         return self.client.bars(
             symbol,
@@ -104,13 +106,12 @@ class MassiveReferenceConnection(Connection):
         )
         super().__init__(spec, components=())
 
-    def catalog(self, *, as_of: datetime, market: str | None = None, params: object | None = None):
-        if str(market or "").lower() not in {"option", "options"}:
+    def catalog(self, request: ReferenceCatalogRequest):
+        if str(request.market or "").lower() not in {"option", "options"}:
             raise ValueError("Massive reference catalog currently requires market=option")
-        values = dict(params or {}) if isinstance(params, dict) else {}
-        underlying = str(values.get("underlying") or os.getenv("MASSIVE_OPTION_UNDERLYING") or "SPY")
+        underlying = request.underlying or os.getenv("MASSIVE_OPTION_UNDERLYING") or "SPY"
         rows = []
-        for item in self.client.option_contracts(underlying, as_of=as_of.date().isoformat()):
+        for item in self.client.option_contracts(underlying, as_of=request.as_of.date().isoformat()):
             rows.append({
                 "venue": "massive",
                 "market": "option",
@@ -123,12 +124,12 @@ class MassiveReferenceConnection(Connection):
                 "active": item.get("active", True),
                 "raw": item,
             })
-        return catalog_from_market_snapshot(rows, effective_from=as_of)
+        return catalog_from_market_snapshot(rows, effective_from=request.as_of)
 
 
 class MassiveStocksGateway:
     def open(self, spec: IntegrationConnectionSpec) -> MassiveStockMarketStreamConnection:
-        if spec.product is not ProductFamily.EQUITY:
+        if spec.product is not ProductFamily.SPOT or spec.asset_type is not AssetType.EQUITY:
             raise ValueError("Massive stocks gateway requires the equity product")
         return MassiveStockMarketStreamConnection(spec)
 

@@ -10,18 +10,23 @@ from kairospy.application.usecases.account.application.directory import AccountD
 from kairospy.application.support.messaging import Message
 from kairospy.application.actor.support.connections import ConnectionManager
 from kairospy.application.usecases.account.services.service import AccountService
-from kairospy.application.usecases.account.protocol import AccountLoginPort, AccountLoginResult, AccountSession
+from kairospy.application.usecases.account.protocol import AccountLoginPort, AccountLoginResult, AccountMarketProfilePort, AccountReadPort, AccountSession
 from kairospy.application.usecases.account.services.read import AccountReadService
-from kairospy.application.usecases.account.domain.routing import AccountBookRoute, account_book_route
+from kairospy.application.usecases.account.application.read import AccountQueryRequest, AccountQueryResult, AccountRefreshRequest, AccountRefreshResult
+from kairospy.application.usecases.account.domain.routing import AccountSegmentRoute, account_segment_route
 from kairospy.application.usecases.account.services.runtime.private_stream import (
     LivePrivateStreamCollector,
     LivePrivateStreamState,
 )
-from kairospy.domain.account import AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, AccountLedger, AccountSnapshot, AccountSource, AccountState, Environment, derive_account_state
+from kairospy.domain.account import AccountSegment, AccountCapability, AccountRuntimeContext, AccountFeeSchedule, AccountLedger, AccountMarketProfile, AccountSnapshot, AccountSource, AccountState, Environment, derive_account_state
+from kairospy.domain.reference import MarketRef
 
 
 class LiveAccountGatewayResolver(Protocol):
-    def resolve_account_reader(self, account: AccountBookRef) -> object | None:
+    def resolve_account_reader(self, account: AccountSegment) -> AccountReadPort | None:
+        ...
+
+    def resolve_private_stream(self, account: AccountSegment) -> object | None:
         ...
 
 
@@ -34,24 +39,20 @@ class AccountIncident:
     def __post_init__(self) -> None:
         object.__setattr__(self, "raw", MappingProxyType(dict(self.raw)))
 
-    def resolve_private_stream(self, account: AccountBookRef) -> object | None:
-        ...
-
-
 @dataclass(frozen=True, slots=True)
 class _AccountReaderConnectionFactory:
     resolver: LiveAccountGatewayResolver
-    account: AccountBookRef
-    fallback: object | None
+    account: AccountSegment
+    fallback: AccountReadPort | None
 
-    def create_connection(self) -> object | None:
+    def create_connection(self) -> AccountReadPort | None:
         return self.resolver.resolve_account_reader(self.account) or self.fallback
 
 
 @dataclass(frozen=True, slots=True)
 class _PrivateStreamConnectionFactory:
     resolver: LiveAccountGatewayResolver | None
-    account: AccountBookRef
+    account: AccountSegment
     fallback: object | None
 
     def create_connection(self) -> object | None:
@@ -63,7 +64,7 @@ class _PrivateStreamConnectionFactory:
 class LiveAccountService:
     def __init__(
         self,
-        account: AccountContext,
+        account: AccountRuntimeContext,
         ledger: AccountLedger | None,
         *,
         broker: object | None = None,
@@ -83,8 +84,8 @@ class LiveAccountService:
         directory: AccountDirectory | None = None,
         capabilities: tuple[AccountCapability, ...] = (),
         fees: tuple[AccountFeeSchedule, ...] = (),
-        routes: tuple[AccountBookRoute, ...] = (),
-        market_profile_port: object | None = None,
+        routes: tuple[AccountSegmentRoute, ...] = (),
+        market_profile_port: AccountMarketProfilePort | None = None,
         connections: ConnectionManager | None = None,
     ) -> None:
         if account.environment not in {Environment.LIVE, Environment.TESTNET}:
@@ -121,18 +122,18 @@ class LiveAccountService:
             self.update_snapshot(snapshot)
         if self.connections is not None:
             if self.broker is not None:
-                self.broker = self.connections.register(self._connection_key("broker", account.book), self.broker, role="account_broker")
+                self.broker = self.connections.register(self._connection_key("broker", account.segment), self.broker, role="account_broker")
             if self.stream is not None:
-                self.stream = self.connections.register(self._connection_key("private_stream", account.book), self.stream, role="account_private_stream")
+                self.stream = self.connections.register(self._connection_key("private_stream", account.segment), self.stream, role="account_private_stream")
 
     def set_connection_manager(self, connections: ConnectionManager | None) -> None:
         self.connections = connections
         if self.connections is None:
             return
         if self.broker is not None:
-            self.broker = self.connections.register(self._connection_key("broker", self.account.book), self.broker, role="account_broker")
+            self.broker = self.connections.register(self._connection_key("broker", self.account.segment), self.broker, role="account_broker")
         if self.stream is not None:
-            self.stream = self.connections.register(self._connection_key("private_stream", self.account.book), self.stream, role="account_private_stream")
+            self.stream = self.connections.register(self._connection_key("private_stream", self.account.segment), self.stream, role="account_private_stream")
 
     async def events(self) -> AsyncIterator[Message]:
         if self.broker is None and self.gateway_resolver is None:
@@ -146,10 +147,10 @@ class LiveAccountService:
             if self.gateway_resolver is None:
                 return
         for snapshot in snapshots:
-            stream = self._stream_for(snapshot.context.book)
+            stream = self._stream_for(snapshot.context.segment)
             if stream is None:
                 continue
-            route = self._route(snapshot.context.book)
+            route = self._route(snapshot.context.segment)
             typed_stream = callable(getattr(stream, "account_snapshots", None))
             if self.parser is None and not typed_stream:
                 raise RuntimeError("live account service requires an account payload parser")
@@ -168,7 +169,7 @@ class LiveAccountService:
                     max_balance_events=self.max_balance_events,
                 )
             except Exception as error:
-                key = self._connection_key("private_stream", snapshot.context.book)
+                key = self._connection_key("private_stream", snapshot.context.segment)
                 self._record_connection_error(key, error)
                 self._reconnect(key)
                 raise
@@ -177,10 +178,10 @@ class LiveAccountService:
                     self.update_snapshot(event.payload)
                 yield event
 
-    def accounts(self) -> tuple[AccountContext, ...]:
+    def accounts(self) -> tuple[AccountRuntimeContext, ...]:
         return self.accounts_service.accounts()
 
-    def login(self, account: AccountBookRef | None = None, *, credential_ref: str | None = None, connection_ids: tuple[str, ...] = (), at: datetime | None = None) -> AccountLoginResult:
+    def login(self, account: AccountSegment | None = None, *, credential_ref: str | None = None, connection_ids: tuple[str, ...] = (), at: datetime | None = None) -> AccountLoginResult:
         return self.accounts_service.login(account, credential_ref=credential_ref, connection_ids=connection_ids, at=at)
 
     def logout(self, session: AccountSession) -> None:
@@ -189,39 +190,39 @@ class LiveAccountService:
     def directory(self) -> AccountDirectory:
         return self._directory or AccountDirectory.from_contexts((self.account,))
 
-    def capabilities(self, account: AccountBookRef | None = None) -> tuple[AccountCapability, ...]:
+    def capabilities(self, account: AccountSegment | None = None) -> tuple[AccountCapability, ...]:
         return self.accounts_service.capabilities(account)
 
-    def fees(self, account: AccountBookRef | None = None) -> tuple[AccountFeeSchedule, ...]:
+    def fees(self, account: AccountSegment | None = None) -> tuple[AccountFeeSchedule, ...]:
         return self.accounts_service.fees(account)
 
-    def market_profile(self, account: AccountBookRef, market: object, *, at: datetime | None = None, refresh: bool = False):
-        return self.accounts_service.market_profile(account, market, at=at, refresh=refresh)  # type: ignore[arg-type]
+    def market_profile(self, account: AccountSegment, market: MarketRef, *, at: datetime | None = None, refresh: bool = False) -> AccountMarketProfile | None:
+        return self.accounts_service.market_profile(account, market, at=at, refresh=refresh)
 
-    def update_market_profile(self, profile: object) -> None:
-        self.accounts_service.update_market_profile(profile)  # type: ignore[arg-type]
+    def update_market_profile(self, profile: AccountMarketProfile) -> None:
+        self.accounts_service.update_market_profile(profile)
 
-    def market_profiles(self, account: AccountBookRef | None = None):
+    def market_profiles(self, account: AccountSegment | None = None):
         return self.accounts_service.market_profiles(account)
 
-    def snapshot(self, account: AccountBookRef | None = None) -> AccountSnapshot | None:
+    def snapshot(self, account: AccountSegment | None = None) -> AccountSnapshot | None:
         context = self._context_for(account)
         if context is None:
             return None
-        if context.book != self.account.book:
-            return self.accounts_service.snapshot(context.book) or AccountSnapshot(context, balances=(), observed_at=None, source=AccountSource.VENUE)
-        return self.accounts_service.snapshot(context.book)
+        if context.segment != self.account.segment:
+            return self.accounts_service.snapshot(context.segment) or AccountSnapshot(context, balances=(), observed_at=None, source=AccountSource.VENUE)
+        return self.accounts_service.snapshot(context.segment)
 
-    def state(self, account: AccountBookRef | None = None) -> AccountState | None:
+    def state(self, account: AccountSegment | None = None, *, max_snapshot_age_seconds: int | None = None, now: datetime | None = None) -> AccountState | None:
         context = self._context_for(account)
         if context is None:
             return None
-        if context.book != self.account.book:
-            snapshot = self.accounts_service.snapshot(context.book)
+        if context.segment != self.account.segment:
+            snapshot = self.accounts_service.snapshot(context.segment)
             if snapshot is not None:
-                return derive_account_state(context, ledger=self.ledger, venue=snapshot)
+                return derive_account_state(context, ledger=self.ledger, venue=snapshot, max_snapshot_age_seconds=max_snapshot_age_seconds, now=now)
             return AccountState(context, (), (), (), (), None, AccountSource.VENUE)
-        return derive_account_state(self.account, ledger=self.ledger, venue=self.accounts_service.snapshot(context.book))
+        return derive_account_state(self.account, ledger=self.ledger, venue=self.accounts_service.snapshot(context.segment), max_snapshot_age_seconds=max_snapshot_age_seconds, now=now)
 
     def update_snapshot(self, snapshot: AccountSnapshot) -> None:
         if snapshot.context not in self.accounts():
@@ -230,30 +231,45 @@ class LiveAccountService:
 
     def read(
         self,
-        account: AccountBookRef | None = None,
+        account: AccountSegment | None = None,
         *,
         symbol: str | None = None,
         at: datetime | None = None,
-        balance_options: Mapping[str, object] | None = None,
-        order_options: Mapping[str, object] | None = None,
         fetch_orders: bool = True,
     ):
         context = self._context_for(account)
         if context is None:
             raise RuntimeError("account is not configured")
-        broker = self._broker_for(context.book)
+        broker = self._broker_for(context.segment)
         if broker is None:
-            raise RuntimeError(f"live account service requires a broker integration for account: {context.book.value}")
-        route = self._route(context.book)
+            raise RuntimeError(f"live account service requires a broker integration for account: {context.segment.value}")
+        route = self._route(context.segment)
         result = AccountReadService(broker).read(
             context,
             symbol=symbol,
             at=at,
-            options={**dict(route.balance_params), **dict(route.order_params), **dict(balance_options or {}), **dict(order_options or {})},
             fetch_orders=fetch_orders,
         )
         self.update_snapshot(result.snapshot)
         return result
+
+    def query(self, request: AccountQueryRequest) -> AccountQueryResult:
+        context = self._context_for(request.account)
+        if context is None:
+            raise ValueError(f"account is not configured: {request.account}")
+        return self.accounts_service.query(request)
+
+    def refresh_account(self, request: AccountRefreshRequest) -> AccountRefreshResult:
+        context = self._context_for(request.account)
+        if context is None:
+            raise ValueError(f"account is not configured: {request.account}")
+        result = self.read(
+            context.segment,
+            symbol=request.symbol,
+            at=request.at,
+            fetch_orders=request.fetch_orders,
+        )
+        return AccountRefreshResult(result)
 
     def refresh(self, *, observed_at: datetime | None = None) -> AccountSnapshot:
         snapshots = self.refresh_all(observed_at=observed_at)
@@ -267,20 +283,19 @@ class LiveAccountService:
         at = observed_at or datetime.now(timezone.utc)
         snapshots: list[AccountSnapshot] = []
         for context in self.accounts():
-            broker = self._broker_for(context.book)
+            broker = self._broker_for(context.segment)
             if broker is None:
-                raise RuntimeError(f"live account service requires a broker integration for account: {context.book.value}")
-            route = self._route(context.book)
+                raise RuntimeError(f"live account service requires a broker integration for account: {context.segment.value}")
+            route = self._route(context.segment)
             try:
                 result = AccountReadService(broker).read(
                     context,
                     symbol=self.open_order_symbols[0] if len(self.open_order_symbols) == 1 and route.can_trade else None,
                     at=at,
-                    options={**dict(route.balance_params), **dict(route.order_params), **self.balance_params, **self.open_order_params},
                     fetch_orders=route.can_trade,
                 )
             except Exception as error:
-                key = self._connection_key("broker", context.book)
+                key = self._connection_key("broker", context.segment)
                 self._record_connection_error(key, error)
                 self._reconnect(key)
                 raise
@@ -288,13 +303,13 @@ class LiveAccountService:
             snapshots.append(result.snapshot)
         return tuple(snapshots)
 
-    def _route(self, account: AccountBookRef) -> AccountBookRoute:
+    def _route(self, account: AccountSegment) -> AccountSegmentRoute:
         for route in self._routes:
-            if route.book == account:
+            if route.segment == account:
                 return route
-        return account_book_route(account)
+        return account_segment_route(account)
 
-    def _broker_for(self, account: AccountBookRef) -> object | None:
+    def _broker_for(self, account: AccountSegment) -> object | None:
         if self.gateway_resolver is None:
             return self.broker
         if self.connections is not None:
@@ -305,7 +320,7 @@ class LiveAccountService:
             )
         return self.gateway_resolver.resolve_account_reader(account) or self.broker
 
-    def _stream_for(self, account: AccountBookRef) -> object | None:
+    def _stream_for(self, account: AccountSegment) -> object | None:
         if self.connections is not None:
             return self.connections.resolve(
                 self._connection_key("private_stream", account),
@@ -316,7 +331,7 @@ class LiveAccountService:
             return self.gateway_resolver.resolve_private_stream(account) or self.stream
         return self.stream
 
-    def _connection_key(self, role: str, account: AccountBookRef) -> str:
+    def _connection_key(self, role: str, account: AccountSegment) -> str:
         return f"live.{role}.{account.value}"
 
     def _record_connection_error(self, key: str, error: Exception) -> None:
@@ -336,13 +351,13 @@ class LiveAccountService:
         self._sequence += 1
         return Message(topic=f"system.{kind}", payload=AccountIncident(kind, str(error), {"raw": dict(raw)}), published_at=at or datetime.now(timezone.utc), producer="account.service", producer_sequence=self._sequence)
 
-    def _context_for(self, account: AccountBookRef | None) -> AccountContext | None:
+    def _context_for(self, account: AccountSegment | None) -> AccountRuntimeContext | None:
         if account is None:
             return self.account
-        if account == self.account.book:
+        if account == self.account.segment:
             return self.account
         for context in self.accounts():
-            if context.book == account:
+            if context.segment == account:
                 return context
         return None
 

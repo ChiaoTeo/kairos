@@ -3,12 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping
 
-from kairospy.domain.account import AccountBookKind, AccountBookRef
+from kairospy.domain.account import AccountModel, AccountSegment, ProductFamily
 
 
 @dataclass(frozen=True, slots=True)
-class AccountBookRoute:
-    book: AccountBookRef
+class AccountSegmentRoute:
+    segment: AccountSegment
     balance_params: Mapping[str, object]
     order_params: Mapping[str, object]
     can_trade: bool
@@ -18,76 +18,79 @@ class AccountBookRoute:
 class AccountCapabilityPolicy:
     broker: str | None = None
 
-    def can_trade(self, book: AccountBookRef | str) -> bool:
-        kind = str(book.book) if isinstance(book, AccountBookRef) else str(book)
+    def can_trade(self, segment: AccountSegment | str) -> bool:
+        kind = _segment_model(segment)
         return _can_trade(kind, broker=_broker_key(self.broker) if self.broker is not None else None)
 
 
 @dataclass(frozen=True, slots=True)
-class AccountBookRoutingService:
+class AccountSegmentRoutingService:
     broker: str | None = None
     base_params: Mapping[str, object] | None = None
 
     def route(
         self,
-        book: AccountBookRef,
+        segment: AccountSegment,
         *,
         broker: str | None = None,
         base_params: Mapping[str, object] | None = None,
-    ) -> AccountBookRoute:
-        broker_key = _broker_key(broker or self.broker or str(book.broker))
+    ) -> AccountSegmentRoute:
+        broker_key = _broker_key(broker or self.broker or str(segment.broker))
         params = dict(self.base_params or {})
         params.update(dict(base_params or {}))
-        return AccountBookRoute(
-            book,
+        return AccountSegmentRoute(
+            segment,
             balance_params=params,
             order_params=dict(params),
-            can_trade=AccountCapabilityPolicy(broker_key).can_trade(book),
+            can_trade=AccountCapabilityPolicy(broker_key).can_trade(segment),
         )
 
 
-def account_book_route(
-    book: AccountBookRef,
+def account_segment_route(
+    segment: AccountSegment,
     *,
     broker: str | None = None,
     base_params: Mapping[str, object] | None = None,
-) -> AccountBookRoute:
-    return AccountBookRoutingService(broker=broker, base_params=base_params).route(book)
+) -> AccountSegmentRoute:
+    return AccountSegmentRoutingService(broker=broker, base_params=base_params).route(segment)
 
 
 def _normalize_kind(kind: str) -> str:
     value = kind.strip().lower()
     aliases = {
-        "spot": AccountBookKind.SPOT.value,
-        "fund": AccountBookKind.FUNDING.value,
-        "funding": AccountBookKind.FUNDING.value,
-        "equity": AccountBookKind.EQUITY.value,
-        "stocks": AccountBookKind.EQUITY.value,
-        "stock": AccountBookKind.EQUITY.value,
-        "earn": AccountBookKind.EARN.value,
+        "spot": ProductFamily.SPOT.value,
+        # Equity is an asset type; a cash equity account uses SPOT.
+        "equity": ProductFamily.SPOT.value,
+        "stocks": ProductFamily.SPOT.value,
+        "stock": ProductFamily.SPOT.value,
         "swap": "swap",
         "perp": "perp",
         "perpetual": "perp",
         "future": "future",
-        "futures": AccountBookKind.USD_M_FUTURES.value,
-        "usd_m": AccountBookKind.USD_M_FUTURES.value,
-        "usdm": AccountBookKind.USD_M_FUTURES.value,
-        "usd_m_futures": AccountBookKind.USD_M_FUTURES.value,
-        "coin_m": AccountBookKind.COIN_M_FUTURES.value,
-        "coinm": AccountBookKind.COIN_M_FUTURES.value,
-        "coin_m_futures": AccountBookKind.COIN_M_FUTURES.value,
-        "margin": AccountBookKind.CROSS_MARGIN.value,
-        "cross_margin": AccountBookKind.CROSS_MARGIN.value,
-        "isolated_margin": AccountBookKind.ISOLATED_MARGIN.value,
+        "futures": ProductFamily.USD_M_FUTURES.value,
+        "usd_m": ProductFamily.USD_M_FUTURES.value,
+        "usdm": ProductFamily.USD_M_FUTURES.value,
+        "usd_m_futures": ProductFamily.USD_M_FUTURES.value,
+        "coin_m": ProductFamily.COIN_M_FUTURES.value,
+        "coinm": ProductFamily.COIN_M_FUTURES.value,
+        "coin_m_futures": ProductFamily.COIN_M_FUTURES.value,
+        "margin": AccountModel.MARGIN.value,
+        "cross_margin": AccountModel.MARGIN.value,
+        "isolated_margin": AccountModel.MARGIN.value,
     }
-    return aliases.get(value, value or AccountBookKind.DEFAULT.value)
+    return aliases.get(value, value or AccountModel.NO_MARGIN.value)
 
 
 def _can_trade(kind: str, *, broker: str | None = None) -> bool:
     normalized = _normalize_kind(kind)
-    if (broker or "").strip().lower() == "binance" and normalized == AccountBookKind.EQUITY.value:
-        return False
-    return normalized not in {AccountBookKind.FUNDING.value, AccountBookKind.EARN.value}
+    return normalized not in {"funding", "earn"}
+
+
+def _segment_model(segment: AccountSegment | str) -> str:
+    if not isinstance(segment, AccountSegment):
+        return str(segment)
+    value = segment.product_family or segment.model
+    return value.value
 
 
 def _broker_key(value: object) -> str:
@@ -95,8 +98,8 @@ def _broker_key(value: object) -> str:
 
 
 __all__ = [
-    "AccountBookRoute",
-    "AccountBookRoutingService",
+    "AccountSegmentRoute",
+    "AccountSegmentRoutingService",
     "AccountCapabilityPolicy",
-    "account_book_route",
+    "account_segment_route",
 ]

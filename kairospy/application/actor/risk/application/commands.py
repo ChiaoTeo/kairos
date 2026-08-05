@@ -8,7 +8,7 @@ from kairospy.application.usecases.risk.application.budget import (
     RiskAssessmentRequest,
     RiskReservationRequest,
 )
-from kairospy.application.usecases.risk.domain import RiskBudget
+from kairospy.application.usecases.risk.application.budget import RiskBudget
 
 
 @dataclass(frozen=True, slots=True)

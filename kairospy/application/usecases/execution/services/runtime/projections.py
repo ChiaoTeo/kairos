@@ -7,7 +7,7 @@ from kairospy.application.usecases.execution.services.updates import ExecutionUp
 from kairospy.domain.execution import EXECUTION_CURRENT_SCHEMA, EXECUTION_FILLS_SCHEMA, ExecutionCurrentView, ExecutionFillsView
 from kairospy.domain.intent import TradeIntent
 from kairospy.domain.order import OrderState
-from kairospy.domain.account import AccountBookRef
+from kairospy.domain.account import AccountSegment
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,11 +39,11 @@ class TradingRuntimeExecutionService:
     def fills_view(self) -> ExecutionFillsView:
         return _require_execution_projection(self.projection).fills_view()
 
-    def orders(self, account: AccountBookRef | None = None) -> tuple[OrderState, ...]:
+    def orders(self, account: AccountSegment | None = None) -> tuple[OrderState, ...]:
         states = _require_execution_projection(self.projection).order_states()
         if account is None:
             return states
-        return tuple(state for state in states if state.request.context.book == account)
+        return tuple(state for state in states if state.request.context.segment == account)
 
     def schemas(self) -> tuple[object, ...]:
         return (EXECUTION_CURRENT_SCHEMA, EXECUTION_FILLS_SCHEMA)
@@ -79,7 +79,7 @@ class RuntimeExecutionService:
     def fills_view(self) -> ExecutionFillsView:
         return _require_trading_execution(self.trading).fills_view()
 
-    def orders(self, account: AccountBookRef | None = None) -> tuple[OrderState, ...]:
+    def orders(self, account: AccountSegment | None = None) -> tuple[OrderState, ...]:
         return _require_trading_execution(self.trading).orders(account)
 
     def schemas(self) -> tuple[object, ...]:

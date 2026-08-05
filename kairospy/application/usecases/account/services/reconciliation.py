@@ -1,39 +1,19 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Protocol
+from dataclasses import dataclass
 
-from kairospy.domain.account import AccountContext, AccountSnapshot, AccountState
+from kairospy.domain.account import AccountRuntimeContext, AccountSnapshot, AccountState
+from kairospy.application.usecases.account.application.reconciliation import AccountDifference, AccountEventFactory, AccountReconciliationResult
+from kairospy.application.usecases.account.protocol import AccountReadPort
 from .read import AccountReadResult, AccountReadService
-
-
-class AccountEventFactory(Protocol):
-    def __call__(self, at: datetime, snapshot: AccountSnapshot) -> object:
-        ...
-
-
-@dataclass(frozen=True, slots=True)
-class AccountDifference:
-    kind: str
-    key: str
-    local: Decimal
-    external: Decimal
-
-
-@dataclass(frozen=True, slots=True)
-class AccountReconciliationResult:
-    read: AccountReadResult
-    differences: tuple[AccountDifference, ...]
-    event: object
 
 
 @dataclass(frozen=True, slots=True)
 class AccountReconciliationService:
-    account: AccountContext
-    reader: object
+    account: AccountRuntimeContext
+    reader: AccountReadPort
     account_event: AccountEventFactory
 
     def reconcile(
@@ -42,8 +22,6 @@ class AccountReconciliationService:
         previous: AccountState | None = None,
         symbol: str | None = None,
         at: datetime | None = None,
-        balance_params: Mapping[str, object] | None = None,
-        order_params: Mapping[str, object] | None = None,
     ) -> AccountReconciliationResult:
         observed_at = at or datetime.now(timezone.utc)
         if observed_at.tzinfo is None:
@@ -52,7 +30,6 @@ class AccountReconciliationService:
             self.account,
             symbol=symbol,
             at=observed_at,
-            options={**dict(balance_params or {}), **dict(order_params or {})},
         )
         differences = (
             ()

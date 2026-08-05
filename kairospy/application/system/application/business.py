@@ -6,7 +6,9 @@ this coordinator. Market/account/projector wiring stays behind this boundary.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -40,6 +42,7 @@ from kairospy.application.actor.market.application.projectors import MarketActor
 from kairospy.application.actor.risk.application import RiskActor
 from kairospy.application.actor.risk.application.projectors import RiskActorProjectors
 from kairospy.application.actor.monitor.application import MonitorActor
+from kairospy.application.actor.notification import NotificationActor
 from kairospy.domain.intent import IntentJournal, TradeIntent
 
 
@@ -65,6 +68,7 @@ class SystemBusinessRuntime:
     message_bus: MessageBus | None = None
     topology: MessageTopology | None = None
     message_policy: MessageDeliveryPolicy | None = None
+    notification_actor: NotificationActor | None = None
     runtime: object | None = None
     _strategy_callbacks_logged: set[str] = field(default_factory=set)
     _pending_async_intents: list[object] = field(default_factory=list)
@@ -87,6 +91,8 @@ class SystemBusinessRuntime:
     def bind_runtime(self, runtime: LaunchRuntimeSession) -> None:
         self.runtime = runtime
         self.output.publish_started(runtime.views)
+        if self.notification_actor is not None:
+            self.notification_actor.bind_views(runtime.views)
 
     async def start_actors(self) -> None:
         if self.actor_supervisor is not None:
@@ -150,6 +156,10 @@ class SystemBusinessRuntime:
             await self.actor_supervisor.dispatch(event)
         if self.topology is not None:
             await self.topology.dispatch(event)
+        if self.notification_actor is not None:
+            # The actor only enqueues here; external HTTP delivery runs in its
+            # own worker and cannot hold up business event processing.
+            await self.notification_actor.handle(event)
         try:
             return await self._process_runtime_event_async(runtime, event)
         finally:
@@ -323,7 +333,42 @@ class SystemApplication:
         if execution_runtime is not None and hasattr(execution_runtime, "risk"):
             execution_runtime.risk = None
         execution_source = getattr(components, "execution", None)
+        health_sequence = 0
+
+        def publish_connection_health(health: object) -> None:
+            nonlocal health_sequence
+            output.publish_connection_health(health)
+            if message_bus is None:
+                return
+            health_sequence += 1
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            loop.create_task(
+                message_bus.publish(
+                    Message(
+                        "connection.health",
+                        health,
+                        datetime.now(timezone.utc),
+                        "system.connection",
+                        health_sequence,
+                    )
+                )
+            )
         monitor_actor = None if message_bus is None else MonitorActor(strategy_id=strategy_id, bus=message_bus)
+        notification_application = getattr(resources, "notifications", None)
+        notification_settings_value = getattr(resources, "notification_settings", None)
+        notification_actor = (
+            None
+            if message_bus is None or notification_application is None
+            else NotificationActor(
+                notification_application,
+                bus=message_bus,
+                queue_size=int(getattr(notification_settings_value, "queue_size", 256)),
+                summary_interval_seconds=getattr(notification_settings_value, "summary_interval_seconds", None),
+            )
+        )
         set_market_reference = getattr(execution_source, "set_market_reference", None)
         if callable(set_market_reference):
             set_market_reference(reference)
@@ -332,7 +377,7 @@ class SystemApplication:
             message_bus,
             execution_source=execution_source,
             connections=getattr(resources, "connection_scope", None),
-            publish_connection_health=lambda health: output.publish_connection_health(health),
+            publish_connection_health=publish_connection_health,
         )
         intents = account_owner.intents
         capabilities = compose_account_capabilities(
@@ -368,7 +413,7 @@ class SystemApplication:
                 reference=reference,
                 reference_poll_interval_seconds=poll_interval,
                 connections=getattr(resources, "connection_scope", None),
-                publish_connection_health=lambda health: output.publish_connection_health(health),
+                publish_connection_health=publish_connection_health,
                 projectors=MarketActorProjectors(market=market_service, reference=reference),
             )
         )
@@ -381,17 +426,18 @@ class SystemApplication:
         )
         account_owner.account_application = capabilities.account_application
         account_owner.execution_application = capabilities.execution_application
+        account_owner.account_view = capabilities.account
         account_owner.projectors = AccountActorProjectors(
             strategy_id=strategy_id,
             intents=intents,
-            account=capabilities.account,
+            account=account_owner if capabilities.account is not None else None,
             execution=capabilities.execution,
         )
         if monitor_actor is not None:
-            monitor_actor.bind_actor_sources(tuple(actor for actor in (market_actor, risk_actor, account_owner) if actor is not None))
+            monitor_actor.bind_actor_sources(tuple(actor for actor in (market_actor, risk_actor, account_owner, notification_actor) if actor is not None))
         # AccountActor awaits RiskActor for reservation decisions, so the
         # dependency is started before the account event loops.
-        business_actors = tuple(actor for actor in (market_actor, risk_actor, account_owner, monitor_actor) if actor is not None)
+        business_actors = tuple(actor for actor in (market_actor, risk_actor, account_owner, monitor_actor, notification_actor) if actor is not None)
         output = MonitorOutputCoordinator(actors=business_actors, monitor_output=artifact_projector)
         actor_supervisor = BusinessActorSupervisor(business_actors, monitor=monitor_actor)
         topology = MessageTopology()
@@ -427,6 +473,7 @@ class SystemApplication:
             message_bus=message_bus,  # type: ignore[arg-type]
             topology=topology,
             message_policy=message_policy,
+            notification_actor=notification_actor,
         )
 
 

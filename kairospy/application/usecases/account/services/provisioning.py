@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from kairospy.domain.account import AccountBookKind, AccountBookRef, AccountCapability, AccountFeeSchedule
+from kairospy.domain.account import AccountModel, AccountSegment, AccountCapability, AccountFeeSchedule
 
 from kairospy.application.usecases.account.domain.routing import AccountCapabilityPolicy
 
@@ -12,28 +12,27 @@ from kairospy.application.usecases.account.domain.routing import AccountCapabili
 class AccountProvisioningService:
     def capability(
         self,
-        book: AccountBookRef,
+        segment: AccountSegment,
         *,
         trade_enabled: bool = True,
         has_trade_credential: bool = True,
     ) -> AccountCapability:
-        kind = str(book.book)
-        can_trade = trade_enabled and has_trade_credential and AccountCapabilityPolicy(str(book.broker)).can_trade(book)
+        can_trade = trade_enabled and has_trade_credential and AccountCapabilityPolicy(str(segment.broker)).can_trade(segment)
         return AccountCapability(
-            book,
+            segment,
             can_trade=can_trade,
-            can_hold_cash=True,
-            can_hold_position=kind not in {AccountBookKind.FUNDING.value, AccountBookKind.EARN.value},
-            can_borrow=kind in {AccountBookKind.CROSS_MARGIN.value, AccountBookKind.ISOLATED_MARGIN.value},
+            can_hold_assets=True,
+            can_hold_position=segment.product_family is not None,
+            can_borrow=segment.model in {AccountModel.MARGIN, AccountModel.CONTRACT, AccountModel.CONTRACT_UNIFIED, AccountModel.UNIFIED, AccountModel.PORTFOLIO_MARGIN},
         )
 
     def fee_schedule(
         self,
-        book: AccountBookRef,
+        segment: AccountSegment,
         *,
         fee_rate: Decimal,
     ) -> AccountFeeSchedule:
-        return AccountFeeSchedule(book, maker=fee_rate, taker=fee_rate)
+        return AccountFeeSchedule(segment, maker=fee_rate, taker=fee_rate)
 
 
 __all__ = ["AccountProvisioningService"]

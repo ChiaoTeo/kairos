@@ -90,7 +90,7 @@ def _equity_row(account_view: object, *, launch_id: str | None, mode: str | None
         "mode": mode,
         "time": getattr(account_view, "last_event_time", None),
         "equity": getattr(account_view, "equity", None),
-        "cash": getattr(account_view, "cash", None),
+        "selected_balance": getattr(account_view, "selected_balance", None),
         "net_profit": getattr(account_view, "net_profit", None),
         "total_return": getattr(account_view, "total_return", None),
         "positions": getattr(account_view, "positions", ()),

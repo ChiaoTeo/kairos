@@ -1,13 +1,13 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.domain.account import AccountBookKind, AccountBookRef, AccountContext, Environment
+from kairospy.domain.account import AccountModel, AccountSegment, AccountRuntimeContext, Environment, ProductFamily
 from kairospy.domain.reference import MarketRef
 from kairospy.domain.order import OrderSide, OrderType
 from kairospy.infrastructure.integrations.application.account import ConnectionAccountMarketProfileRequest, ConnectionAccountReadRequest
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec
 from kairospy.infrastructure.integrations.application.execution import ConnectionOrderSubmissionRequest
-from kairospy.infrastructure.integrations.domain import AccessScope, BrokerId, BrokerRef, IntegrationCapability, IntegrationRoute, ProductFamily, TransportKind
+from kairospy.infrastructure.integrations.domain import AccessScope, BrokerId, BrokerRef, IntegrationCapability, IntegrationRoute, ProductFamily as IntegrationProductFamily, TransportKind
 from kairospy.infrastructure.integrations.services.gateways.ccxt.private import CcxtAccountConnection, CcxtExecutionConnection
 
 
@@ -67,7 +67,7 @@ def _spec(capability, broker=BrokerId.BINANCE):
     return IntegrationConnectionSpec(
         connection_id="test.ccxt.futures",
         route=IntegrationRoute(broker=BrokerRef(broker)),
-        product=ProductFamily.USD_M_FUTURES,
+        product=IntegrationProductFamily.USD_M_FUTURES,
         access=AccessScope.PRIVATE,
         transport=TransportKind.REST,
         capability=capability,
@@ -76,7 +76,7 @@ def _spec(capability, broker=BrokerId.BINANCE):
 
 
 def test_ccxt_account_connection_accepts_injected_exchange() -> None:
-    account = AccountContext(AccountBookRef("binance", "main", AccountBookKind.USD_M_FUTURES), Environment.PAPER)
+    account = AccountRuntimeContext(AccountSegment("binance", "main", AccountModel.CONTRACT, ProductFamily.USD_M_FUTURES), Environment.PAPER)
     connection = CcxtAccountConnection(_spec(IntegrationCapability.ACCOUNT_READ), exchange=FakeExchange())
     snapshot = connection.read_account(ConnectionAccountReadRequest(account, datetime.now(timezone.utc), symbol="BTC/USDT:USDT")).snapshot
     assert snapshot.balances[0].total == Decimal("105")
@@ -84,11 +84,30 @@ def test_ccxt_account_connection_accepts_injected_exchange() -> None:
     assert snapshot.open_orders[0].order_id == "open-1"
 
 
+def test_ccxt_futures_snapshot_exposes_each_collateral_asset() -> None:
+    class MultiCollateralExchange(FakeExchange):
+        def fetch_balance(self):
+            return {
+                "free": {"USDT": "100", "USDC": "50"},
+                "used": {"USDT": "5", "USDC": "2"},
+                "total": {"USDT": "105", "USDC": "52"},
+            }
+
+    account = AccountRuntimeContext(AccountSegment("binance", "main", AccountModel.CONTRACT, ProductFamily.USD_M_FUTURES), Environment.PAPER)
+    connection = CcxtAccountConnection(_spec(IntegrationCapability.ACCOUNT_READ), exchange=MultiCollateralExchange())
+    snapshot = connection.read_account(ConnectionAccountReadRequest(account, datetime.now(timezone.utc), symbol="BTC/USDT:USDT")).snapshot
+
+    assert [(item.asset, item.wallet, item.available) for item in snapshot.collaterals] == [
+        ("USDC", Decimal("52"), Decimal("50")),
+        ("USDT", Decimal("105"), Decimal("100")),
+    ]
+
+
 def test_ccxt_execution_connection_accepts_injected_exchange() -> None:
     fake = FakeExchange()
     connection = CcxtExecutionConnection(_spec(IntegrationCapability.ORDER_ENTRY), exchange=fake)
     result = connection.submit(ConnectionOrderSubmissionRequest(
-        AccountBookRef("binance", "main", AccountBookKind.USD_M_FUTURES),
+        AccountSegment("binance", "main", AccountModel.CONTRACT, ProductFamily.USD_M_FUTURES),
         "BTC/USDT:USDT",
         OrderSide.BUY,
         OrderType.LIMIT,
@@ -100,7 +119,7 @@ def test_ccxt_execution_connection_accepts_injected_exchange() -> None:
 
 
 def test_ccxt_account_market_profile_combines_account_product_and_discount_rules() -> None:
-    account = AccountContext(AccountBookRef("binance", "main", AccountBookKind.USD_M_FUTURES), Environment.PAPER)
+    account = AccountRuntimeContext(AccountSegment("binance", "main", AccountModel.CONTRACT, ProductFamily.USD_M_FUTURES), Environment.PAPER)
     market = MarketRef.ephemeral(venue="binance", market="usd_m_futures", source_symbol="BTC/USDT:USDT")
     profile = CcxtAccountConnection(_spec(IntegrationCapability.ACCOUNT_MARKET_PROFILE_READ), exchange=FakeExchange()).read_market_profile(
         ConnectionAccountMarketProfileRequest(account, market, datetime.now(timezone.utc))
@@ -116,12 +135,12 @@ def test_ccxt_account_market_profile_combines_account_product_and_discount_rules
 
 
 def test_okx_account_config_and_instrument_fee_are_read_from_private_api() -> None:
-    account = AccountContext(AccountBookRef("okx", "main", AccountBookKind.USD_M_FUTURES), Environment.PAPER)
+    account = AccountRuntimeContext(AccountSegment("okx", "main", AccountModel.CONTRACT, ProductFamily.USD_M_FUTURES), Environment.PAPER)
     market = MarketRef.ephemeral(venue="okx", market="usd_m_futures", source_symbol="BTC/USDT:USDT")
     profile = CcxtAccountConnection(_spec(IntegrationCapability.ACCOUNT_MARKET_PROFILE_READ, BrokerId.OKX), exchange=FakeOkxExchange()).read_market_profile(
         ConnectionAccountMarketProfileRequest(account, market, datetime.now(timezone.utc))
     ).profile
-    assert profile.account_type == "multi_currency_margin"
+    assert profile.account_type is AccountModel.UNIFIED
     assert profile.position_mode == "long_short_mode"
     assert profile.fee is not None
     assert profile.fee.maker == Decimal("-0.0001")
@@ -129,7 +148,7 @@ def test_okx_account_config_and_instrument_fee_are_read_from_private_api() -> No
 
 
 def test_hyperliquid_user_fees_use_wallet_address_and_return_effective_rates() -> None:
-    account = AccountContext(AccountBookRef("hyperliquid", "main", AccountBookKind.USD_M_FUTURES), Environment.PAPER)
+    account = AccountRuntimeContext(AccountSegment("hyperliquid", "main", AccountModel.CONTRACT, ProductFamily.USD_M_FUTURES), Environment.PAPER)
     market = MarketRef.ephemeral(venue="hyperliquid", market="usd_m_futures", source_symbol="BTC/USDC:USDC")
     profile = CcxtAccountConnection(_spec(IntegrationCapability.ACCOUNT_MARKET_PROFILE_READ, BrokerId("hyperliquid")), exchange=FakeHyperliquidExchange()).read_market_profile(
         ConnectionAccountMarketProfileRequest(account, market, datetime.now(timezone.utc))

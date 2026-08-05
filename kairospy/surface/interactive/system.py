@@ -94,7 +94,7 @@ def parse_system_command(line: str) -> dict[str, object]:
             raise ValueError("order target-position requires instrument and quantity")
         args = {
             "account": values.pop("account", None),
-            "book": values.pop("book", None),
+            "account_segment": values.pop("account_segment", None),
             "instrument": instrument,
             "intent_id": values.pop("intent-id", values.pop("intent_id", None)),
             "limit_price": values.pop("limit-price", values.pop("limit_price", None)),
@@ -146,7 +146,7 @@ def system_help_text() -> str:
             "account current [ACCOUNT|--account ACCOUNT]",
             "account balance CURRENCY [--account ACCOUNT]",
             "account position INSTRUMENT [--account ACCOUNT]",
-            "order target-position INSTRUMENT QUANTITY [--account ACCOUNT] [--book BOOK] [--limit-price PRICE]",
+            "order target-position INSTRUMENT QUANTITY [--account ACCOUNT] [--account-scope SCOPE] [--limit-price PRICE]",
             "command CLI_COMMAND '{\"arg\":\"value\"}'",
             "exit-system",
         ]
@@ -248,7 +248,7 @@ def _render_position(position: object, *, title: str) -> str:
 
 def _account_summary_rows(view: object) -> list[tuple[str, object]]:
     rows: list[tuple[str, object]] = []
-    for name in ("cash", "equity", "initial_equity", "net_profit", "total_return", "event_count", "last_event_time", "stale"):
+    for name in ("selected_balance", "equity", "initial_equity", "net_profit", "total_return", "event_count", "last_event_time", "stale"):
         value = _field(view, name)
         if value is not None:
             rows.append((name, _cell(value)))

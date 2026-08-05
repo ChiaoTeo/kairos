@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from kairospy.domain.account import AccountContext, AccountMarketProfile, AccountSnapshot, OpenOrderSnapshot
+from kairospy.domain.account import AccountRuntimeContext, AccountMarketProfile, AccountSnapshot, OpenOrderSnapshot
 from kairospy.domain.reference import MarketRef
 from kairospy.domain.execution import ExecutionUpdate
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnection
@@ -13,7 +13,7 @@ from kairospy.infrastructure.integrations.application.connections import Integra
 
 @dataclass(frozen=True, slots=True)
 class ConnectionAccountReadRequest:
-    context: AccountContext
+    context: AccountRuntimeContext
     observed_at: datetime
     symbol: str | None = None
     fetch_orders: bool = True
@@ -26,7 +26,7 @@ class ConnectionAccountReadData:
 
 @dataclass(frozen=True, slots=True)
 class ConnectionAccountMarketProfileRequest:
-    context: AccountContext
+    context: AccountRuntimeContext
     market: MarketRef
     observed_at: datetime
 
@@ -38,7 +38,7 @@ class ConnectionAccountMarketProfileData:
 
 @dataclass(frozen=True, slots=True)
 class ConnectionAccountStreamRequest:
-    context: AccountContext
+    context: AccountRuntimeContext
     symbol: str | None = None
     open_orders: tuple[OpenOrderSnapshot, ...] = ()
 

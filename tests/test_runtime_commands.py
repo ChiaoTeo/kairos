@@ -22,8 +22,7 @@ from kairospy.application.usecases.strategy.protocol import StrategySubscription
 from kairospy.application.usecases.market.application.ingestion import MarketIngestionApplicationService
 from kairospy.application.usecases.market.application.query import MarketDataQueryApplicationService
 from kairospy.application.usecases.market.application.subscriptions import MarketSubscriptionApplicationService
-from kairospy.application.usecases.market.domain.subscriptions import MarketSubscriptionService
-from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionGroupSpec, MarketDataSubscriptionSpec
+from kairospy.application.usecases.market.application.requests import MarketDataSubscriptionGroupSpec, MarketDataSubscriptionSpec
 from kairospy.domain.market import Quote
 from kairospy.domain.reference import MarketRef
 from kairospy.domain.intent import IntentJournal, target_position_intent
@@ -110,17 +109,7 @@ def test_runtime_event_can_correlate_a_system_transition_to_a_command() -> None:
 
 
 def test_system_interaction_accepts_market_registration_and_deduplicates_command() -> None:
-    class Market:
-        def __init__(self) -> None:
-            self.subscriptions = MarketSubscriptionService()
-
-        def subscribe(self, spec: MarketDataSubscriptionSpec):
-            return self.subscriptions.subscribe(spec)
-
-        def unsubscribe(self, subscription):
-            self.subscriptions.unsubscribe(subscription)
-
-    market = Market()
+    market = MarketApplication()
     interaction = MarketActor(None, None, market_service=market)
     command = RuntimeCommand(
         "market.subscribe",
@@ -137,7 +126,7 @@ def test_system_interaction_accepts_market_registration_and_deduplicates_command
     assert first is second
     assert first.status is RuntimeCommandStatus.ACCEPTED
     assert first.result["subscription_id"]
-    assert len(market.subscriptions.subscriptions()) == 1
+    assert len(market.subscriptions()) == 1
 
     interaction.apply_event(
         Message(
@@ -169,7 +158,7 @@ def test_system_interaction_accepts_a_batch_subscription_selection() -> None:
 
     assert result.accepted
     assert len(result.result["subscription_ids"]) == 2
-    assert len(market.subscriptions.subscriptions()) == 2
+    assert len(market.subscriptions()) == 2
 
 
 def test_system_translates_strategy_subscription_intent_inside_biz() -> None:
@@ -186,17 +175,13 @@ def test_system_translates_strategy_subscription_intent_inside_biz() -> None:
     result = interaction.call(RuntimeCommand("market.subscribe", request))
 
     assert result.accepted
-    subscriptions = market.subscriptions.subscriptions()
+    subscriptions = market.subscriptions()
     assert len(subscriptions) == 1
     assert subscriptions[0].spec.market.source_symbol == "BTC/USDT"
 
 
 def test_system_call_is_the_primary_command_entrypoint() -> None:
-    class Market:
-        def __init__(self) -> None:
-            self.subscriptions = MarketSubscriptionService()
-
-    service = MarketActor(None, None, market_service=Market())
+    service = MarketActor(None, None, market_service=MarketApplication())
     handle = service.call(RuntimeCommand("unsupported.command"))
 
     assert handle.status is RuntimeCommandStatus.REJECTED
@@ -219,22 +204,20 @@ def test_system_policy_can_defer_or_ignore_a_command() -> None:
     assert ignored.status is RuntimeCommandStatus.IGNORED
 
 
-def test_market_service_exposes_capabilities_without_flattening_them() -> None:
+def test_market_application_exposes_business_capabilities_without_internal_services() -> None:
     market = MarketApplication()
 
-    assert isinstance(market.subscriptions, MarketSubscriptionApplicationService)
-    assert isinstance(market.queries, MarketDataQueryApplicationService)
-    assert isinstance(market.ingestion, MarketIngestionApplicationService)
-    assert not hasattr(market, "subscribe")
-    assert not hasattr(market, "download")
+    assert not hasattr(market, "subscriptions_service")
+    assert hasattr(market, "subscribe")
+    assert hasattr(market, "download")
 
-    subscription = market.subscriptions.subscribe(
+    subscription = market.subscribe(
         MarketDataSubscriptionSpec(
             MarketRef.ephemeral(venue="binance", market="spot", source_symbol="AAPL"),
             (Quote,),
         )
     )
-    assert market.subscriptions.subscriptions() == (subscription,)
+    assert market.subscriptions() == (subscription,)
 
 
 def test_runtime_routes_each_message_through_system_callback_before_strategy() -> None:

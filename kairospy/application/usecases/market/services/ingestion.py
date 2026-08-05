@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from kairospy.application.support.messaging import Message
 
 from kairospy.domain.market import (
     Bar,
@@ -19,16 +19,8 @@ from kairospy.domain.market import (
 from .sources import market_event_from_row, parse_event_time
 
 
-class MarketMessage(Protocol):
-    domain: object
-    kind: object
-    time: datetime
-    sequence: int
-    payload: object
-
-
 class MarketIngestionService:
-    def event_from_message(self, message: MarketMessage) -> MarketEvent | None:
+    def event_from_message(self, message: Message) -> MarketEvent | None:
         if str(message.domain) not in {"market", "data"}:
             return None
         payload = message.payload
@@ -74,4 +66,4 @@ class MarketIngestionService:
         return parse_event_time(value)
 
 
-__all__ = ["MarketMessage", "MarketIngestionService"]
+__all__ = ["MarketIngestionService"]

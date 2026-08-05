@@ -9,13 +9,14 @@ from typing import Mapping
 
 from kairospy.application.actor.support.base import BusinessActor
 from kairospy.application.support.messaging import Message, MessageBus
+from kairospy.application.usecases.reference.application.component import ReferenceApplication
 
 
 _LOGGER = logging.getLogger("kairospy.actor.reference")
 
 
 class ReferenceActor(BusinessActor):
-    def __init__(self, reference: object, bus: MessageBus, *, poll_interval_seconds: float = 300.0) -> None:
+    def __init__(self, reference: ReferenceApplication, bus: MessageBus, *, poll_interval_seconds: float = 300.0) -> None:
         super().__init__("reference")
         if poll_interval_seconds <= 0:
             raise ValueError("reference poll interval must be positive")

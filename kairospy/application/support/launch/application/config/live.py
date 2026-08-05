@@ -7,9 +7,9 @@ from typing import Mapping, Protocol
 
 from kairospy.application.support.launch.application.config.launch import LaunchAccountConfig
 from kairospy.application.support.launch.domain.modes import RuntimeMode
-from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
+from kairospy.application.usecases.market.application.requests import MarketDataSubscriptionSpec
 from kairospy.application.usecases.strategy.protocol import Strategy
-from kairospy.domain.account import AccountBookRef, AccountContext
+from kairospy.domain.account import AccountSegment, AccountRuntimeContext
 from kairospy.application.usecases.market.application.feed import MarketStreamConnection
 
 from kairospy.application.support.launch.application.config.common import (
@@ -34,7 +34,7 @@ class LiveConfigurationError(ValueError):
 
 
 class BrokerFactory(Protocol):
-    def __call__(self, account: AccountBookRef, credential: str | None) -> object:
+    def __call__(self, account: AccountSegment, credential: str | None) -> object:
         ...
 
 
@@ -60,7 +60,7 @@ class LiveLaunchResult(AccountPerformanceMixin):
     runtime: object
     views: object
     intents: object
-    account: AccountContext
+    account: AccountRuntimeContext
     account_view: object | None
     fills: tuple[object, ...] = ()
     trades: tuple[object, ...] = ()
@@ -108,6 +108,7 @@ def configured_live(
     live = _table(launch_config.values.get("live"), "live")
     feeds_config = common_parse_feeds(launch_config.values.get("feeds"), error_type=LiveConfigurationError)
     timeline_config = _table(launch_config.values.get("timeline"), "timeline") if launch_config.values.get("timeline") is not None else {}
+    notifications_config = _table(launch_config.values.get("notifications"), "notifications") if launch_config.values.get("notifications") is not None else {}
     account_ref = launch_config.account_ref or _primary_launch_account_ref(launch_config.launch_accounts)
     account_config = _configured_account(account_ref, account_resolver=account_resolver, venue=None)
     launch_account_configs = _configured_launch_accounts(launch_config.launch_accounts, account_resolver=account_resolver, venue=None)
@@ -143,9 +144,10 @@ def configured_live(
             "strategy": {"params": dict(_strategy_params(launch_config.values))},
             "live": dict(live),
             "feeds": {key: dict(feed.values or {}) for key, feed in feeds_config.items()},
-            "account": {"ref": account_ref, "account_id": account_config.account_id, "venue": venue, "currency": account_config.currency},
-            "accounts": {key: {"ref": value.ref, "index": value.index, "books": list(value.books), "trade": value.trade} for key, value in launch_config.launch_accounts.items()},
+            "account": {"ref": account_ref, "account_id": account_config.account_id, "venue": venue, "initial_balances": dict(account_config.initial_balances)},
+            "accounts": {key: {"ref": value.ref, "index": value.index, "segments": list(value.segments), "trade": value.trade} for key, value in launch_config.launch_accounts.items()},
             "timeline": dict(timeline_config),
+            "notifications": dict(notifications_config),
         },
         launch_directory=state_path.parent,
         state_path=state_path,

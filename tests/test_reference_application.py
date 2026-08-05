@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from kairospy.application.usecases.reference.application.component import ReferenceApplication
-from kairospy.application.usecases.reference.services.builders import catalog_from_market_rows
+from kairospy.application.usecases.reference.application.builders import catalog_from_market_rows
 from kairospy.application.usecases.reference.application.query import ReferenceQuery
+from kairospy.application.usecases.reference.application.requests import ReferenceCatalogRequest
 from kairospy.application.actor.market.application import ReferenceActor
-from kairospy.domain.reference import AssetType, LifecycleEvent, ReferenceCatalog
+from kairospy.domain.reference import AssetType, FinancialProductDefinition, FinancialProductStatus, FinancialProductType, LifecycleEvent, ReferenceCatalog
+from kairospy.domain.reference import AssetId, FinancialProductId, ProviderId
 from kairospy.infrastructure.messaging import InMemoryMessageBus
 
 
@@ -33,7 +36,7 @@ class SnapshotSource:
     def __init__(self, catalog: ReferenceCatalog) -> None:
         self.catalog_value = catalog
 
-    def catalog(self, *, as_of, market=None, params=None) -> ReferenceCatalog:
+    def catalog(self, request: ReferenceCatalogRequest) -> ReferenceCatalog:
         return self.catalog_value
 
 
@@ -46,6 +49,43 @@ def test_reference_application_owns_catalog_and_resolution_capabilities() -> Non
     assert str(asset.asset_id) == "asset:crypto:btc"
     assert app.catalog().maybe_get_asset(asset.asset_id, at) == asset
     assert app.resolver(as_of=at).snapshot() == {}
+
+
+def test_reference_application_owns_versioned_financial_product_definitions() -> None:
+    at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    app = ReferenceApplication(MemoryReferenceStore())
+    product = FinancialProductDefinition(
+        FinancialProductId("financial_product:binance:earn:p-1"),
+        FinancialProductType.SIMPLE_EARN_FLEXIBLE,
+        "USDT Flexible Earn",
+        AssetId("asset:crypto:usdt"),
+        "P-1",
+        provider_id=ProviderId("binance"),
+        apr=Decimal("0.05"),
+        status=FinancialProductStatus.AVAILABLE,
+        effective_from=at,
+    )
+    app.add_financial_product(product)
+    assert app.financial_products(at=at) == (product,)
+    assert app.catalog().snapshot(at=at)["financial_products"][str(product.product_id)] == product
+
+
+def test_reference_bootstrap_merges_financial_product_snapshot() -> None:
+    at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    product = FinancialProductDefinition(
+        FinancialProductId("financial_product:binance:earn:p-locked"),
+        FinancialProductType.SIMPLE_EARN_LOCKED,
+        "USDT Locked Earn",
+        AssetId("asset:crypto:usdt"),
+        "P-LOCKED",
+        provider_id=ProviderId("binance"),
+        lock_period_days=30,
+        effective_from=at,
+    )
+    catalog = ReferenceCatalog(financial_products=(product,))
+    app = ReferenceApplication(MemoryReferenceStore(), source=SnapshotSource(catalog))
+    app.ensure_ready()
+    assert app.catalog().get_financial_product(product.product_id, at) == product
 
 
 def test_reference_events_bootstrap_persist_and_emit_catalog_changes() -> None:

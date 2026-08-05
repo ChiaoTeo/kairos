@@ -4,7 +4,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from time import monotonic, sleep
-from typing import Literal, Mapping, Protocol
+from typing import Literal, Protocol
 
 from kairospy.application.usecases.market.domain.datasets import parse_market_dataset_id
 from kairospy.domain.market import Bar, OrderBookSnapshot, Quote, RateObservation, TradePrint
@@ -12,26 +12,27 @@ from kairospy.domain.market import Bar, OrderBookSnapshot, Quote, RateObservatio
 from .sources import parse_event_time
 from ..domain.specs import MarketDataSpec
 from ..domain.subscriptions import DataSubscription, MarketDataSubscriptionSpec
-from ..protocol import MarketDataReader, MarketDataWriter
+from ..protocol import MarketDataReader, MarketDataWriter, MarketHistoricalClient
+from kairospy.application.usecases.market.application.requests import MarketDataRow, MarketTime
 
 
 BacktestMissingDataAction = Literal["error", "download", "skip"]
 
 
 class RowWriter(Protocol):
-    def __call__(self, rows: Iterable[Mapping[str, object]]) -> None:
+    def __call__(self, rows: Iterable[MarketDataRow]) -> None:
         ...
 
 
 class HistoricalClientFactory(Protocol):
-    def __call__(self, spec: MarketDataSpec) -> object:
+    def __call__(self, spec: MarketDataSpec) -> MarketHistoricalClient:
         ...
 
 
 @dataclass(frozen=True, slots=True)
 class ReplayMarketDataPolicy:
-    start: object
-    end: object
+    start: MarketTime
+    end: MarketTime
     on_missing: BacktestMissingDataAction = "error"
 
     def __post_init__(self) -> None:
@@ -48,7 +49,7 @@ class MarketReplayService:
         *,
         writer: MarketDataWriter | None = None,
         policy: ReplayMarketDataPolicy | None = None,
-        historical_client: object | None = None,
+        historical_client: MarketHistoricalClient | None = None,
         historical_client_factory: HistoricalClientFactory | None = None,
     ) -> None:
         self.reader = reader
@@ -60,14 +61,14 @@ class MarketReplayService:
     def set_historical_client_factory(self, factory: HistoricalClientFactory | None) -> None:
         self.historical_client_factory = factory
 
-    def rows_for_subscriptions(self, subscriptions: Iterable[DataSubscription]) -> tuple[Mapping[str, object], ...]:
+    def rows_for_subscriptions(self, subscriptions: Iterable[DataSubscription]) -> tuple[MarketDataRow, ...]:
         rows = [dict(row) for subscription in subscriptions for row in self.rows_for_subscription(subscription)]
         return tuple(sorted(rows, key=lambda row: parse_event_time(row["time"])))
 
-    def rows_for_subscription(self, subscription: DataSubscription) -> tuple[Mapping[str, object], ...]:
+    def rows_for_subscription(self, subscription: DataSubscription) -> tuple[MarketDataRow, ...]:
         if self.policy is None:
             return ()
-        rows: list[Mapping[str, object]] = []
+        rows: list[MarketDataRow] = []
         missing: list[str] = []
         for spec in specs_from_subscription(subscription.spec, start=self.policy.start, end=self.policy.end):
             resolved = self.reader.resolve(spec)
@@ -89,7 +90,7 @@ class MarketReplayService:
             return tuple(rows)
         return tuple(rows)
 
-    def _historical_client(self, spec: MarketDataSpec) -> object | None:
+    def _historical_client(self, spec: MarketDataSpec) -> MarketHistoricalClient | None:
         if self.historical_client_factory is not None:
             return self.historical_client_factory(spec)
         return self.historical_client
@@ -98,8 +99,8 @@ class MarketReplayService:
 def specs_from_subscription(
     subscription: MarketDataSubscriptionSpec,
     *,
-    start: object,
-    end: object,
+    start: MarketTime,
+    end: MarketTime,
 ) -> tuple[MarketDataSpec, ...]:
     if subscription.dataset_id is not None:
         dataset = parse_market_dataset_id(subscription.dataset_id)
@@ -150,7 +151,7 @@ def kind_from_selector(selector: object) -> str:
     raise ValueError(f"unsupported backtest market selector model: {getattr(model, '__name__', model)!r}")
 
 
-def replay_rows(rows: Iterable[Mapping[str, object]], *, speed: float, write: RowWriter) -> int:
+def replay_rows(rows: Iterable[MarketDataRow], *, speed: float, write: RowWriter) -> int:
     if speed < 0:
         raise ValueError("replay speed cannot be negative")
     previous_time: float | None = None

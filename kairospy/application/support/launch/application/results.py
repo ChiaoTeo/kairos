@@ -19,7 +19,8 @@ def backtest_result(configured: object, resources: object, runtime: LaunchRuntim
     fills = resources.execution.fills
     equity_curve = _equity_curve(runtime)
     trades = closed_trades_from_fills(fills)
-    metrics = MetricsModel().evaluate(equity_curve, trades, initial_equity=account_config.initial_cash)
+    initial_equity = equity_curve[0].equity if equity_curve else None
+    metrics = MetricsModel().evaluate(equity_curve, trades, initial_equity=initial_equity)
     from kairospy.application.support.launch.application.configuration import BacktestLaunchResult
 
     return BacktestLaunchResult(

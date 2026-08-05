@@ -8,8 +8,8 @@ from typing import Protocol
 from kairospy.domain.views import ViewFieldSchema, ViewSchema
 
 from .catalog import ReferenceCatalog
-from .identity import AssetId, InstrumentId, ListingId, MarketId, reference_slug
-from .markets import MarketRef
+from .identity import AssetId, ExchangeId, InstrumentId, ListingId, MarketId, MarketTypeId, reference_slug
+from .markets import MarketRef, SymbolRef
 from .model import Asset, InstrumentDefinition, LifecycleEvent, ListingDefinition, MarketDefinition, MarketStatus
 
 
@@ -20,7 +20,7 @@ class ReferenceViewKeys:
     market_prefix = "reference.market"
 
     @staticmethod
-    def market(market_key: object) -> str:
+    def market(market_key: MarketId | MarketRef | str) -> str:
         return f"{ReferenceViewKeys.market_prefix}.{reference_slug(market_key)}"
 
 
@@ -36,6 +36,7 @@ class ReferenceCatalogSummaryView:
     instrument_count: int = 0
     listing_count: int = 0
     market_count: int = 0
+    financial_product_count: int = 0
     active_market_count: int = 0
     lifecycle_event_count: int = 0
     as_of: datetime | None = None
@@ -44,9 +45,9 @@ class ReferenceCatalogSummaryView:
 @dataclass(frozen=True, slots=True)
 class ReferenceMarketSummary:
     key: str
-    market_id: MarketId | str
-    instrument_id: InstrumentId | str
-    listing_id: ListingId | str
+    market_id: MarketId
+    instrument_id: InstrumentId
+    listing_id: ListingId
     market_key: str
     venue: str
     market: str
@@ -75,9 +76,9 @@ class ReferenceMarketsView:
 class ReferenceLifecycleEventSummary:
     event_type: str
     event_time: datetime
-    instrument_id: InstrumentId | str | None = None
-    listing_id: ListingId | str | None = None
-    market_id: MarketId | str | None = None
+    instrument_id: InstrumentId | None = None
+    listing_id: ListingId | None = None
+    market_id: MarketId | None = None
     venue: str = ""
     source_symbol: str = ""
 
@@ -109,6 +110,7 @@ REFERENCE_CATALOG_SCHEMA = ViewSchema(
         ViewFieldSchema("instrument_count", "known reference instrument count", "runtime state", "reference port"),
         ViewFieldSchema("listing_count", "known reference listing count", "runtime state", "reference port"),
         ViewFieldSchema("market_count", "known reference market count", "runtime state", "reference port"),
+        ViewFieldSchema("financial_product_count", "known investment product count", "runtime state", "reference port"),
         ViewFieldSchema("active_market_count", "active reference market count", "as-of reference state", "reference catalog"),
         ViewFieldSchema("lifecycle_event_count", "known reference lifecycle event count", "runtime state", "reference port"),
         ViewFieldSchema("as_of", "reference catalog as-of time", "as-of", "runtime publish time"),
@@ -172,8 +174,8 @@ class ReferenceViewReader:
     def markets(
         self,
         *,
-        venue: object | None = None,
-        market: object | None = None,
+        venue: ExchangeId | str | None = None,
+        market: MarketTypeId | str | None = None,
         status: MarketStatus | str | None = None,
         active_only: bool = False,
     ) -> ReferenceMarketsView:
@@ -199,19 +201,19 @@ class ReferenceViewReader:
 
     def resolve(
         self,
-        subject: object | MarketRef,
+        subject: SymbolRef | MarketRef | str,
         *,
-        venue: object | None = None,
-        market: object | None = None,
+        venue: ExchangeId | str | None = None,
+        market: MarketTypeId | str | None = None,
     ) -> MarketRef:
         return self.market(subject, venue=venue, market=market).ref
 
     def market(
         self,
-        subject: object | MarketRef,
+        subject: SymbolRef | MarketRef | str,
         *,
-        venue: object | None = None,
-        market: object | None = None,
+        venue: ExchangeId | str | None = None,
+        market: MarketTypeId | str | None = None,
     ) -> ReferenceResolvedMarketView:
         if isinstance(subject, MarketRef):
             value = self.source.get(ReferenceViewKeys.market(subject.market_key), None)
@@ -243,6 +245,7 @@ def reference_catalog_view(
         instrument_count=len(catalog.instruments()),
         listing_count=len(catalog.listings()),
         market_count=len(catalog.markets()),
+        financial_product_count=len(catalog.financial_products()),
         active_market_count=len(active_markets),
         lifecycle_event_count=len(lifecycle_events),
         as_of=as_of,
@@ -318,10 +321,10 @@ def _lifecycle_event_summary(event: LifecycleEvent) -> ReferenceLifecycleEventSu
 
 def _match_market(
     markets: ReferenceMarketsView,
-    subject: object,
+    subject: SymbolRef | MarketRef | str,
     *,
-    venue: object | None,
-    market: object | None,
+    venue: ExchangeId | str | None,
+    market: MarketTypeId | str | None,
 ) -> ReferenceMarketSummary | None:
     subject_text = str(subject).casefold()
     matches = tuple(

@@ -4,27 +4,49 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
+from typing import Protocol
 
 from kairospy.application.actor.market.application.reference import ReferenceActor, reference_poll_interval
 from kairospy.application.actor.support.base import BusinessActor
 from kairospy.application.support.messaging import Message, MessageBus
 from kairospy.application.support.runtime.application.interaction import SystemCallDecision, SystemCallResult
 from kairospy.application.support.runtime.domain.commands import CommandHandle, RuntimeCommand, RuntimeCommandStatus
-from kairospy.application.usecases.market.application.data import DataSubscription, DataSubscriptionGroup, MarketDataSubscriptionGroupSpec, MarketDataSubscriptionSpec
-from kairospy.application.usecases.market.domain.datasets import parse_market_dataset_id
+from kairospy.application.usecases.market.application.requests import DataSubscription, DataSubscriptionGroup, MarketDataSubscriptionGroupSpec, MarketDataSubscriptionSpec, parse_market_dataset_id
 from kairospy.application.usecases.strategy.protocol import StrategySubscriptionGroupRequest, StrategySubscriptionRequest
 from kairospy.domain.reference import MarketResolver
 from kairospy.application.usecases.market.application.component import MarketApplication
+from kairospy.application.usecases.market.application.requests import MarketDataSpec
+from kairospy.application.usecases.reference.application.component import ReferenceApplication
+from kairospy.application.actor.support.connections import ConnectionManager
 
 
 _LOGGER = logging.getLogger("kairospy.actor.market")
 
 
+class MarketRuntime(Protocol):
+    is_finite: bool
+
+    def set_market_service(self, market_service: MarketApplication) -> None: ...
+    def clear_market_service(self) -> None: ...
+    def events(self) -> AsyncIterator[Message]: ...
+    def warmup_events(
+        self,
+        *,
+        stop_requested: Callable[[], bool],
+        progress: Callable[[int, int, MarketDataSpec, str], None],
+        failure: Callable[[MarketDataSpec, Exception], None],
+    ) -> tuple[Message, ...]: ...
+
+
+class MarketProjectors(Protocol):
+    def on_event(self, event: Message) -> None: ...
+
+
 class MarketActor(BusinessActor):
     """Own market data and reference-facing market resources."""
 
-    def __init__(self, source: object | None, bus: MessageBus, *, market_service: MarketApplication | None = None, reference: object | None = None, reference_poll_interval_seconds: float = 300.0, connections: object | None = None, publish_connection_health: object | None = None, projectors: object | None = None) -> None:
+    def __init__(self, source: MarketRuntime | None, bus: MessageBus, *, market_service: MarketApplication | None = None, reference: ReferenceApplication | None = None, reference_poll_interval_seconds: float = 300.0, connections: ConnectionManager | None = None, publish_connection_health: Callable[[Mapping[str, object]], None] | None = None, projectors: MarketProjectors | None = None) -> None:
         super().__init__("market", bus=bus)
         self.runtime = source
         # A live feed normally runs forever, but a launch stop request ends
@@ -35,7 +57,7 @@ class MarketActor(BusinessActor):
         self.market_service = market_service
         self.projectors = projectors
         self._connections = connections
-        self._publish_connection_health = publish_connection_health if callable(publish_connection_health) else None
+        self._publish_connection_health = publish_connection_health
         self._connection_roles = ("market_stream", "market_data", "market_feed")
         self.reference_actor = None if reference is None else ReferenceActor(reference, bus, poll_interval_seconds=reference_poll_interval_seconds)
         self.policy: Callable[[RuntimeCommand], RuntimeCommandStatus | None] | None = None
@@ -91,7 +113,7 @@ class MarketActor(BusinessActor):
             handle._reject("system has no market service")
             return
         try:
-            subscription = self.market_service.subscriptions.subscribe(_market_subscription_spec(payload))
+            subscription = self.market_service.subscribe(_market_subscription_spec(payload))
         except (TypeError, ValueError, KeyError) as error:
             handle._reject(str(error))
             return
@@ -108,7 +130,7 @@ class MarketActor(BusinessActor):
         if subscription is None:
             handle._reject("market.unsubscribe requires a subscription or id")
             return
-        self.market_service.subscriptions.unsubscribe(subscription)
+        self.market_service.unsubscribe(subscription)
         handle._accept()
 
     def _subscribe_batch(self, handle: CommandHandle, payload: object | None) -> None:
@@ -116,7 +138,7 @@ class MarketActor(BusinessActor):
             handle._reject("system has no market service")
             return
         try:
-            group = self.market_service.subscriptions.subscribe_many(_market_subscription_group(payload))
+            group = self.market_service.subscribe_many(_market_subscription_group(payload))
         except (TypeError, ValueError, KeyError) as error:
             handle._reject(str(error))
             return
@@ -209,7 +231,7 @@ class MarketActor(BusinessActor):
         should_stop = getattr(self.runtime, "_should_stop", None)
         return bool(should_stop()) if callable(should_stop) else False
 
-    async def _resilient_events(self, factory: Callable[[], object]):
+    async def _resilient_events(self, factory: Callable[[], AsyncIterator[Message]]) -> AsyncIterator[Message]:
         """Keep a transient feed failure local to the market Actor.
 
         A connection failure must not tear down the strategy session. The
@@ -219,7 +241,7 @@ class MarketActor(BusinessActor):
         delay = 1.0
         while not self._should_stop():
             try:
-                async for event in factory():  # type: ignore[union-attr]
+                async for event in factory():
                     delay = 1.0
                     yield event
                 return
@@ -250,7 +272,7 @@ class MarketActor(BusinessActor):
                 clearer()
         self._stop_connections()
 
-    async def process(self, message: object) -> None:
+    async def process(self, message: Message) -> None:
         projector_event = getattr(self.projectors, "on_event", None)
         if callable(projector_event):
             projector_event(message)

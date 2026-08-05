@@ -11,6 +11,7 @@ from kairospy.application.usecases.reference.domain.serde import (
     asset_to_primitive,
     entity_to_primitive,
     instrument_to_primitive,
+    financial_product_to_primitive,
     listing_to_primitive,
     market_to_primitive,
 )
@@ -77,6 +78,12 @@ def _merge_static_definitions(catalog: ReferenceCatalog, snapshot: ReferenceCata
             catalog.add_instrument(instrument)
         elif _versionless(instrument_to_primitive(existing)) != _versionless(instrument_to_primitive(instrument)):
             catalog.supersede_instrument(instrument, as_of)
+    for product in snapshot.financial_products():
+        existing = catalog.maybe_get_financial_product(product.product_id, as_of)
+        if existing is None:
+            catalog.add_financial_product(product)
+        elif _versionless(financial_product_to_primitive(existing)) != _versionless(financial_product_to_primitive(product)):
+            catalog.supersede_financial_product(product, as_of)
 
 
 def _merge_listing(catalog: ReferenceCatalog, listing: ListingDefinition, *, as_of: datetime) -> None:

@@ -6,17 +6,23 @@ from decimal import Decimal
 from uuid import uuid4
 
 from kairospy.application.usecases.account.application.directory import AccountDirectory
-from kairospy.application.usecases.account.services.snapshots import AccountSnapshotService
+from kairospy.application.usecases.account.application.snapshots import AccountSnapshotService
+from kairospy.application.usecases.account.protocol import AccountCatalogReader, AccountRuntimeStateReader
 from kairospy.domain.account import (
+    AccountLedger,
     AccountBalance,
+    CollateralBalance,
+    AccountSegment,
     AccountCapability,
-    AccountContext,
+    AccountRuntimeContext,
     AccountCurrentView,
     AccountDetailView,
     AccountEvent,
     AccountEventKind,
     AccountFeeSchedule,
+    AccountMarketProfile,
     AccountSnapshot,
+    AssetCode,
     AccountSource,
     AccountState,
     LiabilitySnapshot,
@@ -24,12 +30,15 @@ from kairospy.domain.account import (
     OpenOrderSnapshot,
     PositionSnapshot,
 )
+from kairospy.domain.order import OrderState
+from kairospy.application.usecases.account.application.view_contracts import AccountViewObservation
 
 @dataclass(frozen=True, slots=True)
 class RuntimeAccountViewProjectionService:
-    runtime: object
-    catalog: object | None = None
+    runtime: AccountRuntimeStateReader
+    catalog: AccountCatalogReader | None = None
     account_directory: AccountDirectory | None = None
+    max_snapshot_age_seconds: int | None = 300
 
     def directory(self) -> AccountDirectory:
         if self.account_directory is not None:
@@ -48,7 +57,7 @@ class RuntimeAccountViewProjectionService:
             return ()
         return tuple(self.catalog.fees())
 
-    def market_profiles(self) -> tuple[object, ...]:
+    def market_profiles(self) -> tuple[AccountMarketProfile, ...]:
         if self.catalog is None:
             return ()
         profiles = getattr(self.catalog, "market_profiles", None)
@@ -56,104 +65,112 @@ class RuntimeAccountViewProjectionService:
 
     def current_view(
         self,
-        context: AccountContext,
+        context: AccountRuntimeContext,
         *,
         event_count: int = 0,
         last_event_time: datetime | None = None,
-        payload: object | None = None,
-        equity_currency: str | None = None,
+        payload: AccountViewObservation | None = None,
+        equity_currency: AssetCode | str | None = None,
         latest_equity: Decimal | None = None,
         initial_equity: Decimal | None = None,
-        pending_orders: tuple[object, ...] = (),
+        pending_orders: tuple[OrderState, ...] = (),
+        now: datetime | None = None,
     ) -> AccountCurrentView:
-        state = self.runtime.state(context.book)
-        snapshot = self.runtime.snapshot(context.book)
+        state = _runtime_state(self.runtime, context.segment, max_snapshot_age_seconds=self.max_snapshot_age_seconds, now=now)
+        snapshot = self.runtime.snapshot(context.segment)
         balances = _balances(state, snapshot)
         margins = _margins(state, snapshot)
+        collaterals = () if state is None else state.collaterals
         liabilities = _liabilities(state, snapshot)
         positions = _positions(state, snapshot)
         open_orders = _open_orders(state, snapshot)
         simulated_orders = _simulated_open_orders(context, pending_orders)
         if simulated_orders and snapshot is None:
             open_orders = simulated_orders
-        cash = _cash(balances, equity_currency)
-        equity = latest_equity or _payload_equity(payload) or cash
+        valuation_asset = _valuation_asset(balances, equity_currency)
+        selected_balance = _selected_balance(balances, valuation_asset)
+        equity = latest_equity or _payload_equity(payload) or selected_balance
         baseline = initial_equity if initial_equity is not None else equity
         net_profit = None if equity is None or baseline is None else equity - baseline
         total_return = None if net_profit is None or baseline in (None, Decimal("0")) else net_profit / baseline
         return AccountCurrentView(
             context=context,
             identity=context.identity,
-            book=context.book,
-            book_kind=str(context.book.book),
-            book_qualifier=context.book.qualifier,
+            segment=context.segment,
+            segment_model=context.segment.model.value,
+            segment_qualifier=context.segment.qualifier,
             event_count=event_count,
             last_event_time=last_event_time,
             source=_source(state, snapshot),
             balances=balances,
             margins=margins,
+            collaterals=collaterals,
             liabilities=liabilities,
             positions=positions,
             open_orders=open_orders,
-            pending_orders=pending_orders or tuple(getattr(payload, "pending_orders", ()) or ()),
+            pending_orders=pending_orders,
             stale=False if state is None else state.stale,
-            cash=cash,
+            selected_balance=selected_balance,
             equity=equity,
             initial_equity=baseline,
             net_profit=net_profit,
             total_return=total_return,
+            valuation_asset=valuation_asset,
         )
 
     def detail_view(
         self,
-        context: AccountContext,
+        context: AccountRuntimeContext,
         *,
         event_count: int = 0,
         last_event_time: datetime | None = None,
         metadata: dict[str, object] | None = None,
+        now: datetime | None = None,
     ) -> AccountDetailView:
         return AccountDetailView(
             context=context,
             identity=context.identity,
-            book=context.book,
+            segment=context.segment,
             event_count=event_count,
             last_event_time=last_event_time,
-            account_state=self.runtime.state(context.book),
-            snapshot=self.runtime.snapshot(context.book),
+            account_state=_runtime_state(self.runtime, context.segment, max_snapshot_age_seconds=self.max_snapshot_age_seconds, now=now),
+            snapshot=self.runtime.snapshot(context.segment),
             metadata=metadata,
         )
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeAccountProjectionService:
-    account: AccountContext
-    ledger: object
-    cash_currency: str = "USD"
-    settlement_currency: str = "USD"
+    account: AccountRuntimeContext
+    ledger: AccountLedger
+    valuation_asset: AssetCode = AssetCode("USD")
+    settlement_asset: AssetCode = AssetCode("USD")
 
-    def cash(self, currency: str | None = None) -> Decimal:
-        return self.ledger.cash(self.account.book).get(currency or self.cash_currency, Decimal("0"))
+    def asset_balance(self, currency: AssetCode | str | None = None) -> Decimal:
+        selected = self.valuation_asset if currency is None else currency
+        selected = selected if isinstance(selected, AssetCode) else AssetCode(selected)
+        return self.ledger.balances(self.account.segment).get(selected, Decimal("0"))
 
     def positions(self) -> dict[str, Decimal]:
-        return dict(self.ledger.positions(self.account.book))
+        return dict(self.ledger.positions(self.account.segment))
 
     def record_funding(
         self,
         *,
         occurred_at: datetime,
-        currency: str,
-        cash_delta: Decimal,
+        currency: AssetCode | str,
+        balance_delta: Decimal,
         instrument_id: str,
         reference_id: str,
     ) -> None:
         self.ledger.record(
             AccountEvent(
                 uuid4(),
-                self.account.book,
+                self.account.segment,
                 AccountEventKind.FUNDING,
                 occurred_at,
                 currency,
-                cash_delta=cash_delta,
+                balance_delta=balance_delta,
                 instrument_id=instrument_id,
                 reference_id=reference_id,
             )
@@ -179,20 +196,21 @@ class RuntimeAccountService:
     def fees(self) -> tuple[AccountFeeSchedule, ...]:
         return _require_account_views(self.views).fees()
 
-    def market_profiles(self) -> tuple[object, ...]:
+    def market_profiles(self) -> tuple[AccountMarketProfile, ...]:
         return _require_account_views(self.views).market_profiles()
 
     def current_view(
         self,
-        context: AccountContext,
+        context: AccountRuntimeContext,
         *,
         event_count: int = 0,
         last_event_time: datetime | None = None,
-        payload: object | None = None,
-        equity_currency: str | None = None,
+        payload: AccountViewObservation | None = None,
+        equity_currency: AssetCode | str | None = None,
         latest_equity: Decimal | None = None,
         initial_equity: Decimal | None = None,
-        pending_orders: tuple[object, ...] = (),
+        pending_orders: tuple[OrderState, ...] = (),
+        now: datetime | None = None,
     ) -> AccountCurrentView:
         return _require_account_views(self.views).current_view(
             context,
@@ -203,37 +221,40 @@ class RuntimeAccountService:
             latest_equity=latest_equity,
             initial_equity=initial_equity,
             pending_orders=pending_orders,
+            now=now,
         )
 
     def detail_view(
         self,
-        context: AccountContext,
+        context: AccountRuntimeContext,
         *,
         event_count: int = 0,
         last_event_time: datetime | None = None,
         metadata: dict[str, object] | None = None,
+        now: datetime | None = None,
     ) -> AccountDetailView:
         return _require_account_views(self.views).detail_view(
             context,
             event_count=event_count,
             last_event_time=last_event_time,
             metadata=metadata,
+            now=now,
         )
 
     @property
-    def account(self) -> AccountContext:
+    def account(self) -> AccountRuntimeContext:
         return _require_account_projection(self.projection).account
 
     @property
-    def cash_currency(self) -> str:
-        return _require_account_projection(self.projection).cash_currency
+    def valuation_asset(self) -> AssetCode:
+        return _require_account_projection(self.projection).valuation_asset
 
     @property
-    def settlement_currency(self) -> str:
-        return _require_account_projection(self.projection).settlement_currency
+    def settlement_asset(self) -> AssetCode:
+        return _require_account_projection(self.projection).settlement_asset
 
-    def cash(self, currency: str | None = None) -> Decimal:
-        return _require_account_projection(self.projection).cash(currency)
+    def asset_balance(self, currency: AssetCode | str | None = None) -> Decimal:
+        return _require_account_projection(self.projection).asset_balance(currency)
 
     def positions(self) -> dict[str, Decimal]:
         return _require_account_projection(self.projection).positions()
@@ -242,24 +263,24 @@ class RuntimeAccountService:
         self,
         *,
         occurred_at: datetime,
-        currency: str,
-        cash_delta: Decimal,
+        currency: AssetCode | str,
+        balance_delta: Decimal,
         instrument_id: str,
         reference_id: str,
     ) -> None:
         _require_account_projection(self.projection).record_funding(
             occurred_at=occurred_at,
             currency=currency,
-            cash_delta=cash_delta,
+            balance_delta=balance_delta,
             instrument_id=instrument_id,
             reference_id=reference_id,
         )
 
 
 def account_projection(
-    account: object | None,
-    catalog: object | None,
-    ledger: object | None,
+    account: AccountRuntimeStateReader | None,
+    catalog: AccountCatalogReader | None,
+    ledger: AccountLedger | None,
 ) -> RuntimeAccountProjectionService | None:
     if account is None or catalog is None or ledger is None:
         return None
@@ -267,12 +288,12 @@ def account_projection(
     if len(accounts) != 1:
         return None
     service_account = getattr(account, "account", None)
-    cash_currency = str(getattr(service_account, "cash_currency", "") or "USD")
+    valuation_asset = AssetCode(str(getattr(service_account, "valuation_asset", "") or "USD"))
     return RuntimeAccountProjectionService(
         account=accounts[0],
         ledger=ledger,
-        cash_currency=cash_currency,
-        settlement_currency=cash_currency,
+        valuation_asset=valuation_asset,
+        settlement_asset=valuation_asset,
     )
 
 
@@ -282,15 +303,18 @@ def _require_account_views(service: RuntimeAccountViewProjectionService | None) 
     return service
 
 
+def _runtime_state(runtime: AccountRuntimeStateReader, account: AccountSegment, *, max_snapshot_age_seconds: int | None, now: datetime | None) -> AccountState | None:
+    return runtime.state(account, max_snapshot_age_seconds=max_snapshot_age_seconds, now=now)
+
+
 def _require_account_projection(service: RuntimeAccountProjectionService | None) -> RuntimeAccountProjectionService:
     if service is None:
         raise RuntimeError("runtime account service has no account projection")
     return service
 
 
-def _payload_equity(payload: object | None) -> Decimal | None:
-    value = getattr(payload, "equity", None)
-    return None if value is None else Decimal(str(value))
+def _payload_equity(payload: AccountViewObservation | None) -> Decimal | None:
+    return None if payload is None else payload.equity
 
 
 def _balances(state: AccountState | None, snapshot: AccountSnapshot | None) -> tuple[AccountBalance, ...]:
@@ -323,30 +347,32 @@ def _open_orders(state: AccountState | None, snapshot: AccountSnapshot | None) -
     return () if snapshot is None else snapshot.open_orders
 
 
-def _simulated_open_orders(context: AccountContext, orders: tuple[object, ...]) -> tuple[OpenOrderSnapshot, ...]:
+def _simulated_open_orders(context: AccountRuntimeContext, orders: tuple[OrderState, ...]) -> tuple[OpenOrderSnapshot, ...]:
     if context.environment.value not in {"paper", "backtest", "simulation"}:
         return ()
     values = []
     for order in orders:
-        request = getattr(order, "request", None)
-        if request is None:
-            continue
+        request = order.request
         values.append(
             OpenOrderSnapshot(
-                str(getattr(order, "order_id", request.order_id)),
+                str(order.order_id),
                 request.instrument_id,
                 request.side.value,
-                getattr(order, "remaining_quantity", request.quantity),
+                order.remaining_quantity,
                 AccountSource.SIMULATED,
             )
         )
     return tuple(values)
 
 
-def _cash(balances: tuple[AccountBalance, ...], equity_currency: str | None) -> Decimal | None:
-    currency = equity_currency
-    if currency is None and balances:
-        currency = balances[0].currency
+def _valuation_asset(balances: tuple[AccountBalance, ...], equity_currency: AssetCode | str | None) -> AssetCode | None:
+    if equity_currency is not None:
+        return equity_currency if isinstance(equity_currency, AssetCode) else AssetCode(equity_currency)
+    currencies = {item.currency for item in balances}
+    return next(iter(currencies)) if len(currencies) == 1 else None
+
+
+def _selected_balance(balances: tuple[AccountBalance, ...], currency: AssetCode | None) -> Decimal | None:
     if currency is None:
         return None
     balance = next((item for item in balances if item.currency == currency), None)

@@ -1,4 +1,4 @@
-"""Account broker and credential schemas used by account applications."""
+"""ExternalAccount broker and credential schemas used by account applications."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ class AccountBrokerSchema:
 AccountProviderSchema = AccountBrokerSchema
 
 ACCOUNT_SCHEMAS: dict[str, AccountBrokerSchema] = {
+    "paper": AccountBrokerSchema("paper", "paper", "spot", "none", (), ()),
     "binance": AccountBrokerSchema("binance", "binance", "spot", "api_key_secret", ("api_key", "api_secret")),
     "okx": AccountBrokerSchema("okx", "okx", "spot", "api_key_secret_passphrase", ("api_key", "api_secret", "passphrase")),
     "hyperliquid": AccountBrokerSchema(

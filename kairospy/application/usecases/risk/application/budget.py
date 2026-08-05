@@ -7,6 +7,7 @@ from .component import (
     RiskReservationRequest,
     RiskReservationResult,
     RiskSnapshot,
+    RiskBudget,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "RiskReservationRequest",
     "RiskReservationResult",
     "RiskSnapshot",
+    "RiskBudget",
 ]

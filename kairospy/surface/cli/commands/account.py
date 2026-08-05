@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import json
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
-import sys
 import time
 from typing import Mapping
 
@@ -10,22 +9,24 @@ import typer
 
 from kairospy.application.support.launch.application.control import RuntimeMode
 from kairospy.application.support.query.browsing import ListQuery
-from kairospy.application.usecases.account.application.commands import AccountCommandApplication
+from kairospy.application.support.composition.application.cli import AccountCommandServices
+from kairospy.application.usecases.account.application.results import AccountBalanceResult, AccountPositionsResult
 from kairospy.application.support.composition.application.cli import build_account_command
 from kairospy.application.support.launch.application.control.facade import DEFAULT_SYSTEM_LAUNCH_ID
 from kairospy.application.support.composition.application.launch import launch_application
-from kairospy.surface.interactive.account import run_account_create_wizard
 from kairospy.surface.tui import ResourceList, ResourceListBrowser
 from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.cli.output import write_cli_result
 
 
 account_app = typer.Typer(no_args_is_help=True, help="Configured account commands")
-account_credential_app = typer.Typer(no_args_is_help=True, help="Account credential commands")
-account_query_app = typer.Typer(no_args_is_help=True, help="Account query commands")
-account_trade_lock_app = typer.Typer(no_args_is_help=True, help="Account trade-lock commands")
+account_credential_app = typer.Typer(no_args_is_help=True, help="ExternalAccount credential commands")
+account_query_app = typer.Typer(no_args_is_help=True, help="ExternalAccount query commands")
+account_model_app = typer.Typer(no_args_is_help=True, help="ExternalAccount model commands")
+account_trade_lock_app = typer.Typer(no_args_is_help=True, help="ExternalAccount trade-lock commands")
 account_app.add_typer(account_credential_app, name="credential")
 account_app.add_typer(account_query_app, name="query")
+account_app.add_typer(account_model_app, name="model")
 account_app.add_typer(account_trade_lock_app, name="trade-lock")
 _ACCOUNTS = build_account_command()
 _RUNS = launch_application()
@@ -36,7 +37,7 @@ def list_accounts(
     ctx: typer.Context,
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
-    payload = _ACCOUNTS.list_accounts()
+    payload = _ACCOUNTS.administration.list_accounts()
     write_cli_result(ctx, payload, output_format=output_format, text=_render_accounts)
 
 
@@ -59,7 +60,7 @@ def schemas(
     ctx: typer.Context,
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
-    payload = _ACCOUNTS.schemas()
+    payload = _ACCOUNTS.administration.schemas()
     write_cli_result(ctx, payload, output_format=output_format, text=_render_schemas)
 
 
@@ -70,79 +71,91 @@ def schema(
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     try:
-        payload = _ACCOUNTS.schema(broker_name)
+        payload = _ACCOUNTS.administration.schema(broker_name)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     write_cli_result(ctx, payload, output_format=output_format, text=_render_schema)
 
 
-@account_app.command("create")
-def create_account(
-    account_id: str | None = typer.Argument(None),
-    broker_name: str | None = typer.Option(None, "--broker", "--provider"),
-    environment: str | None = typer.Option(None, "--environment"),
-    venue: str | None = typer.Option(None, "--venue"),
-    market: str | None = typer.Option(None, "--book", "--market", help="Default account book/product, for example spot, equity, or swap."),
-    currency: str = typer.Option("USD", "--currency"),
-    cash: str | None = typer.Option(None, "--cash", help="Initial simulated cash; only written for non-live accounts"),
-    fee_rate: str = typer.Option("0", "--fee-rate", help="Commission rate charged on filled notional, for example 0.001"),
-    credential_kind: str | None = typer.Option(None, "--credential-kind"),
-    credential: str | None = typer.Option(None, "--credential", help="Credential id, for example okx_live"),
-    credential_role: str = typer.Option("readonly", "--credential-role", help="Credential role when API fields are provided: readonly or trade"),
-    api_key: str | None = typer.Option(None, "--api-key"),
-    api_secret: str | None = typer.Option(None, "--api-secret"),
-    passphrase: str | None = typer.Option(None, "--passphrase"),
-    wallet_address: str | None = typer.Option(None, "--wallet-address"),
-    private_key: str | None = typer.Option(None, "--private-key"),
-    vault_address: str | None = typer.Option(None, "--vault-address"),
-    field_values: list[str] | None = typer.Option(None, "--field", help="Extra account field as key=value"),
-    credential_values: list[str] | None = typer.Option(None, "--credential-field", help="Extra credential field as key=value"),
-    force: bool = typer.Option(False, "--force"),
-    interactive: bool = typer.Option(False, "--interactive", "-i", help="Create the account through an interactive guide."),
-    direct: bool = typer.Option(False, "--direct", help="Run the explicit argv form instead of the interactive guide."),
+@account_app.command("inspect")
+def inspect_account(
+    ctx: typer.Context,
+    account_id: str = typer.Argument(...),
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
-    if interactive and direct:
-        raise typer.BadParameter("--interactive and --direct cannot be used together")
-    if interactive or (not direct and account_id is None and sys.stdin.isatty() and sys.stdout.isatty()):
-        raise typer.Exit(
-            run_account_create_wizard(
-                prompt=lambda message: typer.prompt(message, prompt_suffix="", default="", show_default=False),
-                echo=typer.echo,
-                facade=_ACCOUNTS,
-            )
-        )
-    if account_id is None:
-        raise typer.BadParameter("account_id is required for direct creation; use --interactive for guided setup")
-    if broker_name is None:
-        raise typer.BadParameter("--broker is required for direct creation; use --interactive for guided setup")
-    if environment is None:
-        raise typer.BadParameter("--environment is required for direct creation; use --interactive for guided setup")
     try:
-        path = _ACCOUNTS.create(
-            account_id=account_id,
+        payload = _ACCOUNTS.connection.inspect(account_id)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_inspect)
+
+
+@account_app.command("connect")
+def connect_account(
+    ctx: typer.Context,
+    broker_name: str = typer.Option(..., "--broker", "--provider"),
+    environment: str = typer.Option(..., "--environment"),
+    credential: str = typer.Option(..., "--credential", help="Credential reference; the remote account is discovered from it."),
+    credential_role: str = typer.Option("readonly", "--credential-role", help="Permission role for this credential: readonly or trade."),
+    alias: str | None = typer.Option(None, "--alias", help="Optional local binding label; this does not create a broker account."),
+    product_family: str | None = typer.Option(None, "--product-family", help="Initial discovery route, for example spot or usd_m_futures."),
+    account_model: str | None = typer.Option(None, "--account-model", help="Optional local expectation; actual model must be reconciled from the broker."),
+    force: bool = typer.Option(False, "--force"),
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
+    try:
+        payload = _ACCOUNTS.connection.connect(
             broker=broker_name,
             environment=environment,
-            venue=venue,
-            market=market,
-            currency=currency,
-            cash=cash,
-            fee_rate=fee_rate,
-            credential_kind=credential_kind,
             credential=credential,
             credential_role=credential_role,
-            api_key=api_key,
-            api_secret=api_secret,
-            passphrase=passphrase,
-            wallet_address=wallet_address,
-            private_key=private_key,
-            vault_address=vault_address,
-            field_values=field_values,
-            credential_values=credential_values,
+            alias=alias,
+            product_family=product_family,
+            account_model=account_model,
             force=force,
         )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    typer.echo(path)
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
+
+
+@account_app.command("simulate")
+def simulate_account(
+    account_id: str = typer.Argument(..., help="Local simulation binding id."),
+    broker_name: str = typer.Option("paper", "--broker", "--provider"),
+    environment: str = typer.Option("paper", "--environment"),
+    product_family: str = typer.Option("spot", "--product-family"),
+    account_model: str | None = typer.Option(None, "--account-model"),
+    balance: list[str] = typer.Option([], "--balance", help="Initial asset quantity, repeatable: USDT=10000 or BTC=0.5."),
+    fee_rate: str = typer.Option("0", "--fee-rate"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    try:
+        path = _ACCOUNTS.simulation.provision(
+            account_id=account_id,
+            broker=broker_name,
+            environment=environment,
+            venue=broker_name,
+            product_family=product_family,
+            account_model=account_model,
+            initial_balances=balance,
+            fee_rate=fee_rate,
+            credential_kind=None,
+            credential=None,
+            credential_role=None,
+            api_key=None,
+            api_secret=None,
+            passphrase=None,
+            wallet_address=None,
+            private_key=None,
+            vault_address=None,
+            field_values=None,
+            credential_values=None,
+            force=force,
+        )
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    typer.echo(path.path)
 
 
 def add_credential(
@@ -153,7 +166,7 @@ def add_credential(
     force: bool = typer.Option(False, "--force"),
 ) -> None:
     try:
-        typer.echo(_ACCOUNTS.add_credential(account_id, name=name, ref=ref, check=check, force=force))
+        typer.echo(_ACCOUNTS.connection.add_credential(account_id, name=name, ref=ref, check=check, force=force).path)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
 
@@ -255,8 +268,6 @@ def modify_account(
     broker_name: str | None = typer.Option(None, "--broker", "--provider"),
     environment: str | None = typer.Option(None, "--environment"),
     venue: str | None = typer.Option(None, "--venue"),
-    currency: str | None = typer.Option(None, "--currency"),
-    cash: str | None = typer.Option(None, "--cash"),
     fee_rate: str | None = typer.Option(None, "--fee-rate"),
     credential: str | None = typer.Option(None, "--credential", help="Credential id, for example okx_live"),
     clear_credential: bool = typer.Option(False, "--clear-credential"),
@@ -264,18 +275,16 @@ def modify_account(
 ) -> None:
     try:
         typer.echo(
-            _ACCOUNTS.modify(
+            _ACCOUNTS.administration.modify(
                 account_id,
                 broker=broker_name,
                 environment=environment,
                 venue=venue,
-                currency=currency,
-                cash=cash,
                 fee_rate=fee_rate,
                 credential=credential,
                 clear_credential=clear_credential,
                 field_values=field_values,
-            )
+            ).path
         )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
@@ -284,7 +293,7 @@ def modify_account(
 @account_app.command("delete")
 def delete_account(account_id: str = typer.Argument(...), force: bool = typer.Option(False, "--force")) -> None:
     try:
-        typer.echo(_ACCOUNTS.delete(account_id, force=force))
+        typer.echo(_ACCOUNTS.administration.delete(account_id, force=force).path)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
 
@@ -302,7 +311,7 @@ def show_account(
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     try:
-        payload = _ACCOUNTS.show(account_id, reveal_secrets=reveal_secrets)
+        payload = _ACCOUNTS.administration.show(account_id, reveal_secrets=reveal_secrets)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_show)
@@ -312,23 +321,21 @@ def show_account(
 def balance(
     ctx: typer.Context,
     account_id: str = typer.Argument(...),
-    books: list[str] | None = typer.Option(None, "--book", help="Account book to query; repeat for multiple books. Defaults to all supported books."),
+    segments: list[str] | None = typer.Option(None, "--segment", help="ExternalAccount segment to query; repeat for multiple segments. Defaults to all configured segments."),
     include_zero: bool = typer.Option(False, "--include-zero", help="Include assets whose free/used/total balances are all zero."),
     page: int = typer.Option(1, "--page", min=1),
     page_size: int = typer.Option(50, "--page-size", min=1),
-    params_json: str | None = typer.Option(None, "--params-json"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     resolved_output = resolve_output(ctx, output_format, default=OutputFormat.text)
     progress = _balance_progress_reporter() if resolved_output is OutputFormat.text else None
     try:
-        payload = _ACCOUNTS.balance(
+        payload = _ACCOUNTS.queries.balance(
             account_id,
-            books=books,
+            segments=segments,
             include_zero=include_zero,
             page=page,
             page_size=page_size,
-            params=_params(params_json),
             progress=progress,
         )
     except ValueError as error:
@@ -336,82 +343,19 @@ def balance(
     write_cli_result(ctx, payload, output_format=resolved_output, default=OutputFormat.text, text=_render_balance)
 
 
-@account_query_app.command("current")
-def current(
-    ctx: typer.Context,
-    launch: str | None = typer.Option(None, "--launch", help="Registered launch name or launch id for the launched system session."),
-    mode: RuntimeMode | None = typer.Option(None, "--mode", hidden=True),
-    launch_id: str | None = typer.Option(None, "--launch-id", hidden=True),
-    root: Path | None = typer.Option(None, "--root", hidden=True),
-    account_key: str | None = typer.Option(None, "--account", help="Account alias/id when the launch exposes multiple accounts."),
-    timeout_seconds: float = typer.Option(5.0, "--timeout"),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    try:
-        payload = _runtime_account_query(
-            "account.current",
-            launch=launch,
-            mode=mode,
-            launch_id=launch_id,
-            root=root,
-            account_key=account_key,
-            timeout_seconds=timeout_seconds,
-        )
-    except ValueError as error:
-        raise typer.BadParameter(str(error)) from error
-    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
-
-
-@account_query_app.command("balances")
-def balances(
-    ctx: typer.Context,
-    launch: str | None = typer.Option(None, "--launch", help="Registered launch name or launch id for the launched system session."),
-    mode: RuntimeMode | None = typer.Option(None, "--mode", hidden=True),
-    launch_id: str | None = typer.Option(None, "--launch-id", hidden=True),
-    root: Path | None = typer.Option(None, "--root", hidden=True),
-    account_key: str | None = typer.Option(None, "--account", help="Account alias/id when the launch exposes multiple accounts."),
-    timeout_seconds: float = typer.Option(5.0, "--timeout"),
-    output_format: OutputFormat | None = typer.Option(None, "--format"),
-) -> None:
-    try:
-        payload = _runtime_account_query(
-            "account.balances",
-            launch=launch,
-            mode=mode,
-            launch_id=launch_id,
-            root=root,
-            account_key=account_key,
-            timeout_seconds=timeout_seconds,
-        )
-    except ValueError as error:
-        raise typer.BadParameter(str(error)) from error
-    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
-
-
 @account_query_app.command("positions")
 def positions(
     ctx: typer.Context,
-    launch: str | None = typer.Option(None, "--launch", help="Registered launch name or launch id for the launched system session."),
-    mode: RuntimeMode | None = typer.Option(None, "--mode", hidden=True),
-    launch_id: str | None = typer.Option(None, "--launch-id", hidden=True),
-    root: Path | None = typer.Option(None, "--root", hidden=True),
-    account_key: str | None = typer.Option(None, "--account", help="Account alias/id when the launch exposes multiple accounts."),
-    timeout_seconds: float = typer.Option(5.0, "--timeout"),
+    account_id: str = typer.Argument(...),
+    segments: list[str] | None = typer.Option(None, "--segment", help="ExternalAccount segment to query; repeat for multiple segments."),
+    symbol: str | None = typer.Option(None, "--symbol"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     try:
-        payload = _runtime_account_query(
-            "account.positions",
-            launch=launch,
-            mode=mode,
-            launch_id=launch_id,
-            root=root,
-            account_key=account_key,
-            timeout_seconds=timeout_seconds,
-        )
+        payload = _ACCOUNTS.queries.positions(account_id, segments=segments, symbol=symbol)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
-    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_positions)
 
 
 @account_trade_lock_app.command("status")
@@ -444,11 +388,10 @@ def open_orders(
     account_id: str = typer.Argument(...),
     symbol: str | None = typer.Option(None, "--symbol"),
     limit: int | None = typer.Option(None, "--limit"),
-    params_json: str | None = typer.Option(None, "--params-json"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     try:
-        payload = _ACCOUNTS.open_orders(account_id, symbol=symbol, limit=limit, params=_params(params_json))
+        payload = _ACCOUNTS.queries.open_orders(account_id, symbol=symbol, limit=limit)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
@@ -459,11 +402,25 @@ def snapshot(
     ctx: typer.Context,
     account_id: str = typer.Argument(...),
     symbol: str | None = typer.Option(None, "--symbol"),
-    params_json: str | None = typer.Option(None, "--params-json"),
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     try:
-        payload = _ACCOUNTS.snapshot(account_id, symbol=symbol, params=_params(params_json))
+        payload = _ACCOUNTS.queries.snapshot(account_id, symbol=symbol)
+    except ValueError as error:
+        raise typer.BadParameter(str(error)) from error
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
+
+
+@account_model_app.command("switch")
+def switch_account_model(
+    ctx: typer.Context,
+    account_id: str = typer.Argument(...),
+    target: str = typer.Option(..., "--target", help="Target AccountModel, for example unified or contract."),
+    reason: str = typer.Option("", "--reason"),
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
+    try:
+        payload = _ACCOUNTS.model.switch(account_id, target=target, reason=reason)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
@@ -474,7 +431,7 @@ def locks(
     ctx: typer.Context,
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
-    payload = _ACCOUNTS.locks()
+    payload = _ACCOUNTS.leases.list()
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_locks)
 
 
@@ -485,7 +442,7 @@ def lock(
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     try:
-        payload = _ACCOUNTS.lock(account_id)
+        payload = _ACCOUNTS.leases.status(account_id)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_lock)
@@ -500,7 +457,7 @@ def release_lock(
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     try:
-        payload = _ACCOUNTS.release_lock(account_id, stale_only=stale_only, force=force)
+        payload = _ACCOUNTS.leases.release(account_id, stale_only=stale_only, force=force)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json, text=_render_release_lock)
@@ -513,24 +470,12 @@ def doctor(
     output_format: OutputFormat | None = typer.Option(None, "--format"),
 ) -> None:
     try:
-        payload = _ACCOUNTS.doctor(account_id)
+        payload = _ACCOUNTS.administration.doctor(account_id)
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error
     write_cli_result(ctx, payload, output_format=output_format, text=_render_doctor)
-    if payload["issues"]:
+    if _payload(payload)["issues"]:
         raise typer.Exit(2)
-
-
-def _params(value: str | None) -> Mapping[str, object] | None:
-    if value is None:
-        return None
-    try:
-        payload = json.loads(value)
-    except json.JSONDecodeError as error:
-        raise typer.BadParameter(f"--params-json must be a JSON object: {error}") from error
-    if not isinstance(payload, Mapping):
-        raise typer.BadParameter("--params-json must be a JSON object")
-    return payload
 
 
 def _balance_progress_reporter():
@@ -539,58 +484,27 @@ def _balance_progress_reporter():
     def report(event: Mapping[str, object]) -> None:
         name = str(event.get("event") or "")
         if name == "start":
-            books = ", ".join(str(item) for item in event.get("books", ()))
-            typer.echo(f"Querying balances for {event.get('account')} ({event.get('total')} books): {books}", err=True)
+            segments = ", ".join(str(item) for item in event.get("segments", ()))
+            typer.echo(f"Querying balances for {event.get('account')} ({event.get('total')} segments): {segments}", err=True)
             return
-        if name == "book_start":
-            book = str(event.get("book"))
-            started_at[book] = time.monotonic()
-            typer.echo(f"  [{event.get('index')}/{event.get('total')}] {book} ...", err=True)
+        if name == "segment_start":
+            segment = str(event.get("segment"))
+            started_at[segment] = time.monotonic()
+            typer.echo(f"  [{event.get('index')}/{event.get('total')}] {segment} ...", err=True)
             return
-        if name in {"book_done", "book_error"}:
-            book = str(event.get("book"))
-            elapsed = time.monotonic() - started_at.get(book, time.monotonic())
-            if name == "book_done":
-                typer.echo(f"  [{event.get('index')}/{event.get('total')}] {book} done ({event.get('rows')} rows, {elapsed:.1f}s)", err=True)
+        if name in {"segment_done", "segment_error"}:
+            segment = str(event.get("segment"))
+            elapsed = time.monotonic() - started_at.get(segment, time.monotonic())
+            if name == "segment_done":
+                typer.echo(f"  [{event.get('index')}/{event.get('total')}] {segment} done ({event.get('rows')} rows, {elapsed:.1f}s)", err=True)
             else:
                 typer.echo(
-                    f"  [{event.get('index')}/{event.get('total')}] {book} failed "
+                    f"  [{event.get('index')}/{event.get('total')}] {segment} failed "
                     f"({elapsed:.1f}s, {event.get('diagnostic_id')}): {event.get('error')}",
                     err=True,
                 )
 
     return report
-
-
-def _runtime_account_query(
-    kind: str,
-    *,
-    launch: str | None,
-    mode: RuntimeMode | None,
-    launch_id: str | None,
-    root: Path | None,
-    account_key: str | None,
-    timeout_seconds: float,
-) -> dict[str, object]:
-    command_payload = {} if account_key is None else {"account": account_key}
-    if launch is None and mode is None and launch_id is None:
-        return _RUNS.system_command(
-            kind=kind,
-            payload=command_payload,
-            root=root,
-            wait=True,
-            timeout_seconds=timeout_seconds,
-        )
-    return _RUNS.submit_command(
-        target=launch,
-        root=root,
-        launch_id=launch_id,
-        mode=mode,
-        kind=kind,
-        payload=command_payload,
-        wait=True,
-        timeout_seconds=timeout_seconds,
-    )
 
 
 def _system_account_trade_command(
@@ -629,15 +543,14 @@ def _render_accounts(result: object) -> str:
                     _display(account.get("broker", account.get("provider"))),
                     _display(account.get("environment")),
                     _display(account.get("venue")),
-                    _display(account.get("market")),
-                    _display(_account_value(account, "currency")),
-                    _simulated_value(account, "cash"),
+                    _display(account.get("default_segment") or _first_segment_label(account)),
+                    _display(account.get("initial_balances") or "-"),
                     _simulated_value(account, "fee_rate"),
                     _credential_label(account),
                     _lock_label(account.get("lock")),
                 )
             )
-    return "\n".join(["Accounts", *_table(("ID", "BROKER", "ENV", "VENUE", "MARKET", "CCY", "CASH", "FEE", "CREDENTIAL", "TRADE_LOCK"), rows)])
+    return "\n".join(["Accounts", *_table(("ID", "BROKER", "ENV", "VENUE", "SCOPE", "ASSETS", "FEE", "CREDENTIAL", "TRADE_LOCK"), rows)])
 
 
 def _render_schemas(result: object) -> str:
@@ -645,15 +558,15 @@ def _render_schemas(result: object) -> str:
     schemas = payload["schemas"]
     if not isinstance(schemas, Mapping):
         raise TypeError("account schemas renderer expected schemas mapping")
-    lines = ["Account Schemas"]
+    lines = ["ExternalAccount Schemas"]
     for schema in schemas.values():
         if isinstance(schema, Mapping):
             required = ", ".join(schema["required_credential_fields"])
             optional = ", ".join(schema["optional_fields"]) or "-"
-            books = ", ".join(str(book) for book in schema.get("balance_books", ())) or "-"
+            segments = ", ".join(str(segment) for segment in schema.get("balance_segments", ())) or "-"
             lines.append(
                 f"  {schema.get('broker', schema.get('provider')):<12} venue={schema['venue']:<12} "
-                f"balance_books={books:<70} required={required} optional={optional}"
+                f"balance_segments={segments:<70} required={required} optional={optional}"
             )
     return "\n".join(lines)
 
@@ -661,9 +574,9 @@ def _render_schemas(result: object) -> str:
 def _render_schema(result: object) -> str:
     payload = _payload(result)
     return "\n".join([
-        f"Account Schema {payload.get('broker', payload.get('provider'))}",
+        f"ExternalAccount Schema {payload.get('broker', payload.get('provider'))}",
         f"  venue             {payload['venue']}",
-        f"  balance_books     {', '.join(str(book) for book in payload.get('balance_books', ())) or '-'}",
+        f"  balance_segments    {', '.join(str(segment) for segment in payload.get('balance_segments', ())) or '-'}",
         f"  credential.kind   {payload['credential_kind']}",
         f"  required          {', '.join(payload['required_credential_fields'])}",
         f"  optional          {', '.join(payload['optional_fields']) or '-'}",
@@ -673,14 +586,14 @@ def _render_schema(result: object) -> str:
 def _render_show(result: object) -> str:
     payload = _payload(result)
     lines = [
-        f"Account {payload['account_id']}",
+        f"ExternalAccount {payload['account_id']}",
         f"  broker       {payload.get('broker', payload.get('provider'))}",
         f"  environment  {payload['environment']}",
         f"  venue        {payload['venue']}",
         f"  source       {payload['source_path']}",
     ]
-    if payload.get("market"):
-        lines.insert(4, f"  legacy_book  {payload['market']}")
+    if payload.get("default_segment"):
+        lines.insert(4, f"  default_segment  {payload.get('default_segment')}")
     credentials = payload.get("credentials")
     if isinstance(credentials, list) and credentials:
         lines.append("  credentials")
@@ -691,6 +604,29 @@ def _render_show(result: object) -> str:
 
 
 def _render_balance(result: object) -> str:
+    if isinstance(result, AccountBalanceResult):
+        title = f"Balances  {result.account_id}  segments={', '.join(str(segment.segment_id) for segment in result.segments)}"
+        lines = [title]
+        table_rows = [
+            (
+                str(row.segment.segment_id),
+                row.balance.currency,
+                _display(row.balance.free),
+                _display(row.balance.locked),
+                _display(row.balance.total),
+            )
+            for row in result.rows
+        ]
+        lines.extend(_table(("SCOPE", "ASSET", "FREE", "USED", "TOTAL"), table_rows) if table_rows else ["  none"])
+        if result.errors:
+            error_rows = [
+                (str(error.segment.segment_id), error.error_type, str(error.duration_ms), _display(error.diagnostic_id), error.message)
+                for error in result.errors
+            ]
+            lines.extend(["", "Balance Errors", *_table(("SCOPE", "TYPE", "MS", "DIAGNOSTIC", "ERROR"), error_rows)])
+        page = result.page
+        lines.append(f"page {page.page}/{page.total_pages}  rows {len(result.rows)}/{page.total_rows}")
+        return "\n".join(lines)
     payload = _payload(result)
     rows = payload.get("rows")
     if not isinstance(rows, list):
@@ -698,7 +634,7 @@ def _render_balance(result: object) -> str:
     page = payload.get("page")
     if not isinstance(page, Mapping):
         raise TypeError("account balance renderer expected page mapping")
-    title = f"Balances  {payload.get('account')}  books={', '.join(str(item) for item in payload.get('books', []))}"
+    title = f"Balances  {payload.get('account')}  segments={', '.join(str(item) for item in payload.get('segments', []))}"
     lines = [title]
     if rows:
         table_rows = []
@@ -706,14 +642,14 @@ def _render_balance(result: object) -> str:
             if isinstance(row, Mapping):
                 table_rows.append(
                     (
-                        _display(row.get("book")),
+                        _display(row.get("segment")),
                         _display(row.get("asset")),
                         _display(row.get("free")),
                         _display(row.get("used")),
                         _display(row.get("total")),
                     )
                 )
-        lines.extend(_table(("BOOK", "ASSET", "FREE", "USED", "TOTAL"), table_rows))
+        lines.extend(_table(("SCOPE", "ASSET", "FREE", "USED", "TOTAL"), table_rows))
     else:
         lines.append("  none")
     errors = payload.get("errors")
@@ -723,14 +659,14 @@ def _render_balance(result: object) -> str:
             if isinstance(error, Mapping):
                 error_rows.append(
                     (
-                        _display(error.get("book")),
+                        _display(error.get("segment")),
                         _display(error.get("error_type")),
                         _display(error.get("duration_ms")),
                         _display(error.get("diagnostic_id")),
                         _display(error.get("error")),
                     )
                 )
-        lines.extend(["", "Balance Errors", *_table(("BOOK", "TYPE", "MS", "DIAGNOSTIC", "ERROR"), error_rows)])
+        lines.extend(["", "Balance Errors", *_table(("SCOPE", "TYPE", "MS", "DIAGNOSTIC", "ERROR"), error_rows)])
     lines.append(
         "page {}/{}  rows {}/{}".format(
             page.get("page"),
@@ -742,13 +678,49 @@ def _render_balance(result: object) -> str:
     return "\n".join(lines)
 
 
+def _render_positions(result: object) -> str:
+    if not isinstance(result, AccountPositionsResult):
+        return str(_payload(result))
+    lines = [f"Positions  {result.account_id}  segments={', '.join(str(segment.segment_id) for segment in result.segments)}"]
+    rows = [
+        (
+            str(row.segment.segment_id),
+            str(row.position.instrument_id),
+            _display(row.position.quantity),
+            _display(row.position.average_price),
+            _display(row.position.unrealized_pnl),
+            _display(row.position.margin_mode),
+        )
+        for row in result.rows
+    ]
+    lines.extend(_table(("SEGMENT", "INSTRUMENT", "QUANTITY", "AVERAGE", "UPNL", "MARGIN"), rows) if rows else ["  none"])
+    if result.errors:
+        lines.extend(["", "Position Errors", *_table(("SEGMENT", "TYPE", "MS", "DIAGNOSTIC", "ERROR"), [(str(error.segment.segment_id), error.error_type, str(error.duration_ms), _display(error.diagnostic_id), error.message) for error in result.errors])])
+    return "\n".join(lines)
+
+
 def _render_doctor(result: object) -> str:
     payload = _payload(result)
     account = payload["account"]
     if not isinstance(account, Mapping):
         raise TypeError("account doctor renderer expected account mapping")
-    lines = [f"Account Doctor {account['account_id']}", f"  valid {str(payload['valid']).lower()}"]
+    lines = [f"ExternalAccount Doctor {account['account_id']}", f"  valid {str(payload['valid']).lower()}"]
     lines.extend(f"  issue {issue}" for issue in payload["issues"])
+    return "\n".join(lines)
+
+
+def _render_inspect(result: object) -> str:
+    payload = _payload(result)
+    lines = [
+        f"ExternalAccount Inspect {payload.get('account_id')}",
+        f"  broker             {_display(payload.get('broker'))}",
+        f"  remote_identity    {_display(payload.get('remote_identity'))}",
+        f"  account_type       {_display(payload.get('account_type'))}",
+        f"  observed_model     {_display(payload.get('observed_model'))}",
+        f"  permissions        {_display(', '.join(str(item) for item in payload.get('permissions', [])))}",
+        f"  configured         {_display(', '.join(str(item) for item in payload.get('configured_segments', [])))}",
+        f"  discovered         {_display(', '.join(str(item) for item in payload.get('discovered_segments', [])))}",
+    ]
     return "\n".join(lines)
 
 
@@ -756,7 +728,7 @@ def _render_locks(result: object) -> str:
     payload = _payload(result)
     locks = payload["locks"]
     if not locks:
-        return f"Account Trade Locks\n  none\n  root {payload['root']}"
+        return f"ExternalAccount Trade Locks\n  none\n  root {payload['root']}"
     if not isinstance(locks, list):
         raise TypeError("account locks renderer expected list")
     rows = []
@@ -772,17 +744,17 @@ def _render_locks(result: object) -> str:
                     _display(lock.get("heartbeat_at")),
                 )
             )
-    return "\n".join(["Account Trade Locks", *_table(("ACCOUNT", "MODE", "LAUNCH", "INSTANCE", "STATE", "HEARTBEAT"), rows)])
+    return "\n".join(["ExternalAccount Trade Locks", *_table(("ACCOUNT", "MODE", "LAUNCH", "INSTANCE", "STATE", "HEARTBEAT"), rows)])
 
 
 def _render_lock(result: object) -> str:
     payload = _payload(result)
     lock = payload.get("lock")
     if not isinstance(lock, Mapping):
-        return f"Account Trade Lock {payload['account']}\n  free"
+        return f"ExternalAccount Trade Lock {payload['account']}\n  free"
     return "\n".join(
         [
-            f"Account Trade Lock {payload['account']}",
+            f"ExternalAccount Trade Lock {payload['account']}",
             f"  state       {'stale' if lock.get('stale') else 'active'}",
             f"  launch      {lock.get('launch_id')}",
             f"  instance    {lock.get('launch_instance_id')}",
@@ -794,17 +766,21 @@ def _render_lock(result: object) -> str:
 
 def _render_release_lock(result: object) -> str:
     payload = _payload(result)
-    return f"Account Trade Lock {payload['account']}\n  released {str(payload['released']).lower()}"
+    return f"ExternalAccount Trade Lock {payload['account']}\n  released {str(payload['released']).lower()}"
 
 
 def _payload(result: object) -> Mapping[str, object]:
+    if is_dataclass(result):
+        value = asdict(result)
+        if isinstance(value, Mapping):
+            return value
     if not isinstance(result, Mapping):
         raise TypeError("account renderer expected mapping payload")
     return result
 
 
-def _account_rows(facade: AccountCommandApplication) -> tuple[Mapping[str, object], ...]:
-    payload = facade.list_accounts()
+def _account_rows(facade: AccountCommandServices) -> tuple[Mapping[str, object], ...]:
+    payload = _payload(facade.administration.list_accounts())
     rows = payload.get("accounts", ())
     if not isinstance(rows, (tuple, list)):
         return ()
@@ -829,6 +805,16 @@ def _account_value(account: Mapping[str, object], key: str) -> object:
     if isinstance(values, Mapping) and key in values:
         return values[key]
     return account.get(key)
+
+
+def _first_segment_label(account: Mapping[str, object]) -> str:
+    segments = account.get("segments")
+    if not isinstance(segments, (tuple, list)) or not segments:
+        return "-"
+    first = segments[0]
+    if not isinstance(first, Mapping):
+        return "-"
+    return str(first.get("product_family") or first.get("model") or "-")
 
 
 def _simulated_value(account: Mapping[str, object], key: str) -> str:

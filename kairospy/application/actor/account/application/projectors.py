@@ -1,4 +1,4 @@
-"""Account Actor-owned projections."""
+"""ExternalAccount Actor-owned projections."""
 
 from __future__ import annotations
 
@@ -7,14 +7,17 @@ from datetime import datetime
 from kairospy.application.support.messaging import Message
 from kairospy.application.support.runtime.application.views import ViewStore
 from kairospy.application.usecases.account.application.projectors import AccountProjector, EquityProjector, FundingProjector
+from kairospy.application.usecases.account.application.runtime import RuntimeAccountService
 from kairospy.application.usecases.execution.application.execution_projector import ExecutionProjector
 from kairospy.application.usecases.execution.application.order_projector import OrderProjector
+from kairospy.application.usecases.execution.application.runtime import RuntimeExecutionService
 from kairospy.application.usecases.intent.application.projection import IntentProjector
+from kairospy.application.usecases.risk.application.budget import RiskApplication
 from kairospy.domain.intent import IntentJournal
 
 
 class AccountActorProjectors:
-    def __init__(self, *, strategy_id: str, intents: IntentJournal, account: object | None = None, execution: object | None = None, risk: object | None = None) -> None:
+    def __init__(self, *, strategy_id: str, intents: IntentJournal, account: RuntimeAccountService | None = None, execution: RuntimeExecutionService | None = None, risk: RiskApplication | None = None) -> None:
         self.account = None if account is None else AccountProjector(account, execution=execution)  # type: ignore[arg-type]
         self.funding = _funding(account)
         self.equity = _equity(account)
@@ -46,7 +49,7 @@ class AccountActorProjectors:
             projector.publish_views(views, as_of=as_of)
 
 
-def _funding(account: object | None) -> FundingProjector | None:
+def _funding(account: RuntimeAccountService | None) -> FundingProjector | None:
     if account is None or getattr(account, "projection", None) is None:
         return None
     environment = getattr(getattr(account, "account", None), "environment", None)
@@ -55,7 +58,7 @@ def _funding(account: object | None) -> FundingProjector | None:
     return FundingProjector(service=account)  # type: ignore[arg-type]
 
 
-def _equity(account: object | None) -> EquityProjector | None:
+def _equity(account: RuntimeAccountService | None) -> EquityProjector | None:
     return None if account is None or getattr(account, "projection", None) is None else EquityProjector(service=account)  # type: ignore[arg-type]
 
 

@@ -8,8 +8,7 @@ import unittest
 from kairospy.application.actor.support.services.connections import IntegrationConnectionScope
 from kairospy.application.usecases.market.application.integration import MarketDataConnectionRequest, MarketFeedSubscriptionRequest, MarketStreamConnectionRequest
 from kairospy.application.usecases.market.application.component import MarketApplication
-from kairospy.application.usecases.market.domain.specs import MarketDataSpec
-from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
+from kairospy.application.usecases.market.application.requests import MarketDataSpec, MarketDataSubscriptionSpec
 from kairospy.application.usecases.market.application.runtime import build_live_market
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec, RuntimeMode
 from kairospy.infrastructure.integrations.application.market_runtime import SystemMarketIntegrationRuntime
@@ -50,10 +49,8 @@ class MarketDynamicIntegrationTests(unittest.TestCase):
         registry = GatewayRegistry.with_builtins()
         combinations = (
             (ExchangeId.BINANCE, ProductFamily.SPOT),
-            (ExchangeId.BINANCE, ProductFamily.EQUITY),
             (ExchangeId.BINANCE, ProductFamily.USD_M_FUTURES),
             (ExchangeId.OKX, ProductFamily.SPOT),
-            (ExchangeId.OKX, ProductFamily.EQUITY),
             (ExchangeId.OKX, ProductFamily.USD_M_FUTURES),
             (ExchangeId.HYPERLIQUID, ProductFamily.SPOT),
             (ExchangeId.HYPERLIQUID, ProductFamily.USD_M_FUTURES),
@@ -72,7 +69,6 @@ class MarketDynamicIntegrationTests(unittest.TestCase):
             if (exchange, product) in {
                 (ExchangeId.BINANCE, ProductFamily.USD_M_FUTURES),
                 (ExchangeId.OKX, ProductFamily.SPOT),
-                (ExchangeId.OKX, ProductFamily.EQUITY),
                 (ExchangeId.OKX, ProductFamily.USD_M_FUTURES),
                 (ExchangeId.HYPERLIQUID, ProductFamily.SPOT),
                 (ExchangeId.HYPERLIQUID, ProductFamily.USD_M_FUTURES),
@@ -105,15 +101,15 @@ class MarketDynamicIntegrationTests(unittest.TestCase):
             self.assertIsInstance(execution, CcxtExecutionConnection)
 
     def test_market_runtime_creates_typed_connection_on_demand(self) -> None:
-        scope = IntegrationConnectionScope()
-        runtime = SystemMarketIntegrationRuntime(scope=scope, application=_FakeIntegrationApplication())
+        segment = IntegrationConnectionScope()
+        runtime = SystemMarketIntegrationRuntime(scope=segment, application=_FakeIntegrationApplication())
         market = MarketRef.ephemeral(venue="okx", market="swap", source_symbol="BTC/USDT")
         connection = runtime.create_stream(
             MarketStreamConnectionRequest(
                 market=market,
             )
         )
-        self.assertIs(scope.get("market.okx.swap.stream"), connection)
+        self.assertIs(segment.get("market.okx.swap.stream"), connection)
         self.assertEqual(connection.identity.participants[0].id, ExchangeId.OKX)
         quote = connection.latest_quote("BTC/USDT")  # type: ignore[attr-defined]
         self.assertEqual(quote.bid, Decimal("100.1"))  # type: ignore[union-attr]
@@ -129,23 +125,23 @@ class MarketDynamicIntegrationTests(unittest.TestCase):
         event = asyncio.run(receive())
         self.assertEqual(event.kind, "quote")
         runtime.remove("market.okx.swap.stream")
-        self.assertIsNone(scope.get("market.okx.swap.stream"))
+        self.assertIsNone(segment.get("market.okx.swap.stream"))
 
     def test_market_runtime_creates_data_connection_and_canonicalizes_okex(self) -> None:
-        scope = IntegrationConnectionScope()
-        runtime = SystemMarketIntegrationRuntime(scope=scope, application=_FakeIntegrationApplication())
+        segment = IntegrationConnectionScope()
+        runtime = SystemMarketIntegrationRuntime(scope=segment, application=_FakeIntegrationApplication())
         connection = runtime.create_data(
             MarketDataConnectionRequest(
                 MarketDataSpec("BTC/USDT", "quote", venue="okex", market="spot"),
             )
         )
-        self.assertIs(scope.get("market.okex.spot.data"), connection)
+        self.assertIs(segment.get("market.okex.spot.data"), connection)
         self.assertEqual(connection.identity.participants[0].id, ExchangeId.OKX)  # type: ignore[attr-defined]
         self.assertEqual(connection.latest_quote("BTC/USDT").ask, Decimal("100.2"))  # type: ignore[union-attr]
 
     def test_market_application_uses_dynamic_runtime_instead_of_precreated_feed(self) -> None:
-        scope = IntegrationConnectionScope()
-        runtime = SystemMarketIntegrationRuntime(scope=scope, application=_FakeIntegrationApplication())
+        segment = IntegrationConnectionScope()
+        runtime = SystemMarketIntegrationRuntime(scope=segment, application=_FakeIntegrationApplication())
         market = MarketRef.ephemeral(venue="binance", market="spot", source_symbol="BTC/USDT")
         application = MarketApplication()
         source = build_live_market(
@@ -160,7 +156,7 @@ class MarketDynamicIntegrationTests(unittest.TestCase):
 
         event = asyncio.run(receive())
         self.assertEqual(event.kind, "quote")
-        self.assertIsNotNone(scope.get("market.binance.spot.stream"))
+        self.assertIsNotNone(segment.get("market.binance.spot.stream"))
 
 
 if __name__ == "__main__":

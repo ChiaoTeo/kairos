@@ -3,6 +3,7 @@ from .bindings import (
     IntegrationBinding,
     TransportKind,
 )
+from kairospy.domain.reference import AssetType
 from .capabilities import IntegrationCapability
 from .connections import (
     ConnectionHealth,
@@ -25,12 +26,12 @@ from kairospy.domain.reference import (
 )
 from .policies import binding_is_public
 from .products import ProductFamily
-from .routes import AdapterRef, IntegrationRoute
+from .routes import IntegrationRoute
 from .updates import IntegrationEvent
 
 __all__ = [
     "AccessScope",
-    "AdapterRef",
+    "AssetType",
     "BrokerId",
     "BrokerRef",
     "ConnectionHealth",

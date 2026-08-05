@@ -6,7 +6,6 @@ from typing import Any, Mapping
 
 from kairospy.application.usecases.workspace.domain.config import DEFAULT_DATA_ROOT, DEFAULT_REFERENCE_ROOT, KairosConfig, find_manifest_path, load_config
 
-from .accounts import AccountStore
 from .account_locks import AccountLeaseManager
 from .credentials import CredentialStore
 from .operations import OperationJournal
@@ -32,7 +31,6 @@ class KairosWorkspace:
     account_locks_root: Path
     launch_index_path: Path
     operations_path: Path
-    accounts: AccountStore
     credentials: CredentialStore
     account_locks: AccountLeaseManager
     launch_index: LaunchIndex
@@ -53,7 +51,6 @@ class KairosWorkspace:
         account_locks_root = _path(config, "paths", "account_locks_root", str(state_root / "account-locks"))
         launch_index_path = _path(config, "paths", "launch_index", str(state_root / "launch-index.json"))
         operations_path = _path(config, "paths", "operations", str(state_root / "operations.jsonl"))
-        account_store = AccountStore.load(accounts_root)
         credential_store = CredentialStore.load(credentials_root)
         account_locks = AccountLeaseManager(account_locks_root)
         launch_index = LaunchIndex(launch_index_path, root=root)
@@ -72,7 +69,6 @@ class KairosWorkspace:
             account_locks_root=account_locks_root,
             launch_index_path=launch_index_path,
             operations_path=operations_path,
-            accounts=account_store,
             credentials=credential_store,
             account_locks=account_locks,
             launch_index=launch_index,

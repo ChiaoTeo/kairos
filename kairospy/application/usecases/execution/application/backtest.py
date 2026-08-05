@@ -61,8 +61,8 @@ def equity_point_from_account_view(time: datetime | None, account_view: object |
     if account_view is None or time is None:
         return None
     equity = getattr(account_view, "equity", None)
-    cash = getattr(account_view, "cash", None)
-    if equity is None or cash is None:
+    selected_balance = getattr(account_view, "selected_balance", None)
+    if equity is None or selected_balance is None:
         return None
     positions = tuple(
         sorted(
@@ -70,7 +70,7 @@ def equity_point_from_account_view(time: datetime | None, account_view: object |
             for position in tuple(getattr(account_view, "positions", ()) or ())
         )
     )
-    return EquityCurvePoint(time, Decimal(str(equity)), Decimal(str(cash)), positions)
+    return EquityCurvePoint(time, Decimal(str(equity)), Decimal(str(selected_balance)), positions)
 
 
 def closed_trades_from_fills(fills: tuple[SimulatedFill, ...]) -> tuple[SimulatedClosedTrade, ...]:

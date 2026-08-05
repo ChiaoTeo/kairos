@@ -150,7 +150,7 @@ class MarketProjectionService:
         if synchronizer is None:
             return None
         try:
-            snapshot = synchronizer.apply(delta).book
+            snapshot = synchronizer.apply(delta).scope
         except OrderBookSyncGap:
             return None
         self._book_windows[key] = _append_window(self._book_windows.get(key, ()), snapshot, limit=self.window_size, replace_key=_orderbook_replace_key)

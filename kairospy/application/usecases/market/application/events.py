@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Protocol
+from kairospy.application.support.messaging import Message
 
 from kairospy.application.usecases.market.application.ingestion import MarketIngestionApplicationService
 from kairospy.application.usecases.market.application.projections import MarketProjectionApplicationService
@@ -35,7 +36,7 @@ class MarketEventApplicationService:
         self.projection = projection
         self.sink = sink
 
-    def handle(self, message: object) -> MarketEvent | None:
+    def handle(self, message: Message) -> MarketEvent | None:
         event = self.ingestion.event_from_message(message)
         if event is None:
             return None

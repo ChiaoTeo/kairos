@@ -6,7 +6,8 @@ from enum import Enum
 
 from kairospy.application.usecases.reference.application.ports import ReferenceCommandResources
 from kairospy.application.usecases.reference.application.serde import asset_to_primitive, entity_to_primitive, instrument_to_primitive, lifecycle_event_to_primitive, listing_to_primitive, market_to_primitive
-from kairospy.application.usecases.market.application.commands.resources import DriverName, ExchangeName
+from kairospy.application.usecases.reference.protocol import ReferenceCatalogSource, ReferenceProviderSource
+from kairospy.application.usecases.reference.application.requests import ReferenceDriverName as DriverName, ReferenceExchangeName as ExchangeName
 from kairospy.application.usecases.workspace.application.context import workspace as resolve_workspace
 from kairospy.domain.reference import AssetType, Broker, Exchange, MarketStatus, Provider
 from kairospy.domain.reference import brokers as reference_brokers
@@ -33,13 +34,13 @@ class ReferenceCommandApplication:
     def __init__(self, resources: ReferenceCommandResources) -> None:
         self._resources = resources
 
-    def public_market_access(self, exchange_name: ExchangeName, driver_name: DriverName) -> object:
+    def public_market_access(self, exchange_name: ExchangeName, driver_name: DriverName) -> ReferenceCatalogSource:
         return self._resources.public_market_access(exchange_name, driver_name)
 
-    def provider(self, provider_name: ProviderName, driver_name: DriverName) -> object:
+    def provider(self, provider_name: ProviderName, driver_name: DriverName) -> ReferenceProviderSource:
         return self._resources.provider(provider_name, driver_name)
 
-    def reference_access(self, source_kind: str, source_name: str, *, market: str | None, driver_name: DriverName) -> object:
+    def reference_access(self, source_kind: str, source_name: str, *, market: str | None, driver_name: DriverName) -> ReferenceCatalogSource:
         return self._resources.reference_access(source_kind, source_name, market=market, driver_name=driver_name)
 
 

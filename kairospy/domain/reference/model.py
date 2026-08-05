@@ -6,7 +6,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Mapping
 
-from .identity import AssetId, EntityId, ExchangeId, InstrumentId, ListingId, MarketId, MarketTypeId, SourceSymbol
+from .identity import AssetId, EntityId, ExchangeId, FinancialProductId, InstrumentId, ListingId, MarketId, MarketTypeId, ProviderId, SourceSymbol
 
 
 class EntityType(StrEnum):
@@ -41,6 +41,32 @@ class InstrumentType(StrEnum):
     CASH = "cash"
     INDEX = "index"
     OTHER = "other"
+
+
+class ProductFamily(StrEnum):
+    """Trading and account product family, independent of asset type."""
+
+    SPOT = "spot"
+    USD_M_FUTURES = "usd_m_futures"
+    COIN_M_FUTURES = "coin_m_futures"
+    OPTIONS = "options"
+
+
+class FinancialProductType(StrEnum):
+    SIMPLE_EARN_FLEXIBLE = "simple_earn_flexible"
+    SIMPLE_EARN_LOCKED = "simple_earn_locked"
+    STAKING = "staking"
+    DUAL_INVESTMENT = "dual_investment"
+    DISCOUNT_BUY = "discount_buy"
+
+
+class FinancialProductStatus(StrEnum):
+    AVAILABLE = "available"
+    SUBSCRIPTION_ONLY = "subscription_only"
+    REDEMPTION_ONLY = "redemption_only"
+    SUSPENDED = "suspended"
+    MATURED = "matured"
+    UNKNOWN = "unknown"
 
 
 class MarketStatus(StrEnum):
@@ -132,6 +158,45 @@ class InstrumentDefinition(EffectiveInterval):
     option_right: str | None = None
     multiplier: Decimal | None = None
     metadata: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
+class FinancialProductDefinition(EffectiveInterval):
+    """Provider-neutral identity and terms for a non-market investment product."""
+
+    product_id: FinancialProductId
+    product_type: FinancialProductType
+    name: str
+    asset_id: AssetId
+    provider_product_id: str
+    provider_id: ProviderId | str | None = None
+    issuer_id: EntityId | None = None
+    currency_asset_id: AssetId | None = None
+    min_amount: Decimal | None = None
+    max_amount: Decimal | None = None
+    apr: Decimal | None = None
+    lock_period_days: int | None = None
+    maturity_at: datetime | None = None
+    status: FinancialProductStatus = FinancialProductStatus.UNKNOWN
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        EffectiveInterval.__post_init__(self)
+        object.__setattr__(self, "product_id", _id(self.product_id, FinancialProductId, "product_id"))
+        object.__setattr__(self, "product_type", FinancialProductType(str(self.product_type).lower()))
+        object.__setattr__(self, "asset_id", _id(self.asset_id, AssetId, "asset_id"))
+        object.__setattr__(self, "provider_product_id", _required_text(self.provider_product_id, "provider_product_id"))
+        object.__setattr__(self, "provider_id", None if self.provider_id is None else _id(self.provider_id, ProviderId, "provider_id"))
+        object.__setattr__(self, "issuer_id", None if self.issuer_id is None else _id(self.issuer_id, EntityId, "issuer_id"))
+        object.__setattr__(self, "status", FinancialProductStatus(str(self.status).lower()))
+        if self.min_amount is not None and self.min_amount < 0:
+            raise ValueError("min_amount cannot be negative")
+        if self.max_amount is not None and self.max_amount < 0:
+            raise ValueError("max_amount cannot be negative")
+        if self.min_amount is not None and self.max_amount is not None and self.max_amount < self.min_amount:
+            raise ValueError("max_amount must be greater than or equal to min_amount")
+        if self.lock_period_days is not None and self.lock_period_days < 0:
+            raise ValueError("lock_period_days cannot be negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +318,13 @@ def _id(value, id_type, label: str):
     return id_type(text)
 
 
+def _required_text(value: object, label: str) -> str:
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{label} is required")
+    return text
+
+
 __all__ = [
     "Asset",
     "AssetType",
@@ -261,6 +333,10 @@ __all__ = [
     "EntityType",
     "InstrumentDefinition",
     "InstrumentType",
+    "ProductFamily",
+    "FinancialProductDefinition",
+    "FinancialProductStatus",
+    "FinancialProductType",
     "LifecycleEvent",
     "LifecycleEventType",
     "ListingDefinition",

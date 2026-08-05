@@ -5,17 +5,10 @@ from datetime import datetime
 
 from kairospy.domain.reference import LifecycleEvent, MarketDefinition, ReferenceCatalog
 from kairospy.application.usecases.reference.protocol import ReferenceStore
+from kairospy.application.usecases.reference.application.results import ReferenceRefreshResult
 from kairospy.application.usecases.reference.services.catalogs import ReferenceCatalogService
 
 from ..domain.transition import apply_catalog_snapshot
-
-
-@dataclass(frozen=True, slots=True)
-class ReferenceRefreshResult:
-    catalog: ReferenceCatalog
-    events: tuple[LifecycleEvent, ...]
-    previous_markets: tuple[MarketDefinition, ...]
-    current_markets: tuple[MarketDefinition, ...]
 
 
 @dataclass(slots=True)

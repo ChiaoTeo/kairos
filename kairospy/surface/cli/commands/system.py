@@ -161,10 +161,52 @@ def account_trade_status(
     write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
 
 
+@system_account_app.command("current")
+def account_current(
+    ctx: typer.Context,
+    account: str | None = typer.Argument(None, help="Optional ExternalAccount id or broker.account key"),
+    root: Path | None = typer.Option(None, "--root"),
+    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
+    wait: bool = typer.Option(True, "--wait/--no-wait"),
+    timeout_seconds: float = typer.Option(5.0, "--timeout"),
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
+    payload = _system_account_command("account.current", account=account, root=root, launch_id=launch_id, wait=wait, timeout_seconds=timeout_seconds)
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
+
+
+@system_account_app.command("balances")
+def account_balances(
+    ctx: typer.Context,
+    account: str | None = typer.Argument(None, help="Optional ExternalAccount id or broker.account key"),
+    root: Path | None = typer.Option(None, "--root"),
+    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
+    wait: bool = typer.Option(True, "--wait/--no-wait"),
+    timeout_seconds: float = typer.Option(5.0, "--timeout"),
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
+    payload = _system_account_command("account.balances", account=account, root=root, launch_id=launch_id, wait=wait, timeout_seconds=timeout_seconds)
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
+
+
+@system_account_app.command("positions")
+def account_positions(
+    ctx: typer.Context,
+    account: str | None = typer.Argument(None, help="Optional ExternalAccount id or broker.account key"),
+    root: Path | None = typer.Option(None, "--root"),
+    launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
+    wait: bool = typer.Option(True, "--wait/--no-wait"),
+    timeout_seconds: float = typer.Option(5.0, "--timeout"),
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
+    payload = _system_account_command("account.positions", account=account, root=root, launch_id=launch_id, wait=wait, timeout_seconds=timeout_seconds)
+    write_cli_result(ctx, payload, output_format=output_format, default=OutputFormat.json)
+
+
 @system_account_app.command("trade-acquire")
 def account_trade_acquire(
     ctx: typer.Context,
-    account: str = typer.Argument(..., help="Account id or broker.account key"),
+    account: str = typer.Argument(..., help="ExternalAccount id or broker.account key"),
     root: Path | None = typer.Option(None, "--root"),
     launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
     wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for the system runtime response."),
@@ -185,7 +227,7 @@ def account_trade_acquire(
 @system_account_app.command("trade-release")
 def account_trade_release(
     ctx: typer.Context,
-    account: str = typer.Argument(..., help="Account id or broker.account key"),
+    account: str = typer.Argument(..., help="ExternalAccount id or broker.account key"),
     root: Path | None = typer.Option(None, "--root"),
     launch_id: str = typer.Option(DEFAULT_SYSTEM_LAUNCH_ID, "--launch-id"),
     wait: bool = typer.Option(True, "--wait/--no-wait", help="Wait for the system runtime response."),

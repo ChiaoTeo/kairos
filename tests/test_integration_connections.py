@@ -21,7 +21,7 @@ from kairospy.infrastructure.integrations.services.gateways.binance.equity.clien
 from kairospy.infrastructure.integrations.services.gateways.binance.equity.operations import BinanceEquityMarketOperations
 from kairospy.infrastructure.integrations.services.gateways.binance.equity.normalizers import BinanceEquityNormalizers
 from kairospy.infrastructure.integrations.services.gateways.binance.equity.public_stream import BinanceEquityPollingConnection
-from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
+from kairospy.application.usecases.market.application.requests import MarketDataSubscriptionSpec
 from kairospy.application.usecases.market.application.runtime import build_live_market
 from kairospy.application.usecases.market.application.component import MarketApplication
 from kairospy.application.system.application.business import SystemBusinessRuntime
@@ -38,12 +38,13 @@ from kairospy.infrastructure.integrations.services.gateways.binance.spot.public_
 from kairospy.infrastructure.integrations.services.gateways.binance.spot.normalizers import BinanceSpotNormalizers
 from kairospy.infrastructure.integrations.services.connections.connection import Connection
 from kairospy.infrastructure.integrations.domain import ConnectionLifecycle
-from kairospy.domain.account import AccountBookKind, AccountBookRef, AccountContext, Environment
+from kairospy.domain.account import AccountModel, AccountSegment, AccountRuntimeContext, Environment, ProductFamily
 from kairospy.domain.market import Quote, TradePrint
 from kairospy.domain.reference import MarketRef
 from kairospy.domain.intent import IntentJournal
 from kairospy.infrastructure.integrations.domain import (
     AccessScope,
+    AssetType,
     BrokerId,
     BrokerRef,
     CredentialRef,
@@ -81,17 +82,17 @@ class IntegrationConnectionTests(unittest.TestCase):
                 self.stops += 1
 
         resource = Resource()
-        scope = DefaultConnectionManager()
-        scope.register("market", resource, role="market_stream")
+        segment = DefaultConnectionManager()
+        segment.register("market", resource, role="market_stream")
 
-        scope.start()
-        scope.start()
+        segment.start()
+        segment.start()
         assert resource.starts == 1
-        assert scope.health()["connections"] == 1
+        assert segment.health()["connections"] == 1
 
-        scope.stop()
+        segment.stop()
         assert resource.stops == 1
-        assert scope.health()["status"] == "stopped"
+        assert segment.health()["status"] == "stopped"
 
     def test_binance_equity_polling_connection_emits_quote_to_market_runtime(self) -> None:
         class Response:
@@ -111,7 +112,8 @@ class IntegrationConnectionTests(unittest.TestCase):
             spec = IntegrationConnectionSpec(
                 connection_id="binance-equity-test",
                 route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
-                product=ProductFamily.EQUITY,
+                product=ProductFamily.SPOT,
+                asset_type=AssetType.EQUITY,
                 access=AccessScope.PUBLIC,
                 transport=TransportKind.MARKET_STREAM,
                 mode=RuntimeMode.LIVE,
@@ -153,7 +155,8 @@ class IntegrationConnectionTests(unittest.TestCase):
             spec = IntegrationConnectionSpec(
                 connection_id="binance-equity-runtime-test",
                 route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
-                product=ProductFamily.EQUITY,
+                product=ProductFamily.SPOT,
+                asset_type=AssetType.EQUITY,
                 access=AccessScope.PUBLIC,
                 transport=TransportKind.MARKET_STREAM,
                 mode=RuntimeMode.LIVE,
@@ -225,7 +228,8 @@ class IntegrationConnectionTests(unittest.TestCase):
             spec = IntegrationConnectionSpec(
                 connection_id="binance-equity-strategy-test",
                 route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
-                product=ProductFamily.EQUITY,
+                product=ProductFamily.SPOT,
+                asset_type=AssetType.EQUITY,
                 access=AccessScope.PUBLIC,
                 transport=TransportKind.MARKET_STREAM,
                 mode=RuntimeMode.LIVE,
@@ -519,7 +523,7 @@ class IntegrationConnectionTests(unittest.TestCase):
         self.assertEqual(len(catalog.list_markets(at=datetime.now(timezone.utc))), 1)
         snapshot = translator.account_snapshot(
             {"balances": [{"asset": "USDT", "free": "10.5", "locked": "1.5"}]},
-            context=AccountContext(AccountBookRef("binance", "live", AccountBookKind.SPOT), Environment.LIVE),
+            context=AccountRuntimeContext(AccountSegment("binance", "live", AccountModel.NO_MARGIN, ProductFamily.SPOT), Environment.LIVE),
             observed_at=datetime.now(timezone.utc),
         )
         self.assertEqual(snapshot.balances[0].total, 12)
@@ -539,7 +543,7 @@ class IntegrationConnectionTests(unittest.TestCase):
 
     def test_binance_private_order_event_translates_to_execution_update(self) -> None:
         translator = BinanceSpotNormalizers()
-        context = AccountContext(AccountBookRef("binance", "live", AccountBookKind.SPOT), Environment.LIVE)
+        context = AccountRuntimeContext(AccountSegment("binance", "live", AccountModel.NO_MARGIN, ProductFamily.SPOT), Environment.LIVE)
         update = translator.execution_update(
             {
                 "E": 1700000000000,

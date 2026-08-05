@@ -4,8 +4,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from kairospy.application.usecases.account.application.schemas import ACCOUNT_SCHEMAS
-from kairospy.application.usecases.account.application.commands import AccountCommandApplication
-from kairospy.application.support.composition.application.cli import build_account_command
+from kairospy.application.support.composition.application.cli import AccountCommandServices, build_account_command
 
 
 _ENVIRONMENTS = ("paper", "testnet", "live")
@@ -24,7 +23,7 @@ class WizardEcho(Protocol):
 
 @dataclass(slots=True)
 class AccountCreateWizard:
-    facade: AccountCommandApplication = field(default_factory=build_account_command)
+    facade: AccountCommandServices = field(default_factory=build_account_command)
     fields: dict[str, str | None] = field(default_factory=dict)
     credential_fields: dict[str, str] = field(default_factory=dict)
     current: str = "account_id"
@@ -36,7 +35,7 @@ class AccountCreateWizard:
     def start(self) -> str:
         return "\n".join(
             [
-                "Account create wizard",
+                "ExternalAccount create wizard",
                 "Type `cancel` to stop. Press Enter to accept defaults shown in brackets.",
                 self.prompt(),
             ]
@@ -50,10 +49,8 @@ class AccountCreateWizard:
                 return f"broker [{'/'.join(sorted(ACCOUNT_SCHEMAS))}]: "
             case "environment":
                 return "environment [paper/testnet/live] (paper): "
-            case "currency":
-                return "currency (USD): "
-            case "cash":
-                return "initial cash (100000): "
+            case "initial_balances":
+                return "initial balances (for example USDT=10000,USDC=5000; empty for none): "
             case "fee_rate":
                 return "fee rate (0): "
             case "credential_mode":
@@ -75,7 +72,7 @@ class AccountCreateWizard:
         if value.lower() in {"cancel", "quit", "exit"}:
             self.canceled = True
             self.complete = True
-            return "Account create canceled."
+            return "ExternalAccount create canceled."
         try:
             self._accept(value)
         except ValueError as error:
@@ -85,7 +82,7 @@ class AccountCreateWizard:
                 return f"error: {self.error}"
             if self.result_path is not None:
                 return f"created account: {self.result_path}"
-            return "Account create canceled."
+            return "ExternalAccount create canceled."
         return self.prompt()
 
     def _accept(self, value: str) -> None:
@@ -108,12 +105,9 @@ class AccountCreateWizard:
                 if environment not in _ENVIRONMENTS:
                     raise ValueError(f"environment must be one of: {', '.join(_ENVIRONMENTS)}")
                 self.fields["environment"] = environment
-                self.current = "currency"
-            case "currency":
-                self.fields["currency"] = value.upper() if value else "USD"
-                self.current = "cash" if self._environment() != "live" else "credential_mode"
-            case "cash":
-                self.fields["cash"] = value or "100000"
+                self.current = "initial_balances" if self._environment() != "live" else "credential_mode"
+            case "initial_balances":
+                self.fields["initial_balances"] = value
                 self.current = "fee_rate"
             case "fee_rate":
                 self.fields["fee_rate"] = value or "0"
@@ -153,14 +147,13 @@ class AccountCreateWizard:
 
     def _create(self) -> None:
         try:
-                self.result_path = self.facade.create(
+                self.result_path = str(self.facade.simulation.provision(
                     account_id=self._required("account_id"),
                     broker=self._required("broker"),
                 environment=self._required("environment"),
                 venue=None,
-                market=None,
-                currency=self._required("currency"),
-                cash=self.fields.get("cash"),
+                product_family=None,
+                initial_balances=tuple(item.strip() for item in (self.fields.get("initial_balances") or "").split(",") if item.strip()),
                 fee_rate=self.fields.get("fee_rate") or "0",
                 credential_kind=None,
                 credential=self.fields.get("credential"),
@@ -174,7 +167,7 @@ class AccountCreateWizard:
                 field_values=None,
                 credential_values=None,
                 force=False,
-            )
+                ).path)
         except ValueError as error:
             self.error = str(error)
         self.complete = True
@@ -204,14 +197,13 @@ class AccountCreateWizard:
 
     def _summary(self) -> str:
         lines = [
-            "Account summary",
+            "ExternalAccount summary",
             f"  id:          {self.fields.get('account_id')}",
             f"  broker:      {self.fields.get('broker')}",
             f"  environment: {self.fields.get('environment')}",
-            f"  currency:    {self.fields.get('currency')}",
         ]
-        if self.fields.get("cash") is not None:
-            lines.append(f"  cash:        {self.fields.get('cash')}")
+        if self.fields.get("initial_balances"):
+            lines.append(f"  balances:    {self.fields.get('initial_balances')}")
         if self.fields.get("fee_rate") is not None:
             lines.append(f"  fee_rate:    {self.fields.get('fee_rate')}")
         if self.fields.get("credential"):
@@ -228,7 +220,7 @@ def run_account_create_wizard(
     *,
     prompt: WizardPrompt,
     echo: WizardEcho,
-    facade: AccountCommandApplication | None = None,
+    facade: AccountCommandServices | None = None,
 ) -> int:
     wizard = AccountCreateWizard(facade=facade or build_account_command())
     message = wizard.start()

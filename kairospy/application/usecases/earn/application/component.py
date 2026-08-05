@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from kairospy.application.usecases.earn.domain import EarnPosition, EarnProduct, EarnRedeemRequest, EarnReward, EarnSubscribeRequest
+from kairospy.application.usecases.earn.domain import EarnPosition, EarnProduct, EarnProductType, EarnRedeemRequest, EarnReward, EarnSubscribeRequest
 from kairospy.application.usecases.earn.protocol import EarnProvider
 
 
@@ -11,7 +11,8 @@ class EarnApplication:
     provider: EarnProvider
 
     def list_products(self, *, asset: str | None = None, product_type: str | None = None) -> tuple[EarnProduct, ...]:
-        return tuple(self.provider.products(asset=asset, product_type=product_type))
+        normalized = None if product_type is None else EarnProductType(str(product_type).lower()).value
+        return tuple(self.provider.products(asset=asset, product_type=normalized))
 
     def positions(self, *, asset: str | None = None) -> tuple[EarnPosition, ...]:
         return tuple(self.provider.positions(asset=asset))

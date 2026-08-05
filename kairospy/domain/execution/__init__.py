@@ -13,7 +13,7 @@ from .impact import (
     BuyingPowerCheck,
     CashBuyingPowerModel,
     MarginBuyingPowerModel,
-    reserve_cash_order,
+    reserve_asset_order,
     reserve_margin_order,
 )
 from .reservation import Reservation, ReservationBook, ReservationStatus
@@ -34,6 +34,6 @@ __all__ = [
     "Reservation",
     "ReservationBook",
     "ReservationStatus",
-    "reserve_cash_order",
+    "reserve_asset_order",
     "reserve_margin_order",
 ]

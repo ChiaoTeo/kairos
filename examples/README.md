@@ -111,9 +111,9 @@ host、port、client id 和 timeout 在 infrastructure factory 中注入，业�
 先创建一个本地 paper 账户：
 
 ```bash
-uv run kairospy account create paper_btc \
-  --broker binance --environment paper --book spot \
-  --currency USDT --cash 10000
+uv run kairospy account simulate paper_btc \
+  --broker binance --environment paper --product-family spot \
+  --balance USDT=10000
 ```
 
 然后启动：
@@ -135,9 +135,9 @@ Binance Stocks Trading 的行情接口需要 API key。先创建一个只读 cre
 ```bash
 uv run kairospy account credential create binance_read \
   --broker binance --api-key "$BINANCE_API_KEY" --api-secret "$BINANCE_API_SECRET"
-uv run kairospy account create aapl_reader \
+uv run kairospy account connect \
   --broker binance --environment live \
-  --credential binance_read --credential-role readonly
+  --credential binance_read --alias aapl_reader
 ```
 
 如果账户已经绑定了其它 credential id，只需要把 `[account].ref` 改成对应账户；
@@ -159,7 +159,7 @@ uv run kairospy launch start \
 先准备一个 paper 账户和两个只读行情 credential：
 
 ```bash
-uv run kairospy account create paper --broker binance --environment paper --book spot --currency USDT --cash 10000
+uv run kairospy account simulate paper --broker binance --environment paper --product-family spot --balance USDT=10000
 uv run kairospy account credential create binance_read --broker binance --api-key "$BINANCE_API_KEY" --api-secret "$BINANCE_API_SECRET"
 ```
 

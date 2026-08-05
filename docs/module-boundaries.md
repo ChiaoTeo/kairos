@@ -140,9 +140,9 @@ Actor 不应复制 Domain 规则，也不应持有其他 Actor 的内部状态�
 | 状态 | 拥有者 |
 | --- | --- |
 | 行情订阅和行情数据流 | Market Actor |
-| 多账户状态 | Account Actor |
-| 订单和成交状态 | Account Actor |
-| IntentJournal | Account Actor |
+| 多账户状态 | ExternalAccount Actor |
+| 订单和成交状态 | ExternalAccount Actor |
+| IntentJournal | ExternalAccount Actor |
 | 风险预算和风险状态 | Risk Actor |
 | Timeline 和展示投影 | Monitor Actor |
 | 系统启停状态 | System / Supervisor |
@@ -161,7 +161,7 @@ System 是系统运行壳，不是业务层。它只负责：
 
 System 中出现以下内容时应优先下沉：
 
-- 账户、订单、成交、Intent 的状态变更 → Account Actor。
+- 账户、订单、成交、Intent 的状态变更 → ExternalAccount Actor。
 - 行情订阅和 reference 刷新 → Market Actor。
 - 风险判断 → Risk Usecase/Risk Actor。
 - 展示和 Timeline → Monitor Actor。
@@ -183,9 +183,9 @@ Query    读取状态，不改变状态
 
 ```text
 SubscribeMarketDataCommand → MarketActor
-MarketDataReceivedEvent    → Bus → Strategy / Account / Monitor
+MarketDataReceivedEvent    → Bus → Strategy / ExternalAccount / Monitor
 SubmitOrderCommand         → AccountActor
-OrderFilledEvent           → Bus → Account / Monitor
+OrderFilledEvent           → Bus → ExternalAccount / Monitor
 ```
 
 规则：

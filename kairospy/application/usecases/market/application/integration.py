@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Protocol
+from typing import Awaitable, Protocol
 
-from kairospy.application.usecases.market.domain.specs import MarketDataSpec
-from kairospy.domain.market import Bar, MarketEvent, MarketSelector, Quote
-from kairospy.domain.reference import MarketRef
+from kairospy.application.usecases.market.domain.specs import MarketDataSpec, MarketOptions, MarketTime
+from kairospy.domain.market import Bar, MarketEvent, MarketSelector, Quote, RateObservation
+from kairospy.domain.reference import MarketRef, ProviderId
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,8 +22,7 @@ class MarketStreamConnectionRequest:
 
     market: MarketRef
     connection_id: str | None = None
-    provider: str | None = None
-    adapter: str | None = None
+    provider: ProviderId | str | None = None
     credential: str | None = None
 
 
@@ -32,7 +31,7 @@ class MarketFeedSubscriptionRequest:
     market: MarketRef
     selector: MarketSelector
     identity: str
-    params: Mapping[str, object] = field(default_factory=dict)
+    params: MarketOptions = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.identity.strip():
@@ -78,7 +77,7 @@ class MarketIntegrationRuntime(Protocol):
 class MarketDataConnectionRequest:
     spec: MarketDataSpec
     connection_id: str | None = None
-    params: Mapping[str, object] = field(default_factory=dict)
+    params: MarketOptions = field(default_factory=dict)
 
 
 class MarketDataConnection(Protocol):
@@ -90,10 +89,10 @@ class MarketDataConnection(Protocol):
         symbol: str,
         *,
         timeframe: str = "1m",
-        since: object | None = None,
-        until: object | None = None,
+        since: MarketTime | None = None,
+        until: MarketTime | None = None,
         limit: int = 1000,
-        adapter_options: Mapping[str, object] | None = None,
+        adapter_options: MarketOptions | None = None,
     ) -> Iterable[Bar]:
         ...
 
@@ -101,11 +100,11 @@ class MarketDataConnection(Protocol):
         self,
         symbol: str,
         *,
-        since: object | None = None,
-        until: object | None = None,
+        since: MarketTime | None = None,
+        until: MarketTime | None = None,
         limit: int = 1000,
-        adapter_options: Mapping[str, object] | None = None,
-    ) -> Iterable[object]:
+        adapter_options: MarketOptions | None = None,
+    ) -> Iterable[RateObservation]:
         ...
 
 

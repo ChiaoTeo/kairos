@@ -11,7 +11,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
-from kairospy.domain.account import AccountBalance, AccountContext, AccountFeeResolution, AccountFeeRule, AccountFeeSchedule, AccountMarketProfile, AccountSnapshot, AccountSource, FeeDiscountRule, FeePaymentRule, MarginState, MarketFeeRule, OpenOrderSnapshot, PositionSnapshot
+from kairospy.domain.account import AccountBalance, AccountRuntimeContext, AccountFeeResolution, AccountFeeRule, AccountFeeSchedule, AccountMarketProfile, AccountModel, AccountSegment, AccountSnapshot, AccountSource, CollateralBalance, FeeDiscountRule, FeePaymentRule, MarginState, MarketFeeRule, OpenOrderSnapshot, PositionSnapshot, ProductFamily as AccountProductFamily
 from kairospy.domain.reference import MarketRef
 from kairospy.infrastructure.integrations.application.account import ConnectionAccountMarketProfileData, ConnectionAccountMarketProfileRequest, ConnectionAccountReadData, ConnectionAccountReadRequest
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec
@@ -101,7 +101,7 @@ class CcxtAccountConnection(CcxtPrivateConnection):
                 request.context,
                 request.market,
                 fee=resolution,
-                account_type=_account_type(info, exchange_id) or _account_book_type(request.context.book.book),
+                account_type=_account_type(info, exchange_id) or _account_segment_type(request.context.segment),
                 margin_mode=_text(info, "marginMode"),
                 leverage=_decimal_or_none(_value(info, "leverage")),
                 position_mode=_text(info, "positionMode") or _text(info, "posMode"),
@@ -168,7 +168,7 @@ class CcxtExecutionGateway:
         return CcxtExecutionConnection(spec, exchange=self.exchange)
 
 
-def _account_snapshot(balance: object, positions: object, orders: object, *, context: AccountContext, observed_at: datetime, product: ProductFamily | None) -> AccountSnapshot:
+def _account_snapshot(balance: object, positions: object, orders: object, *, context: AccountRuntimeContext, observed_at: datetime, product: ProductFamily | None) -> AccountSnapshot:
     values = balance if isinstance(balance, Mapping) else {}
     free = values.get("free") if isinstance(values.get("free"), Mapping) else {}
     used = values.get("used") if isinstance(values.get("used"), Mapping) else {}
@@ -179,11 +179,12 @@ def _account_snapshot(balance: object, positions: object, orders: object, *, con
         for currency in sorted(currencies)
         if _decimal(totals.get(currency)) != 0 or _decimal(free.get(currency)) != 0 or _decimal(used.get(currency)) != 0
     )
-    venue = str(context.book.broker)
+    venue = str(context.segment.broker)
     position_rows = tuple(_position(row, venue=venue, product=product) for row in positions if isinstance(row, Mapping) and _decimal(row.get("contracts")) not in (None, Decimal("0"))) if isinstance(positions, (list, tuple)) else ()
     order_rows = tuple(_order(row, venue=venue, product=product) for row in orders if isinstance(row, Mapping)) if isinstance(orders, (list, tuple)) else ()
     margin = _margin(values)
-    return AccountSnapshot(context, balances=balances, margins=() if margin is None else (margin,), positions=position_rows, open_orders=order_rows, observed_at=observed_at, source=AccountSource.VENUE)
+    collaterals = _collateral_balances(values) if product in {ProductFamily.USD_M_FUTURES, ProductFamily.COIN_M_FUTURES} else ()
+    return AccountSnapshot(context, balances=balances, margins=() if margin is None else (margin,), collaterals=collaterals, positions=position_rows, open_orders=order_rows, observed_at=observed_at, source=AccountSource.VENUE)
 
 
 def _position(row: Mapping[str, object], *, venue: str, product: ProductFamily | None) -> PositionSnapshot:
@@ -207,6 +208,22 @@ def _margin(values: Mapping[str, object]) -> MarginState | None:
     if not any(key in values for key in ("free", "used", "total")) or not any(_decimal(value) for value in total.values()):
         return None
     return MarginState("USDT", _decimal(used.get("USDT")), _decimal(used.get("USDT")), AccountSource.VENUE, available=_decimal(free.get("USDT")))
+
+
+def _collateral_balances(values: Mapping[str, object]) -> tuple[CollateralBalance, ...]:
+    free = values.get("free") if isinstance(values.get("free"), Mapping) else {}
+    total = values.get("total") if isinstance(values.get("total"), Mapping) else {}
+    assets = sorted(set(free) | set(total))
+    return tuple(
+        CollateralBalance(
+            str(asset),
+            _decimal(total.get(asset)) or Decimal("0"),
+            _decimal(free.get(asset)) or Decimal("0"),
+            source=AccountSource.VENUE,
+        )
+        for asset in assets
+        if (_decimal(total.get(asset)) or Decimal("0")) > 0
+    )
 
 
 def _fetch_positions(exchange: Any, symbol: str | None, *, product: ProductFamily | None) -> object:
@@ -258,7 +275,7 @@ def _venue_fee_payloads(
         fee = _as_mapping(fee)
         schedule = fee.get("feeSchedule") if isinstance(fee, Mapping) else None
         if isinstance(schedule, Mapping):
-            spot = str(request.context.book.book) == "spot"
+            spot = request.context.segment.product_family is AccountProductFamily.SPOT
             market_maker = _decimal_or_none(schedule.get("spotAdd" if spot else "add"))
             market_taker = _decimal_or_none(schedule.get("spotCross" if spot else "cross"))
             account_maker = _decimal_or_none(fee.get("userSpotAddRate" if spot else "userAddRate"))
@@ -281,7 +298,7 @@ def _call_raw(exchange: Any, names: tuple[str, ...], *, params: Mapping[str, obj
 
 
 def _okx_fee_params(request: ConnectionAccountMarketProfileRequest, symbol: str) -> Mapping[str, object]:
-    product = str(request.context.book.book)
+    product = str(request.context.segment.product_family or request.context.segment.model)
     if product in {"spot", "equity"}:
         return {"instType": "SPOT", "instId": symbol.replace("/", "-")}
     return {"instType": "SWAP", "instFamily": symbol.split(":", 1)[0].replace("/", "-")}
@@ -301,22 +318,29 @@ def _first_data_row(value: object) -> Mapping[str, object] | None:
     return None
 
 
-def _account_type(payload: Mapping[str, object] | None, exchange_id: str) -> str | None:
+def _account_type(payload: Mapping[str, object] | None, exchange_id: str) -> AccountModel | None:
     value = _text(payload, "accountType") or _text(payload, "acctLv")
     if exchange_id == "okx":
-        return {"1": "spot", "2": "futures", "3": "multi_currency_margin", "4": "portfolio_margin"}.get(value or "", value)
-    return value
-
-
-def _account_book_type(book: object) -> str | None:
+        value = {"1": "spot", "2": "futures", "3": "multi_currency_margin", "4": "portfolio_margin"}.get(value or "", value)
     return {
-        "spot": "spot",
-        "usd_m_futures": "futures",
-        "coin_m_futures": "coin_m_futures",
-        "cross_margin": "cross_margin",
-        "isolated_margin": "isolated_margin",
-        "portfolio_margin": "portfolio_margin",
-    }.get(str(book))
+        "spot": AccountModel.NO_MARGIN,
+        "futures": AccountModel.CONTRACT,
+        "multi_currency_margin": AccountModel.UNIFIED,
+        "unified": AccountModel.UNIFIED,
+        "portfolio_margin": AccountModel.PORTFOLIO_MARGIN,
+        "margin": AccountModel.MARGIN,
+    }.get(value or "")
+
+
+def _account_segment_type(scope: AccountSegment) -> AccountModel | None:
+    return {
+        "spot": AccountModel.NO_MARGIN,
+        "usd_m_futures": AccountModel.CONTRACT,
+        "coin_m_futures": AccountModel.CONTRACT,
+        "cross_margin": AccountModel.MARGIN,
+        "isolated_margin": AccountModel.MARGIN,
+        "portfolio_margin": AccountModel.PORTFOLIO_MARGIN,
+    }.get(str(scope.product_family or scope.model))
 
 
 def _market_fee_rule(market: MarketRef, payload: Mapping[str, object] | None, *, observed_at: datetime) -> MarketFeeRule | None:
@@ -329,7 +353,7 @@ def _market_fee_rule(market: MarketRef, payload: Mapping[str, object] | None, *,
     return MarketFeeRule(market, maker, taker, currency=_text(payload, "currency"), source="ccxt.market", updated_at=observed_at)
 
 
-def _account_fee_rule(context: AccountContext, payload: Mapping[str, object] | None, *, observed_at: datetime) -> AccountFeeRule | None:
+def _account_fee_rule(context: AccountRuntimeContext, payload: Mapping[str, object] | None, *, observed_at: datetime) -> AccountFeeRule | None:
     if payload is None:
         return None
     maker = _decimal_or_none(_value(payload, "maker"))
@@ -337,7 +361,7 @@ def _account_fee_rule(context: AccountContext, payload: Mapping[str, object] | N
     tier = _text(payload, "tier") or _text(payload, "vipLevel") or _text(payload, "level")
     if maker is None and taker is None and tier is None:
         return None
-    return AccountFeeRule(context.book, maker, taker, tier=tier, source="ccxt.account", updated_at=observed_at)
+    return AccountFeeRule(context.segment, maker, taker, tier=tier, source="ccxt.account", updated_at=observed_at)
 
 
 def _payment_rule(payload: Mapping[str, object] | None) -> FeePaymentRule | None:
@@ -356,7 +380,7 @@ def _payment_rule(payload: Mapping[str, object] | None) -> FeePaymentRule | None
     return FeePaymentRule(currency=currency, currency_mode="explicit" if currency else "venue_default", discount=discount)
 
 
-def _effective_fee_schedule(context: AccountContext, market: MarketRef, *, account_rule: AccountFeeRule | None, market_rule: MarketFeeRule | None, payment: FeePaymentRule | None, observed_at: datetime) -> AccountFeeSchedule | None:
+def _effective_fee_schedule(context: AccountRuntimeContext, market: MarketRef, *, account_rule: AccountFeeRule | None, market_rule: MarketFeeRule | None, payment: FeePaymentRule | None, observed_at: datetime) -> AccountFeeSchedule | None:
     if account_rule is None and market_rule is None:
         return None
     maker = account_rule.maker if account_rule is not None and account_rule.maker is not None else market_rule.maker if market_rule is not None else Decimal("0")
@@ -369,7 +393,7 @@ def _effective_fee_schedule(context: AccountContext, market: MarketRef, *, accou
         source = "ccxt.account+market+discount"
     else:
         source = "ccxt.account+market"
-    return AccountFeeSchedule(context.book, maker, taker, market=market, currency=currency, tier=None if account_rule is None else account_rule.tier, source=source, updated_at=observed_at, account_rule=account_rule, market_rule=market_rule, payment=payment)
+    return AccountFeeSchedule(context.segment, maker, taker, market=market, currency=currency, tier=None if account_rule is None else account_rule.tier, source=source, updated_at=observed_at, account_rule=account_rule, market_rule=market_rule, payment=payment)
 
 
 def _value(payload: Mapping[str, object] | None, key: str) -> object | None:

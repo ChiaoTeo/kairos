@@ -26,6 +26,7 @@ from kairospy.application.usecases.reference.application.commands import (
     reference_exchanges,
     reference_providers,
 )
+from kairospy.application.usecases.reference.application.requests import ReferenceLifecycleSyncRequest, ReferenceRefreshRequest
 from kairospy.application.support.composition.application.cli import build_reference_application, build_reference_command
 from kairospy.application.usecases.workspace.application.context import ProjectNotFound
 from kairospy.application.support.query.browsing import ListQuery, query_rows
@@ -250,11 +251,12 @@ def _sync_binance(
 ) -> None:
     provider_result = reference_application(root).refresh_exchange_with_delist_schedule(
         _reference_client("exchange", ExchangeName.binance.value, market=market, driver_name=driver_name),
-        as_of=at,
-        venue=ExchangeName.binance.value,
-        market=market,
-        params={"type": market},
-        include_delist_schedule=include_delist_schedule,
+        ReferenceRefreshRequest(
+            as_of=at,
+            venue=ExchangeName.binance.value,
+            market=market,
+            include_delist_schedule=include_delist_schedule,
+        ),
     )
     result = provider_result.refresh
     _write_sync_result(
@@ -284,9 +286,11 @@ def _sync_hyperliquid(
 ) -> None:
     result = reference_application(root).refresh_exchange(
         _reference_client("exchange", ExchangeName.hyperliquid.value, market=market, driver_name=driver_name),
-        as_of=at,
-        venue=ExchangeName.hyperliquid.value,
-        market=market,
+        ReferenceRefreshRequest(
+            as_of=at,
+            venue=ExchangeName.hyperliquid.value,
+            market=market,
+        ),
     ).refresh
     _write_sync_result(
         root=root,
@@ -315,9 +319,12 @@ def _sync_massive(
 ) -> None:
     result = reference_application(root).refresh_provider(
         _reference_client("provider", ProviderName.massive.value, market=market, driver_name=driver_name),
-        as_of=at,
-        venue=venue,
-        params={"asset_class": "equity"},
+        ReferenceRefreshRequest(
+            as_of=at,
+            venue=venue,
+            market=market,
+            asset_class="equity",
+        ),
     ).refresh
     _write_sync_result(
         root=root,
@@ -392,10 +399,7 @@ def sync_events(
     try:
         events = reference_application(root).sync_lifecycle_events(
             _reference_client("provider", ProviderName.massive.value, market=None, driver_name=driver_name),
-            ticker=ticker,
-            start=start_at,
-            end=end_at,
-            venue=venue,
+            ReferenceLifecycleSyncRequest(ticker=ticker, start=start_at, end=end_at, venue=venue),
         )
     except ValueError as error:
         raise typer.BadParameter(str(error)) from error

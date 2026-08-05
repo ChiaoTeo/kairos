@@ -65,7 +65,7 @@ def _update_key(update: ExecutionUpdate) -> tuple[object, ...]:
         update.fill_quantity,
         update.fill_price,
         update.filled_quantity,
-        update.cash_delta,
+        update.balance_delta,
         update.fee_currency,
         update.fee_amount,
         update.reason,

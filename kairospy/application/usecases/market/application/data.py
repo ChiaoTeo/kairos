@@ -17,6 +17,10 @@ from kairospy.application.usecases.market.domain.subscriptions import (
 )
 from kairospy.application.usecases.market.services.operations import MarketDataOperationsService
 from kairospy.application.usecases.market.services.resolver import MarketDataResolver, ResolvedMarketData
+from kairospy.application.usecases.market.application.requests import MarketDataRow, MarketTime, MarketWarmupStatus
+from kairospy.application.usecases.market.application.requests import MarketOptions
+from kairospy.application.usecases.market.protocol import MarketDataStore, MarketHistoricalClient
+from kairospy.domain.market import MarketEvent, RateObservation
 from kairospy.application.usecases.market.application.integration import MarketDataConnectionRequest, MarketIntegrationRuntime
 from kairospy.domain.market import Bar
 from kairospy.domain.reference import MarketRef
@@ -27,7 +31,7 @@ class MarketDataApplicationService:
 
     def __init__(
         self,
-        store: object | None = None,
+        store: MarketDataStore | None = None,
         *,
         resolver: MarketDataResolver | None = None,
         integration_runtime: MarketIntegrationRuntime | None = None,
@@ -46,7 +50,7 @@ class MarketDataApplicationService:
         return self._require_operations().resolve(spec)
 
     @property
-    def store(self) -> object:
+    def store(self) -> MarketDataStore:
         return self._require_operations().store
 
     @property
@@ -57,30 +61,30 @@ class MarketDataApplicationService:
     def resolver(self) -> MarketDataResolver:
         return self._resolver
 
-    def read(self, spec: MarketDataSpec, *, columns: Iterable[str] | None = None) -> list[dict[str, object]]:
+    def read(self, spec: MarketDataSpec, *, columns: Iterable[str] | None = None) -> list[MarketDataRow]:
         return self._require_operations().read(spec, columns=columns)
 
-    def download(self, spec: MarketDataSpec, client: object | None = None, *, mode: str = "append", options: Mapping[str, object] | None = None) -> Path:
+    def download(self, spec: MarketDataSpec, client: MarketHistoricalClient | None = None, *, mode: str = "append", options: MarketOptions | None = None) -> Path:
         if client is None:
             client = self._require_integration().create_data(MarketDataConnectionRequest(spec, params=options or {}))
         return self._require_operations().download(spec, client, mode=mode, params=options)
 
-    def persist_historical(self, spec: MarketDataSpec, observations: Iterable[object], *, mode: str = "append") -> Path:
+    def persist_historical(self, spec: MarketDataSpec, observations: Iterable[Bar | RateObservation], *, mode: str = "append") -> Path:
         return self._require_operations().persist_historical(spec, observations, mode=mode)
 
     def ensure(
         self,
         spec: MarketDataSpec,
-        client: object | None = None,
+        client: MarketHistoricalClient | None = None,
         *,
         mode: str = "append",
-        options: Mapping[str, object] | None = None,
+        options: MarketOptions | None = None,
     ) -> ResolvedMarketData:
         if client is None:
             client = self._require_integration().create_data(MarketDataConnectionRequest(spec, params=options or {}))
         return self._require_operations().ensure(spec, client, mode=mode, params=options)
 
-    def ensure_bars(self, spec: MarketDataSpec, client: object) -> tuple[Bar, ...]:
+    def ensure_bars(self, spec: MarketDataSpec, client: MarketHistoricalClient) -> tuple[Bar, ...]:
         """Load persisted bars, fetching and writing them only when absent."""
         operations = self._require_operations()
         storage_spec = _storage_spec(spec)
@@ -127,7 +131,7 @@ class MarketDataApplicationService:
     async def persist(
         self,
         spec: MarketDataSpec,
-        events: AsyncIterable[Mapping[str, object]],
+        events: AsyncIterable[MarketEvent],
         *,
         limit: int | None = None,
     ) -> int:
@@ -150,7 +154,7 @@ class MarketDataApplicationService:
         return self._integration_runtime
 
 
-def _bar_from_row(row: Mapping[str, object], *, spec: MarketDataSpec, market: MarketRef) -> Bar:
+def _bar_from_row(row: MarketDataRow, *, spec: MarketDataSpec, market: MarketRef) -> Bar:
     observed = row.get("time")
     if isinstance(observed, str):
         text = observed[:-1] + "+00:00" if observed.endswith("Z") else observed
@@ -192,10 +196,11 @@ def _storage_spec(spec: MarketDataSpec) -> MarketDataSpec:
         limit=spec.limit,
         dataset=spec.dataset,
         stream=spec.stream,
+        provider=spec.provider,
     )
 
 
-def _storage_time(value: object | None) -> object | None:
+def _storage_time(value: MarketTime | None) -> MarketTime | None:
     if not isinstance(value, str):
         return value
     text = value.strip()
@@ -204,7 +209,7 @@ def _storage_time(value: object | None) -> object | None:
     return value
 
 
-def _storage_end(value: object | None) -> object | None:
+def _storage_end(value: MarketTime | None) -> MarketTime | None:
     if not isinstance(value, str):
         return value
     text = value.strip()
@@ -223,18 +228,12 @@ def _historical_status_key(operations: MarketDataOperationsService, spec: Market
     ))
 
 
-def _read_metadata(store: object, key: str) -> Mapping[str, object] | None:
-    reader = getattr(store, "read_metadata", None)
-    if not callable(reader):
-        return None
-    value = reader(key)
-    return value if isinstance(value, Mapping) else None
+def _read_metadata(store: MarketDataStore, key: str) -> MarketWarmupStatus | None:
+    return store.read_metadata(key)
 
 
-def _write_metadata(store: object, key: str, value: Mapping[str, object]) -> None:
-    writer = getattr(store, "write_metadata", None)
-    if callable(writer):
-        writer(key, value)
+def _write_metadata(store: MarketDataStore, key: str, value: MarketWarmupStatus) -> None:
+    store.write_metadata(key, value)
 
 
 def _historical_status(
@@ -242,9 +241,9 @@ def _historical_status(
     *,
     cooldown: float,
     error_type: str | None = None,
-) -> dict[str, object]:
+) -> MarketWarmupStatus:
     retry_at = datetime.now(timezone.utc).timestamp() + cooldown
-    result: dict[str, object] = {
+    result: MarketWarmupStatus = {
         "state": state,
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "retry_at": retry_at,
@@ -254,7 +253,7 @@ def _historical_status(
     return result
 
 
-def _status_is_cooling_down(status: Mapping[str, object] | None) -> bool:
+def _status_is_cooling_down(status: MarketWarmupStatus | None) -> bool:
     if not status or status.get("state") not in {"empty", "failed"}:
         return False
     try:

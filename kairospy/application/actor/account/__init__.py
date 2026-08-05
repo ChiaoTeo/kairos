@@ -1,4 +1,4 @@
-"""Account and execution Actor boundary."""
+"""ExternalAccount and execution Actor boundary."""
 
 from .application import AccountActor
 

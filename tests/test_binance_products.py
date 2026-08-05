@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from kairospy.application.usecases.earn.application import EarnApplication
-from kairospy.application.usecases.earn.domain import EarnRedeemRequest, EarnSubscribeRequest
-from kairospy.domain.account import AccountBookKind, AccountBookRef, AccountContext, Environment
+from kairospy.application.usecases.earn.domain import EarnProductType, EarnRedeemRequest, EarnSubscribeRequest
+from kairospy.domain.account import AccountModel, AccountSegment, AccountRuntimeContext, Environment, ProductFamily
 from kairospy.domain.order import OrderSide, OrderType
 from kairospy.infrastructure.integrations.application.account import ConnectionAccountReadRequest
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec
@@ -55,7 +55,7 @@ def _spec(product, capability, access=AccessScope.PUBLIC):
 def test_registry_has_distinct_binance_options_and_earn_routes() -> None:
     registry = GatewayRegistry.with_builtins()
     options = registry.create(_spec(ProductFamily.OPTIONS, IntegrationCapability.MARKET_DATA))
-    earn = registry.create(_spec(ProductFamily.EARN, IntegrationCapability.EARN, AccessScope.PRIVATE))
+    earn = registry.create(_spec(None, IntegrationCapability.EARN, AccessScope.PRIVATE))
     assert isinstance(options, BinanceOptionsPublicRestConnection)
     assert isinstance(earn, BinanceSimpleEarnConnection)
 
@@ -75,24 +75,38 @@ def test_binance_options_public_quote_is_normalized() -> None:
 
 def test_binance_options_account_and_execution_are_typed_ports() -> None:
     fake = FakeBinanceClient()
-    account = AccountContext(AccountBookRef("binance", "main", AccountBookKind.OPTIONS), Environment.PAPER)
+    account = AccountRuntimeContext(AccountSegment("binance", "main", AccountModel.CONTRACT, ProductFamily.OPTIONS), Environment.PAPER)
     account_connection = BinanceOptionsAccountConnection(_spec(ProductFamily.OPTIONS, IntegrationCapability.ACCOUNT_READ, AccessScope.PRIVATE))
     account_connection.operations.client = fake  # type: ignore[assignment]
     snapshot = account_connection.read_account(ConnectionAccountReadRequest(account, datetime.now(timezone.utc))).snapshot
     assert snapshot.balances[0].currency == "USDT"
     execution = BinanceOptionsExecutionConnection(_spec(ProductFamily.OPTIONS, IntegrationCapability.ORDER_ENTRY, AccessScope.PRIVATE))
     execution.operations.client = fake  # type: ignore[assignment]
-    result = execution.submit(ConnectionOrderSubmissionRequest(account.book, "BTC-260925-60000-C", OrderSide.BUY, OrderType.LIMIT, Decimal("1"), Decimal("100")))
+    result = execution.submit(ConnectionOrderSubmissionRequest(account.segment, "BTC-260925-60000-C", OrderSide.BUY, OrderType.LIMIT, Decimal("1"), Decimal("100")))
     assert result.order_venue_id == ""  # fake public client is intentionally not an order response
 
 
 def test_simple_earn_application_uses_replaceable_provider() -> None:
-    connection = BinanceSimpleEarnConnection(_spec(ProductFamily.EARN, IntegrationCapability.EARN, AccessScope.PRIVATE))
+    connection = BinanceSimpleEarnConnection(_spec(None, IntegrationCapability.EARN, AccessScope.PRIVATE))
     fake = FakeBinanceClient()
     connection.client = fake  # type: ignore[assignment]
     application = EarnApplication(connection)
     assert application.list_products()[0].product_id == "P-1"
     assert application.positions()[0].principal == Decimal("10")
+    assert application.positions()[0].accrued_reward == Decimal("0")
+    assert application.positions()[0].apr == Decimal("0")
     assert application.rewards()[0].amount == Decimal("0.1")
     assert application.subscribe(EarnSubscribeRequest("P-1", Decimal("2"))) == {"success": True}
     assert application.redeem(EarnRedeemRequest("P-1", Decimal("1"))) == {"success": True}
+
+
+def test_simple_earn_locked_routes_are_distinct_from_flexible() -> None:
+    connection = BinanceSimpleEarnConnection(_spec(None, IntegrationCapability.EARN, AccessScope.PRIVATE))
+    fake = FakeBinanceClient()
+    connection.client = fake  # type: ignore[assignment]
+    connection.subscribe(EarnSubscribeRequest("L-1", Decimal("2"), product_type=EarnProductType.LOCKED))
+    connection.redeem(EarnRedeemRequest("L-1", Decimal("1"), product_type=EarnProductType.LOCKED))
+    assert [call[1] for call in fake.calls if call[0] == "POST"][-2:] == [
+        "/sapi/v1/simple-earn/locked/subscribe",
+        "/sapi/v1/simple-earn/locked/redeem",
+    ]

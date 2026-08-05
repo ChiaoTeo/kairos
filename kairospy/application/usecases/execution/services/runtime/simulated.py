@@ -13,7 +13,7 @@ from kairospy.application.usecases.execution.domain.simulation import TradingRul
 from kairospy.application.usecases.execution.services.simulation import CommissionModel, FillModel, ImmediateFillModel, NoSlippageModel, PercentageCommissionModel, SimulatedFill, SimulatedOrderConnection, SlippageModel
 from kairospy.infrastructure.integrations.application.execution import ConnectionOrderCancelRequest
 from kairospy.application.usecases.execution.services.coordinator import ExecutionCoordinator
-from kairospy.domain.account import AccountContext, AccountSnapshot
+from kairospy.domain.account import AccountRuntimeContext, AccountSnapshot
 from kairospy.domain.execution import ExecutionUpdate
 from kairospy.domain.order import OrderEventKind, OrderStatus
 from kairospy.domain.intent import TradeIntent
@@ -26,8 +26,8 @@ class SimulatedExecutionRuntimeService:
         self,
         coordinator: ExecutionCoordinator,
         *,
-        account: AccountContext | None = None,
-        cash_currency: str = "USD",
+        account: AccountRuntimeContext | None = None,
+        settlement_asset: str = "USD",
         price_field: str,
         fill_model: FillModel | None = None,
         slippage_model: SlippageModel | None = None,
@@ -39,7 +39,7 @@ class SimulatedExecutionRuntimeService:
         self.coordinator = coordinator
         self.account = account
         self.directory = directory
-        self.cash_currency = cash_currency
+        self.settlement_asset = settlement_asset
         self.price_field = price_field
         self.fill_model = fill_model
         self.slippage_model = slippage_model
@@ -75,7 +75,7 @@ class SimulatedExecutionRuntimeService:
             coordinator=self.coordinator,
             context=context,
             intent=intent,
-            cash_currency=self.cash_currency,
+            settlement_asset=self.settlement_asset,
             price_field=self.price_field,
             fill_model=self.fill_model or ImmediateFillModel(),
             slippage_model=self.slippage_model or NoSlippageModel(),
@@ -84,7 +84,7 @@ class SimulatedExecutionRuntimeService:
             record_fill=self._record_fill,
             trading_rules=self._trading_rules_for(intent, context),
         )
-        current = self.coordinator.ledger.positions(account.book).get(str(intent.instrument_id), Decimal("0"))
+        current = self.coordinator.ledger.positions(account.segment).get(str(intent.instrument_id), Decimal("0"))
         delta = (intent.target_quantity or Decimal("0")) - current
         reserve_amount = None
         reserve_currency = None
@@ -92,7 +92,7 @@ class SimulatedExecutionRuntimeService:
             price = self._market_price(str(intent.instrument_id), side="buy", limit_price=getattr(intent, "limit_price", None))
             if price is not None:
                 reserve_amount = abs(delta) * price
-                reserve_currency = self.cash_currency
+                reserve_currency = self.settlement_asset
         ExecutionApplication.compose(self.coordinator, order_connection=connection).execute_intent(
             ExecuteIntentCommand(
                 intent=intent,
@@ -290,7 +290,7 @@ class SimulatedExecutionRuntimeService:
         if connection is not None and state.order_venue_id:
             connection.cancel(
                 ConnectionOrderCancelRequest(
-                    account=state.request.context.book,
+                    account=state.request.context.segment,
                     order_venue_id=state.order_venue_id,
                     symbol=str(state.request.market_id or state.request.instrument_id),
                 )
@@ -315,14 +315,15 @@ class SimulatedExecutionRuntimeService:
             )
         return state
 
-    def _resolve_account(self, intent: TradeIntent) -> AccountContext | None:
+    def _resolve_account(self, intent: TradeIntent) -> AccountRuntimeContext | None:
         directory = self.directory
         if directory is None:
             return self.account
         return directory.resolve_context(
             account_id=getattr(intent, "account_id", None),
             account_index=getattr(intent, "account_index", None),
-            book=getattr(intent, "account_book", None),
+            scope=getattr(intent, "account_segment", None),
+            environment=None if self.account is None else self.account.environment,
             default=self.account,
         )
 

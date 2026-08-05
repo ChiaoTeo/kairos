@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Mapping, Literal
+from typing import Literal
 
 from kairospy.application.usecases.market.application.component import MarketApplication
 from kairospy.application.usecases.market.application.data import MarketDataSpec
+from kairospy.application.usecases.market.application.requests import MarketCapability, MarketCapabilitiesResult, MarketDoctorResult, MarketFeature, MarketSourceCheckResult
 from .resources import DriverName, ExchangeName, MarketCommandResources
 
 
@@ -22,7 +23,7 @@ class MarketSourceQueryService:
         exchange_name: ExchangeName | None = None,
         market: str | None = None,
         driver_name: DriverName | None = None,
-    ) -> dict[str, object]:
+    ) -> MarketCapabilitiesResult:
         driver = driver_name or DriverName.ccxt
         venues = (exchange_name,) if exchange_name is not None else tuple(ExchangeName)
         markets = [
@@ -30,7 +31,7 @@ class MarketSourceQueryService:
             for venue in venues
             for namespace in _candidate_markets(venue, market)
         ]
-        return {"driver": driver.value, "markets": markets, "count": len(markets)}
+        return {"driver": driver.value, "markets": tuple(markets), "count": len(markets)}
 
     def check(
         self,
@@ -42,7 +43,7 @@ class MarketSourceQueryService:
         data_mode: MarketDataMode,
         timeframe: str | None = None,
         driver_name: DriverName = DriverName.ccxt,
-    ) -> dict[str, object]:
+    ) -> MarketSourceCheckResult:
         capability = _market_capability(exchange_name.value, market, driver_name)
         spec = MarketDataSpec(
             symbol=symbol,
@@ -60,7 +61,7 @@ class MarketSourceQueryService:
         resolved = MarketApplication(
             store=self._resources.data_store(None, None),
             resolver=None,
-        ).queries.resolve(spec)
+        ).resolve(spec)
         return {
             "valid": available,
             "reason": reason,
@@ -75,12 +76,12 @@ class MarketSourceQueryService:
             "capability": capability,
         }
 
-    def doctor(self, *, exchange_name: ExchangeName, driver_name: DriverName) -> dict[str, object]:
-        self._resources.public_market_access(exchange_name, driver_name)
+    def doctor(self, *, exchange_name: ExchangeName, driver_name: DriverName) -> MarketDoctorResult:
+        self._resources.historical_market_access(exchange_name, driver_name)
         return {"valid": True, "exchange": exchange_name.value, "driver": driver_name.value}
 
 
-def _market_capability(venue: str, market: str, driver_name: DriverName) -> dict[str, object]:
+def _market_capability(venue: str, market: str, driver_name: DriverName) -> MarketCapability:
     venue_name = _normalize_venue(venue)
     market_name = _normalize_market(market)
     configured = driver_name is DriverName.ccxt and market_name in _configured_markets(venue_name)
@@ -120,28 +121,28 @@ def _configured_markets(venue: str) -> set[str]:
     return set()
 
 
-def _historical_capabilities(market: str) -> tuple[dict[str, object], ...]:
+def _historical_capabilities(market: str) -> tuple[MarketFeature, ...]:
     if market == "option":
         return ()
     return ({"kind": "ohlcv", "label": "bars", "selector": "Bar", "timeframe_required": True, "command_kind": "ohlcv"},)
 
 
-def _live_capabilities(market: str) -> tuple[dict[str, object], ...]:
-    capabilities = [
-        {"kind": "ticker", "label": "quotes", "selector": "Quote", "command_kind": "ticker"},
-        {"kind": "orderbook", "label": "orderbook", "selector": "OrderBookSnapshot", "command_kind": "orderbook"},
-        {"kind": "trades", "label": "trades", "selector": "TradePrint", "command_kind": "trades"},
+def _live_capabilities(market: str) -> tuple[MarketFeature, ...]:
+    capabilities: list[MarketFeature] = [
+        {"kind": "ticker", "label": "quotes", "selector": "Quote", "command_kind": "ticker", "timeframe_required": False},
+        {"kind": "orderbook", "label": "orderbook", "selector": "OrderBookSnapshot", "command_kind": "orderbook", "timeframe_required": False},
+        {"kind": "trades", "label": "trades", "selector": "TradePrint", "command_kind": "trades", "timeframe_required": False},
     ]
     if market == "option":
-        capabilities.append({"kind": "option_greeks", "label": "option greeks", "selector": "OptionGreeks", "command_kind": "option_greeks"})
+        capabilities.append({"kind": "option_greeks", "label": "option greeks", "selector": "OptionGreeks", "command_kind": "option_greeks", "timeframe_required": False})
     return tuple(capabilities)
 
 
-def _capability_supports(capability: Mapping[str, object], *, kind: str, data_mode: MarketDataMode) -> bool:
+def _capability_supports(capability: MarketCapability, *, kind: str, data_mode: MarketDataMode) -> bool:
     if capability.get("status") != "configured":
         return False
     rows = capability.get(data_mode)
-    return isinstance(rows, tuple) and _normalized_kind(kind) in {str(row.get("kind")) for row in rows if isinstance(row, Mapping)}
+    return _normalized_kind(kind) in {row["kind"] for row in rows}
 
 
 def _historical_kind(kind: str) -> str:

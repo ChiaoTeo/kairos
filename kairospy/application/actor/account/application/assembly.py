@@ -1,8 +1,11 @@
-"""Account Actor assembly for account, execution and intent capabilities."""
+"""ExternalAccount Actor assembly for account, execution and intent capabilities."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
+from typing import Protocol
 
 from kairospy.application.usecases.account.application.directory import AccountDirectory
 from kairospy.application.usecases.account.application.runtime import (
@@ -11,6 +14,7 @@ from kairospy.application.usecases.account.application.runtime import (
     account_projection,
 )
 from kairospy.application.usecases.account.application.runtime_capability import AccountRuntimeApplication
+from kairospy.application.usecases.account.application.runtime_capability import AccountRuntimeCapability
 from kairospy.application.usecases.account.application.snapshots import AccountSnapshotService, AccountSnapshotStore
 from kairospy.application.usecases.execution.application.component import ExecutionApplication
 from kairospy.application.usecases.execution.application.runtime import (
@@ -18,8 +22,37 @@ from kairospy.application.usecases.execution.application.runtime import (
     TradingRuntimeExecutionService,
     execution_runtime_adapters,
 )
+from kairospy.application.usecases.execution.application.runtime import ExecutionCoordinator
+from kairospy.application.actor.account.application.ports import ExecutionEventSource
 from kairospy.application.usecases.risk.application.budget import RiskApplication
 from kairospy.domain.intent import IntentJournal
+from kairospy.domain.order import OrderSide
+
+
+class AccountFillObservation(Protocol):
+    order_id: str
+    intent_id: str
+    instrument_id: str
+    side: OrderSide
+    quantity: Decimal
+    price: Decimal
+    fee: Decimal
+    occurred_at: datetime
+
+
+class AccountFillSource(Protocol):
+    fills: tuple[AccountFillObservation, ...]
+
+
+class ExecutionComponentSource(Protocol):
+    coordinator: ExecutionCoordinator | None
+    execution_coordinator: ExecutionCoordinator | None
+
+
+class AccountAssemblyComponentSource(Protocol):
+    account_catalog: AccountRuntimeCapability | None
+    account: AccountRuntimeCapability | None
+    execution: ExecutionComponentSource | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,12 +60,12 @@ class AccountActorDependencies:
     intents: IntentJournal
     account_service: AccountRuntimeApplication | None = None
     account_snapshot_store: AccountSnapshotStore | None = None
-    account: object | None = None
-    account_catalog: object | None = None
+    account: AccountRuntimeCapability | None = None
+    account_catalog: AccountRuntimeCapability | None = None
     account_directory: AccountDirectory | None = None
-    trading_execution: object | None = None
-    execution_coordinator: object | None = None
-    fills_source: object | None = None
+    trading_execution: ExecutionEventSource | None = None
+    execution_coordinator: ExecutionCoordinator | None = None
+    fills_source: AccountFillSource | None = None
     risk: RiskApplication | None = None
 
 
@@ -45,7 +78,7 @@ class AccountActorCapabilities:
 
 
 def compose_account_capabilities(dependencies: AccountActorDependencies) -> AccountActorCapabilities:
-    """Compose the usecases held by the Account Actor."""
+    """Compose the usecases held by the ExternalAccount Actor."""
     execution_application = (
         None
         if dependencies.execution_coordinator is None
@@ -108,11 +141,11 @@ def compose_account_capabilities(dependencies: AccountActorDependencies) -> Acco
     )
 
 
-def build_account_application(source: object | None) -> AccountRuntimeApplication | None:
+def build_account_application(source: AccountRuntimeCapability | None) -> AccountRuntimeApplication | None:
     return None if source is None else AccountRuntimeApplication(runtime=source)
 
 
-def account_directory(components: object) -> object | None:
+def account_directory(components: AccountAssemblyComponentSource) -> AccountDirectory | None:
     for candidate in (
         getattr(components, "account_catalog", None),
         getattr(components, "account", None),
@@ -123,7 +156,7 @@ def account_directory(components: object) -> object | None:
     return None
 
 
-def execution_coordinator(components: object) -> object | None:
+def execution_coordinator(components: AccountAssemblyComponentSource) -> ExecutionCoordinator | None:
     execution = getattr(components, "execution", None)
     for name in ("coordinator", "execution_coordinator"):
         value = getattr(execution, name, None)
@@ -135,6 +168,10 @@ def execution_coordinator(components: object) -> object | None:
 __all__ = [
     "AccountActorCapabilities",
     "AccountActorDependencies",
+    "AccountAssemblyComponentSource",
+    "AccountFillObservation",
+    "AccountFillSource",
+    "ExecutionComponentSource",
     "account_directory",
     "build_account_application",
     "compose_account_capabilities",

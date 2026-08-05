@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
-from kairospy.domain.account import AccountBookRef
+from kairospy.domain.account import AccountSegment
 from kairospy.domain.order import OrderSide, OrderType
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnection
 
@@ -22,7 +22,7 @@ class ConnectionOrderOptions:
 
 @dataclass(frozen=True, slots=True)
 class ConnectionOrderSubmissionRequest:
-    account: AccountBookRef
+    account: AccountSegment
     symbol: str
     side: OrderSide
     order_type: OrderType
@@ -41,7 +41,7 @@ class ConnectionOrderSubmissionResult:
 
 @dataclass(frozen=True, slots=True)
 class ConnectionOrderCancelRequest:
-    account: AccountBookRef
+    account: AccountSegment
     order_venue_id: str
     symbol: str | None = None
     options: ConnectionOrderOptions | None = None

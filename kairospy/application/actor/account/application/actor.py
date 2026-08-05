@@ -1,9 +1,9 @@
-"""Account Actor application facade for account and execution usecases."""
+"""ExternalAccount Actor application facade for account and execution usecases."""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
@@ -11,12 +11,19 @@ from typing import Mapping
 
 from kairospy.application.actor.support.base import BusinessActor
 from kairospy.application.support.messaging import Message, MessageBus
-from kairospy.domain.account import AccountBookRef, AccountContext, AccountSnapshot, AccountState
+from kairospy.domain.account import AccountCapability, AccountRuntimeContext, AccountCurrentView, AccountDetailView, AccountFeeSchedule, AccountMarketProfile, AccountSegment, AccountSnapshot, AccountState, AssetCode
+from kairospy.domain.market import MarketEvent, MarketEventValue
+from kairospy.application.usecases.account.application.directory import AccountDirectory
+from kairospy.application.usecases.account.application.read import AccountQueryResult, AccountRefreshRequest, AccountRefreshResult
+from kairospy.application.usecases.account.application.runtime_capability import AccountRuntimeCapability
+from .ports import AccountActorViewPort, AccountConnectionManager, AccountEventSource, AccountProjectionPort, AccountProjectorPort, ExecutionEventSource, RiskCommand, RiskCommandPort, RiskCommandResult
 from kairospy.domain.execution import ExecutionUpdate
 from kairospy.domain.intent import IntentEvent, IntentEventKind, IntentJournal, IntentState, TradeIntent
 from kairospy.domain.order import OrderState
+from kairospy.application.usecases.account.application.view_contracts import AccountViewObservation
 from kairospy.application.usecases.execution.application.component import (
     CancelOrderCommand as ExecutionCancelOrderCommand,
+    ExecutionApplication,
     ExecutionIntentPreparation,
     ExecuteIntentCommand as ExecutionExecuteIntentCommand,
 )
@@ -33,6 +40,11 @@ from .commands import (
     ExecuteIntentCommand,
     RecordIntentsCommand,
     RefreshAccountMarketProfileCommand,
+    QueryAccountCommand,
+    RefreshAccountCommand,
+    AccountCommand,
+    AccountCommandResult,
+    IntentExecutionContext,
 )
 
 
@@ -40,11 +52,12 @@ _LOGGER = logging.getLogger("kairospy.actor.account")
 
 
 class AccountActor(BusinessActor):
-    def __init__(self, source: object, bus: MessageBus, *, execution_source: object | None = None, account_application: object | None = None, execution_application: object | None = None, intents: IntentJournal | None = None, connections: object | None = None, publish_connection_health: object | None = None, projectors: object | None = None, risk_actor: object | None = None) -> None:
+    def __init__(self, source: AccountEventSource | None, bus: MessageBus | None, *, execution_source: ExecutionEventSource | None = None, account_application: AccountRuntimeCapability | None = None, execution_application: ExecutionApplication | None = None, intents: IntentJournal | None = None, connections: AccountConnectionManager | None = None, publish_connection_health: Callable[[Mapping[str, object]], None] | None = None, projectors: AccountProjectorPort | None = None, risk_actor: RiskCommandPort | None = None, account_view: AccountActorViewPort | None = None) -> None:
         super().__init__("account", bus=bus)
         self.runtime = source
         self._intents = intents or IntentJournal()
         self.account_application = account_application
+        self.account_view = account_view
         self.execution_application = execution_application
         self.projectors = projectors
         self.execution_runtime = execution_source
@@ -58,40 +71,107 @@ class AccountActor(BusinessActor):
     def intents(self) -> IntentJournal:
         return self._intents
 
-    def accounts(self) -> tuple[AccountContext, ...]:
+    def accounts(self) -> tuple[AccountRuntimeContext, ...]:
         application = self.account_application
         if application is None:
             return ()
-        accounts = getattr(application, "accounts", None)
-        return () if not callable(accounts) else tuple(accounts())
+        return tuple(application.accounts())
 
-    def snapshot(self, account: AccountBookRef | None = None) -> AccountSnapshot | None:
-        application = self.account_application
-        snapshot = None if application is None else getattr(application, "snapshot", None)
-        return None if not callable(snapshot) else snapshot(account)
+    def _view(self) -> AccountActorViewPort:
+        if self.account_view is None:
+            raise RuntimeError("account actor has no account view projection")
+        return self.account_view
 
-    def state(self, account: AccountBookRef | None = None) -> AccountState | None:
+    def directory(self) -> AccountDirectory:
+        return self._view().directory()
+
+    def capabilities(self) -> tuple[AccountCapability, ...]:
+        return self._view().capabilities()
+
+    def fees(self) -> tuple[AccountFeeSchedule, ...]:
+        return self._view().fees()
+
+    def market_profiles(self) -> tuple[AccountMarketProfile, ...]:
+        return self._view().market_profiles()
+
+    def current_view(self, context: AccountRuntimeContext, *, event_count: int = 0, last_event_time: datetime | None = None, payload: AccountViewObservation | None = None, equity_currency: AssetCode | str | None = None, latest_equity: Decimal | None = None, initial_equity: Decimal | None = None, pending_orders: tuple[OrderState, ...] = (), now: datetime | None = None) -> AccountCurrentView:
+        return self._view().current_view(context, event_count=event_count, last_event_time=last_event_time, payload=payload, equity_currency=equity_currency, latest_equity=latest_equity, initial_equity=initial_equity, pending_orders=pending_orders, now=now)
+
+    def detail_view(self, context: AccountRuntimeContext, *, event_count: int = 0, last_event_time: datetime | None = None, metadata: dict[str, object] | None = None, now: datetime | None = None) -> AccountDetailView:
+        return self._view().detail_view(context, event_count=event_count, last_event_time=last_event_time, metadata=metadata, now=now)
+
+    @property
+    def projection(self) -> AccountProjectionPort | None:
+        return self._view().projection
+
+    @property
+    def account(self) -> AccountRuntimeContext:
+        return self._view().account
+
+    @property
+    def valuation_asset(self) -> AssetCode:
+        return self._view().valuation_asset
+
+    @property
+    def settlement_asset(self) -> AssetCode:
+        return self._view().settlement_asset
+
+    def asset_balance(self, currency: AssetCode | str | None = None) -> Decimal:
+        return self._view().asset_balance(currency)
+
+    def positions(self) -> dict[str, Decimal]:
+        return self._view().positions()
+
+    def record_funding(
+        self,
+        *,
+        occurred_at: datetime,
+        currency: AssetCode | str,
+        balance_delta: Decimal,
+        instrument_id: str,
+        reference_id: str,
+    ) -> None:
+        self._view().record_funding(
+            occurred_at=occurred_at,
+            currency=currency,
+            balance_delta=balance_delta,
+            instrument_id=instrument_id,
+            reference_id=reference_id,
+        )
+
+    def snapshot(self, account: AccountSegment | None = None) -> AccountSnapshot | None:
         application = self.account_application
-        state = None if application is None else getattr(application, "state", None)
-        return None if not callable(state) else state(account)
+        return None if application is None else application.snapshot(account)
+
+    def state(self, account: AccountSegment | None = None) -> AccountState | None:
+        application = self.account_application
+        return None if application is None else application.state(account)
 
     def update_snapshot(self, snapshot: AccountSnapshot) -> None:
         application = self.account_application
-        update = None if application is None else getattr(application, "update_snapshot", None)
-        if not callable(update):
+        if application is None:
             raise RuntimeError("account actor has no account snapshot usecase")
-        update(snapshot)
+        application.update_snapshot(snapshot)
+
+    def query(self, command: QueryAccountCommand) -> AccountQueryResult:
+        application = self.account_application
+        if application is None:
+            raise RuntimeError("account actor has no account query usecase")
+        return application.query(command.request)
+
+    def refresh(self, command: RefreshAccountCommand) -> AccountRefreshResult:
+        application = self.account_application
+        if application is None:
+            raise RuntimeError("account actor has no account refresh usecase")
+        return application.refresh(command.request)
 
     def refresh_market_profile(self, command: RefreshAccountMarketProfileCommand) -> AccountMarketProfile | None:
         application = self.account_application
-        refresh = None if application is None else getattr(application, "market_profile", None)
-        if not callable(refresh):
+        if application is None:
             raise RuntimeError("account actor has no account market profile usecase")
-        profile = refresh(command.account, command.market, at=command.at, refresh=True)
+        profile = application.market_profile(command.account, command.market, at=command.at, refresh=True)
         if profile is not None:
-            update = getattr(application, "update_market_profile", None)
-            if callable(update):
-                update(profile)
+            application.update_market_profile(profile)
         return profile
 
     def apply_execution_update(self, update: ExecutionUpdate) -> OrderState:
@@ -101,39 +181,39 @@ class AccountActor(BusinessActor):
             raise RuntimeError("account actor has no execution update usecase")
         return apply_update(update)
 
-    def orders(self, account: AccountBookRef | None = None) -> tuple[OrderState, ...]:
+    def orders(self, account: AccountSegment | None = None) -> tuple[OrderState, ...]:
         application = self.execution_application
         orders = None if application is None else getattr(application, "orders", None)
         return () if not callable(orders) else tuple(orders(account))
 
-    def record_intent(self, intent: object, *, at: object) -> None:
+    def record_intent(self, intent: TradeIntent, *, at: datetime) -> None:
         self._intents.record_intent(intent, at=at)  # type: ignore[arg-type]
 
-    def record_intents(self, intents: Iterable[object], *, at: object) -> None:
+    def record_intents(self, intents: Iterable[TradeIntent], *, at: datetime) -> None:
         for intent in intents:
             self.record_intent(intent, at=at)
 
-    async def dispatch_command(self, command: object) -> object:
+    async def dispatch_command(self, command: AccountCommand) -> AccountCommandResult:
         """Execute an account command through the actor mailbox."""
-        now = getattr(command, "at", None) or datetime.now(timezone.utc)
-        context = getattr(command, "context", None)
+        now = _command_time(command)
+        context = command.context if isinstance(command, ExecuteIntentCommand) else None
         causation_id = getattr(getattr(context, "event", None), "message_id", None)
         sequence = self._next_command_sequence()
         return await self.ask(
             Message(
                 "account.command",
                 command,
-                now if isinstance(now, datetime) else datetime.now(timezone.utc),
+                now,
                 "account.actor",
                 sequence,
                 message_id=f"account-command-{sequence}",
                 correlation_id=_command_correlation(command),
                 causation_id=causation_id,
-                command_id=getattr(command, "command_id", None),
+                command_id=None,
             )
         )
 
-    def apply_command(self, command: object) -> object:
+    def apply_command(self, command: AccountCommand) -> AccountCommandResult:
         """Apply a command for the deterministic synchronous System API.
 
         Long-running sessions use ``dispatch_command`` and the mailbox.  The
@@ -143,6 +223,10 @@ class AccountActor(BusinessActor):
         if isinstance(command, RecordIntentsCommand):
             self.record_intents(command.intents, at=command.at)
             return None
+        if isinstance(command, QueryAccountCommand):
+            return self.query(command)
+        if isinstance(command, RefreshAccountCommand):
+            return self.refresh(command)
         if isinstance(command, ExecuteIntentCommand):
             return self.execute_intent(command.intent, command.context)
         if isinstance(command, CancelOrderCommand):
@@ -156,7 +240,7 @@ class AccountActor(BusinessActor):
         self._command_sequence = sequence
         return sequence
 
-    def execute_intent(self, intent: TradeIntent, context: object) -> object:
+    def execute_intent(self, intent: TradeIntent, context: IntentExecutionContext) -> OrderState | None:
         application = self.execution_runtime or self.execution_application
         execute = None if application is None else getattr(application, "execute_intent", None)
         if not callable(execute):
@@ -166,7 +250,7 @@ class AccountActor(BusinessActor):
         if account is None:
             return None
         quantity = getattr(application, "current_quantity", None)
-        current_quantity = Decimal("0") if not callable(quantity) else quantity(account.book, intent.instrument_id)
+        current_quantity = Decimal("0") if not callable(quantity) else quantity(account.segment, intent.instrument_id)
         execution_context = context
         if getattr(context, "intents", None) is not self._intents:
             execution_context = SimpleNamespace(now=getattr(context, "now", None), intents=self._intents)
@@ -178,11 +262,11 @@ class AccountActor(BusinessActor):
                 context=execution_context,
                 account=account,
                 current_quantity=current_quantity,
-                account_snapshot=self.snapshot(account.book),
+                account_snapshot=self.snapshot(account.segment),
             )
         )
 
-    def cancel_order(self, order_id: str, *, at: object) -> OrderState:
+    def cancel_order(self, order_id: str, *, at: datetime) -> OrderState:
         application = self.execution_runtime or self.execution_application
         cancel = None if application is None else getattr(application, "cancel_order", None)
         if not callable(cancel):
@@ -191,7 +275,7 @@ class AccountActor(BusinessActor):
             return cancel(str(order_id), at=at)
         return cancel(ExecutionCancelOrderCommand(str(order_id), at))
 
-    def cancel_intent(self, intent_id: object, *, at: object) -> IntentState:
+    def cancel_intent(self, intent_id: str, *, at: datetime) -> IntentState:
         state = self._intents.get(str(intent_id))
         if state.status.terminal:
             return state
@@ -217,20 +301,15 @@ class AccountActor(BusinessActor):
         manager = self._connections
         if manager is None:
             return
-        start_roles = getattr(manager, "start_roles", None)
-        if callable(start_roles):
-            start_roles(self._connection_roles)
-        health = getattr(manager, "health", None)
-        if callable(health) and self._publish_connection_health is not None:
-            self._publish_connection_health(health())
+        manager.start_roles(self._connection_roles)
+        if self._publish_connection_health is not None:
+            self._publish_connection_health(manager.health())
 
     def _stop_connections(self) -> None:
         manager = self._connections
         if manager is None:
             return
-        stop_roles = getattr(manager, "stop_roles", None)
-        if callable(stop_roles):
-            stop_roles(self._connection_roles)
+        manager.stop_roles(self._connection_roles)
 
     async def on_start(self) -> None:
         _LOGGER.info(
@@ -239,19 +318,21 @@ class AccountActor(BusinessActor):
             self.execution_runtime is not None,
         )
         self._start_connections()
-        events = getattr(self.runtime, "events", None)
-        if callable(events):
-            self.start_event_loop(events(), is_finite=bool(getattr(self.runtime, "is_finite", False)), name="account")
-        execution_events = getattr(self.execution_runtime, "events", None)
-        if callable(execution_events):
-            self.start_event_loop(execution_events(), is_finite=bool(getattr(self.execution_runtime, "is_finite", False)), name="execution")
+        if self.runtime is not None:
+            events = getattr(self.runtime, "events", None)
+            if callable(events):
+                self.start_event_loop(events(), is_finite=bool(getattr(self.runtime, "is_finite", False)), name="account")
+        if self.execution_runtime is not None:
+            events = getattr(self.execution_runtime, "events", None)
+            if callable(events):
+                self.start_event_loop(events(), is_finite=bool(getattr(self.execution_runtime, "is_finite", False)), name="execution")
         _LOGGER.info("actor=account phase=streaming loops=%d", len(self._event_tasks))
 
     async def on_stop(self) -> None:
         _LOGGER.info("actor=account phase=stopping")
         self._stop_connections()
 
-    async def process(self, message: Message) -> object:
+    async def process(self, message: Message) -> AccountCommandResult:
         """Apply account-owned stream events to the account state boundary."""
         payload = message.payload
         if message.topic == "account.command":
@@ -259,7 +340,16 @@ class AccountActor(BusinessActor):
                 return await self.execute_intent_async(payload.intent, payload.context)
             if isinstance(payload, CancelOrderCommand) and self.risk_actor is not None:
                 return await self.cancel_order_async(payload.order_id, at=payload.at)
-            return self.apply_command(payload)
+            result = self.apply_command(payload)
+            if isinstance(result, AccountRefreshResult):
+                await self._publish_refreshed_snapshot(result, message)
+            return result
+        elif message.topic == "account.refresh.requested":
+            request = payload.request if isinstance(payload, RefreshAccountCommand) else payload
+            if isinstance(request, AccountRefreshRequest):
+                result = self.refresh(RefreshAccountCommand(request))
+                await self._publish_refreshed_snapshot(result, message)
+                return result
         elif message.topic == "account.snapshot" and isinstance(payload, AccountSnapshot):
             self.update_snapshot(payload)
         elif message.topic == "account.market_profile.refresh":
@@ -288,15 +378,30 @@ class AccountActor(BusinessActor):
                     elif state.status.value in {"canceled", "rejected", "expired"}:
                         await self._dispatch_risk(ReleaseRiskCommand(reservation_id))
         elif message.domain == "market":
-            on_market_event = getattr(self.execution_runtime, "on_market_event", None)
-            if callable(on_market_event):
-                on_market_event(payload)
-        projector_event = getattr(self.projectors, "on_event", None)
-        if callable(projector_event):
-            projector_event(message)
+            if self.execution_runtime is not None and isinstance(payload, (MarketEvent, MarketEventValue)):
+                self.execution_runtime.on_market_event(payload)
+        if self.projectors is not None:
+            self.projectors.on_event(message)
         return None
 
-    async def execute_intent_async(self, intent: TradeIntent, context: object) -> object:
+    async def _publish_refreshed_snapshot(self, result: AccountRefreshResult, caused_by: Message) -> None:
+        if self.bus is None:
+            return
+        sequence = self._next_command_sequence()
+        await self.bus.publish(
+            Message(
+                "account.snapshot",
+                result.read.snapshot,
+                result.read.snapshot.observed_at or datetime.now(timezone.utc),
+                "account.actor",
+                sequence,
+                message_id=f"account-refresh-{sequence}",
+                correlation_id=caused_by.correlation_id,
+                causation_id=caused_by.message_id,
+            )
+        )
+
+    async def execute_intent_async(self, intent: TradeIntent, context: IntentExecutionContext) -> OrderState | None:
         """Reserve risk before entering the execution usecase."""
         application = self.execution_application
         prepare = None if application is None else getattr(application, "prepare_intent", None)
@@ -308,7 +413,7 @@ class AccountActor(BusinessActor):
         if account is None:
             return None
         quantity = getattr(application, "current_quantity", None)
-        current_quantity = Decimal("0") if not callable(quantity) else quantity(account.book, intent.instrument_id)
+        current_quantity = Decimal("0") if not callable(quantity) else quantity(account.segment, intent.instrument_id)
         execution_context = context
         if getattr(context, "intents", None) is not self._intents:
             execution_context = SimpleNamespace(now=getattr(context, "now", None), intents=self._intents)
@@ -318,7 +423,7 @@ class AccountActor(BusinessActor):
                 context=execution_context,
                 account=account,
                 current_quantity=current_quantity,
-                account_snapshot=self.snapshot(account.book),
+                account_snapshot=self.snapshot(account.segment),
             ),
             check_safety=False,
         )
@@ -361,13 +466,13 @@ class AccountActor(BusinessActor):
                 await self._dispatch_risk(ReleaseRiskCommand(preparation.risk_reservation_id), correlation_id=str(intent.intent_id))
         return result
 
-    async def cancel_order_async(self, order_id: str, *, at: object) -> OrderState:
+    async def cancel_order_async(self, order_id: str, *, at: datetime) -> OrderState:
         result = self.cancel_order(order_id, at=at)
         if self.risk_actor is not None and result.status.value in {"canceled", "rejected", "expired"}:
             await self._dispatch_risk(ReleaseRiskCommand(result.request.reservation_id or result.request.order_id), correlation_id=result.request.reservation_id or result.request.order_id)
         return result
 
-    async def _dispatch_risk(self, command: object, *, correlation_id: str | None = None, causation_id: str | None = None) -> object:
+    async def _dispatch_risk(self, command: RiskCommand, *, correlation_id: str | None = None, causation_id: str | None = None) -> RiskCommandResult:
         dispatch = getattr(self.risk_actor, "dispatch_command", None)
         if not callable(dispatch):
             raise RuntimeError("account actor has no risk actor command gateway")
@@ -380,23 +485,35 @@ __all__ = [
     "CancelOrderCommand",
     "ExecuteIntentCommand",
     "RecordIntentsCommand",
+    "QueryAccountCommand",
+    "RefreshAccountCommand",
     "RefreshAccountMarketProfileCommand",
 ]
 
 
-def _command_correlation(command: object) -> str | None:
-    intent = getattr(command, "intent", None)
-    intent_id = getattr(intent, "intent_id", None)
-    if intent_id:
-        return str(intent_id)
-    intent_id = getattr(command, "intent_id", None)
-    if intent_id:
-        return str(intent_id)
-    order_id = getattr(command, "order_id", None)
-    return None if order_id is None else str(order_id)
+def _command_time(command: AccountCommand) -> datetime:
+    if isinstance(command, (RecordIntentsCommand, CancelOrderCommand, CancelIntentCommand)):
+        return command.at
+    if isinstance(command, RefreshAccountCommand):
+        return command.request.at or datetime.now(timezone.utc)
+    if isinstance(command, QueryAccountCommand):
+        return command.request.now or datetime.now(timezone.utc)
+    if isinstance(command, ExecuteIntentCommand):
+        return command.context.now or datetime.now(timezone.utc)
+    return command.at or datetime.now(timezone.utc)
 
 
-def _resolve_intent_account(accounts: tuple[AccountContext, ...], intent: TradeIntent) -> AccountContext | None:
+def _command_correlation(command: AccountCommand) -> str | None:
+    if isinstance(command, ExecuteIntentCommand):
+        return str(command.intent.intent_id)
+    if isinstance(command, CancelIntentCommand):
+        return command.intent_id
+    if isinstance(command, CancelOrderCommand):
+        return command.order_id
+    return None
+
+
+def _resolve_intent_account(accounts: tuple[AccountRuntimeContext, ...], intent: TradeIntent) -> AccountRuntimeContext | None:
     if not accounts:
         return None
     if intent.account_index is not None:
@@ -405,9 +522,9 @@ def _resolve_intent_account(accounts: tuple[AccountContext, ...], intent: TradeI
         except IndexError:
             return None
     for account in accounts:
-        if intent.account_id is not None and account.book.account_id == intent.account_id:
-            if intent.account_book is None or str(account.book.book) == intent.account_book:
+        if intent.account_id is not None and account.segment.account_id == intent.account_id:
+            if intent.account_segment is None or account.segment.segment_id == intent.account_segment or str(account.segment.product_family) == intent.account_segment:
                 return account
-        if intent.account_book is not None and account.book.book_key == intent.account_book:
+        if intent.account_segment is not None and account.segment.key == intent.account_segment:
             return account
     return accounts[0]

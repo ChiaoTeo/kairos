@@ -2,14 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Mapping
+from collections.abc import Callable, Mapping
+from typing import TypeVar
 
-from kairospy.domain.reference.identity import AssetId, EntityId, InstrumentId, ListingId, MarketId
+from kairospy.domain.reference.identity import AssetId, EntityId, FinancialProductId, InstrumentId, ListingId, MarketId, ProviderId
 from kairospy.domain.reference.model import (
     Asset,
     AssetType,
     Entity,
     EntityType,
+    EffectiveInterval,
+    FinancialProductDefinition,
+    FinancialProductStatus,
+    FinancialProductType,
     InstrumentDefinition,
     InstrumentType,
     LifecycleEvent,
@@ -18,6 +23,9 @@ from kairospy.domain.reference.model import (
     MarketDefinition,
     MarketStatus,
 )
+
+
+ReferenceIdT = TypeVar("ReferenceIdT")
 
 
 def entity_to_primitive(item: Entity) -> dict[str, object]:
@@ -54,6 +62,27 @@ def instrument_to_primitive(item: InstrumentDefinition) -> dict[str, object]:
         "strike": _optional_decimal(item.strike),
         "option_right": item.option_right,
         "multiplier": _optional_decimal(item.multiplier),
+        **_interval_fields(item),
+        "metadata": _encode(item.metadata),
+    }
+
+
+def financial_product_to_primitive(item: FinancialProductDefinition) -> dict[str, object]:
+    return {
+        "product_id": str(item.product_id),
+        "product_type": item.product_type.value,
+        "name": item.name,
+        "asset_id": str(item.asset_id),
+        "provider_product_id": item.provider_product_id,
+        "provider_id": _optional_id(item.provider_id),
+        "issuer_id": _optional_id(item.issuer_id),
+        "currency_asset_id": _optional_id(item.currency_asset_id),
+        "min_amount": _optional_decimal(item.min_amount),
+        "max_amount": _optional_decimal(item.max_amount),
+        "apr": _optional_decimal(item.apr),
+        "lock_period_days": item.lock_period_days,
+        "maturity_at": _optional_time(item.maturity_at),
+        "status": item.status.value,
         **_interval_fields(item),
         "metadata": _encode(item.metadata),
     }
@@ -156,6 +185,28 @@ def instrument_from_primitive(item: Mapping[str, object]) -> InstrumentDefinitio
     )
 
 
+def financial_product_from_primitive(item: Mapping[str, object]) -> FinancialProductDefinition:
+    return FinancialProductDefinition(
+        FinancialProductId(_required(item, "product_id")),
+        FinancialProductType(_required(item, "product_type")),
+        _required(item, "name"),
+        AssetId(_required(item, "asset_id")),
+        _required(item, "provider_product_id"),
+        provider_id=_optional_ref(item.get("provider_id"), ProviderId),
+        issuer_id=_optional_ref(item.get("issuer_id"), EntityId),
+        currency_asset_id=_optional_ref(item.get("currency_asset_id"), AssetId),
+        min_amount=_optional_decimal_from_value(item.get("min_amount")),
+        max_amount=_optional_decimal_from_value(item.get("max_amount")),
+        apr=_optional_decimal_from_value(item.get("apr")),
+        lock_period_days=_optional_int(item.get("lock_period_days")),
+        maturity_at=_optional_datetime(item.get("maturity_at")),
+        status=FinancialProductStatus(_required(item, "status")),
+        effective_from=_time(_required(item, "effective_from")),
+        effective_to=_optional_datetime(item.get("effective_to")),
+        metadata=_mapping(item.get("metadata")),
+    )
+
+
 def listing_from_primitive(item: Mapping[str, object]) -> ListingDefinition:
     return ListingDefinition(
         ListingId(_required(item, "listing_id")),
@@ -207,7 +258,7 @@ def lifecycle_event_from_primitive(item: Mapping[str, object]) -> LifecycleEvent
     )
 
 
-def _interval_fields(item: Any) -> dict[str, object]:
+def _interval_fields(item: EffectiveInterval) -> dict[str, object]:
     return {
         "effective_from": item.effective_from.isoformat(),
         "effective_to": _optional_time(item.effective_to),
@@ -273,7 +324,7 @@ def _optional_text(value: object) -> str | None:
     return text or None
 
 
-def _optional_ref(value: object, factory: Any) -> Any | None:
+def _optional_ref(value: object, factory: Callable[[str], ReferenceIdT]) -> ReferenceIdT | None:
     text = _optional_text(value)
     return None if text is None else factory(text)
 
@@ -299,6 +350,8 @@ __all__ = [
     "entity_to_primitive",
     "instrument_from_primitive",
     "instrument_to_primitive",
+    "financial_product_from_primitive",
+    "financial_product_to_primitive",
     "lifecycle_event_from_primitive",
     "lifecycle_event_to_primitive",
     "listing_from_primitive",

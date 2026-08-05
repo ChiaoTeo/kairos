@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable
 
 from kairospy.application.usecases.market.application.replay import replay_rows
+from kairospy.application.usecases.market.application.requests import MarketDataRow
 from .query import MarketDataQueryService
 from .resources import ExchangeName, MarketCommandResources, StorageFormat
 
@@ -26,7 +27,7 @@ class MarketReplayCommandService:
         end: str | None,
         limit: int | None,
         speed: float,
-        write: Callable[[object], None],
+        write: Callable[[MarketDataRow], None],
     ) -> None:
         rows = self.query.read(
             dataset=dataset,

@@ -8,7 +8,7 @@ from kairospy.application.usecases.market.application.events import MarketEventA
 from kairospy.application.usecases.market.application.feed import MarketFeedApplicationService
 from kairospy.application.usecases.market.application.runtime import build_replay_market
 from kairospy.application.usecases.market.application.component import MarketApplication
-from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
+from kairospy.application.usecases.market.application.requests import MarketDataSubscriptionSpec
 from kairospy.domain.market import MarketEvent, MarketSubject, Quote
 from kairospy.domain.reference import MarketRef
 
@@ -71,7 +71,7 @@ def test_market_feed_subscribe_requests_remote_data_and_emits_canonical_events()
                 unsubscribed.append(subscription_id)
 
         market = MarketApplication()
-        feed = MarketFeedApplicationService(market.subscriptions, feed=Feed())
+        feed = MarketFeedApplicationService(market, feed=Feed())
         feed.subscribe(
             MarketDataSubscriptionSpec(
                 MarketRef.ephemeral(venue="binance", market="spot", source_symbol="BTCUSDT"),
@@ -107,7 +107,16 @@ def test_replay_source_uses_system_subscription_state_when_bound() -> None:
 
     class Market:
         def __init__(self) -> None:
-            self.subscriptions = Subscriptions()
+            self._subscriptions = Subscriptions()
+
+        def subscribe(self, spec):
+            return self._subscriptions.subscribe(spec)
+
+        def unsubscribe(self, subscription):
+            self._subscriptions.unsubscribe(subscription)
+
+        def subscriptions(self):
+            return self._subscriptions.subscriptions()
 
     source = build_replay_market(Store())
     market = Market()

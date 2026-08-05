@@ -1,22 +1,28 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 
 from kairospy.domain.account import (
     AccountBalance,
-    AccountBookRef,
+    AccountCurrentView,
+    AccountDetailView,
+    AccountMarketProfile,
+    AccountSegment,
     AccountFeeSchedule,
-    AccountScopeReader,
+    ExternalAccountReader,
     AccountViewReader,
     AccountViewSource,
+    OpenOrderSnapshot,
     PositionSnapshot,
+    AssetCode,
 )
+from kairospy.domain.order import OrderState
 from kairospy.domain.reference import MarketRef
 
 
 @dataclass(frozen=True, slots=True)
-class AccountQueryService:
+class AccountViewQueryService:
     """Semantic account queries backed by a read-only view source.
 
     The source may be owned by runtime, persistence, or a test fixture. The
@@ -30,13 +36,13 @@ class AccountQueryService:
     def reader(self) -> AccountViewReader:
         return AccountViewReader(self.source)
 
-    def account(self, key: str | int) -> AccountScopeReader:
+    def account(self, key: str | int) -> ExternalAccountReader:
         return self.reader.account(key)
 
     def has_account(self, key: str | int) -> bool:
         return self.reader.has_account(key)
 
-    def current(self, key: str | None = None) -> object:
+    def current(self, key: str | None = None) -> AccountCurrentView:
         if key is None:
             return self.reader.current()
         try:
@@ -44,48 +50,42 @@ class AccountQueryService:
         except KeyError:
             currents = tuple(item for item in self.source.envelopes() if str(item).startswith("account.current."))
             if len(currents) == 1:
-                return self.source.require(currents[0])
+                return cast(AccountCurrentView, self.source.require(currents[0]))
             raise
 
-    def detail(self, key: str | None = None) -> object:
+    def detail(self, key: str | None = None) -> AccountDetailView:
         return self.reader.detail(key)
 
-    def book(self, key: str) -> object:
-        return self.reader.book(key)
+    def segment(self, key: str) -> ExternalAccountReader:
+        return self.reader.segment(key)
 
     def balances(self, *, account: str | None = None) -> tuple[AccountBalance, ...]:
-        return tuple(_field(self._selected_current(account), "balances") or ())
+        return self._selected_current(account).balances
 
-    def balance(self, currency: str, *, account: str | None = None) -> AccountBalance | None:
-        return next((item for item in self.balances(account=account) if _field(item, "currency") == currency), None)
+    def balance(self, currency: AssetCode | str, *, account: str | None = None) -> AccountBalance | None:
+        return next((item for item in self.balances(account=account) if item.currency == currency), None)
 
     def positions(self, *, account: str | None = None) -> tuple[PositionSnapshot, ...]:
-        return tuple(_field(self._selected_current(account), "positions") or ())
+        return self._selected_current(account).positions
 
-    def position(self, instrument: object, *, account: str | None = None) -> PositionSnapshot | None:
+    def position(self, instrument: str, *, account: str | None = None) -> PositionSnapshot | None:
         instrument_id = str(instrument)
-        return next((item for item in self.positions(account=account) if str(_field(item, "instrument_id")) == instrument_id), None)
+        return next((item for item in self.positions(account=account) if str(item.instrument_id) == instrument_id), None)
 
-    def open_orders(self, *, account: str | None = None) -> tuple[object, ...]:
-        return tuple(_field(self._selected_current(account), "open_orders") or ())
+    def open_orders(self, *, account: str | None = None) -> tuple[OpenOrderSnapshot, ...]:
+        return self._selected_current(account).open_orders
 
-    def pending_orders(self, *, account: str | None = None) -> tuple[object, ...]:
-        return tuple(_field(self._selected_current(account), "pending_orders") or ())
+    def pending_orders(self, *, account: str | None = None) -> tuple[OrderState, ...]:
+        return self._selected_current(account).pending_orders
 
     def fees(self, *, account: str | None = None) -> tuple[AccountFeeSchedule, ...]:
         return self.reader.fees(account=account)
 
-    def market_profile(self, account: AccountBookRef, market: MarketRef) -> object | None:
+    def market_profile(self, account: AccountSegment, market: MarketRef) -> AccountMarketProfile | None:
         return self.reader.market_profile(account, market)
 
-    def _selected_current(self, account: str | None) -> object:
+    def _selected_current(self, account: str | None) -> AccountCurrentView:
         return self.current(account)
 
 
-def _field(value: object, name: str, default: object = None) -> object:
-    if isinstance(value, Mapping):
-        return value.get(name, default)
-    return getattr(value, name, default)
-
-
-__all__ = ["AccountQueryService"]
+__all__ = ["AccountViewQueryService"]

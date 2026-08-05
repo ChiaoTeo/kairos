@@ -24,6 +24,7 @@ from kairospy.infrastructure.integrations.domain import (
     ProductFamily,
     TransportKind,
 )
+from kairospy.domain.reference import AssetType
 
 
 class RuntimeMode(StrEnum):
@@ -48,6 +49,7 @@ class IntegrationConnectionSpec:
     product: ProductFamily | None
     access: AccessScope
     transport: TransportKind
+    asset_type: AssetType | None = None
     credential: CredentialRef | None = None
     mode: RuntimeMode = RuntimeMode.LIVE
     capability: IntegrationCapability | None = None
@@ -75,6 +77,7 @@ class IntegrationConnectionSpec:
                 product=self.product,
                 access=self.access,
                 transport=self.transport,
+                asset_type=self.asset_type,
             )
 
     @property
@@ -84,6 +87,7 @@ class IntegrationConnectionSpec:
             product=self.product,
             access=self.access,
             transport=self.transport,
+            asset_type=self.asset_type,
         )
 
     @property
@@ -94,6 +98,7 @@ class IntegrationConnectionSpec:
                 product=self.product,
                 access=self.access,
                 transport=self.transport,
+                asset_type=self.asset_type,
             )
             for participant in self.route.participants
         )

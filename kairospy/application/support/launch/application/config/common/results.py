@@ -14,7 +14,7 @@ class AccountPerformanceMixin:
         equity_curve = tuple(getattr(self, "equity_curve", ()) or ())
         if equity_curve:
             return Decimal(str(getattr(equity_curve[0], "equity")))
-        value = getattr(self.account_view, "cash", None)
+        value = getattr(self.account_view, "selected_balance", None)
         return Decimal("0") if value is None else Decimal(str(value))
 
     @property

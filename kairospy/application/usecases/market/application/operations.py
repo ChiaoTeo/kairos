@@ -9,26 +9,29 @@ from kairospy.application.usecases.market.services.operations import MarketDataO
 from kairospy.application.usecases.market.application.resolver import MarketDataResolver, ResolvedMarketData
 from kairospy.application.usecases.market.domain.datasets import MarketPartition
 from kairospy.application.usecases.market.domain.specs import MarketDataSpec
+from kairospy.application.usecases.market.application.requests import MarketDataRow, MarketOptions
+from kairospy.application.usecases.market.protocol import MarketDataStore, MarketHistoricalClient
+from kairospy.domain.market import MarketEvent
 from kairospy.application.usecases.market.domain.subscriptions import DataSubscription
 
 
 class MarketDataOperationsService:
-    def __init__(self, store: object, resolver: MarketDataResolver | None = None) -> None:
+    def __init__(self, store: MarketDataStore, resolver: MarketDataResolver | None = None) -> None:
         self._service = _MarketDataOperationsService(store, resolver=resolver)
 
     def resolve(self, spec: MarketDataSpec) -> ResolvedMarketData:
         return self._service.resolve(spec)
 
-    def read(self, spec: MarketDataSpec, *, columns: Iterable[str] | None = None) -> list[dict[str, object]]:
+    def read(self, spec: MarketDataSpec, *, columns: Iterable[str] | None = None) -> list[MarketDataRow]:
         return self._service.read(spec, columns=columns)
 
-    def download(self, spec: MarketDataSpec, client: object, *, mode: str = "append", options: Mapping[str, object] | None = None) -> Path:
+    def download(self, spec: MarketDataSpec, client: MarketHistoricalClient, *, mode: str = "append", options: MarketOptions | None = None) -> Path:
         return self._service.download(spec, client, mode=mode, params=options)
 
-    def ensure(self, spec: MarketDataSpec, client: object | None = None, *, mode: str = "append", options: Mapping[str, object] | None = None) -> ResolvedMarketData:
+    def ensure(self, spec: MarketDataSpec, client: MarketHistoricalClient | None = None, *, mode: str = "append", options: MarketOptions | None = None) -> ResolvedMarketData:
         return self._service.ensure(spec, client, mode=mode, params=options)
 
-    async def persist(self, spec: MarketDataSpec, events: AsyncIterable[Mapping[str, object]], *, limit: int | None = None) -> int:
+    async def persist(self, spec: MarketDataSpec, events: AsyncIterable[MarketEvent], *, limit: int | None = None) -> int:
         return await self._service.persist(spec, events, limit=limit)
 
     def subscription_stream(self, spec: MarketDataSpec) -> str:

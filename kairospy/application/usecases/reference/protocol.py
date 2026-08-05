@@ -6,12 +6,17 @@ not depend on SQLite, vendor clients, or integration services.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
 from kairospy.domain.reference import LifecycleEvent, ReferenceCatalog
+from kairospy.application.usecases.reference.application.requests import (
+    ReferenceCatalogRequest,
+    ReferenceDelistRequest,
+    ReferenceLifecycleRequest,
+)
 
 
 class ReferenceStore(Protocol):
@@ -25,25 +30,33 @@ class ReferenceStore(Protocol):
 
 
 class ReferenceCatalogSource(Protocol):
-    def catalog(
-        self,
-        *,
-        as_of: datetime,
-        market: str | None = None,
-        params: Mapping[str, object] | None = None,
-    ) -> ReferenceCatalog: ...
+    def catalog(self, request: ReferenceCatalogRequest) -> ReferenceCatalog: ...
+
+
+class ReferenceDelistScheduleSource(Protocol):
+    def fetch_delist_events(self, request: ReferenceDelistRequest) -> Iterable[LifecycleEvent]: ...
 
 
 class ReferenceLifecycleSource(Protocol):
-    def fetch_lifecycle_events(
-        self,
-        ticker: str,
-        *,
-        start: datetime,
-        end: datetime,
-        catalog: ReferenceCatalog,
-        venue: str | None = None,
-    ) -> Iterable[LifecycleEvent]: ...
+    def fetch_lifecycle_events(self, request: ReferenceLifecycleRequest) -> Iterable[LifecycleEvent]: ...
 
 
-__all__ = ["ReferenceCatalogSource", "ReferenceLifecycleSource", "ReferenceStore"]
+class ReferenceCatalogDelistSource(ReferenceCatalogSource, ReferenceDelistScheduleSource, Protocol):
+    """Catalog source that can also provide scheduled delist facts."""
+
+
+class ReferenceProviderSource(ReferenceCatalogSource, ReferenceDelistScheduleSource, ReferenceLifecycleSource, Protocol):
+    """Provider capability used by catalog refresh and lifecycle queries."""
+
+
+__all__ = [
+    "ReferenceCatalogRequest",
+    "ReferenceCatalogDelistSource",
+    "ReferenceCatalogSource",
+    "ReferenceDelistRequest",
+    "ReferenceDelistScheduleSource",
+    "ReferenceLifecycleRequest",
+    "ReferenceLifecycleSource",
+    "ReferenceProviderSource",
+    "ReferenceStore",
+]

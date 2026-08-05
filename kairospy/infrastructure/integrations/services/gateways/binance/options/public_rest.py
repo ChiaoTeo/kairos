@@ -8,7 +8,8 @@ from decimal import Decimal
 from uuid import uuid4
 
 from kairospy.application.usecases.market.application.integration import MarketFeedSubscriptionRequest
-from kairospy.domain.market import Bar, MarketEvent, MarketSubject, Quote
+from kairospy.domain.market import Bar, MarketEvent, MarketSubject, Quote, RateObservation
+from kairospy.application.usecases.market.application.requests import MarketOptions, MarketTime
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec
 from kairospy.infrastructure.integrations.domain import AccessScope, ProductFamily, TransportKind
 from kairospy.infrastructure.integrations.services.connections.connection import Connection
@@ -64,11 +65,11 @@ class BinanceOptionsPublicRestConnection(Connection):
             result.append(OptionContractRef(market, InstrumentId(f"instrument:crypto:{base_asset.lower()}"), expiry, strike, right, _decimal(row.get("unit") or row.get("contractSize")) or Decimal("1")))
         return tuple(result)
 
-    def bars(self, symbol: str, *, timeframe: str = "1m", since: object | None = None, until: object | None = None, limit: int = 1000, adapter_options: Mapping[str, object] | None = None) -> Iterable[Bar]:
+    def bars(self, symbol: str, *, timeframe: str = "1m", since: MarketTime | None = None, until: MarketTime | None = None, limit: int = 1000, adapter_options: MarketOptions | None = None) -> Iterable[Bar]:
         del symbol, timeframe, since, until, limit, adapter_options
         return ()
 
-    def funding_rates(self, symbol: str, *, since: object | None = None, until: object | None = None, limit: int = 1000, adapter_options: Mapping[str, object] | None = None) -> Iterable[object]:
+    def funding_rates(self, symbol: str, *, since: MarketTime | None = None, until: MarketTime | None = None, limit: int = 1000, adapter_options: MarketOptions | None = None) -> Iterable[RateObservation]:
         del symbol, since, until, limit, adapter_options
         return ()
 

@@ -3,20 +3,22 @@ from __future__ import annotations
 from typing import Mapping
 
 from kairospy.application.usecases.market.application.resolver import MarketDataResolver
-from kairospy.application.usecases.market.domain.specs import MarketDataSpec
+from kairospy.application.usecases.market.application.requests import MarketDataSpec
+from kairospy.application.usecases.market.protocol import MarketHistoricalClient
 from kairospy.application.support.launch.application.configuration import ConfiguredBacktest
 from kairospy.application.support.launch.application.results import backtest_result
 from kairospy.application.support.launch.domain.modes import RuntimeMode
 from kairospy.application.actor.support.services.connections import IntegrationConnectionScope
 from kairospy.application.usecases.market.application.runtime import BacktestMarketDataService, build_backtest_market
 from kairospy.application.system.application.business import SystemApplication
-from kairospy.application.support.composition.application.resources import DriverName, ExchangeName, public_market_access
+from kairospy.application.support.composition.application.resources import DriverName, ExchangeName, historical_market_access
 from kairospy.application.support.composition.application.accounts import BacktestAccountResources
 from kairospy.domain.reference import MarketResolver
 from kairospy.infrastructure.persistence.application.market_data import DataStore
 
 from .common import ComposedLaunch, in_memory_message_bus, optional_default_text, reference_runtime
 from .runtime import compose_runtime_assembly
+from .notifications import build_notification_application, notification_runtime_settings
 
 
 class BacktestComposition:
@@ -37,6 +39,8 @@ class BacktestComposition:
             ),
             connection_scope=connections,
             message_bus=in_memory_message_bus(),
+            notifications=build_notification_application(configured.normalized_config),
+            notification_settings=notification_runtime_settings(configured.normalized_config),
             assembly=compose_runtime_assembly(),
         )
         return ComposedLaunch(
@@ -54,8 +58,8 @@ class BacktestComposition:
         if configured.market_policy.on_missing != "download":
             return
 
-        def factory(spec: MarketDataSpec):
-            return public_market_access(
+        def factory(spec: MarketDataSpec) -> MarketHistoricalClient:
+            return historical_market_access(
                 _exchange_name(spec.venue),
                 DriverName.ccxt,
                 product=_product_family(spec.market),
@@ -100,7 +104,7 @@ def _product_family(value: object) -> object:
 
     text = str(value).strip().lower()
     if text in {"equity", "stock", "stocks"}:
-        return ProductFamily.EQUITY
+        return ProductFamily.SPOT
     if text in {"swap", "perp", "perpetual", "future", "futures", "usd_margined_futures"}:
         return ProductFamily.USD_M_FUTURES
     return ProductFamily.SPOT

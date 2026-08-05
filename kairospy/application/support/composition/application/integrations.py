@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from kairospy.application.usecases.market.domain.subscriptions import MarketDataSubscriptionSpec
+from kairospy.application.usecases.market.application.requests import MarketDataSubscriptionSpec
 from kairospy.infrastructure.integrations.application.connections import (
     IntegrationConnection,
     IntegrationConnectionApplication,
@@ -14,6 +14,7 @@ from kairospy.infrastructure.integrations.application.connections import (
 from kairospy.application.usecases.market.application.feed import MarketStreamConnection
 from kairospy.infrastructure.integrations.domain import (
     AccessScope,
+    AssetType,
     BrokerId,
     BrokerRef,
     CredentialRef,
@@ -181,7 +182,8 @@ def connect_binance_equity(
         IntegrationConnectionSpec(
             connection_id=connection_id,
             route=IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE)),
-            product=ProductFamily.EQUITY,
+            product=ProductFamily.SPOT,
+            asset_type=AssetType.EQUITY,
             access=AccessScope.PUBLIC,
             transport=transport,
             credential=CredentialRef(credential) if credential else None,
@@ -200,7 +202,7 @@ def connect_binance_earn(
         IntegrationConnectionSpec(
             connection_id=connection_id,
             route=IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
-            product=ProductFamily.EARN,
+            product=None,
             access=AccessScope.PRIVATE,
             transport=TransportKind.REST,
             capability=IntegrationCapability.EARN,
@@ -245,7 +247,8 @@ def connect_massive_stocks(
         IntegrationConnectionSpec(
             connection_id=connection_id,
             route=IntegrationRoute(provider=ProviderRef(ProviderId.MASSIVE)),
-            product=ProductFamily.EQUITY,
+            product=ProductFamily.SPOT,
+            asset_type=AssetType.EQUITY,
             access=AccessScope.PUBLIC,
             transport=transport,
             credential=CredentialRef(credential) if credential else None,
@@ -305,7 +308,8 @@ def connect_ibkr(
         IntegrationConnectionSpec(
             connection_id=connection_id,
             route=IntegrationRoute(broker=BrokerRef(BrokerId.IBKR)),
-            product=ProductFamily.EQUITY,
+            product=ProductFamily.SPOT,
+            asset_type=AssetType.EQUITY,
             access=AccessScope.PRIVATE,
             transport=transport,
             credential=CredentialRef(credential) if credential else None,
@@ -465,8 +469,8 @@ def _market_product(value: str) -> ProductFamily:
         return ProductFamily.USD_M_FUTURES
     if value == ProductFamily.COIN_M_FUTURES.value:
         return ProductFamily.COIN_M_FUTURES
-    if value == ProductFamily.EQUITY.value:
-        return ProductFamily.EQUITY
+    if value in {"equity", "stock", "stocks"}:
+        return ProductFamily.SPOT
     return ProductFamily.SPOT
 
 

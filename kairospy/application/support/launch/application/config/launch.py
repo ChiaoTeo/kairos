@@ -7,14 +7,14 @@ from typing import Any, Mapping
 import tomllib
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from kairospy.application.usecases.notification.application.config import notification_issues
+
 
 CONFIG_FILENAME = "kairos.toml"
 VALID_LAUNCH_MODES = frozenset({"backtest", "paper", "live"})
 SYSTEM_LAUNCH_ID = "kairos-system"
 RESERVED_LAUNCH_IDS = frozenset({SYSTEM_LAUNCH_ID})
 VALID_ACCOUNT_ENVIRONMENTS = frozenset({"backtest", "paper", "live", "sandbox", "simulation", "testnet"})
-DEFAULT_ACCOUNT_CASH = Decimal("100000")
-DEFAULT_ACCOUNT_CURRENCY = "USD"
 DEFAULT_ACCOUNT_FEE_RATE = Decimal("0")
 
 
@@ -24,8 +24,7 @@ class ConfigError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class AccountDefaults:
-    cash: Decimal = DEFAULT_ACCOUNT_CASH
-    currency: str = DEFAULT_ACCOUNT_CURRENCY
+    initial_balances: tuple[tuple[str, Decimal], ...] = ()
     fee_rate: Decimal = DEFAULT_ACCOUNT_FEE_RATE
 
 
@@ -34,8 +33,7 @@ class AccountConfig:
     account_id: str
     index: int
     venue: str
-    cash: Decimal = DEFAULT_ACCOUNT_CASH
-    currency: str = DEFAULT_ACCOUNT_CURRENCY
+    initial_balances: tuple[tuple[str, Decimal], ...] = ()
     fee_rate: Decimal = DEFAULT_ACCOUNT_FEE_RATE
     credential: str | None = None
 
@@ -45,7 +43,7 @@ class LaunchAccountConfig:
     alias: str
     ref: str
     index: int
-    books: tuple[str, ...] = ()
+    segments: tuple[str, ...] = ()
     trade: bool = True
 
 
@@ -150,11 +148,10 @@ class LaunchConfig:
         accounts = self.accounts
         if accounts:
             first = min(accounts.values(), key=lambda account: account.index)
-            return AccountDefaults(first.cash, first.currency, first.fee_rate)
+            return AccountDefaults(first.initial_balances, first.fee_rate)
         account = self._table("account", required=False)
         return AccountDefaults(
-            cash=_decimal(account.get("cash", DEFAULT_ACCOUNT_CASH), "account.cash"),
-            currency=_text(account.get("currency", DEFAULT_ACCOUNT_CURRENCY), "account.currency"),
+            initial_balances=_initial_balances(account.get("initial_balances"), "account.initial_balances"),
             fee_rate=_decimal(account.get("fee_rate", DEFAULT_ACCOUNT_FEE_RATE), "account.fee_rate"),
         )
 
@@ -171,8 +168,7 @@ class LaunchConfig:
                 account_id=str(account_id),
                 index=_int(raw.get("index", fallback_index), f"accounts.{account_id}.index"),
                 venue=_text(raw.get("venue"), f"accounts.{account_id}.venue"),
-                cash=_decimal(raw.get("cash", DEFAULT_ACCOUNT_CASH), f"accounts.{account_id}.cash"),
-                currency=_text(raw.get("currency", DEFAULT_ACCOUNT_CURRENCY), f"accounts.{account_id}.currency"),
+                initial_balances=_initial_balances(raw.get("initial_balances"), f"accounts.{account_id}.initial_balances"),
                 fee_rate=_decimal(raw.get("fee_rate", DEFAULT_ACCOUNT_FEE_RATE), f"accounts.{account_id}.fee_rate"),
                 credential=_optional_text(raw.get("credential"), f"accounts.{account_id}.credential") or None,
             )
@@ -187,12 +183,12 @@ class LaunchConfig:
                 raise ConfigError(f"accounts.{alias} must be a table")
             if "ref" not in raw:
                 continue
-            books = raw.get("books")
+            segments = raw.get("segments")
             parsed[str(alias)] = LaunchAccountConfig(
                 alias=str(alias),
                 ref=_text(raw.get("ref"), f"accounts.{alias}.ref"),
                 index=_int(raw.get("index", fallback_index), f"accounts.{alias}.index"),
-                books=_string_tuple(books, f"accounts.{alias}.books"),
+                segments=_string_tuple(segments, f"accounts.{alias}.segments"),
                 trade=_bool(raw.get("trade", True), f"accounts.{alias}.trade"),
             )
         return dict(sorted(parsed.items(), key=lambda item: item[1].index))
@@ -235,6 +231,7 @@ class LaunchConfig:
             issues.append("launch.mode must be one of: backtest, paper, live")
         if "data" in self.values:
             issues.append("[data] is not valid launch config; strategy code declares market data with context.subscribe")
+        issues.extend(notification_issues(self.values.get("notifications")))
         feeds = self.values.get("feeds")
         if feeds is not None:
             if not isinstance(feeds, Mapping):
@@ -315,7 +312,7 @@ class LaunchConfig:
             "account": dict(self._table("account", required=False)),
             "account_ref": self.account_ref,
             "accounts": {
-                key: {"ref": value.ref, "index": value.index, "books": list(value.books), "trade": value.trade}
+                key: {"ref": value.ref, "index": value.index, "segments": list(value.segments), "trade": value.trade}
                 for key, value in self.launch_accounts.items()
             },
             "feeds": dict(self._table("feeds", required=False)),
@@ -372,7 +369,7 @@ def _string_tuple(value: object, source: str) -> tuple[str, ...]:
     if isinstance(value, str):
         text = value.strip()
         if not text:
-            raise ConfigError(f"{source} must not contain empty book names")
+            raise ConfigError(f"{source} must not contain empty account segment names")
         return (text,)
     if not isinstance(value, list):
         raise ConfigError(f"{source} must be a string or list of strings")
@@ -401,6 +398,20 @@ def _decimal(value: object, source: str) -> Decimal:
         raise ConfigError(f"{source} must be decimal-compatible") from error
 
 
+def _initial_balances(value: object, source: str) -> tuple[tuple[str, Decimal], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Mapping):
+        raise ConfigError(f"{source} must be a table of ASSET = QUANTITY")
+    balances: list[tuple[str, Decimal]] = []
+    for asset, quantity in sorted(value.items(), key=lambda item: str(item[0]).upper()):
+        name = _text(asset, f"{source} asset").upper()
+        balances.append((name, _decimal(quantity, f"{source}.{name}")))
+    if len({asset for asset, _ in balances}) != len(balances):
+        raise ConfigError(f"{source} cannot contain duplicate assets")
+    return tuple(balances)
+
+
 def _int(value: object, source: str) -> int:
     if isinstance(value, bool):
         raise ConfigError(f"{source} must be an integer")
@@ -423,7 +434,22 @@ def _account_issues(account: Mapping[str, Any], *, mode: str) -> list[str]:
     issues: list[str] = []
     if "ref" in account and not _valid_optional_text(account.get("ref")):
         issues.append("account.ref must be a non-empty string")
-    for key in ("cash", "fee_rate"):
+    if "initial_balances" in account:
+        balances = account.get("initial_balances")
+        if not isinstance(balances, Mapping):
+            issues.append("account.initial_balances must be a table of ASSET = QUANTITY")
+        else:
+            for asset, quantity in balances.items():
+                if not _valid_optional_text(str(asset)):
+                    issues.append("account.initial_balances asset must be a non-empty string")
+                try:
+                    value = _decimal(quantity, f"account.initial_balances.{asset}")
+                except ConfigError as error:
+                    issues.append(str(error))
+                else:
+                    if value < 0:
+                        issues.append(f"account.initial_balances.{asset} cannot be negative")
+    for key in ("fee_rate",):
         if key in account:
             try:
                 value = _decimal(account[key], f"account.{key}")
@@ -432,8 +458,6 @@ def _account_issues(account: Mapping[str, Any], *, mode: str) -> list[str]:
             else:
                 if value < 0:
                     issues.append(f"account.{key} cannot be negative")
-    if "currency" in account and not _valid_optional_text(account.get("currency")):
-        issues.append("account.currency must be a non-empty string")
     if "environment" in account:
         environment = account.get("environment")
         if not _valid_optional_text(environment):
@@ -472,7 +496,7 @@ def _accounts_issues(accounts: Mapping[str, Any], *, mode: str) -> list[str]:
                 indexes[index] = str(account_id)
         if not _valid_optional_text(raw.get("venue")):
             issues.append(f"{source}.venue is required")
-        for key in ("cash", "fee_rate"):
+        for key in ("fee_rate",):
             if key in raw:
                 try:
                     value = _decimal(raw[key], f"{source}.{key}")
@@ -481,8 +505,9 @@ def _accounts_issues(accounts: Mapping[str, Any], *, mode: str) -> list[str]:
                 else:
                     if value < 0:
                         issues.append(f"{source}.{key} cannot be negative")
-        if "currency" in raw and not _valid_optional_text(raw.get("currency")):
-            issues.append(f"{source}.currency must be a non-empty string")
+        balances = raw.get("initial_balances")
+        if balances is not None and not isinstance(balances, Mapping):
+            issues.append(f"{source}.initial_balances must be a table of ASSET = QUANTITY")
         if "credential" in raw and not _valid_optional_text(raw.get("credential")):
             issues.append(f"{source}.credential must be a non-empty string")
         if mode == "live" and not _valid_optional_text(raw.get("credential")):
@@ -519,9 +544,9 @@ def _launch_accounts_issues(accounts: Mapping[str, Any]) -> list[str]:
                 issues.append(f"{source}.index duplicates accounts.{indexes[index]}.index")
             else:
                 indexes[index] = str(alias)
-        if "books" in raw:
+        if "segments" in raw:
             try:
-                _string_tuple(raw.get("books"), f"{source}.books")
+                _string_tuple(raw.get("segments"), f"{source}.segments")
             except ConfigError as error:
                 issues.append(str(error))
         if "trade" in raw and not isinstance(raw.get("trade"), bool):
@@ -550,7 +575,7 @@ def _live_issues(live: Mapping[str, Any]) -> list[str]:
     legacy_fields = ("venue", "market", "symbol", "stream", "order_params", "balance_params", "watch_private")
     for key in legacy_fields:
         if key in live:
-            issues.append(f"live.{key} is no longer supported; use account refs, account books, and strategy context.subscribe(...)")
+            issues.append(f"live.{key} is no longer supported; use account refs, account segments, and strategy context.subscribe(...)")
     for key in ("max_balance_events", "max_order_events", "max_trade_events"):
         if key in live:
             issues.append(f"live.{key} is no longer supported; use live.account_stream.{key}")
@@ -649,8 +674,6 @@ __all__ = [
     "CONFIG_FILENAME",
     "AccountConfig",
     "ConfigError",
-    "DEFAULT_ACCOUNT_CASH",
-    "DEFAULT_ACCOUNT_CURRENCY",
     "DEFAULT_ACCOUNT_FEE_RATE",
     "LaunchAccountConfig",
     "LaunchConfig",

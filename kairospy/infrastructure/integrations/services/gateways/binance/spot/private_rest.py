@@ -46,6 +46,22 @@ class BinanceSpotAccountConnection(Connection):
         )
         return ConnectionAccountReadData(snapshot=snapshot)
 
+    def inspect_credential(self) -> Mapping[str, object]:
+        """Return normalized discovery hints for account binding.
+
+        Binance Spot does not expose a universal user id in every account
+        response, so the application may retain the credential reference as a
+        provisional identity until another product endpoint supplies one.
+        """
+        payload = self.account_operations.account_snapshot()
+        row = payload if isinstance(payload, Mapping) else {}
+        return {
+            "read_private": True,
+            "account_type": row.get("accountType"),
+            "permissions": row.get("permissions", ()),
+            "scopes": ("spot",),
+        }
+
     def read_market_profile(self, request: ConnectionAccountMarketProfileRequest) -> ConnectionAccountMarketProfileData:
         payload = self.account_operations.trade_fee(symbol=str(request.market.source_symbol))
         rows = payload if isinstance(payload, list) else ()
@@ -58,7 +74,7 @@ class BinanceSpotAccountConnection(Connection):
         enabled = bool(burn_row.get("spotBNBBurn"))
         discount = FeeDiscountRule("BNB", Decimal("0.25"), enabled=enabled, source="binance.spot")
         payment = FeePaymentRule(currency="BNB" if enabled else "BNB", currency_mode="discount_asset", discount=discount)
-        schedule = AccountFeeSchedule(request.context.book, maker * (Decimal("0.75") if enabled else Decimal("1")), taker * (Decimal("0.75") if enabled else Decimal("1")), market=request.market, currency="BNB", source="binance.spot+bnb" if enabled else "binance.spot", updated_at=request.observed_at, market_rule=market_rule, payment=payment)
+        schedule = AccountFeeSchedule(request.context.segment, maker * (Decimal("0.75") if enabled else Decimal("1")), taker * (Decimal("0.75") if enabled else Decimal("1")), market=request.market, currency="BNB", source="binance.spot+bnb" if enabled else "binance.spot", updated_at=request.observed_at, market_rule=market_rule, payment=payment)
         account = self.account_operations.account_snapshot()
         account_row = account if isinstance(account, Mapping) else {}
         return ConnectionAccountMarketProfileData(AccountMarketProfile(request.context, request.market, fee=AccountFeeResolution(schedule, None, market_rule, payment, combination="market_rate_then_bnb_discount"), account_type=str(account_row.get("accountType") or "spot"), source="binance.spot", observed_at=request.observed_at))

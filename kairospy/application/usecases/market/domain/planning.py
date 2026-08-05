@@ -8,7 +8,8 @@ from typing import Mapping
 from kairospy.domain.market import Bar, MarketSelector, OptionGreeks, OrderBookSnapshot, Quote, RateObservation, TradePrint, market_selector
 from kairospy.domain.reference import MarketRef
 
-from ..domain.subscriptions import DataSubscription
+from ..domain.subscriptions import DataSubscription, MarketDataSubscriptionSpec
+from .specs import MarketOptions
 
 
 STREAM_TICKER = "ticker"
@@ -33,7 +34,7 @@ class MarketStreamPlan:
     subject_id: str
     selectors: tuple[MarketSelector, ...]
     identity: str | None = None
-    params: Mapping[str, object] = MappingProxyType({})
+    params: MarketOptions = MappingProxyType({})
 
     def __post_init__(self) -> None:
         if not self.key.strip() or not self.channel.strip():
@@ -50,7 +51,7 @@ class MarketFeedWatchPlan:
     market: MarketRef
     source_symbol: str
     selector: MarketSelector
-    params: Mapping[str, object] = MappingProxyType({})
+    params: MarketOptions = MappingProxyType({})
     depth: int | None = None
 
     def __post_init__(self) -> None:
@@ -62,7 +63,7 @@ class MarketFeedWatchPlan:
 
 
 class MarketStreamPlanningService:
-    def stream_plans(self, spec: object) -> tuple[MarketStreamPlan, ...]:
+    def stream_plans(self, spec: MarketDataSubscriptionSpec) -> tuple[MarketStreamPlan, ...]:
         return plan_market_streams(spec)
 
     def feed_watches(self, subscription: DataSubscription) -> tuple[MarketFeedWatchPlan, ...]:
@@ -93,24 +94,24 @@ def selector_channel(selector: MarketSelector | type) -> str:
     return model.__name__.lower()
 
 
-def plan_market_streams(spec: object) -> tuple[MarketStreamPlan, ...]:
-    selectors = tuple(market_selector(selector) for selector in getattr(spec, "selectors"))
+def plan_market_streams(spec: MarketDataSubscriptionSpec) -> tuple[MarketStreamPlan, ...]:
+    selectors = tuple(market_selector(selector) for selector in spec.selectors)
     grouped: dict[str, list[MarketSelector]] = {}
     for selector in selectors:
         grouped.setdefault(selector_channel(selector), []).append(selector)
     plans: list[MarketStreamPlan] = []
     for channel, channel_selectors in sorted(grouped.items()):
-        params = dict(getattr(spec, "params", {}))
+        params = dict(spec.params)
         key = _stream_plan_key(spec, channel, tuple(channel_selectors), params)
         plans.append(
             MarketStreamPlan(
                 key,
-                str(getattr(spec, "venue", "") or ""),
+                str(spec.provider or spec.market.exchange_id),
                 channel,
-                str(getattr(spec, "subject_type")),
-                str(getattr(spec, "subject_id")),
+                "market",
+                str(spec.market.market_id),
                 tuple(channel_selectors),
-                identity=getattr(spec, "identity", None),
+                identity=spec.identity,
                 params=params,
             )
         )
@@ -122,6 +123,8 @@ def feed_watch_plan(subscription: DataSubscription, selector: MarketSelector | t
     channel = selector_channel(selector)
     model = selector.model
     params = dict(subscription.spec.params)
+    if subscription.spec.provider is not None:
+        params["provider"] = str(subscription.spec.provider)
     depth = None
     if model is Quote:
         kind = "quote"
@@ -152,13 +155,14 @@ def feed_watch_plan(subscription: DataSubscription, selector: MarketSelector | t
     )
 
 
-def _stream_plan_key(spec: object, channel: str, selectors: tuple[MarketSelector, ...], params: Mapping[str, object]) -> str:
-    subject = _key_part(getattr(spec, "source_symbol", None) or getattr(spec, "subject_id"))
-    identity_value = getattr(spec, "identity", None)
+def _stream_plan_key(spec: MarketDataSubscriptionSpec, channel: str, selectors: tuple[MarketSelector, ...], params: MarketOptions) -> str:
+    subject = _key_part(spec.market.source_symbol or spec.market.market_id)
+    identity_value = spec.identity
     identity = "" if identity_value is None else f".{_key_part(identity_value)}"
     options = "|".join([selector.key for selector in selectors] + [f"{name}={value}" for name, value in sorted(params.items())])
     digest = sha1(options.encode("utf-8")).hexdigest()[:12]
-    return ".".join(part for part in ("market", getattr(spec, "venue", None) or "", channel, subject + identity, digest) if part)
+    provider = spec.provider or spec.market.exchange_id
+    return ".".join(part for part in ("market", str(provider), channel, subject + identity, digest) if part)
 
 
 def _key_part(value: object) -> str:

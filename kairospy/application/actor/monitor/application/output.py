@@ -22,7 +22,7 @@ class AccountCurrentOutput:
                 getattr(account_view, "event_count", None),
                 getattr(account_view, "last_event_time", None),
                 getattr(account_view, "equity", None),
-                getattr(account_view, "cash", None),
+                getattr(account_view, "selected_balance", None),
                 getattr(account_view, "net_profit", None),
                 getattr(account_view, "total_return", None),
                 len(tuple(getattr(account_view, "positions", ()) or ())),

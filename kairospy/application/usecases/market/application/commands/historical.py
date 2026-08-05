@@ -4,22 +4,21 @@ from collections.abc import Iterable
 
 from kairospy.application.usecases.market.application.component import MarketApplication
 from kairospy.application.usecases.market.application.data import MarketDataSpec
+from kairospy.application.usecases.market.protocol import MarketHistoricalClient
+from kairospy.domain.market import Bar, RateObservation
 from .resources import DriverName, ExchangeName, MarketCommandResources, StorageFormat
 
 
 class _HistoricalConnectionSource:
     """System adapter translating a selected integration connection to the market source contract."""
 
-    def __init__(self, connection: object) -> None:
+    def __init__(self, connection: MarketHistoricalClient) -> None:
         self._connection = connection
 
-    def fetch(self, spec: MarketDataSpec) -> Iterable[object]:
+    def fetch(self, spec: MarketDataSpec) -> Iterable[Bar | RateObservation]:
         symbol = spec.symbol
         if spec.kind == "ohlcv":
-            fetch = getattr(self._connection, "bars", None)
-            if not callable(fetch):
-                raise ValueError("selected market connection does not provide historical bars")
-            return fetch(
+            return self._connection.bars(
                 symbol,
                 timeframe=spec.timeframe or "1m",
                 since=spec.start,
@@ -27,10 +26,7 @@ class _HistoricalConnectionSource:
                 limit=spec.limit or 1000,
             )
         if spec.kind == "funding_rate":
-            fetch = getattr(self._connection, "funding_rates", None)
-            if not callable(fetch):
-                raise ValueError("selected market connection does not provide historical funding rates")
-            return fetch(
+            return self._connection.funding_rates(
                 symbol,
                 since=spec.start,
                 until=spec.end,
@@ -77,8 +73,8 @@ class MarketHistoricalCommandService:
             store=self._resources.data_store(root, storage_format),
             resolver=None,
         )
-        source = _HistoricalConnectionSource(self._resources.public_market_access(exchange_name, driver_name))
-        return str(service.ingestion.persist_historical(spec, source.fetch(spec), mode=mode))
+        source = _HistoricalConnectionSource(self._resources.historical_market_access(exchange_name, driver_name))
+        return str(service.persist_historical(spec, source.fetch(spec), mode=mode))
 
 
 __all__ = ["MarketHistoricalCommandService"]

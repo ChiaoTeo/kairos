@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from kairospy.application.support.launch.domain.modes import RuntimeMode
 from kairospy.application.support.launch.application.sources import AsyncEventSource, ClockEventSource, CsvEventSource, IntervalClockSource, IterableEventSource, RealtimeClockSource
 from kairospy.application.usecases.strategy.application.entrypoint import StrategyEntrypoint, load_strategy_entrypoint
-from kairospy.application.usecases.workspace.domain.workspace import KairosWorkspace
+from kairospy.application.usecases.workspace.application.workspace import KairosWorkspace
 from kairospy.application.support.launch.application.configuration import ConfigError, LaunchConfig, load_launch_config
 from kairospy.application.usecases.workspace.domain.config import CONFIG_FILENAME, find_manifest_path
 

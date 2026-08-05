@@ -8,8 +8,8 @@ from uuid import uuid4
 from kairospy.domain.account import (
     AccountEvent,
     AccountEventKind,
-    AccountBookRef,
-    AccountContext,
+    AccountSegment,
+    AccountRuntimeContext,
     AccountLedger,
     AccountSnapshot,
     AccountState,
@@ -27,7 +27,7 @@ from kairospy.domain.order import (
 )
 from kairospy.domain.reference import InstrumentId
 
-from kairospy.domain.execution import ExecutionUpdate, Reservation, ReservationBook, reserve_cash_order, reserve_margin_order
+from kairospy.domain.execution import ExecutionUpdate, Reservation, ReservationBook, reserve_asset_order, reserve_margin_order
 from kairospy.application.usecases.risk.application.budget import (
     RiskApplication,
     RiskAssessmentRequest,
@@ -43,7 +43,7 @@ class FillReport:
     fill_quantity: Decimal
     fill_price: Decimal
     settlement_currency: str
-    cash_delta: Decimal
+    balance_delta: Decimal
     fee_currency: str | None = None
     fee_amount: Decimal = Decimal("0")
     cumulative_filled_quantity: Decimal | None = None
@@ -112,7 +112,7 @@ class ExecutionCoordinator:
         if amount is not None:
             reservation = Reservation(
                 request.reservation_id or request.order_id,
-                request.context.book,
+                request.context.segment,
                 reserve_currency,
                 amount,
                 "order margin pre-submit hold" if margin_notional is not None else "order pre-submit hold",
@@ -130,7 +130,7 @@ class ExecutionCoordinator:
                         selected_metric,
                         selected_amount or Decimal("0"),
                         (
-                            BudgetRef("account", request.context.book.value),
+                            BudgetRef("account", request.context.segment.value),
                             BudgetRef("instrument", str(request.instrument_id)),
                         ),
                     ),
@@ -150,7 +150,7 @@ class ExecutionCoordinator:
         if amount is None:
             return self.orders.record(OrderEvent(request.order_id, OrderEventKind.RESERVED, at))
         if margin_notional is None:
-            check = reserve_cash_order(self.reservations, reservation, projection)
+            check = reserve_asset_order(self.reservations, reservation, projection)
         else:
             check = reserve_margin_order(
                 self.reservations,
@@ -190,7 +190,7 @@ class ExecutionCoordinator:
 
     def account_projection(
         self,
-        context: AccountContext,
+        context: AccountRuntimeContext,
         *,
         venue_snapshot: AccountSnapshot | None = None,
     ) -> AccountState:
@@ -227,11 +227,11 @@ class ExecutionCoordinator:
         self.ledger.record(
             AccountEvent(
                 uuid4(),
-                state.request.context.book,
+                state.request.context.segment,
                 AccountEventKind.FILL,
                 report.occurred_at,
                 report.settlement_currency,
-                cash_delta=report.cash_delta,
+                balance_delta=report.balance_delta,
                 instrument_id=state.request.instrument_id,
                 position_delta=report.fill_quantity * Decimal(state.request.side.position_sign),
                 reference_id=report.order_id,
@@ -241,11 +241,11 @@ class ExecutionCoordinator:
             self.ledger.record(
                 AccountEvent(
                     uuid4(),
-                    state.request.context.book,
+                    state.request.context.segment,
                     AccountEventKind.FEE,
                     report.occurred_at,
                     report.fee_currency or report.settlement_currency,
-                    cash_delta=-report.fee_amount,
+                    balance_delta=-report.fee_amount,
                     reference_id=report.order_id,
                 )
             )
@@ -265,9 +265,9 @@ class ExecutionCoordinator:
                     update.fill_quantity,
                     update.fill_price,
                     update.settlement_currency or _settlement_currency(state.request.instrument_id),
-                    cash_delta=update.cash_delta
-                    if update.cash_delta is not None
-                    else _cash_delta(state.request.side, update.fill_quantity, update.fill_price),
+                    balance_delta=update.balance_delta
+                    if update.balance_delta is not None
+                    else _balance_delta(state.request.side, update.fill_quantity, update.fill_price),
                     fee_currency=update.fee_currency,
                     fee_amount=update.fee_amount,
                     cumulative_filled_quantity=update.filled_quantity,
@@ -345,10 +345,10 @@ class ExecutionCoordinator:
         )
 
 
-def cash_order_request(
+def asset_order_request(
     *,
     order_id: str | None = None,
-    context: AccountContext,
+    context: AccountRuntimeContext,
     instrument_id: InstrumentId | str,
     side: OrderSide,
     quantity: Decimal,
@@ -384,9 +384,9 @@ def _settlement_currency(symbol: object) -> str:
     return symbol.split("/", 1)[1].split(":", 1)[0] or "USD"
 
 
-def _cash_delta(side: OrderSide, quantity: Decimal, price: Decimal) -> Decimal:
+def _balance_delta(side: OrderSide, quantity: Decimal, price: Decimal) -> Decimal:
     cost = quantity * price
     return cost if side is OrderSide.SELL else -cost
 
 
-__all__ = ["ExecutionCoordinator", "FillReport", "cash_order_request"]
+__all__ = ["ExecutionCoordinator", "FillReport", "asset_order_request"]

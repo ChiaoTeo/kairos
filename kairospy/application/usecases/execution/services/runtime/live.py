@@ -12,7 +12,7 @@ from kairospy.application.usecases.execution.services.coordinator import Executi
 from kairospy.application.usecases.execution.services.orders import ExecutionOrderService, SymbolResolver, margin_plan_args
 from kairospy.application.usecases.execution.domain.policy import ExecutionSafetyPolicy
 from kairospy.application.support.messaging import Message
-from kairospy.domain.account import AccountBookRef, AccountContext, AccountSnapshot
+from kairospy.domain.account import AccountSegment, AccountRuntimeContext, AccountSnapshot
 from kairospy.domain.intent import TradeIntent
 from kairospy.domain.order import OrderEvent, OrderEventKind, OrderRequest, OrderState
 
@@ -20,7 +20,7 @@ from kairospy.domain.order import OrderEvent, OrderEventKind, OrderRequest, Orde
 @dataclass(frozen=True, slots=True)
 class LiveExecutionService:
     coordinator: ExecutionCoordinator
-    account: AccountContext | None = None
+    account: AccountRuntimeContext | None = None
     order_connection: object | None = None
     symbol_resolver: SymbolResolver | None = None
     account_state: object | None = None
@@ -46,8 +46,8 @@ class LiveExecutionService:
             return False
         account = self._resolve_account(intent)
         selected = self._require_account(account)
-        order_params = self._order_params(selected.book)
-        current = self.coordinator.ledger.positions(selected.book).get(str(intent.instrument_id), Decimal("0"))
+        order_params = self._order_params(selected.segment)
+        current = self.coordinator.ledger.positions(selected.segment).get(str(intent.instrument_id), Decimal("0"))
         ExecutionApplication.compose(
             self.coordinator,
             order_connection=self.order_connection,
@@ -58,7 +58,7 @@ class LiveExecutionService:
                 context=context,
                 account=selected,
                 current_quantity=current,
-                account_snapshot=self._snapshot(selected.book),
+                account_snapshot=self._snapshot(selected.segment),
                 order_options=order_params,
                 safety_policy=self.safety_policy,
             )
@@ -113,35 +113,36 @@ class LiveExecutionService:
             symbol_resolver=self.symbol_resolver,
         )
 
-    def _require_account(self, account: AccountContext | None = None) -> AccountContext:
+    def _require_account(self, account: AccountRuntimeContext | None = None) -> AccountRuntimeContext:
         selected = account or self.account
         if selected is None:
             raise RuntimeError("live execution service requires an account before it can execute intents")
         return selected
 
-    def _resolve_account(self, intent: TradeIntent) -> AccountContext | None:
+    def _resolve_account(self, intent: TradeIntent) -> AccountRuntimeContext | None:
         if self.directory is None:
             return self.account
         return self.directory.resolve_context(
             account_id=getattr(intent, "account_id", None),
             account_index=getattr(intent, "account_index", None),
-            book=getattr(intent, "account_book", None),
+            scope=getattr(intent, "account_segment", None),
+            environment=None if self.account is None else self.account.environment,
             default=self.account,
         )
 
-    def _snapshot(self, account: AccountBookRef) -> AccountSnapshot | None:
+    def _snapshot(self, account: AccountSegment) -> AccountSnapshot | None:
         if self.account_state is None:
             return None
         return self.account_state.snapshot(account)
 
-    def _order_params(self, account: AccountBookRef) -> Mapping[str, object] | None:
+    def _order_params(self, account: AccountSegment) -> Mapping[str, object] | None:
         route = self._route(account)
         values = {**dict(route.order_params if route is not None else {}), **dict(self.order_params or {})}
         return values or None
 
-    def _route(self, account: AccountBookRef) -> object | None:
+    def _route(self, account: AccountSegment) -> object | None:
         for route in self.routes:
-            if route.book == account:
+            if route.segment == account:
                 return route
         return None
 

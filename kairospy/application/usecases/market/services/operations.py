@@ -9,17 +9,20 @@ from ..domain.datasets import MarketPartition, parse_market_dataset_id
 from .resolver import MarketDataResolver, ResolvedMarketData
 from ..domain.specs import MarketDataSpec
 from ..domain.subscriptions import DataSubscription
+from ..protocol import MarketDataStore, MarketHistoricalClient
+from kairospy.application.usecases.market.application.requests import MarketDataRow, MarketOptions
+from kairospy.domain.market import Bar, RateObservation, MarketEvent
 
 
 class MarketDataOperationsService:
-    def __init__(self, store: object, resolver: MarketDataResolver | None = None) -> None:
+    def __init__(self, store: MarketDataStore, resolver: MarketDataResolver | None = None) -> None:
         self.store = store
         self.resolver = resolver or MarketDataResolver()
 
     def resolve(self, spec: MarketDataSpec) -> ResolvedMarketData:
         return self.resolver.resolve(spec)
 
-    def read(self, spec: MarketDataSpec, *, columns: Iterable[str] | None = None) -> list[dict[str, object]]:
+    def read(self, spec: MarketDataSpec, *, columns: Iterable[str] | None = None) -> list[MarketDataRow]:
         resolved = self.resolve(spec)
         return self.store.read_rows(
             resolved.dataset_id,
@@ -33,10 +36,10 @@ class MarketDataOperationsService:
     def download(
         self,
         spec: MarketDataSpec,
-        client: object,
+        client: MarketHistoricalClient,
         *,
         mode: str = "append",
-        params: Mapping[str, object] | None = None,
+        params: MarketOptions | None = None,
     ) -> Path:
         if spec.kind not in {"ohlcv", "funding_rate"}:
             raise ValueError(f"unsupported historical data kind: {spec.kind}")
@@ -77,7 +80,7 @@ class MarketDataOperationsService:
     def persist_historical(
         self,
         spec: MarketDataSpec,
-        observations: Iterable[object],
+        observations: Iterable[Bar | RateObservation],
         *,
         mode: str = "append",
     ) -> Path:
@@ -103,10 +106,10 @@ class MarketDataOperationsService:
     def ensure(
         self,
         spec: MarketDataSpec,
-        client: object | None = None,
+        client: MarketHistoricalClient | None = None,
         *,
         mode: str = "append",
-        params: Mapping[str, object] | None = None,
+        params: MarketOptions | None = None,
     ) -> ResolvedMarketData:
         resolved = self.resolve(spec)
         if self.read(MarketDataSpec(
@@ -120,6 +123,7 @@ class MarketDataOperationsService:
             limit=1,
             dataset=spec.dataset,
             stream=spec.stream,
+            provider=spec.provider,
         )):
             return resolved
         if client is None:
@@ -130,7 +134,7 @@ class MarketDataOperationsService:
     async def persist(
         self,
         spec: MarketDataSpec,
-        events: AsyncIterable[Mapping[str, object]],
+        events: AsyncIterable[MarketEvent],
         *,
         limit: int | None = None,
     ) -> int:
@@ -160,6 +164,7 @@ class MarketDataOperationsService:
                 market=dataset.market,
                 timeframe=dataset.timeframe,
                 dataset=dataset.dataset_id,
+                provider=subscription.spec.provider,
             )
         kind = _kind_from_subscription(subscription)
         timeframe = _timeframe_from_subscription(subscription)
@@ -169,6 +174,7 @@ class MarketDataOperationsService:
             venue=str(subscription.spec.market.venue),
             market=str(subscription.spec.market.market),
             timeframe=timeframe,
+            provider=subscription.spec.provider,
         )
 
     def resolve_subscription(self, subscription: DataSubscription) -> ResolvedMarketData:

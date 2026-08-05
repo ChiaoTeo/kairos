@@ -139,7 +139,7 @@ def _equity_from_views(timeline_records: list[dict[str, object]]) -> list[dict[s
                 {
                     "time": time,
                     "equity": account.get("equity"),
-                    "cash": account.get("cash"),
+                    "selected_balance": account.get("selected_balance"),
                     "net_profit": account.get("net_profit"),
                     "total_return": account.get("total_return"),
                     "positions": account.get("positions", []),
@@ -272,7 +272,7 @@ def _equity_series(equity: list[dict[str, object]]) -> list[dict[str, object]]:
         {
             "time": row.get("time"),
             "equity": row.get("equity"),
-            "cash": row.get("cash"),
+            "selected_balance": row.get("selected_balance"),
         }
         for row in rows
         if isinstance(row.get("time"), str)

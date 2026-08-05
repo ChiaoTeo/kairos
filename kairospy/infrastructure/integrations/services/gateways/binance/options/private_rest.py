@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from kairospy.domain.account import AccountBalance, AccountContext, AccountSnapshot, AccountSource, OpenOrderSnapshot, PositionSnapshot
+from kairospy.domain.account import AccountBalance, AccountRuntimeContext, AccountSnapshot, AccountSource, OpenOrderSnapshot, PositionSnapshot
 from kairospy.domain.reference import MarketRef
 from kairospy.domain.order import OrderSide
 from kairospy.infrastructure.integrations.application.account import ConnectionAccountReadData, ConnectionAccountReadRequest
@@ -57,7 +57,7 @@ def _client(spec: IntegrationConnectionSpec) -> BinanceOptionsRestClient:
     return BinanceOptionsRestClient(credential_id=spec.credential.id if spec.credential else None)
 
 
-def _snapshot(payload: object, orders: object, context: AccountContext, observed_at: object) -> AccountSnapshot:
+def _snapshot(payload: object, orders: object, context: AccountRuntimeContext, observed_at: object) -> AccountSnapshot:
     values = payload if isinstance(payload, Mapping) else {}
     balances = tuple(AccountBalance.from_free_locked(str(row.get("asset")), _decimal(row.get("available")), _decimal(row.get("freeze")), source=AccountSource.VENUE) for row in values.get("assets", ()) if isinstance(row, Mapping) and str(row.get("asset") or "").strip())
     positions = tuple(PositionSnapshot(MarketRef.ephemeral(venue="binance", market="options", source_symbol=str(row.get("symbol"))).instrument_id, _decimal(row.get("quantity")), AccountSource.VENUE, average_price=_decimal(row.get("averagePrice"))) for row in values.get("positions", ()) if isinstance(row, Mapping) and _decimal(row.get("quantity")) != 0)

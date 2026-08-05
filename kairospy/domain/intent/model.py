@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
-from kairospy.domain.reference import AccountId, InstrumentId, IntentId, MarketId, StrategyId
+from kairospy.domain.reference import ExternalAccountId, AccountSegmentId, InstrumentId, IntentId, MarketId, StrategyId
 
 
 class IntentKind(StrEnum):
@@ -62,7 +62,7 @@ class IntentEventKind(StrEnum):
 class Intent(Protocol):
     intent_id: IntentId | str
     strategy_id: StrategyId | str
-    kind: object
+    kind: IntentKind
     created_at: datetime | None
     reason: str
 
@@ -74,9 +74,9 @@ class TradeIntent(Intent):
     instrument_id: InstrumentId | str
     kind: IntentKind
     market_id: MarketId | str | None = None
-    account_id: AccountId | str | None = None
+    account_id: ExternalAccountId | str | None = None
     account_index: int | None = None
-    account_book: str | None = None
+    account_segment: AccountSegmentId | str | None = None
     created_at: datetime | None = None
     target_quantity: Decimal | None = None
     quantity: Decimal | None = None
@@ -88,10 +88,10 @@ class TradeIntent(Intent):
         object.__setattr__(self, "strategy_id", _id(self.strategy_id, StrategyId, "strategy_id"))
         object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
         object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
-        object.__setattr__(self, "account_id", None if self.account_id is None else _id(self.account_id, AccountId, "account_id"))
+        object.__setattr__(self, "account_id", None if self.account_id is None else _id(self.account_id, ExternalAccountId, "account_id"))
         if self.account_index is not None and self.account_index < 0:
             raise ValueError("intent account_index cannot be negative")
-        object.__setattr__(self, "account_book", None if self.account_book is None else _required_text(self.account_book, "account_book"))
+        object.__setattr__(self, "account_segment", None if self.account_segment is None else _id(self.account_segment, AccountSegmentId, "account_segment"))
         if self.quantity is not None and self.quantity <= 0:
             raise ValueError("quantity must be positive")
         if self.limit_price is not None and self.limit_price <= 0:
@@ -144,9 +144,9 @@ def target_position_intent(
     strategy_id: StrategyId | str,
     instrument_id: InstrumentId | str,
     market_id: MarketId | str | None = None,
-    account_id: AccountId | str | None = None,
+    account_id: ExternalAccountId | str | None = None,
     account_index: int | None = None,
-    account_book: object | None = None,
+    account_segment: AccountSegmentId | str | None = None,
     target_quantity: Decimal,
     at: datetime | None = None,
     limit_price: Decimal | None = None,
@@ -161,7 +161,7 @@ def target_position_intent(
         market_id=market_id,
         account_id=account_id,
         account_index=account_index,
-        account_book=None if account_book is None else str(account_book),
+        account_segment=account_segment,
         created_at=at,
         target_quantity=target_quantity,
         limit_price=limit_price,

@@ -7,7 +7,8 @@ from typing import Mapping, Sequence
 
 from kairospy.domain.market import MarketSelector, market_selector
 from kairospy.domain.market import MarketSubscriptionSummary, MarketSubscriptionsView
-from kairospy.domain.reference import MarketRef
+from kairospy.domain.reference import MarketRef, ProviderId
+from .specs import MarketOptions
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,8 +16,9 @@ class MarketDataSubscriptionSpec:
     market: MarketRef
     selectors: Sequence[MarketSelector | type]
     identity: str | None = None
-    params: Mapping[str, object] = MappingProxyType({})
+    params: MarketOptions = MappingProxyType({})
     dataset_id: str | None = None
+    provider: ProviderId | str | None = None
 
     def __post_init__(self) -> None:
         selectors = tuple(market_selector(selector) for selector in self.selectors)
@@ -29,6 +31,7 @@ class MarketDataSubscriptionSpec:
         object.__setattr__(self, "selectors", selectors)
         object.__setattr__(self, "params", MappingProxyType(dict(self.params)))
         object.__setattr__(self, "dataset_id", None if self.dataset_id is None else self.dataset_id.strip())
+        object.__setattr__(self, "provider", None if self.provider is None else ProviderId(str(self.provider).strip()))
 
     @property
     def key(self) -> str:
@@ -36,7 +39,8 @@ class MarketDataSubscriptionSpec:
             return f"data.{_key_part(self.dataset_id)}.{_key_part(self.identity or 'default')}"
         selectors_key = sha1("|".join(selector.key for selector in self.selectors).encode("utf-8")).hexdigest()[:12]
         identity = self.identity or "default"
-        return f"data.{self.market.market_key}.{_key_part(identity)}.{selectors_key}"
+        provider = _key_part(self.provider or self.market.exchange_id)
+        return f"data.{provider}.{self.market.market_key}.{_key_part(identity)}.{selectors_key}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +99,7 @@ def subscription_summary(subscription: DataSubscription) -> MarketSubscriptionSu
         kind="data",
         fields=tuple(selector.key for selector in subscription.spec.selectors),
         status="active",
-        provider=subscription.spec.market.venue,
+        provider=subscription.spec.provider or subscription.spec.market.exchange_id,
         stream=subscription.spec.market.source_symbol,
     )
 

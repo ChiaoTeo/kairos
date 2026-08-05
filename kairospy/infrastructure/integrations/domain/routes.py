@@ -6,26 +6,12 @@ from kairospy.domain.reference import BrokerRef, ExchangeRef, ParticipantRef, Pr
 
 
 @dataclass(frozen=True, slots=True)
-class AdapterRef:
-    """Technical implementation selector, such as ``ccxt`` or ``native``."""
-
-    name: str
-
-    def __post_init__(self) -> None:
-        value = self.name.strip().lower()
-        if not value:
-            raise ValueError("integration adapter name is required")
-        object.__setattr__(self, "name", value)
-
-
-@dataclass(frozen=True, slots=True)
 class IntegrationRoute:
-    """Business participants and optional technical adapter selection."""
+    """Business participants used by the Gateway registry for resolution."""
 
     exchange: ExchangeRef | None = None
     broker: BrokerRef | None = None
     provider: ProviderRef | None = None
-    adapter: AdapterRef | None = None
 
     def __post_init__(self) -> None:
         if self.exchange is None and self.broker is None and self.provider is None:
@@ -43,4 +29,4 @@ class IntegrationRoute:
         return tuple(values)
 
 
-__all__ = ["AdapterRef", "IntegrationRoute"]
+__all__ = ["IntegrationRoute"]

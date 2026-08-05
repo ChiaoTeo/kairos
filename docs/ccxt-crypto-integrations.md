@@ -10,8 +10,9 @@ OKX 和 Hyperliquid 的共性加密能力统一走 CCXT 适配层：
 | 持仓与未成交订单 | CCXT | CCXT |
 | 下单与撤单 | CCXT | CCXT |
 
-Hyperliquid 的 `swap` 账户簿会在组合层映射为 `usd_m_futures`，因此账户和执行
-端使用同一套永续合约端口。OKX 的 `okex`/`ouyi` 别名会规范化为 `okx`。
+Hyperliquid 的 `swap` 产品 segment 会在组合层映射为 `usd_m_futures` 产品族，
+但不能因此假设它与 Binance 的 USD-M Futures 账户模式完全相同；账户模式、抵押资产、
+杠杆和仓位规则仍由 Hyperliquid adapter 观察并转换。OKX 的 `okex`/`ouyi` 别名会规范化为 `okx`。
 
 ```toml
 [account]
@@ -21,7 +22,7 @@ environment = "live"
 
 [accounts.main]
 ref = "okx-main"
-books = ["spot", "usd_m_futures"]
+segments = ["spot", "usd_m_futures"]
 
 [feeds.okx_btc_swap]
 venue = "okx"

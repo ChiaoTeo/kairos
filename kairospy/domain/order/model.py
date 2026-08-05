@@ -5,8 +5,8 @@ from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 
-from kairospy.domain.account.model import AccountContext
-from kairospy.domain.reference import AccountId, BrokerId, InstrumentId, MarketId
+from kairospy.domain.account.model import AccountRuntimeContext
+from kairospy.domain.reference import ExternalAccountId, BrokerId, InstrumentId, MarketId
 
 
 class OrderSide(StrEnum):
@@ -84,7 +84,7 @@ class OrderIdentity:
         cls,
         *,
         broker: BrokerId | str,
-        account_id: AccountId | str,
+        account_id: ExternalAccountId | str,
         order_venue_id: str,
         segment: str = "",
         origin: OrderOrigin = OrderOrigin.VENUE,
@@ -99,7 +99,7 @@ class OrderIdentity:
 @dataclass(frozen=True, slots=True)
 class OrderRequest:
     order_id: str
-    context: AccountContext
+    context: AccountRuntimeContext
     instrument_id: InstrumentId | str
     side: OrderSide
     quantity: Decimal
@@ -138,7 +138,7 @@ class OrderRequest:
     def external(
         cls,
         *,
-        context: AccountContext,
+        context: AccountRuntimeContext,
         order_venue_id: str,
         instrument_id: InstrumentId | str,
         side: OrderSide,
@@ -148,11 +148,11 @@ class OrderRequest:
         origin: OrderOrigin = OrderOrigin.VENUE,
         market_id: MarketId | str | None = None,
         ) -> "OrderRequest":
-        book = context.book
+        scope = context.segment
         identity = OrderIdentity.external(
-            broker=book.broker,
-            account_id=book.account_id,
-            segment=book.segment,
+            broker=scope.broker,
+            account_id=scope.account_id,
+            segment=scope.key,
             order_venue_id=order_venue_id,
             origin=origin,
         )

@@ -32,7 +32,7 @@ class CashBuyingPowerModel:
         available = balance.free if balance is not None else Decimal("0")
         if available < notional:
             return BuyingPowerCheck(False, notional, available, "insufficient free balance")
-        return BuyingPowerCheck(True, notional, available, "accepted by local cash model")
+        return BuyingPowerCheck(True, notional, available, "accepted by local asset-balance model")
 
 
 class MarginBuyingPowerModel:
@@ -80,7 +80,7 @@ class MarginBuyingPowerModel:
         )
 
 
-def reserve_cash_order(
+def reserve_asset_order(
     reservations: ReservationBook,
     reservation: Reservation,
     account_state: AccountState,
@@ -120,6 +120,6 @@ __all__ = [
     "BuyingPowerCheck",
     "CashBuyingPowerModel",
     "MarginBuyingPowerModel",
-    "reserve_cash_order",
+    "reserve_asset_order",
     "reserve_margin_order",
 ]

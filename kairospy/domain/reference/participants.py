@@ -5,7 +5,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Mapping
 
-from .identity import BrokerId, EntityId, ExchangeId, ProviderId
+from .identity import BrokerId, EntityId, ExchangeId, ProviderId, ReferenceId
 
 
 class ParticipantKind(StrEnum):
@@ -147,7 +147,7 @@ class ParticipantRegistry:
     def providers(self) -> tuple[Provider, ...]:
         return tuple(self._providers[key] for key in sorted(self._providers))
 
-    def resolve_exchange(self, value: object) -> Exchange:
+    def resolve_exchange(self, value: ExchangeId | str) -> Exchange:
         key = _lookup_key(value)
         exchange_id = self._exchange_aliases.get(key, key)
         try:
@@ -155,7 +155,7 @@ class ParticipantRegistry:
         except KeyError as error:
             raise KeyError(f"unknown exchange: {value}") from error
 
-    def resolve_broker(self, value: object) -> Broker:
+    def resolve_broker(self, value: BrokerId | str) -> Broker:
         key = _lookup_key(value)
         broker_id = self._broker_aliases.get(key, key)
         try:
@@ -163,7 +163,7 @@ class ParticipantRegistry:
         except KeyError as error:
             raise KeyError(f"unknown broker: {value}") from error
 
-    def resolve_provider(self, value: object) -> Provider:
+    def resolve_provider(self, value: ProviderId | str) -> Provider:
         key = _lookup_key(value)
         provider_id = self._provider_aliases.get(key, key)
         try:
@@ -172,7 +172,7 @@ class ParticipantRegistry:
             raise KeyError(f"unknown provider: {value}") from error
 
 
-def _required_text(value: str, label: str) -> str:
+def _required_text(value: str | ReferenceId, label: str) -> str:
     text = str(value).strip()
     if not text:
         raise ValueError(f"{label} is required")
@@ -221,7 +221,7 @@ def _metadata_texts(metadata: Mapping[str, object], key: str) -> tuple[str, ...]
     return (str(value),)
 
 
-def _lookup_key(value: object) -> str:
+def _lookup_key(value: str | ReferenceId) -> str:
     return _required_text(value, "participant reference").casefold()
 
 
@@ -305,15 +305,15 @@ def providers() -> tuple[Provider, ...]:
     return DEFAULT_PARTICIPANTS.providers()
 
 
-def resolve_exchange(value: object) -> Exchange:
+def resolve_exchange(value: ExchangeId | str) -> Exchange:
     return DEFAULT_PARTICIPANTS.resolve_exchange(value)
 
 
-def resolve_broker(value: object) -> Broker:
+def resolve_broker(value: BrokerId | str) -> Broker:
     return DEFAULT_PARTICIPANTS.resolve_broker(value)
 
 
-def resolve_provider(value: object) -> Provider:
+def resolve_provider(value: ProviderId | str) -> Provider:
     return DEFAULT_PARTICIPANTS.resolve_provider(value)
 
 

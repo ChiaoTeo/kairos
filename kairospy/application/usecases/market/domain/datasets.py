@@ -7,11 +7,13 @@ from kairospy.domain.market import Bar, MarketSelector, OptionGreeks, OrderBookS
 from kairospy.domain.reference import MarketRef
 from kairospy.domain.reference.identity import reference_slug
 
+from .specs import MarketDataKind
+
 
 @dataclass(frozen=True, slots=True)
 class MarketDataset:
     dataset_id: str
-    kind: str
+    kind: MarketDataKind | str
     venue: str
     market: str
     symbol: str
@@ -55,7 +57,7 @@ class MarketDataset:
         raise ValueError(f"unsupported market dataset kind: {self.kind}")
 
 
-def market_dataset_id(kind: object, market_ref: MarketRef, *, timeframe: str | None = None) -> str:
+def market_dataset_id(kind: MarketDataKind | str, market_ref: MarketRef, *, timeframe: str | None = None) -> str:
     parts = (
         "market",
         _dataset_kind(kind),

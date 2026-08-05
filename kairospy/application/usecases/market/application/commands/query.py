@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from kairospy.application.usecases.market.application.component import MarketApplication
 from kairospy.application.usecases.market.application.data import MarketDataSpec
+from kairospy.application.usecases.market.application.requests import MarketDataRow
 from .resources import ExchangeName, MarketCommandResources, StorageFormat
 
 
@@ -26,7 +27,7 @@ class MarketDataQueryService:
         end: str | None,
         columns: list[str] | None,
         limit: int | None,
-    ) -> list[dict[str, object]]:
+    ) -> list[MarketDataRow]:
         if dataset is not None:
             return self._resources.read_dataset(
                 dataset,
@@ -49,7 +50,7 @@ class MarketDataQueryService:
             end=end,
             limit=limit,
         )
-        return MarketApplication(store=self._resources.data_store(root, storage_format)).queries.read(spec, columns=columns)
+        return MarketApplication(store=self._resources.data_store(root, storage_format)).read(spec, columns=columns)
 
 
 __all__ = ["MarketDataQueryService"]

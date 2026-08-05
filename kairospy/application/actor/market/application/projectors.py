@@ -7,11 +7,12 @@ from datetime import datetime
 from kairospy.application.support.messaging import Message
 from kairospy.application.support.runtime.application.views import ViewStore
 from kairospy.application.usecases.market.application.projector import MarketProjector
-from kairospy.application.usecases.reference.application.projector import ReferenceProjector
+from kairospy.application.usecases.reference.application.projector import ReferenceProjectionTarget, ReferenceProjector
+from kairospy.application.usecases.market.application.component import MarketApplication
 
 
 class MarketActorProjectors:
-    def __init__(self, *, market: object | None = None, reference: object | None = None) -> None:
+    def __init__(self, *, market: MarketApplication | None = None, reference: ReferenceProjectionTarget | None = None) -> None:
         self.market = None if market is None else MarketProjector(market)  # type: ignore[arg-type]
         self.reference = None if reference is None else ReferenceProjector(reference)
 

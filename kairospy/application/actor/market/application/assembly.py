@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from kairospy.application.usecases.market.application.component import MarketApplication
+from kairospy.application.usecases.market.protocol import MarketDataReader, MarketDataStore, MarketDataWriter
+from kairospy.application.usecases.market.application.runtime import MarketRuntimeSource
 
 
-def build_market_application(source: object | None, *, store: object | None = None) -> MarketApplication:
+def build_market_application(source: MarketRuntimeSource | None, *, store: MarketDataStore | None = None) -> MarketApplication:
     """Build the market application owned by the Market Actor."""
     market_data = getattr(source, "market_data", None) or source
-    reader = getattr(market_data, "reader", None)
-    writer = getattr(market_data, "writer", None)
+    reader: MarketDataReader | None = getattr(market_data, "reader", None)
+    writer: MarketDataWriter | None = getattr(market_data, "writer", None)
     return (
         MarketApplication(
             store=store,

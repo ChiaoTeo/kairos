@@ -1,26 +1,30 @@
-"""Account Actor trade authority composition."""
+"""ExternalAccount Actor trade authority composition."""
 
 from kairospy.application.actor.account.application.authority_runtime import (
     AccountTradeAuthority,
     AuthorizingAccountRuntime,
     AuthorizingTradingExecutionService,
 )
+from kairospy.application.usecases.account.application.runtime_capability import AccountRuntimeCapability
+from kairospy.application.usecases.execution.application.runtime import LiveExecutionService, SimulatedExecutionRuntimeService
+from kairospy.application.usecases.workspace.application.leases import AccountLeaseManager
+from kairospy.domain.account import AccountRuntimeContext
 
 
-def build_trade_authority(manager: object, *, launch_id: str, launch_instance_id: str, mode: str) -> AccountTradeAuthority:
-    return AccountTradeAuthority(manager, launch_id=launch_id, launch_instance_id=launch_instance_id, mode=mode)  # type: ignore[arg-type]
+def build_trade_authority(manager: AccountLeaseManager, *, launch_id: str, launch_instance_id: str, mode: str) -> AccountTradeAuthority:
+    return AccountTradeAuthority(manager, launch_id=launch_id, launch_instance_id=launch_instance_id, mode=mode)
 
 
-def authorize_account_runtime(account: object, authority: AccountTradeAuthority) -> AuthorizingAccountRuntime:
-    return AuthorizingAccountRuntime(account, authority)  # type: ignore[arg-type]
+def authorize_account_runtime(account: AccountRuntimeCapability, authority: AccountTradeAuthority) -> AuthorizingAccountRuntime:
+    return AuthorizingAccountRuntime(account, authority)
 
 
-def authorize_trading_execution(execution: object, authority: AccountTradeAuthority) -> AuthorizingTradingExecutionService:
-    return AuthorizingTradingExecutionService(execution, authority)  # type: ignore[arg-type]
+def authorize_trading_execution(execution: LiveExecutionService | SimulatedExecutionRuntimeService, authority: AccountTradeAuthority) -> AuthorizingTradingExecutionService:
+    return AuthorizingTradingExecutionService(execution, authority)
 
 
 class TradeAuthorityLifecycle:
-    def __init__(self, authority: AccountTradeAuthority, contexts: tuple[object, ...]) -> None:
+    def __init__(self, authority: AccountTradeAuthority, contexts: tuple[AccountRuntimeContext, ...]) -> None:
         self._authority = authority
         self._contexts = contexts
 
@@ -31,7 +35,7 @@ class TradeAuthorityLifecycle:
         self._authority.release()
 
 
-def build_trade_authority_lifecycle(authority: AccountTradeAuthority, contexts: tuple[object, ...]) -> TradeAuthorityLifecycle:
+def build_trade_authority_lifecycle(authority: AccountTradeAuthority, contexts: tuple[AccountRuntimeContext, ...]) -> TradeAuthorityLifecycle:
     return TradeAuthorityLifecycle(authority, contexts)
 
 

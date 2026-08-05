@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-from enum import StrEnum
+"""Compatibility export for the shared ProductFamily type.
 
+ProductFamily is a business concept shared by Account, Market, Execution,
+Reference, and Integration.  Its canonical definition lives in the domain
+model; this module remains only so existing integration imports do not create
+a second enum during the migration.
+"""
 
-class ProductFamily(StrEnum):
-    SPOT = "spot"
-    EQUITY = "equity"
-    USD_M_FUTURES = "usd_margined_futures"
-    COIN_M_FUTURES = "coin_margined_futures"
-    OPTIONS = "options"
-    EARN = "earn"
+from kairospy.domain.reference import ProductFamily
 
 
 __all__ = ["ProductFamily"]

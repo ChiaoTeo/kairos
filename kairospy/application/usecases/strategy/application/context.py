@@ -8,12 +8,13 @@ from typing import Mapping, Sequence, overload
 from kairospy.application.support.runtime.application.interaction import SystemCall, SystemCallResult
 from kairospy.application.support.runtime.application.views import ViewStore
 from kairospy.application.support.runtime.domain.commands import CommandHandle, RuntimeCommand
-from kairospy.application.usecases.account.application.queries import AccountQueryService
+from kairospy.application.usecases.account.application.queries import AccountViewQueryService
 from kairospy.domain.intent import Intent, IntentJournalView, IntentViewKeys, TradeIntent, target_position_intent
 from kairospy.domain.market import MarketViewReader
 from kairospy.domain.reference import MarketResolver
 from kairospy.application.usecases.strategy.protocol import StrategyReferenceCapability, StrategySubscriptionGroupRequest, StrategySubscriptionRequest
 from kairospy.application.usecases.strategy.application.option_chain import OptionChainView, build_option_chain_view
+from kairospy.domain.account import AccountModel
 
 
 class StrategyContext:
@@ -84,8 +85,8 @@ class StrategyContext:
         return tuple(self._emitted_intents)
 
     @property
-    def accounts(self) -> AccountQueryService:
-        return AccountQueryService(self.views)
+    def accounts(self) -> AccountViewQueryService:
+        return AccountViewQueryService(self.views)
 
     @property
     def intents(self) -> IntentJournalView | None:
@@ -104,7 +105,7 @@ class StrategyContext:
         quantity: Decimal | str | int | float,
         *,
         account: int | str | None = None,
-        book: object | None = None,
+        account_segment: str | None = None,
         limit_price: Decimal | str | int | float | None = None,
         reason: str = "",
         intent_id: str | None = None,
@@ -123,7 +124,7 @@ class StrategyContext:
             market_id=resolved.market_id,
             account_id=account_id,
             account_index=account_index,
-            account_book=book,
+            account_segment=account_segment,
             target_quantity=Decimal(str(quantity)),
             at=self.now,
             limit_price=None if limit_price is None else Decimal(str(limit_price)),
