@@ -23,11 +23,14 @@ from kairospy.application.usecases.account.application.runtime import LiveAccoun
 from kairospy.application.usecases.account.protocol import AccountLoginPort, AccountLoginRequest, AccountLoginResult, AccountReadRequest, AccountSession
 from kairospy.application.support.launch.application.configuration import ConfiguredLive, LiveConfigurationError
 from kairospy.application.usecases.account.application.runtime import PaperAccountService
+from kairospy.application.usecases.earn.application import EarnApplication
 from kairospy.application.support.launch.application.configuration import ConfiguredPaper, ConfiguredAccount
 from kairospy.application.support.launch.application.configuration import LaunchAccountConfig
 from kairospy.domain.account import AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, Environment
 from kairospy.domain.reference import MarketResolver
 from kairospy.infrastructure.integrations.application.account import (
+    ConnectionAccountMarketProfileData,
+    ConnectionAccountMarketProfileRequest,
     ConnectionAccountReadRequest,
     ConnectionAccountStreamRequest,
     AccountConnection,
@@ -111,7 +114,7 @@ class PaperAccountResources:
         fees = _fees(directory, configured.launch_account_configs, fallback=account_config)
         account_service = PaperAccountService(account, coordinator.ledger, directory=directory, capabilities=capabilities, fees=fees)
         execution = build_paper_runtime(
-            coordinator.ledger,
+            coordinator,
             account=account.context,
             cash_currency=account.cash_currency,
             price_field=account.price_field,
@@ -135,6 +138,7 @@ class LiveAccountResources:
     execution: object
     coordinator: object
     integration_connections: Mapping[str, object] = field(default_factory=dict)
+    earn: EarnApplication | None = None
 
     @classmethod
     def from_configured(
@@ -217,6 +221,7 @@ class LiveAccountResources:
             capabilities=capabilities,
             fees=fees,
             routes=routes,
+            market_profile_port=account_gateway_resolver,
         )
         execution = build_live_runtime(
             coordinator,
@@ -259,6 +264,7 @@ def _from_configured_integration(
     private_connections: dict[AccountBookRef, object] = {}
     execution_connections: dict[AccountBookRef, object] = {}
     resources: dict[str, object] = {}
+    earn_applications: dict[AccountBookRef, EarnApplication] = {}
     for binding in directory.bindings:
         config = configured.launch_account_configs.get(binding.alias, account_config)
         read_credential = config.read_credential_ref()
@@ -266,53 +272,69 @@ def _from_configured_integration(
         for context in binding.books:
             book = context.book
             credential = CredentialRef(trade_credential or read_credential)
+            product = _integration_product(book)
+            broker_name = _canonical_broker_name(context.book.broker)
+            route = IntegrationRoute(broker=BrokerRef(BrokerId(broker_name)))
+            account_capability = (
+                IntegrationCapability.EARN
+                if product is ProductFamily.EARN
+                else IntegrationCapability.ACCOUNT_MARKET_PROFILE_READ
+            )
             rest_connection = integration.connect(
                 IntegrationConnectionSpec(
-                    connection_id=f"live.binance.spot.{book.value}.private-rest",
-                    route=IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
-                    product=ProductFamily.SPOT,
+                    connection_id=f"live.{broker_name}.{product.value}.{book.value}.private-rest",
+                    route=route,
+                    product=product,
                     access=AccessScope.PRIVATE,
                     transport=TransportKind.REST,
-                    capability=IntegrationCapability.ACCOUNT_READ,
+                    capability=account_capability,
                     credential=credential,
                     mode=IntegrationRuntimeMode.LIVE,
                 )
             )
-            stream_connection = integration.connect(
-                IntegrationConnectionSpec(
-                    connection_id=f"live.binance.spot.{book.value}.private-stream",
-                    route=IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
-                    product=ProductFamily.SPOT,
-                    access=AccessScope.PRIVATE,
-                    transport=TransportKind.USER_STREAM,
-                    capability=IntegrationCapability.ACCOUNT_STREAM,
-                    credential=credential,
-                    mode=IntegrationRuntimeMode.LIVE,
+            stream_connection = None
+            if product is ProductFamily.SPOT:
+                stream_connection = integration.connect(
+                    IntegrationConnectionSpec(
+                        connection_id=f"live.{broker_name}.{product.value}.{book.value}.private-stream",
+                        route=route,
+                        product=product,
+                        access=AccessScope.PRIVATE,
+                        transport=TransportKind.USER_STREAM,
+                        capability=IntegrationCapability.ACCOUNT_STREAM,
+                        credential=credential,
+                        mode=IntegrationRuntimeMode.LIVE,
+                    )
                 )
-            )
             read_connections[book] = rest_connection
-            private_connections[book] = stream_connection
-            execution_connection = integration.connect(
-                IntegrationConnectionSpec(
-                    connection_id=f"live.binance.spot.{book.value}.execution-rest",
-                    route=IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
-                    product=ProductFamily.SPOT,
-                    access=AccessScope.PRIVATE,
-                    transport=TransportKind.REST,
-                    capability=IntegrationCapability.ORDER_ENTRY,
-                    credential=credential,
-                    mode=IntegrationRuntimeMode.LIVE,
+            if product is ProductFamily.EARN:
+                earn_applications[book] = EarnApplication(rest_connection)  # type: ignore[arg-type]
+            if stream_connection is not None:
+                private_connections[book] = stream_connection
+            if product is not ProductFamily.EARN:
+                execution_connection = integration.connect(
+                    IntegrationConnectionSpec(
+                        connection_id=f"live.{broker_name}.{product.value}.{book.value}.execution-rest",
+                        route=route,
+                        product=product,
+                        access=AccessScope.PRIVATE,
+                        transport=TransportKind.REST,
+                        capability=IntegrationCapability.ORDER_ENTRY,
+                        credential=credential,
+                        mode=IntegrationRuntimeMode.LIVE,
+                    )
                 )
-            )
-            execution_connections[book] = execution_connection
+                execution_connections[book] = execution_connection
             resources[rest_connection.identity.connection_id] = rest_connection
-            resources[stream_connection.identity.connection_id] = stream_connection
-            resources[execution_connection.identity.connection_id] = execution_connection
+            if stream_connection is not None:
+                resources[stream_connection.identity.connection_id] = stream_connection
+            if product is not ProductFamily.EARN:
+                resources[execution_connection.identity.connection_id] = execution_connection
     if not read_connections:
         raise LiveConfigurationError("live account configuration produced no account connections")
     coordinator = build_execution_coordinator()
     primary_read = read_connections.get(account.book) or next(iter(read_connections.values()))
-    primary_private = private_connections.get(account.book) or next(iter(private_connections.values()))
+    primary_private = private_connections.get(account.book)
     capabilities = _capabilities(directory, configured.launch_account_configs, fallback=account_config)
     fees = _fees(directory, configured.launch_account_configs, fallback=account_config)
     routes = _routes(directory, configured.launch_account_configs, fallback=account_config)
@@ -338,6 +360,7 @@ def _from_configured_integration(
         capabilities=capabilities,
         fees=fees,
         routes=routes,
+        market_profile_port=account_gateway_resolver,
     )
     execution = build_live_runtime(
         coordinator,
@@ -350,7 +373,7 @@ def _from_configured_integration(
         directory=directory,
         routes=routes,
     )
-    return resource_type(account_service, execution, coordinator, resources)
+    return resource_type(account_service, execution, coordinator, resources, earn_applications.get(account.book))
 
 
 def _default_live_broker(book: AccountBookRef, credential: str | None) -> object:
@@ -426,6 +449,30 @@ def _capabilities(
 
 def _capability(book: AccountBookRef, *, trade: bool = True) -> AccountCapability:
     return AccountProvisioningService().capability(book, trade_enabled=trade)
+
+
+def _integration_product(book: AccountBookRef) -> ProductFamily:
+    value = str(book.book)
+    if value in {"swap", "perpetual", "perpetuals"}:
+        return ProductFamily.USD_M_FUTURES
+    if value == "usd_m_futures":
+        return ProductFamily.USD_M_FUTURES
+    if value == "options":
+        return ProductFamily.OPTIONS
+    if value == "earn":
+        return ProductFamily.EARN
+    if value == "coin_m_futures":
+        return ProductFamily.COIN_M_FUTURES
+    return ProductFamily.SPOT
+
+
+def _canonical_broker_name(value: object) -> str:
+    normalized = str(value).strip().lower()
+    if normalized in {"okex", "ouyi"}:
+        return "okx"
+    if normalized in {"binance", "okx", "hyperliquid"}:
+        return normalized
+    raise LiveConfigurationError(f"CCXT integration does not support broker: {value}")
 
 
 def configured_account_book_route(
@@ -544,6 +591,12 @@ class _MappedLiveAccountGatewayResolver:
     def resolve_private_stream(self, account: AccountBookRef) -> object | None:
         return self.private_streams.get(account)
 
+    def read_market_profile(self, request):
+        reader = self.account_readers.get(request.context.book)
+        if reader is None:
+            raise RuntimeError(f"no account reader configured for account: {request.context.book.value}")
+        return reader.read_market_profile(request)
+
 
 @dataclass(frozen=True, slots=True)
 class _MappedAccountLoginPort:
@@ -601,6 +654,16 @@ class _AccountReader:
             )
         )
         return data.snapshot
+
+    def read_market_profile(self, request):
+        data = self.access.read_market_profile(
+            ConnectionAccountMarketProfileRequest(
+                context=request.context,
+                market=request.market,
+                observed_at=request.observed_at,
+            )
+        )
+        return data.profile
 
 
 @dataclass(frozen=True, slots=True)

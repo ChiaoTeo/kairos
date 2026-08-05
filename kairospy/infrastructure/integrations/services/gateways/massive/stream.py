@@ -64,7 +64,10 @@ class MassiveStockMarketStream:
             for wanted_symbol, wanted_channels, _wanted_queue in self._queues.values()
         )
         if self._session is not None and not still_needed:
-            await self._send({"action": "unsubscribe", "params": ",".join(f"{channel}.{symbol}" for channel in sorted(channels))})
+            await _send_with_timeout(
+                self,
+                {"action": "unsubscribe", "params": ",".join(f"{channel}.{symbol}" for channel in sorted(channels))},
+            )
         if not self._queues:
             await self.stop()
 
@@ -77,7 +80,7 @@ class MassiveStockMarketStream:
             await asyncio.gather(reader, return_exceptions=True)
         session, self._session = self._session, None
         if session is not None:
-            await _close(session)
+            await _close_with_timeout(session)
         if not subscriptions:
             return
         await self._ensure_connected()
@@ -92,7 +95,7 @@ class MassiveStockMarketStream:
             await asyncio.gather(reader, return_exceptions=True)
         session, self._session = self._session, None
         if session is not None:
-            await _close(session)
+            await _close_with_timeout(session)
         for _symbol, _channels, queue in self._queues.values():
             queue.put_nowait(_CLOSED)
         self._queues.clear()
@@ -157,6 +160,24 @@ async def _close(session: object) -> None:
     result = close()
     if inspect.isawaitable(result):
         await result
+
+
+async def _close_with_timeout(session: object, timeout_seconds: float = 1.0) -> None:
+    """Bound provider close latency; process shutdown must not await the wire."""
+
+    try:
+        await asyncio.wait_for(_close(session), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        return
+
+
+async def _send_with_timeout(stream: MassiveStockMarketStream, message: dict[str, object], timeout_seconds: float = 1.0) -> None:
+    """Bound best-effort unsubscribe latency during shutdown."""
+
+    try:
+        await asyncio.wait_for(stream._send(message), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        return
 
 
 @dataclass(slots=True)

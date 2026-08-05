@@ -76,6 +76,9 @@ class AuthorizingAccountRuntime:
     def snapshot(self, account: AccountBookRef | None = None): return self.port.snapshot(account)
     def state(self, account: AccountBookRef | None = None): return self.port.state(account)
     def fees(self, account: AccountBookRef | None = None): return self.port.fees(account)
+    def market_profile(self, account: AccountBookRef, market: object, *, at: datetime | None = None, refresh: bool = False): return self.port.market_profile(account, market, at=at, refresh=refresh)
+    def update_market_profile(self, profile: object) -> None: self.port.update_market_profile(profile)
+    def market_profiles(self, account: AccountBookRef | None = None): return self.port.market_profiles(account)
 
     def capabilities(self, account: AccountBookRef | None = None) -> tuple[AccountCapability, ...]:
         capabilities = tuple(self.port.capabilities(account))

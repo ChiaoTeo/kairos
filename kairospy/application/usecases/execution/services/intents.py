@@ -24,20 +24,25 @@ class ExecutionIntentService:
         account: AccountContext,
         current_quantity: Decimal,
         order_id: str,
+        record_events: bool = True,
     ) -> ExecutionIntentOrderPlan | None:
         if context.now is None:
             return None
         if intent.kind is not IntentKind.TARGET_POSITION:
-            self.reject(context, intent, f"unsupported intent kind: {intent.kind}")
+            if record_events:
+                self.reject(context, intent, f"unsupported intent kind: {intent.kind}")
             return None
         if intent.target_quantity is None:
-            self.reject(context, intent, "target_position intent requires target_quantity")
+            if record_events:
+                self.reject(context, intent, "target_position intent requires target_quantity")
             return None
 
         delta = intent.target_quantity - current_quantity
-        self.accept(context, intent)
+        if record_events:
+            self.accept(context, intent)
         if delta == 0:
-            self.satisfy(context, intent)
+            if record_events:
+                self.satisfy(context, intent)
             return None
 
         side = OrderSide.BUY if delta > 0 else OrderSide.SELL

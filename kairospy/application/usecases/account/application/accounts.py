@@ -6,11 +6,12 @@ from collections.abc import Iterable, Mapping
 from datetime import datetime
 
 from kairospy.application.usecases.account.services.read import AccountReadResult
-from kairospy.application.usecases.account.protocol import AccountLoginPort, AccountLoginResult, AccountSession
+from kairospy.application.usecases.account.protocol import AccountLoginPort, AccountLoginResult, AccountSession, AccountMarketProfilePort
 from kairospy.application.usecases.account.services.reconciliation import AccountEventFactory, AccountReconciliationResult
 from kairospy.application.usecases.account.services.service import AccountService as AccountUsecaseService
 from kairospy.application.usecases.account.services.snapshots import AccountSnapshotStore
-from kairospy.domain.account import AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, AccountSnapshot, AccountState
+from kairospy.domain.account import AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, AccountMarketProfile, AccountSnapshot, AccountState
+from kairospy.domain.reference import MarketRef
 
 
 class AccountApplicationService:
@@ -29,6 +30,7 @@ class AccountApplicationService:
         snapshots: Iterable[AccountSnapshot] = (),
         account_event: AccountEventFactory | None = None,
         provision_missing_capabilities: bool = True,
+        market_profile_port: AccountMarketProfilePort | None = None,
     ) -> None:
         self._service = AccountUsecaseService(
             contexts,
@@ -41,6 +43,7 @@ class AccountApplicationService:
             snapshots=snapshots,
             account_event=account_event,
             provision_missing_capabilities=provision_missing_capabilities,
+            market_profile_port=market_profile_port,
         )
 
     def accounts(self) -> tuple[AccountContext, ...]:
@@ -57,6 +60,22 @@ class AccountApplicationService:
 
     def fees(self, account: AccountBookRef | None = None) -> tuple[AccountFeeSchedule, ...]:
         return self._service.fees(account)
+
+    def market_profile(
+        self,
+        account: AccountBookRef,
+        market: MarketRef,
+        *,
+        at: datetime | None = None,
+        refresh: bool = False,
+    ) -> AccountMarketProfile | None:
+        return self._service.market_profile(account, market, at=at, refresh=refresh)
+
+    def update_market_profile(self, profile: AccountMarketProfile) -> None:
+        self._service.update_market_profile(profile)
+
+    def market_profiles(self, account: AccountBookRef | None = None) -> tuple[AccountMarketProfile, ...]:
+        return self._service.market_profiles(account)
 
     def snapshot(self, account: AccountBookRef | None = None) -> AccountSnapshot | None:
         return self._service.snapshot(account)
@@ -82,6 +101,7 @@ __all__ = [
     "AccountCapability",
     "AccountContext",
     "AccountFeeSchedule",
+    "AccountMarketProfile",
     "AccountSnapshot",
     "AccountState",
 ]

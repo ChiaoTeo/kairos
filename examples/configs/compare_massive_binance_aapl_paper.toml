@@ -1,0 +1,19 @@
+[launch]
+id = "example-compare-massive-binance-aapl"
+mode = "paper"
+strategy = "examples.strategies.compare_massive_binance_aapl:strategy"
+
+[account]
+ref = "paper"
+
+# These are real market feeds. Paper mode only disables order execution; this
+# strategy does not submit orders in either case.
+[feeds.massive_stocks]
+venue = "massive"
+market = "equity"
+credential = "massive_stocks"
+
+[feeds.binance_equity]
+venue = "binance"
+market = "equity"
+credential = "binance_zhaoqian888666"

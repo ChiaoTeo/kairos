@@ -26,6 +26,9 @@ class StrategyReferenceCapability(Protocol):
     ) -> object:
         ...
 
+    def option_contracts(self, request: MarketSelectionQuery | None = None) -> tuple[object, ...]:
+        ...
+
 
 class StrategyContextProtocol(Protocol):
     @property
@@ -48,6 +51,7 @@ class StrategyContextProtocol(Protocol):
         *,
         selectors: Sequence[MarketSelector | type],
         identity: str | None = None,
+        params: Mapping[str, object] | None = None,
     ) -> object:
         ...
 
@@ -60,6 +64,7 @@ class StrategyContextProtocol(Protocol):
         exchange: ExchangeId | str | None = None,
         market_type: MarketTypeId | str | None = None,
         identity: str | None = None,
+        params: Mapping[str, object] | None = None,
     ) -> object:
         ...
 
@@ -97,6 +102,9 @@ class StrategyContextProtocol(Protocol):
 
     @property
     def market(self) -> MarketViewReader:
+        ...
+
+    def option_chain(self, contracts: Sequence[object], *, underlying: Decimal | str | int | float | None = None) -> object:
         ...
 
     @property

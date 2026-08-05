@@ -287,6 +287,10 @@ def _connection_options(params: Mapping[str, object]) -> ConnectionOrderOptions 
         time_in_force=_text_option(params, "time_in_force", "timeInForce"),
         reduce_only=_bool_option(params, "reduce_only", "reduceOnly"),
         post_only=_bool_option(params, "post_only", "postOnly"),
+        position_side=_text_option(params, "position_side", "positionSide"),
+        close_position=_bool_option(params, "close_position", "closePosition"),
+        working_type=_text_option(params, "working_type", "workingType"),
+        stop_price=_decimal_option(params, "stop_price", "stopPrice"),
     )
 
 
@@ -316,6 +320,18 @@ def _bool_option(params: Mapping[str, object], *keys: str) -> bool | None:
         if normalized in {"0", "false", "no", "off"}:
             return False
         raise ValueError(f"invalid boolean order option: {value!r}")
+    return None
+
+
+def _decimal_option(params: Mapping[str, object], *keys: str) -> Decimal | None:
+    for key in keys:
+        value = params.get(key)
+        if value is None or str(value).strip() == "":
+            continue
+        try:
+            return Decimal(str(value))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"invalid decimal order option: {value!r}") from error
     return None
 
 

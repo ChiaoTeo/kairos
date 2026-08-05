@@ -68,6 +68,12 @@ class ReservationBook:
     def reservations(self) -> tuple[Reservation, ...]:
         return tuple(self._reservations.values())
 
+    def restore(self, reservations: tuple[Reservation, ...]) -> None:
+        """Replace reservations while preserving injected object identity."""
+        self._reservations.clear()
+        for reservation in reservations:
+            self.hold(reservation)
+
     def _transition(self, reservation_id: str, status: ReservationStatus) -> Reservation:
         reservation = self._reservations.get(reservation_id)
         if reservation is None:

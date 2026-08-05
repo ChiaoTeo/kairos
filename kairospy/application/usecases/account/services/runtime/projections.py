@@ -25,7 +25,6 @@ from kairospy.domain.account import (
     PositionSnapshot,
 )
 
-
 @dataclass(frozen=True, slots=True)
 class RuntimeAccountViewProjectionService:
     runtime: object
@@ -49,6 +48,12 @@ class RuntimeAccountViewProjectionService:
             return ()
         return tuple(self.catalog.fees())
 
+    def market_profiles(self) -> tuple[object, ...]:
+        if self.catalog is None:
+            return ()
+        profiles = getattr(self.catalog, "market_profiles", None)
+        return () if not callable(profiles) else tuple(profiles())
+
     def current_view(
         self,
         context: AccountContext,
@@ -59,6 +64,7 @@ class RuntimeAccountViewProjectionService:
         equity_currency: str | None = None,
         latest_equity: Decimal | None = None,
         initial_equity: Decimal | None = None,
+        pending_orders: tuple[object, ...] = (),
     ) -> AccountCurrentView:
         state = self.runtime.state(context.book)
         snapshot = self.runtime.snapshot(context.book)
@@ -67,6 +73,9 @@ class RuntimeAccountViewProjectionService:
         liabilities = _liabilities(state, snapshot)
         positions = _positions(state, snapshot)
         open_orders = _open_orders(state, snapshot)
+        simulated_orders = _simulated_open_orders(context, pending_orders)
+        if simulated_orders and snapshot is None:
+            open_orders = simulated_orders
         cash = _cash(balances, equity_currency)
         equity = latest_equity or _payload_equity(payload) or cash
         baseline = initial_equity if initial_equity is not None else equity
@@ -86,7 +95,7 @@ class RuntimeAccountViewProjectionService:
             liabilities=liabilities,
             positions=positions,
             open_orders=open_orders,
-            pending_orders=tuple(getattr(payload, "pending_orders", ()) or ()),
+            pending_orders=pending_orders or tuple(getattr(payload, "pending_orders", ()) or ()),
             stale=False if state is None else state.stale,
             cash=cash,
             equity=equity,
@@ -170,6 +179,9 @@ class RuntimeAccountService:
     def fees(self) -> tuple[AccountFeeSchedule, ...]:
         return _require_account_views(self.views).fees()
 
+    def market_profiles(self) -> tuple[object, ...]:
+        return _require_account_views(self.views).market_profiles()
+
     def current_view(
         self,
         context: AccountContext,
@@ -180,6 +192,7 @@ class RuntimeAccountService:
         equity_currency: str | None = None,
         latest_equity: Decimal | None = None,
         initial_equity: Decimal | None = None,
+        pending_orders: tuple[object, ...] = (),
     ) -> AccountCurrentView:
         return _require_account_views(self.views).current_view(
             context,
@@ -189,6 +202,7 @@ class RuntimeAccountService:
             equity_currency=equity_currency,
             latest_equity=latest_equity,
             initial_equity=initial_equity,
+            pending_orders=pending_orders,
         )
 
     def detail_view(
@@ -307,6 +321,26 @@ def _open_orders(state: AccountState | None, snapshot: AccountSnapshot | None) -
     if state is not None:
         return state.open_orders
     return () if snapshot is None else snapshot.open_orders
+
+
+def _simulated_open_orders(context: AccountContext, orders: tuple[object, ...]) -> tuple[OpenOrderSnapshot, ...]:
+    if context.environment.value not in {"paper", "backtest", "simulation"}:
+        return ()
+    values = []
+    for order in orders:
+        request = getattr(order, "request", None)
+        if request is None:
+            continue
+        values.append(
+            OpenOrderSnapshot(
+                str(getattr(order, "order_id", request.order_id)),
+                request.instrument_id,
+                request.side.value,
+                getattr(order, "remaining_quantity", request.quantity),
+                AccountSource.SIMULATED,
+            )
+        )
+    return tuple(values)
 
 
 def _cash(balances: tuple[AccountBalance, ...], equity_currency: str | None) -> Decimal | None:

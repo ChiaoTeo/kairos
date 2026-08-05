@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable, Mapping
+from datetime import datetime
 
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec
 from kairospy.application.usecases.market.application.integration import MarketFeedSubscriptionRequest
@@ -12,6 +14,9 @@ from .stream import (
     MassiveOptionsMarketStream,
     MassiveStockMarketStream,
 )
+from .client import MassiveStocksRestClient
+from kairospy.domain.market import Bar
+from kairospy.application.usecases.reference.application.builders import catalog_from_market_snapshot
 from kairospy.infrastructure.integrations.services.gateways.massive.normalizers import MassiveStockNormalizers
 
 
@@ -55,13 +60,70 @@ class MassiveOptionsMarketStreamConnection(MassiveStockMarketStreamConnection):
         Connection.__init__(self, spec, components=(self.stream,))
 
 
+class MassiveOptionsMarketDataConnection(Connection):
+    """Massive REST market-data capability for historical option bars."""
+
+    def __init__(self, spec: IntegrationConnectionSpec, *, api_key: str | None = None) -> None:
+        resolved_key = api_key or credential_value(spec.credential.id if spec.credential else None, "api_key") or os.getenv("MASSIVE_API_KEY")
+        self.client = MassiveStocksRestClient(api_key=resolved_key)
+        super().__init__(spec, components=())
+
+    def bars(
+        self,
+        symbol: str,
+        *,
+        timeframe: str = "1m",
+        since: datetime | str | None = None,
+        until: datetime | str | None = None,
+        limit: int = 1000,
+        adapter_options: Mapping[str, object] | None = None,
+    ) -> Iterable[Bar]:
+        return self.client.bars(
+            symbol,
+            timeframe=timeframe,
+            since=since,
+            until=until,
+            limit=limit,
+            market="option",
+            adapter_options=adapter_options,
+        )
+
+    def latest_quote(self, symbol: str) -> None:
+        # The live NBBO is provided by the options WebSocket connection.
+        return None
+
+
 class MassiveReferenceConnection(Connection):
     """Provider identity connection used for non-stream reference access."""
 
     def __init__(self, spec: IntegrationConnectionSpec) -> None:
         if spec.product is not None:
             raise ValueError("Massive reference connection does not select a product")
+        self.client = MassiveStocksRestClient(
+            credential_id=spec.credential.id if spec.credential else None,
+        )
         super().__init__(spec, components=())
+
+    def catalog(self, *, as_of: datetime, market: str | None = None, params: object | None = None):
+        if str(market or "").lower() not in {"option", "options"}:
+            raise ValueError("Massive reference catalog currently requires market=option")
+        values = dict(params or {}) if isinstance(params, dict) else {}
+        underlying = str(values.get("underlying") or os.getenv("MASSIVE_OPTION_UNDERLYING") or "SPY")
+        rows = []
+        for item in self.client.option_contracts(underlying, as_of=as_of.date().isoformat()):
+            rows.append({
+                "venue": "massive",
+                "market": "option",
+                "source_symbol": item.get("ticker"),
+                "underlying_instrument_id": f"instrument:equity:{underlying.lower()}",
+                "expiry": item.get("expiration_date"),
+                "strike_price": item.get("strike_price"),
+                "contract_type": item.get("contract_type"),
+                "shares_per_contract": item.get("shares_per_contract", 100),
+                "active": item.get("active", True),
+                "raw": item,
+            })
+        return catalog_from_market_snapshot(rows, effective_from=as_of)
 
 
 class MassiveStocksGateway:
@@ -75,6 +137,8 @@ class MassiveOptionsGateway:
     def open(self, spec: IntegrationConnectionSpec) -> MassiveOptionsMarketStreamConnection:
         if spec.product is not ProductFamily.OPTIONS:
             raise ValueError("Massive options gateway requires the options product")
+        if spec.transport.value == "rest":
+            return MassiveOptionsMarketDataConnection(spec)  # type: ignore[return-value]
         return MassiveOptionsMarketStreamConnection(spec)
 
 
@@ -118,5 +182,6 @@ __all__ = [
     "MassiveStocksGateway",
     "MassiveOptionsGateway",
     "MassiveOptionsMarketStreamConnection",
+    "MassiveOptionsMarketDataConnection",
     "MassiveStockMarketStreamConnection",
 ]

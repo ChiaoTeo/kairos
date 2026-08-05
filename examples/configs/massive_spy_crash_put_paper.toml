@@ -1,0 +1,16 @@
+[launch]
+id = "example-massive-spy-crash-put"
+mode = "paper"
+strategy = "examples.strategies.massive_spy_crash_put:strategy"
+
+[account]
+ref = "paper"
+
+[market]
+venue = "massive"
+market = "option"
+
+[feeds.massive_options]
+venue = "massive"
+market = "option"
+credential = "massive_stocks"

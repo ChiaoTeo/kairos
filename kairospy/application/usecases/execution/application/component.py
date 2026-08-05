@@ -9,10 +9,12 @@ from kairospy.application.usecases.execution.services.orders import ExecutionOrd
 from kairospy.application.usecases.execution.services.projections import ExecutionProjectionService
 from kairospy.application.usecases.execution.services.updates import ExecutionUpdateService
 from kairospy.application.usecases.execution.services.intents import ExecutionIntentService
+from kairospy.application.usecases.execution.services.intents import ExecutionIntentOrderPlan
 from kairospy.application.usecases.execution.domain.policy import ExecutionSafetyPolicy
 from kairospy.application.usecases.execution.services.coordinator import ExecutionCoordinator
 from kairospy.application.usecases.risk.application.budget import RiskApplication
-from kairospy.application.usecases.risk.domain import RiskMetric
+from kairospy.application.usecases.risk.application.budget import RiskAssessmentRequest
+from kairospy.application.usecases.risk.domain import BudgetRef, RiskMetric, RiskUsage
 from kairospy.infrastructure.integrations.application.execution import OrderConnection
 from kairospy.domain.account import AccountBookRef, AccountSnapshot
 from kairospy.domain.account import AccountContext
@@ -56,6 +58,20 @@ class ExecuteIntentCommand:
     account_snapshot: AccountSnapshot | None = None
     order_options: Mapping[str, object] | None = None
     safety_policy: ExecutionSafetyPolicy | None = None
+    reserve_currency: str | None = None
+    reserve_amount: Decimal | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionIntentPreparation:
+    """Order and risk facts prepared before an external risk decision."""
+
+    command: ExecuteIntentCommand
+    plan: ExecutionIntentOrderPlan | None
+    risk_request: RiskAssessmentRequest | None
+    risk_reservation_id: str | None
+    risk_amount: Decimal | None
+    risk_metric: RiskMetric
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,28 +126,73 @@ class ExecutionApplication:
         return self._orders.cancel(command.order_id, at=command.at)
 
     def execute_intent(self, command: ExecuteIntentCommand) -> OrderState | None:
+        preparation = self.prepare_intent(command, record_events=True)
+        if preparation.plan is None:
+            return None
+        return self.execute_prepared_intent(
+            preparation,
+            risk_reserved=False,
+            events_already_recorded=True,
+        )
+
+    def prepare_intent(
+        self,
+        command: ExecuteIntentCommand,
+        *,
+        record_events: bool = False,
+        check_safety: bool = True,
+    ) -> ExecutionIntentPreparation:
         intents = ExecutionIntentService()
         now = getattr(command.context, "now", None)
         if now is None:
-            return None
+            return ExecutionIntentPreparation(command, None, None, None, None, RiskMetric.NOTIONAL)
         plan = intents.plan_target_position_order(
             command.intent,
             command.context,
             account=command.account,
             current_quantity=command.current_quantity,
             order_id=f"{command.intent.intent_id}-order",
+            record_events=record_events,
         )
         if plan is None:
-            return None
-        reason = (command.safety_policy or ExecutionSafetyPolicy()).reject_reason(plan.request)
+            return ExecutionIntentPreparation(command, None, None, None, None, RiskMetric.NOTIONAL)
+        reason = "" if not check_safety else (command.safety_policy or ExecutionSafetyPolicy()).reject_reason(plan.request)
         if reason:
-            intents.reject(command.context, command.intent, reason, order_ids=(plan.request.order_id,))
+            if record_events:
+                intents.reject(command.context, command.intent, reason, order_ids=(plan.request.order_id,))
+            return ExecutionIntentPreparation(command, None, None, None, None, RiskMetric.NOTIONAL)
+        risk_metric, risk_amount = _risk_facts(plan.request, command)
+        return ExecutionIntentPreparation(
+            command,
+            plan,
+            _risk_request(plan.request, risk_metric, risk_amount, at=now),
+            plan.request.reservation_id or plan.request.order_id,
+            risk_amount,
+            risk_metric,
+        )
+
+    def execute_prepared_intent(
+        self,
+        preparation: ExecutionIntentPreparation,
+        *,
+        risk_reserved: bool,
+        events_already_recorded: bool = False,
+    ) -> OrderState | None:
+        if preparation.plan is None:
             return None
+        command = preparation.command
+        intents = ExecutionIntentService()
+        plan = preparation.plan
+        if not events_already_recorded:
+            intents.accept(command.context, command.intent)
         order = self._orders.plan(
             plan.request,
+            reserve_currency=command.reserve_currency,
+            reserve_amount=command.reserve_amount,
             venue_snapshot=command.account_snapshot,
-            risk_amount=_risk_amount(plan.request, command.order_options),
-            at=now,
+            risk_amount=None if risk_reserved else preparation.risk_amount,
+            risk_metric=preparation.risk_metric,
+            at=command.context.now,
             **_margin_args(command.order_options, plan.request.instrument_id),
         )
         intents.planned(command.context, command.intent, order_ids=(order.order_id,))
@@ -140,7 +201,7 @@ class ExecutionApplication:
             return order
         submitted = self._orders.submit(
             order.order_id,
-            at=now,
+            at=command.context.now,
             params=command.order_options,
         )
         if submitted.status.value in {"rejected", "unknown"}:
@@ -150,6 +211,16 @@ class ExecutionApplication:
         else:
             intents.ordering(command.context, command.intent, order_ids=(submitted.order_id,))
         return submitted
+
+    def reject_prepared_intent(self, preparation: ExecutionIntentPreparation, reason: str) -> None:
+        if preparation.plan is None:
+            return
+        ExecutionIntentService().reject(
+            preparation.command.context,
+            preparation.command.intent,
+            reason,
+            order_ids=(preparation.plan.request.order_id,),
+        )
 
     def apply_update(self, update: ExecutionUpdate) -> OrderState:
         return self._updates.apply(update)
@@ -176,10 +247,45 @@ class ExecutionApplication:
 __all__ = [
     "CancelOrderCommand",
     "ExecutionApplication",
+    "ExecutionIntentPreparation",
     "ExecuteIntentCommand",
     "PlanOrderCommand",
     "SubmitOrderCommand",
 ]
+
+
+def _risk_facts(request: OrderRequest, command: ExecuteIntentCommand) -> tuple[RiskMetric, Decimal | None]:
+    params = command.order_options or {}
+    margin_notional = params.get("marginNotional") or params.get("margin_notional")
+    if margin_notional is not None:
+        leverage = Decimal(str(params.get("marginLeverage") or params.get("margin_leverage") or "1"))
+        return RiskMetric.MARGIN, Decimal(str(margin_notional)) / leverage
+    if command.reserve_amount is not None:
+        return RiskMetric.NOTIONAL, command.reserve_amount
+    return RiskMetric.NOTIONAL, _risk_amount(request, command.order_options)
+
+
+def _risk_request(
+    request: OrderRequest,
+    metric: RiskMetric,
+    amount: Decimal | None,
+    *,
+    at: datetime,
+) -> RiskAssessmentRequest:
+    return RiskAssessmentRequest(
+        request.order_id,
+        (
+            RiskUsage(
+                metric,
+                amount or Decimal("0"),
+                (
+                    BudgetRef("account", request.context.book.value),
+                    BudgetRef("instrument", str(request.instrument_id)),
+                ),
+            ),
+        ),
+        at,
+    )
 
 
 def _margin_args(params: Mapping[str, object] | None, instrument_id: object) -> dict[str, object]:

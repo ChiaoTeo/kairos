@@ -11,7 +11,8 @@ from kairospy.application.usecases.reference.services.projections import Referen
 from kairospy.application.usecases.reference.services.refresh import ReferenceRefreshService
 from kairospy.application.usecases.reference.services.resolution import ReferenceResolutionService
 from kairospy.application.usecases.reference.services.universe import ReferenceUniverseService
-from kairospy.domain.reference import LifecycleEvent, MarketRef, MarketResolver, ReferenceCatalog
+from kairospy.domain.reference import LifecycleEvent, MarketDefinition, MarketRef, MarketResolver, OptionContractRef, ReferenceCatalog
+from kairospy.domain.market.selection import MarketSelectionQuery
 
 
 class ReferenceApplication:
@@ -68,11 +69,38 @@ class ReferenceApplication:
             self.catalog(), default_venue=self._default_venue, default_market=self._default_market
         ).resolve(value, venue=venue, market=market, as_of=as_of)
 
+    def market_definition(self, market_id: object, *, at: datetime) -> MarketDefinition | None:
+        """Return the effective market contract used by execution rule checks."""
+        if not self._ready:
+            self.ensure_ready()
+        return self.catalog().maybe_get_market(market_id, at)
+
     def query(self, request: ReferenceQuery) -> ReferenceSelection:
         """Select resolved markets for a strategy subscription."""
         if not self._ready:
             self.ensure_ready()
         return ReferenceUniverseService(self.catalog()).select_markets(request)
+
+    def option_contracts(self, request: MarketSelectionQuery | None = None) -> tuple[OptionContractRef, ...]:
+        """Return stable option identities; quotes remain owned by Market."""
+        if not self._ready:
+            self.ensure_ready()
+        query = request or MarketSelectionQuery(market="option", instrument_type="option")
+        selection = ReferenceUniverseService(self.catalog()).select_markets(query)
+        contracts: list[OptionContractRef] = []
+        for market in selection.markets:
+            definition = self.catalog().get_instrument(market.instrument_id, selection.as_of)
+            if definition.expiry is None or definition.strike is None or definition.option_right is None:
+                continue
+            contracts.append(OptionContractRef(
+                market=market,
+                underlying_instrument_id=definition.underlying_instrument_id or "instrument:equity:spy",
+                expiry=definition.expiry,
+                strike=definition.strike,
+                right=definition.option_right,
+                multiplier=definition.multiplier or 100,
+            ))
+        return tuple(contracts)
 
     def ensure_ready(self):
         """Ensure a usable catalog exists before a strategy is started.
@@ -107,6 +135,32 @@ class ReferenceApplication:
 
     def refresh_provider(self, source, **kwargs):
         return self._refresh_workflow.provider(source, **kwargs)
+
+    def refresh_options(
+        self,
+        source: ReferenceCatalogSource | None = None,
+        *,
+        underlying: str = "SPY",
+        as_of: datetime | None = None,
+    ):
+        """Refresh option contract identity into the Reference catalog."""
+        selected = source or self._source
+        if selected is None:
+            raise RuntimeError("option reference refresh requires a catalog source")
+        observed_at = as_of or datetime.now(timezone.utc)
+        snapshot = selected.catalog(
+            as_of=observed_at,
+            market="option",
+            params={"underlying": underlying},
+        )
+        result = self._refresh.refresh_snapshot(
+            snapshot,
+            as_of=observed_at,
+            venue="massive",
+            market="option",
+        )
+        self._ready = True
+        return result
 
     def refresh_equity(self, source, **kwargs):
         return self._refresh_workflow.equity(source, **kwargs)

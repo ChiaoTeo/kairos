@@ -460,8 +460,13 @@ def _install_process_stop_handlers(directory: Path) -> dict[int, object]:
     if threading.current_thread() is not threading.main_thread():
         return {}
     previous: dict[int, object] = {}
+    interrupts = 0
 
     def handle(signum: int, _frame: object) -> None:
+        nonlocal interrupts
+        interrupts += 1
+        if interrupts >= 2:
+            raise KeyboardInterrupt
         _request_stop_command(
             directory,
             reason=f"received signal {signum}",

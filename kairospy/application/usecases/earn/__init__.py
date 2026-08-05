@@ -1,0 +1,1 @@
+"""Simple Earn business usecase."""

@@ -20,4 +20,22 @@ This repository is migrating to a strict module contract:
 - Keep business invariants and entity behavior in `domain/`; keep use-case orchestration, transaction boundaries, and cross-module collaboration at the application boundary; keep concrete implementation and integration details private in `services/`, adapters, infrastructure, or composition.
 - A useful review question is: "Would a caller outside this module need to invoke this capability as a use case?" If yes, define a business-oriented API in `application/`; otherwise keep it private.
 
-Before adding or moving code, read `docs/module-boundaries.md`. When reviewing imports, treat cross-module imports from `services` as violations unless the import is inside the same module. Run focused tests and static searches after boundary changes.
+## Agent Execution Rules
+
+Before adding, moving, or deleting code, read `docs/module-boundaries.md` completely. Treat it as the architecture baseline for DDD convergence.
+
+For every change, the Agent must first identify the business owner, state owner, command/event/query type, and target layer. Do not start by adding a manager, coordinator, processor, callback, registry, or compatibility facade.
+
+Use this order when implementing a business change:
+
+1. Define or verify the domain rule.
+2. Define the use-case application API.
+3. Assign mutable runtime state to exactly one Actor.
+4. Let the Actor own its data loop and publish events.
+5. Keep System limited to composition and lifecycle.
+6. Keep CLI limited to input adaptation and application invocation.
+7. Delete obsolete concepts after migration.
+
+Before reporting completion, run focused tests, `uv run pytest -q`, `git diff --check`, and static searches for cross-module imports from `services` or new generic orchestration concepts. Explain any intentional exception.
+
+When a requested change appears to introduce a new layer or split, stop and validate whether an existing Domain, Usecase, Actor, Monitor, or composition boundary already owns the responsibility. Prefer convergence and deletion over another indirection.

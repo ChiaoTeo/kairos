@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from kairospy.domain.account import AccountBookRef, AccountCapability, AccountContext, AccountSnapshot
+from kairospy.domain.account import AccountBookRef, AccountCapability, AccountContext, AccountMarketProfile, AccountSnapshot
+from kairospy.domain.reference import MarketRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +63,19 @@ class AccountReadPort(Protocol):
     def read_account(self, request: AccountReadRequest) -> AccountSnapshot: ...
 
 
+@dataclass(frozen=True, slots=True)
+class AccountMarketProfileRequest:
+    context: AccountContext
+    market: MarketRef
+    observed_at: datetime
+
+
+class AccountMarketProfilePort(Protocol):
+    """Minimal venue port consumed by the account usecase."""
+
+    def read_market_profile(self, request: AccountMarketProfileRequest) -> AccountMarketProfile: ...
+
+
 class AccountEventPort(Protocol):
     def account_snapshots(
         self,
@@ -82,6 +96,8 @@ __all__ = [
     "AccountLoginResult",
     "AccountReadPort",
     "AccountReadRequest",
+    "AccountMarketProfilePort",
+    "AccountMarketProfileRequest",
     "AccountSession",
     "AccountSnapshotStore",
 ]

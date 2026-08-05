@@ -18,6 +18,7 @@ class PaperExecutionService(SimulatedExecutionRuntimeService):
         slippage_model: SlippageModel | None = None,
         commission_model: CommissionModel | None = None,
         directory: AccountDirectory | None = None,
+        market_reference: object | None = None,
     ) -> None:
         super().__init__(
             coordinator,
@@ -29,6 +30,7 @@ class PaperExecutionService(SimulatedExecutionRuntimeService):
             commission_model=commission_model,
             mode_label="paper",
             directory=directory,
+            market_reference=market_reference,
         )
 
 

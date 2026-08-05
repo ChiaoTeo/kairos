@@ -3,10 +3,10 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 
-from kairospy.application.support.composition.application.integrations import connect_binance_equity, connect_binance_spot_account, connect_binance_spot_execution, connect_binance_spot_public, integration_application
+from kairospy.application.support.composition.application.integrations import connect_binance_equity, connect_binance_spot_account, connect_binance_spot_execution, connect_binance_spot_public, connect_ibkr, connect_massive_reference, integration_application
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnection, RuntimeMode
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec
-from kairospy.infrastructure.integrations.domain import AccessScope, ExchangeId, ExchangeRef, IntegrationRoute, ProductFamily, TransportKind
+from kairospy.infrastructure.integrations.domain import AccessScope, BrokerId, ExchangeId, ExchangeRef, IntegrationCapability, IntegrationRoute, ProductFamily, TransportKind
 from kairospy.application.usecases.workspace.application.context import workspace as resolve_workspace
 from kairospy.application.usecases.account.application.ports import AccountCommandResources
 from kairospy.application.usecases.execution.application.ports import OrderCommandResources
@@ -140,6 +140,13 @@ def private_account_access(
     *,
     credential: str | None = None,
 ) -> object:
+    if str(book.broker).lower() == BrokerId.IBKR.value:
+        return connect_ibkr(
+            f"facade.account.request.{book.value}.{credential or 'default'}",
+            credential=credential,
+            mode=RuntimeMode.PAPER if credential is None else RuntimeMode.LIVE,
+            capability=IntegrationCapability.ACCOUNT_READ,
+        )
     _require_ccxt_driver(driver_name)
     return connect_binance_spot_account(
         f"facade.account.request.{book.value}.{credential or 'default'}",
@@ -154,7 +161,6 @@ def account_read_access(
     *,
     credential: str | None = None,
 ) -> object:
-    _require_ccxt_driver(driver_name)
     return private_account_access(book, driver_name, credential=credential)
 
 
@@ -164,7 +170,6 @@ def account_query_access(
     *,
     credential: str | None = None,
 ) -> object:
-    _require_ccxt_driver(driver_name)
     return private_account_access(book, driver_name, credential=credential)
 
 
@@ -174,7 +179,6 @@ def execution_access_for_account(
     *,
     credential: str | None = None,
 ) -> object:
-    _require_ccxt_driver(driver_name)
     return execution_access(book, driver_name, credential=credential)
 
 
@@ -184,6 +188,13 @@ def execution_access(
     *,
     credential: str | None = None,
 ) -> IntegrationConnection:
+    if str(book.broker).lower() == BrokerId.IBKR.value:
+        return connect_ibkr(
+            f"facade.execution.{book.value}.{credential or 'default'}",
+            credential=credential,
+            mode=RuntimeMode.PAPER if credential is None else RuntimeMode.LIVE,
+            capability=IntegrationCapability.ORDER_ENTRY,
+        )
     _require_ccxt_driver(driver_name)
     return connect_binance_spot_execution(
         f"facade.execution.{book.value}.{credential or 'default'}",
@@ -210,13 +221,20 @@ def reference_access(
     *,
     market: str | None,
     driver_name: DriverName,
+    credential: str | None = None,
 ) -> IntegrationConnection:
     if source_kind in {"exchange", "broker"} and driver_name is not DriverName.ccxt:
         raise ValueError(f"{source_kind} reference source requires ccxt driver")
     if source_kind == "provider" and driver_name is not DriverName.massive:
         raise ValueError("massive provider requires massive driver")
+    if source_kind == "provider" and source_name.lower() == ProviderName.massive.value:
+        return connect_massive_reference(
+            f"facade.reference.{source_kind}.{source_name}.{market or 'default'}",
+            credential=credential,
+            mode=RuntimeMode.PAPER,
+        )
     if source_kind != "exchange" or source_name.lower() != ExchangeName.binance.value:
-        raise ValueError("only Binance Spot reference catalog is supported")
+        raise ValueError("only Binance Spot or Massive reference catalog is supported")
     return connect_binance_spot_public(
         f"facade.reference.{source_kind}.{source_name}.{market or 'default'}",
         mode=RuntimeMode.PAPER,

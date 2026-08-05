@@ -43,6 +43,7 @@ class MarketApplication:
         subscription_state = subscriptions or MarketSubscriptionService()
         planning_service = planning or MarketStreamPlanningService()
         data = MarketDataApplicationService(store, resolver=resolver, integration_runtime=integration_runtime)
+        self.data = data
         reader = reader or data
         if writer is None and reader is data:
             writer = data
@@ -60,6 +61,13 @@ class MarketApplication:
         self.feed = feed
         self.projections = projections or MarketProjectionApplicationService(subscriptions=self.subscriptions)
         self.events = MarketEventApplicationService(ingestion=self.ingestion, projection=self.projections)
+
+    @property
+    def has_historical_store(self) -> bool:
+        return bool(getattr(self.data, "has_store", False))
+
+    def ensure_bars(self, spec, client):
+        return self.data.ensure_bars(spec, client)
 
     def attach_feed(self, feed: MarketFeedApplicationService) -> None:
         if self.feed is not None and self.feed is not feed:

@@ -7,7 +7,7 @@ scope; composition never creates Market connections during a launch.
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Mapping, Protocol
 
 from kairospy.application.usecases.market.application.integration import (
     MarketDataConnection,
@@ -52,17 +52,20 @@ class SystemMarketIntegrationRuntime:
         scope: ConnectionScope,
         application: IntegrationConnectionApplication,
         mode: RuntimeMode = RuntimeMode.LIVE,
+        feed_configs: Mapping[str, object] | None = None,
     ) -> None:
         self.scope = scope
         self.application = application
         self.mode = mode
+        self.feed_configs = dict(feed_configs or {})
 
     def create_stream(self, request: MarketStreamConnectionRequest) -> MarketStreamConnection:
-        connection_id = str(request.connection_id or self._connection_id(request))
+        values = self._feed_values(request.market)
+        connection_id = str(request.connection_id or values.get("connection_id") or self._connection_id(request))
         existing = self.scope.get(connection_id)
         if existing is not None:
             return _require_stream(existing, connection_id)
-        spec = self._spec(request, connection_id, transport=TransportKind.MARKET_STREAM)
+        spec = self._spec(request, connection_id, transport=TransportKind.MARKET_STREAM, feed_values=values)
         connection = self.application.connect(spec)
         self.scope.register(connection_id, connection, role="market_stream")
         return _require_stream(connection, connection_id)
@@ -91,14 +94,26 @@ class SystemMarketIntegrationRuntime:
             raise LookupError(f"market connection is not registered: {connection_id}")
         return _require_stream(value, connection_id)
 
-    def _spec(self, request: MarketStreamConnectionRequest, connection_id: str, *, transport: TransportKind) -> IntegrationConnectionSpec:
+    def _spec(
+        self,
+        request: MarketStreamConnectionRequest,
+        connection_id: str,
+        *,
+        transport: TransportKind,
+        feed_values: Mapping[str, object] | None = None,
+    ) -> IntegrationConnectionSpec:
+        values = dict(feed_values or {})
+        if request.provider is not None:
+            values["provider"] = request.provider
+        if request.adapter is not None:
+            values["adapter"] = request.adapter
+        if request.credential is not None:
+            values["credential"] = request.credential
         return self._spec_values(
             {
                 "exchange": request.market.venue,
                 "product": request.market.market,
-                "provider": request.provider,
-                "adapter": request.adapter,
-                "credential": request.credential,
+                **values,
             },
             connection_id,
             transport=transport,
@@ -133,6 +148,17 @@ class SystemMarketIntegrationRuntime:
             credential=None if credential is None else CredentialRef(str(credential)),
             mode=RuntimeMode(str(params.get("mode") or self.mode.value)),
         )
+
+    def _feed_values(self, market: object) -> Mapping[str, object]:
+        venue = str(getattr(market, "venue", "")).lower()
+        product = str(getattr(market, "market", "")).lower()
+        for feed in self.feed_configs.values():
+            values = dict(getattr(feed, "values", None) or {})
+            feed_venue = str(values.get("venue") or getattr(feed, "feed_id", "")).lower()
+            feed_product = str(values.get("market") or values.get("product") or "spot").lower()
+            if feed_venue == venue and feed_product == product:
+                return values
+        return {}
 
     @staticmethod
     def _connection_id(request: MarketStreamConnectionRequest, *, suffix: str = "stream") -> str:

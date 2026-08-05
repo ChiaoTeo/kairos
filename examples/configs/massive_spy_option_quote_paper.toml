@@ -6,6 +6,10 @@ strategy = "examples.strategies.massive_spy_option_quote:strategy"
 [account]
 ref = "paper"
 
+[market]
+venue = "massive"
+market = "option"
+
 [feeds.massive_options]
 venue = "massive"
 market = "option"

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from functools import partial
+from threading import Thread
 from typing import Mapping
 from uuid import uuid4
 
@@ -70,7 +72,7 @@ class BinanceEquityQuoteSubscription:
     async def _events(self):
         while not self._closed.is_set():
             observed_at = datetime.now(timezone.utc)
-            payload = self.operations.latest_quote(symbol=self.symbol)
+            payload = await _latest_quote(self.operations, self.symbol)
             quote = self.normalizers.latest_quote(payload, market=self.market, observed_at=observed_at)  # type: ignore[arg-type]
             if quote is not None:
                 yield MarketEvent(
@@ -102,6 +104,38 @@ def _poll_seconds(params: Mapping[str, object]) -> float:
     if result <= 0:
         raise ValueError("Binance Equity poll_seconds must be a positive number")
     return result
+
+
+async def _latest_quote(operations: BinanceEquityMarketOperations, symbol: str) -> object:
+    """Run the blocking REST adapter without blocking launch shutdown."""
+
+    loop = asyncio.get_running_loop()
+    result: asyncio.Future[object] = loop.create_future()
+
+    def request() -> None:
+        try:
+            payload = operations.latest_quote(symbol=symbol)
+        except BaseException as error:
+            loop.call_soon_threadsafe(partial(_complete, result, error=error))
+        else:
+            loop.call_soon_threadsafe(partial(_complete, result, value=payload))
+
+    Thread(target=request, name=f"binance-equity-quote:{symbol}", daemon=True).start()
+    return await result
+
+
+def _complete(
+    result: asyncio.Future[object],
+    *,
+    value: object | None = None,
+    error: BaseException | None = None,
+) -> None:
+    if result.done():
+        return
+    if error is not None:
+        result.set_exception(error)
+    else:
+        result.set_result(value)
 
 
 __all__ = ["BinanceEquityPollingConnection", "BinanceEquityQuoteSubscription"]

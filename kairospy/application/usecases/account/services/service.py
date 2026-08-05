@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from kairospy.application.usecases.account.services.read import AccountReadResult, AccountReadService
-from kairospy.application.usecases.account.protocol import AccountLoginPort, AccountLoginRequest, AccountLoginResult, AccountSession
+from kairospy.application.usecases.account.protocol import AccountLoginPort, AccountLoginRequest, AccountLoginResult, AccountMarketProfilePort, AccountSession
+from kairospy.application.usecases.account.services.market_profiles import AccountMarketProfileService
 from kairospy.application.usecases.account.services.provisioning import AccountProvisioningService
 from kairospy.application.usecases.account.services.queries import AccountQueryService
 from kairospy.application.usecases.account.services.reconciliation import AccountEventFactory, AccountReconciliationResult, AccountReconciliationService
@@ -14,7 +15,8 @@ from kairospy.application.usecases.account.domain.books import default_account_b
 from kairospy.application.usecases.account.domain.private_stream import PrivateStreamCheckpoint
 from kairospy.application.usecases.account.domain.routing import AccountBookRoute, account_book_route
 from kairospy.application.usecases.account.domain.simulated import SimulatedAccount
-from kairospy.domain.account import AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, AccountLedger, AccountSnapshot, AccountState, derive_account_state
+from kairospy.domain.account import AccountBookRef, AccountCapability, AccountContext, AccountFeeSchedule, AccountLedger, AccountMarketProfile, AccountSnapshot, AccountState, derive_account_state
+from kairospy.domain.reference import MarketRef
 
 
 @dataclass(slots=True)
@@ -35,7 +37,10 @@ class AccountService:
     fee_items: tuple[AccountFeeSchedule, ...] = ()
     account_event: AccountEventFactory | None = None
     provision_missing_capabilities: bool = True
+    market_profile_port: AccountMarketProfilePort | None = None
     _snapshots: dict[AccountBookRef, AccountSnapshot] = field(default_factory=dict, init=False, repr=False)
+    _market_profile_service: AccountMarketProfileService | None = field(default=None, init=False, repr=False)
+    _market_profiles: dict[tuple[AccountBookRef, str], AccountMarketProfile] = field(default_factory=dict, init=False, repr=False)
 
     def __init__(
         self,
@@ -50,6 +55,7 @@ class AccountService:
         snapshots: Iterable[AccountSnapshot] = (),
         account_event: AccountEventFactory | None = None,
         provision_missing_capabilities: bool = True,
+        market_profile_port: AccountMarketProfilePort | None = None,
     ) -> None:
         resolved_contexts = (contexts,) if isinstance(contexts, AccountContext) else tuple(contexts)
         if not resolved_contexts:
@@ -63,7 +69,10 @@ class AccountService:
         self.fee_items = tuple(fees)
         self.account_event = account_event
         self.provision_missing_capabilities = provision_missing_capabilities
+        self.market_profile_port = market_profile_port
+        self._market_profile_service = None if market_profile_port is None else AccountMarketProfileService(market_profile_port)
         self._snapshots = {}
+        self._market_profiles = {}
         for snapshot in snapshots:
             self.update_snapshot(snapshot)
 
@@ -115,6 +124,28 @@ class AccountService:
         if account is None:
             return self.fee_items
         return tuple(item for item in self.fee_items if item.book == account)
+
+    def market_profile(self, account: AccountBookRef, market: MarketRef, *, at: datetime | None = None, refresh: bool = False) -> AccountMarketProfile | None:
+        key = (account, str(market.market_id))
+        if not refresh and key in self._market_profiles:
+            return self._market_profiles[key]
+        context = self._context_for(account)
+        if context is None:
+            raise KeyError(f"unknown account book: {account.value}")
+        if self._market_profile_service is None:
+            return self._market_profiles.get(key)
+        profile = self._market_profile_service.read(context, market, at=at)
+        self._market_profiles[key] = profile
+        return profile
+
+    def update_market_profile(self, profile: AccountMarketProfile) -> None:
+        if profile.account not in self.contexts:
+            raise ValueError("account market profile context does not belong to account service")
+        self._market_profiles[(profile.account.book, str(profile.market.market_id))] = profile
+
+    def market_profiles(self, account: AccountBookRef | None = None) -> tuple[AccountMarketProfile, ...]:
+        values = tuple(self._market_profiles.values())
+        return values if account is None else tuple(item for item in values if item.account.book == account)
 
     def snapshot(self, account: AccountBookRef | None = None) -> AccountSnapshot | None:
         context = self._context_for(account)

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from kairospy.domain.reference import (
@@ -119,6 +119,11 @@ def catalog_from_market_rows(rows: Iterable[Mapping[str, object]], *, effective_
                     base_asset_id=base_asset_id,
                     quote_asset_id=quote_asset_id,
                     display_name=_display_name(base, quote, row),
+                    underlying_instrument_id=_optional_id(row.get("underlying_instrument_id")),
+                    expiry=_optional_datetime(row.get("expiry") or row.get("expiration_date")),
+                    strike=_optional_decimal(row.get("strike_price") or row.get("strike")),
+                    option_right=_optional_text(row.get("contract_type") or row.get("option_right")),
+                    multiplier=_optional_decimal(row.get("shares_per_contract") or row.get("multiplier")),
                     effective_from=effective_from,
                 )
             )
@@ -424,6 +429,26 @@ def _optional_decimal(value: object) -> Decimal | None:
         return Decimal(str(value))
     except (InvalidOperation, ValueError):
         return None
+
+
+def _optional_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        result = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        result = datetime.fromisoformat(f"{text}T00:00:00+00:00")
+    return result if result.tzinfo is not None else result.replace(tzinfo=timezone.utc)
+
+
+def _optional_id(value: object):
+    text = _optional_text(value)
+    return None if text is None else InstrumentId(text)
 
 
 __all__ = [

@@ -22,7 +22,11 @@ class IntentJournal:
         recorded = intent
         if intent.created_at is None and is_dataclass(intent):
             recorded = replace(intent, created_at=at)
-        state = IntentState(recorded)
+        state = IntentState(
+            recorded,
+            updated_at=at,
+            reason=getattr(recorded, "reason", ""),
+        )
         self._states[intent_id] = state
         self._events.append(IntentEvent(intent.intent_id, IntentEventKind.CREATED, at, reason=getattr(intent, "reason", "")))
         return state

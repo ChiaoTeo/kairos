@@ -26,6 +26,7 @@ class ExchangeName(str, Enum):
 class DriverName(str, Enum):
     ccxt = "ccxt"
     massive = "massive"
+    ibkr = "ibkr"
 
 
 class MarketCommandResources(Protocol):

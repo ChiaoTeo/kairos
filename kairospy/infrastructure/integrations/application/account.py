@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
-from kairospy.domain.account import AccountContext, AccountSnapshot, OpenOrderSnapshot
+from kairospy.domain.account import AccountContext, AccountMarketProfile, AccountSnapshot, OpenOrderSnapshot
+from kairospy.domain.reference import MarketRef
 from kairospy.domain.execution import ExecutionUpdate
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnection
 
@@ -24,6 +25,18 @@ class ConnectionAccountReadData:
 
 
 @dataclass(frozen=True, slots=True)
+class ConnectionAccountMarketProfileRequest:
+    context: AccountContext
+    market: MarketRef
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class ConnectionAccountMarketProfileData:
+    profile: AccountMarketProfile
+
+
+@dataclass(frozen=True, slots=True)
 class ConnectionAccountStreamRequest:
     context: AccountContext
     symbol: str | None = None
@@ -32,6 +45,12 @@ class ConnectionAccountStreamRequest:
 
 class AccountConnection(IntegrationConnection, Protocol):
     def read_account(self, request: ConnectionAccountReadRequest) -> ConnectionAccountReadData: ...
+
+    def read_market_profile(self, request: ConnectionAccountMarketProfileRequest) -> ConnectionAccountMarketProfileData: ...
+
+
+class AccountMarketProfileConnection(IntegrationConnection, Protocol):
+    def read_market_profile(self, request: ConnectionAccountMarketProfileRequest) -> ConnectionAccountMarketProfileData: ...
 
 
 class AccountStreamConnection(IntegrationConnection, Protocol):
@@ -45,8 +64,11 @@ class OrderUpdateConnection(IntegrationConnection, Protocol):
 __all__ = [
     "ConnectionAccountReadRequest",
     "ConnectionAccountReadData",
+    "ConnectionAccountMarketProfileData",
+    "ConnectionAccountMarketProfileRequest",
     "ConnectionAccountStreamRequest",
     "AccountConnection",
+    "AccountMarketProfileConnection",
     "AccountStreamConnection",
     "OrderUpdateConnection",
 ]

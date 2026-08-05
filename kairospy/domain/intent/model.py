@@ -187,6 +187,7 @@ def _next_status(status: IntentStatus, kind: IntentEventKind) -> IntentStatus:
         },
         IntentStatus.PLANNED: {
             IntentEventKind.ORDERING: IntentStatus.ORDERING,
+            IntentEventKind.SATISFIED: IntentStatus.SATISFIED,
             IntentEventKind.REJECTED: IntentStatus.REJECTED,
             IntentEventKind.CANCELED: IntentStatus.CANCELED,
             IntentEventKind.FAILED: IntentStatus.FAILED,

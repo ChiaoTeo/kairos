@@ -43,16 +43,46 @@ class AccountCurrentOutput:
             self._last_written[key] = marker
 
 
+class MonitorCurrentOutput:
+    """Persist Monitor-owned health snapshots as the current system artifact."""
+
+    def __init__(self, output: LaunchOutput) -> None:
+        self.output = output
+        self._last_marker: object | None = None
+
+    def publish_views(self, views: ViewStore, *, as_of: datetime | None = None) -> None:
+        health = views.get("system.health")
+        freshness = views.get("system.freshness")
+        operations = views.get("system.operations")
+        alerts = views.get("system.alerts")
+        marker = (as_of, repr(health), repr(freshness), repr(operations), repr(alerts))
+        if marker == self._last_marker:
+            return
+        self.output.update_current(
+            "system",
+            {
+                "health": health,
+                "freshness": freshness,
+                "operations": operations,
+                "alerts": alerts,
+            },
+        )
+        self._last_marker = marker
+
+
 class MonitorOutput:
     """Monitor-owned launch and timeline output."""
 
-    def __init__(self, output: LaunchOutput, *, timeline_sample_interval: str | timedelta | None = "1m") -> None:
+    def __init__(self, output: LaunchOutput, *, timeline_sample_interval: str | timedelta | None = "1m", monitor_actor: object | None = None) -> None:
         self.output = output
+        self.monitor_actor = monitor_actor
         self.account_current = AccountCurrentOutput(output)
+        self.system_current = MonitorCurrentOutput(output)
         self.timeline = TimelineProjector(output, sample_interval=timeline_sample_interval)
 
     def publish_started(self, views: ViewStore) -> None:
         self.account_current.publish_views(views)
+        self.system_current.publish_views(views)
         self.timeline.publish_views(views)
 
     def publish_cycle(self, cycle: object, views: ViewStore) -> None:
@@ -69,9 +99,13 @@ class MonitorOutput:
             )
         as_of = getattr(cycle, "as_of", None)
         self.account_current.publish_views(step_views, as_of=as_of)
+        self.system_current.publish_views(step_views, as_of=as_of)
         self.timeline.publish_views(step_views, as_of=as_of)
 
     def publish_connection_health(self, health: object) -> None:
+        observe = getattr(self.monitor_actor, "record_connection_health", None)
+        if callable(observe):
+            observe(health)
         payload = health if isinstance(health, dict) else {"status": "unknown", "details": health}
         self.output.update_current("system", {"connections": payload})
 
@@ -135,6 +169,10 @@ class MonitorOutputCoordinator:
         self.monitor_output.publish_cycle(cycle, views)
 
     def on_intents(self, intents: tuple[object, ...], context: object, hook: str) -> None:
+        observe = getattr(self.monitor_output, "monitor_actor", None)
+        record = getattr(observe, "record_intents", None)
+        if callable(record):
+            record(intents, context, hook)
         if self.pipeline is not None:
             self.pipeline.on_intents(intents, context, hook)
 
@@ -143,5 +181,6 @@ __all__ = [
     "AccountCurrentOutput",
     "MonitorOutput",
     "MonitorOutputCoordinator",
+    "MonitorCurrentOutput",
     "MonitorProjectionPipeline",
 ]

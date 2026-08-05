@@ -14,6 +14,10 @@ class ConnectionOrderOptions:
     time_in_force: str | None = None
     reduce_only: bool | None = None
     post_only: bool | None = None
+    position_side: str | None = None
+    close_position: bool | None = None
+    working_type: str | None = None
+    stop_price: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +36,7 @@ class ConnectionOrderSubmissionRequest:
 class ConnectionOrderSubmissionResult:
     order_venue_id: str
     status: str = ""
+    reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)

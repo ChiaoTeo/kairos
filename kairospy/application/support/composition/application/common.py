@@ -42,12 +42,21 @@ def reference_runtime(
     *,
     default_venue: str | None = None,
     default_market: str | None = None,
+    credential: str | None = None,
 ) -> ReferenceApplication:
     workspace = KairosWorkspace.resolve(start)
     venue = optional_default_text(default_venue)
     market = optional_default_text(default_market)
     source = None
-    if venue is None or venue.casefold() == ExchangeName.binance.value:
+    if (market or "").casefold() in {"option", "options"} or (venue is not None and venue.casefold() == "massive"):
+        source = reference_access(
+            "provider",
+            "massive",
+            market=market or "option",
+            driver_name=DriverName.massive,
+            credential=credential,
+        )
+    elif venue is None or venue.casefold() == ExchangeName.binance.value:
         source = reference_access(
             "exchange",
             ExchangeName.binance.value,
@@ -56,7 +65,7 @@ def reference_runtime(
         )
     return ReferenceApplication(
         SqliteReferenceStore(workspace.reference_root),
-        default_venue=venue or ExchangeName.binance.value,
+        default_venue="massive" if (market or "").casefold() in {"option", "options"} else (venue or ExchangeName.binance.value),
         default_market=market or "spot",
         source=source,
     )

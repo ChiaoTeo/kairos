@@ -9,6 +9,7 @@ class ProductFamily(StrEnum):
     USD_M_FUTURES = "usd_margined_futures"
     COIN_M_FUTURES = "coin_margined_futures"
     OPTIONS = "options"
+    EARN = "earn"
 
 
 __all__ = ["ProductFamily"]

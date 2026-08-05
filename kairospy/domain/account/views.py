@@ -49,6 +49,7 @@ class AccountViewKeys:
     books = "account.books"
     capabilities = "account.capabilities"
     fees = "account.fees"
+    market_profiles = "account.market_profiles"
     detail_prefix = "account.detail"
     portfolio_prefix = "account.portfolio"
     current_prefix = "account.current"
@@ -125,6 +126,12 @@ class AccountCapabilitiesView:
 class AccountFeesView:
     total_count: int = 0
     fees: tuple[AccountFeeSchedule, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AccountMarketProfilesView:
+    total_count: int = 0
+    profiles: tuple[object, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,6 +251,19 @@ class AccountViewReader:
         book = getattr(current, "book", None)
         return tuple(item for item in schedules if item.book == book)
 
+    def market_profile(self, account: AccountBookRef, market: object) -> object | None:
+        view = self.source.get(AccountViewKeys.market_profiles, None)
+        profiles = tuple(getattr(view, "profiles", ()) or ())
+        market_id = str(getattr(market, "market_id", market))
+        return next(
+            (
+                item for item in profiles
+                if getattr(getattr(item, "account", None), "book", None) == account
+                and str(getattr(getattr(item, "market", None), "market_id", "")) == market_id
+            ),
+            None,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class AccountScopeReader:
@@ -257,8 +277,8 @@ class AccountScopeReader:
         current_key = _account_view_key_for_account(self.source, self.account_key, book)
         return self.source.require(_detail_key_from_current_key(current_key))
 
-    def book(self, key: object | None = None) -> object:
-        return self.source.require(_account_view_key_for_account(self.source, self.account_key, key))
+    def book(self, key: object | None = None) -> "AccountBookScopeReader":
+        return AccountBookScopeReader(self.source, self.account_key, key)
 
     def overview(self) -> object:
         return self.source.require(_portfolio_view_key_for_account(self.source, self.account_key))
@@ -282,6 +302,69 @@ class AccountScopeReader:
         account_view = self.source.require(_account_view_key_for_account(self.source, self.account_key, book))
         selected = getattr(account_view, "book", None)
         return tuple(item for item in schedules if item.book == selected)
+
+
+@dataclass(frozen=True, slots=True)
+class AccountBookScopeReader:
+    source: AccountViewSource
+    account_key: str | int
+    book_key: object | None = None
+
+    def current(self) -> object:
+        return self.source.require(_account_view_key_for_account(self.source, self.account_key, self.book_key))
+
+    @property
+    def detail(self) -> object:
+        return self.source.require(_detail_key_from_current_key(_account_view_key_for_account(self.source, self.account_key, self.book_key)))
+
+    @property
+    def market(self) -> "AccountMarketCollectionReader":
+        return AccountMarketCollectionReader(self.source, self.account_key, self.book_key)
+
+    def fees(self) -> tuple[AccountFeeSchedule, ...]:
+        current = self.current()
+        selected = getattr(current, "book", None)
+        view = self.source.get(AccountViewKeys.fees, None)
+        return tuple(item for item in (getattr(view, "fees", ()) or ()) if item.book == selected)
+
+
+@dataclass(frozen=True, slots=True)
+class AccountMarketScopeReader:
+    source: AccountViewSource
+    account_key: str | int
+    book_key: object | None
+    market_ref: object
+
+    @property
+    def profile(self) -> object | None:
+        current = self.source.require(_account_view_key_for_account(self.source, self.account_key, self.book_key))
+        book = getattr(current, "book", None)
+        return AccountViewReader(self.source).market_profile(book, self.market_ref)
+
+    @property
+    def fee(self) -> object | None:
+        profile = self.profile
+        return None if profile is None else getattr(profile, "fee", None)
+
+    @property
+    def detail(self) -> object:
+        profile = self.profile
+        if profile is None:
+            raise KeyError(f"no account market profile is available for {self.market_ref}")
+        return profile
+
+
+@dataclass(frozen=True, slots=True)
+class AccountMarketCollectionReader:
+    source: AccountViewSource
+    account_key: str | int
+    book_key: object | None
+
+    def __call__(self, market: object) -> AccountMarketScopeReader:
+        return AccountMarketScopeReader(self.source, self.account_key, self.book_key, market)
+
+    def get(self, market: object) -> AccountMarketScopeReader:
+        return self(market)
 
 
 ACCOUNT_BOOKS_SCHEMA = ViewSchema(
@@ -316,6 +399,18 @@ ACCOUNT_FEES_SCHEMA = ViewSchema(
     ),
     mutability="runtime_writable",
     evidence="runtime account fee schedule index",
+)
+
+
+ACCOUNT_MARKET_PROFILES_SCHEMA = ViewSchema(
+    AccountViewKeys.market_profiles,
+    "account",
+    fields=(
+        ViewFieldSchema("total_count", "known account market profile count", "runtime state", "account port"),
+        ViewFieldSchema("profiles", "account and market fee/margin profiles", "runtime state", "account port"),
+    ),
+    mutability="runtime_writable",
+    evidence="runtime account market profile index",
 )
 
 
@@ -546,6 +641,7 @@ __all__ = [
     "ACCOUNT_BOOKS_SCHEMA",
     "ACCOUNT_CAPABILITIES_SCHEMA",
     "ACCOUNT_FEES_SCHEMA",
+    "ACCOUNT_MARKET_PROFILES_SCHEMA",
     "AccountBookSummary",
     "AccountBooksView",
     "AccountCapabilitiesView",
@@ -555,8 +651,12 @@ __all__ = [
     "EquityCurveView",
     "EquityCurvePoint",
     "AccountFeesView",
+    "AccountMarketProfilesView",
     "AccountPortfolioView",
     "AccountScopeReader",
+    "AccountBookScopeReader",
+    "AccountMarketScopeReader",
+    "AccountMarketCollectionReader",
     "AccountViewReader",
     "AccountViewKeys",
     "AccountViewSource",

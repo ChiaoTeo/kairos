@@ -212,6 +212,11 @@ class ExecutionCoordinator:
         self._release_reservation(state)
         return state
 
+    def reject_order(self, order_id: str, *, at: datetime, reason: str = "") -> OrderState:
+        state = self.orders.record(OrderEvent(order_id, OrderEventKind.REJECTED, at, reason=reason))
+        self._release_reservation(state)
+        return state
+
     def ingest_fill(self, report: FillReport) -> OrderState:
         state = self.orders.get(report.order_id)
         cumulative = report.cumulative_filled_quantity or state.filled_quantity + report.fill_quantity
@@ -270,7 +275,7 @@ class ExecutionCoordinator:
             )
         if update.kind is OrderEventKind.ACKNOWLEDGED and state.status is OrderStatus.ACKNOWLEDGED:
             return state
-        return self.orders.record(
+        updated = self.orders.record(
             OrderEvent(
                 state.request.order_id,
                 update.kind,
@@ -282,6 +287,9 @@ class ExecutionCoordinator:
                 reason=update.reason,
             )
         )
+        if updated.status in {OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED}:
+            self._release_reservation(updated)
+        return updated
 
     def _release_reservation(self, state: OrderState) -> None:
         reservation_id = state.request.reservation_id or state.request.order_id

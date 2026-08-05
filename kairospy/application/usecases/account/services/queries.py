@@ -5,12 +5,14 @@ from dataclasses import dataclass
 
 from kairospy.domain.account import (
     AccountBalance,
+    AccountBookRef,
     AccountFeeSchedule,
     AccountScopeReader,
     AccountViewReader,
     AccountViewSource,
     PositionSnapshot,
 )
+from kairospy.domain.reference import MarketRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +74,9 @@ class AccountQueryService:
 
     def fees(self, *, account: str | None = None) -> tuple[AccountFeeSchedule, ...]:
         return self.reader.fees(account=account)
+
+    def market_profile(self, account: AccountBookRef, market: MarketRef) -> object | None:
+        return self.reader.market_profile(account, market)
 
     def _selected_current(self, account: str | None) -> object:
         return self.current(account)

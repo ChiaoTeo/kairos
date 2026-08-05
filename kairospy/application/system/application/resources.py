@@ -18,6 +18,7 @@ from kairospy.application.usecases.strategy.protocol import Strategy
 class TradingSystemResources:
     input_streams: tuple[object, ...] = ()
     data: object | None = None
+    market_store: object | None = None
     account: object | None = None
     reference: object | None = None
     trading_execution: object | None = None

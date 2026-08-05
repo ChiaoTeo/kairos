@@ -6,6 +6,7 @@ this coordinator. Market/account/projector wiring stays behind this boundary.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -29,6 +30,10 @@ from kairospy.application.support.runtime.domain.commands import RuntimeCommand
 from kairospy.application.actor.support.base import BusinessActorSupervisor
 from kairospy.application.actor.support.commands import ActorCommandRouter
 from kairospy.application.actor.account.application import AccountActor
+from kairospy.application.actor.account.application.commands import (
+    ExecuteIntentCommand as AccountExecuteIntentCommand,
+    RecordIntentsCommand,
+)
 from kairospy.application.actor.account.application.projectors import AccountActorProjectors
 from kairospy.application.actor.market.application import MarketActor, reference_poll_interval
 from kairospy.application.actor.market.application.projectors import MarketActorProjectors
@@ -36,6 +41,9 @@ from kairospy.application.actor.risk.application import RiskActor
 from kairospy.application.actor.risk.application.projectors import RiskActorProjectors
 from kairospy.application.actor.monitor.application import MonitorActor
 from kairospy.domain.intent import IntentJournal, TradeIntent
+
+
+_LOGGER = logging.getLogger("kairospy.system")
 
 
 @dataclass(slots=True)
@@ -58,6 +66,9 @@ class SystemBusinessRuntime:
     topology: MessageTopology | None = None
     message_policy: MessageDeliveryPolicy | None = None
     runtime: object | None = None
+    _strategy_callbacks_logged: set[str] = field(default_factory=set)
+    _pending_async_intents: list[object] = field(default_factory=list)
+    _processing_async_event: bool = False
 
     @property
     def intents(self) -> IntentJournal:
@@ -117,23 +128,33 @@ class SystemBusinessRuntime:
         runtime = self.runtime
         if runtime is None:
             raise RuntimeError("business runtime is not bound")
+        self._processing_async_event = True
+        self._pending_async_intents.clear()
         # AccountActor is the owner of account snapshots, order state and
         # intent transitions.  Projectors below only observe the resulting
         # state and publish views.
-        if self.actor_supervisor is not None and event.topic in {
-            "account.snapshot",
-            "execution.update",
-            "market.refresh.requested",
-            "reference.refresh.requested",
-            "account.refresh.requested",
-            "execution.refresh.requested",
-            "risk.requested",
-        }:
+        if self.actor_supervisor is not None and (
+            event.domain == "market"
+            or event.topic in {
+                "account.snapshot",
+                "account.market_profile.refresh",
+                "execution.update",
+                "market.refresh.requested",
+                "reference.refresh.requested",
+                "account.refresh.requested",
+                "execution.refresh.requested",
+                "risk.requested",
+                "reference.catalog.changed",
+            }
+        ):
             await self.actor_supervisor.dispatch(event)
         if self.topology is not None:
             await self.topology.dispatch(event)
-        result = self._process_runtime_event(runtime, event)
-        return result
+        try:
+            return await self._process_runtime_event_async(runtime, event)
+        finally:
+            self._processing_async_event = False
+            self._pending_async_intents.clear()
 
     def on_message(self, event: Message) -> RuntimeInstruction:
         self.command_router.apply_event(event)
@@ -148,7 +169,13 @@ class SystemBusinessRuntime:
             raise RuntimeError("intent emission requires a timestamp")
         if self.account_actor is None:
             raise RuntimeError("account actor has not been composed")
-        self.account_actor.record_intent(intent, at=at)
+        if self._processing_async_event:
+            # Strategy callbacks are synchronous, so the command is collected
+            # here and submitted after the callback returns.  The actual
+            # mutation still happens through AccountActor.ask().
+            self._pending_async_intents.append(intent)
+            return
+        self.account_actor.apply_command(RecordIntentsCommand((intent,), at))
         event = getattr(context, "event", None)
         hook = _strategy_hook(event) if isinstance(event, Message) else "on_data"
         self.output.on_intents((intent,), context, hook)
@@ -164,11 +191,32 @@ class SystemBusinessRuntime:
         at = getattr(context, "now", None) or event.time
         if self.account_actor is None:
             raise RuntimeError("account actor has not been composed")
-        self.account_actor.record_intents(intents, at=at)
-        for intent in intents:
+        collected = tuple(intents)
+        self.account_actor.apply_command(RecordIntentsCommand(collected, at))
+        for intent in collected:
             if isinstance(intent, TradeIntent):
-                self.account_actor.execute_intent(intent, context)
-        self.output.on_intents(intents, context, hook)
+                self.account_actor.apply_command(AccountExecuteIntentCommand(intent, context))
+        self.output.on_intents(collected, context, hook)
+        return RuntimeInstruction()
+
+    async def _on_strategy_result_async(
+        self,
+        event: Message,
+        *,
+        hook: str,
+        intents: tuple[object, ...],
+        context: object,
+    ) -> RuntimeInstruction:
+        if self.account_actor is None:
+            raise RuntimeError("account actor has not been composed")
+        at = getattr(context, "now", None) or event.time
+        collected = tuple(dict.fromkeys((*self._pending_async_intents, *intents)))
+        if collected:
+            await self.account_actor.dispatch_command(RecordIntentsCommand(collected, at))
+        for intent in collected:
+            if isinstance(intent, TradeIntent):
+                await self.account_actor.dispatch_command(AccountExecuteIntentCommand(intent, context))
+        self.output.on_intents(collected, context, hook)
         return RuntimeInstruction()
 
     def detach(self) -> None:
@@ -194,6 +242,47 @@ class SystemBusinessRuntime:
                 if result_instruction.action == "stop":
                     runtime.stop()
         for cycle in cycles:
+            if cycle.dispatched and cycle.hook not in self._strategy_callbacks_logged:
+                self._strategy_callbacks_logged.add(cycle.hook)
+                _LOGGER.info(
+                    "system=%s phase=strategy_callback hook=%s event_sequence=%s intents=%d",
+                    getattr(runtime, "launch_id", "-"),
+                    cycle.hook,
+                    event.sequence,
+                    len(tuple(getattr(cycle.output, "intents", ()))),
+                )
+            self.output.publish_cycle(cycle, runtime.views)
+        return cycles
+
+    async def _process_runtime_event_async(self, runtime: LaunchRuntimeSession, event: Message) -> tuple[RuntimeCycle, ...]:
+        instruction = self.on_message(event)
+        if not instruction.dispatch_strategy:
+            if instruction.action == "stop":
+                runtime.stop()
+            cycles = (runtime.observe(event),)
+        else:
+            cycle = runtime.process(event, hook=instruction.strategy_hook)
+            cycles = (cycle,)
+            if cycle.dispatched:
+                output = cycle.output
+                result_instruction = await self._on_strategy_result_async(
+                    event,
+                    hook=getattr(output, "hook", cycle.hook),
+                    intents=tuple(getattr(output, "intents", ())),
+                    context=getattr(output, "context", None),
+                )
+                if result_instruction.action == "stop":
+                    runtime.stop()
+        for cycle in cycles:
+            if cycle.dispatched and cycle.hook not in self._strategy_callbacks_logged:
+                self._strategy_callbacks_logged.add(cycle.hook)
+                _LOGGER.info(
+                    "system=%s phase=strategy_callback hook=%s event_sequence=%s intents=%d",
+                    getattr(runtime, "launch_id", "-"),
+                    cycle.hook,
+                    event.sequence,
+                    len(tuple(getattr(cycle.output, "intents", ()))) + len(self._pending_async_intents),
+                )
             self.output.publish_cycle(cycle, runtime.views)
         return cycles
 
@@ -223,11 +312,21 @@ class SystemApplication:
         if callable(ensure_ready):
             ensure_ready()
         market_source = getattr(components, "market", None)
-        market_service = build_market_application(market_source)
+        market_service = build_market_application(market_source, store=getattr(resources, "market_store", None))
         account_runtime = getattr(components, "account", None)
         account_service = build_account_application(account_runtime)
         execution_runtime = execution_coordinator(components)
+        risk_application = getattr(execution_runtime, "risk", None)
+        # In the Actor composition RiskActor is the sole mutable owner of the
+        # risk ledger.  Standalone ExecutionApplication composition keeps its
+        # synchronous risk option for CLI/tests; this runtime path does not.
+        if execution_runtime is not None and hasattr(execution_runtime, "risk"):
+            execution_runtime.risk = None
         execution_source = getattr(components, "execution", None)
+        monitor_actor = None if message_bus is None else MonitorActor(strategy_id=strategy_id, bus=message_bus)
+        set_market_reference = getattr(execution_source, "set_market_reference", None)
+        if callable(set_market_reference):
+            set_market_reference(reference)
         account_owner = AccountActor(
             account_runtime,
             message_bus,
@@ -239,7 +338,6 @@ class SystemApplication:
         capabilities = compose_account_capabilities(
             AccountActorDependencies(
                 intents=intents,
-                market_service=market_service,
                 account_service=account_service,
                 account_snapshot_store=account_runtime,
                 account=account_runtime,
@@ -248,14 +346,14 @@ class SystemApplication:
                 trading_execution=getattr(components, "execution", None),
                 execution_coordinator=execution_runtime,
                 fills_source=getattr(components, "execution", None),
-                risk=getattr(execution_runtime, "risk", None),
-                reference=reference,
+                risk=None,
             )
         )
         command_router = ActorCommandRouter()
         artifact_projector = MonitorOutput(
             artifact_output,
             timeline_sample_interval=timeline_sample_interval,
+            monitor_actor=monitor_actor,
         )
         poll_interval = reference_poll_interval(
             normalized_config if isinstance(normalized_config, dict) else None
@@ -274,7 +372,8 @@ class SystemApplication:
                 projectors=MarketActorProjectors(market=market_service, reference=reference),
             )
         )
-        risk_actor = None if message_bus is None or getattr(capabilities, "risk", None) is None else RiskActor(capabilities.risk, projectors=RiskActorProjectors(capabilities.risk))
+        risk_actor = None if message_bus is None or risk_application is None else RiskActor(risk_application, bus=message_bus, projectors=RiskActorProjectors(risk_application))
+        account_owner.risk_actor = risk_actor
         runtime_account_actor = (
             account_owner
             if message_bus is not None and (callable(getattr(account_runtime, "events", None)) or callable(getattr(execution_source, "events", None)))
@@ -288,14 +387,17 @@ class SystemApplication:
             account=capabilities.account,
             execution=capabilities.execution,
         )
-        monitor_actor = None if message_bus is None else MonitorActor(strategy_id=strategy_id)
-        business_actors = tuple(actor for actor in (market_actor, account_owner, risk_actor, monitor_actor) if actor is not None)
+        if monitor_actor is not None:
+            monitor_actor.bind_actor_sources(tuple(actor for actor in (market_actor, risk_actor, account_owner) if actor is not None))
+        # AccountActor awaits RiskActor for reservation decisions, so the
+        # dependency is started before the account event loops.
+        business_actors = tuple(actor for actor in (market_actor, risk_actor, account_owner, monitor_actor) if actor is not None)
         output = MonitorOutputCoordinator(actors=business_actors, monitor_output=artifact_projector)
         actor_supervisor = BusinessActorSupervisor(business_actors, monitor=monitor_actor)
         topology = MessageTopology()
         message_policy = MessageDeliveryPolicy()
         if market_actor is not None:
-            actor_supervisor.route("*", market_actor)
+            actor_supervisor.route_domain("market", market_actor)
             command_router.register(
                 "market.subscribe",
                 "market.subscribe.batch",
@@ -304,17 +406,17 @@ class SystemApplication:
             )
             actor_supervisor.route("market.refresh.requested", market_actor)
             actor_supervisor.route("reference.refresh.requested", market_actor)
+            actor_supervisor.route("reference.catalog.changed", market_actor)
         if runtime_account_actor is not None:
-            actor_supervisor.route("*", runtime_account_actor)
+            actor_supervisor.route_domain("market", runtime_account_actor)
             actor_supervisor.route("account.refresh.requested", runtime_account_actor)
             actor_supervisor.route("execution.refresh.requested", runtime_account_actor)
             actor_supervisor.route("account.snapshot", runtime_account_actor)
             actor_supervisor.route("execution.update", runtime_account_actor)
         if risk_actor is not None:
-            actor_supervisor.route("*", risk_actor)
+            actor_supervisor.route("risk.requested", risk_actor)
         if monitor_actor is not None:
             actor_supervisor.route("*", monitor_actor)
-            actor_supervisor.route("risk.requested", risk_actor)
         message_subscription = None if message_bus is None else message_bus.open_inbox(maxsize=1024)  # type: ignore[union-attr]
         return SystemBusinessRuntime(
             output=output,

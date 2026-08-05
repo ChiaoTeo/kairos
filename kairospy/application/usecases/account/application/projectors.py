@@ -14,6 +14,7 @@ from kairospy.domain.account import (
     ACCOUNT_CAPABILITIES_SCHEMA,
     ACCOUNT_EQUITY_CURVE_SCHEMA,
     ACCOUNT_FEES_SCHEMA,
+    ACCOUNT_MARKET_PROFILES_SCHEMA,
     AccountBalance,
     AccountBookRef,
     AccountBookSummary,
@@ -26,6 +27,7 @@ from kairospy.domain.account import (
     AccountEvent,
     AccountEventKind,
     AccountFeesView,
+    AccountMarketProfilesView,
     AccountPortfolioView,
     AccountSnapshot,
     AccountViewKeys,
@@ -40,9 +42,10 @@ from kairospy.domain.reference import MarketId, reference_slug
 
 
 class AccountCurrentProjector:
-    def __init__(self, service: RuntimeAccountService, context: AccountContext) -> None:
+    def __init__(self, service: RuntimeAccountService, context: AccountContext, execution: object | None = None) -> None:
         self.service = service
         self.context = context
+        self.execution = execution
         self.key = AccountViewKeys.current(context)
         self.detail_key = AccountViewKeys.detail(context)
         self.schema = account_current_schema(self.key)
@@ -68,6 +71,10 @@ class AccountCurrentProjector:
             self._latest = value
 
     def view(self) -> AccountCurrentView:
+        orders = getattr(self.execution, "orders", None)
+        pending_orders = () if not callable(orders) else tuple(
+            order for order in orders(self.context.book) if not order.status.terminal
+        )
         return self.service.current_view(
             self.context,
             event_count=self._count,
@@ -75,6 +82,7 @@ class AccountCurrentProjector:
             payload=self._payload,
             latest_equity=self._latest,
             initial_equity=self._initial,
+            pending_orders=pending_orders,
         )
 
     def detail(self) -> AccountDetailView:
@@ -87,10 +95,10 @@ class AccountCurrentProjector:
 
 
 class AccountProjector:
-    def __init__(self, service: RuntimeAccountService) -> None:
+    def __init__(self, service: RuntimeAccountService, execution: object | None = None) -> None:
         self.service = service
         self.directory = service.directory()
-        self.states = tuple(AccountCurrentProjector(service, context) for context in self.directory.contexts())
+        self.states = tuple(AccountCurrentProjector(service, context, execution) for context in self.directory.contexts())
 
     def on_event(self, event: Message) -> None:
         for state in self.states:
@@ -100,7 +108,7 @@ class AccountProjector:
         return None
 
     def register_views(self, views: ViewStore) -> None:
-        for schema in (ACCOUNT_BOOKS_SCHEMA, ACCOUNT_CAPABILITIES_SCHEMA, ACCOUNT_FEES_SCHEMA):
+        for schema in (ACCOUNT_BOOKS_SCHEMA, ACCOUNT_CAPABILITIES_SCHEMA, ACCOUNT_FEES_SCHEMA, ACCOUNT_MARKET_PROFILES_SCHEMA):
             if views.registry.get(schema.key) is None:
                 views.register(schema)
         for state in self.states:
@@ -116,6 +124,8 @@ class AccountProjector:
         views.put_runtime(AccountViewKeys.books, self._books(), as_of=as_of, available_time=as_of)
         views.put_runtime(AccountViewKeys.capabilities, self._capabilities(), as_of=as_of, available_time=as_of)
         views.put_runtime(AccountViewKeys.fees, AccountFeesView(len(self.service.fees()), self.service.fees()), as_of=as_of, available_time=as_of)
+        profiles = tuple(self.service.market_profiles())
+        views.put_runtime(AccountViewKeys.market_profiles, AccountMarketProfilesView(len(profiles), profiles), as_of=as_of, available_time=as_of)
         current = []
         for state in self.states:
             item = state.view()

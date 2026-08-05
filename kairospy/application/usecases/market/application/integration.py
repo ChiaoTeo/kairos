@@ -93,6 +93,7 @@ class MarketDataConnection(Protocol):
         since: object | None = None,
         until: object | None = None,
         limit: int = 1000,
+        adapter_options: Mapping[str, object] | None = None,
     ) -> Iterable[Bar]:
         ...
 

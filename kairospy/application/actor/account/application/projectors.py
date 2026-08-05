@@ -15,10 +15,10 @@ from kairospy.domain.intent import IntentJournal
 
 class AccountActorProjectors:
     def __init__(self, *, strategy_id: str, intents: IntentJournal, account: object | None = None, execution: object | None = None, risk: object | None = None) -> None:
-        self.account = None if account is None else AccountProjector(account)  # type: ignore[arg-type]
+        self.account = None if account is None else AccountProjector(account, execution=execution)  # type: ignore[arg-type]
         self.funding = _funding(account)
         self.equity = _equity(account)
-        self.execution = None if execution is None or not getattr(execution, "has_projection", False) or not getattr(execution, "has_updates", False) else ExecutionProjector(execution)  # type: ignore[arg-type]
+        self.execution = None if execution is None or not getattr(execution, "has_projection", False) or not getattr(execution, "has_updates", False) else ExecutionProjector(service=execution)  # type: ignore[arg-type]
         self.order = None if execution is None or not getattr(execution, "has_projection", False) else OrderProjector(execution)  # type: ignore[arg-type]
         self.intent = IntentProjector(strategy_id=strategy_id, intents=intents)
 

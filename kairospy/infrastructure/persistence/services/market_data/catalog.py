@@ -85,6 +85,35 @@ class MarketDataCatalog:
             for path in sorted(self.aliases_root.glob("*.ref"))
         }
 
+    def read_metadata(self, key: str) -> dict[str, object] | None:
+        """Read small durable application metadata alongside datasets."""
+        path = self.root / "metadata.json"
+        if not path.exists():
+            return None
+        try:
+            values = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        value = values.get(key) if isinstance(values, dict) else None
+        return dict(value) if isinstance(value, dict) else None
+
+    def write_metadata(self, key: str, value: Mapping[str, object]) -> None:
+        """Atomically update one application metadata entry."""
+        path = self.root / "metadata.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        values: dict[str, object] = {}
+        if path.exists():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    values = loaded
+            except (OSError, json.JSONDecodeError):
+                values = {}
+        values[key] = dict(value)
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(values, sort_keys=True), encoding="utf-8")
+        temporary.replace(path)
+
     def write(
         self,
         dataset: object,

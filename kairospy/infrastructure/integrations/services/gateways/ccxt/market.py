@@ -63,13 +63,16 @@ class CcxtMarketConnection(Connection):
         since: datetime | None = None,
         until: datetime | None = None,
         limit: int = 1000,
+        adapter_options: Mapping[str, object] | None = None,
     ) -> Iterable[Bar]:
-        rows = self._client().fetch_ohlcv(
-            self._symbol(symbol),
-            timeframe=timeframe,
-            since=None if since is None else int(since.timestamp() * 1000),
-            limit=limit,
-        )
+        kwargs = {
+            "timeframe": timeframe,
+            "since": None if since is None else int(since.timestamp() * 1000),
+            "limit": limit,
+        }
+        if adapter_options:
+            kwargs["params"] = dict(adapter_options)
+        rows = self._client().fetch_ohlcv(self._symbol(symbol), **kwargs)
         for row in rows or ():
             if not isinstance(row, (list, tuple)) or len(row) < 6:
                 continue
@@ -294,7 +297,7 @@ def _exchange_id(spec: IntegrationConnectionSpec) -> str:
 
 
 def _ccxt_market_type(product: ProductFamily | None, exchange_id: str) -> str:
-    if product is ProductFamily.USD_M_FUTURES:
+    if product in {ProductFamily.USD_M_FUTURES, ProductFamily.COIN_M_FUTURES}:
         return "future" if exchange_id == "binance" else "swap"
     return "spot"
 

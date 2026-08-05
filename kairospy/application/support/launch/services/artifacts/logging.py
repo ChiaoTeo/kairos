@@ -30,8 +30,13 @@ class LaunchOutputLog(AbstractContextManager["LaunchOutputLog"]):
         out = _TeeTextIO(self._file, self.stdout) if self.stdout is not None else self._file
         err = _TeeTextIO(self._file, self.stderr) if self.stderr is not None else self._file
         self._logging_handler = logging.StreamHandler(err)
+        self._logging_handler.setLevel(logging.INFO)
         self._logging_handler.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s"))
-        logging.getLogger().addHandler(self._logging_handler)
+        root_logger = logging.getLogger()
+        self._root_level = root_logger.level
+        if self._root_level > logging.INFO:
+            root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(self._logging_handler)
         self._stdout_redirect = redirect_stdout(out)
         self._stderr_redirect = redirect_stderr(err)
         self._stdout_redirect.__enter__()
@@ -41,7 +46,9 @@ class LaunchOutputLog(AbstractContextManager["LaunchOutputLog"]):
     def __exit__(self, exc_type, exc_value, traceback) -> bool | None:
         try:
             if self._logging_handler is not None:
-                logging.getLogger().removeHandler(self._logging_handler)
+                root_logger = logging.getLogger()
+                root_logger.removeHandler(self._logging_handler)
+                root_logger.setLevel(self._root_level)
                 self._logging_handler.flush()
             if self._stderr_redirect is not None:
                 self._stderr_redirect.__exit__(exc_type, exc_value, traceback)

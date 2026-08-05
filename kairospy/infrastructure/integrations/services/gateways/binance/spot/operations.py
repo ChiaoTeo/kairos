@@ -33,6 +33,14 @@ class BinanceSpotAccountOperations:
             raise ValueError("Binance trade query requires a symbol")
         return self.client.get("/api/v3/myTrades", params={"symbol": symbol, "limit": limit}, signed=True)
 
+    def trade_fee(self, *, symbol: str) -> object:
+        if not symbol.strip():
+            raise ValueError("Binance trade fee query requires a symbol")
+        return self.client.get("/sapi/v1/asset/tradeFee", params={"symbol": symbol}, signed=True)
+
+    def bnb_burn_status(self) -> object:
+        return self.client.get("/sapi/v1/bnbBurn", signed=True)
+
     def create_listen_key(self) -> str:
         payload = self.client.post("/api/v3/userDataStream", signed=False)
         if not isinstance(payload, Mapping) or not isinstance(payload.get("listenKey"), str):

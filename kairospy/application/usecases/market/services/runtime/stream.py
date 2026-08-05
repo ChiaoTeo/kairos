@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from datetime import datetime, timezone
 from typing import Mapping
 
@@ -10,6 +10,9 @@ from kairospy.application.usecases.market.application.data import DataSubscripti
 from kairospy.application.usecases.market.application.feed import MarketStreamConnection
 from kairospy.application.actor.support.connections import ConnectionManager
 from kairospy.domain.market import MarketEvent
+from kairospy.domain.market import MarketSubject, Bar
+from kairospy.domain.reference import MarketResolver
+from kairospy.application.usecases.market.domain.specs import MarketDataSpec
 from kairospy.application.usecases.market.application.feed import MarketFeedApplicationService
 
 from kairospy.application.usecases.market.services.runtime.view import RuntimeMarketDataServiceView
@@ -28,6 +31,8 @@ class MarketRuntimeService:
         stream_connections: Mapping[str, MarketStreamConnection] | None = None,
         market_service: MarketApplication | None = None,
         integration_runtime: object | None = None,
+        warmup_specs: Iterable[MarketDataSpec] = (),
+        warmup_client_factory: object | None = None,
     ) -> None:
         if source is None and feed is None and feed_resolver is None and not stream_connections and integration_runtime is None:
             raise ValueError(f"{mode_label} market data service requires a runtime source or integration feed")
@@ -40,6 +45,8 @@ class MarketRuntimeService:
         self.stream_connections = dict(stream_connections or {})
         self.market_service = market_service
         self.integration_runtime = integration_runtime
+        self.warmup_specs = tuple(warmup_specs)
+        self.warmup_client_factory = warmup_client_factory
         self._sequence = 0
         self._stop_signal: object | None = None
         if self.feed is not None and self.connections is not None:
@@ -73,6 +80,135 @@ class MarketRuntimeService:
 
     def clear_market_service(self) -> None:
         self.market_service = None
+
+    def warmup_events(
+        self,
+        *,
+        stop_requested: Callable[[], bool] | None = None,
+        progress: Callable[[int, int, MarketDataSpec, str], None] | None = None,
+        failure: Callable[[MarketDataSpec, Exception], None] | None = None,
+    ) -> tuple[Message, ...]:
+        """Load historical bars before the strategy runtime starts.
+
+        Warmup is deliberately synchronous: the Market Actor invokes it before
+        ``StrategyRuntimeSession.start()``, so ``on_start`` sees a complete
+        initial projection.  Live updates still arrive through the normal
+        Market Actor event loop afterwards.
+        """
+        messages: list[Message] = []
+        sequence = 0
+        failed = 0
+        specs = tuple(self.warmup_specs or self._subscription_warmup_specs())
+        total = len(specs)
+        for index, spec in enumerate(specs, start=1):
+            if stop_requested is not None and stop_requested():
+                if progress is not None:
+                    progress(index, total, spec, "stopped")
+                break
+            if progress is not None:
+                progress(index, total, spec, "checking")
+            try:
+                client = self._warmup_client(spec)
+                if client is None:
+                    raise RuntimeError(f"market warmup has no historical client for {spec.symbol}")
+                cached = getattr(self.market_service, "ensure_bars", None)
+                values = cached(spec, client) if callable(cached) and getattr(self.market_service, "has_historical_store", False) else self._fetch_bars(spec, client)
+                ref = MarketResolver(default_venue=spec.venue, default_market=spec.market).resolve(
+                    spec.symbol, venue=spec.venue, market=spec.market
+                )
+                values = tuple(values)
+                for value in values:
+                    if not isinstance(value, Bar):
+                        raise TypeError("market warmup historical client must return domain Bar values")
+                    sequence += 1
+                    event = MarketEvent(
+                        subject=MarketSubject("market", ref.market_id),
+                        observed_at=value.time,
+                        available_at=value.time,
+                        value=value,
+                        source="historical",
+                        sequence=sequence,
+                    )
+                    messages.append(self._message(event.kind, event))
+                if progress is not None:
+                    progress(index, total, spec, "ready" if values else "empty")
+            except Exception as error:
+                failed += 1
+                if failure is not None:
+                    failure(spec, error)
+                if progress is not None:
+                    progress(index, total, spec, "failed")
+                # One unavailable contract must not prevent the strategy from
+                # starting with the rest of its view and the live stream.
+                continue
+        if progress is not None and failed and specs:
+            progress(total, total, specs[-1], f"degraded failed={failed}")
+        return tuple(messages)
+
+    def _fetch_bars(self, spec: MarketDataSpec, client: object) -> Iterable[Bar]:
+        fetch = getattr(client, "bars", None)
+        if not callable(fetch):
+            raise TypeError("market warmup historical client must provide bars()")
+        return fetch(
+            spec.symbol,
+            timeframe=spec.timeframe or "1m",
+            since=spec.start,
+            until=spec.end,
+            limit=spec.limit or 1000,
+        )
+
+    def _subscription_warmup_specs(self) -> tuple[MarketDataSpec, ...]:
+        """Translate strategy-declared historical params into market specs."""
+        service = self.market_service
+        if service is None:
+            return ()
+        subscriptions = getattr(getattr(service, "subscriptions", None), "subscriptions", None)
+        if not callable(subscriptions):
+            return ()
+        specs: list[MarketDataSpec] = []
+        for subscription in subscriptions():
+            subscription_spec = subscription.spec
+            params = subscription_spec.params
+            start = params.get("history_start", params.get("warmup_start"))
+            end = params.get("history_end", params.get("warmup_end"))
+            if start is None or end is None:
+                continue
+            for selector in subscription_spec.selectors:
+                model = getattr(selector, "model", selector)
+                model_name = getattr(model, "__name__", "")
+                if model_name == "Bar":
+                    timeframe = getattr(selector, "interval", None) or "1m"
+                elif model_name == "Quote" and params.get("history_timeframe") is not None:
+                    timeframe = str(params["history_timeframe"])
+                else:
+                    continue
+                specs.append(MarketDataSpec(
+                    symbol=str(subscription_spec.market.source_symbol),
+                    kind="ohlcv",
+                    venue=str(subscription_spec.market.venue),
+                    market=str(subscription_spec.market.market),
+                    timeframe=timeframe,
+                    start=start,
+                    end=end,
+                    limit=int(params.get("history_limit", params.get("warmup_limit", 1000))),
+                ))
+        return tuple(specs)
+
+    def _warmup_client(self, spec: MarketDataSpec) -> object | None:
+        factory = self.warmup_client_factory
+        if callable(factory):
+            return factory(spec)
+        if factory is not None:
+            return factory
+        runtime = self.integration_runtime
+        if runtime is None:
+            return None
+        create_data = getattr(runtime, "create_data", None)
+        if not callable(create_data):
+            return None
+        from kairospy.application.usecases.market.application.integration import MarketDataConnectionRequest
+
+        return create_data(MarketDataConnectionRequest(spec))
 
     async def events(self) -> AsyncIterator[Message]:
         if (self.stream_connections or self.feed is not None or self.feed_resolver is not None or self.integration_runtime is not None) and self.subscriptions():

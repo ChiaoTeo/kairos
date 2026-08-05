@@ -9,10 +9,11 @@ from kairospy.application.support.runtime.application.interaction import SystemC
 from kairospy.application.support.runtime.application.views import ViewStore
 from kairospy.application.support.runtime.domain.commands import CommandHandle, RuntimeCommand
 from kairospy.application.usecases.account.application.queries import AccountQueryService
-from kairospy.domain.intent import Intent, TradeIntent, target_position_intent
+from kairospy.domain.intent import Intent, IntentJournalView, IntentViewKeys, TradeIntent, target_position_intent
 from kairospy.domain.market import MarketViewReader
 from kairospy.domain.reference import MarketResolver
 from kairospy.application.usecases.strategy.protocol import StrategyReferenceCapability, StrategySubscriptionGroupRequest, StrategySubscriptionRequest
+from kairospy.application.usecases.strategy.application.option_chain import OptionChainView, build_option_chain_view
 
 
 class StrategyContext:
@@ -87,6 +88,11 @@ class StrategyContext:
         return AccountQueryService(self.views)
 
     @property
+    def intents(self) -> IntentJournalView | None:
+        """Current read-only Intent projection for this strategy."""
+        return self.views.get(IntentViewKeys.system_intents)
+
+    @property
     def reference(self) -> StrategyReferenceCapability:
         if self._reference is None:
             raise RuntimeError("strategy reference capability is not available")
@@ -138,6 +144,14 @@ class StrategyContext:
     def market(self) -> MarketViewReader:
         return MarketViewReader(self.views)
 
+    def option_chain(self, contracts: Sequence[object], *, underlying: Decimal | str | int | float | None = None) -> OptionChainView:
+        typed = tuple(item for item in contracts if hasattr(item, "market"))
+        return build_option_chain_view(
+            typed,  # type: ignore[arg-type]
+            self.market,
+            underlying=None if underlying is None else Decimal(str(underlying)),
+        )
+
     def submit(self, command: RuntimeCommand) -> SystemCallResult:
         if self.system_call is None:
             raise RuntimeError("strategy context has no system call")
@@ -150,6 +164,7 @@ class StrategyContext:
         *,
         selectors: Sequence[object],
         identity: str | None = None,
+        params: Mapping[str, object] | None = None,
     ) -> SystemCallResult:
         ...
 
@@ -162,6 +177,7 @@ class StrategyContext:
         exchange: str | None = None,
         market_type: str | None = None,
         identity: str | None = None,
+        params: Mapping[str, object] | None = None,
     ) -> SystemCallResult:
         ...
 
@@ -173,6 +189,7 @@ class StrategyContext:
         exchange: str | None = None,
         market_type: str | None = None,
         identity: str | None = None,
+        params: Mapping[str, object] | None = None,
     ) -> SystemCallResult:
         selected_markets = getattr(subject, "markets", None)
         request = StrategySubscriptionRequest(
@@ -181,6 +198,7 @@ class StrategyContext:
             exchange=None if exchange is None else str(exchange),
             market_type=None if market_type is None else str(market_type),
             identity=identity,
+            params={} if params is None else params,
         )
         if selected_markets is not None:
             requests = tuple(
@@ -190,6 +208,7 @@ class StrategyContext:
                     exchange=request.exchange,
                     market_type=request.market_type,
                     identity=request.identity,
+                    params=request.params,
                 )
                 for market in tuple(selected_markets)
             )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Mapping, Protocol
 
@@ -14,6 +15,9 @@ from kairospy.application.support.runtime.domain.commands import RuntimeCommand
 from kairospy.application.support.launch.domain.identity import LaunchIdentity
 from kairospy.application.system.protocol import SystemBusinessRuntime
 from kairospy.application.usecases.strategy.application.runtime import build_strategy_dispatcher
+
+
+_LOGGER = logging.getLogger("kairospy.system")
 
 
 class SystemSpec(Protocol):
@@ -45,10 +49,12 @@ class TradingSystem:
     def start(self) -> "TradingSystemSession":
         if self._session is not None:
             return self._session
+        _LOGGER.info("system=%s phase=starting mode=%s", self.spec.launch_id, getattr(self.spec.mode, "value", self.spec.mode))
         resources = self.spec.resources
         lifecycle = self.spec.lifecycle or NoopTradingLifecycle()
         try:
             lifecycle.prepare()
+            _LOGGER.info("system=%s phase=lifecycle_prepared", self.spec.launch_id)
             assembly = getattr(resources, "assembly", None)
             if assembly is None:
                 raise RuntimeError("TradingSystem requires a runtime assembly supplied by composition")
@@ -65,6 +71,7 @@ class TradingSystem:
                 normalized_config=self.spec.normalized_config,
                 message_bus=getattr(resources, "message_bus", None),
             )
+            _LOGGER.info("system=%s phase=business_composed", self.spec.launch_id)
             self._business = business
             business.attach(views=stores.views)
             runtime_session = create_runtime_session(
@@ -76,12 +83,14 @@ class TradingSystem:
                     reference=resources.reference,
                 )
             )
+            _LOGGER.info("system=%s phase=strategy_on_start_completed", self.spec.launch_id)
             runtime_session = LaunchRuntimeSession(
                 launch_id=self.spec.launch_id,
                 mode=self.spec.mode,
                 session=runtime_session,
             )
             business.bind_runtime(runtime_session)
+            _LOGGER.info("system=%s phase=runtime_bound strategy=%s", self.spec.launch_id, self.spec.strategy.strategy_id)
             self._session = TradingSystemSession(
                 system=self,
                 session=runtime_session,
@@ -127,6 +136,7 @@ class TradingSystem:
         if session is None:
             return
         session.stop()
+        _LOGGER.info("system=%s phase=stopped", self.spec.launch_id)
         if self._business is not None:
             self._business.detach()
         self._session = None
@@ -222,7 +232,9 @@ async def _launch_with_artifacts(session: TradingSystemSession) -> LaunchRuntime
     subscription = session.business.message_inbox()
     if subscription is None:
         raise ValueError("SystemBusinessRuntime must expose a MessageBus subscription")
+    _LOGGER.info("system=%s phase=actors_starting", session.launch_id)
     await session.business.start_actors()
+    _LOGGER.info("system=%s phase=actors_started", session.launch_id)
     input_streams = tuple(getattr(session.system.spec.resources, "input_streams", ()) or ())
     input_tasks = tuple(
         asyncio.create_task(_publish_input_stream(stream, session.business), name=f"system:input:{index}")
@@ -273,6 +285,7 @@ async def _launch_with_artifacts(session: TradingSystemSession) -> LaunchRuntime
             await asyncio.gather(*input_tasks, return_exceptions=True)
         await session.business.stop_actors()
         await session.business.close()
+        _LOGGER.info("system=%s phase=actors_stopped", session.launch_id)
     return session.finish()
 
 

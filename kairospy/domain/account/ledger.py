@@ -64,6 +64,13 @@ class AccountLedger:
     def events(self) -> tuple[AccountEvent, ...]:
         return tuple(self._events)
 
+    def restore(self, events: tuple[AccountEvent, ...]) -> None:
+        """Replace ledger contents while preserving injected object identity."""
+        self._events.clear()
+        self._ids.clear()
+        for event in events:
+            self.record(event)
+
     def cash(self, account: AccountBookRef) -> dict[str, Decimal]:
         balances: dict[str, Decimal] = {}
         for event in self._events:

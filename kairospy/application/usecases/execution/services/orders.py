@@ -90,6 +90,8 @@ class ExecutionOrderService:
             )
         except Exception as error:
             return self.coordinator.mark_order_unknown(order_id, at=at, reason=str(error))
+        if result.status.strip().lower() in {"rejected", "reject"}:
+            return self.coordinator.reject_order(order_id, at=at, reason=result.reason)
         if not result.order_venue_id:
             return self.coordinator.mark_order_unknown(order_id, at=at, reason="missing venue order id")
         current = self.coordinator.orders.get(order_id)

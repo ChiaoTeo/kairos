@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 
 from kairospy.domain.views import ViewFieldSchema, ViewSchema
 
@@ -18,6 +19,12 @@ class IntentStateSummary:
     status: str
     active: bool
     updated_at: datetime | None = None
+    strategy_id: str | None = None
+    account_id: str | None = None
+    account_book: str | None = None
+    order_ids: tuple[str, ...] = ()
+    target_quantity: Decimal | None = None
+    reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)

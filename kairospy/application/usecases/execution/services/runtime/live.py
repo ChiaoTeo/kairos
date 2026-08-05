@@ -37,7 +37,9 @@ class LiveExecutionService:
             return
         async for update in self.update_source.events(self.account, symbol=self.update_symbol):
             self._event_sequence += 1
-            yield Message(topic="execution.update", payload=update, published_at=update.observed_at, producer="execution.service", producer_sequence=self._event_sequence)
+            metadata = getattr(update, "metadata", {})
+            correlation_id = metadata.get("correlation_id") if isinstance(metadata, Mapping) else None
+            yield Message(topic="execution.update", payload=update, published_at=update.observed_at, producer="execution.service", producer_sequence=self._event_sequence, correlation_id=str(correlation_id or update.order_id or "") or None)
 
     def execute_intent(self, intent: TradeIntent, context: object) -> bool:
         if getattr(context, "now", None) is None:

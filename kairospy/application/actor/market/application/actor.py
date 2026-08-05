@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Callable, Mapping
 
 from kairospy.application.actor.market.application.reference import ReferenceActor, reference_poll_interval
@@ -16,13 +18,20 @@ from kairospy.domain.reference import MarketResolver
 from kairospy.application.usecases.market.application.component import MarketApplication
 
 
+_LOGGER = logging.getLogger("kairospy.actor.market")
+
+
 class MarketActor(BusinessActor):
     """Own market data and reference-facing market resources."""
 
     def __init__(self, source: object | None, bus: MessageBus, *, market_service: MarketApplication | None = None, reference: object | None = None, reference_poll_interval_seconds: float = 300.0, connections: object | None = None, publish_connection_health: object | None = None, projectors: object | None = None) -> None:
         super().__init__("market", bus=bus)
         self.runtime = source
-        self.is_finite = bool(getattr(source, "is_finite", False))
+        # A live feed normally runs forever, but a launch stop request ends
+        # its event loop cooperatively. Mark it finite whenever the source
+        # exposes that lifecycle capability so System can await its natural
+        # completion instead of waiting forever on the message inbox.
+        self.is_finite = bool(getattr(source, "is_finite", False)) or callable(getattr(source, "set_stop_signal", None))
         self.market_service = market_service
         self.projectors = projectors
         self._connections = connections
@@ -136,6 +145,11 @@ class MarketActor(BusinessActor):
             stop_roles(self._connection_roles)
 
     async def on_start(self) -> None:
+        _LOGGER.info(
+            "actor=market phase=prepare connections=%s reference_actor=%s",
+            self._connections is not None,
+            self.reference_actor is not None,
+        )
         self._start_connections()
         if self.reference_actor is not None:
             await self.reference_actor.start()
@@ -143,11 +157,91 @@ class MarketActor(BusinessActor):
             setter = getattr(self.runtime, "set_market_service", None)
             if callable(setter):
                 setter(self.market_service)
+        warmup = getattr(self.runtime, "warmup_events", None)
+        if callable(warmup):
+            _LOGGER.info("actor=market phase=warmup state=starting")
+            progress = lambda index, total, spec, state: _LOGGER.info(
+                "startup_progress actor=market phase=warmup item=%d/%d symbol=%s state=%s",
+                index,
+                total,
+                getattr(spec, "symbol", "-"),
+                state,
+            )
+            failure = lambda spec, error: _LOGGER.error(
+                "actor=market phase=warmup state=failed symbol=%s error_type=%s reason=%s",
+                getattr(spec, "symbol", "-"),
+                type(error).__name__,
+                error,
+            )
+            try:
+                events = await asyncio.to_thread(
+                    warmup,
+                    stop_requested=self._should_stop,
+                    progress=progress,
+                    failure=failure,
+                )
+            except asyncio.CancelledError:
+                _LOGGER.info("actor=market phase=warmup state=cancelled")
+                raise
+            except Exception as error:
+                _LOGGER.exception(
+                    "actor=market phase=warmup state=failed error_type=%s reason=%s",
+                    type(error).__name__,
+                    error,
+                )
+                raise
+            warmup_count = 0
+            for event in events:
+                await self.bus.publish(event)
+                warmup_count += 1
+            _LOGGER.info("actor=market phase=warmup events=%d", warmup_count)
+            if self._should_stop():
+                _LOGGER.info("actor=market phase=stopped reason=stop_requested_during_warmup")
+                return
         events = getattr(self.runtime, "events", None)
         if callable(events):
-            self.start_event_loop(events(), is_finite=self.is_finite, name="market")
+            self.start_event_loop(self._resilient_events(events), is_finite=self.is_finite, name="market")
+            _LOGGER.info("actor=market phase=streaming")
+        else:
+            _LOGGER.info("actor=market phase=idle reason=no_event_source")
+
+    def _should_stop(self) -> bool:
+        should_stop = getattr(self.runtime, "_should_stop", None)
+        return bool(should_stop()) if callable(should_stop) else False
+
+    async def _resilient_events(self, factory: Callable[[], object]):
+        """Keep a transient feed failure local to the market Actor.
+
+        A connection failure must not tear down the strategy session. The
+        runtime's event source is recreated after an exponential backoff;
+        cancellation and an explicit stop still terminate immediately.
+        """
+        delay = 1.0
+        while not self._should_stop():
+            try:
+                async for event in factory():  # type: ignore[union-attr]
+                    delay = 1.0
+                    yield event
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self.error_count += 1
+                self.last_error = str(error)
+                _LOGGER.error(
+                    "actor=market phase=stream state=degraded retry_seconds=%s "
+                    "error_type=%s reason=%s",
+                    delay,
+                    type(error).__name__,
+                    error,
+                )
+                while delay > 0 and not self._should_stop():
+                    await asyncio.sleep(min(1.0, delay))
+                    delay -= 1.0
+                delay = min(30.0, max(1.0, delay * 2.0))
 
     async def on_stop(self) -> None:
+        _LOGGER.info("actor=market phase=stopping")
         if self.reference_actor is not None:
             await self.reference_actor.stop()
         if self.market_service is not None:

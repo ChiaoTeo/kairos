@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 
 from kairospy.application.actor.market.application import MarketActor
@@ -10,7 +11,9 @@ from kairospy.application.support.launch.application.sources import IterableEven
 from kairospy.infrastructure.messaging import InMemoryMessageBus
 
 
-def test_market_actor_owns_source_and_publishes_to_bus() -> None:
+def test_market_actor_owns_source_and_publishes_to_bus(caplog) -> None:
+    caplog.set_level(logging.INFO, logger="kairospy.actor")
+
     async def scenario() -> None:
         event = make_message("market", "quote", at=datetime(2026, 1, 1, tzinfo=timezone.utc), sequence=1, payload={"symbol": "BTC"}, producer="test")
         bus = InMemoryMessageBus()
@@ -27,3 +30,6 @@ def test_market_actor_owns_source_and_publishes_to_bus() -> None:
         await bus.close()
 
     asyncio.run(scenario())
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("actor=market state=started" in message for message in messages)
+    assert any("actor=market state=stopped" in message for message in messages)

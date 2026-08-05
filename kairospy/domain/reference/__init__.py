@@ -19,6 +19,7 @@ from .identity import (
     reference_slug,
 )
 from .markets import MarketRef, MarketResolver, SymbolRef
+from .options import OptionContractRef
 from .model import (
     Asset,
     AssetType,
@@ -113,6 +114,7 @@ __all__ = [
     "MarketRef",
     "MarketResolver",
     "MarketStatus",
+    "OptionContractRef",
     "MASSIVE",
     "NASDAQ",
     "NYSE",

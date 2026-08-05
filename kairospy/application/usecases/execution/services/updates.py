@@ -12,9 +12,14 @@ class ExecutionUpdateService:
     def __init__(self, coordinator: ExecutionCoordinator, *, intents: IntentJournal | None = None) -> None:
         self.coordinator = coordinator
         self.intents = intents
+        self._seen_updates: set[tuple[object, ...]] = set()
 
     def apply(self, update: ExecutionUpdate) -> OrderState:
+        key = _update_key(update)
+        if key in self._seen_updates:
+            return _existing_order(self.coordinator, update)
         state = self.coordinator.apply_execution_update(update)
+        self._seen_updates.add(key)
         self._record_intent_order_state(state, at=update.observed_at)
         return state
 
@@ -35,6 +40,37 @@ def _intent_for_order(intents: IntentJournal, order_id: str) -> IntentState | No
         if order_id in state.order_ids:
             return state
     return None
+
+
+def _existing_order(coordinator: ExecutionCoordinator, update: ExecutionUpdate) -> OrderState:
+    if update.order_id:
+        return coordinator.orders.get(update.order_id)
+    if update.order_venue_id:
+        return coordinator.orders.get_by_order_venue_id(update.order_venue_id)
+    raise ValueError("duplicate execution update has no order identity")
+
+
+def _update_key(update: ExecutionUpdate) -> tuple[object, ...]:
+    metadata = update.metadata
+    for name in ("event_id", "execution_id", "trade_id", "fill_id"):
+        value = metadata.get(name)
+        if value is not None and str(value).strip():
+            return ("event", name, str(value))
+    return (
+        "payload",
+        update.observed_at,
+        update.kind,
+        update.order_id,
+        update.order_venue_id,
+        update.fill_quantity,
+        update.fill_price,
+        update.filled_quantity,
+        update.cash_delta,
+        update.fee_currency,
+        update.fee_amount,
+        update.reason,
+        update.source,
+    )
 
 
 def _intent_events_for_order_status(status: IntentStatus, order_status: OrderStatus) -> tuple[IntentEventKind, ...]:

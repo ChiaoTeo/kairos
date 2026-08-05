@@ -42,8 +42,16 @@ class ExecutionStateSnapshot:
 
     def restore_into(self, coordinator: ExecutionStateOwner) -> ExecutionStateOwner:
         coordinator.orders = OrderJournal.from_states(self.orders)
-        coordinator.ledger = AccountLedger(self.ledger_events)
-        coordinator.reservations = ReservationBook(self.reservations)
+        restore_ledger = getattr(coordinator.ledger, "restore", None)
+        if callable(restore_ledger):
+            restore_ledger(self.ledger_events)
+        else:
+            coordinator.ledger = AccountLedger(self.ledger_events)
+        restore_reservations = getattr(coordinator.reservations, "restore", None)
+        if callable(restore_reservations):
+            restore_reservations(self.reservations)
+        else:
+            coordinator.reservations = ReservationBook(self.reservations)
         return coordinator
 
     def to_dict(self) -> dict[str, object]:

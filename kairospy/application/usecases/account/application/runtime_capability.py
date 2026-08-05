@@ -12,10 +12,12 @@ from kairospy.application.usecases.account.application.accounts import (
     AccountCapability,
     AccountContext,
     AccountFeeSchedule,
+    AccountMarketProfile,
     AccountSnapshot,
     AccountState,
 )
 from kairospy.application.usecases.account.protocol import AccountLoginResult, AccountSession
+from kairospy.domain.reference import MarketRef
 
 
 class AccountRuntimeCapability(Protocol):
@@ -26,6 +28,9 @@ class AccountRuntimeCapability(Protocol):
     def logout(self, session: AccountSession) -> None: ...
     def capabilities(self, account: AccountBookRef | None = None) -> tuple[AccountCapability, ...]: ...
     def fees(self, account: AccountBookRef | None = None) -> tuple[AccountFeeSchedule, ...]: ...
+    def market_profile(self, account: AccountBookRef, market: MarketRef, *, at: datetime | None = None, refresh: bool = False) -> AccountMarketProfile | None: ...
+    def update_market_profile(self, profile: AccountMarketProfile) -> None: ...
+    def market_profiles(self, account: AccountBookRef | None = None) -> tuple[AccountMarketProfile, ...]: ...
     def snapshot(self, account: AccountBookRef | None = None) -> AccountSnapshot | None: ...
     def state(self, account: AccountBookRef | None = None) -> AccountState | None: ...
     def update_snapshot(self, snapshot: AccountSnapshot) -> None: ...
@@ -51,6 +56,7 @@ class AccountRuntimeApplication:
         snapshots: Iterable[AccountSnapshot] = (),
         account_event: object | None = None,
         provision_missing_capabilities: bool = True,
+        market_profile_port: object | None = None,
     ) -> None:
         if runtime is not None:
             if contexts is not None or any(
@@ -74,6 +80,7 @@ class AccountRuntimeApplication:
             snapshots=snapshots,
             account_event=account_event,
             provision_missing_capabilities=provision_missing_capabilities,
+            market_profile_port=market_profile_port,  # type: ignore[arg-type]
         )
 
     def accounts(self) -> tuple[AccountContext, ...]:
@@ -100,6 +107,18 @@ class AccountRuntimeApplication:
 
     def fees(self, account: AccountBookRef | None = None) -> tuple[AccountFeeSchedule, ...]:
         return self._runtime.fees(account) if self._runtime is not None else self._service.fees(account)
+
+    def market_profile(self, account: AccountBookRef, market: MarketRef, *, at: datetime | None = None, refresh: bool = False) -> AccountMarketProfile | None:
+        return self._runtime.market_profile(account, market, at=at, refresh=refresh) if self._runtime is not None else self._service.market_profile(account, market, at=at, refresh=refresh)
+
+    def update_market_profile(self, profile: AccountMarketProfile) -> None:
+        if self._runtime is not None:
+            self._runtime.update_market_profile(profile)
+        else:
+            self._service.update_market_profile(profile)
+
+    def market_profiles(self, account: AccountBookRef | None = None) -> tuple[AccountMarketProfile, ...]:
+        return self._runtime.market_profiles(account) if self._runtime is not None else self._service.market_profiles(account)
 
     def snapshot(self, account: AccountBookRef | None = None) -> AccountSnapshot | None:
         return self._runtime.snapshot(account) if self._runtime is not None else self._service.snapshot(account)

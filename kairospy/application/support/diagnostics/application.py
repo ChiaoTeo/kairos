@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,8 +43,8 @@ def record_exception(
         "command": command,
         "context": redact(context or {}),
         "error_type": error.__class__.__name__,
-        "error": str(error),
-        "traceback": "".join(traceback.format_exception(type(error), error, error.__traceback__)),
+        "error": redact(str(error)),
+        "traceback": redact("".join(traceback.format_exception(type(error), error, error.__traceback__))),
     }
     _append_jsonl(path, record)
     return {
@@ -69,6 +70,8 @@ def redact(value: object) -> object:
         return [redact(item) for item in value]
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, str):
+        return _redact_text(value)
     if hasattr(value, "value") and isinstance(getattr(value, "value"), (str, int, float, bool)):
         return getattr(value, "value")
     if hasattr(value, "isoformat"):
@@ -95,6 +98,12 @@ def _append_jsonl(path: Path, record: Mapping[str, object]) -> None:
 def _is_sensitive_key(key: str) -> bool:
     normalized = key.strip().lower().replace("-", "_")
     return normalized in _SENSITIVE_KEYS or normalized.endswith("_secret") or normalized.endswith("_token")
+
+
+def _redact_text(value: str) -> str:
+    value = re.sub(r"(?i)(api[_-]?key)=([^&\s)]+)", r"\1=<redacted>", value)
+    value = re.sub(r"(?i)(authorization:\s*bearer\s+)[^\s]+", r"\1<redacted>", value)
+    return value
 
 
 __all__ = ["diagnostic_log_path", "record_exception", "redact"]

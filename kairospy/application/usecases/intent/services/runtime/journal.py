@@ -24,6 +24,12 @@ class IntentJournalViewState:
                 status=item.status.value,
                 active=item.active,
                 updated_at=item.updated_at,
+                strategy_id=None if getattr(item.intent, "strategy_id", None) is None else str(getattr(item.intent, "strategy_id")),
+                account_id=None if getattr(item.intent, "account_id", None) is None else str(getattr(item.intent, "account_id")),
+                account_book=getattr(item.intent, "account_book", None),
+                order_ids=item.order_ids,
+                target_quantity=getattr(item.intent, "target_quantity", None),
+                reason=item.reason,
             )
             for item in self.intents.list(strategy_id=self.strategy_id)
         )

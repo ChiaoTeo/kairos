@@ -6,7 +6,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Mapping
 
-from kairospy.domain.reference import AccountId, BrokerId, InstrumentId
+from kairospy.domain.reference import AccountId, BrokerId, InstrumentId, MarketRef
 
 
 class Environment(StrEnum):
@@ -39,6 +39,7 @@ class AccountBookKind(StrEnum):
     CROSS_MARGIN = "cross_margin"
     ISOLATED_MARGIN = "isolated_margin"
     USD_M_FUTURES = "usd_m_futures"
+    OPTIONS = "options"
     COIN_M_FUTURES = "coin_m_futures"
     FUNDING = "funding"
     EARN = "earn"
@@ -286,21 +287,174 @@ class AccountCapability:
 
 
 @dataclass(frozen=True, slots=True)
+class FeeDiscountRule:
+    """Discount applied when the account pays fees with a selected asset."""
+
+    asset: str
+    rate: Decimal
+    enabled: bool = False
+    source: str = "venue"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "asset", _required_text(self.asset, "fee discount asset"))
+        object.__setattr__(self, "rate", Decimal(str(self.rate)))
+        if self.rate < 0 or self.rate > 1:
+            raise ValueError("fee discount rate must be between 0 and 1")
+        object.__setattr__(self, "source", _required_text(self.source, "fee discount source"))
+
+
+@dataclass(frozen=True, slots=True)
+class FeePaymentRule:
+    """Venue rule for selecting the fee currency and optional discount."""
+
+    currency: str | None = None
+    currency_mode: str = "venue_default"
+    discount: FeeDiscountRule | None = None
+
+    def __post_init__(self) -> None:
+        if self.currency is not None:
+            object.__setattr__(self, "currency", _required_text(self.currency, "fee payment currency"))
+        object.__setattr__(self, "currency_mode", _required_text(self.currency_mode, "fee currency mode"))
+
+
+@dataclass(frozen=True, slots=True)
+class AccountFeeRule:
+    """Account-owned fee tier/rates before product rules are applied."""
+
+    book: AccountBookRef
+    maker: Decimal | None = None
+    taker: Decimal | None = None
+    tier: str | None = None
+    source: str = "venue"
+    updated_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("maker", "taker"):
+            value = getattr(self, name)
+            if value is not None:
+                value = Decimal(str(value))
+                object.__setattr__(self, name, value)
+        if self.tier is not None:
+            object.__setattr__(self, "tier", _required_text(self.tier, "account fee tier"))
+        object.__setattr__(self, "source", _required_text(self.source, "account fee source"))
+        if self.updated_at is not None and self.updated_at.tzinfo is None:
+            raise ValueError("account fee timestamp must be timezone-aware")
+
+
+@dataclass(frozen=True, slots=True)
+class MarketFeeRule:
+    """Product/market-owned fee rates before account discounts are applied."""
+
+    market: MarketRef
+    maker: Decimal
+    taker: Decimal
+    currency: str | None = None
+    source: str = "venue"
+    updated_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        for name in ("maker", "taker"):
+            value = Decimal(str(getattr(self, name)))
+            object.__setattr__(self, name, value)
+        if self.currency is not None:
+            object.__setattr__(self, "currency", _required_text(self.currency, "market fee currency"))
+        object.__setattr__(self, "source", _required_text(self.source, "market fee source"))
+        if self.updated_at is not None and self.updated_at.tzinfo is None:
+            raise ValueError("market fee timestamp must be timezone-aware")
+
+
+@dataclass(frozen=True, slots=True)
 class AccountFeeSchedule:
     book: AccountBookRef
     maker: Decimal
     taker: Decimal
     source: str = "configured"
     updated_at: datetime | None = None
+    market: MarketRef | None = None
+    currency: str | None = None
+    tier: str | None = None
+    account_rule: AccountFeeRule | None = None
+    market_rule: MarketFeeRule | None = None
+    payment: FeePaymentRule | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "maker", Decimal(str(self.maker)))
         object.__setattr__(self, "taker", Decimal(str(self.taker)))
-        if self.maker < 0 or self.taker < 0:
-            raise ValueError("account fee rates cannot be negative")
+        if self.currency is not None:
+            object.__setattr__(self, "currency", _required_text(self.currency, "account fee currency"))
+        if self.tier is not None:
+            object.__setattr__(self, "tier", _required_text(self.tier, "account fee tier"))
         object.__setattr__(self, "source", _required_text(self.source, "account fee source"))
         if self.updated_at is not None and self.updated_at.tzinfo is None:
             raise ValueError("account fee timestamp must be timezone-aware")
+
+
+@dataclass(frozen=True, slots=True)
+class AccountFeeResolution:
+    """Effective fee plus both source rules and payment discount semantics."""
+
+    schedule: AccountFeeSchedule
+    account_rule: AccountFeeRule | None = None
+    market_rule: MarketFeeRule | None = None
+    payment: FeePaymentRule | None = None
+    combination: str = "exchange_defined"
+
+    @property
+    def maker(self) -> Decimal:
+        return self.schedule.maker
+
+    @property
+    def taker(self) -> Decimal:
+        return self.schedule.taker
+
+    @property
+    def currency(self) -> str | None:
+        return self.schedule.currency
+
+    @property
+    def discount_rate(self) -> Decimal:
+        discount = None if self.payment is None else self.payment.discount
+        return Decimal("0") if discount is None or not discount.enabled else discount.rate
+
+    @property
+    def tier(self) -> str | None:
+        return self.schedule.tier
+
+
+@dataclass(frozen=True, slots=True)
+class AccountMarketProfile:
+    """Venue-derived account capabilities for one tradable market."""
+
+    account: AccountContext
+    market: MarketRef
+    fee: AccountFeeResolution | AccountFeeSchedule | None = None
+    account_type: str | None = None
+    margin_mode: str | None = None
+    leverage: Decimal | None = None
+    position_mode: str | None = None
+    settlement_currency: str | None = None
+    source: str = "unknown"
+    observed_at: datetime | None = None
+    stale: bool = False
+
+    def __post_init__(self) -> None:
+        if self.fee is not None:
+            fee_schedule = self.fee.schedule if isinstance(self.fee, AccountFeeResolution) else self.fee
+            if fee_schedule.book != self.account.book:
+                raise ValueError("account market fee book does not match profile account")
+            if fee_schedule.market is not None and fee_schedule.market != self.market:
+                raise ValueError("account market fee market does not match profile market")
+        if self.leverage is not None:
+            object.__setattr__(self, "leverage", Decimal(str(self.leverage)))
+            if self.leverage <= 0:
+                raise ValueError("account market leverage must be positive")
+        for name in ("account_type", "margin_mode", "position_mode", "settlement_currency"):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, _required_text(value, f"account market {name}"))
+        object.__setattr__(self, "source", _required_text(self.source, "account market profile source"))
+        if self.observed_at is not None and self.observed_at.tzinfo is None:
+            raise ValueError("account market profile timestamp must be timezone-aware")
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,12 +534,18 @@ __all__ = [
     "AccountContext",
     "AccountDirectory",
     "AccountFeeSchedule",
+    "AccountFeeResolution",
+    "AccountFeeRule",
     "AccountIdentity",
+    "AccountMarketProfile",
     "AccountSnapshot",
     "AccountSource",
     "Environment",
+    "FeeDiscountRule",
+    "FeePaymentRule",
     "LiabilitySnapshot",
     "MarginScope",
+    "MarketFeeRule",
     "MarginState",
     "OpenOrderSnapshot",
     "PositionSnapshot",

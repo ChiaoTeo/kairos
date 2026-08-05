@@ -55,6 +55,11 @@ def bind_stop_signal(market_data: object, stop_requested: Callable[[], bool]) ->
 
 
 class TradingSystemLauncher:
+    def __init__(self, *, composer: object | None = None) -> None:
+        # Kept as an optional composition hook for the launch factory. The
+        # configured resource graph is already composed before execution.
+        self.composer = composer
+
     def _run_composed(
         self,
         composed: object,
@@ -146,6 +151,7 @@ class TradingSystemLauncher:
             business=resources.business,
             input_streams=resources.input_streams,
             data=resources.data,
+            market_store=resources.market_store,
             account=resources.account,
             reference=resources.reference,
             trading_execution=resources.trading_execution,

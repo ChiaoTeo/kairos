@@ -72,6 +72,15 @@ class SimulatedAccountService:
     def fees(self, account: AccountBookRef | None = None) -> tuple[AccountFeeSchedule, ...]:
         return self.accounts_service.fees(account)
 
+    def market_profile(self, account: AccountBookRef, market: object, *, at: datetime | None = None, refresh: bool = False):
+        return self.accounts_service.market_profile(account, market, at=at, refresh=refresh)  # type: ignore[arg-type]
+
+    def update_market_profile(self, profile: object) -> None:
+        self.accounts_service.update_market_profile(profile)  # type: ignore[arg-type]
+
+    def market_profiles(self, account: AccountBookRef | None = None):
+        return self.accounts_service.market_profiles(account)
+
     def snapshot(self, account: AccountBookRef | None = None) -> AccountSnapshot | None:
         context = self._context_for(account)
         if context is None:

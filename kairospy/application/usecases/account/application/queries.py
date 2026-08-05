@@ -14,6 +14,9 @@ class AccountQueryService:
     def reader(self) -> AccountViewReader:
         return self._service.reader
 
+    def __getitem__(self, key: str | int) -> AccountScopeReader:
+        return self._service.account(key)
+
     def account(self, key: str | int) -> AccountScopeReader:
         return self._service.account(key)
 
@@ -49,6 +52,9 @@ class AccountQueryService:
 
     def fees(self, *, account: str | None = None) -> tuple[object, ...]:
         return self._service.fees(account=account)
+
+    def market_profile(self, account: object, market: object) -> object | None:
+        return self._service.market_profile(account, market)  # type: ignore[arg-type]
 
 
 __all__ = ["AccountQueryService"]

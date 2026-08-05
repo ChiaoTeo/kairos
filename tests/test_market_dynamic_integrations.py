@@ -15,6 +15,8 @@ from kairospy.infrastructure.integrations.application.connections import Integra
 from kairospy.infrastructure.integrations.application.market_runtime import SystemMarketIntegrationRuntime
 from kairospy.infrastructure.integrations.domain import AccessScope, ExchangeId, ExchangeRef, IntegrationRoute, ProductFamily, TransportKind
 from kairospy.infrastructure.integrations.services.gateways.ccxt.market import CcxtMarketConnection
+from kairospy.infrastructure.integrations.services.gateways.ccxt.private import CcxtAccountConnection, CcxtExecutionConnection
+from kairospy.infrastructure.integrations.domain import BrokerId, BrokerRef, IntegrationCapability
 from kairospy.infrastructure.integrations.services.factories.registry import GatewayRegistry
 from kairospy.domain.market import Quote
 from kairospy.domain.reference import MarketRef
@@ -76,6 +78,31 @@ class MarketDynamicIntegrationTests(unittest.TestCase):
                 (ExchangeId.HYPERLIQUID, ProductFamily.USD_M_FUTURES),
             }:
                 self.assertIsInstance(connection, CcxtMarketConnection)
+
+    def test_registry_selects_ccxt_private_connections_for_okx_and_hyperliquid(self) -> None:
+        registry = GatewayRegistry.with_builtins()
+        for broker in (BrokerId.OKX, BrokerId("hyperliquid")):
+            route = IntegrationRoute(broker=BrokerRef(broker))
+            account = registry.create(IntegrationConnectionSpec(
+                f"{broker.value}-account",
+                route,
+                ProductFamily.USD_M_FUTURES,
+                AccessScope.PRIVATE,
+                TransportKind.REST,
+                capability=IntegrationCapability.ACCOUNT_READ,
+                mode=RuntimeMode.PAPER,
+            ))
+            execution = registry.create(IntegrationConnectionSpec(
+                f"{broker.value}-execution",
+                route,
+                ProductFamily.USD_M_FUTURES,
+                AccessScope.PRIVATE,
+                TransportKind.REST,
+                capability=IntegrationCapability.ORDER_ENTRY,
+                mode=RuntimeMode.PAPER,
+            ))
+            self.assertIsInstance(account, CcxtAccountConnection)
+            self.assertIsInstance(execution, CcxtExecutionConnection)
 
     def test_market_runtime_creates_typed_connection_on_demand(self) -> None:
         scope = IntegrationConnectionScope()
