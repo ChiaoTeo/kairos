@@ -27,6 +27,7 @@ class MassiveStockMarketStream:
     _session: object | None = field(default=None, init=False, repr=False)
     _reader: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _queues: dict[str, tuple[str, set[str], asyncio.Queue[object]]] = field(default_factory=dict, init=False, repr=False)
+    _channel_references: dict[tuple[str, str], int] = field(default_factory=dict, init=False, repr=False)
 
     async def start(self) -> None:
         return None
@@ -39,7 +40,14 @@ class MassiveStockMarketStream:
         await self._ensure_connected()
         subscription_id = f"massive-{uuid4().hex}"
         self._queues[subscription_id] = (symbol, channels, asyncio.Queue())
-        await self._send({"action": "subscribe", "params": ",".join(f"{channel}.{symbol}" for channel in sorted(channels))})
+        new_channels = []
+        for channel in channels:
+            key = (symbol, channel)
+            if self._channel_references.get(key, 0) == 0:
+                new_channels.append(channel)
+            self._channel_references[key] = self._channel_references.get(key, 0) + 1
+        if new_channels:
+            await self._send({"action": "subscribe", "params": ",".join(f"{channel}.{symbol}" for channel in sorted(new_channels))})
         return subscription_id
 
     async def events(self, subscription_id: str):
@@ -59,14 +67,19 @@ class MassiveStockMarketStream:
             return
         symbol, channels, queue = entry
         queue.put_nowait(_CLOSED)
-        still_needed = any(
-            wanted_symbol == symbol and bool(wanted_channels & channels)
-            for wanted_symbol, wanted_channels, _wanted_queue in self._queues.values()
-        )
-        if self._session is not None and not still_needed:
+        released = []
+        for channel in channels:
+            key = (symbol, channel)
+            count = self._channel_references.get(key, 0) - 1
+            if count <= 0:
+                self._channel_references.pop(key, None)
+                released.append(channel)
+            else:
+                self._channel_references[key] = count
+        if self._session is not None and released:
             await _send_with_timeout(
                 self,
-                {"action": "unsubscribe", "params": ",".join(f"{channel}.{symbol}" for channel in sorted(channels))},
+                {"action": "unsubscribe", "params": ",".join(f"{channel}.{symbol}" for channel in sorted(released))},
             )
         if not self._queues:
             await self.stop()
@@ -84,8 +97,9 @@ class MassiveStockMarketStream:
         if not subscriptions:
             return
         await self._ensure_connected()
-        for _subscription_id, (symbol, channels, _queue) in subscriptions:
-            await self._send({"action": "subscribe", "params": ",".join(f"{channel}.{symbol}" for channel in sorted(channels))})
+        active = {(symbol, channel) for symbol, channels, _queue in subscriptions for channel in channels}
+        for symbol, channel in sorted(active):
+            await self._send({"action": "subscribe", "params": f"{channel}.{symbol}"})
 
     async def stop(self) -> None:
         reader = self._reader
@@ -99,6 +113,7 @@ class MassiveStockMarketStream:
         for _symbol, _channels, queue in self._queues.values():
             queue.put_nowait(_CLOSED)
         self._queues.clear()
+        self._channel_references.clear()
 
     async def _ensure_connected(self) -> None:
         if self._session is not None:

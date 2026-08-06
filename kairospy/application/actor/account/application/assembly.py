@@ -23,6 +23,7 @@ from kairospy.application.usecases.execution.application.runtime import (
     execution_runtime_adapters,
 )
 from kairospy.application.usecases.execution.application.runtime import ExecutionCoordinator
+from kairospy.application.usecases.execution.protocol import OrderAuditStore
 from kairospy.application.actor.account.application.ports import ExecutionEventSource
 from kairospy.application.usecases.risk.application.budget import RiskApplication
 from kairospy.domain.intent import IntentJournal
@@ -67,6 +68,8 @@ class AccountActorDependencies:
     execution_coordinator: ExecutionCoordinator | None = None
     fills_source: AccountFillSource | None = None
     risk: RiskApplication | None = None
+    audit_store: OrderAuditStore | None = None
+    instance_id: str = "local"
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +82,9 @@ class AccountActorCapabilities:
 
 def compose_account_capabilities(dependencies: AccountActorDependencies) -> AccountActorCapabilities:
     """Compose the usecases held by the ExternalAccount Actor."""
+    if dependencies.execution_coordinator is not None and dependencies.audit_store is not None:
+        dependencies.execution_coordinator.audit_store = dependencies.audit_store
+        dependencies.execution_coordinator.instance_id = dependencies.instance_id
     execution_application = (
         None
         if dependencies.execution_coordinator is None
@@ -87,6 +93,8 @@ def compose_account_capabilities(dependencies: AccountActorDependencies) -> Acco
             intents=dependencies.intents,
             fills_source=dependencies.fills_source,
             risk=dependencies.risk,
+            audit_store=dependencies.audit_store,
+            instance_id=dependencies.instance_id,
         )
     )
     execution_updates, execution_projection = (

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from kairospy.application.support.launch.application.artifacts import LaunchOutput
 from kairospy.application.support.runtime.application.views import ViewStore
@@ -129,6 +129,14 @@ class MonitorProjectionPipeline:
             if callable(publish):
                 publish(self.views, as_of=getattr(event, "time", None))
 
+    def publish_initial(self, *, as_of: datetime | None = None) -> None:
+        """Publish actor-owned initial views before strategy startup."""
+        for actor in self.actors:
+            projectors = getattr(actor, "projectors", None)
+            publish = getattr(projectors, "publish_views", None)
+            if callable(publish):
+                publish(self.views, as_of=as_of)
+
     def on_intents(self, intents: tuple[object, ...], context: object, hook: str) -> None:
         if not intents:
             return
@@ -154,6 +162,7 @@ class MonitorOutputCoordinator:
 
     def attach(self, *, views: ViewStore) -> None:
         self.pipeline = MonitorProjectionPipeline(views=views, actors=self.actors)
+        self.pipeline.publish_initial(as_of=datetime.now(timezone.utc))
 
     def publish_for_event(self, event: object) -> None:
         if self.pipeline is not None:

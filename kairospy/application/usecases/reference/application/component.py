@@ -36,6 +36,7 @@ class ReferenceApplication:
         *,
         default_venue: str | None = None,
         default_market: str | None = None,
+        underlyings: tuple[str, ...] = (),
         source: ReferenceCatalogSource | None = None,
     ) -> None:
         self._catalogs = ReferenceCatalogService(store)
@@ -44,6 +45,7 @@ class ReferenceApplication:
         self._store = store
         self._default_venue = default_venue
         self._default_market = default_market
+        self._underlyings = tuple(dict.fromkeys(item.strip() for item in underlyings if item.strip()))
         self._source = source
         self._ready = False
 
@@ -200,6 +202,7 @@ class ReferenceApplication:
             as_of=observed_at,
             venue="massive",
             market="option",
+            underlying=underlying,
         )
         self._ready = True
         return result
@@ -220,11 +223,28 @@ class ReferenceApplication:
         if self._source is None:
             return None
         observed_at = as_of or datetime.now(timezone.utc)
-        return self._refresh.refresh_snapshot(
-            self._source.catalog(ReferenceCatalogRequest(as_of=observed_at, market=self._default_market)),
-            as_of=observed_at,
-            venue=self._default_venue,
-            market=self._default_market,
+        scopes = self._underlyings or (None,)
+        results = [
+            self._refresh.refresh_snapshot(
+                self._source.catalog(
+                    ReferenceCatalogRequest(
+                        as_of=observed_at,
+                        market=self._default_market,
+                        underlying=underlying,
+                    )
+                ),
+                as_of=observed_at,
+                venue=self._default_venue,
+                market=self._default_market,
+                underlying=underlying,
+            )
+            for underlying in scopes
+        ]
+        return ReferenceRefreshResult(
+            catalog=results[-1].catalog,
+            events=tuple(event for result in results for event in result.events),
+            previous_markets=tuple(item for result in results for item in result.previous_markets),
+            current_markets=tuple(item for result in results for item in result.current_markets),
         )
 
 __all__ = ["ReferenceApplication", "ReferenceQuery", "ReferenceSelection"]

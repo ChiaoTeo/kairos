@@ -25,7 +25,7 @@ class LaunchProjectionService:
     def list_datasets(self) -> tuple[ProjectionSpec, ...]:
         return self.catalog.list()
 
-    def load_timeline_view(self) -> dict[str, object]:
+    def load_run_view(self) -> dict[str, object]:
         root = self.reader.root.expanduser().resolve()
         if not root.exists() or not root.is_dir():
             raise ValueError(f"launch instance directory was not found: {root}")
@@ -69,7 +69,7 @@ class LaunchProjectionService:
             return self.reader.read_json(spec.resource)
         if spec.record_key is None:
             return {}
-        records = self.load_timeline_view()["records"]
+        records = self.load_run_view()["records"]
         return records[spec.record_key] if isinstance(records, Mapping) else []
 
 

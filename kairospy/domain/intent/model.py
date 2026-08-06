@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
-from kairospy.domain.reference import ExternalAccountId, AccountSegmentId, InstrumentId, IntentId, MarketId, StrategyId
+from kairospy.domain.reference import AssetType, ExternalAccountId, AccountSegmentId, InstrumentId, IntentId, MarketId, StrategyId
 
 
 class IntentKind(StrEnum):
@@ -82,12 +82,14 @@ class TradeIntent(Intent):
     quantity: Decimal | None = None
     limit_price: Decimal | None = None
     reason: str = ""
+    asset_type: AssetType | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "intent_id", _id(self.intent_id, IntentId, "intent_id"))
         object.__setattr__(self, "strategy_id", _id(self.strategy_id, StrategyId, "strategy_id"))
         object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
         object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
+        object.__setattr__(self, "asset_type", None if self.asset_type is None else AssetType(str(self.asset_type)))
         object.__setattr__(self, "account_id", None if self.account_id is None else _id(self.account_id, ExternalAccountId, "account_id"))
         if self.account_index is not None and self.account_index < 0:
             raise ValueError("intent account_index cannot be negative")
@@ -152,6 +154,7 @@ def target_position_intent(
     limit_price: Decimal | None = None,
     reason: str = "",
     intent_id: IntentId | str | None = None,
+    asset_type: AssetType | str | None = None,
 ) -> TradeIntent:
     return TradeIntent(
         intent_id=intent_id or f"intent-{uuid4()}",
@@ -166,6 +169,7 @@ def target_position_intent(
         target_quantity=target_quantity,
         limit_price=limit_price,
         reason=reason,
+        asset_type=None if asset_type is None else AssetType(str(asset_type)),
     )
 
 

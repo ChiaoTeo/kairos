@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from kairospy.infrastructure.integrations.services.gateways.massive.client import MassiveStocksRestClient
+import pytest
+
+from kairospy.infrastructure.integrations.services.gateways.massive.client import MassiveStocksRequestError, MassiveStocksRestClient
 from kairospy.application.usecases.reference.application.builders import catalog_from_market_snapshot
 
 
@@ -71,3 +73,50 @@ def test_option_contracts_are_reference_rows_and_keep_contract_identity() -> Non
     assert instrument.multiplier == Decimal("100")
     assert instrument.expiry is not None
     assert driver.calls[0][1].endswith("/v3/reference/options/contracts")
+
+
+def test_massive_option_contracts_follow_next_url_until_limit() -> None:
+    class PagingResponse:
+        status_code = 200
+        text = "{}"
+
+        def __init__(self, page: int) -> None:
+            self.page = page
+
+        def json(self):
+            if self.page == 1:
+                return {"results": [{"ticker": "O:SPY260821P00500000"}], "next_url": "https://api.massiveprivateserver.site/v3/reference/options/contracts?cursor=next"}
+            return {"results": [{"ticker": "O:SPY260821P00510000"}]}
+
+    class PagingDriver:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def request(self, method, url, *, params=None, headers=None):
+            self.calls.append((method, url, params, headers))
+            return PagingResponse(len(self.calls))
+
+    driver = PagingDriver()
+    rows = MassiveStocksRestClient(api_key="test-key", driver=driver).option_contracts("SPY", limit=2)
+
+    assert tuple(row["ticker"] for row in rows) == (
+        "O:SPY260821P00500000",
+        "O:SPY260821P00510000",
+    )
+    assert driver.calls[1][1] == "https://api.massiveprivateserver.site/v3/reference/options/contracts?cursor=next"
+
+
+def test_massive_option_contracts_reject_malformed_reference_response() -> None:
+    class MalformedResponse:
+        status_code = 200
+        text = "{}"
+
+        def json(self):
+            return {}
+
+    class MalformedDriver:
+        def request(self, method, url, *, params=None, headers=None):
+            return MalformedResponse()
+
+    with pytest.raises(MassiveStocksRequestError, match="no results list"):
+        tuple(MassiveStocksRestClient(api_key="test-key", driver=MalformedDriver()).option_contracts("SPY"))

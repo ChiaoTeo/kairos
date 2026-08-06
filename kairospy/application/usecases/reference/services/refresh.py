@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from kairospy.domain.reference import LifecycleEvent, MarketDefinition, ReferenceCatalog
+from kairospy.domain.reference import ReferenceCatalog
 from kairospy.application.usecases.reference.protocol import ReferenceStore
 from kairospy.application.usecases.reference.application.results import ReferenceRefreshResult
 from kairospy.application.usecases.reference.services.catalogs import ReferenceCatalogService
@@ -28,10 +28,24 @@ class ReferenceRefreshService:
         as_of: datetime,
         venue: str | None = None,
         market: str | None = None,
+        underlying: str | None = None,
     ) -> ReferenceRefreshResult:
+        """Apply a complete snapshot for the requested scope.
+
+        Missing markets are treated as delisted only inside ``venue``,
+        ``market`` and ``underlying``. A filtered provider response must never
+        remove another underlying from the catalog.
+        """
         catalogs = self.catalogs
         catalog = catalogs.catalog()
-        transition = apply_catalog_snapshot(catalog, snapshot, as_of=as_of, venue=venue, market=market)
+        transition = apply_catalog_snapshot(
+            catalog,
+            snapshot,
+            as_of=as_of,
+            venue=venue,
+            market=market,
+            underlying=underlying,
+        )
         result = ReferenceRefreshResult(
             transition.catalog,
             transition.events,

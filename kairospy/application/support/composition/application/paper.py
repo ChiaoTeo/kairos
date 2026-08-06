@@ -13,7 +13,7 @@ from kairospy.application.support.composition.application.integrations import co
 from kairospy.infrastructure.integrations.application.connections import TransportKind
 from kairospy.infrastructure.persistence.application.market_data import DataStore
 
-from .common import ComposedLaunch, in_memory_message_bus, optional_default_text, reference_runtime
+from .common import ComposedLaunch, in_memory_message_bus, optional_default_text, reference_runtime, reference_underlyings
 from .runtime import compose_runtime_assembly
 from .notifications import build_notification_application, notification_runtime_settings
 
@@ -46,6 +46,7 @@ class PaperComposition:
                 configured.launch_directory,
                 default_venue=configured.account_config.venue,
                 default_market=_paper_default_market(configured.normalized_config),
+                underlyings=reference_underlyings(configured.normalized_config),
                 credential=_massive_credential(configured.feeds),
             ),
             trading_execution=resources.execution,

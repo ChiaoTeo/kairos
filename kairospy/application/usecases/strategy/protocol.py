@@ -65,6 +65,7 @@ class StrategySubscriptionRequest:
     market_type: str | None = None
     identity: str | None = None
     params: Mapping[str, object] = field(default_factory=dict)
+    dynamic: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "selectors", tuple(self.selectors))

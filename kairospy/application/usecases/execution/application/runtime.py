@@ -11,6 +11,7 @@ from kairospy.application.usecases.execution.services.runtime.projections import
 from kairospy.application.usecases.execution.services.runtime.simulated import SimulatedExecutionRuntimeService
 from kairospy.application.usecases.execution.services.simulation import ImmediateFillModel, PercentageCommissionModel
 from kairospy.application.usecases.execution.services.coordinator import ExecutionCoordinator
+from kairospy.application.usecases.execution.protocol import OrderAuditStore
 from kairospy.application.usecases.execution.domain.policy import ExecutionSafetyPolicy
 from kairospy.application.usecases.execution.domain.simulation import BasisPointSlippageModel
 from kairospy.application.usecases.risk.application.budget import RiskApplication
@@ -18,8 +19,8 @@ from kairospy.application.usecases.risk.application.runtime import build_risk_ap
 from .component import ExecutionApplication
 
 
-def build_execution_coordinator(*, risk: RiskApplication | None = None) -> ExecutionCoordinator:
-    return ExecutionCoordinator(risk=risk or build_risk_application())
+def build_execution_coordinator(*, risk: RiskApplication | None = None, audit_store: OrderAuditStore | None = None, instance_id: str = "local") -> ExecutionCoordinator:
+    return ExecutionCoordinator(risk=risk or build_risk_application(), audit_store=audit_store, instance_id=instance_id)
 
 
 def build_backtest_runtime(coordinator: object, **kwargs: object) -> BacktestExecutionService:

@@ -17,7 +17,7 @@ from kairospy.application.usecases.execution.application.runtime import (
 )
 from kairospy.application.usecases.account.application.runtime import BacktestAccountService
 from kairospy.application.support.launch.application.configuration import ConfiguredBacktest
-from kairospy.application.support.composition.application.integrations import connect_binance_spot_account, connect_binance_spot_execution, integration_application
+from kairospy.application.support.composition.application.integrations import connect_binance_equity_execution, connect_binance_options_account, connect_binance_options_execution, connect_binance_spot_account, connect_binance_spot_execution, integration_application
 from kairospy.application.support.launch.application.configuration import slippage_model
 from kairospy.application.usecases.account.application.runtime import LiveAccountService
 from kairospy.application.usecases.account.protocol import AccountLoginPort, AccountLoginRequest, AccountLoginResult, AccountReadRequest, AccountSession
@@ -28,6 +28,8 @@ from kairospy.application.support.launch.application.configuration import Config
 from kairospy.application.support.launch.application.configuration import LaunchAccountConfig
 from kairospy.domain.account import ExternalAccountIdentity, AccountSegment, AccountCapability, AccountRuntimeContext, AccountFeeSchedule, Environment, account_segment_from_name
 from kairospy.domain.reference import MarketResolver
+from kairospy.infrastructure.persistence.services.execution.sqlite_audit import SqliteOrderAuditStore
+import os
 from kairospy.infrastructure.integrations.application.account import (
     ConnectionAccountMarketProfileData,
     ConnectionAccountMarketProfileRequest,
@@ -47,6 +49,7 @@ from kairospy.infrastructure.integrations.domain import (
     IntegrationCapability,
     IntegrationRoute,
     ProductFamily,
+    AssetType,
     TransportKind,
 )
 
@@ -66,7 +69,10 @@ class BacktestAccountResources:
             fee_rate=account_config.fee_rate,
             price_field=account_config.price_field,
         )
-        coordinator = build_execution_coordinator()
+        coordinator = build_execution_coordinator(
+            audit_store=_audit_store(configured.launch_directory, configured.launch_id),
+            instance_id=_instance_id(configured.launch_id),
+        )
         account_service = BacktestAccountService(account, coordinator.ledger)
         execution = build_backtest_runtime(
             coordinator,
@@ -99,7 +105,10 @@ class PaperAccountResources:
             fee_rate=account_config.fee_rate,
             price_field=str(configured.execution_config.get("price_field") or paper.get("price_field", "ask")),
         )
-        coordinator = build_execution_coordinator()
+        coordinator = build_execution_coordinator(
+            audit_store=_audit_store(configured.launch_directory, configured.launch_id),
+            instance_id=_instance_id(configured.launch_id),
+        )
         directory = _launch_account_directory(
             configured.launch_accounts,
             account_configs=configured.launch_account_configs,
@@ -159,7 +168,7 @@ class LiveAccountResources:
         account_config = configured.account_config
         primary_broker = account_config.venue
         primary_scope = _primary_scope(configured.launch_accounts, default="spot")
-        account = AccountRuntimeContext(account_segment_from_name(ExternalAccountIdentity(primary_broker, account_config.account_id), primary_book), Environment.LIVE)
+        account = AccountRuntimeContext(account_segment_from_name(ExternalAccountIdentity(primary_broker, account_config.account_id), primary_scope), Environment.LIVE)
         market_resolver = MarketResolver(default_venue=primary_broker)
         account_application = replace(account_application, market_resolver=market_resolver)
         parser = account_application.payload_translator
@@ -200,7 +209,10 @@ class LiveAccountResources:
         private_streams = _account_private_streams(read_clients, account_application)
         account_gateway_resolver = _MappedLiveAccountGatewayResolver(read_brokers, private_streams)
         trade_broker_resolver = _client_resolver(trade_clients)
-        coordinator = build_execution_coordinator()
+        coordinator = build_execution_coordinator(
+            audit_store=_audit_store(configured.launch_directory, configured.launch_id),
+            instance_id=_instance_id(configured.launch_id),
+        )
         capabilities = _capabilities(directory, configured.launch_account_configs, fallback=account_config)
         fees = _fees(directory, configured.launch_account_configs, fallback=account_config)
         routes = _routes(directory, configured.launch_account_configs, fallback=account_config)
@@ -248,7 +260,7 @@ def _from_configured_integration(
     account_config = configured.account_config
     primary_broker = account_config.venue
     primary_scope = _primary_scope(configured.launch_accounts, default="spot")
-    account = AccountRuntimeContext(account_segment_from_name(ExternalAccountIdentity(primary_broker, account_config.account_id), primary_book), Environment.LIVE)
+    account = AccountRuntimeContext(account_segment_from_name(ExternalAccountIdentity(primary_broker, account_config.account_id), primary_scope), Environment.LIVE)
     market_resolver = MarketResolver(default_venue=primary_broker)
     directory = _launch_account_directory(
         configured.launch_accounts,
@@ -260,7 +272,7 @@ def _from_configured_integration(
     )
     read_connections: dict[AccountSegment, object] = {}
     private_connections: dict[AccountSegment, object] = {}
-    execution_connections: dict[AccountSegment, object] = {}
+    execution_connections: dict[object, object] = {}
     resources: dict[str, object] = {}
     earn_applications: dict[AccountSegment, EarnApplication] = {}
     for binding in directory.bindings:
@@ -273,11 +285,13 @@ def _from_configured_integration(
             product = _integration_product(segment)
             broker_name = _canonical_broker_name(context.segment.broker)
             route = IntegrationRoute(broker=BrokerRef(BrokerId(broker_name)))
-            account_capability = (
-                IntegrationCapability.EARN
-                if product is None and str(segment.segment_id).lower() == "earn"
-                else IntegrationCapability.ACCOUNT_MARKET_PROFILE_READ
-            )
+            segment_id = str(segment.segment_id).lower()
+            if product is None and segment_id == "earn":
+                account_capability = IntegrationCapability.EARN
+            elif product is None and segment_id == "funding":
+                account_capability = IntegrationCapability.ACCOUNT_READ
+            else:
+                account_capability = IntegrationCapability.ACCOUNT_MARKET_PROFILE_READ
             product_label = product.value if product is not None else str(segment.segment_id)
             rest_connection = integration.connect(
                 IntegrationConnectionSpec(
@@ -324,14 +338,35 @@ def _from_configured_integration(
                     )
                 )
                 execution_connections[segment] = execution_connection
+                if broker_name == "binance" and product is ProductFamily.SPOT:
+                    equity_execution_connection = integration.connect(
+                        IntegrationConnectionSpec(
+                            connection_id=f"live.{broker_name}.equity.{segment.value}.execution-rest",
+                            route=route,
+                            product=product,
+                            asset_type=AssetType.EQUITY,
+                            access=AccessScope.PRIVATE,
+                            transport=TransportKind.REST,
+                            capability=IntegrationCapability.ORDER_ENTRY,
+                            credential=credential,
+                            mode=IntegrationRuntimeMode.LIVE,
+                        )
+                    )
+                    execution_connections[(segment, AssetType.EQUITY)] = equity_execution_connection
             resources[rest_connection.identity.connection_id] = rest_connection
             if stream_connection is not None:
                 resources[stream_connection.identity.connection_id] = stream_connection
             if product is not None:
                 resources[execution_connection.identity.connection_id] = execution_connection
+                if (segment, AssetType.EQUITY) in execution_connections:
+                    equity_connection = execution_connections[(segment, AssetType.EQUITY)]
+                    resources[equity_connection.identity.connection_id] = equity_connection
     if not read_connections:
         raise LiveConfigurationError("live account configuration produced no account connections")
-    coordinator = build_execution_coordinator()
+    coordinator = build_execution_coordinator(
+        audit_store=_audit_store(configured.launch_directory, configured.launch_id),
+        instance_id=_instance_id(configured.launch_id),
+    )
     primary_read = read_connections.get(account.segment) or next(iter(read_connections.values()))
     primary_private = private_connections.get(account.segment)
     capabilities = _capabilities(directory, configured.launch_account_configs, fallback=account_config)
@@ -376,12 +411,27 @@ def _from_configured_integration(
 
 
 def _default_live_broker(segment: AccountSegment, credential: str | None) -> object:
+    if segment.product_family is ProductFamily.OPTIONS:
+        return connect_binance_options_account(
+            f"live.binance.options.{segment.value}.{credential or 'default'}",
+            credential=credential,
+            mode=IntegrationRuntimeMode.LIVE,
+        )
     connection = connect_binance_spot_account(
         f"live.binance.spot.{segment.value}.{credential or 'default'}",
         credential=credential,
         mode=IntegrationRuntimeMode.LIVE,
     )
     return connection
+
+
+def _instance_id(launch_id: str) -> str:
+    return os.environ.get("KAIROS_LAUNCH_INSTANCE_ID") or f"{launch_id}:{os.getpid()}"
+
+
+def _audit_store(directory: object, launch_id: str) -> SqliteOrderAuditStore:
+    path = str(directory)
+    return SqliteOrderAuditStore(f"{path}/run.sqlite", instance_id=_instance_id(launch_id))
 
 
 def _live_broker_factory():
@@ -398,11 +448,25 @@ def _live_order_connection(
 ) -> object:
     if custom_client is not None or custom_client_resolver is not None:
         raise ValueError("custom live clients are not supported by the Binance Spot connection assembly")
-    return connect_binance_spot_execution(
+    if segment.product_family is ProductFamily.OPTIONS:
+        return {
+            segment: connect_binance_options_execution(
+                f"live.binance.options.{segment.value}.execution.{credential or 'default'}",
+                credential=credential,
+                mode=IntegrationRuntimeMode.LIVE,
+            )
+        }
+    spot = connect_binance_spot_execution(
         f"live.binance.spot.{segment.value}.execution.{credential or 'default'}",
         credential=credential,
         mode=IntegrationRuntimeMode.LIVE,
     )
+    equity = connect_binance_equity_execution(
+        f"live.binance.equity.{segment.value}.execution.{credential or 'default'}",
+        credential=credential,
+        mode=IntegrationRuntimeMode.LIVE,
+    )
+    return {segment: spot, (segment, AssetType.EQUITY): equity}
 
 
 def _primary_scope(accounts: Mapping[str, LaunchAccountConfig], *, default: str) -> str:
@@ -427,7 +491,10 @@ def _launch_account_directory(
     for alias, config in accounts.items():
         account_config = account_configs.get(alias, fallback)
         broker = account_config.venue or fallback_broker
-        segments = config.segments or default_account_segments(broker, fallback=default_segment)
+        # Launches must opt into additional venue account products explicitly.
+        # Falling back to every broker-supported segment can open endpoints
+        # that the credential does not use or cannot access.
+        segments = config.segments or (default_segment,)
         contexts = tuple(AccountRuntimeContext(account_segment_from_name(ExternalAccountIdentity(broker, account_config.account_id), segment), environment) for segment in segments)
         bindings.append(AccountBinding(alias, config.index, contexts, ref=config.ref, trade=config.trade))
     return AccountDirectory(tuple(bindings))
@@ -451,6 +518,9 @@ def _capability(segment: AccountSegment, *, trade: bool = True) -> AccountCapabi
 
 
 def _integration_product(segment: AccountSegment) -> ProductFamily | None:
+    segment_id = str(segment.segment_id).lower()
+    if segment_id in {"funding", "earn"}:
+        return None
     value = str(segment.product_family or segment.model)
     if value in {"swap", "perpetual", "perpetuals"}:
         return ProductFamily.USD_M_FUTURES
@@ -458,8 +528,6 @@ def _integration_product(segment: AccountSegment) -> ProductFamily | None:
         return ProductFamily.USD_M_FUTURES
     if value == "options":
         return ProductFamily.OPTIONS
-    if value == "earn":
-        return None
     if value == "coin_m_futures":
         return ProductFamily.COIN_M_FUTURES
     return ProductFamily.SPOT
@@ -684,7 +752,7 @@ class _AccountStreamAdapter:
 
 @dataclass(frozen=True, slots=True)
 class _MappedExecutionUpdateSource:
-    connections: Mapping[AccountSegment, object]
+    connections: Mapping[object, object]
 
     def events(self, account: AccountRuntimeContext, *, symbol: str | None = None):
         connection = self.connections.get(account.segment)

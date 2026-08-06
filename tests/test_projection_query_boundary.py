@@ -22,15 +22,16 @@ class FakeProjectionReader:
 def test_projection_query_consumes_support_owned_reader_protocol(tmp_path: Path) -> None:
     service = LaunchProjectionService(FakeProjectionReader(tmp_path))
 
-    assert service.load("launch.summary") == {"launch_id": "demo"}
+    assert service.load("run.summary") == {"launch_id": "demo"}
 
 
 def test_projection_query_can_be_composed_with_filesystem_reader(tmp_path: Path) -> None:
     from kairospy.application.support.composition.application.projections import launch_projection_query
+    from kairospy.infrastructure.persistence.services.artifacts.run_sqlite import RunSqliteStore
 
-    (tmp_path / "summary.json").write_text('{"launch_id": "demo"}\n', encoding="utf-8")
+    RunSqliteStore(tmp_path / "run.sqlite").write_json("summary", {"launch_id": "demo"})
 
-    assert launch_projection_query(tmp_path).load("launch.summary") == {"launch_id": "demo"}
+    assert launch_projection_query(tmp_path).load("run.summary") == {"launch_id": "demo"}
 
 
 def test_projection_instance_discovery_is_composed_from_infrastructure(tmp_path: Path) -> None:
@@ -38,11 +39,13 @@ def test_projection_instance_discovery_is_composed_from_infrastructure(tmp_path:
         find_latest_instance,
         list_instances,
     )
+    from kairospy.infrastructure.persistence.services.artifacts.run_sqlite import RunSqliteStore
 
     instance = tmp_path / "paper" / "demo" / "instances" / "one"
     instance.mkdir(parents=True)
-    (instance / "summary.json").write_text('{"launch_id": "demo", "mode": "paper"}\n', encoding="utf-8")
-    (instance / "timeline.jsonl").write_text('{"time": "2026-01-01T00:00:00Z"}\n', encoding="utf-8")
+    store = RunSqliteStore(instance / "run.sqlite")
+    store.write_json("summary", {"launch_id": "demo", "mode": "paper"})
+    store.append_record("records", {"time": "2026-01-01T00:00:00Z"})
 
     assert find_latest_instance(tmp_path, mode="paper", launch_id="demo") == instance
     assert list_instances(tmp_path, mode="paper", launch_id="demo")[0]["directory"] == str(instance)

@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from kairospy.domain.reference.catalog import ReferenceCatalog
-from kairospy.domain.reference.model import LifecycleEvent, ListingDefinition, MarketDefinition, MarketStatus
+from kairospy.domain.reference.model import InstrumentDefinition, LifecycleEvent, LifecycleEventType, ListingDefinition, MarketDefinition, MarketStatus
 
 from kairospy.application.usecases.reference.domain.serde import (
     asset_to_primitive,
@@ -32,14 +32,29 @@ def apply_catalog_snapshot(
     as_of: datetime,
     venue: str | None = None,
     market: str | None = None,
+    underlying: str | None = None,
 ) -> ReferenceCatalogTransition:
-    previous_markets = catalog.list_markets(at=as_of, venue=venue, market=market, active_only=True)
-    current_markets = snapshot.list_markets(at=as_of, venue=venue, market=market)
-    events = ReferenceCatalog.diff_markets(previous_markets, current_markets, event_time=as_of)
+    previous_markets = tuple(
+        item
+        for item in catalog.list_markets(at=as_of, venue=venue, market=market, active_only=True)
+        if _in_scope_market(catalog, item, as_of=as_of, underlying=underlying)
+    )
+    current_markets = tuple(
+        item
+        for item in snapshot.list_markets(at=as_of, venue=venue, market=market)
+        if _in_scope_market(snapshot, item, as_of=as_of, underlying=underlying)
+    )
+    _reject_unexpected_empty_snapshot(catalog, previous_markets, current_markets, as_of=as_of)
+    events = _classify_terminal_events(
+        ReferenceCatalog.diff_markets(previous_markets, current_markets, event_time=as_of),
+        catalog,
+        previous_markets,
+        as_of=as_of,
+    )
 
     _merge_static_definitions(catalog, snapshot, as_of=as_of)
     for listing in snapshot.listings():
-        if _in_scope_listing(listing, snapshot, as_of=as_of, venue=venue, market=market):
+        if _in_scope_listing(listing, snapshot, as_of=as_of, venue=venue, market=market, underlying=underlying):
             _merge_listing(catalog, listing, as_of=as_of)
     for current in current_markets:
         _merge_market(catalog, current, as_of=as_of)
@@ -48,12 +63,13 @@ def apply_catalog_snapshot(
     for previous in previous_markets:
         if str(previous.market_id) in current_ids:
             continue
-        delisted_market = replace(previous, status=MarketStatus.DELISTED, effective_from=as_of, effective_to=None)
-        catalog.supersede_market(delisted_market, as_of)
+        terminal_status = _terminal_status(catalog, previous, as_of=as_of)
+        terminal_market = replace(previous, status=terminal_status, effective_from=as_of, effective_to=None)
+        catalog.supersede_market(terminal_market, as_of)
         previous_listing = catalog.maybe_get_listing(previous.listing_id, as_of)
         if previous_listing is not None:
             catalog.supersede_listing(
-                replace(previous_listing, status=MarketStatus.DELISTED, effective_from=as_of, effective_to=None),
+                replace(previous_listing, status=terminal_status, effective_from=as_of, effective_to=None),
                 as_of,
             )
     return ReferenceCatalogTransition(catalog, events, previous_markets, current_markets)
@@ -111,10 +127,96 @@ def _in_scope_listing(
     as_of: datetime,
     venue: str | None,
     market: str | None,
+    underlying: str | None,
 ) -> bool:
     if venue is not None and str(listing.venue) != str(venue):
         return False
-    return any(item.listing_id == listing.listing_id for item in snapshot.list_markets(at=as_of, venue=venue, market=market))
+    return any(
+        item.listing_id == listing.listing_id
+        and _in_scope_market(snapshot, item, as_of=as_of, underlying=underlying)
+        for item in snapshot.list_markets(at=as_of, venue=venue, market=market)
+    )
+
+
+def _in_scope_market(
+    catalog: ReferenceCatalog,
+    market: MarketDefinition,
+    *,
+    as_of: datetime,
+    underlying: str | None,
+) -> bool:
+    if underlying is None:
+        return True
+    instrument = catalog.maybe_get_instrument(market.instrument_id, as_of)
+    return instrument is not None and _underlying_matches(instrument, underlying)
+
+
+def _underlying_matches(instrument: InstrumentDefinition, underlying: str) -> bool:
+    expected = str(underlying).strip().casefold()
+    if not expected:
+        return True
+    value = str(instrument.underlying_instrument_id or "").casefold()
+    return value == expected or value.rsplit(":", 1)[-1] == expected
+
+
+def _terminal_status(catalog: ReferenceCatalog, market: MarketDefinition, *, as_of: datetime) -> MarketStatus:
+    instrument = catalog.maybe_get_instrument(market.instrument_id, as_of)
+    if instrument is not None and instrument.expiry is not None and instrument.expiry <= as_of:
+        return MarketStatus.EXPIRED
+    return MarketStatus.DELISTED
+
+
+def _classify_terminal_events(
+    events: tuple[LifecycleEvent, ...],
+    catalog: ReferenceCatalog,
+    previous_markets: tuple[MarketDefinition, ...],
+    *,
+    as_of: datetime,
+) -> tuple[LifecycleEvent, ...]:
+    previous_by_id = {str(item.market_id): item for item in previous_markets}
+    classified: list[LifecycleEvent] = []
+    for event in events:
+        market = previous_by_id.get(str(event.market_id))
+        if event.event_type is not LifecycleEventType.DELISTED or market is None:
+            classified.append(event)
+            continue
+        status = _terminal_status(catalog, market, as_of=as_of)
+        if status is MarketStatus.EXPIRED:
+            classified.append(replace(event, event_type=LifecycleEventType.EXPIRED, current={"status": status.value}))
+        else:
+            classified.append(event)
+    return tuple(classified)
+
+
+def _reject_unexpected_empty_snapshot(
+    catalog: ReferenceCatalog,
+    previous_markets: tuple[MarketDefinition, ...],
+    current_markets: tuple[MarketDefinition, ...],
+    *,
+    as_of: datetime,
+) -> None:
+    """Keep the last catalog when a live scope suddenly becomes empty.
+
+    Empty is a valid terminal state only when the scope had no active markets
+    or all its contracts had already expired. This check runs before the
+    transition mutates the catalog, so a rejected refresh is side-effect free.
+    """
+    if current_markets or not previous_markets:
+        return
+    live = tuple(
+        item
+        for item in previous_markets
+        if (
+            (instrument := catalog.maybe_get_instrument(item.instrument_id, as_of)) is None
+            or instrument.expiry is None
+            or instrument.expiry > as_of
+        )
+    )
+    if live:
+        raise ValueError(
+            "reference provider returned an empty snapshot for an active scope; "
+            f"refusing to mark {len(live)} active markets as delisted"
+        )
 
 
 def _listing_signature(listing: ListingDefinition) -> Mapping[str, object]:

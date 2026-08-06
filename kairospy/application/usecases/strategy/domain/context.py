@@ -53,6 +53,7 @@ class StrategyContextProtocol(Protocol):
         selectors: Sequence[MarketSelector | type],
         identity: str | None = None,
         params: Mapping[str, object] | None = None,
+        dynamic: bool = False,
     ) -> object:
         ...
 
@@ -66,6 +67,7 @@ class StrategyContextProtocol(Protocol):
         market_type: MarketTypeId | str | None = None,
         identity: str | None = None,
         params: Mapping[str, object] | None = None,
+        dynamic: bool = False,
     ) -> object:
         ...
 

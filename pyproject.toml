@@ -41,8 +41,5 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["kairospy*"]
 
-[tool.setuptools.package-data]
-"kairospy.surface.timeline" = ["static/index.html", "static/assets/*"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]

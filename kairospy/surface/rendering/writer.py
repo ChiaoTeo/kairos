@@ -157,7 +157,7 @@ def _rows(result: object) -> Iterable[Mapping[str, object]]:
             if isinstance(value, list) and all(isinstance(row, Mapping) for row in value):
                 return value
         return (result,)
-    if isinstance(result, list):
+    if isinstance(result, (list, tuple)):
         return (row for row in result if isinstance(row, Mapping))
     return ()
 

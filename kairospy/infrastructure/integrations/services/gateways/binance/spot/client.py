@@ -41,6 +41,7 @@ class BinanceSpotRestClient:
     )
     driver: HttpDriver = field(default_factory=HttpDriver)
     time_provider: MillisecondClock = field(default_factory=lambda: lambda: int(time.time() * 1000))
+    clock_offset_ms: int = field(init=False, default=0)
     api_key: str | None = field(init=False, default=None, repr=False)
     secret: str | None = field(init=False, default=None, repr=False)
 
@@ -65,21 +66,42 @@ class BinanceSpotRestClient:
         if signed:
             if not self.secret:
                 raise BinanceRequestError("Binance signed request requires an API secret")
-            query.setdefault("recvWindow", 5000)
-            query["timestamp"] = self.time_provider()
-            query["signature"] = hmac.new(
-                self.secret.encode("utf-8"),
-                urlencode(tuple((key, str(value)) for key, value in query.items()), doseq=True).encode("utf-8"),
-                hashlib.sha256,
-            ).hexdigest()
+            query.setdefault("recvWindow", 10000)
+            self._sign(query)
         response = self.driver.request(method, self._url(path), params=query, headers=headers)
         payload = _response_payload(response)
+        if signed and response.status_code >= 400:
+            code, _ = _error_payload(payload)
+            if code == -1021:
+                try:
+                    self._synchronize_clock()
+                    self._sign(query)
+                    response = self.driver.request(method, self._url(path), params=query, headers=headers)
+                    payload = _response_payload(response)
+                except Exception:
+                    pass
         if response.status_code >= 400:
             code, message = _error_payload(payload)
             if _is_html_error(message):
                 message = f"Binance returned a non-JSON error page (HTTP {response.status_code}); the endpoint may be unavailable for this account or region"
             raise BinanceRequestError(message or f"Binance request failed with HTTP {response.status_code}", code=code, status_code=response.status_code, payload=payload)
         return payload
+
+    def _sign(self, query: dict[str, Any]) -> None:
+        query["timestamp"] = self.time_provider() + self.clock_offset_ms
+        query.pop("signature", None)
+        assert self.secret is not None
+        query["signature"] = hmac.new(
+            self.secret.encode("utf-8"),
+            urlencode(tuple((key, str(value)) for key, value in query.items()), doseq=True).encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def _synchronize_clock(self) -> None:
+        payload = self.request("GET", "/api/v3/time")
+        if not isinstance(payload, Mapping) or payload.get("serverTime") is None:
+            raise BinanceRequestError("Binance time endpoint returned no serverTime", payload=payload)
+        self.clock_offset_ms = int(payload["serverTime"]) - self.time_provider()
 
     def get(self, path: str, *, params: Mapping[str, Any] | None = None, signed: bool = False) -> object:
         return self.request("GET", path, params=params, signed=signed)

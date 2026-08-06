@@ -106,6 +106,15 @@ class MarketApplication:
     def subscriptions(self) -> tuple[DataSubscription, ...]:
         return self._subscription_state.subscriptions()
 
+    def register_dynamic_subscription(self, key: str) -> None:
+        self._subscription_state.register_dynamic(key)
+
+    def unregister_dynamic_subscription(self, key: str) -> None:
+        self._subscription_state.unregister_dynamic(key)
+
+    def has_subscription_intents(self) -> bool:
+        return self._subscription_state.has_subscription_intents()
+
     def feed_watches(self, subscription: DataSubscription) -> tuple[MarketFeedWatchPlan, ...]:
         return self._planning.feed_watches(subscription)
 

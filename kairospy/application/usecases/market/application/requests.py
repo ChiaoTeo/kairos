@@ -217,6 +217,7 @@ from kairospy.application.usecases.market.domain.specs import MarketDataSpec
 from kairospy.application.usecases.market.domain.subscriptions import (
     DataSubscription,
     DataSubscriptionGroup,
+    DynamicMarketDataSubscriptionSpec,
     MarketDataSubscriptionGroupSpec,
     MarketDataSubscriptionSpec,
 )
@@ -242,6 +243,7 @@ __all__ = [
     "MarketDataRow",
     "DataSubscription",
     "DataSubscriptionGroup",
+    "DynamicMarketDataSubscriptionSpec",
     "MarketDataSubscriptionGroupSpec",
     "MarketDataSubscriptionSpec",
     "parse_market_dataset_id",

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from kairospy.application.support.query.projections.service import LaunchProjectionService
 from kairospy.infrastructure.persistence.application.artifacts import (
-    JsonProjectionReader,
+    SqliteProjectionReader,
     find_projection_instance,
     list_projection_instances,
 )
@@ -13,7 +13,7 @@ from kairospy.infrastructure.persistence.application.artifacts import (
 def launch_projection_query(instance_path: str | Path) -> LaunchProjectionService:
     """Compose the Biz projection query with the concrete persistence reader."""
 
-    return LaunchProjectionService(JsonProjectionReader(instance_path))
+    return LaunchProjectionService(SqliteProjectionReader(instance_path))
 
 
 def find_latest_instance(root: str | Path, *, mode: str | None = None, launch_id: str | None = None) -> Path:

@@ -25,17 +25,17 @@ class StopAfter:
         return self.count >= self.limit
 
 
-async def listen(*, symbol: str | None, events: int, poll_seconds: float) -> None:
+async def listen(*, underlying: str, symbol: str | None, events: int) -> None:
     connection = connect_binance_options(
         "example.binance.options",
         transport=TransportKind.MARKET_STREAM,
         mode=RuntimeMode.LIVE,
     )
-    contracts = connection.contracts(underlying="BTC")  # type: ignore[attr-defined]
+    contracts = connection.contracts(underlying=underlying)  # type: ignore[attr-defined]
     selected = next((item for item in contracts if str(item.market.source_symbol) == symbol), None) if symbol else (sorted(contracts, key=lambda item: item.expiry)[0] if contracts else None)
     if selected is None:
         available = ", ".join(str(item.market.source_symbol) for item in contracts[:10])
-        raise RuntimeError(f"no Binance BTC option found; available sample: {available or 'none'}")
+        raise RuntimeError(f"no Binance {underlying} option found; available sample: {available or 'none'}")
     market = selected.market
     connections = IntegrationConnectionScope()
     data = build_live_market(
@@ -44,7 +44,7 @@ async def listen(*, symbol: str | None, events: int, poll_seconds: float) -> Non
         stream_connections={"binance-options": connection},
     )
     data.set_market_service(MarketApplication())
-    data.subscribe(MarketDataSubscriptionSpec(market, (Quote,), identity="example.binance.options.quote", params={"poll_seconds": poll_seconds}))
+    data.subscribe(MarketDataSubscriptionSpec(market, (Quote,), identity="example.binance.options.quote"))
     stop = StopAfter(events)
     data.set_stop_signal(stop)
     print(f"contract={selected.market.source_symbol} expiry={selected.expiry.isoformat()} strike={selected.strike} right={selected.right}", flush=True)
@@ -59,15 +59,13 @@ async def listen(*, symbol: str | None, events: int, poll_seconds: float) -> Non
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--underlying", choices=("BTC", "ETH"), default="BTC")
     parser.add_argument("--symbol", help="Binance option symbol, for example BTC-260925-60000-C")
     parser.add_argument("--events", type=int, default=5)
-    parser.add_argument("--poll-seconds", type=float, default=2.0)
     args = parser.parse_args(argv)
     if args.events < 1:
         raise SystemExit("--events must be positive")
-    if args.poll_seconds <= 0:
-        raise SystemExit("--poll-seconds must be positive")
-    asyncio.run(listen(symbol=args.symbol, events=args.events, poll_seconds=args.poll_seconds))
+    asyncio.run(listen(underlying=args.underlying, symbol=args.symbol, events=args.events))
 
 
 if __name__ == "__main__":

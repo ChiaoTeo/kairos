@@ -25,6 +25,20 @@ fee.market_rule
 fee.payment.discount
 ```
 
+读取账户状态时，账户和分区先显式选择，再调用 `view()`：
+
+```python
+futures = (
+    context.accounts
+    .account("binance_zhaoqian888666")
+    .segment("usd_m_futures")
+    .view()
+)
+```
+
+`only()` 只适用于 launch 明确只暴露一个账户分区的场景；它表达“唯一配置项”，
+不代表运行时存在一个隐式的默认账户。
+
 费率画像保留三类信息：
 
 1. `AccountFeeRule`：账户 VIP、账户费率或账户权限产生的规则。

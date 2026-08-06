@@ -212,7 +212,7 @@ def resolve_attach_target(
         root=launch_root,
         directory=directory,
         state_file=directory / "state.json",
-        log_file=_first_log_file((directory / "daemon.log", directory / "launch.log", directory / "events.jsonl")),
+        log_file=_first_log_file((directory / "daemon.log", directory / "launch.log")),
     )
 
 

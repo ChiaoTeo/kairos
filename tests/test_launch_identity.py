@@ -11,6 +11,7 @@ from kairospy.application.support.launch.application.control import daemon as da
 from kairospy.application.support.launch.application.control.daemon import LaunchDaemonService
 from kairospy.application.system.application.resources import TradingSystemResources
 from kairospy.application.support.launch.application.launcher import LaunchTargetDescriptor
+from kairospy.infrastructure.persistence.services.artifacts.run_sqlite import RunSqliteStore
 
 
 def test_foreground_launch_propagates_one_instance_id_to_runtime_and_artifacts(
@@ -61,7 +62,7 @@ def test_foreground_launch_propagates_one_instance_id_to_runtime_and_artifacts(
     group = tmp_path / "launches" / "paper" / "identity-test-launch"
     current = json.loads((group / "current.json").read_text())
     state = json.loads((result.state_path).read_text())
-    summary = json.loads((result.summary_path).read_text())
+    summary = RunSqliteStore(result.run_path).read_json("summary")
     assert current["launch_instance_id"] == result.launch_instance_id
     assert state["launch_instance_id"] == result.launch_instance_id
     assert summary["launch_instance_id"] == result.launch_instance_id

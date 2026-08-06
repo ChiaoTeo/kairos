@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -55,7 +55,7 @@ class AccountCurrentProjector:
         self._count = 0
         self._last: Message | None = None
         self._payload: AccountViewObservation | None = None
-        initial_view = service.current_view(context)
+        initial_view = service.current_view(context, now=datetime.now(timezone.utc))
         self._initial: Decimal | None = initial_view.equity
         self._latest: Decimal | None = None
 

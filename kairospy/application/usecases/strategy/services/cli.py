@@ -46,7 +46,7 @@ class CliStrategyBase(StrategyBase):
             self.target_position(context, command)
             return None
         if command.name == "account.current":
-            context.accounts.current(_optional_text(command.args.get("account")))
+            context.accounts.view(_optional_text(command.args.get("account")))
             return None
         if command.name == "account.balance":
             context.accounts.balance(str(command.args.get("currency") or ""), account=_optional_text(command.args.get("account")))

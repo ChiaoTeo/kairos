@@ -93,6 +93,7 @@ def configured_paper(
     paper = _table(launch_config.values.get("paper"), "paper")
     market_config = _table(launch_config.values.get("market"), "market") if launch_config.values.get("market") is not None else {}
     feeds_config = common_parse_feeds(launch_config.values.get("feeds"), error_type=PaperConfigurationError)
+    reference_config = _table(launch_config.values.get("reference"), "reference") if launch_config.values.get("reference") is not None else {}
     timeline_config = _table(launch_config.values.get("timeline"), "timeline") if launch_config.values.get("timeline") is not None else {}
     execution_config = _table(launch_config.values.get("execution"), "execution") if launch_config.values.get("execution") is not None else {}
     notifications_config = _table(launch_config.values.get("notifications"), "notifications") if launch_config.values.get("notifications") is not None else {}
@@ -138,6 +139,7 @@ def configured_paper(
             "strategy": {"params": dict(_strategy_params(launch_config.values))},
             "paper": dict(paper),
             "feeds": {key: dict(feed.values or {}) for key, feed in feeds_config.items()},
+            "reference": dict(reference_config),
             **({} if not market_config else {"market": dict(market_config)}),
             "account": {"ref": account_ref, "initial_balances": dict(account_config.initial_balances), "fee_rate": account_config.fee_rate},
             "accounts": {key: {"ref": value.ref, "index": value.index, "segments": list(value.segments), "trade": value.trade} for key, value in launch_config.launch_accounts.items()},

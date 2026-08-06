@@ -5,16 +5,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable, Mapping
+from dataclasses import replace
 from typing import Protocol
 
-from kairospy.application.actor.market.application.reference import ReferenceActor, reference_poll_interval
 from kairospy.application.actor.support.base import BusinessActor
 from kairospy.application.support.messaging import Message, MessageBus
 from kairospy.application.support.runtime.application.interaction import SystemCallDecision, SystemCallResult
 from kairospy.application.support.runtime.domain.commands import CommandHandle, RuntimeCommand, RuntimeCommandStatus
-from kairospy.application.usecases.market.application.requests import DataSubscription, DataSubscriptionGroup, MarketDataSubscriptionGroupSpec, MarketDataSubscriptionSpec, parse_market_dataset_id
+from kairospy.application.usecases.market.application.requests import DataSubscription, DataSubscriptionGroup, DynamicMarketDataSubscriptionSpec, MarketDataSubscriptionGroupSpec, MarketDataSubscriptionSpec, parse_market_dataset_id
 from kairospy.application.usecases.strategy.protocol import StrategySubscriptionGroupRequest, StrategySubscriptionRequest
 from kairospy.domain.reference import MarketResolver
+from kairospy.domain.market.selection import MarketSelection, MarketSelectionQuery
 from kairospy.application.usecases.market.application.component import MarketApplication
 from kairospy.application.usecases.market.application.requests import MarketDataSpec
 from kairospy.application.usecases.reference.application.component import ReferenceApplication
@@ -46,8 +47,10 @@ class MarketProjectors(Protocol):
 class MarketActor(BusinessActor):
     """Own market data and reference-facing market resources."""
 
-    def __init__(self, source: MarketRuntime | None, bus: MessageBus, *, market_service: MarketApplication | None = None, reference: ReferenceApplication | None = None, reference_poll_interval_seconds: float = 300.0, connections: ConnectionManager | None = None, publish_connection_health: Callable[[Mapping[str, object]], None] | None = None, projectors: MarketProjectors | None = None) -> None:
+    def __init__(self, source: MarketRuntime | None, bus: MessageBus, *, market_service: MarketApplication | None = None, reference: ReferenceApplication | None = None, connections: ConnectionManager | None = None, publish_connection_health: Callable[[Mapping[str, object]], None] | None = None, projectors: MarketProjectors | None = None, max_dynamic_members: int | None = None) -> None:
         super().__init__("market", bus=bus)
+        if max_dynamic_members is not None and max_dynamic_members <= 0:
+            raise ValueError("market max_dynamic_members must be positive")
         self.runtime = source
         # A live feed normally runs forever, but a launch stop request ends
         # its event loop cooperatively. Mark it finite whenever the source
@@ -55,14 +58,16 @@ class MarketActor(BusinessActor):
         # completion instead of waiting forever on the message inbox.
         self.is_finite = bool(getattr(source, "is_finite", False)) or callable(getattr(source, "set_stop_signal", None))
         self.market_service = market_service
+        self.reference = reference
         self.projectors = projectors
         self._connections = connections
         self._publish_connection_health = publish_connection_health
+        self.max_dynamic_members = max_dynamic_members
         self._connection_roles = ("market_stream", "market_data", "market_feed")
-        self.reference_actor = None if reference is None else ReferenceActor(reference, bus, poll_interval_seconds=reference_poll_interval_seconds)
         self.policy: Callable[[RuntimeCommand], RuntimeCommandStatus | None] | None = None
         self._handles: dict[str, CommandHandle] = {}
         self._results: dict[str, SystemCallResult] = {}
+        self._dynamic_subscriptions: dict[str, tuple[DynamicMarketDataSubscriptionSpec, tuple[str, ...]]] = {}
 
     def call(self, command: RuntimeCommand) -> SystemCallResult:
         """Handle a market command as part of the market Actor boundary."""
@@ -83,6 +88,8 @@ class MarketActor(BusinessActor):
                 self._subscribe(handle, command.payload)
             elif command.kind == "market.subscribe.batch":
                 self._subscribe_batch(handle, command.payload)
+            elif command.kind == "market.subscribe.dynamic":
+                self._subscribe_dynamic(handle, command.payload)
             elif command.kind == "market.unsubscribe":
                 self._unsubscribe(handle, command.payload)
             else:
@@ -130,6 +137,9 @@ class MarketActor(BusinessActor):
         if subscription is None:
             handle._reject("market.unsubscribe requires a subscription or id")
             return
+        if isinstance(subscription, str) and self._unsubscribe_dynamic(subscription):
+            handle._accept()
+            return
         self.market_service.unsubscribe(subscription)
         handle._accept()
 
@@ -146,6 +156,76 @@ class MarketActor(BusinessActor):
             handle._reject("system market service returned an invalid subscription group")
             return
         handle._accept(result={"subscription_ids": tuple(item.key for item in group.subscriptions)})
+
+    def _subscribe_dynamic(self, handle: CommandHandle, payload: object | None) -> None:
+        if self.market_service is None:
+            handle._reject("system has no market service")
+            return
+        if self.reference is None:
+            handle._reject("system has no reference application")
+            return
+        try:
+            spec = _dynamic_subscription_spec(payload)
+            member_specs = self._resolve_dynamic_specs(spec)
+            group = None if not member_specs else self.market_service.subscribe_many(MarketDataSubscriptionGroupSpec(member_specs))
+        except (TypeError, ValueError, KeyError, RuntimeError) as error:
+            handle._reject(str(error))
+            return
+        member_ids = () if group is None else tuple(item.key for item in group.subscriptions)
+        self._dynamic_subscriptions[spec.key] = (spec, member_ids)
+        self.market_service.register_dynamic_subscription(spec.key)
+        handle._accept(result={"subscription_id": spec.key, "subscription_ids": member_ids})
+
+    def _resolve_dynamic_specs(self, spec: DynamicMarketDataSubscriptionSpec) -> tuple[MarketDataSubscriptionSpec, ...]:
+        if self.reference is None:
+            raise RuntimeError("dynamic market subscription requires a reference application")
+        selection = self.reference.query(spec.query)
+        if self.max_dynamic_members is not None and len(selection.markets) > self.max_dynamic_members:
+            raise RuntimeError(
+                f"dynamic market subscription selected {len(selection.markets)} markets, "
+                f"limit is {self.max_dynamic_members}"
+            )
+        return tuple(
+            MarketDataSubscriptionSpec(
+                market,
+                spec.selectors,
+                identity=spec.identity,
+                params=spec.params,
+                provider=spec.provider,
+            )
+            for market in selection.markets
+        )
+
+    def _reconcile_dynamic_subscriptions(self) -> None:
+        if self.market_service is None or self.reference is None:
+            return
+        for dynamic_key, (spec, old_members) in tuple(self._dynamic_subscriptions.items()):
+            try:
+                resolved = self._resolve_dynamic_specs(spec)
+            except (RuntimeError, ValueError) as error:
+                _LOGGER.warning(
+                    "actor=market dynamic_reconcile=skipped key=%s reason=%s",
+                    dynamic_key,
+                    error,
+                )
+                continue
+            current = tuple(self.market_service.subscribe(item) for item in resolved)
+            current_keys = tuple(item.key for item in current)
+            old_set = set(old_members)
+            current_set = set(current_keys)
+            for subscription_id in sorted(old_set - current_set):
+                self.market_service.unsubscribe(subscription_id)
+            self._dynamic_subscriptions[dynamic_key] = (spec, current_keys)
+
+    def _unsubscribe_dynamic(self, key: str) -> bool:
+        value = self._dynamic_subscriptions.pop(key, None)
+        if value is None or self.market_service is None:
+            return False
+        self.market_service.unregister_dynamic_subscription(key)
+        _spec, members = value
+        for subscription_id in members:
+            self.market_service.unsubscribe(subscription_id)
+        return True
 
     def _start_connections(self) -> None:
         manager = self._connections
@@ -168,13 +248,11 @@ class MarketActor(BusinessActor):
 
     async def on_start(self) -> None:
         _LOGGER.info(
-            "actor=market phase=prepare connections=%s reference_actor=%s",
+            "actor=market phase=prepare connections=%s reference=%s",
             self._connections is not None,
-            self.reference_actor is not None,
+            self.reference is not None,
         )
         self._start_connections()
-        if self.reference_actor is not None:
-            await self.reference_actor.start()
         if self.market_service is not None:
             setter = getattr(self.runtime, "set_market_service", None)
             if callable(setter):
@@ -264,8 +342,6 @@ class MarketActor(BusinessActor):
 
     async def on_stop(self) -> None:
         _LOGGER.info("actor=market phase=stopping")
-        if self.reference_actor is not None:
-            await self.reference_actor.stop()
         if self.market_service is not None:
             clearer = getattr(self.runtime, "clear_market_service", None)
             if callable(clearer):
@@ -276,8 +352,8 @@ class MarketActor(BusinessActor):
         projector_event = getattr(self.projectors, "on_event", None)
         if callable(projector_event):
             projector_event(message)
-        if self.reference_actor is not None:
-            await self.reference_actor.process(message)  # type: ignore[arg-type]
+        if message.topic == "reference.catalog.changed":
+            self._reconcile_dynamic_subscriptions()
 
 def _market_subscription_spec(payload: object) -> MarketDataSubscriptionSpec:
     if isinstance(payload, MarketDataSubscriptionSpec):
@@ -301,6 +377,27 @@ def _market_subscription_group(payload: object) -> MarketDataSubscriptionGroupSp
     return MarketDataSubscriptionGroupSpec(tuple(_market_subscription_spec(request) for request in payload.requests))
 
 
+def _dynamic_subscription_spec(payload: object) -> DynamicMarketDataSubscriptionSpec:
+    if not isinstance(payload, StrategySubscriptionRequest):
+        raise TypeError("market.subscribe.dynamic requires a strategy subscription request")
+    if not isinstance(payload.subject, MarketSelection):
+        raise TypeError("dynamic market subscription requires a MarketSelection subject")
+    if not isinstance(payload.subject.query, MarketSelectionQuery):
+        raise TypeError("dynamic market subscription requires a MarketSelectionQuery")
+    params = dict(payload.params)
+    provider = params.pop("provider", None)
+    return DynamicMarketDataSubscriptionSpec(
+        # A dynamic intent follows the current Reference catalog.  The
+        # selection snapshot's as_of is only for the initial resolution and
+        # must not freeze future listings out of reconciliation.
+        query=replace(payload.subject.query, as_of=None),
+        selectors=payload.selectors,
+        identity=payload.identity,
+        params=params,
+        provider=provider,
+    )
+
+
 def _call_result(handle: CommandHandle) -> SystemCallResult:
     decision = {
         RuntimeCommandStatus.DEFERRED: SystemCallDecision.DEFERRED,
@@ -310,4 +407,23 @@ def _call_result(handle: CommandHandle) -> SystemCallResult:
     return SystemCallResult(request_id=handle.command_id, decision=decision, handle=handle, result=handle.result, error=handle.error)
 
 
-__all__ = ["MarketActor", "ReferenceActor", "reference_poll_interval"]
+def dynamic_subscription_limit(config: Mapping[str, object] | None) -> int | None:
+    """Read the optional per-intent dynamic market expansion budget."""
+    if not isinstance(config, Mapping):
+        return None
+    section = config.get("market")
+    if not isinstance(section, Mapping):
+        return None
+    value = section.get("max_dynamic_members")
+    if value is None:
+        return None
+    try:
+        limit = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("market.max_dynamic_members must be an integer") from error
+    if limit <= 0:
+        raise ValueError("market.max_dynamic_members must be positive")
+    return limit
+
+
+__all__ = ["MarketActor"]

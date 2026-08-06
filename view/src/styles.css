@@ -1,9 +1,0 @@
-html,
-body,
-#root {
-  min-height: 100%;
-}
-
-.echarts-for-react {
-  min-width: 0;
-}

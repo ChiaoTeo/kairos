@@ -69,6 +69,7 @@ def configured_backtest(config_path: Path, *, strategy_ref: str | None = None) -
     values = launch_config.values
     strategy_params = _strategy_params(values)
     backtest = _table(values.get("backtest"), "backtest")
+    reference_config = _table(values.get("reference"), "reference") if values.get("reference") is not None else {}
     timeline_config = _table(values.get("timeline"), "timeline") if values.get("timeline") is not None else {}
     notifications_config = _table(values.get("notifications"), "notifications") if values.get("notifications") is not None else {}
     execution_config = _table(values.get("execution"), "execution") if values.get("execution") is not None else {}
@@ -100,6 +101,7 @@ def configured_backtest(config_path: Path, *, strategy_ref: str | None = None) -
             market_policy=market_policy,
             timeline=timeline_config,
             notifications=notifications_config,
+            reference=reference_config,
         ),
         data_root=data_root,
         storage_format=storage_format,
@@ -171,6 +173,7 @@ def _normalized_config(
     market_policy: ReplayMarketDataPolicy,
     timeline: Mapping[str, object],
     notifications: Mapping[str, object],
+    reference: Mapping[str, object],
 ) -> Mapping[str, object]:
     return {
         "launch": {"id": launch_id, "mode": RuntimeMode.BACKTEST.value, "strategy": strategy},
@@ -193,6 +196,7 @@ def _normalized_config(
         "execution": dict(execution),
         "timeline": dict(timeline),
         "notifications": dict(notifications),
+        "reference": dict(reference),
     }
 
 

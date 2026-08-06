@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import Mapping, Sequence
 
 from kairospy.domain.market import MarketSelector, market_selector
+from kairospy.domain.market.selection import MarketSelectionQuery
 from kairospy.domain.market import MarketSubscriptionSummary, MarketSubscriptionsView
 from kairospy.domain.reference import MarketRef, ProviderId
 from .specs import MarketOptions
@@ -50,6 +51,35 @@ class DataSubscription:
 
 
 @dataclass(frozen=True, slots=True)
+class DynamicMarketDataSubscriptionSpec:
+    """A selection intent whose concrete contracts are reconciled by Market."""
+
+    query: MarketSelectionQuery
+    selectors: Sequence[MarketSelector | type]
+    identity: str | None = None
+    params: MarketOptions = MappingProxyType({})
+    provider: ProviderId | str | None = None
+
+    def __post_init__(self) -> None:
+        selectors = tuple(market_selector(selector) for selector in self.selectors)
+        if not selectors:
+            raise ValueError("dynamic data subscription selectors are required")
+        if self.identity is not None and not self.identity.strip():
+            raise ValueError("dynamic data subscription identity cannot be blank")
+        object.__setattr__(self, "selectors", selectors)
+        object.__setattr__(self, "params", MappingProxyType(dict(self.params)))
+        object.__setattr__(self, "provider", None if self.provider is None else ProviderId(str(self.provider).strip()))
+
+    @property
+    def key(self) -> str:
+        selectors_key = sha1("|".join(selector.key for selector in self.selectors).encode("utf-8")).hexdigest()[:12]
+        query_key = sha1(repr(self.query).encode("utf-8")).hexdigest()[:12]
+        identity = _key_part(self.identity or "default")
+        provider = _key_part(self.provider or self.query.venue or "reference")
+        return f"dynamic.{provider}.{identity}.{query_key}.{selectors_key}"
+
+
+@dataclass(frozen=True, slots=True)
 class MarketDataSubscriptionGroupSpec:
     """A batch of market subscription intents sharing one strategy identity."""
 
@@ -69,6 +99,7 @@ class DataSubscriptionGroup:
 class MarketSubscriptionService:
     def __init__(self) -> None:
         self._subscriptions: dict[str, DataSubscription] = {}
+        self._dynamic_keys: set[str] = set()
 
     def subscribe(self, spec: MarketDataSubscriptionSpec) -> DataSubscription:
         subscription = DataSubscription(spec.key, spec)
@@ -81,6 +112,15 @@ class MarketSubscriptionService:
 
     def subscriptions(self) -> tuple[DataSubscription, ...]:
         return tuple(self._subscriptions[key] for key in sorted(self._subscriptions))
+
+    def register_dynamic(self, key: str) -> None:
+        self._dynamic_keys.add(key)
+
+    def unregister_dynamic(self, key: str) -> None:
+        self._dynamic_keys.discard(key)
+
+    def has_subscription_intents(self) -> bool:
+        return bool(self._subscriptions or self._dynamic_keys)
 
     def subscriptions_view(self) -> MarketSubscriptionsView:
         summaries = tuple(subscription_summary(subscription) for subscription in self.subscriptions())
@@ -111,6 +151,7 @@ def _key_part(value: object) -> str:
 
 __all__ = [
     "DataSubscription",
+    "DynamicMarketDataSubscriptionSpec",
     "DataSubscriptionGroup",
     "MarketDataSubscriptionSpec",
     "MarketDataSubscriptionGroupSpec",

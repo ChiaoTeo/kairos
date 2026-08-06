@@ -15,7 +15,7 @@ class TimelineDataLoader:
     instance_path: Path
 
     def load(self) -> dict[str, object]:
-        return launch_projection_query(self.instance_path).load_timeline_view()
+        return launch_projection_query(self.instance_path).load_run_view()
 
 
 __all__ = ["TimelineDataLoader", "find_latest_instance", "list_instances"]

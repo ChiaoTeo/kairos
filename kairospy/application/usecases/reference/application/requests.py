@@ -45,6 +45,13 @@ class ReferenceMarketRow(TypedDict, total=False):
 
 @dataclass(frozen=True, slots=True)
 class ReferenceCatalogRequest:
+    """Request a provider snapshot for one explicitly defined scope.
+
+    ``underlying`` is part of the snapshot scope. A provider may therefore
+    return a complete catalog for one underlying without claiming that every
+    other underlying is absent from the venue.
+    """
+
     as_of: datetime
     market: str | None = None
     underlying: str | None = None

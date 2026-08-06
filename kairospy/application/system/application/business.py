@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -37,7 +38,7 @@ from kairospy.application.actor.account.application.commands import (
     RecordIntentsCommand,
 )
 from kairospy.application.actor.account.application.projectors import AccountActorProjectors
-from kairospy.application.actor.market.application import MarketActor, reference_poll_interval
+from kairospy.application.actor.market.application import MarketActor, ReferenceActor, dynamic_subscription_limit, reference_poll_interval
 from kairospy.application.actor.market.application.projectors import MarketActorProjectors
 from kairospy.application.actor.risk.application import RiskActor
 from kairospy.application.actor.risk.application.projectors import RiskActorProjectors
@@ -392,6 +393,8 @@ class SystemApplication:
                 execution_coordinator=execution_runtime,
                 fills_source=getattr(components, "execution", None),
                 risk=None,
+                audit_store=getattr(execution_runtime, "audit_store", None),
+                instance_id=str(getattr(execution_runtime, "instance_id", "local")),
             )
         )
         command_router = ActorCommandRouter()
@@ -403,18 +406,27 @@ class SystemApplication:
         poll_interval = reference_poll_interval(
             normalized_config if isinstance(normalized_config, dict) else None
         )
+        reference_actor = (
+            None
+            if message_bus is None or reference is None
+            else ReferenceActor(reference, message_bus, poll_interval_seconds=poll_interval)
+        )
         market_actor = (
             None
-            if message_bus is None or (not callable(getattr(market_source, "events", None)) and reference is None)
+            if message_bus is None or (
+                not callable(getattr(market_source, "events", None))
+                and market_service is None
+                and reference is None
+            )
             else MarketActor(
                 market_source,  # type: ignore[arg-type]
                 message_bus,  # type: ignore[arg-type]
                 market_service=market_service,
                 reference=reference,
-                reference_poll_interval_seconds=poll_interval,
                 connections=getattr(resources, "connection_scope", None),
                 publish_connection_health=publish_connection_health,
                 projectors=MarketActorProjectors(market=market_service, reference=reference),
+                max_dynamic_members=dynamic_subscription_limit(normalized_config if isinstance(normalized_config, Mapping) else None),
             )
         )
         risk_actor = None if message_bus is None or risk_application is None else RiskActor(risk_application, bus=message_bus, projectors=RiskActorProjectors(risk_application))
@@ -434,10 +446,10 @@ class SystemApplication:
             execution=capabilities.execution,
         )
         if monitor_actor is not None:
-            monitor_actor.bind_actor_sources(tuple(actor for actor in (market_actor, risk_actor, account_owner, notification_actor) if actor is not None))
+            monitor_actor.bind_actor_sources(tuple(actor for actor in (reference_actor, market_actor, risk_actor, account_owner, notification_actor) if actor is not None))
         # AccountActor awaits RiskActor for reservation decisions, so the
         # dependency is started before the account event loops.
-        business_actors = tuple(actor for actor in (market_actor, risk_actor, account_owner, monitor_actor, notification_actor) if actor is not None)
+        business_actors = tuple(actor for actor in (reference_actor, market_actor, risk_actor, account_owner, monitor_actor, notification_actor) if actor is not None)
         output = MonitorOutputCoordinator(actors=business_actors, monitor_output=artifact_projector)
         actor_supervisor = BusinessActorSupervisor(business_actors, monitor=monitor_actor)
         topology = MessageTopology()
@@ -447,12 +459,14 @@ class SystemApplication:
             command_router.register(
                 "market.subscribe",
                 "market.subscribe.batch",
+                "market.subscribe.dynamic",
                 "market.unsubscribe",
                 handler=market_actor,
             )
             actor_supervisor.route("market.refresh.requested", market_actor)
-            actor_supervisor.route("reference.refresh.requested", market_actor)
             actor_supervisor.route("reference.catalog.changed", market_actor)
+        if reference_actor is not None:
+            actor_supervisor.route("reference.refresh.requested", reference_actor)
         if runtime_account_actor is not None:
             actor_supervisor.route_domain("market", runtime_account_actor)
             actor_supervisor.route("account.refresh.requested", runtime_account_actor)

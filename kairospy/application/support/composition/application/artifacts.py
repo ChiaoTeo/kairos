@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from kairospy.application.support.launch.application.artifacts import LaunchOutput
-from kairospy.infrastructure.persistence.application.artifacts import LaunchInstanceStore
+from kairospy.infrastructure.persistence.application.run import open_run_store
 
 
 def launch_output(
@@ -11,13 +11,11 @@ def launch_output(
     *,
     launch_id: str | None = None,
     mode: str | None = None,
-    write_legacy_jsonl: bool = False,
 ) -> LaunchOutput:
     return LaunchOutput(
         launch_id=launch_id,
         mode=mode,
-        write_legacy_jsonl=write_legacy_jsonl,
-        store=LaunchInstanceStore(launch_directory),
+        store=open_run_store(Path(launch_directory) / "run.sqlite"),
     )
 
 

@@ -21,6 +21,7 @@ from kairospy.domain.account import AccountRuntimeContext
 from kairospy.domain.execution import ExecutionCurrentView, ExecutionFillsView, ExecutionUpdate
 from kairospy.domain.intent import IntentJournal, TradeIntent
 from kairospy.domain.order import OrderRequest, OrderState
+from kairospy.application.usecases.execution.protocol import OrderAuditStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,11 +88,13 @@ class ExecutionApplication:
         cls,
         coordinator: ExecutionCoordinator,
         *,
-        order_connection: OrderConnection | Mapping[AccountSegment, OrderConnection] | None = None,
+        order_connection: OrderConnection | Mapping[object, OrderConnection] | None = None,
         symbol_resolver: SymbolResolver | None = None,
         intents: IntentJournal | None = None,
         fills_source: object | None = None,
         risk: RiskApplication | None = None,
+        audit_store: OrderAuditStore | None = None,
+        instance_id: str = "local",
     ) -> "ExecutionApplication":
         if risk is not None:
             coordinator.risk = risk
@@ -101,7 +104,7 @@ class ExecutionApplication:
                 order_connection=order_connection,
                 symbol_resolver=symbol_resolver,
             ),
-            ExecutionUpdateService(coordinator, intents=intents),
+            ExecutionUpdateService(coordinator, intents=intents, audit_store=audit_store, instance_id=instance_id),
             ExecutionProjectionService(coordinator, fills_source=fills_source),
         )
 
@@ -239,6 +242,15 @@ class ExecutionApplication:
 
     def current_quantity(self, account: AccountSegment, instrument_id: object) -> Decimal:
         return self._orders.coordinator.ledger.positions(account).get(str(instrument_id), Decimal("0"))
+
+    def reflect_account_snapshot(self, snapshot: AccountSnapshot) -> None:
+        """Stop double-counting a local hold once the venue reports the order."""
+        for order in self.orders(snapshot.context.segment):
+            if order.status.terminal:
+                continue
+            venue_ids = {str(order.order_venue_id or ""), str(order.request.order_venue_id or "")}
+            if any(str(remote.order_id) == order.order_id or str(remote.order_id) in venue_ids for remote in snapshot.open_orders):
+                self._orders.coordinator.mark_reservation_reflected(order.order_id)
 
     def runtime_adapters(self) -> tuple[ExecutionUpdateService, ExecutionProjectionService]:
         """Assembly-only access for the business runtime adapter."""

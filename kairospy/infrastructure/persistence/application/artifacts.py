@@ -4,35 +4,36 @@ import json
 from pathlib import Path
 from typing import Mapping
 
-from kairospy.infrastructure.persistence.services.artifacts.launch_store import (
-    DataNamespace,
-    JsonResource,
-    JsonlResource,
-    LaunchInstanceStore,
-    jsonable,
-)
+from kairospy.infrastructure.persistence.services.artifacts.run_sqlite import RunSqliteStore
 
 
-class JsonProjectionReader:
-    """Filesystem implementation of the Biz projection read capability."""
+class SqliteProjectionReader:
+    """SQLite implementation of the launch research read capability."""
 
     def __init__(self, root: str | Path) -> None:
-        self._store = LaunchInstanceStore(root)
+        self._root = Path(root)
+        self._store = RunSqliteStore(self._root / "run.sqlite")
 
     @property
     def root(self) -> Path:
-        return self._store.directory
+        return self._root
 
     def exists(self, name: str) -> bool:
-        return self._store.path_for(name).exists()
+        return self._store.exists(name)
 
     def read_json(self, name: str) -> dict[str, object]:
-        return self._store.json(name.removesuffix(".json")).read()
+        if name in {"state.json", "live_state.json"}:
+            return _read_projection_json(self._root / name)
+        if name.startswith("account/") and name.endswith("current.json"):
+            return self._store.read_current("account")
+        return self._store.read_json(name)
 
     def read_jsonl(self, name: str) -> list[dict[str, object]]:
-        if not self._store.path_for(name).exists():
-            return []
-        return self._store.jsonl(name.removesuffix(".jsonl")).read()
+        return self._store.read_records(name.removesuffix(".jsonl").split("/")[-1])
+
+    def read_records(self, stream: str) -> list[dict[str, object]]:
+        """Read a canonical run stream for composition-level projections."""
+        return self._store.read_records(stream)
 
 
 def find_projection_instance(root: str | Path, *, mode: str | None = None, launch_id: str | None = None) -> Path:
@@ -45,7 +46,7 @@ def find_projection_instance(root: str | Path, *, mode: str | None = None, launc
             hint += f" mode={mode}"
         if launch_id is not None:
             hint += f" launch_id={launch_id}"
-        raise ValueError(f"no timeline-capable launch instances found{hint}")
+        raise ValueError(f"no run-capable launch instances found{hint}")
     return max(candidates, key=_projection_mtime)
 
 
@@ -55,7 +56,10 @@ def list_projection_instances(root: str | Path, *, mode: str | None = None, laun
         return []
     rows: list[dict[str, object]] = []
     for path in sorted(_projection_candidates(base, mode=mode, launch_id=launch_id, require_existing=False), key=_projection_mtime, reverse=True):
-        summary = _read_projection_json(path / "summary.json")
+        if not (path / "run.sqlite").exists():
+            continue
+        reader = SqliteProjectionReader(path)
+        summary = reader.read_json("summary.json")
         state = _read_projection_json(path / "state.json")
         rows.append(
             {
@@ -65,8 +69,8 @@ def list_projection_instances(root: str | Path, *, mode: str | None = None, laun
                 "strategy_id": _first_string(summary.get("strategy_id"), _projection_context_value(state, "strategy")),
                 "updated_at": _projection_mtime(path),
                 "directory": str(path),
-                "timeline_count": _jsonl_count(path / "timeline.jsonl"),
-                "equity_count": _jsonl_count(path / "equity.jsonl"),
+                "record_count": sum(len(reader.read_records(stream)) for stream in ("timeline", "equity", "fills", "trades", "intent_states")),
+                "equity_count": len(reader.read_records("equity")),
             }
         )
     return rows
@@ -85,11 +89,11 @@ def _projection_candidates(base: Path, *, mode: str | None, launch_id: str | Non
 
 
 def _has_projection_file(path: Path) -> bool:
-    return any((path / name).exists() for name in ("timeline.jsonl", "summary.json", "state.json"))
+    return (path / "run.sqlite").exists()
 
 
 def _projection_mtime(path: Path) -> float:
-    existing = [item for item in (path / "summary.json", path / "state.json", path) if item.exists()]
+    existing = [item for item in (path / "run.sqlite", path / "state.json", path) if item.exists()]
     return max(item.stat().st_mtime for item in existing)
 
 
@@ -127,12 +131,7 @@ def _first_string(*values: object) -> str | None:
 
 
 __all__ = [
-    "DataNamespace",
-    "JsonProjectionReader",
-    "JsonResource",
-    "JsonlResource",
-    "LaunchInstanceStore",
+    "SqliteProjectionReader",
     "find_projection_instance",
-    "jsonable",
     "list_projection_instances",
 ]

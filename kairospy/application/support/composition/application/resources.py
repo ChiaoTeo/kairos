@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
-from kairospy.application.support.composition.application.integrations import connect_binance_equity, connect_binance_spot_account, connect_binance_spot_execution, connect_binance_spot_public, connect_ibkr, connect_massive_reference, integration_application
+from kairospy.application.support.composition.application.integrations import connect_binance_equity, connect_binance_options_execution, connect_binance_options_account, connect_binance_spot_account, connect_binance_spot_execution, connect_binance_spot_public, connect_ibkr, connect_massive_reference, integration_application
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnection, RuntimeMode
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnectionSpec
 from kairospy.infrastructure.integrations.domain import AccessScope, BrokerId, BrokerRef, CredentialRef, ExchangeId, ExchangeRef, IntegrationCapability, IntegrationRoute, ProductFamily, TransportKind
@@ -221,7 +221,13 @@ def private_account_access(
         )
     _require_ccxt_driver(driver_name)
     product_name = str(segment.product_family or segment.segment_id).lower()
-    if product_name in {ProductFamily.USD_M_FUTURES.value, ProductFamily.COIN_M_FUTURES.value, ProductFamily.OPTIONS.value}:
+    if product_name == ProductFamily.OPTIONS.value:
+        return connect_binance_options_account(
+            f"facade.account.request.{segment.value}.{credential or 'default'}",
+            credential=credential,
+            mode=RuntimeMode.PAPER if credential is None else RuntimeMode.LIVE,
+        )
+    if product_name in {ProductFamily.USD_M_FUTURES.value, ProductFamily.COIN_M_FUTURES.value}:
         product = ProductFamily(product_name)
         return integration_application().connect(
             IntegrationConnectionSpec(
@@ -437,6 +443,12 @@ def execution_access(
             capability=IntegrationCapability.ORDER_ENTRY,
         )
     _require_ccxt_driver(driver_name)
+    if str(segment.product_family or segment.segment_id).lower() == ProductFamily.OPTIONS.value:
+        return connect_binance_options_execution(
+            f"facade.execution.{segment.value}.{credential or 'default'}",
+            credential=credential,
+            mode=RuntimeMode.PAPER if credential is None else RuntimeMode.LIVE,
+        )
     return connect_binance_spot_execution(
             f"facade.execution.{segment.value}.{credential or 'default'}",
         credential=credential,
@@ -475,7 +487,13 @@ def reference_access(
             mode=RuntimeMode.PAPER,
         )
     if source_kind != "exchange" or source_name.lower() != ExchangeName.binance.value:
-        raise ValueError("only Binance Spot or Massive reference catalog is supported")
+        raise ValueError("only Binance reference catalogs or Massive reference catalogs are supported")
+    if (market or "").casefold() in {"option", "options"}:
+        return connect_binance_options(
+            f"facade.reference.{source_kind}.{source_name}.{market or 'options'}",
+            transport=TransportKind.REST,
+            mode=RuntimeMode.PAPER,
+        )
     return connect_binance_spot_public(
         f"facade.reference.{source_kind}.{source_name}.{market or 'default'}",
         mode=RuntimeMode.PAPER,

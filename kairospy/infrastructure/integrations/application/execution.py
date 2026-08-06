@@ -6,12 +6,17 @@ from typing import Protocol
 
 from kairospy.domain.account import AccountSegment
 from kairospy.domain.order import OrderSide, OrderType
+from kairospy.domain.reference import AssetType
 from kairospy.infrastructure.integrations.application.connections import IntegrationConnection
 
 
 @dataclass(frozen=True, slots=True)
 class ConnectionOrderOptions:
     time_in_force: str | None = None
+    trading_session: str | None = None
+    quote_asset: str | None = None
+    wallet_type: str | None = None
+    tokenize: bool | None = None
     reduce_only: bool | None = None
     post_only: bool | None = None
     position_side: str | None = None
@@ -30,6 +35,7 @@ class ConnectionOrderSubmissionRequest:
     limit_price: Decimal | None = None
     options: ConnectionOrderOptions | None = None
     client_order_id: str | None = None
+    asset_type: AssetType | None = None
 
 
 @dataclass(frozen=True, slots=True)

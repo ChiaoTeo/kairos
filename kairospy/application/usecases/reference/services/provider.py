@@ -37,6 +37,7 @@ class ReferenceDataRefreshService:
             as_of=as_of,
             venue=venue,
             market=market or _market_from_product(product),
+            underlying=_underlying(params),
         )
 
 

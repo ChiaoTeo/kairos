@@ -121,26 +121,37 @@ class MassiveStocksRestClient:
         limit: int = 1000,
     ) -> Iterable[Mapping[str, object]]:
         """Fetch option contract definitions, leaving catalog translation to Reference."""
-        payload = self.get(
-            "/v3/reference/options/contracts",
-            params={
-                "underlying_ticker": str(underlying).strip().upper(),
-                "as_of": as_of,
-                "expired": str(expired).lower(),
-                "limit": limit,
-                "sort": "expiration_date",
-                "order": "asc",
-            },
-        )
-        results = payload.get("results", ()) if isinstance(payload, Mapping) else ()
-        return tuple(item for item in results if isinstance(item, Mapping))
+        if limit < 1:
+            return ()
+        path = "/v3/reference/options/contracts"
+        params: Mapping[str, object] | None = {
+            "underlying_ticker": str(underlying).strip().upper(),
+            "as_of": as_of,
+            "expired": str(expired).lower(),
+            "limit": min(limit, 1000),
+            "sort": "expiration_date",
+            "order": "asc",
+        }
+        rows: list[Mapping[str, object]] = []
+        while path and len(rows) < limit:
+            payload = self.get(path, params=params)
+            if not isinstance(payload, Mapping) or "results" not in payload:
+                raise MassiveStocksRequestError("Massive options contracts response has no results list")
+            results = payload.get("results")
+            if not isinstance(results, list):
+                raise MassiveStocksRequestError("Massive options contracts response results must be a list")
+            rows.extend(item for item in results if isinstance(item, Mapping))
+            next_url = payload.get("next_url") if isinstance(payload, Mapping) else None
+            path = str(next_url) if next_url else ""
+            params = None
+        return tuple(rows[:limit])
 
     def get(self, path: str, *, params: Mapping[str, Any] | None = None) -> object:
         if not self.api_key:
             raise MassiveStocksRequestError("Massive API key is required")
         query = {str(key): value for key, value in dict(params or {}).items() if value is not None}
         query["apiKey"] = self.api_key
-        target = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
+        target = path if str(path).startswith(("http://", "https://")) else f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
         try:
             response = self.driver.request("GET", target, params=query, headers=None)
         except Exception as error:

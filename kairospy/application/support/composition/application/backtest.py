@@ -16,7 +16,7 @@ from kairospy.application.support.composition.application.accounts import Backte
 from kairospy.domain.reference import MarketResolver
 from kairospy.infrastructure.persistence.application.market_data import DataStore
 
-from .common import ComposedLaunch, in_memory_message_bus, optional_default_text, reference_runtime
+from .common import ComposedLaunch, in_memory_message_bus, optional_default_text, reference_runtime, reference_underlyings
 from .runtime import compose_runtime_assembly
 from .notifications import build_notification_application, notification_runtime_settings
 
@@ -36,6 +36,7 @@ class BacktestComposition:
                 configured.launch_directory,
                 default_venue=_backtest_default_venue(configured.backtest_config),
                 default_market=_backtest_default_market(configured.backtest_config),
+                underlyings=reference_underlyings(configured.normalized_config),
             ),
             connection_scope=connections,
             message_bus=in_memory_message_bus(),

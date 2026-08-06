@@ -143,6 +143,8 @@ def test_massive_shared_stream_keeps_subscription_when_one_consumer_leaves() -> 
         return [message for message in session.messages if message.get("action") == "unsubscribe"]
 
     unsubscribes = asyncio.run(exercise())
+    subscribes = [message for message in session.messages if message.get("action") == "subscribe"]
+    assert subscribes == [{"action": "subscribe", "params": "Q.AAPL"}]
     assert unsubscribes == [{"action": "unsubscribe", "params": "Q.AAPL"}]
 
 

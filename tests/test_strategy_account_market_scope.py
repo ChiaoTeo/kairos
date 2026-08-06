@@ -20,6 +20,7 @@ from kairospy.domain.account import (
     AccountMarketProfile,
     AccountMarketProfilesView,
     AccountViewKeys,
+    AccountViewReader,
     Environment,
     account_current_schema,
 )
@@ -45,6 +46,41 @@ def test_strategy_can_navigate_account_segment_market_and_read_effective_fee() -
     segment = context.accounts[0].segment("usd_m_futures").market(market)
     assert segment.fee is not None
     assert segment.fee.taker == Decimal("0.00045")
+
+    account_view = context.accounts.account("main").segment("usd_m_futures").view()
+    assert account_view.segment == account.segment
+    assert context.accounts.only().segment == account.segment
+
+
+def test_account_reader_accepts_segment_id_for_composite_segment_key() -> None:
+    account = AccountRuntimeContext(AccountSegment("binance", "main", AccountModel.NO_MARGIN, ProductFamily.SPOT), Environment.LIVE)
+    views = ViewStore()
+    views.register(ACCOUNT_SCOPES_SCHEMA)
+    views.register(account_current_schema(AccountViewKeys.current(account)))
+    views.put_runtime(
+        AccountViewKeys.segments,
+        AccountSegmentsView(
+            1,
+            (AccountSegmentSummary(
+                AccountViewKeys.current(account),
+                "binance_main.spot.no_margin.spot",
+                "main",
+                0,
+                "binance.main",
+                "spot.no_margin.spot",
+                "live",
+                "binance",
+                "main",
+                "no_margin",
+                "",
+            ),),
+        ),
+    )
+    views.put_runtime(AccountViewKeys.current(account), AccountCurrentView(account, segment=account.segment))
+
+    view = AccountViewReader(views).account("binance.main").segment("spot").view()
+
+    assert view.segment == account.segment
 
 
 def test_account_actor_refreshes_market_profile_and_publishes_fact() -> None:

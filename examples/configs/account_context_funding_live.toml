@@ -1,0 +1,17 @@
+[launch]
+id = "example-account-context-funding-live"
+mode = "live"
+strategy = "examples.strategies.account_context_live:strategy"
+
+[strategy.params]
+account = "binance_zhaoqian888666"
+segment = "funding"
+
+[live]
+
+# This example reads the Binance Funding Wallet only. It does not submit orders.
+
+[accounts.main]
+ref = "binance_zhaoqian888666"
+segments = ["funding"]
+trade = false

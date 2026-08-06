@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 
 from .identity import AssetId, ExchangeId, MarketTypeId, SourceSymbol
 from .model import InstrumentType, MarketDefinition, MarketStatus
@@ -18,6 +19,12 @@ class UniverseQuery:
     base_asset_id: AssetId | str | None = None
     quote_asset_id: AssetId | str | None = None
     symbols: tuple[SourceSymbol | str, ...] = ()
+    underlying_instrument_id: str | None = None
+    expiry_from: datetime | None = None
+    expiry_to: datetime | None = None
+    strike_min: Decimal | str | int | float | None = None
+    strike_max: Decimal | str | int | float | None = None
+    option_right: str | None = None
     limit: int | None = None
 
 

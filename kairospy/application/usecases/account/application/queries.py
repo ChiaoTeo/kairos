@@ -25,8 +25,11 @@ class AccountViewQueryService:
     def has_account(self, key: str | int) -> bool:
         return self._service.has_account(key)
 
-    def current(self, key: str | None = None) -> AccountCurrentView:
-        return self._service.current(key)
+    def only(self) -> AccountCurrentView:
+        return self._service.only()
+
+    def view(self, key: str | None = None) -> AccountCurrentView:
+        return self._service.view(key)
 
     def detail(self, key: str | None = None) -> AccountDetailView:
         return self._service.detail(key)

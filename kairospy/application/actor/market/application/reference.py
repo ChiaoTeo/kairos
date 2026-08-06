@@ -1,4 +1,8 @@
-"""Reference refresh owned by the market Actor."""
+"""Reference catalog refresh Actor.
+
+The catalog is shared business state for market consumers, but its refresh
+lifecycle is independent from any one market feed or provider.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +21,7 @@ _LOGGER = logging.getLogger("kairospy.actor.reference")
 
 class ReferenceActor(BusinessActor):
     def __init__(self, reference: ReferenceApplication, bus: MessageBus, *, poll_interval_seconds: float = 300.0) -> None:
-        super().__init__("reference")
+        super().__init__("reference", bus=bus)
         if poll_interval_seconds <= 0:
             raise ValueError("reference poll interval must be positive")
         self.reference = reference
@@ -32,7 +36,7 @@ class ReferenceActor(BusinessActor):
         await super().start()
         if bool(getattr(self.reference, "has_source", lambda: False)()):
             self._stop_event.clear()
-            self._refresh_task = asyncio.create_task(self._refresh_loop(), name="actor:market.reference.refresh")
+            self._refresh_task = asyncio.create_task(self._refresh_loop(), name="actor:reference.refresh")
             _LOGGER.info("actor=reference refresh_loop=started interval_seconds=%s", self.poll_interval_seconds)
 
     async def stop(self) -> None:
@@ -82,7 +86,7 @@ class ReferenceActor(BusinessActor):
             _LOGGER.info("actor=reference refresh=unchanged")
             return
         self._sequence += 1
-        await self.bus.publish(Message(topic="reference.catalog.changed", payload={"events": result.events, "previous_markets": result.previous_markets, "current_markets": result.current_markets}, published_at=getattr(result, "as_of", datetime.now(timezone.utc)), producer="market.actor", producer_sequence=self._sequence))
+        await self.bus.publish(Message(topic="reference.catalog.changed", payload={"events": result.events, "previous_markets": result.previous_markets, "current_markets": result.current_markets}, published_at=getattr(result, "as_of", datetime.now(timezone.utc)), producer="reference.actor", producer_sequence=self._sequence))
         _LOGGER.info("actor=reference refresh=changed events=%d", len(result.events))
 
 

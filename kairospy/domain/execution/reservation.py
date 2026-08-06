@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -55,6 +55,20 @@ class ReservationBook:
 
     def reflect(self, reservation_id: str) -> Reservation:
         return self._transition(reservation_id, ReservationStatus.REFLECTED)
+
+    def adjust(self, reservation_id: str, amount: Decimal) -> Reservation:
+        reservation = self._reservations.get(reservation_id)
+        if reservation is None:
+            raise KeyError(reservation_id)
+        if reservation.status is not ReservationStatus.HELD:
+            return reservation
+        if amount <= 0:
+            raise ValueError("adjusted reservation amount must be positive")
+        if amount > reservation.amount:
+            raise ValueError("adjusted reservation amount cannot increase")
+        updated = replace(reservation, amount=amount)
+        self._reservations[reservation_id] = updated
+        return updated
 
     def active_amounts(self, account: AccountSegment) -> dict[str, Decimal]:
         totals: dict[str, Decimal] = {}

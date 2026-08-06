@@ -15,15 +15,15 @@ class ProjectionSpec:
 
 
 LAUNCH_PROJECTIONS: tuple[ProjectionSpec, ...] = (
-    ProjectionSpec("launch.summary", "snapshot", "Launch summary", "summary.json"),
-    ProjectionSpec("launch.metrics", "snapshot", "Launch metrics", "metrics.json"),
-    ProjectionSpec("launch.config", "snapshot", "Normalized launch config", "config.normalized.json"),
-    ProjectionSpec("launch.timeline", "history", "Launch timeline", "timeline.jsonl", "timelineRecords"),
-    ProjectionSpec("timeline.equity", "derived-history", "Equity history", "equity.jsonl", "equity"),
-    ProjectionSpec("timeline.fills", "derived-history", "Fills", "fills.jsonl", "fills"),
-    ProjectionSpec("timeline.intents", "derived-history", "Intent states", "intent_states.jsonl", "intents"),
-    ProjectionSpec("timeline.trades", "derived-history", "Market records", "trades.jsonl", "trades"),
-    ProjectionSpec("account.current", "current", "Current account state", "account/current.json"),
+    ProjectionSpec("run.summary", "snapshot", "Run summary", "summary.json"),
+    ProjectionSpec("run.metrics", "snapshot", "Run metrics", "metrics.json"),
+    ProjectionSpec("run.config", "snapshot", "Normalized run config", "config.normalized.json"),
+    ProjectionSpec("run.records", "history", "Run records", "records.jsonl", "timelineRecords"),
+    ProjectionSpec("run.equity", "derived-history", "Equity history", "equity.jsonl", "equity"),
+    ProjectionSpec("run.fills", "derived-history", "Fills", "fills.jsonl", "fills"),
+    ProjectionSpec("run.intents", "derived-history", "Intent states", "intent_states.jsonl", "intents"),
+    ProjectionSpec("run.trades", "derived-history", "Trades", "trades.jsonl", "trades"),
+    ProjectionSpec("run.account.current", "current", "Current account state", "account/current.json"),
 )
 
 

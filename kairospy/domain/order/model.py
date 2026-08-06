@@ -6,7 +6,7 @@ from decimal import Decimal
 from enum import StrEnum
 
 from kairospy.domain.account.model import AccountRuntimeContext
-from kairospy.domain.reference import ExternalAccountId, BrokerId, InstrumentId, MarketId
+from kairospy.domain.reference import AssetType, ExternalAccountId, BrokerId, InstrumentId, MarketId
 
 
 class OrderSide(StrEnum):
@@ -109,10 +109,12 @@ class OrderRequest:
     reservation_id: str | None = None
     origin: OrderOrigin = OrderOrigin.SYSTEM
     order_venue_id: str | None = None
+    asset_type: AssetType | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "instrument_id", _id(self.instrument_id, InstrumentId, "instrument_id"))
         object.__setattr__(self, "market_id", None if self.market_id is None else _id(self.market_id, MarketId, "market_id"))
+        object.__setattr__(self, "asset_type", None if self.asset_type is None else AssetType(str(self.asset_type)))
         if not self.order_id.strip():
             raise ValueError("order request identity fields cannot be empty")
         if self.origin is not OrderOrigin.SYSTEM and self.order_venue_id is None:

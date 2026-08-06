@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+import logging
 from uuid import uuid4
 
 from kairospy.domain.account import (
@@ -28,12 +29,16 @@ from kairospy.domain.order import (
 from kairospy.domain.reference import InstrumentId
 
 from kairospy.domain.execution import ExecutionUpdate, Reservation, ReservationBook, reserve_asset_order, reserve_margin_order
+from kairospy.application.usecases.execution.protocol import OrderAuditStore
 from kairospy.application.usecases.risk.application.budget import (
     RiskApplication,
     RiskAssessmentRequest,
     RiskReservationRequest,
 )
 from kairospy.application.usecases.risk.domain import BudgetRef, RiskDecision, RiskMetric, RiskUsage
+
+
+_LOGGER = logging.getLogger("kairospy.execution")
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,11 +74,15 @@ class ExecutionCoordinator:
         ledger: AccountLedger | None = None,
         reservations: ReservationBook | None = None,
         risk: RiskApplication | None = None,
+        audit_store: OrderAuditStore | None = None,
+        instance_id: str = "local",
     ) -> None:
         self.orders = orders or OrderJournal()
         self.ledger = ledger or AccountLedger()
         self.reservations = reservations or ReservationBook()
         self.risk = risk
+        self.audit_store = audit_store
+        self.instance_id = instance_id
 
     def plan_order(
         self,
@@ -92,6 +101,7 @@ class ExecutionCoordinator:
         if at.tzinfo is None:
             raise ValueError("plan timestamp must be timezone-aware")
         state = self.orders.plan(request)
+        self._audit_transition(None, state, event_kind=OrderEventKind.PLANNED, observed_at=at)
         if reserve_currency is None and reserve_amount is None and margin_notional is None and risk_amount is None:
             return state
         if margin_notional is not None:
@@ -140,15 +150,15 @@ class ExecutionCoordinator:
             assessment = self.risk.assess(risk_request)
             if assessment.decision is not RiskDecision.ALLOWED:
                 reason = "; ".join(assessment.violations or ("order must be reduced",))
-                self.orders.record(OrderEvent(request.order_id, OrderEventKind.REJECTED, at, reason=f"risk budget: {reason}"))
+                self._record(OrderEvent(request.order_id, OrderEventKind.REJECTED, at, reason=f"risk budget: {reason}"))
                 return self.orders.get(request.order_id)
             try:
                 self.risk.reserve(RiskReservationRequest(risk_reservation_id, risk_request))
             except ValueError as error:
-                self.orders.record(OrderEvent(request.order_id, OrderEventKind.REJECTED, at, reason=f"risk budget: {error}"))
+                self._record(OrderEvent(request.order_id, OrderEventKind.REJECTED, at, reason=f"risk budget: {error}"))
                 return self.orders.get(request.order_id)
         if amount is None:
-            return self.orders.record(OrderEvent(request.order_id, OrderEventKind.RESERVED, at))
+            return self._record(OrderEvent(request.order_id, OrderEventKind.RESERVED, at))
         if margin_notional is None:
             check = reserve_asset_order(self.reservations, reservation, projection)
         else:
@@ -162,31 +172,55 @@ class ExecutionCoordinator:
             )
         if not check.accepted:
             self._release_risk(risk_reservation_id)
-            self.orders.record(OrderEvent(request.order_id, OrderEventKind.REJECTED, at, reason=check.reason))
+            self._record(OrderEvent(request.order_id, OrderEventKind.REJECTED, at, reason=check.reason))
             return self.orders.get(request.order_id)
-        return self.orders.record(OrderEvent(request.order_id, OrderEventKind.RESERVED, at))
+        return self._record(OrderEvent(request.order_id, OrderEventKind.RESERVED, at))
 
     def submit_order(self, order_id: str, *, at: datetime) -> OrderState:
         if at.tzinfo is None:
             raise ValueError("submit timestamp must be timezone-aware")
-        return self.orders.record(OrderEvent(order_id, OrderEventKind.SUBMITTED, at))
+        return self._record(OrderEvent(order_id, OrderEventKind.SUBMITTED, at))
 
     def acknowledge_order(self, order_id: str, *, order_venue_id: str, at: datetime) -> OrderState:
         if at.tzinfo is None:
             raise ValueError("acknowledgement timestamp must be timezone-aware")
         if not order_venue_id.strip():
             raise ValueError("order venue id cannot be empty")
-        return self.orders.record(OrderEvent(order_id, OrderEventKind.ACKNOWLEDGED, at, order_venue_id=order_venue_id))
+        return self._record(OrderEvent(order_id, OrderEventKind.ACKNOWLEDGED, at, order_venue_id=order_venue_id))
 
     def mark_order_unknown(self, order_id: str, *, at: datetime, reason: str) -> OrderState:
         if at.tzinfo is None:
             raise ValueError("unknown-order timestamp must be timezone-aware")
-        return self.orders.record(OrderEvent(order_id, OrderEventKind.UNKNOWN, at, reason=reason))
+        return self._record(OrderEvent(order_id, OrderEventKind.UNKNOWN, at, reason=reason))
 
     def mark_reservation_reflected(self, order_id: str) -> None:
         state = self.orders.get(order_id)
         reservation_id = state.request.reservation_id or order_id
-        self.reservations.reflect(reservation_id)
+        reservation = self.reservations.reflect(reservation_id)
+        if self.audit_store is not None:
+            self.audit_store.record_transition(
+                {
+                    "record_id": f"reservation:{self.instance_id}:{reservation_id}:reflected",
+                    "instance_id": self.instance_id,
+                    "record_type": "reservation",
+                    "order_id": order_id,
+                    "order_venue_id": state.order_venue_id or state.request.order_venue_id,
+                    "account": str(state.request.context.segment.account_id),
+                    "account_segment": state.request.context.segment.value,
+                    "broker": str(state.request.context.segment.broker),
+                    "product_type": None if state.request.context.segment.product_family is None else str(state.request.context.segment.product_family),
+                    "symbol": str(state.request.instrument_id),
+                    "event_kind": "reservation_reflected",
+                    "outcome": "applied",
+                    "before_status": "held",
+                    "after_status": reservation.status.value,
+                    "observed_at": datetime.now().astimezone().isoformat(),
+                    "received_at": datetime.now().astimezone().isoformat(),
+                    "reservation_id": reservation_id,
+                    "reservation_amount": str(reservation.amount),
+                    "reservation_currency": reservation.currency,
+                }
+            )
 
     def account_projection(
         self,
@@ -202,18 +236,18 @@ class ExecutionCoordinator:
         )
 
     def request_cancel(self, order_id: str, *, at: datetime) -> OrderState:
-        return self.orders.record(OrderEvent(order_id, OrderEventKind.CANCEL_REQUESTED, at))
+        return self._record(OrderEvent(order_id, OrderEventKind.CANCEL_REQUESTED, at))
 
     def cancel_order(self, order_id: str, *, at: datetime) -> OrderState:
         return self.request_cancel(order_id, at=at)
 
     def cancel_confirmed(self, order_id: str, *, at: datetime) -> OrderState:
-        state = self.orders.record(OrderEvent(order_id, OrderEventKind.CANCELED, at))
+        state = self._record(OrderEvent(order_id, OrderEventKind.CANCELED, at))
         self._release_reservation(state)
         return state
 
     def reject_order(self, order_id: str, *, at: datetime, reason: str = "") -> OrderState:
-        state = self.orders.record(OrderEvent(order_id, OrderEventKind.REJECTED, at, reason=reason))
+        state = self._record(OrderEvent(order_id, OrderEventKind.REJECTED, at, reason=reason))
         self._release_reservation(state)
         return state
 
@@ -221,7 +255,7 @@ class ExecutionCoordinator:
         state = self.orders.get(report.order_id)
         cumulative = report.cumulative_filled_quantity or state.filled_quantity + report.fill_quantity
         kind = OrderEventKind.FILLED if cumulative >= state.request.quantity else OrderEventKind.PARTIALLY_FILLED
-        updated = self.orders.record(
+        updated = self._record(
             OrderEvent(report.order_id, kind, report.occurred_at, filled_quantity=cumulative)
         )
         self.ledger.record(
@@ -251,6 +285,8 @@ class ExecutionCoordinator:
             )
         if updated.status.terminal:
             self._consume_reservation(updated)
+        else:
+            self._adjust_reservation_for_fill(updated)
         return updated
 
     def apply_execution_update(self, update: ExecutionUpdate) -> OrderState:
@@ -275,7 +311,7 @@ class ExecutionCoordinator:
             )
         if update.kind is OrderEventKind.ACKNOWLEDGED and state.status is OrderStatus.ACKNOWLEDGED:
             return state
-        updated = self.orders.record(
+        updated = self._record(
             OrderEvent(
                 state.request.order_id,
                 update.kind,
@@ -289,6 +325,8 @@ class ExecutionCoordinator:
         )
         if updated.status in {OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED}:
             self._release_reservation(updated)
+        elif updated.status is OrderStatus.PARTIALLY_FILLED:
+            self._adjust_reservation_for_fill(updated)
         return updated
 
     def _release_reservation(self, state: OrderState) -> None:
@@ -298,6 +336,40 @@ class ExecutionCoordinator:
         except KeyError:
             pass
         self._release_risk(reservation_id)
+
+    def _adjust_reservation_for_fill(self, state: OrderState) -> None:
+        reservation_id = state.request.reservation_id or state.request.order_id
+        try:
+            reservation = self.reservations.reservations
+            current = next(item for item in reservation if item.reservation_id == reservation_id)
+            remaining = current.amount * state.remaining_quantity / state.request.quantity
+            adjusted = self.reservations.adjust(reservation_id, remaining)
+        except (KeyError, StopIteration, ValueError, ZeroDivisionError):
+            return
+        if self.audit_store is not None:
+            self.audit_store.record_transition(
+                {
+                    "record_id": f"reservation:{self.instance_id}:{reservation_id}:adjusted:{state.filled_quantity}",
+                    "instance_id": self.instance_id,
+                    "record_type": "reservation",
+                    "order_id": state.order_id,
+                    "order_venue_id": state.order_venue_id or state.request.order_venue_id,
+                    "account": str(state.request.context.segment.account_id),
+                    "account_segment": state.request.context.segment.value,
+                    "broker": str(state.request.context.segment.broker),
+                    "product_type": None if state.request.context.segment.product_family is None else str(state.request.context.segment.product_family),
+                    "symbol": str(state.request.instrument_id),
+                    "event_kind": "reservation_adjusted",
+                    "outcome": "applied",
+                    "before_status": str(current.amount),
+                    "after_status": str(adjusted.amount),
+                    "observed_at": state.updated_at.isoformat() if state.updated_at is not None else None,
+                    "received_at": datetime.now().astimezone().isoformat(),
+                    "reservation_id": reservation_id,
+                    "reservation_amount": str(adjusted.amount),
+                    "reservation_currency": adjusted.currency,
+                }
+            )
 
     def _consume_reservation(self, state: OrderState) -> None:
         reservation_id = state.request.reservation_id or state.request.order_id
@@ -330,7 +402,7 @@ class ExecutionCoordinator:
             raise LookupError(f"execution update has no account context for unknown order: {update.order_venue_id}")
         if update.instrument_id is None or update.side is None or update.quantity is None or update.order_type is None:
             raise ValueError("execution update cannot import an unknown order without order identity fields")
-        return self.orders.import_order_venue_open_order(
+        state = self.orders.import_order_venue_open_order(
             context=update.context,
             order_venue_id=update.order_venue_id,
             instrument_id=update.instrument_id,
@@ -342,6 +414,64 @@ class ExecutionCoordinator:
             status=OrderStatus.PARTIALLY_FILLED if update.kind is OrderEventKind.PARTIALLY_FILLED else OrderStatus.ACKNOWLEDGED,
             filled_quantity=update.filled_quantity or Decimal("0"),
             observed_at=update.observed_at,
+        )
+        self._audit_transition(None, state, event_kind=update.kind, observed_at=update.observed_at, update=update)
+        return state
+
+    def _record(self, event: OrderEvent) -> OrderState:
+        before = self.orders.get(event.order_id)
+        state = self.orders.record(event)
+        self._audit_transition(before, state, event_kind=event.kind, observed_at=event.occurred_at)
+        return state
+
+    def _audit_transition(
+        self,
+        before: OrderState | None,
+        after: OrderState,
+        *,
+        event_kind: OrderEventKind,
+        observed_at: datetime,
+        update: ExecutionUpdate | None = None,
+    ) -> None:
+        _LOGGER.info(
+            "order_transition instance=%s order_id=%s order_venue_id=%s kind=%s before=%s after=%s filled=%s remaining=%s",
+            self.instance_id,
+            after.order_id,
+            after.order_venue_id or after.request.order_venue_id,
+            event_kind.value,
+            None if before is None else before.status.value,
+            after.status.value,
+            after.filled_quantity,
+            after.remaining_quantity,
+        )
+        if self.audit_store is None:
+            return
+        metadata = {} if update is None else dict(update.metadata)
+        event_id = next((str(metadata[name]) for name in ("event_id", "execution_id", "trade_id", "fill_id") if metadata.get(name)), None)
+        self.audit_store.record_transition(
+            {
+                "record_id": f"transition:{self.instance_id}:{after.order_id}:{observed_at.isoformat()}:{event_kind.value}",
+                "instance_id": self.instance_id,
+                "order_id": after.order_id,
+                "order_venue_id": after.order_venue_id or after.request.order_venue_id,
+                "event_id": event_id,
+                "account": str(after.request.context.segment.account_id),
+                "account_segment": after.request.context.segment.value,
+                "broker": str(after.request.context.segment.broker),
+                "product_type": None if after.request.context.segment.product_family is None else str(after.request.context.segment.product_family),
+                "symbol": str(after.request.instrument_id),
+                "exchange": metadata.get("exchange") or metadata.get("venue"),
+                "event_kind": event_kind.value,
+                "outcome": "applied",
+                "before_status": None if before is None else before.status.value,
+                "after_status": after.status.value,
+                "filled_quantity": str(after.filled_quantity),
+                "remaining_quantity": str(after.remaining_quantity),
+                "observed_at": observed_at.isoformat(),
+                "received_at": datetime.now().astimezone().isoformat(),
+                "reason": after.reason,
+                "metadata": metadata,
+            }
         )
 
 

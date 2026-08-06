@@ -234,7 +234,7 @@ class AccountViewReader:
     def has_account(self, key: str | int) -> bool:
         return any(_account_key_text(key) in _account_match_keys(item) for item in _account_segments(self.source))
 
-    def current(self, key: str | None = None) -> AccountCurrentView:
+    def view(self, key: str | None = None) -> AccountCurrentView:
         if key is not None:
             return cast(AccountCurrentView, self.source.require(_account_view_key(self.source, key)))
         account_keys = _account_current_keys(self.source)
@@ -244,6 +244,14 @@ class AccountViewReader:
             raise ValueError("multiple account views are available; pass an account key")
         return cast(AccountCurrentView, self.source.require(account_keys[0]))
 
+    def only(self) -> AccountCurrentView:
+        """Return the only configured account view.
+
+        Use ``account(...).segment(...).view()`` when the account or segment
+        must be selected explicitly.
+        """
+        return self.view()
+
     def detail(self, key: str | None = None) -> AccountDetailView:
         current_key = _account_view_key(self.source, key) if key is not None else _single_account_current_key(self.source)
         return cast(AccountDetailView, self.source.require(_detail_key_from_current_key(current_key)))
@@ -252,12 +260,12 @@ class AccountViewReader:
         return self.account(key)
 
     def balance(self, currency: AssetCode | str, *, account: str | None = None) -> AccountBalance | None:
-        balances = tuple(getattr(self.current(account), "balances", ()) or ())
+        balances = tuple(getattr(self.view(account), "balances", ()) or ())
         return next((item for item in balances if item.currency == currency), None)
 
     def position(self, instrument: str, *, account: str | None = None) -> PositionSnapshot | None:
         instrument_id = str(instrument)
-        positions = tuple(getattr(self.current(account), "positions", ()) or ())
+        positions = tuple(getattr(self.view(account), "positions", ()) or ())
         return next((item for item in positions if str(item.instrument_id) == instrument_id), None)
 
     def fees(self, *, account: str | None = None) -> tuple[AccountFeeSchedule, ...]:
@@ -265,7 +273,7 @@ class AccountViewReader:
         schedules = tuple(getattr(view, "fees", ()) or ())
         if account is None:
             return schedules
-        current = self.current(account)
+        current = self.view(account)
         segment = getattr(current, "segment", None)
         return tuple(item for item in schedules if item.segment == segment)
 
@@ -288,7 +296,7 @@ class ExternalAccountReader:
     source: AccountViewSource
     account_key: str | int
 
-    def current(self) -> AccountCurrentView:
+    def view(self) -> AccountCurrentView:
         return cast(AccountCurrentView, self.source.require(_account_view_key_for_account(self.source, self.account_key, None)))
 
     def detail(self, segment: str | None = None) -> AccountDetailView:
@@ -328,7 +336,8 @@ class AccountSegmentReader:
     account_key: str | int
     segment_key: str | None = None
 
-    def current(self) -> AccountCurrentView:
+    def view(self) -> AccountCurrentView:
+        """Return the current view for this explicitly selected segment."""
         return cast(AccountCurrentView, self.source.require(_account_view_key_for_account(self.source, self.account_key, self.segment_key)))
 
     @property
@@ -343,7 +352,7 @@ class AccountSegmentReader:
         return AccountMarketCollectionReader(self.source, self.account_key, self.segment_key)
 
     def fees(self) -> tuple[AccountFeeSchedule, ...]:
-        current = self.current()
+        current = self.view()
         selected = getattr(current, "segment", None)
         view = self.source.get(AccountViewKeys.fees, None)
         return tuple(item for item in (getattr(view, "fees", ()) or ()) if item.segment == selected)
@@ -626,8 +635,11 @@ def _account_match_keys(item: AccountSegmentSummary) -> set[str]:
 
 
 def _segment_match_keys(item: AccountSegmentSummary) -> set[str]:
+    segment_key = str(getattr(item, "segment_key", ""))
+    segment_id = segment_key.split(".", 1)[0] if segment_key else ""
     return {
-        str(getattr(item, "segment_key", "")),
+        segment_key,
+        segment_id,
         str(getattr(item, "segment_model", "")),
         str(getattr(item, "segment_qualifier", "")),
         str(getattr(item, "alias", "")),

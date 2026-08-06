@@ -54,6 +54,12 @@ class ReferenceCatalog:
         for item in financial_products:
             self.add_financial_product(item)
 
+    def __setstate__(self, state: dict[str, object]) -> None:
+        """Restore catalogs written before financial products were added."""
+        self.__dict__.update(state)
+        if "_financial_products" not in self.__dict__:
+            self._financial_products = {}
+
     def add_entity(self, entity: Entity) -> Entity:
         _add_version(self._entities, str(entity.entity_id), entity)
         return entity

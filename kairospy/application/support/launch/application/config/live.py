@@ -106,7 +106,9 @@ def configured_live(
 ) -> ConfiguredLive:
     launch_config = load_required_launch_config(config_path, mode=RuntimeMode.LIVE, error_type=LiveConfigurationError, strategy_ref=strategy_ref)
     live = _table(launch_config.values.get("live"), "live")
+    market_config = _table(launch_config.values.get("market"), "market") if launch_config.values.get("market") is not None else {}
     feeds_config = common_parse_feeds(launch_config.values.get("feeds"), error_type=LiveConfigurationError)
+    reference_config = _table(launch_config.values.get("reference"), "reference") if launch_config.values.get("reference") is not None else {}
     timeline_config = _table(launch_config.values.get("timeline"), "timeline") if launch_config.values.get("timeline") is not None else {}
     notifications_config = _table(launch_config.values.get("notifications"), "notifications") if launch_config.values.get("notifications") is not None else {}
     account_ref = launch_config.account_ref or _primary_launch_account_ref(launch_config.launch_accounts)
@@ -143,7 +145,9 @@ def configured_live(
             "launch": {"id": launch_config.launch_id, "mode": RuntimeMode.LIVE.value, "strategy": launch_config.strategy},
             "strategy": {"params": dict(_strategy_params(launch_config.values))},
             "live": dict(live),
+            "market": dict(market_config),
             "feeds": {key: dict(feed.values or {}) for key, feed in feeds_config.items()},
+            "reference": dict(reference_config),
             "account": {"ref": account_ref, "account_id": account_config.account_id, "venue": venue, "initial_balances": dict(account_config.initial_balances)},
             "accounts": {key: {"ref": value.ref, "index": value.index, "segments": list(value.segments), "trade": value.trade} for key, value in launch_config.launch_accounts.items()},
             "timeline": dict(timeline_config),

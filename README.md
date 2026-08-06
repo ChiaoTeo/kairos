@@ -1,14 +1,12 @@
 # KairosPy
 
-![KairosPy](https://capsule-render.vercel.app/api?type=waving&height=220&color=0:0EA5E9,50:22C55E,100:F59E0B&text=KairosPy&fontAlign=50&fontAlignY=38&fontSize=56&fontColor=ffffff&desc=Strategy%20runtime%20%7C%20Backtesting%20%7C%20Paper%20trading%20%7C%20Timeline%20viewer&descAlign=50&descAlignY=60)
+![KairosPy](https://capsule-render.vercel.app/api?type=waving&height=220&color=0:0EA5E9,50:22C55E,100:F59E0B&text=KairosPy&fontAlign=50&fontAlignY=38&fontSize=56&fontColor=ffffff&desc=Strategy%20runtime%20%7C%20Backtesting%20%7C%20Paper%20trading&descAlign=50&descAlignY=60)
 
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Typer](https://img.shields.io/badge/CLI-Typer-0F172A?style=for-the-badge)
-![React](https://img.shields.io/badge/Viewer-React%2019-61DAFB?style=for-the-badge&logo=react&logoColor=0F172A)
-![Vite](https://img.shields.io/badge/Build-Vite-646CFF?style=for-the-badge&logo=vite&logoColor=white)
 ![Tests](https://img.shields.io/badge/Tests-pytest-0A9EDC?style=for-the-badge&logo=pytest&logoColor=white)
 
-KairosPy 是一个面向量化交易实验的 Python 工具包，提供策略运行、回测、纸交易、账户/订单/行情投影、交易所集成和时间线可视化能力。
+KairosPy 是一个面向量化交易实验的 Python 工具包，提供策略运行、回测、纸交易、账户/订单/行情投影、交易所集成和时间线数据能力。
 
 交易所接入说明：
 
@@ -21,7 +19,7 @@ KairosPy 是一个面向量化交易实验的 Python 工具包，提供策略运
 - 📈 **回测与纸交易**：内置 backtest、paper、live 等运行模式的配置入口。
 - 🧾 **账户与订单视图**：围绕 account、order、execution、risk、trace 等领域组织状态投影。
 - 🔌 **交易所与数据集成**：包含 Binance、CCXT、Massive 等 integration scaffold。
-- 🖥️ **时间线查看器**：React + lightweight-charts 构建的运行时间线 UI。
+- 🖥️ **终端界面**：通过 CLI 和 Textual 组织运行时状态与时间线数据。
 - 🧪 **测试覆盖**：使用 pytest 覆盖 CLI、运行时、市场、账户、执行和参考数据模块。
 
 ## 🧭 架构速览
@@ -35,7 +33,7 @@ flowchart LR
     Services --> Core["Core Domain Models"]
     Services --> Integrations["Exchange & Data Integrations"]
     Runtime --> Artifacts["Artifacts & Timeline Data"]
-    Artifacts --> Viewer["React Timeline Viewer"]
+    Artifacts --> Surface["CLI / Textual surfaces"]
 ```
 
 ## 📦 安装
@@ -67,6 +65,15 @@ python -m pip install pytest
 uv run kairospy --help
 uv run kairos --help
 ```
+
+初始化一个 Kairos 项目：
+
+```bash
+uv run kairos init my-project
+```
+
+这会创建 `.kairos/kairos.toml` 以及项目运行所需的本地目录。完整写法
+`kairos project init my-project` 仍然可用。
 
 校验一个回测配置：
 
@@ -103,10 +110,10 @@ uv run kairospy system account trade-acquire main
 uv run kairospy system account trade-release main
 ```
 
-打开时间线查看器：
+导出时间线数据：
 
 ```bash
-uv run kairospy launch timeline open --latest binance-spot-btc-sma-backtest
+uv run kairospy launch timeline export --latest binance-spot-btc-sma-backtest
 ```
 
 进入交互式命令 shell：
@@ -256,25 +263,6 @@ uv run kairospy system account positions main
 
 更多运行说明见 [`examples/README.md`](examples/README.md)。
 
-## 🖼️ 时间线前端
-
-前端查看器位于 `view/`，使用 React 19、Vite、Tailwind CSS 和 `lightweight-charts`：
-
-```bash
-cd view
-npm install
-npm run dev
-```
-
-构建静态资源：
-
-```bash
-cd view
-npm run build
-```
-
-构建后的资源会用于 `kairospy launch timeline open` 提供的本地查看体验。
-
 ## 🗂️ 项目结构
 
 ```text
@@ -282,12 +270,11 @@ kairospy/
   application/        # CLI facade、launch、runtime orchestration、strategy entrypoint
   core/               # account、execution、intent、market、order、reference 等领域模型
   infrastructure/     # integrations 与 persistence adapters（market data、reference、runtime state、artifacts）
-  surface/            # CLI、interactive shell、timeline server 与渲染层
+  surface/            # CLI、interactive shell、Textual 与渲染层
 examples/
   configs/            # launch 配置示例
   strategies/         # 策略示例
 tests/                # pytest 测试
-view/                 # React/Vite 时间线查看器
 ```
 
 ## 🛠️ 开发命令

@@ -16,6 +16,7 @@ from kairospy.application.usecases.workspace.application.leases import AccountLe
 from kairospy.application.usecases.account.application.configuration import AccountStore
 from kairospy.application.support.launch.application.configuration import SYSTEM_LAUNCH_ID
 from kairospy.domain.views import ViewEnvelope
+from kairospy.infrastructure.persistence.application.run import open_run_store
 
 from kairospy.application.support.launch.application.commands import SystemCommand, SystemCommandResult
 
@@ -47,7 +48,7 @@ class SystemCommandDispatcher:
         service = AccountViewQueryService(_ArtifactViewSource(self.directory))
         account = _optional_text(command.payload.get("account"))
         if command.kind == "account.current":
-            result = {"account": account, "current": service.current(account)}
+            result = {"account": account, "view": service.view(account)}
         elif command.kind == "account.balances":
             result = {"account": account, "balances": service.balances(account=account)}
         elif command.kind == "account.positions":
@@ -218,8 +219,7 @@ class _ArtifactViewSource:
 
 
 def _account_current_payload(directory: Path) -> Mapping[str, object]:
-    path = directory / "account" / "current.json"
-    payload = _read_json(path)
+    payload = open_run_store(directory / "run.sqlite").read_current("account")
     view = payload.get("account_view")
     if isinstance(view, Mapping):
         return dict(view)
@@ -229,8 +229,7 @@ def _account_current_payload(directory: Path) -> Mapping[str, object]:
 
 
 def _latest_timeline_view_payloads(directory: Path) -> dict[str, object]:
-    path = directory / "timeline.jsonl"
-    for row in reversed(_read_jsonl(path)):
+    for row in reversed(open_run_store(directory / "run.sqlite").read_records("records")):
         views = row.get("views")
         if not isinstance(views, Mapping):
             continue

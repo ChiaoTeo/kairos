@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from importlib.resources import files
 from pathlib import Path
 from typing import Mapping
 
@@ -10,10 +9,10 @@ from kairospy.application.usecases.workspace.application.context import workspac
 from kairospy.application.support.launch.application.control import RuntimeMode
 from kairospy.surface.cli.options import OutputFormat, resolve_output
 from kairospy.surface.rendering.writer import write_result
-from kairospy.surface.timeline import TimelineDataLoader, find_latest_instance, list_instances, serve_timeline
+from kairospy.surface.timeline import TimelineDataLoader, find_latest_instance, list_instances
 
 
-timeline_app = typer.Typer(no_args_is_help=True, help="Timeline viewer commands")
+timeline_app = typer.Typer(no_args_is_help=True, help="Timeline data commands")
 
 
 @timeline_app.command("list")
@@ -47,51 +46,6 @@ def export_timeline(
     write_result(data, output=resolve_output(ctx, output_format, default=OutputFormat.json))
 
 
-@timeline_app.command("open")
-def open_timeline(
-    latest: str | None = typer.Option(None, "--latest", help="Select latest instance for the given launch id by default."),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    root: Path | None = typer.Option(None, "--root", help="Launch root. Defaults to the workspace launch root."),
-    host: str = typer.Option("127.0.0.1", "--host"),
-    port: int = typer.Option(8765, "--port"),
-    browser: bool = typer.Option(True, "--browser/--no-browser", help="Open the viewer in the default browser."),
-) -> None:
-    launch_root = _launch_root(root)
-    path = _resolve_latest_instance_path(latest=latest, mode=mode, launch_root=launch_root)
-    serve_timeline(
-        launch_root,
-        selected_instance_path=path,
-        mode=mode.value if mode else None,
-        launch_id=latest,
-        host=host,
-        port=port,
-        open_browser=browser,
-        static_root=_viewer_dist(),
-    )
-
-
-@timeline_app.command("api")
-def timeline_api(
-    latest: str | None = typer.Option(None, "--latest", help="Select latest instance for the given launch id by default."),
-    mode: RuntimeMode | None = typer.Option(None, "--mode"),
-    root: Path | None = typer.Option(None, "--root", help="Launch root. Defaults to the workspace launch root."),
-    host: str = typer.Option("127.0.0.1", "--host"),
-    port: int = typer.Option(8765, "--port"),
-) -> None:
-    launch_root = _launch_root(root)
-    path = _resolve_latest_instance_path(latest=latest, mode=mode, launch_root=launch_root)
-    serve_timeline(
-        launch_root,
-        selected_instance_path=path,
-        mode=mode.value if mode else None,
-        launch_id=latest,
-        host=host,
-        port=port,
-        open_browser=False,
-        static_root=None,
-    )
-
-
 def _resolve_instance_path(
     instance_path: Path | None,
     *,
@@ -108,19 +62,8 @@ def _resolve_instance_path(
     return find_latest_instance(_launch_root(root), mode=mode.value if mode else None, launch_id=latest)
 
 
-def _resolve_latest_instance_path(*, latest: str | None, mode: RuntimeMode | None, launch_root: Path) -> Path | None:
-    if latest is None:
-        return None
-    return find_latest_instance(launch_root, mode=mode.value if mode else None, launch_id=latest)
-
-
 def _launch_root(root: Path | None) -> Path:
     return root.expanduser().resolve() if root is not None else resolve_workspace().launch_root
-
-
-def _viewer_dist() -> Path | None:
-    path = Path(str(files("kairospy.surface.timeline").joinpath("static")))
-    return path if (path / "index.html").exists() else None
 
 
 def _render_instances(payload: Mapping[str, object]) -> str:

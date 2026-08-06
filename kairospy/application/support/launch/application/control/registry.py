@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Mapping
 
 from kairospy.application.support.launch.services.command_queue import SystemCommandFileQueue
+from kairospy.infrastructure.persistence.application.run import open_run_store
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,7 +16,7 @@ class LaunchRecord:
     launch_id: str
     mode: str
     directory: Path
-    summary_path: Path
+    run_path: Path
     updated_at: datetime
     summary: Mapping[str, object]
     state: Mapping[str, object] = field(default_factory=dict)
@@ -200,7 +201,7 @@ class LaunchRegistry:
         }
 
     def _launch_directories(self) -> tuple[Path, ...]:
-        paths = {path.parent for path in self.root.rglob("summary.json")}
+        paths = {path.parent for path in self.root.rglob("run.sqlite")}
         paths.update(path.parent for path in self.root.rglob("state.json"))
         return tuple(sorted(path for path in paths if not _is_mirrored_group_directory(path)))
 
@@ -216,29 +217,20 @@ class LaunchRegistry:
         return None
 
     def _record(self, directory: Path) -> LaunchRecord:
-        summary_path = directory / "summary.json"
-        summary = _read_summary(summary_path)
+        run_path = directory / "run.sqlite"
+        summary = open_run_store(run_path).read_json("summary") if run_path.exists() else {}
         state = _read_json(directory / "state.json")
-        stat_path = summary_path if summary_path.exists() else directory / "state.json"
+        stat_path = run_path if run_path.exists() else directory / "state.json"
         stat = stat_path.stat()
         return LaunchRecord(
             launch_id=str(state.get("launch_id") or summary.get("launch_id") or directory.name),
             mode=str(state.get("mode") or summary.get("mode") or directory.parent.name),
             directory=directory,
-            summary_path=summary_path,
+            run_path=run_path,
             updated_at=datetime.fromtimestamp(stat.st_mtime, timezone.utc),
             summary=summary,
             state=state,
         )
-
-
-def _read_summary(path: Path) -> Mapping[str, object]:
-    if not path.exists():
-        return {}
-    value = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(value, Mapping):
-        raise ValueError(f"launch summary must be a JSON object: {path}")
-    return value
 
 
 def _read_json(path: Path) -> Mapping[str, object]:

@@ -394,7 +394,6 @@ class LaunchApplication:
             (
                 current_directory / "daemon.log",
                 current_directory / "launch.log",
-                current_directory / "events.jsonl",
             )
         )
         if path is None:
@@ -541,7 +540,7 @@ def _daemon_result_payload(result: object) -> dict[str, object]:
         "phase": getattr(result, "phase"),
         "directory": str(getattr(result, "directory")),
         "state_file": str(getattr(result, "state_path")),
-        "summary_file": str(getattr(result, "summary_path")),
+        "run_database": str(getattr(result, "run_path")),
         "result": dict(getattr(result, "result")),
     }
 
@@ -590,7 +589,7 @@ def _stale_reason(record: object, *, stale: bool) -> str | None:
 
 def _log_path(record: object) -> Path | None:
     directory = getattr(record, "directory")
-    return _first_log_file((directory / "daemon.log", directory / "launch.log", directory / "events.jsonl"))
+    return _first_log_file((directory / "daemon.log", directory / "launch.log"))
 
 
 def _select_current_record(records: tuple[object, ...], *, launch_root: Path) -> object | None:

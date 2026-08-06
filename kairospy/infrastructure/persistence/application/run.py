@@ -1,0 +1,26 @@
+"""Public application capability for one launch run store."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Mapping, Protocol
+
+from kairospy.infrastructure.persistence.services.artifacts.run_sqlite import RunSqliteStore
+
+
+class RunStore(Protocol):
+    def write_json(self, name: str, payload: Mapping[str, object]) -> None: ...
+    def read_json(self, name: str) -> dict[str, object]: ...
+    def append_record(self, stream: str, record: Mapping[str, object]) -> None: ...
+    def replace_records(self, stream: str, records: tuple[object, ...] | list[object]) -> None: ...
+    def read_records(self, stream: str) -> list[dict[str, object]]: ...
+    def update_current(self, namespace: str, payload: Mapping[str, object]) -> None: ...
+    def read_current(self, namespace: str) -> dict[str, object]: ...
+    def exists(self, name: str) -> bool: ...
+
+
+def open_run_store(path: str | Path) -> RunStore:
+    return RunSqliteStore(path)
+
+
+__all__ = ["RunStore", "open_run_store"]

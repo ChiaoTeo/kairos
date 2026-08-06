@@ -152,6 +152,10 @@ class AccountActor(BusinessActor):
         if application is None:
             raise RuntimeError("account actor has no account snapshot usecase")
         application.update_snapshot(snapshot)
+        execution = self.execution_application
+        reflect = None if execution is None else getattr(execution, "reflect_account_snapshot", None)
+        if callable(reflect):
+            reflect(snapshot)
 
     def query(self, command: QueryAccountCommand) -> AccountQueryResult:
         application = self.account_application

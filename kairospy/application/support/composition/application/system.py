@@ -27,6 +27,7 @@ from kairospy.application.usecases.account.application.runtime import SimulatedA
 from kairospy.application.usecases.account.application.runtime import account_segment_route, SimulatedAccount
 from kairospy.application.usecases.execution.application.runtime import build_execution_coordinator, build_simulated_runtime
 from kairospy.domain.account import AccountCapability, AccountRuntimeContext, AccountFeeSchedule, Environment
+from kairospy.infrastructure.persistence.services.execution.sqlite_audit import SqliteOrderAuditStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +67,10 @@ def compose_system(*, launch_directory: Path, launch_id: str, producer_source: o
         environment=primary.environment,
         product_family=primary.segment.product_family,
     )
-    coordinator = build_execution_coordinator()
+    coordinator = build_execution_coordinator(
+        audit_store=SqliteOrderAuditStore(launch_directory / "run.sqlite", instance_id=launch_instance_id),
+        instance_id=launch_instance_id,
+    )
     account_service = SimulatedAccountService(
         account,
         coordinator.ledger,

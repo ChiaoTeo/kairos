@@ -17,6 +17,7 @@ from kairospy.infrastructure.integrations.domain import (
     ProviderRef,
     TransportKind,
 )
+from kairospy.infrastructure.integrations.services.gateways.binance.equity.private_rest import BinanceEquityExecutionGateway
 from kairospy.infrastructure.integrations.services.gateways.binance.equity.public_rest import BinanceEquityPublicRestGateway, BinanceEquityPublicStreamGateway
 from kairospy.infrastructure.integrations.services.gateways.binance.spot.private_rest import BinanceSpotAccountGateway, BinanceSpotExecutionGateway
 from kairospy.infrastructure.integrations.services.gateways.binance.spot.public_rest import BinanceSpotPublicRestGateway
@@ -25,6 +26,7 @@ from kairospy.infrastructure.integrations.services.gateways.binance.spot.user_st
 from kairospy.infrastructure.integrations.services.gateways.binance.options.private_rest import BinanceOptionsAccountConnection, BinanceOptionsExecutionConnection
 from kairospy.infrastructure.integrations.services.gateways.binance.options.public_rest import BinanceOptionsPublicRestGateway, BinanceOptionsPublicStreamGateway
 from kairospy.infrastructure.integrations.services.gateways.binance.earn import BinanceSimpleEarnGateway
+from kairospy.infrastructure.integrations.services.gateways.binance.funding import BinanceFundingAccountGateway
 from kairospy.infrastructure.integrations.services.gateways.ccxt.market import CcxtMarketGateway
 from kairospy.infrastructure.integrations.services.gateways.ccxt.private import CcxtAccountGateway, CcxtExecutionGateway
 from kairospy.infrastructure.integrations.services.gateways.ibkr.execution import IBKRAccountGateway, IBKRAccountStreamGateway, IBKRExecutionGateway, IBKRExecutionStreamGateway
@@ -84,9 +86,11 @@ class GatewayRegistry:
             IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
             IntegrationRoute(exchange=ExchangeRef(ExchangeId.BINANCE), broker=BrokerRef(BrokerId.BINANCE)),
         ):
+            registry.register(route=route, product=ProductFamily.SPOT, asset_type=AssetType.EQUITY, capability=IntegrationCapability.ORDER_ENTRY, transport=TransportKind.REST, factory=BinanceEquityExecutionGateway().open)
             registry.register(route=route, product=ProductFamily.OPTIONS, capability=IntegrationCapability.ACCOUNT_READ, transport=TransportKind.REST, factory=BinanceOptionsAccountConnection)
             registry.register(route=route, product=ProductFamily.OPTIONS, capability=IntegrationCapability.ORDER_ENTRY, transport=TransportKind.REST, factory=BinanceOptionsExecutionConnection)
             registry.register(route=route, product=None, capability=IntegrationCapability.EARN, transport=TransportKind.REST, factory=BinanceSimpleEarnGateway().open)
+            registry.register(route=route, product=None, capability=IntegrationCapability.ACCOUNT_READ, transport=TransportKind.REST, factory=BinanceFundingAccountGateway().open)
         for exchange in (ExchangeId.BINANCE, ExchangeId.OKX, ExchangeId.HYPERLIQUID):
             registry.register(route=IntegrationRoute(exchange=ExchangeRef(exchange)), product=ProductFamily.USD_M_FUTURES, factory=CcxtMarketGateway().open)
         for exchange in (ExchangeId.OKX, ExchangeId.HYPERLIQUID):

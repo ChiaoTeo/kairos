@@ -71,51 +71,77 @@ class MarketFeedApplicationService:
     async def events(self) -> AsyncIterator[MarketEvent]:
         if not (self.stream_connections or self.feed is not None or self.feed_resolver is not None or self.integration_runtime is not None):
             raise RuntimeError("market feed has no integration connection")
-        if not self.list_subscriptions():
+        if not self.list_subscriptions() and not bool(getattr(self.subscriptions, "has_subscription_intents", lambda: False)()):
             return
 
-        remotes: list[tuple[MarketStreamConnection, MarketFeedSubscription]] = []
-        tasks: dict[asyncio.Task[MarketEvent], tuple[AsyncIterator[MarketEvent], str]] = {}
-        try:
+        active: dict[str, tuple[MarketStreamConnection, MarketFeedSubscription, AsyncIterator[MarketEvent], asyncio.Task[MarketEvent]]] = {}
+
+        async def sync_subscriptions() -> None:
+            desired: dict[str, tuple[MarketFeedWatchPlan, MarketStreamConnection, str]] = {}
             for subscription in self.list_subscriptions():
                 for plan in self.subscriptions.feed_watches(subscription):
                     connection = self._connection_for(plan)
                     if connection is None:
                         raise RuntimeError(f"no market stream connection for {plan.market.venue}")
-                    remote = await self._await_stop_aware(
-                        connection.subscribe(
-                            MarketFeedSubscriptionRequest(
-                                market=plan.market,
-                                selector=plan.selector,
-                                identity=subscription.key,
-                                params=plan.params,
-                            )
+                    desired[plan.key] = (plan, connection, subscription.key)
+
+            for key, (plan, connection, identity) in desired.items():
+                if key in active:
+                    continue
+                remote = await self._await_stop_aware(
+                    connection.subscribe(
+                        MarketFeedSubscriptionRequest(
+                            market=plan.market,
+                            selector=plan.selector,
+                            identity=identity,
+                            params=plan.params,
                         )
                     )
-                    remotes.append((connection, remote))
-                    iterator = remote.events().__aiter__()
-                    tasks[asyncio.create_task(iterator.__anext__())] = (iterator, plan.kind)
+                )
+                iterator = remote.events().__aiter__()
+                active[key] = (connection, remote, iterator, asyncio.create_task(iterator.__anext__()))
 
-            while tasks and not self._should_stop():
+            for key in tuple(active):
+                if key in desired:
+                    continue
+                connection, remote, _iterator, task = active.pop(key)
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                await connection.unsubscribe(remote.subscription_id)
+
+        try:
+            await sync_subscriptions()
+            while not self._should_stop():
+                tasks = {item[3]: (key, item[2]) for key, item in active.items()}
+                if not tasks:
+                    await asyncio.sleep(0.5)
+                    await sync_subscriptions()
+                    continue
                 done, _ = await asyncio.wait(tasks, timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
                 for task in done:
-                    iterator, _kind = tasks.pop(task)
+                    key, iterator = tasks[task]
                     try:
                         event = task.result()
                     except StopAsyncIteration:
+                        stopped = active.pop(key, None)
+                        if stopped is not None:
+                            await stopped[0].unsubscribe(stopped[1].subscription_id)
                         continue
                     if not isinstance(event, MarketEvent):
                         raise TypeError("market feed connections must emit MarketEvent")
                     yield event
-                    tasks[asyncio.create_task(iterator.__anext__())] = (iterator, _kind)
+                    if key in active:
+                        connection, remote, _old_iterator, _old_task = active[key]
+                        active[key] = (connection, remote, iterator, asyncio.create_task(iterator.__anext__()))
+                await sync_subscriptions()
         except _StopRequested:
             return
         finally:
-            for task in tasks:
+            for connection, remote, _iterator, task in active.values():
                 task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks.keys(), return_exceptions=True)
-            for connection, remote in remotes:
+            if active:
+                await asyncio.gather(*(item[3] for item in active.values()), return_exceptions=True)
+            for connection, remote, _iterator, _task in active.values():
                 await connection.unsubscribe(remote.subscription_id)
 
     def _connection_for(self, plan: MarketFeedWatchPlan) -> MarketStreamConnection | None:

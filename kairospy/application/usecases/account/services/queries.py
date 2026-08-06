@@ -42,16 +42,19 @@ class AccountViewQueryService:
     def has_account(self, key: str | int) -> bool:
         return self.reader.has_account(key)
 
-    def current(self, key: str | None = None) -> AccountCurrentView:
+    def view(self, key: str | None = None) -> AccountCurrentView:
         if key is None:
-            return self.reader.current()
+            return self.reader.view()
         try:
-            return self.reader.current(key)
+            return self.reader.view(key)
         except KeyError:
             currents = tuple(item for item in self.source.envelopes() if str(item).startswith("account.current."))
             if len(currents) == 1:
                 return cast(AccountCurrentView, self.source.require(currents[0]))
             raise
+
+    def only(self) -> AccountCurrentView:
+        return self.reader.only()
 
     def detail(self, key: str | None = None) -> AccountDetailView:
         return self.reader.detail(key)
@@ -60,23 +63,23 @@ class AccountViewQueryService:
         return self.reader.segment(key)
 
     def balances(self, *, account: str | None = None) -> tuple[AccountBalance, ...]:
-        return self._selected_current(account).balances
+        return self._selected_view(account).balances
 
     def balance(self, currency: AssetCode | str, *, account: str | None = None) -> AccountBalance | None:
         return next((item for item in self.balances(account=account) if item.currency == currency), None)
 
     def positions(self, *, account: str | None = None) -> tuple[PositionSnapshot, ...]:
-        return self._selected_current(account).positions
+        return self._selected_view(account).positions
 
     def position(self, instrument: str, *, account: str | None = None) -> PositionSnapshot | None:
         instrument_id = str(instrument)
         return next((item for item in self.positions(account=account) if str(item.instrument_id) == instrument_id), None)
 
     def open_orders(self, *, account: str | None = None) -> tuple[OpenOrderSnapshot, ...]:
-        return self._selected_current(account).open_orders
+        return self._selected_view(account).open_orders
 
     def pending_orders(self, *, account: str | None = None) -> tuple[OrderState, ...]:
-        return self._selected_current(account).pending_orders
+        return self._selected_view(account).pending_orders
 
     def fees(self, *, account: str | None = None) -> tuple[AccountFeeSchedule, ...]:
         return self.reader.fees(account=account)
@@ -84,8 +87,8 @@ class AccountViewQueryService:
     def market_profile(self, account: AccountSegment, market: MarketRef) -> AccountMarketProfile | None:
         return self.reader.market_profile(account, market)
 
-    def _selected_current(self, account: str | None) -> AccountCurrentView:
-        return self.current(account)
+    def _selected_view(self, account: str | None) -> AccountCurrentView:
+        return self.view(account)
 
 
 __all__ = ["AccountViewQueryService"]

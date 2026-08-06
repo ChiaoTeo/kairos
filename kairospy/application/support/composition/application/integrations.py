@@ -111,6 +111,58 @@ def connect_binance_options(
     )
 
 
+def connect_binance_options_account(
+    connection_id: str,
+    *,
+    credential: str | None = None,
+    mode: RuntimeMode = RuntimeMode.LIVE,
+) -> IntegrationConnection:
+    return _connect_binance_options_private(
+        connection_id,
+        capability=IntegrationCapability.ACCOUNT_READ,
+        credential=credential,
+        mode=mode,
+    )
+
+
+def connect_binance_options_execution(
+    connection_id: str,
+    *,
+    credential: str | None = None,
+    mode: RuntimeMode = RuntimeMode.LIVE,
+) -> IntegrationConnection:
+    return _connect_binance_options_private(
+        connection_id,
+        capability=IntegrationCapability.ORDER_ENTRY,
+        credential=credential,
+        mode=mode,
+    )
+
+
+def _connect_binance_options_private(
+    connection_id: str,
+    *,
+    capability: IntegrationCapability,
+    credential: str | None,
+    mode: RuntimeMode,
+) -> IntegrationConnection:
+    return integration_application().connect(
+        IntegrationConnectionSpec(
+            connection_id=connection_id,
+            route=IntegrationRoute(
+                exchange=ExchangeRef(ExchangeId.BINANCE),
+                broker=BrokerRef(BrokerId.BINANCE),
+            ),
+            product=ProductFamily.OPTIONS,
+            access=AccessScope.PRIVATE,
+            transport=TransportKind.REST,
+            capability=capability,
+            credential=CredentialRef(credential) if credential else None,
+            mode=mode,
+        )
+    )
+
+
 def connect_binance_spot_account(
     connection_id: str,
     *,
@@ -144,6 +196,27 @@ def connect_binance_spot_execution(
         credential=credential,
         transport=transport,
         mode=mode,
+    )
+
+
+def connect_binance_equity_execution(
+    connection_id: str,
+    *,
+    credential: str | None = None,
+    mode: RuntimeMode = RuntimeMode.LIVE,
+) -> IntegrationConnection:
+    return integration_application().connect(
+        IntegrationConnectionSpec(
+            connection_id=connection_id,
+            route=IntegrationRoute(broker=BrokerRef(BrokerId.BINANCE)),
+            product=ProductFamily.SPOT,
+            asset_type=AssetType.EQUITY,
+            access=AccessScope.PRIVATE,
+            transport=TransportKind.REST,
+            capability=IntegrationCapability.ORDER_ENTRY,
+            credential=CredentialRef(credential) if credential else None,
+            mode=mode,
+        )
     )
 
 
@@ -474,4 +547,4 @@ def _market_product(value: str) -> ProductFamily:
     return ProductFamily.SPOT
 
 
-__all__ = ["configured_market_feed_for_subscription", "connect_binance_earn", "connect_binance_equity", "connect_binance_futures_public", "connect_binance_options", "connect_binance_spot_account", "connect_binance_spot_execution", "connect_binance_spot_public", "connect_crypto_market", "connect_ibkr", "connect_massive_options", "connect_massive_reference", "connect_massive_stocks", "integration_application", "market_integration_runtime", "market_request_connections", "market_stream_connections"]
+__all__ = ["configured_market_feed_for_subscription", "connect_binance_earn", "connect_binance_equity", "connect_binance_futures_public", "connect_binance_options", "connect_binance_options_account", "connect_binance_options_execution", "connect_binance_spot_account", "connect_binance_spot_execution", "connect_binance_spot_public", "connect_crypto_market", "connect_ibkr", "connect_massive_options", "connect_massive_reference", "connect_massive_stocks", "integration_application", "market_integration_runtime", "market_request_connections", "market_stream_connections"]

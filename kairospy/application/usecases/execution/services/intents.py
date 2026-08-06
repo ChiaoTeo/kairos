@@ -57,6 +57,7 @@ class ExecutionIntentService:
                 order_type=order_type,
                 limit_price=intent.limit_price,
                 market_id=intent.market_id,
+                asset_type=intent.asset_type,
             ),
             delta,
         )

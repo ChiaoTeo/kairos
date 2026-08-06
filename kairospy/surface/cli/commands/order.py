@@ -7,7 +7,9 @@ from typing import Mapping
 import typer
 
 from kairospy.application.support.launch.application.control import RuntimeMode
+from kairospy.application.support.composition.application.audit import build_order_audit_queries
 from kairospy.application.usecases.execution.application.commands import OrderCommandApplication
+from kairospy.application.usecases.execution.application.audit import OrderAuditQueries
 from kairospy.application.support.composition.application.cli import build_order_command
 from kairospy.application.support.query.browsing import ListQuery
 from kairospy.surface.cli.options import OutputFormat
@@ -17,6 +19,61 @@ from kairospy.surface.tui import ResourceList, ResourceListBrowser
 
 order_app = typer.Typer(no_args_is_help=True, help="Order commands")
 _ORDERS = build_order_command()
+
+
+def _audit_queries(db: Path | None, root: Path, instance_id: str | None) -> OrderAuditQueries:
+    return build_order_audit_queries(db=db, root=root, instance_id=instance_id)
+
+
+@order_app.command("events")
+def audit_events(
+    ctx: typer.Context,
+    db: Path | None = typer.Option(None, "--db", help="Query one execution audit SQLite database."),
+    root: Path = typer.Option(Path(".kairos/launches"), "--root", help="Scan launch instances below this root when --db is omitted."),
+    order_id: str | None = typer.Option(None, "--order-id"),
+    instance_id: str | None = typer.Option(None, "--instance"),
+    account: str | None = typer.Option(None, "--account"),
+    venue_order_id: str | None = typer.Option(None, "--venue-order-id"),
+    broker: str | None = typer.Option(None, "--broker"),
+    exchange: str | None = typer.Option(None, "--exchange", "--venue"),
+    product_type: str | None = typer.Option(None, "--product", "--product-type"),
+    symbol: str | None = typer.Option(None, "--symbol"),
+    status: str | None = typer.Option(None, "--status"),
+    event_kind: str | None = typer.Option(None, "--event-kind"),
+    since: str | None = typer.Option(None, "--since"),
+    until: str | None = typer.Option(None, "--until"),
+    limit: int | None = typer.Option(None, "--limit", min=1),
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
+    rows = _audit_queries(db, root, instance_id).events(
+        order_id=order_id,
+        venue_order_id=venue_order_id,
+        instance_id=instance_id,
+        account=account,
+        broker=broker,
+        exchange=exchange,
+        product_type=product_type,
+        symbol=symbol,
+        status=status,
+        event_kind=event_kind,
+        since=since,
+        until=until,
+        limit=limit,
+    )
+    write_cli_result(ctx, rows, output_format=output_format, default=OutputFormat.jsonl)
+
+
+@order_app.command("trace")
+def audit_trace(
+    ctx: typer.Context,
+    order_id: str = typer.Option(..., "--order-id"),
+    db: Path | None = typer.Option(None, "--db", help="Query one execution audit SQLite database."),
+    root: Path = typer.Option(Path(".kairos/launches"), "--root", help="Scan launch instances below this root when --db is omitted."),
+    instance_id: str | None = typer.Option(None, "--instance"),
+    output_format: OutputFormat | None = typer.Option(None, "--format"),
+) -> None:
+    rows = _audit_queries(db, root, instance_id).trace(order_id, instance_id=instance_id)
+    write_cli_result(ctx, rows, output_format=output_format, default=OutputFormat.jsonl)
 
 
 @order_app.command("open")

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from kairospy.application.support.launch.application.control import LaunchControl
 from kairospy.application.usecases.workspace.application.context import current_cwd, workspace as resolve_workspace, workspace_config
 from kairospy.application.usecases.workspace.domain.workspace import OperationJournal
 from kairospy.application.usecases.account.application.configuration import AccountStore
@@ -54,6 +53,8 @@ class ProjectAdminApplication:
         return {"valid": not issues, "issues": issues, "workspace": workspace.to_dict()}
 
     def surface_snapshot(self, *, stale_after_seconds: float = 5.0) -> dict[str, object]:
+        from kairospy.application.support.launch.application.control import LaunchControl
+
         config = workspace_config()
         launches = tuple(
             status.to_dict()

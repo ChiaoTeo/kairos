@@ -382,6 +382,38 @@ class IntegrationConnectionTests(unittest.TestCase):
         self.assertEqual(context.exception.status_code, 400)
         self.assertEqual(context.exception.code, -1021)
 
+    def test_binance_private_rest_resynchronizes_clock_after_timestamp_error(self) -> None:
+        class Response:
+            def __init__(self, payload: object, status_code: int = 200) -> None:
+                self.status_code = status_code
+                self.content = __import__("json").dumps(payload).encode()
+                self.text = self.content.decode()
+
+            def json(self) -> object:
+                return __import__("json").loads(self.content)
+
+        class Driver:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def request(self, method: str, url: str, *, params: dict[str, object], headers: dict[str, str]) -> Response:
+                self.calls += 1
+                if url.endswith("/api/v3/time"):
+                    return Response({"serverTime": 1700000005000})
+                if self.calls == 1:
+                    return Response({"code": -1021, "msg": "Timestamp outside recvWindow"}, 400)
+                return Response({"balances": []})
+
+        driver = Driver()
+        client = BinanceSpotRestClient(credential_id="test", driver=driver)  # type: ignore[arg-type]
+        client.api_key = "key"
+        client.secret = "secret"
+        client.time_provider = lambda: 1700000000000
+
+        self.assertEqual(client.get("/api/v3/account", signed=True), {"balances": []})
+        self.assertEqual(client.clock_offset_ms, 5000)
+        self.assertEqual(driver.calls, 3)
+
     def test_binance_request_api_uses_json_rpc_over_websocket(self) -> None:
         class Session:
             def __init__(self) -> None:

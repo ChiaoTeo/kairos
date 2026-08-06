@@ -13,24 +13,20 @@ class LaunchOutput:
         *,
         launch_id: str | None = None,
         mode: str | None = None,
-        write_legacy_jsonl: bool = False,
     ) -> None:
         self.launch_id = launch_id
         self.mode = mode
-        self.write_legacy_jsonl = write_legacy_jsonl
         self.store = store
 
     def write_result(self, *, result: object, normalized_config: Mapping[str, object]) -> Mapping[str, object]:
         summary = self.summary(result)
-        self.store.json("summary").write(summary)
-        self.store.json("config.normalized").write(normalized_config)
-        self.store.json("metrics").write(getattr(result, "metrics", {}))
-        if not self.write_legacy_jsonl:
-            return summary
-        self.store.jsonl("equity").replace(tuple(getattr(result, "equity_curve", ()) or ()))
-        self.store.jsonl("fills").replace(tuple(getattr(result, "fills", ()) or ()))
-        self.store.jsonl("trades").replace(tuple(getattr(result, "trades", ()) or ()))
-        self.store.jsonl("intent_states").replace(_intent_states(result))
+        self.store.write_json("summary", summary)
+        self.store.write_json("config.normalized", jsonable(normalized_config))
+        self.store.write_json("metrics", jsonable(getattr(result, "metrics", {})))
+        self.store.replace_records("equity", tuple(getattr(result, "equity_curve", ()) or ()))
+        self.store.replace_records("fills", tuple(getattr(result, "fills", ()) or ()))
+        self.store.replace_records("trades", tuple(getattr(result, "trades", ()) or ()))
+        self.store.replace_records("intent_states", _intent_states(result))
         return summary
 
     def summary(self, result: object) -> Mapping[str, object]:
@@ -54,19 +50,12 @@ class LaunchOutput:
         )
 
     def append_history(self, stream: str, record: Mapping[str, object]) -> None:
-        self.store.jsonl(stream).append(record)
+        self.store.append_record(stream, jsonable(record))
 
     def update_current(self, namespace: str, payload: Mapping[str, object]) -> None:
-        current = self.store.namespace(namespace).json("current").read()
+        current = self.store.read_current(namespace)
         current.update({"launch_id": self.launch_id, "mode": self.mode, **payload})
-        self.store.namespace(namespace).json("current").write(current)
-        if not self.write_legacy_jsonl or namespace != "account":
-            return
-        account_view = payload.get("account_view")
-        account = self.store.namespace("account")
-        account.jsonl("equity").append(_equity_row(account_view, launch_id=self.launch_id, mode=self.mode))
-        account.jsonl("positions").replace(_position_rows(account_view, launch_id=self.launch_id, mode=self.mode))
-        account.jsonl("orders").replace(_order_rows(account_view, launch_id=self.launch_id, mode=self.mode))
+        self.store.update_current(namespace, jsonable(current))
 
 
 def _intent_states(result: object) -> tuple[object, ...]:
@@ -82,40 +71,6 @@ def _intent_states(result: object) -> tuple[object, ...]:
     if strategy_id is None:
         return tuple(list_intents())
     return tuple(list_intents(strategy_id=strategy_id))
-
-
-def _equity_row(account_view: object, *, launch_id: str | None, mode: str | None) -> dict[str, object]:
-    return {
-        "launch_id": launch_id,
-        "mode": mode,
-        "time": getattr(account_view, "last_event_time", None),
-        "equity": getattr(account_view, "equity", None),
-        "selected_balance": getattr(account_view, "selected_balance", None),
-        "net_profit": getattr(account_view, "net_profit", None),
-        "total_return": getattr(account_view, "total_return", None),
-        "positions": getattr(account_view, "positions", ()),
-    }
-
-
-def _position_rows(account_view: object, *, launch_id: str | None, mode: str | None) -> list[dict[str, object]]:
-    if account_view is None:
-        return []
-    return [
-        {
-            "launch_id": launch_id,
-            "mode": mode,
-            "time": getattr(account_view, "last_event_time", None),
-            **jsonable(position),
-        }
-        for position in tuple(getattr(account_view, "positions", ()))
-    ]
-
-
-def _order_rows(account_view: object, *, launch_id: str | None, mode: str | None) -> list[dict[str, object]]:
-    if account_view is None:
-        return []
-    orders = [*tuple(getattr(account_view, "open_orders", ())), *tuple(getattr(account_view, "pending_orders", ()))]
-    return [{"launch_id": launch_id, "mode": mode, **jsonable(order)} for order in orders]
 
 
 def jsonable(value: object) -> object:

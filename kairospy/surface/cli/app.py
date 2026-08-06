@@ -18,6 +18,7 @@ from kairospy.surface.cli.commands import (
     market_app,
     order_app,
     project_app,
+    project_init,
     reference_app,
     launch_app,
     system_app,
@@ -33,6 +34,11 @@ app.add_typer(order_app, name="order")
 app.add_typer(market_app, name="market")
 app.add_typer(reference_app, name="catalog")
 app.add_typer(system_app, name="system")
+
+# Keep the short, conventional project bootstrap command alongside the
+# namespaced form (``project init``).  Both commands share the same CLI
+# adapter and application use case.
+app.command("init")(project_init)
 
 
 @app.callback()

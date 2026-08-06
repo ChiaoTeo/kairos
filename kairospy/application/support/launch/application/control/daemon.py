@@ -24,6 +24,7 @@ from kairospy.application.support.launch.application.commands import SystemComma
 from kairospy.application.support.launch.services.command_queue import SystemCommandFileQueue
 from kairospy.application.support.launch.application.configuration import RESERVED_LAUNCH_IDS, SYSTEM_LAUNCH_ID
 from kairospy.application.support.launch.application.commands import SystemCommandHandler
+from kairospy.infrastructure.persistence.application.run import open_run_store
 
 
 _LAUNCH_INSTANCE_ID_ENV = "KAIROS_LAUNCH_INSTANCE_ID"
@@ -38,7 +39,7 @@ class LaunchDaemonResult:
     mode: str
     directory: Path
     state_path: Path
-    summary_path: Path
+    run_path: Path
     phase: str
     result: Mapping[str, object]
     launch_instance_id: str | None = None
@@ -140,10 +141,8 @@ class LaunchDaemonService:
                 mirrors=mirror,
             )
             self._store.write_summary(directory, summary | {"phase": "stopped", "status": "stopped", "reason": "target completed"})
-            for mirror_directory in mirror:
-                self._store.write_summary(mirror_directory, summary | {"phase": "stopped", "status": "stopped", "reason": "target completed"})
             self._store.record_event(directory, "status", phase="stopped", reason="target completed", result=summary)
-            return LaunchDaemonResult(actual_launch_id, runtime_mode.value, directory, directory / "state.json", directory / "summary.json", "stopped", summary, str(identity["process_id"]))
+            return LaunchDaemonResult(actual_launch_id, runtime_mode.value, directory, directory / "state.json", directory / "run.sqlite", "stopped", summary, str(identity["process_id"]))
         except Exception as error:
             summary = {
                 "launch_id": actual_launch_id,
@@ -155,8 +154,6 @@ class LaunchDaemonService:
             }
             self._store.write_state(directory, phase="failed", reason=summary["reason"], identity=identity, result=summary, mirrors=mirror)
             self._store.write_summary(directory, summary)
-            for mirror_directory in mirror:
-                self._store.write_summary(mirror_directory, summary)
             self._store.record_event(directory, "status", phase="failed", reason=summary["reason"])
             raise
 
@@ -196,10 +193,8 @@ class LaunchDaemonService:
             )
             self._store.write_state(directory, phase="stopped", reason="target completed", identity=identity, context=context, result=summary, mirrors=mirror)
             self._store.write_summary(directory, summary | {"phase": "stopped", "status": "stopped", "reason": "target completed"})
-            for mirror_directory in mirror:
-                self._store.write_summary(mirror_directory, summary | {"phase": "stopped", "status": "stopped", "reason": "target completed"})
             self._store.record_event(directory, "status", phase="stopped", reason="target completed", result=summary)
-            return LaunchDaemonResult(launch_id, runtime_mode.value, directory, directory / "state.json", directory / "summary.json", "stopped", summary, str(identity["process_id"]))
+            return LaunchDaemonResult(launch_id, runtime_mode.value, directory, directory / "state.json", directory / "run.sqlite", "stopped", summary, str(identity["process_id"]))
         except Exception as error:
             summary = {
                 "launch_id": launch_id,
@@ -211,8 +206,6 @@ class LaunchDaemonService:
             }
             self._store.write_state(directory, phase="failed", reason=summary["reason"], identity=identity, context=context, result=summary, mirrors=mirror)
             self._store.write_summary(directory, summary)
-            for mirror_directory in mirror:
-                self._store.write_summary(mirror_directory, summary)
             self._store.record_event(directory, "status", phase="failed", reason=summary["reason"])
             raise
 
@@ -274,7 +267,7 @@ class LaunchDaemonService:
             runtime_mode.value,
             directory,
             directory / "state.json",
-            directory / "summary.json",
+            directory / "run.sqlite",
             "starting",
             result,
             str(identity["process_id"]),
@@ -312,7 +305,7 @@ class LaunchDaemonService:
             process = subprocess.Popen(args, stdout=output, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True, env=env)
         result = {"pid": process.pid, "args": args, "log_file": str(log_path)}
         self._store.write_state(directory, phase="starting", reason="background process launched", identity=identity, context=context, result=result, mirrors=(group_directory,))
-        return LaunchDaemonResult(launch_id, runtime_mode.value, directory, directory / "state.json", directory / "summary.json", "starting", result, str(identity["process_id"]))
+        return LaunchDaemonResult(launch_id, runtime_mode.value, directory, directory / "state.json", directory / "run.sqlite", "starting", result, str(identity["process_id"]))
 
 
 class _LaunchTargetResolver:
@@ -406,7 +399,7 @@ class _LaunchDaemonStore:
             _write_json(mirror / "state.json", payload | {"mirrored_from": str(directory)})
 
     def write_summary(self, directory: Path, summary: Mapping[str, object]) -> None:
-        _write_json(directory / "summary.json", summary)
+        open_run_store(directory / "run.sqlite").write_json("summary", summary)
 
     def record_event(self, directory: Path, event_type: str, **payload: object) -> None:
         event = {
@@ -414,12 +407,7 @@ class _LaunchDaemonStore:
             "type": event_type,
             **payload,
         }
-        with (directory / "events.jsonl").open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(_jsonable(event), sort_keys=True) + "\n")
-        group_directory = directory.parent.parent if directory.parent.name == "instances" else None
-        if group_directory is not None and group_directory.exists():
-            with (group_directory / "events.jsonl").open("a", encoding="utf-8") as handle:
-                handle.write(json.dumps(_jsonable(event), sort_keys=True) + "\n")
+        open_run_store(directory / "run.sqlite").append_record("events", _jsonable(event))
 
 
 def _process_runtime_commands(directory: Path, dispatcher_factory: Callable[[Path], SystemCommandHandler] | None) -> None:

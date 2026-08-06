@@ -42,13 +42,15 @@ def reference_runtime(
     *,
     default_venue: str | None = None,
     default_market: str | None = None,
+    underlyings: tuple[str, ...] = (),
     credential: str | None = None,
 ) -> ReferenceApplication:
     workspace = KairosWorkspace.resolve(start)
     venue = optional_default_text(default_venue)
     market = optional_default_text(default_market)
     source = None
-    if (market or "").casefold() in {"option", "options"} or (venue is not None and venue.casefold() == "massive"):
+    is_options = (market or "").casefold() in {"option", "options"}
+    if (is_options and (venue is None or venue.casefold() == "massive")) or (venue is not None and venue.casefold() == "massive"):
         source = reference_access(
             "provider",
             "massive",
@@ -65,10 +67,28 @@ def reference_runtime(
         )
     return ReferenceApplication(
         SqliteReferenceStore(workspace.reference_root),
-        default_venue="massive" if (market or "").casefold() in {"option", "options"} else (venue or ExchangeName.binance.value),
+        default_venue="massive" if (is_options and (venue is None or venue.casefold() == "massive")) or (venue is not None and venue.casefold() == "massive") else (venue or ExchangeName.binance.value),
         default_market=market or "spot",
+        underlyings=underlyings,
         source=source,
     )
+
+
+def reference_underlyings(config: Mapping[str, object] | None) -> tuple[str, ...]:
+    """Read the configured Reference refresh scope without exposing vendors."""
+    if not isinstance(config, Mapping):
+        return ()
+    section = config.get("reference")
+    if not isinstance(section, Mapping):
+        return ()
+    value = section.get("underlyings")
+    if isinstance(value, str):
+        values = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        return ()
+    return tuple(dict.fromkeys(str(item).strip() for item in values if str(item).strip()))
 
 
 def in_memory_message_bus() -> InMemoryMessageBus:
@@ -85,4 +105,4 @@ def optional_default_text(value: object) -> str | None:
     return None
 
 
-__all__ = ["ComposedLaunch", "RuntimeLauncher", "in_memory_message_bus", "optional_default_text", "reference_runtime"]
+__all__ = ["ComposedLaunch", "RuntimeLauncher", "in_memory_message_bus", "optional_default_text", "reference_runtime", "reference_underlyings"]

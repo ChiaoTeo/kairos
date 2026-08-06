@@ -43,17 +43,17 @@ class MassiveSpyCrashPutStrategy(StrategyBase):
                 "history_timeframe": "1d",
             },
         )
-        if selection.markets:
-            context.subscribe(
-                selection,
-                selectors=(Quote.select(),),
-                identity=self.strategy_id,
-                params={
-                    "history_start": (as_of - timedelta(days=30)).date().isoformat(),
-                    "history_end": as_of.date().isoformat(),
-                    "history_timeframe": "1d",
-                },
-            )
+        context.subscribe(
+            selection,
+            selectors=(Quote.select(),),
+            identity=self.strategy_id,
+            dynamic=True,
+            params={
+                "history_start": (as_of - timedelta(days=30)).date().isoformat(),
+                "history_end": as_of.date().isoformat(),
+                "history_timeframe": "1d",
+            },
+        )
 
     def on_data(self, context, signal) -> None:
         if self._submitted or not self.contracts:

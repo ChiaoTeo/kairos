@@ -122,6 +122,7 @@ class StrategyContext:
             strategy_id=self.strategy_id,
             instrument_id=resolved.instrument_id,
             market_id=resolved.market_id,
+            asset_type=resolved.asset_type,
             account_id=account_id,
             account_index=account_index,
             account_segment=account_segment,
@@ -139,7 +140,7 @@ class StrategyContext:
             return self.accounts.account(key)
         if isinstance(key, int):
             raise KeyError(f"unknown account: {key}")
-        return self.accounts.current(key)
+        return self.accounts.view(key)
 
     @property
     def market(self) -> MarketViewReader:
@@ -166,6 +167,7 @@ class StrategyContext:
         selectors: Sequence[object],
         identity: str | None = None,
         params: Mapping[str, object] | None = None,
+        dynamic: bool = False,
     ) -> SystemCallResult:
         ...
 
@@ -179,6 +181,7 @@ class StrategyContext:
         market_type: str | None = None,
         identity: str | None = None,
         params: Mapping[str, object] | None = None,
+        dynamic: bool = False,
     ) -> SystemCallResult:
         ...
 
@@ -191,6 +194,7 @@ class StrategyContext:
         market_type: str | None = None,
         identity: str | None = None,
         params: Mapping[str, object] | None = None,
+        dynamic: bool = False,
     ) -> SystemCallResult:
         selected_markets = getattr(subject, "markets", None)
         request = StrategySubscriptionRequest(
@@ -200,8 +204,17 @@ class StrategyContext:
             market_type=None if market_type is None else str(market_type),
             identity=identity,
             params={} if params is None else params,
+            dynamic=dynamic,
         )
         if selected_markets is not None:
+            if request.dynamic:
+                return self.submit(
+                    RuntimeCommand(
+                        "market.subscribe.dynamic",
+                        request,
+                        actor=self.strategy_id,
+                    )
+                )
             requests = tuple(
                 StrategySubscriptionRequest(
                     subject=market,

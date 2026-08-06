@@ -64,7 +64,7 @@ class TimelineProjector:
             record = {"time": trigger.time, "sequence": trigger.sequence, "trigger": trigger.trigger, "event": dict(trigger.event), "context_hash": views.context_hash, "views": _view_snapshot(views)}
             marker = (record["time"], record["sequence"], record["trigger"], record["event"], record["context_hash"])
             if marker != self._last_written_marker:
-                self.output.append_history("timeline", record)
+                self.output.append_history("records", record)
                 self._last_written_marker = marker
 
     def _should_sample_interval(self, time: datetime) -> bool:

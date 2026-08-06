@@ -52,6 +52,24 @@ class ReferenceUniverseService:
         if options.symbols:
             symbols = {item.casefold() for item in options.symbols}
             markets = [market for market in markets if str(market.source_symbol).casefold() in symbols]
+        if any(value is not None for value in (options.underlying_instrument_id, options.expiry_from, options.expiry_to, options.strike_min, options.strike_max, options.option_right)):
+            filtered = []
+            for market in markets:
+                instrument = self.catalog.get_instrument(market.instrument_id, at)
+                if options.underlying_instrument_id is not None and str(instrument.underlying_instrument_id) != str(options.underlying_instrument_id):
+                    continue
+                if options.expiry_from is not None and (instrument.expiry is None or instrument.expiry < options.expiry_from):
+                    continue
+                if options.expiry_to is not None and (instrument.expiry is None or instrument.expiry > options.expiry_to):
+                    continue
+                if options.strike_min is not None and (instrument.strike is None or instrument.strike < options.strike_min):
+                    continue
+                if options.strike_max is not None and (instrument.strike is None or instrument.strike > options.strike_max):
+                    continue
+                if options.option_right is not None and str(instrument.option_right or "").lower() != str(options.option_right).lower():
+                    continue
+                filtered.append(market)
+            markets = filtered
         markets = sorted(markets, key=lambda item: str(item.market_id))
         if options.limit is not None:
             markets = markets[: options.limit]
@@ -70,6 +88,12 @@ class ReferenceUniverseService:
                 base_asset_id=query.base_asset_id,
                 quote_asset_id=query.quote_asset_id,
                 symbols=query.symbols,
+                underlying_instrument_id=query.underlying_instrument_id,
+                expiry_from=query.expiry_from,
+                expiry_to=query.expiry_to,
+                strike_min=query.strike_min,
+                strike_max=query.strike_max,
+                option_right=query.option_right,
                 limit=query.limit,
             ),
         )

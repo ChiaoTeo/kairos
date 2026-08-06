@@ -17,6 +17,7 @@ from kairospy.infrastructure.integrations.application.execution import (
 from kairospy.domain.account import AccountSegment
 from kairospy.domain.account import AccountSnapshot
 from kairospy.domain.order import OrderRequest, OrderState, OrderType
+from kairospy.domain.reference import AssetType
 from kairospy.application.usecases.risk.domain import RiskMetric
 
 
@@ -30,7 +31,7 @@ class ExecutionOrderService:
         self,
         coordinator: ExecutionCoordinator,
         *,
-        order_connection: OrderConnection | Mapping[AccountSegment, OrderConnection] | None = None,
+        order_connection: OrderConnection | Mapping[object, OrderConnection] | None = None,
         symbol_resolver: SymbolResolver | None = None,
     ) -> None:
         self.coordinator = coordinator
@@ -72,7 +73,7 @@ class ExecutionOrderService:
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
         state = self.coordinator.submit_order(order_id, at=at)
-        connection = self._connection_for(state.request.context.segment)
+        connection = self._connection_for(state.request.context.segment, state.request.asset_type)
         if connection is None:
             return state
         try:
@@ -86,6 +87,7 @@ class ExecutionOrderService:
                     limit_price=state.request.limit_price,
                     options=_connection_options(broker_order_params(params)),
                     client_order_id=state.request.order_id,
+                    asset_type=state.request.asset_type,
                 )
             )
         except Exception as error:
@@ -107,7 +109,7 @@ class ExecutionOrderService:
         params: Mapping[str, object] | None = None,
     ) -> OrderState:
         state = self.coordinator.cancel_order(order_id, at=at)
-        connection = self._connection_for(state.request.context.segment)
+        connection = self._connection_for(state.request.context.segment, state.request.asset_type)
         if connection is None:
             return state
         if not state.order_venue_id:
@@ -133,11 +135,15 @@ class ExecutionOrderService:
             raise ValueError(f"empty broker symbol for instrument: {instrument_id}")
         return symbol
 
-    def _connection_for(self, account: AccountSegment) -> OrderConnection | None:
+    def _connection_for(self, account: AccountSegment, asset_type: AssetType | None = None) -> OrderConnection | None:
         connections = self.order_connection
         if connections is None:
             return None
         if isinstance(connections, Mapping):
+            if asset_type is not None:
+                selected = connections.get((account, asset_type))
+                if selected is not None:
+                    return selected
             return connections.get(account)
         return connections
 
@@ -205,6 +211,10 @@ def _connection_options(params: Mapping[str, object] | None) -> ConnectionOrderO
 
     result = ConnectionOrderOptions(
         time_in_force=text("time_in_force", "timeInForce"),
+        trading_session=text("trading_session", "tradingSession"),
+        quote_asset=text("quote_asset", "quoteAsset"),
+        wallet_type=text("wallet_type", "walletType"),
+        tokenize=boolean("tokenize"),
         reduce_only=boolean("reduce_only", "reduceOnly"),
         post_only=boolean("post_only", "postOnly"),
     )
