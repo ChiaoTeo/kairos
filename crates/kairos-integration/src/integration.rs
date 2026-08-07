@@ -1,0 +1,1601 @@
+//! The single public composition facade for integrations.
+//!
+//! Callers configure one `Integration` instance and receive only stable
+//! protocol traits.  Provider factories, registry entries and concrete
+//! connection types never cross this boundary.
+
+use crate::application::reference::ReferenceDataConnection;
+use crate::application::{
+    AccountCredentialInspectionConnection, AccountEventStreamConnection,
+    AccountMarketProfileConnection, AccountReadConnection, Connection, ConnectionSpec,
+    EarnConnection, ExecutionStreamConnection, IntegrationError, MarketStreamConnection,
+    OrderEntryConnection, OrderQueryConnection, TransferConnection,
+};
+use crate::domain::{IntegrationCapability, ProductFamily, TransportKind};
+use crate::services::factories::GatewayRegistry;
+use crate::services::gateways::binance::{self, equity};
+use crate::services::gateways::ccxt::{
+    CcxtMarketClient, CcxtReferenceConnection, CcxtReferenceFactory,
+};
+use crate::services::gateways::hyperliquid::HyperliquidReferenceConnection;
+use crate::services::gateways::massive::{MassiveReferenceConnection, MassiveStocksRestClient};
+use crate::services::gateways::okx::{
+    OkxAccountConnection, OkxAccountMarketProfileConnection, OkxOrderConnection,
+};
+use crate::services::gateways::okx_stream::OkxAccountStreamConnection;
+
+struct MarketStreamEntry {
+    provider: String,
+    product: Option<ProductFamily>,
+    transport: TransportKind,
+    open: Box<dyn Fn() -> Result<Box<dyn MarketStreamConnection>, IntegrationError> + Send + Sync>,
+}
+
+struct ReferenceEntry {
+    provider: String,
+    product: Option<ProductFamily>,
+    transport: TransportKind,
+    open: Box<dyn Fn() -> Result<Box<dyn ReferenceDataConnection>, IntegrationError> + Send + Sync>,
+}
+
+/// Configured integration composition root.
+pub struct Integration {
+    gateways: GatewayRegistry,
+    references: Vec<ReferenceEntry>,
+    market_streams: Vec<MarketStreamEntry>,
+    accounts: Vec<AccountEntry>,
+    account_market_profiles: Vec<AccountMarketProfileEntry>,
+    order_entries: Vec<OrderEntry>,
+    order_queries: Vec<OrderQueryEntry>,
+    account_streams: Vec<AccountStreamEntry>,
+    execution_streams: Vec<ExecutionStreamEntry>,
+    credential_inspections: Vec<CredentialInspectionEntry>,
+    earns: Vec<EarnEntry>,
+    transfers: Vec<TransferEntry>,
+}
+
+struct AccountEntry {
+    provider: String,
+    product: Option<ProductFamily>,
+    transport: TransportKind,
+    open: Box<dyn Fn() -> Result<Box<dyn AccountReadConnection>, IntegrationError> + Send + Sync>,
+}
+
+struct AccountMarketProfileEntry {
+    provider: String,
+    product: Option<ProductFamily>,
+    transport: TransportKind,
+    open: Box<
+        dyn Fn() -> Result<Box<dyn AccountMarketProfileConnection>, IntegrationError> + Send + Sync,
+    >,
+}
+
+struct OrderEntry {
+    provider: String,
+    product: Option<ProductFamily>,
+    transport: TransportKind,
+    open: Box<dyn Fn() -> Result<Box<dyn OrderEntryConnection>, IntegrationError> + Send + Sync>,
+}
+
+struct OrderQueryEntry {
+    provider: String,
+    product: Option<ProductFamily>,
+    transport: TransportKind,
+    open: Box<dyn Fn() -> Result<Box<dyn OrderQueryConnection>, IntegrationError> + Send + Sync>,
+}
+
+struct AccountStreamEntry {
+    provider: String,
+    product: Option<ProductFamily>,
+    transport: TransportKind,
+    open: Box<
+        dyn Fn() -> Result<Box<dyn AccountEventStreamConnection>, IntegrationError> + Send + Sync,
+    >,
+}
+
+struct ExecutionStreamEntry {
+    provider: String,
+    product: Option<ProductFamily>,
+    transport: TransportKind,
+    open:
+        Box<dyn Fn() -> Result<Box<dyn ExecutionStreamConnection>, IntegrationError> + Send + Sync>,
+}
+
+struct CredentialInspectionEntry {
+    provider: String,
+    product: Option<ProductFamily>,
+    transport: TransportKind,
+    open: Box<
+        dyn Fn() -> Result<Box<dyn AccountCredentialInspectionConnection>, IntegrationError>
+            + Send
+            + Sync,
+    >,
+}
+
+struct EarnEntry {
+    provider: String,
+    transport: TransportKind,
+    open: Box<dyn Fn() -> Result<Box<dyn EarnConnection>, IntegrationError> + Send + Sync>,
+}
+
+struct TransferEntry {
+    provider: String,
+    transport: TransportKind,
+    open: Box<dyn Fn() -> Result<Box<dyn TransferConnection>, IntegrationError> + Send + Sync>,
+}
+
+impl Integration {
+    pub fn new() -> Self {
+        Self {
+            gateways: GatewayRegistry::new(),
+            references: Vec::new(),
+            market_streams: Vec::new(),
+            accounts: Vec::new(),
+            account_market_profiles: Vec::new(),
+            order_entries: Vec::new(),
+            order_queries: Vec::new(),
+            account_streams: Vec::new(),
+            execution_streams: Vec::new(),
+            credential_inspections: Vec::new(),
+            earns: Vec::new(),
+            transfers: Vec::new(),
+        }
+    }
+
+    /// Adds Binance reference connections without exposing the Binance
+    /// factory or connection types to the caller.
+    pub fn with_binance_reference(
+        mut self,
+        endpoint: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        let factory = binance::BinanceReferenceFactory::new(endpoint)
+            .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?;
+        let reference_factory = factory.clone();
+        self.gateways.register(factory);
+        self.references.push(ReferenceEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Spot),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                reference_factory
+                    .open()
+                    .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_binance_options_reference(
+        mut self,
+        endpoint: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        let factory = binance::BinanceReferenceFactory::options(endpoint)
+            .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?;
+        let reference_factory = factory.clone();
+        self.gateways.register(factory);
+        self.references.push(ReferenceEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Options),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                reference_factory
+                    .open()
+                    .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        Ok(self)
+    }
+
+    /// Adds Binance Equity reference connections without exposing provider
+    /// implementation types.
+    pub fn with_binance_equity(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+    ) -> Self {
+        let factory = equity::BinanceEquityReferenceFactory::new(api_key, secret);
+        let reference_factory = factory.clone();
+        self.gateways.register(factory);
+        self.references.push(ReferenceEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Equity),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                reference_factory
+                    .open_connection()
+                    .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_massive_reference(
+        mut self,
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+        underlying: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        let client = MassiveStocksRestClient::with_base_url(api_key, base_url)
+            .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?
+            .for_underlying(underlying);
+        let reference_client = client.clone();
+        self.references.push(ReferenceEntry {
+            provider: "massive".into(),
+            product: None,
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                MassiveReferenceConnection::open(reference_client.clone())
+                    .map(|connection| Box::new(connection) as Box<dyn ReferenceDataConnection>)
+                    .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_massive_equity_reference(
+        mut self,
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        let client = MassiveStocksRestClient::with_base_url(api_key, base_url)
+            .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?
+            .for_equity();
+        let reference_client = client.clone();
+        self.references.push(ReferenceEntry {
+            provider: "massive-equity".into(),
+            product: Some(ProductFamily::Equity),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                MassiveReferenceConnection::open(reference_client.clone())
+                    .map(|connection| Box::new(connection) as Box<dyn ReferenceDataConnection>)
+                    .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_hyperliquid_reference(mut self, endpoint: impl Into<String>) -> Self {
+        let endpoint = endpoint.into();
+        self.references.push(ReferenceEntry {
+            provider: "hyperliquid".into(),
+            product: Some(ProductFamily::UsdMFutures),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                HyperliquidReferenceConnection::open(endpoint.clone())
+                    .map(|connection| Box::new(connection) as Box<dyn ReferenceDataConnection>)
+                    .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_ccxt_reference<C>(mut self, client: C) -> Self
+    where
+        C: CcxtMarketClient + Clone + Sync + 'static,
+    {
+        let factory = CcxtReferenceFactory::new(client.clone());
+        let reference_client = client;
+        self.gateways.register(factory);
+        self.references.push(ReferenceEntry {
+            provider: "ccxt".into(),
+            product: Some(ProductFamily::Spot),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                CcxtReferenceConnection::open(reference_client.clone())
+                    .map(|connection| Box::new(connection) as Box<dyn ReferenceDataConnection>)
+                    .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn connect_reference(
+        &self,
+        spec: &ConnectionSpec,
+    ) -> Result<Box<dyn ReferenceDataConnection>, IntegrationError> {
+        if spec.capability != IntegrationCapability::Reference {
+            return Err(IntegrationError::InvalidRequest(
+                "connection spec is not reference data".into(),
+            ));
+        }
+        self.references
+            .iter()
+            .find(|entry| {
+                entry.provider == spec.provider
+                    && entry.product == spec.product
+                    && entry.transport == spec.transport
+            })
+            .ok_or(IntegrationError::UnsupportedOperation)
+            .and_then(|entry| (entry.open)())
+    }
+
+    /// Adds a REST-backed market stream.  The returned connection still uses
+    /// the same market-stream protocol as a future websocket implementation.
+    pub fn with_binance_spot_rest_market_stream(
+        mut self,
+        endpoint: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        let endpoint = endpoint.into();
+        // Validate at configuration time, while retaining only a closure in
+        // the composition root.
+        binance::spot::market_stream::BinanceSpotSnapshotReader::new(endpoint.clone())?;
+        self.market_streams.push(MarketStreamEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Spot),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::spot::market_stream::rest_market_stream(endpoint.clone())
+                    .map(|stream| Box::new(stream) as Box<dyn MarketStreamConnection>)
+            }),
+        });
+        Ok(self)
+    }
+
+    /// Adds Binance Spot's public WebSocket market stream.
+    pub fn with_binance_spot_websocket_market_stream(
+        mut self,
+        endpoint: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        let endpoint = endpoint.into();
+        binance::spot::websocket::BinanceSpotWebSocketMarketStream::new(endpoint.clone())?;
+        self.market_streams.push(MarketStreamEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Spot),
+            transport: TransportKind::WebSocket,
+            open: Box::new(move || {
+                binance::spot::websocket::BinanceSpotWebSocketMarketStream::new(endpoint.clone())
+                    .map(|stream| Box::new(stream) as Box<dyn MarketStreamConnection>)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_binance_spot_account(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        let inspection_api_key = api_key.clone();
+        let inspection_secret = secret.clone();
+        let inspection_base_url = base_url.clone();
+        self.accounts.push(AccountEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Spot),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::spot::account::BinanceSpotAccountConnection::new(
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn AccountReadConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self.credential_inspections.push(CredentialInspectionEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Spot),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::spot::account::BinanceSpotAccountConnection::new(
+                    inspection_api_key.clone(),
+                    inspection_secret.clone(),
+                    inspection_base_url.clone(),
+                )
+                .map(|connection| {
+                    Box::new(connection) as Box<dyn AccountCredentialInspectionConnection>
+                })
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_binance_spot_account_market_profile(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        self.account_market_profiles
+            .push(AccountMarketProfileEntry {
+                provider: "binance".into(),
+                product: Some(ProductFamily::Spot),
+                transport: TransportKind::Rest,
+                open: Box::new(move || {
+                    binance::spot::account::BinanceSpotAccountMarketProfileConnection::new(
+                        api_key.clone(),
+                        secret.clone(),
+                        base_url.clone(),
+                    )
+                    .map(|connection| {
+                        Box::new(connection) as Box<dyn AccountMarketProfileConnection>
+                    })
+                    .map_err(IntegrationError::InvalidRequest)
+                }),
+            });
+        self
+    }
+
+    pub fn with_binance_funding_account(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        let inspection_api_key = api_key.clone();
+        let inspection_secret = secret.clone();
+        let inspection_base_url = base_url.clone();
+        self.accounts.push(AccountEntry {
+            provider: "binance".into(),
+            product: None,
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::funding::BinanceFundingAccountConnection::new(
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn AccountReadConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self.credential_inspections.push(CredentialInspectionEntry {
+            provider: "binance".into(),
+            product: None,
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::funding::BinanceFundingAccountConnection::new(
+                    inspection_api_key.clone(),
+                    inspection_secret.clone(),
+                    inspection_base_url.clone(),
+                )
+                .map(|connection| {
+                    Box::new(connection) as Box<dyn AccountCredentialInspectionConnection>
+                })
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_binance_margin_account(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        if !matches!(
+            product,
+            ProductFamily::CrossMargin | ProductFamily::IsolatedMargin
+        ) {
+            return Err(IntegrationError::InvalidRequest(
+                "Binance margin account requires cross or isolated margin".into(),
+            ));
+        }
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        let inspection_api_key = api_key.clone();
+        let inspection_secret = secret.clone();
+        let inspection_base_url = base_url.clone();
+        self.accounts.push(AccountEntry {
+            provider: "binance".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::margin::BinanceMarginAccountConnection::new(
+                    product,
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn AccountReadConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self.credential_inspections.push(CredentialInspectionEntry {
+            provider: "binance".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::margin::BinanceMarginAccountConnection::new(
+                    product,
+                    inspection_api_key.clone(),
+                    inspection_secret.clone(),
+                    inspection_base_url.clone(),
+                )
+                .map(|connection| {
+                    Box::new(connection) as Box<dyn AccountCredentialInspectionConnection>
+                })
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_binance_margin_order_entry(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        if !matches!(
+            product,
+            ProductFamily::CrossMargin | ProductFamily::IsolatedMargin
+        ) {
+            return Err(IntegrationError::InvalidRequest(
+                "Binance margin order entry requires cross or isolated margin".into(),
+            ));
+        }
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        self.order_entries.push(OrderEntry {
+            provider: "binance".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::margin_order::BinanceMarginOrderConnection::new(
+                    product,
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn OrderEntryConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_okx_account_market_profile(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        passphrase: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        if !matches!(
+            product,
+            ProductFamily::Spot
+                | ProductFamily::CrossMargin
+                | ProductFamily::IsolatedMargin
+                | ProductFamily::UsdMFutures
+                | ProductFamily::CoinMFutures
+                | ProductFamily::Options
+        ) {
+            return Err(IntegrationError::InvalidRequest(
+                "OKX account market profile requires spot, futures, or options product".into(),
+            ));
+        }
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let passphrase = passphrase.into();
+        let base_url = base_url.into();
+        self.account_market_profiles
+            .push(AccountMarketProfileEntry {
+                provider: "okx".into(),
+                product: Some(product),
+                transport: TransportKind::Rest,
+                open: Box::new(move || {
+                    let connection = OkxAccountMarketProfileConnection::new(
+                        product,
+                        api_key.clone(),
+                        secret.clone(),
+                        passphrase.clone(),
+                        base_url.clone(),
+                    )
+                    .map_err(IntegrationError::InvalidRequest)?;
+                    Ok(Box::new(connection) as Box<dyn AccountMarketProfileConnection>)
+                }),
+            });
+        Ok(self)
+    }
+
+    pub fn with_binance_options_account(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        let inspection_api_key = api_key.clone();
+        let inspection_secret = secret.clone();
+        let inspection_base_url = base_url.clone();
+        self.accounts.push(AccountEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Options),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::options::account::BinanceOptionsAccountConnection::new(
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn AccountReadConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self.credential_inspections.push(CredentialInspectionEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Options),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::options::account::BinanceOptionsAccountConnection::new(
+                    inspection_api_key.clone(),
+                    inspection_secret.clone(),
+                    inspection_base_url.clone(),
+                )
+                .map(|connection| {
+                    Box::new(connection) as Box<dyn AccountCredentialInspectionConnection>
+                })
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_binance_options_order_entry(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        self.order_entries.push(OrderEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Options),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::options::order::BinanceOptionsOrderConnection::new(
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn OrderEntryConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_binance_spot_order_entry(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        self.order_entries.push(OrderEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Spot),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::spot::order::BinanceSpotOrderConnection::new(
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn OrderEntryConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_binance_equity_order_entry(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        self.order_entries.push(OrderEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Equity),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::equity::order::BinanceEquityOrderConnection::new(
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn OrderEntryConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_binance_equity_order_query(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        self.order_queries.push(OrderQueryEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Equity),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::equity::query::BinanceEquityOrderQueryConnection::new(
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn OrderQueryConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_binance_order_query(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        self.order_queries.push(OrderQueryEntry {
+            provider: "binance".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::order_query::BinanceOrderQueryConnection::new(
+                    product,
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn OrderQueryConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_okx_order_query(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        passphrase: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let passphrase = passphrase.into();
+        let base_url = base_url.into();
+        self.order_queries.push(OrderQueryEntry {
+            provider: "okx".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                crate::services::gateways::okx::OkxOrderQueryConnection::new(
+                    product,
+                    api_key.clone(),
+                    secret.clone(),
+                    passphrase.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn OrderQueryConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_ibkr_order_entry(
+        mut self,
+        host: impl Into<String>,
+        port: u16,
+        client_id: i32,
+    ) -> Self {
+        let host = host.into();
+        self.order_entries.push(OrderEntry {
+            provider: "ibkr".into(),
+            product: Some(ProductFamily::Spot),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                crate::services::gateways::ibkr::IbkrOptions::new(host.clone(), port, client_id)
+                    .and_then(crate::services::gateways::ibkr::IbkrOrderConnection::new)
+                    .map(|connection| Box::new(connection) as Box<dyn OrderEntryConnection>)
+                    .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_ibkr_account(mut self, host: impl Into<String>, port: u16, client_id: i32) -> Self {
+        let host = host.into();
+        self.accounts.push(AccountEntry {
+            provider: "ibkr".into(),
+            product: Some(ProductFamily::Spot),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                crate::services::gateways::ibkr::IbkrOptions::new(host.clone(), port, client_id)
+                    .and_then(crate::services::gateways::ibkr::IbkrAccountConnection::new)
+                    .map(|connection| Box::new(connection) as Box<dyn AccountReadConnection>)
+                    .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_ibkr_account_stream(
+        mut self,
+        host: impl Into<String>,
+        port: u16,
+        client_id: i32,
+        account_id: impl Into<String>,
+        segment_key: impl Into<String>,
+    ) -> Self {
+        let host = host.into();
+        let account_id = account_id.into();
+        let segment_key = segment_key.into();
+        self.account_streams.push(AccountStreamEntry {
+            provider: "ibkr".into(),
+            product: Some(ProductFamily::Spot),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                crate::services::gateways::ibkr::IbkrOptions::new(host.clone(), port, client_id)
+                    .and_then(|options| {
+                        crate::services::gateways::ibkr::IbkrAccountStreamConnection::new(
+                            options,
+                            account_id.clone(),
+                            segment_key.clone(),
+                        )
+                    })
+                    .map(|connection| Box::new(connection) as Box<dyn AccountEventStreamConnection>)
+                    .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_ibkr_execution_stream(
+        mut self,
+        host: impl Into<String>,
+        port: u16,
+        client_id: i32,
+        account_id: impl Into<String>,
+        symbol: Option<String>,
+    ) -> Self {
+        let host = host.into();
+        let account_id = account_id.into();
+        self.execution_streams.push(ExecutionStreamEntry {
+            provider: "ibkr".into(),
+            product: Some(ProductFamily::Spot),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                crate::services::gateways::ibkr::IbkrExecutionStreamConnection::new(
+                    crate::services::gateways::ibkr::IbkrOptions::new(
+                        host.clone(),
+                        port,
+                        client_id,
+                    )
+                    .map_err(IntegrationError::InvalidRequest)?,
+                    account_id.clone(),
+                    symbol.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn ExecutionStreamConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_binance_spot_account_stream(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+        websocket_endpoint: impl Into<String>,
+        segment_key: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        let websocket_endpoint = websocket_endpoint.into();
+        let segment_key = segment_key.into();
+        self.account_streams.push(AccountStreamEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Spot),
+            transport: TransportKind::UserStream,
+            open: Box::new(move || {
+                binance::spot::user_stream::BinanceSpotAccountStreamConnection::new(
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                    websocket_endpoint.clone(),
+                    segment_key.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn AccountEventStreamConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_binance_margin_account_stream(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+        websocket_endpoint: impl Into<String>,
+        segment_key: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        if !matches!(
+            product,
+            ProductFamily::CrossMargin | ProductFamily::IsolatedMargin
+        ) {
+            return Err(IntegrationError::InvalidRequest(
+                "Binance margin account stream requires cross or isolated margin".into(),
+            ));
+        }
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        let websocket_endpoint = websocket_endpoint.into();
+        let segment_key = segment_key.into();
+        self.account_streams.push(AccountStreamEntry {
+            provider: "binance".into(),
+            product: Some(product),
+            transport: TransportKind::UserStream,
+            open: Box::new(move || {
+                binance::spot::user_stream::BinanceSpotAccountStreamConnection::new_for_product(
+                    product,
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                    websocket_endpoint.clone(),
+                    segment_key.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn AccountEventStreamConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_okx_account_stream(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        passphrase: impl Into<String>,
+        websocket_endpoint: impl Into<String>,
+        segment_key: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        if !matches!(
+            product,
+            ProductFamily::Spot
+                | ProductFamily::CrossMargin
+                | ProductFamily::IsolatedMargin
+                | ProductFamily::UsdMFutures
+                | ProductFamily::CoinMFutures
+                | ProductFamily::Options
+        ) {
+            return Err(IntegrationError::InvalidRequest(
+                "OKX account stream requires spot, margin, futures, or options product".into(),
+            ));
+        }
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let passphrase = passphrase.into();
+        let websocket_endpoint = websocket_endpoint.into();
+        let segment_key = segment_key.into();
+        self.account_streams.push(AccountStreamEntry {
+            provider: "okx".into(),
+            product: Some(product),
+            transport: TransportKind::UserStream,
+            open: Box::new(move || {
+                Ok(Box::new(
+                    OkxAccountStreamConnection::new(
+                        product,
+                        api_key.clone(),
+                        secret.clone(),
+                        passphrase.clone(),
+                        websocket_endpoint.clone(),
+                        segment_key.clone(),
+                    )
+                    .map_err(IntegrationError::InvalidRequest)?,
+                ) as Box<dyn AccountEventStreamConnection>)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_binance_futures_account_stream(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+        websocket_endpoint: impl Into<String>,
+        segment_key: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        if !matches!(
+            product,
+            ProductFamily::UsdMFutures | ProductFamily::CoinMFutures
+        ) {
+            return Err(IntegrationError::InvalidRequest(
+                "Binance futures account stream requires USD-M or Coin-M".into(),
+            ));
+        }
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        let websocket_endpoint = websocket_endpoint.into();
+        let segment_key = segment_key.into();
+        self.account_streams.push(AccountStreamEntry {
+            provider: "binance".into(),
+            product: Some(product),
+            transport: TransportKind::UserStream,
+            open: Box::new(move || {
+                binance::futures::account::BinanceFuturesAccountStreamConnection::new(
+                    product,
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                    websocket_endpoint.clone(),
+                    segment_key.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn AccountEventStreamConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_binance_earn(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        self.earns.push(EarnEntry {
+            provider: "binance".into(),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::earn::BinanceSimpleEarnConnection::new(
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn EarnConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    pub fn with_binance_transfer(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        self.transfers.push(TransferEntry {
+            provider: "binance".into(),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::transfer::BinanceTransferConnection::new(
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn TransferConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self
+    }
+
+    /// Adds a Binance USD-M or Coin-M futures private account connection.
+    /// The provider-specific REST client remains behind the account-read
+    /// application protocol, just like the Spot connection.
+    pub fn with_binance_futures_account(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        if !matches!(
+            product,
+            ProductFamily::UsdMFutures | ProductFamily::CoinMFutures
+        ) {
+            return Err(IntegrationError::InvalidRequest(
+                "Binance futures account requires USD-M or Coin-M product".into(),
+            ));
+        }
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        let inspection_api_key = api_key.clone();
+        let inspection_secret = secret.clone();
+        let inspection_base_url = base_url.clone();
+        self.accounts.push(AccountEntry {
+            provider: "binance".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::futures::account::BinanceFuturesAccountConnection::new(
+                    product,
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn AccountReadConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        self.credential_inspections.push(CredentialInspectionEntry {
+            provider: "binance".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::futures::account::BinanceFuturesAccountConnection::new(
+                    product,
+                    inspection_api_key.clone(),
+                    inspection_secret.clone(),
+                    inspection_base_url.clone(),
+                )
+                .map(|connection| {
+                    Box::new(connection) as Box<dyn AccountCredentialInspectionConnection>
+                })
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_binance_futures_order_entry(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        if !matches!(
+            product,
+            ProductFamily::UsdMFutures | ProductFamily::CoinMFutures
+        ) {
+            return Err(IntegrationError::InvalidRequest(
+                "Binance futures order entry requires USD-M or Coin-M product".into(),
+            ));
+        }
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into();
+        self.order_entries.push(OrderEntry {
+            provider: "binance".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::futures::order::BinanceFuturesOrderConnection::new(
+                    product,
+                    api_key.clone(),
+                    secret.clone(),
+                    base_url.clone(),
+                )
+                .map(|connection| Box::new(connection) as Box<dyn OrderEntryConnection>)
+                .map_err(IntegrationError::InvalidRequest)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_okx_account(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        passphrase: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        if !matches!(
+            product,
+            ProductFamily::Spot
+                | ProductFamily::CrossMargin
+                | ProductFamily::IsolatedMargin
+                | ProductFamily::UsdMFutures
+                | ProductFamily::CoinMFutures
+                | ProductFamily::Options
+        ) {
+            return Err(IntegrationError::InvalidRequest(
+                "OKX account requires spot, futures, or options product".into(),
+            ));
+        }
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let passphrase = passphrase.into();
+        let base_url = base_url.into();
+        let inspection_api_key = api_key.clone();
+        let inspection_secret = secret.clone();
+        let inspection_passphrase = passphrase.clone();
+        let inspection_base_url = base_url.clone();
+        self.accounts.push(AccountEntry {
+            provider: "okx".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                Ok(Box::new(
+                    OkxAccountConnection::new(
+                        product,
+                        api_key.clone(),
+                        secret.clone(),
+                        passphrase.clone(),
+                        base_url.clone(),
+                    )
+                    .map_err(IntegrationError::InvalidRequest)?,
+                ) as Box<dyn AccountReadConnection>)
+            }),
+        });
+        self.credential_inspections.push(CredentialInspectionEntry {
+            provider: "okx".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                Ok(Box::new(
+                    OkxAccountConnection::new(
+                        product,
+                        inspection_api_key.clone(),
+                        inspection_secret.clone(),
+                        inspection_passphrase.clone(),
+                        inspection_base_url.clone(),
+                    )
+                    .map_err(IntegrationError::InvalidRequest)?,
+                )
+                    as Box<dyn AccountCredentialInspectionConnection>)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_okx_order_entry(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        passphrase: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        if !matches!(
+            product,
+            ProductFamily::Spot
+                | ProductFamily::CrossMargin
+                | ProductFamily::IsolatedMargin
+                | ProductFamily::UsdMFutures
+                | ProductFamily::CoinMFutures
+                | ProductFamily::Options
+        ) {
+            return Err(IntegrationError::InvalidRequest(
+                "OKX order entry requires spot, margin, futures, or options product".into(),
+            ));
+        }
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let passphrase = passphrase.into();
+        let base_url = base_url.into();
+        self.order_entries.push(OrderEntry {
+            provider: "okx".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                Ok(Box::new(
+                    OkxOrderConnection::new(
+                        product,
+                        api_key.clone(),
+                        secret.clone(),
+                        passphrase.clone(),
+                        base_url.clone(),
+                    )
+                    .map_err(IntegrationError::InvalidRequest)?,
+                ) as Box<dyn OrderEntryConnection>)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn connect_account(
+        &self,
+        spec: &ConnectionSpec,
+    ) -> Result<Box<dyn AccountReadConnection>, IntegrationError> {
+        if spec.capability != IntegrationCapability::AccountRead {
+            return Err(IntegrationError::InvalidRequest(
+                "connection spec is not account read".into(),
+            ));
+        }
+        self.accounts
+            .iter()
+            .find(|entry| {
+                entry.provider == spec.provider
+                    && entry.product == spec.product
+                    && entry.transport == spec.transport
+            })
+            .ok_or(IntegrationError::UnsupportedOperation)
+            .and_then(|entry| (entry.open)())
+    }
+
+    pub fn connect_account_credential_inspection(
+        &self,
+        spec: &ConnectionSpec,
+    ) -> Result<Box<dyn AccountCredentialInspectionConnection>, IntegrationError> {
+        if spec.capability != IntegrationCapability::AccountCredentialInspection {
+            return Err(IntegrationError::InvalidRequest(
+                "connection spec is not account credential inspection".into(),
+            ));
+        }
+        self.credential_inspections
+            .iter()
+            .find(|entry| {
+                entry.provider == spec.provider
+                    && entry.product == spec.product
+                    && entry.transport == spec.transport
+            })
+            .ok_or(IntegrationError::UnsupportedOperation)
+            .and_then(|entry| (entry.open)())
+    }
+
+    pub fn connect_account_market_profile(
+        &self,
+        spec: &ConnectionSpec,
+    ) -> Result<Box<dyn AccountMarketProfileConnection>, IntegrationError> {
+        if spec.capability != IntegrationCapability::AccountMarketProfileRead {
+            return Err(IntegrationError::InvalidRequest(
+                "connection spec is not an account market profile read".into(),
+            ));
+        }
+        self.account_market_profiles
+            .iter()
+            .find(|entry| {
+                entry.provider == spec.provider
+                    && entry.product == spec.product
+                    && entry.transport == spec.transport
+            })
+            .ok_or(IntegrationError::UnsupportedOperation)
+            .and_then(|entry| (entry.open)())
+    }
+
+    pub fn connect_order_entry(
+        &self,
+        spec: &ConnectionSpec,
+    ) -> Result<Box<dyn OrderEntryConnection>, IntegrationError> {
+        if spec.capability != IntegrationCapability::OrderEntry {
+            return Err(IntegrationError::InvalidRequest(
+                "connection spec is not order entry".into(),
+            ));
+        }
+        self.order_entries
+            .iter()
+            .find(|entry| {
+                entry.provider == spec.provider
+                    && entry.product == spec.product
+                    && entry.transport == spec.transport
+            })
+            .ok_or(IntegrationError::UnsupportedOperation)
+            .and_then(|entry| (entry.open)())
+    }
+
+    pub fn connect_order_query(
+        &self,
+        spec: &ConnectionSpec,
+    ) -> Result<Box<dyn OrderQueryConnection>, IntegrationError> {
+        if spec.capability != IntegrationCapability::OrderRead {
+            return Err(IntegrationError::InvalidRequest(
+                "connection spec is not order read".into(),
+            ));
+        }
+        self.order_queries
+            .iter()
+            .find(|entry| {
+                entry.provider == spec.provider
+                    && entry.product == spec.product
+                    && entry.transport == spec.transport
+            })
+            .ok_or(IntegrationError::UnsupportedOperation)
+            .and_then(|entry| (entry.open)())
+    }
+
+    pub fn connect_account_stream(
+        &self,
+        spec: &ConnectionSpec,
+    ) -> Result<Box<dyn AccountEventStreamConnection>, IntegrationError> {
+        if spec.capability != IntegrationCapability::AccountStream {
+            return Err(IntegrationError::InvalidRequest(
+                "connection spec is not an account stream".into(),
+            ));
+        }
+        self.account_streams
+            .iter()
+            .find(|entry| {
+                entry.provider == spec.provider
+                    && entry.product == spec.product
+                    && entry.transport == spec.transport
+            })
+            .ok_or(IntegrationError::UnsupportedOperation)
+            .and_then(|entry| (entry.open)())
+    }
+
+    pub fn connect_execution_stream(
+        &self,
+        spec: &ConnectionSpec,
+    ) -> Result<Box<dyn ExecutionStreamConnection>, IntegrationError> {
+        if spec.capability != IntegrationCapability::ExecutionStream {
+            return Err(IntegrationError::InvalidRequest(
+                "connection spec is not execution stream".into(),
+            ));
+        }
+        self.execution_streams
+            .iter()
+            .find(|entry| {
+                entry.provider == spec.provider
+                    && entry.product == spec.product
+                    && entry.transport == spec.transport
+            })
+            .ok_or(IntegrationError::UnsupportedOperation)
+            .and_then(|entry| (entry.open)())
+    }
+
+    pub fn connect_earn(
+        &self,
+        spec: &ConnectionSpec,
+    ) -> Result<Box<dyn EarnConnection>, IntegrationError> {
+        if spec.capability != IntegrationCapability::Earn {
+            return Err(IntegrationError::InvalidRequest(
+                "connection spec is not earn".into(),
+            ));
+        }
+        self.earns
+            .iter()
+            .find(|entry| entry.provider == spec.provider && entry.transport == spec.transport)
+            .ok_or(IntegrationError::UnsupportedOperation)
+            .and_then(|entry| (entry.open)())
+    }
+
+    pub fn connect_transfer(
+        &self,
+        spec: &ConnectionSpec,
+    ) -> Result<Box<dyn TransferConnection>, IntegrationError> {
+        if spec.capability != IntegrationCapability::Transfer {
+            return Err(IntegrationError::InvalidRequest(
+                "connection spec is not transfer".into(),
+            ));
+        }
+        self.transfers
+            .iter()
+            .find(|entry| entry.provider == spec.provider && entry.transport == spec.transport)
+            .ok_or(IntegrationError::UnsupportedOperation)
+            .and_then(|entry| (entry.open)())
+    }
+
+    pub fn connect(&self, spec: &ConnectionSpec) -> Result<Box<dyn Connection>, IntegrationError> {
+        self.gateways
+            .connect(spec)
+            .map_err(IntegrationError::InvalidRequest)
+    }
+
+    pub fn connect_market_stream(
+        &self,
+        spec: &ConnectionSpec,
+    ) -> Result<Box<dyn MarketStreamConnection>, IntegrationError> {
+        if spec.capability != IntegrationCapability::MarketStream {
+            return Err(IntegrationError::InvalidRequest(
+                "connection spec is not a market stream".into(),
+            ));
+        }
+        self.market_streams
+            .iter()
+            .find(|entry| {
+                entry.provider == spec.provider
+                    && entry.product == spec.product
+                    && entry.transport == spec.transport
+            })
+            .ok_or(IntegrationError::UnsupportedOperation)
+            .and_then(|entry| (entry.open)())
+    }
+}
+
+impl Default for Integration {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Integration;
+    use crate::application::ConnectionSpec;
+    use crate::domain::{AccessScope, IntegrationCapability, ProductFamily, TransportKind};
+
+    fn reference_spec() -> ConnectionSpec {
+        ConnectionSpec {
+            connection_id: "reference.binance.spot.rest".into(),
+            provider: "binance".into(),
+            product: Some(ProductFamily::Spot),
+            access: AccessScope::Public,
+            transport: TransportKind::Rest,
+            capability: IntegrationCapability::Reference,
+            credential_id: None,
+            asset_type: None,
+        }
+    }
+
+    #[test]
+    fn one_integration_facade_creates_multiple_opaque_connections() {
+        let integration = Integration::new()
+            .with_binance_reference("https://example.test")
+            .unwrap();
+        let mut first = integration.connect(&reference_spec()).unwrap();
+        let mut second = integration
+            .connect(&ConnectionSpec {
+                connection_id: "reference.binance.spot.rest.second".into(),
+                ..reference_spec()
+            })
+            .unwrap();
+        assert_eq!(first.identity().provider, "binance");
+        assert_eq!(second.identity().provider, "binance");
+        first.start().unwrap();
+        second.start().unwrap();
+        assert!(first.health().healthy);
+        assert!(second.health().healthy);
+    }
+
+    #[test]
+    fn websocket_market_stream_is_selected_without_opening_network_during_composition() {
+        let integration = Integration::new()
+            .with_binance_spot_websocket_market_stream("wss://stream.binance.com:9443/ws")
+            .unwrap();
+        let connection = integration
+            .connect_market_stream(&ConnectionSpec {
+                connection_id: "market.binance.spot.websocket".into(),
+                provider: "binance".into(),
+                product: Some(ProductFamily::Spot),
+                access: AccessScope::Public,
+                transport: TransportKind::WebSocket,
+                capability: IntegrationCapability::MarketStream,
+                credential_id: None,
+                asset_type: None,
+            })
+            .unwrap();
+        assert_eq!(connection.identity().transport, TransportKind::WebSocket);
+    }
+}

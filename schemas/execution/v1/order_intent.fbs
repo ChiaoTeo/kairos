@@ -1,0 +1,24 @@
+include "../../common/v1/decimal.fbs";
+include "../../common/v1/header.fbs";
+include "../../common/v1/types.fbs";
+
+namespace kairos.execution.v1;
+
+table OrderIntent {
+  intent_id:string;
+  account_id:string (required);
+  strategy_id:string (required);
+  instrument_id:string (required);
+  side:kairos.common.v1.Side;
+  order_type:kairos.common.v1.OrderType;
+  quantity:kairos.common.v1.Decimal64 (required);
+  limit_price:kairos.common.v1.Decimal64;
+}
+
+table OrderIntentMessage {
+  header:kairos.common.v1.MessageHeader (required);
+  payload:OrderIntent (required);
+}
+
+root_type OrderIntentMessage;
+file_identifier "OIR1";

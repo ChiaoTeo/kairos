@@ -1,0 +1,18 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../market/v1/data.fbs";
+
+namespace kairos.market.v1;
+
+table Subscriptions {
+  total_count:ulong;
+  active_count:ulong;
+  subscriptions:[kairos.market.v1.Subscription];
+}
+
+table SubscriptionsSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:Subscriptions (required);
+}
+
+root_type SubscriptionsSnapshot;
+file_identifier "PMS1";

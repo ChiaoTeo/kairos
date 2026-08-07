@@ -1,2 +1,1 @@
-from __future__ import annotations
-
+"""User-facing CLI and interactive surfaces."""

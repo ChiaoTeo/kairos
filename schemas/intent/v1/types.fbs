@@ -1,0 +1,17 @@
+include "../../common/v1/decimal.fbs";
+
+namespace kairos.intent.v1;
+
+table Intent {
+  intent_id:string (required);
+  instrument_id:string;
+  status:string (required);
+  active:bool;
+  updated_at_unix_nanos:ulong;
+  strategy_id:string;
+  account_id:string;
+  account_segment:string;
+  order_ids:[string];
+  target_quantity:kairos.common.v1.Decimal64;
+  reason:string;
+}

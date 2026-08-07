@@ -50,10 +50,11 @@ uv sync --group dev
 uv sync --extra crypto --extra query --group dev
 ```
 
-如果你更习惯 pip，也可以在虚拟环境中安装本地包：
+如果你更习惯 pip，也可以安装 wheel。wheel 会携带匹配平台的 Rust
+server/cli 业务组件；从源码包安装时需要本机具备 Cargo/Rust toolchain：
 
 ```bash
-python -m pip install -e ".[crypto,query]"
+python -m pip install ".[crypto,query]"
 python -m pip install pytest
 ```
 
@@ -66,48 +67,81 @@ uv run kairospy --help
 uv run kairos --help
 ```
 
-初始化一个 Kairos 项目：
+初始化一个 Kairos 项目（省略参数时会交互式询问目录和项目名）：
 
 ```bash
-uv run kairos init my-project
+uv run kairos project init
 ```
 
-这会创建 `.kairos/kairos.toml` 以及项目运行所需的本地目录。完整写法
-`kairos project init my-project` 仍然可用。
+脚本或 CI 使用非交互模式，并显式指定项目目录和 workspace ID：
+
+```bash
+uv run kairos project init my-project --id my-project --non-interactive
+```
+
+运行命令可以省略 `--workspace`。Python CLI 会按
+`--workspace`、`KAIROS_WORKSPACE`、当前目录向上查找项目的 `.kairos/kairos.toml`（同时兼容
+直接使用的 `workspace.toml`）；系统进程的
+配置、状态、socket、日志和 launch 实例都限制在该 workspace 内。找不到 workspace
+时，先运行 `kairos project init`；自动化环境使用带 `--non-interactive` 的完整命令。
+
+项目代码保留在项目目录，Kairos 的 manifest、配置、状态、运行时文件和数据统一放在
+`<project>/.kairos/` 下。
+
+launch 配置放在 workspace 的 `config/launches/<launch-id>.toml`，账户只通过
+`ref` 引用 workspace 账户；运行时生成的 normalized config 和状态属于
+`launches/<mode>/<launch-id>/instances/<instance-id>`。
+
+```toml
+[launch]
+id = "btc-sma"
+mode = "backtest"
+strategy = "strategy:Factory"
+
+[account]
+ref = "simulated"
+
+[backtest]
+storage_format = "parquet"
+
+[backtest.market]
+start = "2024-01-01T00:00:00Z"
+end = "2024-01-31T00:00:00Z"
+```
 
 校验一个回测配置：
 
 ```bash
-uv run kairospy launch diagnose validate examples/configs/btc_sma_backtest.toml
+uv run kairospy launch diagnose validate btc-sma --workspace my-project
 ```
 
 解释 launch 配置：
 
 ```bash
-uv run kairospy launch diagnose explain examples/configs/btc_sma_backtest.toml
+uv run kairospy launch diagnose explain btc-sma --workspace my-project
 ```
 
 启动回测：
 
 ```bash
-uv run kairospy launch start examples/configs/btc_sma_backtest.toml
+uv run kairospy launch start btc-sma --workspace my-project
 ```
 
 查看运行状态和日志：
 
 ```bash
-uv run kairospy launch status
-uv run kairospy launch logs --limit 100
+uv run kairospy launch status --workspace my-project
+uv run kairospy launch logs --limit 100 --workspace my-project
 ```
 
 启动内置 system runtime 管理账户和调试下单：
 
 ```bash
-uv run kairospy system up
-uv run kairospy system status
-uv run kairospy system account trade-status
-uv run kairospy system account trade-acquire main
-uv run kairospy system account trade-release main
+uv run kairospy system up --workspace my-project
+uv run kairospy system status --workspace my-project
+uv run kairospy account trade-lock list --workspace my-project
+uv run kairospy account trade-lock acquire --account-id main --workspace my-project
+uv run kairospy account trade-lock release --account-id main --broker binance --workspace my-project
 ```
 
 导出时间线数据：
@@ -122,23 +156,23 @@ uv run kairospy launch timeline export --latest binance-spot-btc-sma-backtest
 uv run kairospy shell
 ```
 
-列表浏览
+Reference 验证 CLI
 
-列表命令保持适合脚本的无状态输出；需要人工翻页、搜索或查看单行详情时，使用统一的 `browse` 子命令：
+Reference CLI 是一次性命令，所有结构化结果写入 stdout；它不会启动或连接长驻
+Reference server：
 
 ```bash
-uv run kairospy catalog assets browse --type crypto
-uv run kairospy catalog markets browse --venue binance --active-only
-uv run kairospy account browse
-uv run kairospy launch targets browse
-uv run kairospy order browse --account main
+uv run kairospy catalog status --workspace my-project --format json
+uv run kairospy catalog sync --workspace my-project --format json
+uv run kairospy catalog query-market --venue binance --active-only --workspace my-project
+uv run kairospy catalog search BTCUSDT --workspace my-project --format json
+uv run kairospy catalog show market:binance:spot:BTCUSDT --workspace my-project
+uv run kairospy catalog events sync --ticker BTCUSDT --workspace my-project
 ```
 
-浏览器支持 `n`/`p` 翻页、`/text` 跨字段搜索、`query JMESPATH` 通用查询、`filter key=value` 条件过滤、`sort field` 或 `sort -field` 排序、`size N` 修改页大小、`open N` 查看当前页的行、`json` 导出当前查询结果、`clear` 清除搜索条件，以及 `q` 退出。也可以通过 `browse --query 'JMESPATH'` 预置查询。JMESPath 表达式必须返回对象数组，以便继续分页和显示结果。它也可以从 `kairospy shell` 中执行对应的 `browse` 命令。
-
-在真实 TTY 中，`browse` 会进入 Textual 全屏模式：`/` 聚焦搜索、`f` 聚焦过滤、`s` 聚焦排序、`g` 聚焦页码、`n`/`p` 翻页、方向键选择行、回车打开详情、Esc 取消详情或编辑、`q` 退出。通过管道或测试环境运行时自动使用行式模式。`e` 和 `Ctrl+S` 已支持通用编辑流程，但只有注册了资源 `save` 回调的资源可写；当前资产、市场、账户和订单浏览均为只读。
-
-这套能力位于 `application.browsing` 和 `surface.interactive.browse`：application 层负责查询、过滤、排序和分页，surface 层负责行式浏览与 Textual 全屏展示。领域命令只负责提供 rows 与领域过滤条件，因此后续列表资源可以复用同一套交互行为，不需要各自实现分页循环。
+原生 binary 也可以直接调用：`kairos-reference-cli --workspace <workspace> query`。
+长驻 server 则由 `kairos-reference-server` 运行，两者共享同一个 Reference application
+和 production provider composition。
 
 Shell 层级约定：
 
@@ -158,7 +192,8 @@ Shell 层级约定：
 - `ExternalAccountIdentity` 表示一个真实账户身份，例如 `binance:main`。
 - `AccountSegment` 表示该账户内的一个具体资金/交易分区，例如 `binance:remote:spot` 或 `binance:remote:usd_m_futures`。
 
-通过 API credential 连接交易所后，系统会发现远端账户并将本地 binding 写入 `.kairos/accounts/<binding>.toml`。应用不会创建 Binance 账户：
+账户管理配置由 workspace 账户应用统一持有：账户目录写入
+账户配置按记录写入 `accounts/*.toml`，凭据元数据写入 `credentials/*.toml`；配置只使用 TOML，JSON 仅用于结构化输出和运行态状态。运行态状态、快照、日志和交易租约分别位于 `state/account/`、`logs/account/` 与 `state/account-locks/`。应用不会创建 Binance 账户：
 
 ```toml
 [accounts.main]

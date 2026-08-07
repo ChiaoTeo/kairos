@@ -1,0 +1,29 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../market/v1/data.fbs";
+
+namespace kairos.market.v1;
+
+table OrderBook {
+  market_id:string (required);
+  instrument_id:string (required);
+  sequence:ulong;
+  event_time_unix_nanos:ulong;
+  source_id:string;
+  checksum:string;
+  synchronized:bool;
+  bids:[kairos.market.v1.OrderBookLevel];
+  asks:[kairos.market.v1.OrderBookLevel];
+}
+
+table OrderBooks {
+  book_count:ulong;
+  books:[OrderBook];
+}
+
+table OrderBookSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:OrderBooks (required);
+}
+
+root_type OrderBookSnapshot;
+file_identifier "PMB1";

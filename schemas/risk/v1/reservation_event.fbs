@@ -1,0 +1,16 @@
+include "../../common/v1/header.fbs";
+include "types.fbs";
+
+namespace kairos.risk.v1;
+
+table ReservationEvent {
+  header:kairos.common.v1.MessageHeader (required);
+  reservation_id:string (required);
+  request_id:string (required);
+  status:string (required);
+  allocations:[Allocation];
+  occurred_at_unix_nanos:ulong;
+}
+
+root_type ReservationEvent;
+file_identifier "RSE1";

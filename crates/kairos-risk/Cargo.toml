@@ -1,0 +1,32 @@
+[package]
+name = "kairos-risk"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Risk budget and reservation state owner"
+autobins = false
+
+[lib]
+name = "kairos_risk"
+path = "src/lib.rs"
+
+[dependencies]
+kairos-workspace = { path = "../kairos-workspace" }
+clap = { version = "4", features = ["derive", "env"] }
+flatbuffers = "25.12.19"
+kairos-protocol = { path = "../kairos-protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "kairos-risk-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "kairos-risk-cli"
+path = "src/bin_cli.rs"

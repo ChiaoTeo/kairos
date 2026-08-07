@@ -1,0 +1,121 @@
+include "../../common/v1/decimal.fbs";
+
+namespace kairos.reference.v1;
+
+table Asset {
+  asset_id:string (required);
+  code:string (required);
+  name:string;
+  asset_class:string;
+  status:string (required);
+}
+
+table Venue {
+  venue_id:string (required);
+  name:string (required);
+  country:string;
+  status:string (required);
+}
+
+table Instrument {
+  instrument_id:string (required);
+  symbol:string (required);
+  name:string;
+  instrument_type:string (required);
+  product_family:string;
+  underlying_instrument_id:string;
+  expiry_unix_nanos:ulong;
+  strike:kairos.common.v1.Decimal64;
+  option_right:string;
+  multiplier:kairos.common.v1.Decimal64;
+  status:string (required);
+}
+
+table Listing {
+  listing_id:string (required);
+  instrument_id:string (required);
+  venue_id:string (required);
+  venue_symbol:string (required);
+  status:string (required);
+  effective_from_unix_nanos:ulong;
+  effective_to_unix_nanos:ulong;
+}
+
+table Market {
+  market_id:string (required);
+  market_key:string (required);
+  instrument_id:string (required);
+  listing_id:string (required);
+  venue_id:string (required);
+  market_type:string (required);
+  source_symbol:string (required);
+  base_asset_id:string;
+  quote_asset_id:string;
+  status:string (required);
+  price_tick:kairos.common.v1.Decimal64;
+  quantity_tick:kairos.common.v1.Decimal64;
+  price_precision:int;
+  quantity_precision:int;
+  minimum_quantity:kairos.common.v1.Decimal64;
+  minimum_notional:kairos.common.v1.Decimal64;
+  contract_size:kairos.common.v1.Decimal64;
+  effective_from_unix_nanos:ulong;
+  effective_to_unix_nanos:ulong;
+}
+
+table Catalog {
+  entity_count:ulong;
+  asset_count:ulong;
+  instrument_count:ulong;
+  listing_count:ulong;
+  market_count:ulong;
+  financial_product_count:ulong;
+  active_market_count:ulong;
+  lifecycle_event_count:ulong;
+  entities:[kairos.reference.v1.Entity];
+  assets:[kairos.reference.v1.Asset];
+  instruments:[kairos.reference.v1.Instrument];
+  listings:[kairos.reference.v1.Listing];
+  markets:[kairos.reference.v1.Market];
+  financial_products:[kairos.reference.v1.FinancialProduct];
+}
+
+table Entity {
+  entity_id:string (required);
+  entity_type:string (required);
+  name:string (required);
+}
+
+table LifecycleEvent {
+  event_id:string (required);
+  event_type:string (required);
+  event_time_unix_nanos:ulong;
+  market_id:string;
+  instrument_id:string;
+  listing_id:string;
+  venue_id:string;
+  source_symbol:string;
+  previous_status:string;
+  current_status:string;
+  previous_symbol:string;
+  current_symbol:string;
+}
+
+table FinancialProduct {
+  product_id:string (required);
+  product_type:string (required);
+  name:string (required);
+  asset_id:string (required);
+  provider_product_id:string (required);
+  provider_id:string;
+  issuer_id:string;
+  currency_asset_id:string;
+  min_amount:kairos.common.v1.Decimal64;
+  max_amount:kairos.common.v1.Decimal64;
+  apr:kairos.common.v1.Decimal64;
+  lock_period_days:int;
+  maturity_at_unix_nanos:ulong;
+  status:string (required);
+  effective_from_unix_nanos:ulong;
+  effective_to_unix_nanos:ulong;
+}

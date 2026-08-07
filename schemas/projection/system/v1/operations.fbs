@@ -1,0 +1,17 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../system/v1/types.fbs";
+
+namespace kairos.system.v1;
+
+table Operations {
+  total_count:ulong;
+  operations:[kairos.system.v1.Operation];
+}
+
+table OperationsSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:Operations (required);
+}
+
+root_type OperationsSnapshot;
+file_identifier "RTO1";

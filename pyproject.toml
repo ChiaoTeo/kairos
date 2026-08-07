@@ -1,10 +1,11 @@
 [project]
 name = "kairospy"
 version = "0.1.0"
-description = "Strategy runtime, execution, account, reference, and integration toolkit"
+description = "Strategy orchestration, execution, account, reference, and integration toolkit"
 requires-python = ">=3.11"
 dependencies = [
     "click>=8,<9",
+    "flatbuffers>=25,<26",
     "httpx>=0.27,<1",
     "jmespath>=1.0,<2",
     "pandas>=2,<4",
@@ -33,13 +34,19 @@ dev = ["pytest>=8,<9"]
 [project.scripts]
 kairospy = "kairospy.__main__:main"
 kairos = "kairospy.__main__:main"
+kairospy-strategy = "kairospy.bin.strategy_cli:main"
+kairospy-strategy-cli = "kairospy.bin.strategy_cli:main"
+kairospy-strategy-server = "kairospy.bin.strategy:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel>=0.43"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["kairospy*"]
+
+[tool.setuptools.package-data]
+kairospy = ["_bin/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

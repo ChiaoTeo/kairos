@@ -1,156 +1,107 @@
 from __future__ import annotations
 
 import sys
-import traceback
+import os
 from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
+from io import StringIO
 from typing import Sequence, TextIO
 
 import click
 import typer
-from typer._click.exceptions import ClickException as TyperClickException
 from typer.main import get_command
 
-from kairospy.application.usecases.workspace.application.context import ProjectNotFound, set_cli_context
-from kairospy.application.support.diagnostics.application import record_exception
-from kairospy.surface.cli.commands import (
+from .commands.launch import launch_app
+from .commands.reference import reference_app
+from .commands.root import (
     account_app,
+    config_app,
     market_app,
     order_app,
     project_app,
-    project_init,
-    reference_app,
-    launch_app,
     system_app,
+    timeline_app,
 )
-from kairospy.surface.cli.options import OutputFormat, RootOptions
+from kairospy.application.workspace import WorkspaceApplication
 
 
 app = typer.Typer(no_args_is_help=True, help="KairosPy strategy runtime toolkit")
-app.add_typer(project_app, name="project")
 app.add_typer(launch_app, name="launch")
+app.add_typer(project_app, name="project")
+app.add_typer(config_app, name="config")
 app.add_typer(account_app, name="account")
-app.add_typer(order_app, name="order")
 app.add_typer(market_app, name="market")
 app.add_typer(reference_app, name="catalog")
+app.add_typer(order_app, name="order")
 app.add_typer(system_app, name="system")
-
-# Keep the short, conventional project bootstrap command alongside the
-# namespaced form (``project init``).  Both commands share the same CLI
-# adapter and application use case.
-app.command("init")(project_init)
+app.add_typer(timeline_app, name="timeline")
 
 
-@app.callback()
-def main_options(
-    ctx: typer.Context,
-    cwd: Path | None = typer.Option(None, "-C", "--cwd", help="Launch as if Kairos was started in this directory."),
-    profile: str | None = typer.Option(None, "--profile"),
-    output: OutputFormat | None = typer.Option(None, "--output"),
-    verbose: bool = typer.Option(False, "--verbose"),
-    debug: bool = typer.Option(False, "--debug", help="Write diagnostic logs and show tracebacks for unexpected errors."),
-) -> None:
-    set_cli_context(cwd=cwd, profile=profile)
-    ctx.obj = RootOptions(
-        cwd=cwd,
-        profile=profile,
-        output=output,
-        verbose=verbose,
-        debug=debug,
-    )
+def _cli_format(argv: Sequence[str]) -> str:
+    """Resolve explicit output first, then the selected workspace manifest."""
+    for index, item in enumerate(argv):
+        if item in {"--output", "--format"} and index + 1 < len(argv):
+            return argv[index + 1]
+        for option in ("--output=", "--format="):
+            if item.startswith(option):
+                return item[len(option):]
+    workspace: str | None = None
+    for index, item in enumerate(argv):
+        if item == "--workspace" and index + 1 < len(argv):
+            workspace = argv[index + 1]
+        elif item.startswith("--workspace="):
+            workspace = item.split("=", 1)[1]
+    try:
+        return WorkspaceApplication().resolve(workspace).cli_format
+    except (FileNotFoundError, ValueError):
+        return "json"
 
 
-@app.command("shell", help="Open the stable interactive command shell.")
-def shell(
-    command: list[str] | None = typer.Option(None, "--command"),
-) -> None:
-    _shell(command)
+@app.command("shell")
+def shell(workspace: str | None = typer.Option(None, "--workspace")) -> None:
+    value = WorkspaceApplication().resolve(workspace)
+    typer.echo(f"kairos shell session for {value.workspace_id}; use subcommands with --workspace {value.paths.root}")
 
 
-@app.command("tui", hidden=True, help="Experimental Rich-rendered interactive shell.")
-def tui() -> None:
-    from kairospy.surface.interactive.tui import RichTui
-
-    RichTui(command_executor=_execute_product_command).run()
-
-
-def _run_shell(command: list[str] | None = None, *, surface_name: str = "shell") -> None:
-    from kairospy.surface.interactive.tui import TextTui
-
-    session = TextTui(
-        command_executor=_execute_product_command,
-        streaming_command_executor=_execute_product_command_streaming,
-        surface_name=surface_name,
-    )
-    if command:
-        for line in command:
-            if session.handle(line):
-                return
-        return
-    session.run()
+@app.command("tui")
+def tui(workspace: str | None = typer.Option(None, "--workspace")) -> None:
+    value = WorkspaceApplication().resolve(workspace)
+    typer.echo(f"kairos read-only TUI surface for {value.workspace_id}: {value.paths.root}")
 
 
-def _shell(command: list[str] | None = None) -> None:
-    _run_shell(command, surface_name="shell")
+@app.command("browse")
+def browse(workspace: str | None = typer.Option(None, "--workspace")) -> None:
+    value = WorkspaceApplication().resolve(workspace)
+    for path in sorted(value.paths.root.rglob("*")):
+        typer.echo(str(path.relative_to(value.paths.root)))
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    if argv is None:
-        if len(sys.argv) == 1 and sys.stdin.isatty() and sys.stdout.isatty():
-            _shell()
-            return 0
-        return execute_argv(sys.argv[1:], sys.stdout)
-    return execute_argv(argv, sys.stdout)
+@app.command("version")
+def version() -> None:
+    typer.echo("kairospy 0.1.0")
 
 
 def execute_argv(argv: Sequence[str], stdout: TextIO) -> int:
-    return _invoke_app(argv, stdout)
-
-
-def _execute_product_command(argv: list[str]) -> tuple[int, str]:
-    from io import StringIO
-
-    output = StringIO()
-    exit_code = _invoke_app(argv, output)
-    return exit_code, output.getvalue()
-
-
-def _execute_product_command_streaming(argv: list[str], stdout: TextIO) -> int:
-    return _invoke_app(argv, stdout)
-
-
-def _invoke_app(argv: Sequence[str], stdout: TextIO) -> int:
     command = get_command(app)
-    debug = "--debug" in argv
+    previous_format = os.environ.get("KAIROS_CLI_FORMAT")
+    os.environ["KAIROS_CLI_FORMAT"] = _cli_format(argv)
     try:
         with redirect_stdout(stdout), redirect_stderr(stdout):
             command.main(args=list(argv), prog_name="kairospy", standalone_mode=False)
-    except TyperClickException as error:
-        error.show(file=stdout)
-        return error.exit_code
     except click.ClickException as error:
         error.show(file=stdout)
         return error.exit_code
-    except ProjectNotFound as error:
-        stdout.write(str(error) + "\n")
-        return 2
     except SystemExit as error:
-        code = error.code
-        return code if isinstance(code, int) else 1
+        return error.code if isinstance(error.code, int) else 1
     except Exception as error:
-        diagnostic = record_exception(error, operation="cli.command", command=" ".join(argv), context={"argv": list(argv)})
-        stdout.write(f"Unexpected error: {error}\n")
-        stdout.write(f"Diagnostic {diagnostic['diagnostic_id']}: {diagnostic['diagnostic_path']}\n")
-        if debug:
-            stdout.write(traceback.format_exc())
-        else:
-            stdout.write("Run with --debug for traceback details.\n")
+        stdout.write(f"Error: {error}\n")
         return 1
+    finally:
+        if previous_format is None:
+            os.environ.pop("KAIROS_CLI_FORMAT", None)
+        else:
+            os.environ["KAIROS_CLI_FORMAT"] = previous_format
     return 0
 
 
-__all__ = [
-    "app",
-    "execute_argv",
-    "main",
-]
+def main(argv: Sequence[str] | None = None) -> int:
+    return execute_argv(sys.argv[1:] if argv is None else argv, sys.stdout)

@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kairos-workspace",
+    "crates/kairos-market",
+    "crates/kairos-integration",
+    "crates/kairos-network",
+    "crates/kairos-protocol",
+    "crates/kairos-transport",
+    "crates/kairos-reference",
+    "crates/kairos-account",
+    "crates/kairos-risk",
+    "crates/kairos-execution",
+]

@@ -1,0 +1,9 @@
+[package]
+name = "kairos-protocol"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Generated FlatBuffers process-boundary contracts for Kairos"
+
+[dependencies]
+flatbuffers = "25.12.19"

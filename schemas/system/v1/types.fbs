@@ -1,0 +1,62 @@
+include "../../common/v1/snapshot_header.fbs";
+
+namespace kairos.system.v1;
+
+table ActorHealth {
+  actor_id:string (required);
+  state:string (required);
+  started:bool;
+  stopping:bool;
+  processed_count:ulong;
+  error_count:ulong;
+  mailbox_depth:ulong;
+  event_loops:ulong;
+  last_processed_at_unix_nanos:ulong;
+  last_event_time_unix_nanos:ulong;
+  last_error:string;
+}
+
+table ConnectionHealth {
+  connection_id:string (required);
+  status:string (required);
+  healthy:bool;
+  authenticated:bool;
+  reconnect_count:ulong;
+  last_event_time_unix_nanos:ulong;
+  last_error:string;
+}
+
+table Alert {
+  alert_id:string (required);
+  rule:string (required);
+  severity:string (required);
+  status:string (required);
+  first_seen_unix_nanos:ulong;
+  last_seen_unix_nanos:ulong;
+  resolved_at_unix_nanos:ulong;
+  correlation_id:string;
+  details:string;
+}
+
+table Operation {
+  operation_id:string (required);
+  stage:string (required);
+  status:string (required);
+  intent_id:string;
+  reservation_id:string;
+  order_id:string;
+  account_id:string;
+  first_event_time_unix_nanos:ulong;
+  last_event_time_unix_nanos:ulong;
+  last_topic:string;
+  error:string;
+  stale:bool;
+  correlation_id:string;
+  causation_id:string;
+}
+
+table DomainFreshness {
+  domain:string (required);
+  last_event_time_unix_nanos:ulong;
+  stale:bool;
+}

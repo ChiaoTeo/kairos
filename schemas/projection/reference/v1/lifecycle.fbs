@@ -1,0 +1,17 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../reference/v1/entities.fbs";
+
+namespace kairos.reference.v1;
+
+table Lifecycle {
+  total_count:ulong;
+  events:[kairos.reference.v1.LifecycleEvent];
+}
+
+table LifecycleSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:Lifecycle (required);
+}
+
+root_type LifecycleSnapshot;
+file_identifier "PRL1";

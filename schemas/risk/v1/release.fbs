@@ -1,0 +1,11 @@
+include "../../common/v1/header.fbs";
+
+namespace kairos.risk.v1;
+
+table ReleaseReservationRequest {
+  header:kairos.common.v1.MessageHeader (required);
+  reservation_id:string (required);
+}
+
+root_type ReleaseReservationRequest;
+file_identifier "RLR1";

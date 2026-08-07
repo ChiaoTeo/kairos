@@ -1,0 +1,59 @@
+include "../../common/v1/decimal.fbs";
+
+namespace kairos.market.v1;
+
+table Bar {
+  market_id:string (required);
+  instrument_id:string (required);
+  timeframe:string (required);
+  open:kairos.common.v1.Decimal64 (required);
+  high:kairos.common.v1.Decimal64 (required);
+  low:kairos.common.v1.Decimal64 (required);
+  close:kairos.common.v1.Decimal64 (required);
+  volume:kairos.common.v1.Decimal64;
+  event_time_unix_nanos:ulong;
+  source_id:string;
+}
+
+table Rate {
+  rate_id:string (required);
+  market_id:string;
+  instrument_id:string;
+  basis:string;
+  value:kairos.common.v1.Decimal64 (required);
+  mark_price:kairos.common.v1.Decimal64;
+  event_time_unix_nanos:ulong;
+  source_id:string;
+}
+
+table Greeks {
+  market_id:string;
+  instrument_id:string (required);
+  expiry_unix_nanos:ulong;
+  strike:kairos.common.v1.Decimal64;
+  delta:kairos.common.v1.Decimal64;
+  gamma:kairos.common.v1.Decimal64;
+  vega:kairos.common.v1.Decimal64;
+  theta:kairos.common.v1.Decimal64;
+  implied_volatility:kairos.common.v1.Decimal64;
+  event_time_unix_nanos:ulong;
+  source_id:string;
+}
+
+table OrderBookLevel {
+  price:kairos.common.v1.Decimal64 (required);
+  quantity:kairos.common.v1.Decimal64 (required);
+  order_count:uint;
+}
+
+table Subscription {
+  subscription_id:string (required);
+  owner_id:string (required);
+  market_id:string (required);
+  selectors:[string];
+  provider_id:string;
+  stream:string;
+  status:string (required);
+  error:string;
+  updated_at_unix_nanos:ulong;
+}

@@ -1,0 +1,18 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../account/v1/types.fbs";
+
+namespace kairos.account.v1;
+
+table Accounts {
+  account_count:ulong;
+  active_count:ulong;
+  accounts:[kairos.account.v1.Account];
+}
+
+table AccountsSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:Accounts (required);
+}
+
+root_type AccountsSnapshot;
+file_identifier "AAC1";

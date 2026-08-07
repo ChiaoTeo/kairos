@@ -1,0 +1,19 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../risk/v1/types.fbs";
+
+namespace kairos.risk.v1;
+
+table Risk {
+  budget_count:ulong;
+  reservation_count:ulong;
+  budgets:[kairos.risk.v1.Budget];
+  reservations:[kairos.risk.v1.Reservation];
+}
+
+table RiskSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:Risk (required);
+}
+
+root_type RiskSnapshot;
+file_identifier "PRK1";

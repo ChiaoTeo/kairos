@@ -1,0 +1,33 @@
+[package]
+name = "kairos-execution"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Execution state owner and exchange order boundary"
+autobins = false
+
+[lib]
+name = "kairos_execution"
+path = "src/lib.rs"
+
+[dependencies]
+ kairos-integration = { path = "../kairos-integration" }
+clap = { version = "4", features = ["derive", "env"] }
+kairos-workspace = { path = "../kairos-workspace" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+rusqlite = { version = "0.32", features = ["bundled"] }
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "kairos-execution-server"
+path = "src/main.rs"
+
+[[bin]]
+name = "kairos-execution-cli"
+path = "src/bin_cli.rs"

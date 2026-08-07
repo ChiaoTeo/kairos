@@ -1,0 +1,95 @@
+from __future__ import annotations
+
+from io import StringIO
+
+from kairospy.application.launch.application import LaunchControlApplication
+from kairospy.application.timeline import TimelineApplication
+from kairospy.application.workspace import WorkspaceApplication
+from kairospy.surface.cli import execute_argv
+
+
+def test_cli_exposes_legacy_launch_entry_shape() -> None:
+    output = StringIO()
+
+    assert execute_argv(["launch", "--help"], output) == 0
+    text = output.getvalue()
+    assert "start" in text
+    assert "status" in text
+    assert "strategy" in text
+
+
+def test_cli_registers_legacy_product_groups() -> None:
+    output = StringIO()
+
+    assert execute_argv(["--help"], output) == 0
+    text = output.getvalue()
+    for command in ("project", "config", "launch", "account", "market", "catalog", "order", "system", "timeline"):
+        assert command in text
+
+
+def test_cli_preserves_legacy_nested_command_paths() -> None:
+    for argv, expected in (
+        (["account", "--help"], ("credential", "query", "trade-lock")),
+        (["market", "--help"], ("source", "dataset", "stream")),
+        (["launch", "--help"], ("targets", "diagnose", "replay")),
+        (["catalog", "--help"], ("assets", "participants", "markets")),
+        (["system", "--help"], ("account", "restart")),
+    ):
+        output = StringIO()
+        assert execute_argv(argv, output) == 0
+        text = output.getvalue()
+        for command in expected:
+            assert command in text
+
+
+def test_cli_version_is_script_friendly() -> None:
+    output = StringIO()
+
+    assert execute_argv(["version"], output) == 0
+    assert output.getvalue().strip() == "kairospy 0.1.0"
+
+
+def test_project_init_creates_dot_kairos_workspace(tmp_path) -> None:
+    output = StringIO()
+
+    assert execute_argv(["project", "init", str(tmp_path / "demo"), "--id", "demo"], output) == 0
+    assert (tmp_path / "demo" / ".kairos" / "kairos.toml").exists()
+    assert not (tmp_path / "demo" / "workspace.toml").exists()
+
+
+def test_project_init_non_interactive_requires_explicit_inputs() -> None:
+    output = StringIO()
+
+    assert execute_argv(["project", "init", "--non-interactive"], output) != 0
+    assert "project directory is required" in output.getvalue()
+
+
+def test_project_init_prompts_for_project_name_and_directory(tmp_path, monkeypatch) -> None:
+    output = StringIO()
+    answers = iter([str(tmp_path / "demo"), "custom-project"])
+    monkeypatch.setattr("typer.prompt", lambda *args, **kwargs: next(answers))
+
+    assert execute_argv(["project", "init"], output) == 0
+    manifest = tmp_path / "demo" / ".kairos" / "kairos.toml"
+    assert manifest.exists()
+    assert 'workspace_id = "custom-project"' in manifest.read_text()
+
+
+def test_launch_control_resolves_instance_owned_socket(tmp_path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="test")
+    target = LaunchControlApplication(workspace).target(
+        "btc-paper", "instance-1", mode="paper"
+    )
+
+    assert target.launch_id == "btc-paper"
+    assert target.instance_id == "instance-1"
+    assert target.socket_path == workspace.paths.launch_socket("paper", "btc-paper", "instance-1")
+
+
+def test_timeline_application_reads_and_exports_jsonl(tmp_path) -> None:
+    source = tmp_path / "events.jsonl"
+    source.write_text('{"sequence": 1, "kind": "started"}\n{"sequence": 2, "kind": "stopped"}\n', encoding="utf-8")
+    assert TimelineApplication().list(source, limit=1) == [{"sequence": 2, "kind": "stopped"}]
+    destination = tmp_path / "export.jsonl"
+    assert TimelineApplication().export(source, destination) == destination
+    assert destination.read_text(encoding="utf-8").count("sequence") == 2

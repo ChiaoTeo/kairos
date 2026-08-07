@@ -1,0 +1,44 @@
+include "../../common/v1/decimal.fbs";
+include "../../common/v1/types.fbs";
+
+namespace kairos.execution.v1;
+
+table Order {
+  order_id:string (required);
+  intent_id:string;
+  strategy_id:string;
+  account_id:string (required);
+  instrument_id:string (required);
+  market_id:string;
+  venue_order_id:string;
+  status:string (required);
+  side:kairos.common.v1.Side;
+  order_type:kairos.common.v1.OrderType;
+  quantity:kairos.common.v1.Decimal64 (required);
+  filled_quantity:kairos.common.v1.Decimal64 (required);
+  remaining_quantity:kairos.common.v1.Decimal64 (required);
+  limit_price:kairos.common.v1.Decimal64;
+  average_fill_price:kairos.common.v1.Decimal64;
+  created_at_unix_nanos:ulong;
+  updated_at_unix_nanos:ulong;
+  reason:string;
+}
+
+table Fill {
+  fill_id:string (required);
+  trade_id:string;
+  order_id:string (required);
+  intent_id:string;
+  strategy_id:string;
+  account_id:string (required);
+  instrument_id:string (required);
+  market_id:string;
+  venue_order_id:string;
+  side:kairos.common.v1.Side;
+  quantity:kairos.common.v1.Decimal64 (required);
+  price:kairos.common.v1.Decimal64 (required);
+  fee:kairos.common.v1.Decimal64;
+  fee_asset_id:string;
+  notional:kairos.common.v1.Decimal64;
+  occurred_at_unix_nanos:ulong;
+}

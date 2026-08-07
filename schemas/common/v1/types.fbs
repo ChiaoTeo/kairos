@@ -1,0 +1,4 @@
+namespace kairos.common.v1;
+
+enum Side:ubyte { UNSPECIFIED = 0, BUY = 1, SELL = 2 }
+enum OrderType:ubyte { UNSPECIFIED = 0, MARKET = 1, LIMIT = 2 }

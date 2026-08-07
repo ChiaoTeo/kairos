@@ -1,0 +1,7 @@
+namespace kairos.common.v1;
+
+/// Signed decimal value. The numeric value is mantissa * 10^-scale.
+struct Decimal64 {
+  mantissa:long;
+  scale:ubyte;
+}

@@ -1,0 +1,61 @@
+include "../../common/v1/decimal.fbs";
+
+namespace kairos.account.v1;
+
+table Balance {
+  asset_id:string (required);
+  asset_code:string (required);
+  total:kairos.common.v1.Decimal64 (required);
+  available:kairos.common.v1.Decimal64;
+  locked:kairos.common.v1.Decimal64;
+  borrowed:kairos.common.v1.Decimal64;
+  interest:kairos.common.v1.Decimal64;
+}
+
+table Position {
+  instrument_id:string (required);
+  market_id:string;
+  quantity:kairos.common.v1.Decimal64 (required);
+  average_price:kairos.common.v1.Decimal64;
+  mark_price:kairos.common.v1.Decimal64;
+  unrealized_pnl:kairos.common.v1.Decimal64;
+  realized_pnl:kairos.common.v1.Decimal64;
+  updated_at_unix_nanos:ulong;
+}
+
+table OpenOrder {
+  order_id:string (required);
+  venue_order_id:string;
+  instrument_id:string (required);
+  side:string (required);
+  quantity:kairos.common.v1.Decimal64 (required);
+  status:string (required);
+  filled_quantity:kairos.common.v1.Decimal64;
+}
+
+table Account {
+  account_id:string (required);
+  segment_key:string (required);
+  environment:string (required);
+  broker:string (required);
+  account_model:string;
+  status:string (required);
+  stale:bool;
+  valuation_asset_id:string;
+  equity:kairos.common.v1.Decimal64;
+  initial_equity:kairos.common.v1.Decimal64;
+  net_profit:kairos.common.v1.Decimal64;
+  balances:[Balance];
+  collateral:[Balance];
+  positions:[Position];
+  open_orders:[OpenOrder];
+  margin_mode:string;
+  position_mode:string;
+}
+
+table EquityObservation {
+  account_id:string (required);
+  time_unix_nanos:ulong;
+  equity:kairos.common.v1.Decimal64 (required);
+  selected_balance:kairos.common.v1.Decimal64;
+}

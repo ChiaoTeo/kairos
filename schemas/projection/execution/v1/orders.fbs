@@ -1,0 +1,19 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../execution/v1/types.fbs";
+
+namespace kairos.execution.v1;
+
+table Orders {
+  total_count:ulong;
+  active_count:ulong;
+  terminal_count:ulong;
+  orders:[kairos.execution.v1.Order];
+}
+
+table OrdersSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:Orders (required);
+}
+
+root_type OrdersSnapshot;
+file_identifier "PEO1";

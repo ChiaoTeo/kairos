@@ -10,13 +10,15 @@ __pycache__
 .pytest_cache/
 build/
 /dist/
+target/
 .DS_Store
 .env
 /configs/
-/.kairos/
+.kairos/
 /examples/.kairos/runs/
 /kairos.toml
 /.configs/
 kairospy.bak
 node_modules/
 view/tsconfig.tsbuildinfo
+/legacy/

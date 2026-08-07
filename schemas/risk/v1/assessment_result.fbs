@@ -1,0 +1,16 @@
+include "../../common/v1/header.fbs";
+include "types.fbs";
+
+namespace kairos.risk.v1;
+
+table RiskAssessmentResult {
+  header:kairos.common.v1.MessageHeader (required);
+  request_id:string (required);
+  allowed:bool;
+  allocations:[Allocation];
+  violations:[string];
+  evaluated_at_unix_nanos:ulong;
+}
+
+root_type RiskAssessmentResult;
+file_identifier "RAR2";

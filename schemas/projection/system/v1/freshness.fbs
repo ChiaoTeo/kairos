@@ -1,0 +1,18 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../system/v1/types.fbs";
+
+namespace kairos.system.v1;
+
+table Freshness {
+  last_event_time_unix_nanos:ulong;
+  stale_domains:[string];
+  domains:[kairos.system.v1.DomainFreshness];
+}
+
+table FreshnessSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:Freshness (required);
+}
+
+root_type FreshnessSnapshot;
+file_identifier "RTF1";

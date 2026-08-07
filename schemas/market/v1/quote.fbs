@@ -1,0 +1,24 @@
+include "../../common/v1/decimal.fbs";
+include "../../common/v1/header.fbs";
+
+namespace kairos.market.v1;
+
+table Quote {
+  quote_id:string;
+  instrument_id:string (required);
+  market_id:string;
+  bid_price:kairos.common.v1.Decimal64;
+  bid_quantity:kairos.common.v1.Decimal64;
+  ask_price:kairos.common.v1.Decimal64;
+  ask_quantity:kairos.common.v1.Decimal64;
+  event_time_unix_nanos:ulong;
+  source_id:string;
+}
+
+table QuoteMessage {
+  header:kairos.common.v1.MessageHeader (required);
+  payload:Quote (required);
+}
+
+root_type QuoteMessage;
+file_identifier "MQT1";

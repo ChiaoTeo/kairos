@@ -1,10 +1,3 @@
-from __future__ import annotations
+from .app import app, execute_argv, main
 
-from kairospy.surface.cli.app import app, execute_argv, main
-
-
-__all__ = [
-    "app",
-    "execute_argv",
-    "main",
-]
+__all__ = ["app", "execute_argv", "main"]

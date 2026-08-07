@@ -1,0 +1,11 @@
+include "../../common/v1/header.fbs";
+
+namespace kairos.risk.v1;
+
+table ConsumeReservationRequest {
+  header:kairos.common.v1.MessageHeader (required);
+  reservation_id:string (required);
+}
+
+root_type ConsumeReservationRequest;
+file_identifier "RCR1";

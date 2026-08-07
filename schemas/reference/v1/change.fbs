@@ -1,0 +1,15 @@
+include "../../common/v1/header.fbs";
+
+namespace kairos.reference.v1;
+
+table ReferenceChanged {
+  header:kairos.common.v1.MessageHeader (required);
+  generation:ulong;
+  event_sequence:ulong;
+  snapshot_id:string (required);
+  affected_market_ids:[string];
+  change_kinds:[string];
+}
+
+root_type ReferenceChanged;
+file_identifier "RCH1";

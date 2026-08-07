@@ -1,1 +1,0 @@
-"""Workspace application capabilities."""

@@ -1,1 +1,0 @@
-"""Composition domain model."""

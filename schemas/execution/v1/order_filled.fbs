@@ -1,0 +1,23 @@
+include "../../common/v1/decimal.fbs";
+include "../../common/v1/header.fbs";
+include "../../common/v1/types.fbs";
+
+namespace kairos.execution.v1;
+
+table OrderFilled {
+  client_order_id:string (required);
+  account_id:string (required);
+  instrument_id:string (required);
+  side:kairos.common.v1.Side;
+  fill_quantity:kairos.common.v1.Decimal64 (required);
+  fill_price:kairos.common.v1.Decimal64 (required);
+  venue_order_id:string;
+}
+
+table OrderFilledMessage {
+  header:kairos.common.v1.MessageHeader (required);
+  payload:OrderFilled (required);
+}
+
+root_type OrderFilledMessage;
+file_identifier "OFL1";

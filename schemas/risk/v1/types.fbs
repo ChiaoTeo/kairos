@@ -1,0 +1,47 @@
+include "../../common/v1/decimal.fbs";
+
+namespace kairos.risk.v1;
+
+table Allocation {
+  budget_id:string (required);
+  metric:string (required);
+  amount:kairos.common.v1.Decimal64 (required);
+}
+
+table BudgetRef {
+  scope:string (required);
+  subject:string (required);
+}
+
+table Usage {
+  metric:string (required);
+  amount:kairos.common.v1.Decimal64 (required);
+  budgets:[BudgetRef];
+}
+
+table Budget {
+  budget_id:string (required);
+  owner_id:string (required);
+  account_id:string;
+  instrument_id:string;
+  metric:string (required);
+  limit:kairos.common.v1.Decimal64 (required);
+  used:kairos.common.v1.Decimal64 (required);
+  reserved:kairos.common.v1.Decimal64 (required);
+  available:kairos.common.v1.Decimal64 (required);
+  status:string (required);
+}
+
+table Reservation {
+  reservation_id:string (required);
+  owner_id:string (required);
+  intent_id:string;
+  account_id:string;
+  instrument_id:string;
+  metric:string (required);
+  amount:kairos.common.v1.Decimal64 (required);
+  allocations:[Allocation];
+  status:string (required);
+  created_at_unix_nanos:ulong;
+  updated_at_unix_nanos:ulong;
+}

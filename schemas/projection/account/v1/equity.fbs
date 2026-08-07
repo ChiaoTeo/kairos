@@ -1,0 +1,18 @@
+include "../../../common/v1/decimal.fbs";
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../account/v1/types.fbs";
+
+namespace kairos.account.v1;
+
+table EquityObservations {
+  point_count:ulong;
+  points:[kairos.account.v1.EquityObservation];
+}
+
+table EquitySnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:EquityObservations (required);
+}
+
+root_type EquitySnapshot;
+file_identifier "AAE1";

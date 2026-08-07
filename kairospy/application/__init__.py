@@ -1,3 +1,5 @@
-from __future__ import annotations
+"""Public Python application APIs."""
 
-__all__: list[str] = []
+from .workspace import Workspace, WorkspaceApplication, WorkspaceIdentity, WorkspacePaths
+
+__all__ = ["Workspace", "WorkspaceApplication", "WorkspaceIdentity", "WorkspacePaths"]

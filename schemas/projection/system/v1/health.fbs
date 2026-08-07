@@ -1,0 +1,24 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../system/v1/types.fbs";
+
+namespace kairos.system.v1;
+
+table SystemHealth {
+  status:string (required);
+  mode:string;
+  event_count:ulong;
+  error_count:ulong;
+  last_event_time_unix_nanos:ulong;
+  last_processed_at_unix_nanos:ulong;
+  stale:bool;
+  actors:[kairos.system.v1.ActorHealth];
+  connections:[kairos.system.v1.ConnectionHealth];
+}
+
+table HealthSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:SystemHealth (required);
+}
+
+root_type HealthSnapshot;
+file_identifier "RTH1";

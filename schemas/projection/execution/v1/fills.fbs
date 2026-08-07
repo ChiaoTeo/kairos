@@ -1,0 +1,17 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../execution/v1/types.fbs";
+
+namespace kairos.execution.v1;
+
+table Fills {
+  total_count:ulong;
+  fills:[kairos.execution.v1.Fill];
+}
+
+table FillsSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:Fills (required);
+}
+
+root_type FillsSnapshot;
+file_identifier "PEF1";

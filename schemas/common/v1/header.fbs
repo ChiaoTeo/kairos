@@ -1,0 +1,15 @@
+namespace kairos.common.v1;
+
+table MessageHeader {
+  message_id:string (required);
+  stream_id:string (required);
+  producer_id:string (required);
+  // Runtime ownership identity. These fields are optional for project-level
+  // one-shot messages, and must be populated by launch instance processes.
+  workspace_id:string;
+  launch_id:string;
+  instance_id:string;
+  sequence:ulong;
+  event_time_unix_nanos:ulong;
+  publish_time_unix_nanos:ulong;
+}

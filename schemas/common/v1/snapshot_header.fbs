@@ -1,0 +1,19 @@
+namespace kairos.common.v1;
+
+table SnapshotHeader {
+  snapshot_id:string (required);
+  view_key:string (required);
+  owner_actor_id:string (required);
+  event_stream_id:string (required);
+  // Runtime ownership identity. These fields are optional for project-level
+  // snapshots and required by instance-scoped publishers at composition time.
+  workspace_id:string;
+  launch_id:string;
+  instance_id:string;
+  event_sequence:ulong;
+  version:ulong;
+  generation:ulong;
+  generated_at_unix_nanos:ulong;
+  as_of_unix_nanos:ulong;
+  complete:bool = true;
+}

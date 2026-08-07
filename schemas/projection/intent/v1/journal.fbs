@@ -1,0 +1,18 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../intent/v1/types.fbs";
+
+namespace kairos.intent.v1;
+
+table Intents {
+  total_count:ulong;
+  active_count:ulong;
+  intents:[kairos.intent.v1.Intent];
+}
+
+table IntentSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:Intents (required);
+}
+
+root_type IntentSnapshot;
+file_identifier "PIJ1";

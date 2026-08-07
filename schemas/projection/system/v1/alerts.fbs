@@ -1,0 +1,18 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../system/v1/types.fbs";
+
+namespace kairos.system.v1;
+
+table Alerts {
+  total_count:ulong;
+  active_count:ulong;
+  alerts:[kairos.system.v1.Alert];
+}
+
+table AlertsSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:Alerts (required);
+}
+
+root_type AlertsSnapshot;
+file_identifier "RTA1";

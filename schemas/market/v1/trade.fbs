@@ -1,0 +1,24 @@
+include "../../common/v1/decimal.fbs";
+include "../../common/v1/header.fbs";
+include "../../common/v1/types.fbs";
+
+namespace kairos.market.v1;
+
+table Trade {
+  trade_id:string;
+  instrument_id:string (required);
+  market_id:string;
+  price:kairos.common.v1.Decimal64 (required);
+  quantity:kairos.common.v1.Decimal64 (required);
+  aggressor_side:kairos.common.v1.Side;
+  event_time_unix_nanos:ulong;
+  source_id:string;
+}
+
+table TradeMessage {
+  header:kairos.common.v1.MessageHeader (required);
+  payload:Trade (required);
+}
+
+root_type TradeMessage;
+file_identifier "MTR1";

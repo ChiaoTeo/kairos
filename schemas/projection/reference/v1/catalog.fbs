@@ -1,0 +1,12 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../reference/v1/entities.fbs";
+
+namespace kairos.reference.v1;
+
+table CatalogSnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:kairos.reference.v1.Catalog (required);
+}
+
+root_type CatalogSnapshot;
+file_identifier "PRC1";

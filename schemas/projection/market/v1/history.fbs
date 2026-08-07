@@ -1,0 +1,27 @@
+include "../../../common/v1/snapshot_header.fbs";
+include "../../../market/v1/quote.fbs";
+include "../../../market/v1/trade.fbs";
+include "../../../market/v1/data.fbs";
+
+namespace kairos.market.v1;
+
+table MarketHistory {
+  quote_count:ulong;
+  trade_count:ulong;
+  bar_count:ulong;
+  rate_count:ulong;
+  greeks_count:ulong;
+  quotes:[kairos.market.v1.Quote];
+  trades:[kairos.market.v1.Trade];
+  bars:[kairos.market.v1.Bar];
+  rates:[kairos.market.v1.Rate];
+  greeks:[kairos.market.v1.Greeks];
+}
+
+table MarketHistorySnapshot {
+  header:kairos.common.v1.SnapshotHeader (required);
+  payload:MarketHistory (required);
+}
+
+root_type MarketHistorySnapshot;
+file_identifier "PMH1";
