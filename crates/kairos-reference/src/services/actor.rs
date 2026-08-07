@@ -1,8 +1,6 @@
 //! Single-owner Reference actor.
 
-use crate::application::protocol::{
-    CatalogStore, PublishedSnapshots, ReferenceSource, SnapshotPublisher,
-};
+use crate::application::protocol::{CatalogStore, ReferenceSource};
 use crate::domain::{unix_nanos, Asset, LifecycleEvent, ReferenceCatalog, ReferenceResult};
 
 pub struct ReferenceActor {
@@ -10,7 +8,6 @@ pub struct ReferenceActor {
     pub catalog: ReferenceCatalog,
     source: Box<dyn ReferenceSource>,
     store: Box<dyn CatalogStore>,
-    publisher: Box<dyn SnapshotPublisher>,
 }
 
 impl ReferenceActor {
@@ -18,7 +15,6 @@ impl ReferenceActor {
         actor_id: impl Into<String>,
         source: Box<dyn ReferenceSource>,
         mut store: Box<dyn CatalogStore>,
-        publisher: Box<dyn SnapshotPublisher>,
     ) -> ReferenceResult<Self> {
         let catalog = store.load()?.unwrap_or_default();
         Ok(Self {
@@ -26,7 +22,6 @@ impl ReferenceActor {
             catalog,
             source,
             store,
-            publisher,
         })
     }
 
@@ -39,17 +34,11 @@ impl ReferenceActor {
         incoming.validate()?;
         let events = self.catalog.apply(incoming, unix_nanos());
         self.store.save(&self.catalog)?;
-        self.publish()?;
-        self.publisher.publish_change(&self.catalog, &events)?;
         Ok(RefreshResult {
             generation: self.catalog.generation,
             event_sequence: self.catalog.event_sequence,
             events,
         })
-    }
-
-    pub fn publish(&mut self) -> ReferenceResult<PublishedSnapshots> {
-        self.publisher.publish(&self.catalog)
     }
 
     pub fn upsert_asset(&mut self, asset: Asset) -> ReferenceResult<()> {
@@ -61,7 +50,7 @@ impl ReferenceActor {
         self.catalog.assets.insert(asset.asset_id.clone(), asset);
         self.catalog.generation = self.catalog.generation.saturating_add(1);
         self.store.save(&self.catalog)?;
-        self.publish().map(|_| ())
+        Ok(())
     }
 }
 

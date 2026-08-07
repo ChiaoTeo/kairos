@@ -3,12 +3,14 @@ use kairos_protocol::generated::kairos::{
     account::v_1 as account_fb,
     common::v_1::{Decimal64, SnapshotHeader, SnapshotHeaderArgs},
 };
+use kairos_protocol::InstanceIdentity;
 
-use crate::application::account::AccountsSnapshot;
+use crate::application::AccountsSnapshot;
 use crate::domain::DecimalValue;
 
 pub struct FlatbuffersAccountPublisher {
     pub owner_actor_id: String,
+    pub identity: InstanceIdentity,
     pub last_payload: Option<Vec<u8>>,
 }
 
@@ -19,9 +21,17 @@ pub struct FileAccountPublisher {
 
 impl FileAccountPublisher {
     pub fn new(path: impl Into<std::path::PathBuf>, owner_actor_id: impl Into<String>) -> Self {
+        Self::new_with_identity(path, owner_actor_id, InstanceIdentity::default())
+    }
+
+    pub fn new_with_identity(
+        path: impl Into<std::path::PathBuf>,
+        owner_actor_id: impl Into<String>,
+        identity: InstanceIdentity,
+    ) -> Self {
         Self {
             path: path.into(),
-            inner: FlatbuffersAccountPublisher::new(owner_actor_id),
+            inner: FlatbuffersAccountPublisher::new_with_identity(owner_actor_id, identity),
         }
     }
 }
@@ -44,8 +54,16 @@ impl FileAccountPublisher {
 
 impl FlatbuffersAccountPublisher {
     pub fn new(owner_actor_id: impl Into<String>) -> Self {
+        Self::new_with_identity(owner_actor_id, InstanceIdentity::default())
+    }
+
+    pub fn new_with_identity(
+        owner_actor_id: impl Into<String>,
+        identity: InstanceIdentity,
+    ) -> Self {
         Self {
             owner_actor_id: owner_actor_id.into(),
+            identity,
             last_payload: None,
         }
     }
@@ -192,6 +210,9 @@ impl FlatbuffersAccountPublisher {
         let view_key = builder.create_string("account.current");
         let owner = builder.create_string(&self.owner_actor_id);
         let stream = builder.create_string("account.events");
+        let workspace_id = non_empty_string(&mut builder, &self.identity.workspace_id);
+        let launch_id = non_empty_string(&mut builder, &self.identity.launch_id);
+        let instance_id = non_empty_string(&mut builder, &self.identity.instance_id);
         let header = SnapshotHeader::create(
             &mut builder,
             &SnapshotHeaderArgs {
@@ -199,9 +220,9 @@ impl FlatbuffersAccountPublisher {
                 view_key: Some(view_key),
                 owner_actor_id: Some(owner),
                 event_stream_id: Some(stream),
-                workspace_id: None,
-                launch_id: None,
-                instance_id: None,
+                workspace_id,
+                launch_id,
+                instance_id,
                 event_sequence: snapshot.event_sequence,
                 version: 1,
                 generation: snapshot.generation,
@@ -225,4 +246,11 @@ impl FlatbuffersAccountPublisher {
 
 fn decimal(value: DecimalValue) -> Decimal64 {
     Decimal64::new(value.mantissa, value.scale)
+}
+
+fn non_empty_string<'a, 'b, A: flatbuffers::Allocator + 'a>(
+    builder: &'b mut FlatBufferBuilder<'a, A>,
+    value: &str,
+) -> Option<flatbuffers::WIPOffset<&'a str>> {
+    (!value.is_empty()).then(|| builder.create_string(value))
 }

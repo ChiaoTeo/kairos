@@ -31,7 +31,6 @@ class StrategyProcessApplication:
         launch_id: str,
         instance_id: str,
         mode: str = "paper",
-        strategy_root: Path | None = None,
         params: dict[str, object] | None = None,
         environment: Mapping[str, str] | None = None,
     ) -> Path:
@@ -59,8 +58,6 @@ class StrategyProcessApplication:
             "--mode", mode,
             "--strategy", strategy_ref,
         ]
-        if strategy_root is not None:
-            command.extend(("--strategy-root", str(strategy_root)))
         if params:
             command.extend(("--params", json.dumps(params, separators=(",", ":"))))
         process_environment = os.environ.copy()

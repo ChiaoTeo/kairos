@@ -7,7 +7,7 @@ use kairos_integration::{
     MarketEventKind, MarketStreamConnection, MarketSubscription, SubscriptionId as ProviderId,
 };
 
-use crate::application::market::protocol::{MarketFeed, MarketOrderBookUpdate};
+use crate::application::protocol::{MarketFeed, MarketOrderBookUpdate};
 use crate::domain::freshness::FeedStatus;
 use crate::domain::market::MarketDescriptor;
 use crate::domain::observations::{MarketObservation, Quote, Trade};

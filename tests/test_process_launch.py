@@ -76,6 +76,30 @@ def test_component_command_uses_instance_workspace_namespace(tmp_path: Path) -> 
     ]
 
 
+def test_market_command_passes_credential_reference_only(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="credential")
+    command, _ = ComponentProcessApplication(workspace, binaries={"market": "market-bin"})._command(
+        "market", account_id=None, market_provider="binance-equity-rest",
+        market_credential_id="binance-equity-readonly",
+    )
+
+    assert "--credential-id" in command
+    assert command[command.index("--credential-id") + 1] == "binance-equity-readonly"
+    assert "--api-key" not in command
+    assert "--secret" not in command
+
+
+def test_risk_command_uses_instance_workspace_namespace(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="instance")
+    instance = workspace.instance("paper", "btc-sma", "run-001")
+    command, _ = ComponentProcessApplication(workspace, binaries={"risk": "risk-bin"})._command(
+        "risk", account_id=None, instance_workspace=instance
+    )
+    assert command[-6:] == [
+        "--launch-mode", "paper", "--launch-id", "btc-sma", "--instance-id", "run-001"
+    ]
+
+
 def test_component_status_and_stop_use_instance_workspace(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="instance")
     instance = workspace.instance("paper", "btc-sma", "run-001")

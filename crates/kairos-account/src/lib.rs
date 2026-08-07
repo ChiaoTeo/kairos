@@ -9,10 +9,9 @@ pub mod composition;
 pub mod domain;
 mod services;
 
-pub use application::account::AccountsSnapshot;
-pub use application::account::{
-    AccountApplication, AccountDataQuery, AccountError, AccountQuery, ReconcileAccount,
-    RefreshAccount,
+pub use application::AccountsSnapshot;
+pub use application::{
+    AccountApplication, AccountDataQuery, AccountError, AccountProcess, AccountQuery,
+    ReconcileAccount, RefreshAccount,
 };
 pub use domain::{Account, AccountState, Balance, Position};
-pub use services::process::AccountProcess;

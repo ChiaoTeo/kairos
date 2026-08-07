@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from uuid import uuid4
 
 
 class InstanceState(StrEnum):
@@ -12,6 +13,11 @@ class InstanceState(StrEnum):
     STOPPING = "stopping"
     STOPPED = "stopped"
     FAILED = "failed"
+
+
+def new_instance_id() -> str:
+    """Create the opaque identity for one launch execution."""
+    return str(uuid4())
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,4 +43,3 @@ class LaunchInstance:
             raise ValueError("instance_id is required")
         if self.directory == self.directory.parent:
             raise ValueError("instance directory must be scoped below a launch")
-

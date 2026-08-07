@@ -29,11 +29,6 @@ impl BinanceEquityRestClient {
                 "Binance Equity API key is required".into(),
             ));
         }
-        if secret.trim().is_empty() {
-            return Err(ExchangeError::Authentication(
-                "Binance Equity API secret is required".into(),
-            ));
-        }
         let base_url = base_url.into().trim_end_matches('/').to_string();
         if base_url.is_empty() {
             return Err(ExchangeError::InvalidRequest(
@@ -50,6 +45,14 @@ impl BinanceEquityRestClient {
 
     pub fn exchange_info(&self) -> Result<Value, ExchangeError> {
         self.get("/sapi/v1/equity/market/exchangeInfo", &[], false)
+    }
+
+    pub fn latest_quote(&self, symbol: impl Into<String>) -> Result<Value, ExchangeError> {
+        self.get(
+            "/sapi/v1/equity/market/quote",
+            &[("symbol", symbol.into().to_ascii_uppercase())],
+            false,
+        )
     }
 
     pub fn place_order(&self, params: &[(&str, String)]) -> Result<Value, ExchangeError> {
@@ -83,6 +86,11 @@ impl BinanceEquityRestClient {
             values.insert((*key).to_string(), value.clone());
         }
         if signed {
+            if self.secret.trim().is_empty() {
+                return Err(ExchangeError::Authentication(
+                    "Binance Equity API secret is required for signed requests".into(),
+                ));
+            }
             values.insert("timestamp".into(), now_millis().to_string());
             values.insert("recvWindow".into(), "10000".into());
         }

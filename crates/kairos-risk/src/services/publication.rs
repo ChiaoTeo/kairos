@@ -1,4 +1,3 @@
-use crate::application::protocol::{RiskEventSink, RiskPublisher};
 use crate::application::{RiskEvent, RiskSnapshot};
 use flatbuffers::FlatBufferBuilder;
 use kairos_protocol::generated::kairos::{
@@ -8,12 +7,12 @@ use kairos_protocol::generated::kairos::{
     risk::v_1 as risk_fb,
 };
 
-pub struct FlatbuffersRiskPublisher {
+pub struct FlatbuffersRiskSnapshotWriter {
     pub actor_id: String,
     pub last_payload: Option<Vec<u8>>,
 }
 
-impl FlatbuffersRiskPublisher {
+impl FlatbuffersRiskSnapshotWriter {
     pub fn new(actor_id: impl Into<String>) -> Self {
         Self {
             actor_id: actor_id.into(),
@@ -22,8 +21,8 @@ impl FlatbuffersRiskPublisher {
     }
 }
 
-impl RiskPublisher for FlatbuffersRiskPublisher {
-    fn publish(&mut self, snapshot: &RiskSnapshot) -> Result<(), String> {
+impl FlatbuffersRiskSnapshotWriter {
+    pub fn publish(&mut self, snapshot: &RiskSnapshot) -> Result<(), String> {
         let mut builder = FlatBufferBuilder::new();
         let mut budgets = Vec::new();
         for budget in &snapshot.budgets {
@@ -143,12 +142,12 @@ impl RiskPublisher for FlatbuffersRiskPublisher {
     }
 }
 
-pub struct FlatbuffersRiskEventPublisher {
+pub struct FlatbuffersRiskEventWriter {
     pub actor_id: String,
     pub last_payload: Option<Vec<u8>>,
 }
 
-impl FlatbuffersRiskEventPublisher {
+impl FlatbuffersRiskEventWriter {
     pub fn new(actor_id: impl Into<String>) -> Self {
         Self {
             actor_id: actor_id.into(),
@@ -157,8 +156,8 @@ impl FlatbuffersRiskEventPublisher {
     }
 }
 
-impl RiskEventSink for FlatbuffersRiskEventPublisher {
-    fn publish(&mut self, event: &RiskEvent) -> Result<(), String> {
+impl FlatbuffersRiskEventWriter {
+    pub fn publish(&mut self, event: &RiskEvent) -> Result<(), String> {
         let RiskEvent::ReservationChanged {
             reservation,
             event_sequence,

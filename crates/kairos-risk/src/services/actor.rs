@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::application::protocol::{RiskEventSink, RiskPublisher, RiskStateStore};
+use crate::application::protocol::RiskStateStore;
 use crate::application::{AssessRisk, ReserveRisk, RiskAssessment, RiskEvent, RiskSnapshot};
 use crate::domain::{Budget, Reservation, ReservationAllocation, ReservationStatus};
 
@@ -19,8 +19,7 @@ pub(crate) struct RiskActor {
     reservations: BTreeMap<String, Reservation>,
     allow_unbudgeted: bool,
     store: Option<Box<dyn RiskStateStore>>,
-    publisher: Option<Box<dyn RiskPublisher>>,
-    events: Option<Box<dyn RiskEventSink>>,
+    pending_events: Vec<RiskEvent>,
 }
 
 impl RiskActor {
@@ -29,8 +28,6 @@ impl RiskActor {
         budgets: Vec<Budget>,
         allow_unbudgeted: bool,
         store: Option<Box<dyn RiskStateStore>>,
-        publisher: Option<Box<dyn RiskPublisher>>,
-        events: Option<Box<dyn RiskEventSink>>,
     ) -> Result<Self, String> {
         let actor_id = actor_id.into();
         if actor_id.trim().is_empty() {
@@ -44,8 +41,7 @@ impl RiskActor {
             reservations: BTreeMap::new(),
             allow_unbudgeted,
             store,
-            publisher,
-            events,
+            pending_events: Vec::new(),
         };
         if let Some(store) = actor.store.as_mut() {
             if let Some(snapshot) = store.load()? {
@@ -84,10 +80,6 @@ impl RiskActor {
         self.event_sequence = snapshot.event_sequence;
         self.budgets = budgets;
         self.reservations = reservations;
-        let restored = self.snapshot();
-        if let Some(publisher) = self.publisher.as_mut() {
-            publisher.publish(&restored)?;
-        }
         Ok(())
     }
 
@@ -276,10 +268,12 @@ impl RiskActor {
     }
 
     fn emit(&mut self, event: RiskEvent) -> Result<(), String> {
-        if let Some(events) = self.events.as_mut() {
-            events.publish(&event)?;
-        }
+        self.pending_events.push(event);
         Ok(())
+    }
+
+    pub fn drain_events(&mut self) -> Vec<RiskEvent> {
+        std::mem::take(&mut self.pending_events)
     }
     fn changed(&mut self) -> Result<(), String> {
         self.generation += 1;
@@ -287,9 +281,6 @@ impl RiskActor {
         let snapshot = self.snapshot();
         if let Some(store) = self.store.as_mut() {
             store.save(&snapshot)?;
-        }
-        if let Some(publisher) = self.publisher.as_mut() {
-            publisher.publish(&snapshot)?;
         }
         Ok(())
     }

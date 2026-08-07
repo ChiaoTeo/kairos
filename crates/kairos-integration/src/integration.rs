@@ -350,6 +350,39 @@ impl Integration {
         Ok(self)
     }
 
+    pub fn with_binance_equity_market_stream(
+        mut self,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        endpoint: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let endpoint = endpoint.into();
+        // The Stocks Trading API exposes latest quotes over REST. The
+        // integration still presents stream semantics through polling.
+        binance::equity::market_stream::rest_market_stream(
+            api_key.clone(),
+            secret.clone(),
+            endpoint.clone(),
+        )?;
+        self.market_streams.push(MarketStreamEntry {
+            provider: "binance".into(),
+            product: Some(ProductFamily::Equity),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::equity::market_stream::rest_market_stream(
+                    api_key.clone(),
+                    secret.clone(),
+                    endpoint.clone(),
+                )
+                .map(|stream| Box::new(stream) as Box<dyn MarketStreamConnection>)
+                .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))
+            }),
+        });
+        Ok(self)
+    }
+
     pub fn with_binance_spot_account(
         mut self,
         api_key: impl Into<String>,

@@ -127,11 +127,22 @@ uv run kairospy launch diagnose explain btc-sma --workspace my-project
 uv run kairospy launch start btc-sma --workspace my-project
 ```
 
+启动会自动生成本次运行的 UUID `instance_id` 并在结果中返回；不需要也不应
+手工指定 instance。查询或停止某次运行时，使用启动结果中的 `instance_id`：
+
+```bash
+uv run kairospy launch status btc-sma --instance <instance-id> --workspace my-project
+uv run kairospy launch stop btc-sma --instance <instance-id> --workspace my-project
+```
+
+省略 `--config` 即可，系统会按 `config/launches/<launch-id>.toml` 自动发现
+launch 配置。`--config` 仅用于显式指定其他配置文件。
+
 查看运行状态和日志：
 
 ```bash
-uv run kairospy launch status --workspace my-project
-uv run kairospy launch logs --limit 100 --workspace my-project
+uv run kairospy launch status btc-sma --instance <instance-id> --workspace my-project
+uv run kairospy launch logs btc-sma --instance <instance-id> --limit 100 --workspace my-project
 ```
 
 启动内置 system runtime 管理账户和调试下单：

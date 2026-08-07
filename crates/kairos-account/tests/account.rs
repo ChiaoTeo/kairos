@@ -1,8 +1,10 @@
 use std::collections::BTreeMap;
 
-use kairos_account::application::account::protocol::AccountStateStore;
-use kairos_account::application::account::protocol::OrderRisk;
-use kairos_account::application::account::OrderRiskRequest;
+use kairos_account::application::{AccountStateStore, OrderRisk, OrderRiskRequest};
+use kairos_account::composition::account::{
+    compose_account_application, compose_account_application_for_segments, AccountOptions,
+    AccountRegistry, CredentialRecord, CredentialStore,
+};
 use kairos_account::composition::{
     empty_snapshot, FlatbuffersAccountPublisher, InMemoryAccountSource, JsonAccountStore,
 };
@@ -11,14 +13,11 @@ use kairos_account::domain::{
     DecimalValue, ExternalAccountIdentity, FillSide, Intent, IntentEvent, IntentKind, IntentStatus,
     OrderRequest, OrderSide, OrderType, Position,
 };
-use kairos_account::composition::account::{
-    compose_account_application, compose_account_application_for_segments, AccountOptions,
-    AccountRegistry, CredentialRecord, CredentialStore,
-};
 use kairos_account::{
     AccountApplication, AccountDataQuery, AccountQuery, ReconcileAccount, RefreshAccount,
 };
 use kairos_protocol::generated::kairos::account::v_1::root_as_accounts_snapshot;
+use kairos_protocol::InstanceIdentity;
 
 fn segment(key: &str) -> AccountSegment {
     AccountSegment {
@@ -320,22 +319,21 @@ fn refresh_owns_segment_state_and_query_returns_typed_view() {
         result[0].account.state.positions["instrument:btc"].quantity,
         DecimalValue::new(25, 2)
     );
-    app.actor_mut()
-        .apply_fill(AccountFill {
-            fill_id: None,
-            order_id: None,
-            segment_key: "spot".into(),
-            instrument_id: "instrument:btc".into(),
-            quantity: DecimalValue::new(1, 2),
-            price: DecimalValue::new(100, 0),
-            side: FillSide::Buy,
-            settlement_asset: None,
-            settlement_delta: None,
-            fee_asset: None,
-            fee_amount: None,
-            occurred_at_unix_nanos: 43,
-        })
-        .unwrap();
+    app.apply_fill(AccountFill {
+        fill_id: None,
+        order_id: None,
+        segment_key: "spot".into(),
+        instrument_id: "instrument:btc".into(),
+        quantity: DecimalValue::new(1, 2),
+        price: DecimalValue::new(100, 0),
+        side: FillSide::Buy,
+        settlement_asset: None,
+        settlement_delta: None,
+        fee_asset: None,
+        fee_amount: None,
+        occurred_at_unix_nanos: 43,
+    })
+    .unwrap();
     let reconciliation = app
         .reconcile_report(ReconcileAccount {
             account_id: "main".into(),
@@ -377,10 +375,16 @@ fn publisher_emits_current_account_snapshot() {
     })
     .unwrap();
 
-    let mut publisher = FlatbuffersAccountPublisher::new("account-1");
+    let mut publisher = FlatbuffersAccountPublisher::new_with_identity(
+        "account-1",
+        InstanceIdentity::new("demo", "btc-sma", "run-001"),
+    );
     publisher.publish(&app.snapshot()).unwrap();
     let payload = publisher.last_payload.as_ref().unwrap();
     let decoded = root_as_accounts_snapshot(payload).unwrap();
+    assert_eq!(decoded.header().workspace_id(), Some("demo"));
+    assert_eq!(decoded.header().launch_id(), Some("btc-sma"));
+    assert_eq!(decoded.header().instance_id(), Some("run-001"));
     assert_eq!(decoded.payload().account_count(), 1);
     assert_eq!(
         decoded.payload().accounts().unwrap().get(0).segment_key(),
@@ -401,7 +405,7 @@ fn fill_event_updates_account_position_owned_by_actor() {
         segments: vec![],
     })
     .unwrap();
-    app.actor_mut().attach_stream(Box::new(TestStream {
+    app.attach_stream(Box::new(TestStream {
         events: vec![Some(AccountEvent::Fill(AccountFill {
             fill_id: None,
             order_id: None,
@@ -417,7 +421,7 @@ fn fill_event_updates_account_position_owned_by_actor() {
             occurred_at_unix_nanos: 99,
         }))],
     }));
-    assert!(app.actor_mut().poll_stream_once().unwrap());
+    assert!(app.poll_stream_once().unwrap());
     assert_eq!(
         app.query(AccountQuery {
             account_id: "main".into(),
@@ -627,7 +631,7 @@ fn account_owns_intent_and_order_lifecycle_but_accepts_execution_facts_as_events
         2,
     )
     .unwrap();
-    app.actor_mut().attach_stream(Box::new(TestStream {
+    app.attach_stream(Box::new(TestStream {
         events: vec![
             Some(AccountEvent::Intent(IntentEvent {
                 intent_id: "intent-1".into(),
@@ -646,8 +650,8 @@ fn account_owns_intent_and_order_lifecycle_but_accepts_execution_facts_as_events
             })),
         ],
     }));
-    assert!(app.actor_mut().poll_stream_once().unwrap());
-    assert!(app.actor_mut().poll_stream_once().unwrap());
+    assert!(app.poll_stream_once().unwrap());
+    assert!(app.poll_stream_once().unwrap());
     let account = &app
         .query(AccountQuery {
             account_id: "main".into(),
@@ -732,7 +736,7 @@ impl OrderRisk for RecordingRisk {
     }
 }
 
-impl kairos_account::application::account::protocol::AccountStreamSource for TestStream {
+impl kairos_account::application::AccountStreamSource for TestStream {
     fn next_event(&mut self) -> Result<Option<AccountEvent>, String> {
         Ok(self.events.pop().flatten())
     }

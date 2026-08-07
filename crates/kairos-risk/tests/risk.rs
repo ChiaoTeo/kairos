@@ -4,25 +4,13 @@ use kairos_protocol::generated::kairos::risk::v_1::{
 use kairos_protocol::generated::kairos::risk::v_1::{
     risk_snapshot_buffer_has_identifier, root_as_risk_snapshot,
 };
-use kairos_risk::application::protocol::{RiskEventSink, RiskPublisher};
 use kairos_risk::composition::{
-    FlatbuffersRiskEventPublisher, FlatbuffersRiskPublisher, MemoryRiskStore,
+    FlatbuffersRiskEventWriter, FlatbuffersRiskSnapshotWriter, MemoryRiskStore,
 };
 use kairos_risk::{
     Amount, AssessRisk, Budget, BudgetRef, ConsumeReservation, Metric, ReleaseReservation,
     ReservationStatus, ReserveRisk, RiskApplication, Usage,
 };
-use std::sync::{Arc, Mutex};
-
-struct CapturedEvents(Arc<Mutex<Vec<kairos_risk::RiskEvent>>>);
-
-impl RiskEventSink for CapturedEvents {
-    fn publish(&mut self, event: &kairos_risk::RiskEvent) -> Result<(), String> {
-        self.0.lock().unwrap().push(event.clone());
-        Ok(())
-    }
-}
-
 fn amount(value: i64) -> Amount {
     Amount::new(value, 0).unwrap()
 }
@@ -45,8 +33,6 @@ fn application(limit: i64) -> RiskApplication {
             valid_until_unix_nanos: None,
         }],
         false,
-        None,
-        None,
         None,
     )
     .unwrap()
@@ -143,9 +129,9 @@ fn publisher_emits_reserved_budget_and_allocation() {
     })
     .unwrap();
     let snapshot = app.snapshot();
-    let mut publisher = FlatbuffersRiskPublisher::new("risk");
-    publisher.publish(&snapshot).unwrap();
-    let payload = publisher.last_payload.unwrap();
+    let mut writer = FlatbuffersRiskSnapshotWriter::new("risk");
+    writer.publish(&snapshot).unwrap();
+    let payload = writer.last_payload.unwrap();
     assert!(risk_snapshot_buffer_has_identifier(&payload));
     let decoded = root_as_risk_snapshot(&payload).unwrap();
     assert_eq!(
@@ -200,8 +186,6 @@ fn application_restores_actor_generation_from_store() {
         Some(Box::new(MemoryRiskStore {
             snapshot: Some(snapshot),
         })),
-        None,
-        None,
     )
     .unwrap();
     let restored = app.snapshot();
@@ -224,14 +208,14 @@ fn event_publisher_emits_reservation_fact_with_sequence() {
         created_at_unix_nanos: 1,
         updated_at_unix_nanos: 1,
     };
-    let mut publisher = FlatbuffersRiskEventPublisher::new("risk");
-    publisher
+    let mut writer = FlatbuffersRiskEventWriter::new("risk");
+    writer
         .publish(&kairos_risk::RiskEvent::ReservationChanged {
             reservation,
             event_sequence: 3,
         })
         .unwrap();
-    let payload = publisher.last_payload.unwrap();
+    let payload = writer.last_payload.unwrap();
     assert!(reservation_event_buffer_has_identifier(&payload));
     let event = root_as_reservation_event(&payload).unwrap();
     assert_eq!(event.header().sequence(), 3);
@@ -241,7 +225,6 @@ fn event_publisher_emits_reservation_fact_with_sequence() {
 
 #[test]
 fn actor_publishes_reservation_facts_after_state_changes() {
-    let events = Arc::new(Mutex::new(Vec::new()));
     let mut app = RiskApplication::with_dependencies(
         "risk",
         vec![Budget {
@@ -260,8 +243,6 @@ fn actor_publishes_reservation_facts_after_state_changes() {
         }],
         false,
         None,
-        None,
-        Some(Box::new(CapturedEvents(events.clone()))),
     )
     .unwrap();
     app.reserve(ReserveRisk {
@@ -273,7 +254,7 @@ fn actor_publishes_reservation_facts_after_state_changes() {
         reservation_id: "reservation".into(),
     })
     .unwrap();
-    let events = events.lock().unwrap();
+    let events = app.drain_events();
     assert_eq!(events.len(), 2);
     assert!(matches!(
         events[0],

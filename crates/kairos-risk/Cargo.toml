@@ -25,8 +25,8 @@ tempfile = "3"
 
 [[bin]]
 name = "kairos-risk-server"
-path = "src/main.rs"
+path = "src/bin/kairos-risk-server.rs"
 
 [[bin]]
 name = "kairos-risk-cli"
-path = "src/bin_cli.rs"
+path = "src/bin/kairos-risk-cli.rs"

@@ -1,4 +1,4 @@
-//! Composition helpers for account sources and publishers.
+//! Composition helpers for account sources and process-owned snapshot writers.
 
 pub mod account;
 
@@ -7,7 +7,7 @@ pub use crate::services::persistence::MemoryAccountStore;
 pub use crate::services::publication::FileAccountPublisher;
 pub use crate::services::publication::FlatbuffersAccountPublisher;
 
-use crate::application::account::protocol::AccountSnapshotSource;
+use crate::application::protocol::AccountSnapshotSource;
 use crate::domain::{AccountSegment, AccountSnapshot, AccountStatus};
 
 pub struct InMemoryAccountSource {

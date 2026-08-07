@@ -15,7 +15,12 @@ def test_workspace_init_creates_manifest_and_runtime_layout(tmp_path: Path) -> N
     assert workspace.paths.reference_socket().parent == workspace.paths.root / "run" / "reference"
     assert workspace.paths.account_config() == workspace.paths.root / "accounts" / "accounts.toml"
     assert workspace.paths.account_state() == workspace.paths.root / "state" / "account" / "account-state.json"
+    instance = workspace.instance("paper", "demo", "run-001")
+    assert instance.socket("account") == instance.root / "sockets" / "account.sock"
+    assert instance.state("execution", "execution-state.json") == instance.root / "state" / "execution" / "execution-state.json"
+    assert instance.state("risk", "risk-state.json") == instance.root / "state" / "risk" / "risk-state.json"
     assert workspace.paths.account_leases() == workspace.paths.root / "state" / "account-locks"
+    assert workspace.paths.market_connections_root().is_dir()
 
 
 def test_project_init_creates_dot_kairos_resource_layout(tmp_path: Path) -> None:
@@ -27,6 +32,13 @@ def test_project_init_creates_dot_kairos_resource_layout(tmp_path: Path) -> None
     assert workspace.paths.account_config() == workspace.paths.root / "accounts" / "accounts.toml"
     assert workspace.paths.account_leases() == workspace.paths.root / "state" / "account-locks"
     assert workspace.paths.orders_root().is_dir()
+    assert workspace.paths.project_root == (tmp_path / "project").resolve()
+
+
+def test_legacy_workspace_uses_itself_as_strategy_project_root(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "demo", workspace_id="demo")
+
+    assert workspace.paths.project_root == workspace.paths.root
 
 
 def test_project_init_rejects_legacy_root_manifest(tmp_path: Path) -> None:
@@ -53,6 +65,22 @@ def test_workspace_cli_format_is_loaded_from_manifest(tmp_path: Path) -> None:
     )
 
     assert WorkspaceApplication().open(workspace.paths.root).cli_format == "text"
+
+
+def test_workspace_resolves_market_connection_from_manifest(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "demo", workspace_id="demo")
+    workspace.paths.manifest.write_text(
+        'version = 1\nworkspace_id = "demo"\n\n'
+        '[market.connections.binance-equity]\n'
+        'provider = "binance-equity-rest"\n'
+        'credential_id = "binance-equity-readonly"\n',
+        encoding="utf-8",
+    )
+
+    assert WorkspaceApplication().market_connection(workspace, "binance-equity") == {
+        "provider": "binance-equity-rest",
+        "credential_id": "binance-equity-readonly",
+    }
 
 
 def test_workspace_resolve_discovers_current_ancestor_and_environment(
@@ -84,6 +112,7 @@ def test_instance_workspace_scopes_runtime_resources(tmp_path: Path) -> None:
     assert instance.snapshot("market.snapshot") == instance.root / "snapshots" / "market.snapshot"
     assert instance.state("account", "account-state.json") == instance.root / "state" / "account" / "account-state.json"
     assert instance.root.is_dir()
+    assert instance.market_state("cursor.json") == instance.root / "state" / "market" / "cursor.json"
 
 
 def test_instance_workspace_rejects_path_components(tmp_path: Path) -> None:

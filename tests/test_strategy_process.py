@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 from kairospy.application.strategy import StrategyProcessApplication
+from kairospy.application.strategy.services.composition import compose_strategy_process
 from kairospy.application.launch import LaunchControlApplication
 from kairospy.application.system import UnixRestClient
 from kairospy.application.workspace import WorkspaceApplication
@@ -42,3 +43,29 @@ def test_launch_status_and_stop_are_safe_when_instance_is_not_running(tmp_path: 
     target = application.target("launch", "instance")
     assert application.status(target)["status"] == "not_running"
     assert application.stop(target)["status"] == "not_running"
+
+
+def test_strategy_composition_uses_instance_market_and_account_resources(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="sp-resources")
+    (workspace.paths.root / "user_strategy.py").write_text(
+        "from kairospy.strategy import StrategyBase\n"
+        "class UserStrategy(StrategyBase):\n"
+        "    strategy_id = 'resource-strategy'\n",
+        encoding="utf-8",
+    )
+    composition = compose_strategy_process(
+        workspace,
+        strategy_ref="user_strategy:UserStrategy",
+        launch_id="launch",
+        instance_id="run-1",
+        mode="backtest",
+    )
+    assert composition.host.stream.socket_path == workspace.paths.instance_socket(
+        "backtest", "launch", "run-1", "market-events"
+    )
+    assert composition.host._snapshots.path == workspace.paths.instance_snapshot(
+        "backtest", "launch", "run-1", "market", "market.snapshot"
+    )
+    assert composition.host.context._bus._intents.client.socket_path == workspace.paths.instance_socket(
+        "backtest", "launch", "run-1", "account"
+    )

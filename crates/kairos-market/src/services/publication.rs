@@ -11,6 +11,7 @@ use kairos_protocol::generated::kairos::market::v_1::{
     OrderBooks as FbOrderBooks, OrderBooksArgs as FbOrderBooksArgs, Quote as FbQuote,
     QuoteArgs as FbQuoteArgs, Trade as FbTrade, TradeArgs as FbTradeArgs,
 };
+use kairos_protocol::InstanceIdentity;
 use kairos_transport::SharedSnapshotWriter;
 
 use crate::domain::observations::MarketObservation;
@@ -21,6 +22,7 @@ pub struct MmapMarketSnapshotPublisher {
     writer: SharedSnapshotWriter,
     actor_id: String,
     event_stream_id: String,
+    identity: InstanceIdentity,
 }
 
 impl MmapMarketSnapshotPublisher {
@@ -30,10 +32,27 @@ impl MmapMarketSnapshotPublisher {
         actor_id: impl Into<String>,
         event_stream_id: impl Into<String>,
     ) -> std::io::Result<Self> {
+        Self::create_with_identity(
+            path,
+            slot_size,
+            actor_id,
+            event_stream_id,
+            InstanceIdentity::default(),
+        )
+    }
+
+    pub fn create_with_identity(
+        path: impl AsRef<std::path::Path>,
+        slot_size: usize,
+        actor_id: impl Into<String>,
+        event_stream_id: impl Into<String>,
+        identity: InstanceIdentity,
+    ) -> std::io::Result<Self> {
         Ok(Self {
             writer: SharedSnapshotWriter::create(path, slot_size)?,
             actor_id: actor_id.into(),
             event_stream_id: event_stream_id.into(),
+            identity,
         })
     }
 
@@ -115,6 +134,9 @@ impl MmapMarketSnapshotPublisher {
         let view_key = builder.create_string("market.current");
         let actor_id = builder.create_string(&self.actor_id);
         let event_stream_id = builder.create_string(&self.event_stream_id);
+        let workspace_id = non_empty_string(&mut builder, &self.identity.workspace_id);
+        let launch_id = non_empty_string(&mut builder, &self.identity.launch_id);
+        let instance_id = non_empty_string(&mut builder, &self.identity.instance_id);
         let header = SnapshotHeader::create(
             &mut builder,
             &SnapshotHeaderArgs {
@@ -122,9 +144,9 @@ impl MmapMarketSnapshotPublisher {
                 view_key: Some(view_key),
                 owner_actor_id: Some(actor_id),
                 event_stream_id: Some(event_stream_id),
-                workspace_id: None,
-                launch_id: None,
-                instance_id: None,
+                workspace_id,
+                launch_id,
+                instance_id,
                 event_sequence: snapshot.event_sequence,
                 version: snapshot.generation,
                 generation: snapshot.generation,
@@ -158,6 +180,7 @@ pub struct MmapOrderBookSnapshotPublisher {
     writer: SharedSnapshotWriter,
     actor_id: String,
     event_stream_id: String,
+    identity: InstanceIdentity,
 }
 
 impl MmapOrderBookSnapshotPublisher {
@@ -167,10 +190,27 @@ impl MmapOrderBookSnapshotPublisher {
         actor_id: impl Into<String>,
         event_stream_id: impl Into<String>,
     ) -> std::io::Result<Self> {
+        Self::create_with_identity(
+            path,
+            slot_size,
+            actor_id,
+            event_stream_id,
+            InstanceIdentity::default(),
+        )
+    }
+
+    pub fn create_with_identity(
+        path: impl AsRef<std::path::Path>,
+        slot_size: usize,
+        actor_id: impl Into<String>,
+        event_stream_id: impl Into<String>,
+        identity: InstanceIdentity,
+    ) -> std::io::Result<Self> {
         Ok(Self {
             writer: SharedSnapshotWriter::create(path, slot_size)?,
             actor_id: actor_id.into(),
             event_stream_id: event_stream_id.into(),
+            identity,
         })
     }
 
@@ -215,6 +255,9 @@ impl MmapOrderBookSnapshotPublisher {
         let view_key = builder.create_string("market.orderbook");
         let actor_id = builder.create_string(&self.actor_id);
         let stream = builder.create_string(&self.event_stream_id);
+        let workspace_id = non_empty_string(&mut builder, &self.identity.workspace_id);
+        let launch_id = non_empty_string(&mut builder, &self.identity.launch_id);
+        let instance_id = non_empty_string(&mut builder, &self.identity.instance_id);
         let header = SnapshotHeader::create(
             &mut builder,
             &SnapshotHeaderArgs {
@@ -222,9 +265,9 @@ impl MmapOrderBookSnapshotPublisher {
                 view_key: Some(view_key),
                 owner_actor_id: Some(actor_id),
                 event_stream_id: Some(stream),
-                workspace_id: None,
-                launch_id: None,
-                instance_id: None,
+                workspace_id,
+                launch_id,
+                instance_id,
                 event_sequence,
                 version: generation,
                 generation,
@@ -245,6 +288,13 @@ impl MmapOrderBookSnapshotPublisher {
             .publish(generation, builder.finished_data())
             .map_err(|error| error.to_string())
     }
+}
+
+fn non_empty_string<'a, 'b, A: flatbuffers::Allocator + 'a>(
+    builder: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+    value: &str,
+) -> Option<flatbuffers::WIPOffset<&'a str>> {
+    (!value.is_empty()).then(|| builder.create_string(value))
 }
 
 fn encode_levels<'a, 'b, A: flatbuffers::Allocator + 'a>(

@@ -1,7 +1,10 @@
 pub mod backtest;
-pub mod protocol;
+mod process;
+pub(crate) mod protocol;
 mod service;
 
+pub use process::ExecutionProcess;
+pub use protocol::ExecutionStateStore;
 pub use service::{
     CancelOrder, ExecuteIntent, ExecutionApplication, ExecutionAuditEvent, ExecutionAuditQuery,
     ExecutionError, ExecutionEvent, ExecutionFillReport, ExecutionOrderOptions, ExecutionSnapshot,
@@ -12,10 +15,9 @@ pub use backtest::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest,
 };
 
-pub trait ExecutionOrderQuery: Send {
-    fn open_orders(&mut self, query: &RemoteOrderQuery) -> Result<Vec<RemoteOrder>, String>;
-    fn history(&mut self, query: &RemoteOrderQuery) -> Result<Vec<RemoteOrder>, String>;
-    fn detail(&mut self, query: &RemoteOrderQuery) -> Result<Option<RemoteOrder>, String>;
+pub trait ExecutionAuditSink: Send {
+    fn publish(&mut self, event: &ExecutionEvent) -> Result<(), String>;
+    fn query(&mut self, query: &ExecutionAuditQuery) -> Result<Vec<ExecutionAuditEvent>, String>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -30,8 +32,4 @@ pub struct RemoteExecutionEvent {
     pub fee_amount: Option<String>,
     pub occurred_at_unix_nanos: u64,
     pub reason: String,
-}
-
-pub trait ExecutionStream: Send {
-    fn next_event(&mut self) -> Result<Option<RemoteExecutionEvent>, String>;
 }

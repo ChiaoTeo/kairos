@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import subprocess
@@ -12,34 +11,29 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .supervisor import ProcessSpec, ProcessState, ProcessSupervisor, UnixRestClient
+from .clients import (
+    AccountSystemClient,
+    ExecutionSystemClient,
+    MarketSystemClient,
+    ReferenceSystemClient,
+    RiskSystemClient,
+    SystemRestClient,
+)
 from .reference import ReferenceProcessConfig
 from .binaries import resolve_binary
 from .risk import RiskProcessConfig
 
 
 @dataclass(frozen=True, slots=True)
-class ComponentControlApplication:
-    """Application facade for a component-owned Unix REST control socket."""
+class ComponentControlApplication(SystemRestClient):
+    """Compatibility facade for generic system control.
 
-    socket_path: Path
-
-    def request(self, method: str, path: str, body: bytes | None = None) -> dict[str, Any]:
-        return asyncio.run(UnixRestClient(self.socket_path).request(method, path, body))
-
-    def status(self) -> dict[str, Any]:
-        return self.request("GET", "/v1/health")
-
-    def snapshot(self) -> dict[str, Any]:
-        return self.request("GET", "/v1/snapshot")
-
-    def refresh(self) -> dict[str, Any]:
-        return self.request("POST", "/v1/refresh")
-
-    def stop(self) -> dict[str, Any]:
-        return self.request("POST", "/v1/stop")
+    New business calls should use the typed ``*SystemClient`` classes.  This
+    generic facade remains for system-level component inspection and the
+    control aggregator, where no business endpoint is being modeled.
+    """
 
     def command(self, component: str, command: dict[str, Any]) -> dict[str, Any]:
-        import json
         payload = json.dumps(command, separators=(",", ":")).encode("utf-8")
         return self.request("POST", f"/v1/components/{component}/commands", payload)
 
@@ -59,12 +53,16 @@ class ComponentProcessApplication:
         account_id: str | None = None,
         reference_config: ReferenceProcessConfig | None = None,
         market_provider: str | None = None,
+        market_credential_id: str | None = None,
         market_replay_file: Path | None = None,
+        provider: str | None = None,
+        product: str | None = None,
+        confirm_live: bool = False,
         instance_workspace: Any | None = None,
-    ) -> ComponentControlApplication:
+    ) -> SystemRestClient:
         runtime = instance_workspace
         socket = runtime.socket(component) if runtime is not None else self.workspace.paths.process_socket(component)
-        control = ComponentControlApplication(socket)
+        control = self.client(component, socket)
         try:
             health = control.status()
             if health.get("status") in {"ok", "ready", "running"}:
@@ -77,7 +75,11 @@ class ComponentProcessApplication:
             account_id=account_id,
             reference_config=reference_config,
             market_provider=market_provider,
+            market_credential_id=market_credential_id,
             market_replay_file=market_replay_file,
+            provider=provider,
+            product=product,
+            confirm_live=confirm_live,
             instance_workspace=runtime,
         )
         log_dir = runtime.log("processes") if runtime is not None else self.workspace.paths.logs / "processes"
@@ -97,11 +99,22 @@ class ComponentProcessApplication:
             log.close()
         return self._wait_ready(component, control)
 
+    @staticmethod
+    def client(component: str, socket: Path) -> SystemRestClient:
+        clients = {
+            "account": AccountSystemClient,
+            "execution": ExecutionSystemClient,
+            "market": MarketSystemClient,
+            "reference": ReferenceSystemClient,
+            "risk": RiskSystemClient,
+        }
+        return clients.get(component, ComponentControlApplication)(socket)
+
     def stop(self, component: str, *, instance_workspace: Any | None = None) -> dict[str, Any]:
         socket = instance_workspace.socket(component) if instance_workspace is not None else self.workspace.paths.process_socket(component)
         if not socket.exists():
             return {"component": component, "status": "not_running", "control_socket": str(socket)}
-        return ComponentControlApplication(socket).stop()
+        return self.client(component, socket).stop()
 
     def status(self, component: str, *, instance_workspace: Any | None = None) -> dict[str, Any]:
         socket = instance_workspace.socket(component) if instance_workspace is not None else self.workspace.paths.process_socket(component)
@@ -111,7 +124,7 @@ class ComponentProcessApplication:
                 "status": "not_running",
                 "control_socket": str(socket),
             }
-        return ComponentControlApplication(socket).status()
+        return self.client(component, socket).status()
 
     def _command(
         self,
@@ -120,7 +133,11 @@ class ComponentProcessApplication:
         account_id: str | None,
         reference_config: ReferenceProcessConfig | None = None,
         market_provider: str | None = None,
+        market_credential_id: str | None = None,
         market_replay_file: Path | None = None,
+        provider: str | None = None,
+        product: str | None = None,
+        confirm_live: bool = False,
         instance_workspace: Any | None = None,
     ) -> tuple[list[str], Mapping[str, str]]:
         if component == "reference":
@@ -149,16 +166,27 @@ class ComponentProcessApplication:
         child_environment: dict[str, str] = {}
         if component == "market" and market_provider is not None:
             command.extend(("--provider", market_provider))
+            if market_credential_id is not None:
+                command.extend(("--credential-id", market_credential_id))
             if market_replay_file is not None:
                 command.extend(("--replay-file", str(market_replay_file)))
+        if component == "execution":
+            if provider is not None:
+                command.extend(("--provider", provider))
+            if product is not None:
+                command.extend(("--product", product))
+            if confirm_live:
+                command.append("--confirm-live")
         if component == "account":
             resolved_account = account_id or os.environ.get("KAIROS_ACCOUNT_ID")
             if not resolved_account:
                 raise RuntimeError("account process requires --account-id or KAIROS_ACCOUNT_ID")
             command.extend(("--account-id", resolved_account))
+            if provider is not None:
+                command.extend(("--provider", provider))
         return command, child_environment
 
-    def _wait_ready(self, component: str, control: ComponentControlApplication) -> ComponentControlApplication:
+    def _wait_ready(self, component: str, control: SystemRestClient) -> SystemRestClient:
         deadline = time.monotonic() + self.ready_timeout
         while True:
             try:
@@ -231,6 +259,12 @@ __all__ = [
     "ProcessState",
     "ProcessSupervisor",
     "UnixRestClient",
+    "SystemRestClient",
+    "AccountSystemClient",
+    "ExecutionSystemClient",
+    "MarketSystemClient",
+    "ReferenceSystemClient",
+    "RiskSystemClient",
     "ReferenceProcessConfig",
     "RiskProcessConfig",
     "ComponentControlApplication",

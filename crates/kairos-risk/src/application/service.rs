@@ -1,4 +1,4 @@
-use crate::application::protocol::{RiskPublisher, RiskStateStore};
+use crate::application::protocol::RiskStateStore;
 use crate::domain::{Amount, Budget, Metric, Reservation, Usage};
 use crate::services::actor::RiskActor;
 
@@ -47,7 +47,7 @@ pub enum RiskEvent {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RiskSnapshot {
     pub actor_id: String,
     pub generation: u64,
@@ -62,8 +62,6 @@ pub enum RiskError {
     Invalid(String),
     #[error("risk state failed: {0}")]
     State(String),
-    #[error("risk publication failed: {0}")]
-    Publication(String),
     #[error("risk request rejected: {0}")]
     Rejected(String),
 }
@@ -82,19 +80,10 @@ impl RiskApplication {
         budgets: Vec<Budget>,
         allow_unbudgeted: bool,
         store: Option<Box<dyn RiskStateStore>>,
-        publisher: Option<Box<dyn RiskPublisher>>,
-        events: Option<Box<dyn crate::application::protocol::RiskEventSink>>,
     ) -> Result<Self, RiskError> {
-        RiskActor::new(
-            actor_id,
-            budgets,
-            allow_unbudgeted,
-            store,
-            publisher,
-            events,
-        )
-        .map(Self::new)
-        .map_err(RiskError::Invalid)
+        RiskActor::new(actor_id, budgets, allow_unbudgeted, store)
+            .map(Self::new)
+            .map_err(RiskError::Invalid)
     }
 
     pub fn configure(&mut self, request: ConfigureBudgets) -> Result<(), RiskError> {
@@ -135,5 +124,9 @@ impl RiskApplication {
 
     pub fn snapshot(&self) -> RiskSnapshot {
         self.actor.snapshot()
+    }
+
+    pub fn drain_events(&mut self) -> Vec<RiskEvent> {
+        self.actor.drain_events()
     }
 }

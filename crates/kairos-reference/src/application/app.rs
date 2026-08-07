@@ -7,7 +7,7 @@
 use crate::domain::LifecycleEvent;
 use crate::domain::{Asset, Market, ReferenceError, ReferenceResult};
 
-use crate::application::protocol::{CatalogStore, ReferenceSource, SnapshotPublisher};
+use crate::application::protocol::{CatalogStore, ReferenceSource};
 use crate::application::queries::{
     MarketQuery, ReferenceKind, ReferenceQuery, ReferenceReader, ReferenceRecord,
 };
@@ -30,10 +30,9 @@ impl ReferenceApplication {
         actor_id: impl Into<String>,
         source: Box<dyn ReferenceSource>,
         store: Box<dyn CatalogStore>,
-        publisher: Box<dyn SnapshotPublisher>,
     ) -> ReferenceResult<Self> {
         Ok(Self {
-            actor: ReferenceActor::new(actor_id, source, store, publisher)?,
+            actor: ReferenceActor::new(actor_id, source, store)?,
         })
     }
 
@@ -53,11 +52,6 @@ impl ReferenceApplication {
             event_sequence: result.event_sequence,
             events: result.events,
         })
-    }
-
-    /// Publish the current catalog without fetching provider data.
-    pub fn publish(&mut self) -> ReferenceResult<u64> {
-        self.actor.publish().map(|_| self.actor.catalog.generation)
     }
 
     pub fn upsert_asset(&mut self, asset: Asset) -> ReferenceResult<u64> {

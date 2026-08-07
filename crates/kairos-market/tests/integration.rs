@@ -1,5 +1,7 @@
 use kairos_market::composition::binance_spot_rest_feed;
-use kairos_market::{MarketActor, MarketObservation, MmapMarketSnapshotPublisher, Quote};
+use kairos_market::composition::{MarketActor, MmapMarketSnapshotPublisher};
+use kairos_market::{MarketObservation, Quote};
+use kairos_protocol::InstanceIdentity;
 use kairos_transport::SharedSnapshotReader;
 
 #[test]
@@ -25,14 +27,23 @@ fn market_snapshot_publishes_through_shared_memory_reader() {
             source_id: "binance".into(),
         }))
         .unwrap();
-    let mut publisher =
-        MmapMarketSnapshotPublisher::create(&path, 64 * 1024, "market-1", "market.events").unwrap();
+    let mut publisher = MmapMarketSnapshotPublisher::create_with_identity(
+        &path,
+        64 * 1024,
+        "market-1",
+        "market.events",
+        InstanceIdentity::new("demo", "btc-sma", "run-001"),
+    )
+    .unwrap();
     publisher.publish(&actor.snapshot()).unwrap();
     let snapshot = SharedSnapshotReader::open(path)
         .unwrap()
         .read_market_data()
         .unwrap();
     assert_eq!(snapshot.owner_actor_id, "market-1");
+    assert_eq!(snapshot.workspace_id.as_deref(), Some("demo"));
+    assert_eq!(snapshot.launch_id.as_deref(), Some("btc-sma"));
+    assert_eq!(snapshot.instance_id.as_deref(), Some("run-001"));
     assert_eq!(snapshot.item_count, 1);
     assert_eq!(
         snapshot.first_instrument_id.as_deref(),

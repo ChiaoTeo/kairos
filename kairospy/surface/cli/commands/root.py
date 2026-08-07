@@ -229,7 +229,17 @@ def _market_remote_action(action: str):
         output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
     ) -> None:
         owner = WorkspaceApplication().open(workspace)
-        value = MarketCliApplication(owner).run([action], remote=True)
+        client = ComponentProcessApplication(owner).ensure_running("market")
+        operation = {
+            "status": client.status,
+            "snapshot": client.snapshot,
+            "refresh": client.refresh,
+            "recover": client.recover,
+            "stop": client.stop,
+        }.get(action)
+        if operation is None:
+            raise typer.BadParameter(f"unsupported remote market action: {action}")
+        value = operation()
         _emit(value, output)
 
     command.__name__ = f"market_{action}"
@@ -440,7 +450,7 @@ market_stream_app = _add_group(market_app, "stream", ("replay", "watch", "persis
 def _market_source(action: str):
     def command(workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
         owner = WorkspaceApplication().open(workspace)
-        value = MarketCliApplication(owner).run(["status"], remote=True)
+        value = ComponentProcessApplication(owner).ensure_running("market").status()
         value["operation"] = action
         _emit(value, output)
     command.__name__ = f"market_source_{action}"

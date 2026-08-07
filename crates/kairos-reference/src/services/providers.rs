@@ -9,9 +9,7 @@ use kairos_integration::application::{
 use kairos_integration::ccxt::CcxtMarketClient;
 use kairos_integration::{ConnectionSpec, Integration};
 
-use crate::application::protocol::{
-    CatalogStore, PublishedSnapshots, ReferenceSource, SnapshotPublisher,
-};
+use crate::application::protocol::{CatalogStore, ReferenceSource};
 use crate::domain::{
     Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceCatalog, ReferenceError,
     ReferenceResult,
@@ -389,20 +387,5 @@ impl CatalogStore for MemoryCatalogStore {
     fn save(&mut self, catalog: &ReferenceCatalog) -> ReferenceResult<()> {
         self.0 = Some(catalog.clone());
         Ok(())
-    }
-}
-
-pub struct MemoryPublisher(pub Option<PublishedSnapshots>);
-
-impl SnapshotPublisher for MemoryPublisher {
-    fn publish(&mut self, catalog: &ReferenceCatalog) -> ReferenceResult<PublishedSnapshots> {
-        let result = PublishedSnapshots {
-            catalog: serde_json::to_vec(catalog)
-                .map_err(|e| ReferenceError::Publication(e.to_string()))?,
-            markets: Vec::new(),
-            lifecycle: Vec::new(),
-        };
-        self.0 = Some(result.clone());
-        Ok(result)
     }
 }

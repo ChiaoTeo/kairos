@@ -1,6 +1,7 @@
 //! Binance Equity gateway family.
 
 pub mod client;
+pub mod market_stream;
 pub mod normalizers;
 pub mod order;
 pub mod query;

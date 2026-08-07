@@ -1,7 +1,7 @@
 //! Reference business boundary.
 
 pub mod application;
-pub mod cli;
+pub mod composition;
 pub mod domain;
 mod services;
 

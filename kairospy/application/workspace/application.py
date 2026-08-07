@@ -3,6 +3,7 @@ from __future__ import annotations
 import tomllib
 import os
 from pathlib import Path
+from typing import Any, Mapping
 
 from .domain import Workspace, WorkspaceIdentity, WorkspacePaths
 
@@ -45,6 +46,7 @@ class WorkspaceApplication:
         for directory in (workspace.paths.config, workspace.paths.config / "launches", workspace.paths.state, workspace.paths.run,
                           workspace.paths.logs, workspace.paths.launches,
                           workspace.paths.data_root(), workspace.paths.reference_root(),
+                          workspace.paths.market_connections_root(),
                           workspace.paths.orders_root(),
                           workspace.paths.operations_journal().parent,
                           workspace.paths.launch_index().parent,
@@ -81,6 +83,7 @@ class WorkspaceApplication:
         for directory in (workspace.paths.config, workspace.paths.config / "launches", workspace.paths.state, workspace.paths.run,
                           workspace.paths.logs, workspace.paths.launches,
                           workspace.paths.data_root(), workspace.paths.reference_root(),
+                          workspace.paths.market_connections_root(),
                           workspace.paths.orders_root(), workspace.paths.account_config().parent,
                           workspace.paths.credential_config().parent,
                           workspace.paths.account_state().parent, workspace.paths.account_log().parent,
@@ -119,3 +122,27 @@ class WorkspaceApplication:
             launches=root_path / "launches",
         )
         return Workspace(identity, paths, cli_format=cli_format)
+
+    def market_connection(self, workspace: Workspace, connection_id: str) -> dict[str, Any]:
+        """Resolve a Workspace-owned Market connection profile."""
+        connection_id = connection_id.strip()
+        if not connection_id or any(
+            part in {"", ".", ".."}
+            for part in connection_id.replace("\\", "/").split("/")
+        ):
+            raise ValueError("market connection id must be a path-safe name")
+        values = tomllib.loads(workspace.paths.manifest.read_text(encoding="utf-8"))
+        market = values.get("market", {})
+        connections = market.get("connections", {}) if isinstance(market, Mapping) else {}
+        if isinstance(connections, Mapping):
+            configured = connections.get(connection_id)
+            if isinstance(configured, Mapping):
+                return dict(configured)
+
+        profile = workspace.paths.market_connections_root() / f"{connection_id}.toml"
+        if profile.is_file():
+            value = tomllib.loads(profile.read_text(encoding="utf-8"))
+            configured = value.get("connection", value)
+            if isinstance(configured, Mapping):
+                return dict(configured)
+        raise KeyError(f"market connection does not exist: {connection_id}")

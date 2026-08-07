@@ -8,6 +8,7 @@ import pytest
 from kairospy.application.launch.application import LaunchConfigError, LaunchConfigurationApplication
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
+from kairospy.surface.cli.commands.launch import _launch_config_path
 from io import StringIO
 
 
@@ -93,6 +94,61 @@ def test_mode_plan_resolves_backtest_paths_and_defaults_execution(tmp_path: Path
     assert plan.execution["dry_run"] is True
 
 
+def test_backtest_plan_resolves_instance_replay_source(tmp_path: Path) -> None:
+    config = tmp_path / "backtest.toml"
+    config.write_text(
+        """[launch]
+id = "backtest"
+mode = "backtest"
+strategy = "strategy:Factory"
+
+[account]
+ref = "simulated"
+
+[backtest]
+data_root = "data"
+
+[backtest.market]
+start = "2024-01-01T00:00:00Z"
+end = "2024-01-02T00:00:00Z"
+events = "data/events.jsonl"
+""",
+        encoding="utf-8",
+    )
+    plan = LaunchConfigurationApplication().load(config, workspace_root=tmp_path).plan()
+    assert plan.backtest_replay_file == (tmp_path / "data/events.jsonl").resolve()
+
+
+def test_live_market_scope_defaults_shared_and_can_be_instance_local(tmp_path: Path) -> None:
+    config = tmp_path / "live.toml"
+    config.write_text(
+        '[launch]\nid = "live"\nmode = "live"\nstrategy = "strategy:Factory"\n\n'
+        '[account]\nref = "live-account"\n\n'
+        '[live.market]\nscope = "instance"\n\n'
+        '[live.safety]\ntrading_enabled = false\n',
+        encoding="utf-8",
+    )
+    plan = LaunchConfigurationApplication().load(config, workspace_root=tmp_path).plan()
+    assert plan.market_scope == "instance"
+
+    config.write_text(config.read_text(encoding="utf-8").replace('scope = "instance"\n', ""), encoding="utf-8")
+    assert LaunchConfigurationApplication().load(config, workspace_root=tmp_path).plan().market_scope == "shared"
+
+
+def test_replay_market_cannot_use_shared_scope(tmp_path: Path) -> None:
+    config = tmp_path / "replay.toml"
+    config.write_text(
+        '[launch]\nid = "replay"\nmode = "paper"\nstrategy = "strategy:Factory"\n\n'
+        '[account]\nref = "paper-account"\n\n'
+        '[paper]\nevents = "events.jsonl"\n\n'
+        '[paper.market]\nscope = "shared"\n',
+        encoding="utf-8",
+    )
+    report = LaunchConfigurationApplication().validate(config, workspace_root=tmp_path)
+    assert report["valid"] is False
+    assert "paper.market.scope must be instance" in " ".join(report["issues"])
+
+
 def test_launch_diagnose_reads_workspace_launch_toml(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="launch")
     config_dir = workspace.paths.config / "launches"
@@ -105,3 +161,11 @@ def test_launch_diagnose_reads_workspace_launch_toml(tmp_path: Path) -> None:
         output,
     ) == 0
     assert '"valid": true' in output.getvalue()
+
+
+def test_launch_id_resolves_workspace_owned_config_without_explicit_path(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="launch")
+    config = workspace.paths.launch_config("demo-launch")
+    _write_config(config)
+
+    assert _launch_config_path(workspace, "demo-launch") == config

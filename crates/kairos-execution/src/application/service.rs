@@ -4,8 +4,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use super::protocol::ExecutionStateStore;
-use super::{ExecutionOrderQuery, ExecutionStream, RemoteExecutionEvent};
+use super::RemoteExecutionEvent;
 use crate::domain::{ExecutionFill, ExecutionOrder, ExecutionOrderStatus, OrderSide, OrderType};
+use kairos_integration::application::{
+    ExecutionStreamConnection, ExternalOrderQuery, OrderQueryConnection,
+};
 use kairos_integration::domain::{
     OrderEntryOptions as ConnectionOrderEntryOptions, OrderSide as ConnectionOrderSide,
     OrderType as ConnectionOrderType, TimeInForce,
@@ -175,8 +178,8 @@ pub struct ExecutionApplication {
     pending_events: Vec<ExecutionEvent>,
     fills: Vec<ExecutionFill>,
     order_entry: Option<Box<dyn OrderEntryConnection>>,
-    order_query: Option<Box<dyn ExecutionOrderQuery>>,
-    execution_stream: Option<Box<dyn ExecutionStream>>,
+    order_query: Option<Box<dyn OrderQueryConnection>>,
+    execution_stream: Option<Box<dyn ExecutionStreamConnection>>,
     store: Option<Box<dyn ExecutionStateStore>>,
     live_trading: bool,
     live_confirmed: bool,
@@ -194,7 +197,7 @@ impl ExecutionApplication {
     pub fn with_dependencies_and_query(
         actor_id: impl Into<String>,
         order_entry: Option<Box<dyn OrderEntryConnection>>,
-        order_query: Option<Box<dyn ExecutionOrderQuery>>,
+        order_query: Option<Box<dyn OrderQueryConnection>>,
         store: Option<Box<dyn ExecutionStateStore>>,
     ) -> Result<Self, ExecutionError> {
         Self::with_dependencies_and_query_and_stream(
@@ -209,8 +212,8 @@ impl ExecutionApplication {
     pub fn with_dependencies_and_query_and_stream(
         actor_id: impl Into<String>,
         order_entry: Option<Box<dyn OrderEntryConnection>>,
-        order_query: Option<Box<dyn ExecutionOrderQuery>>,
-        execution_stream: Option<Box<dyn ExecutionStream>>,
+        order_query: Option<Box<dyn OrderQueryConnection>>,
+        execution_stream: Option<Box<dyn ExecutionStreamConnection>>,
         store: Option<Box<dyn ExecutionStateStore>>,
     ) -> Result<Self, ExecutionError> {
         let actor_id = actor_id.into();
@@ -256,7 +259,13 @@ impl ExecutionApplication {
         self.order_query
             .as_mut()
             .ok_or_else(|| ExecutionError::Gateway("remote order query is not configured".into()))?
-            .open_orders(&query)
+            .open_orders(&ExternalOrderQuery {
+                symbol: query.symbol,
+                order_id: query.order_id,
+                limit: query.limit,
+                since_unix_millis: query.since_unix_millis,
+            })
+            .map(|orders| orders.into_iter().map(remote_order).collect())
             .map_err(ExecutionError::Gateway)
     }
 
@@ -267,7 +276,13 @@ impl ExecutionApplication {
         self.order_query
             .as_mut()
             .ok_or_else(|| ExecutionError::Gateway("remote order query is not configured".into()))?
-            .history(&query)
+            .order_history(&ExternalOrderQuery {
+                symbol: query.symbol,
+                order_id: query.order_id,
+                limit: query.limit,
+                since_unix_millis: query.since_unix_millis,
+            })
+            .map(|orders| orders.into_iter().map(remote_order).collect())
             .map_err(ExecutionError::Gateway)
     }
 
@@ -278,7 +293,13 @@ impl ExecutionApplication {
         self.order_query
             .as_mut()
             .ok_or_else(|| ExecutionError::Gateway("remote order query is not configured".into()))?
-            .detail(&query)
+            .order_detail(&ExternalOrderQuery {
+                symbol: query.symbol,
+                order_id: query.order_id,
+                limit: query.limit,
+                since_unix_millis: query.since_unix_millis,
+            })
+            .map(|order| order.map(remote_order))
             .map_err(ExecutionError::Gateway)
     }
 
@@ -288,7 +309,8 @@ impl ExecutionApplication {
         self.execution_stream
             .as_mut()
             .ok_or_else(|| ExecutionError::Gateway("execution stream is not configured".into()))?
-            .next_event()
+            .next_execution_event()
+            .map(|event| event.map(remote_execution_event))
             .map_err(ExecutionError::Gateway)
     }
 
@@ -850,6 +872,61 @@ fn now_nanos() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64
+}
+
+fn remote_order(order: kairos_integration::application::ExternalOrder) -> RemoteOrder {
+    RemoteOrder {
+        order_id: order.order_id,
+        client_order_id: order.client_order_id,
+        symbol: order.symbol,
+        side: match order.side {
+            kairos_integration::domain::OrderSide::Buy => OrderSide::Buy,
+            kairos_integration::domain::OrderSide::Sell => OrderSide::Sell,
+        },
+        order_type: match order.order_type {
+            kairos_integration::domain::OrderType::Market => OrderType::Market,
+            _ => OrderType::Limit,
+        },
+        status: order.status,
+        quantity: format_decimal(order.quantity),
+        filled_quantity: format_decimal(order.filled_quantity),
+        average_fill_price: order.average_fill_price.map(format_decimal),
+        occurred_at_unix_millis: order.occurred_at_unix_millis,
+    }
+}
+
+fn remote_execution_event(
+    event: kairos_integration::application::ExternalExecutionEvent,
+) -> RemoteExecutionEvent {
+    RemoteExecutionEvent {
+        order_id: event.order_id,
+        symbol: event.symbol,
+        status: event.status,
+        fill_quantity: event.fill_quantity.map(format_decimal),
+        fill_price: event.fill_price.map(format_decimal),
+        execution_id: event.execution_id,
+        fee_currency: event.fee_currency,
+        fee_amount: event.fee_amount.map(format_decimal),
+        occurred_at_unix_nanos: event.occurred_at_unix_nanos,
+        reason: event.reason,
+    }
+}
+
+fn format_decimal(value: kairos_integration::domain::DecimalValue) -> String {
+    if value.scale == 0 {
+        return value.mantissa.to_string();
+    }
+    let negative = value.mantissa < 0;
+    let digits = value.mantissa.unsigned_abs().to_string();
+    let scale = value.scale as usize;
+    let padded = format!("{digits:0>width$}", width = scale + 1);
+    let split = padded.len() - scale;
+    format!(
+        "{}{}.{}",
+        if negative { "-" } else { "" },
+        &padded[..split],
+        &padded[split..]
+    )
 }
 
 fn parse_decimal(value: &str) -> Result<(i64, u8), ExecutionError> {

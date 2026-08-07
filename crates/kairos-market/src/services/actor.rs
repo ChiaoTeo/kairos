@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::application::market::protocol::{MarketEventPublisher, MarketFeed};
+use crate::application::protocol::MarketFeed;
 use crate::domain::freshness::FeedStatus;
 use crate::domain::market::{MarketDescriptor, MarketSelectionQuery};
 use crate::domain::observations::MarketObservation;
@@ -56,7 +56,7 @@ pub struct MarketActor {
     max_dynamic_members: usize,
     feed: Option<Box<dyn MarketFeed>>,
     provider_subscriptions: BTreeMap<(SubscriptionId, String), SubscriptionId>,
-    event_publisher: Option<Box<dyn MarketEventPublisher>>,
+    pending_events: Vec<(u64, MarketObservation)>,
     reference_generation: u64,
     reference_event_sequence: u64,
     feed_status: FeedStatus,
@@ -85,7 +85,7 @@ impl MarketActor {
             feed_status: FeedStatus::Disconnected,
             feed: None,
             provider_subscriptions: BTreeMap::new(),
-            event_publisher: None,
+            pending_events: Vec::new(),
         })
     }
 
@@ -100,10 +100,6 @@ impl MarketActor {
 
     pub fn feed_status(&self) -> FeedStatus {
         self.feed_status
-    }
-
-    pub fn attach_event_publisher(&mut self, publisher: Box<dyn MarketEventPublisher>) {
-        self.event_publisher = Some(publisher);
     }
 
     pub fn subscribe_static(
@@ -330,11 +326,17 @@ impl MarketActor {
             self.feed_status = FeedStatus::Ready;
         }
         self.event_sequence += 1;
-        if let Some(publisher) = self.event_publisher.as_mut() {
-            let value = self.latest.get(&market_id).expect("observation exists");
-            publisher.publish(self.event_sequence, value)?;
-        }
+        let value = self
+            .latest
+            .get(&market_id)
+            .expect("observation exists")
+            .clone();
+        self.pending_events.push((self.event_sequence, value));
         Ok(self.event_sequence)
+    }
+
+    pub fn drain_events(&mut self) -> Vec<(u64, MarketObservation)> {
+        std::mem::take(&mut self.pending_events)
     }
 
     pub fn poll_feed(&mut self) -> Result<usize, String> {

@@ -117,8 +117,10 @@ def test_massive_reference_spec_keeps_credentials_out_of_command_line(tmp_path: 
 
 def test_risk_process_spec_contains_only_process_controls(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace")
+    instance = workspace.instance("paper", "demo", "run-001")
     spec = RiskProcessConfig(
         workspace=workspace,
+        instance_workspace=instance,
     ).process_spec()
     assert spec.name == "risk"
     assert spec.command[:2] == ("kairos-risk", "--workspace")
@@ -126,7 +128,7 @@ def test_risk_process_spec_contains_only_process_controls(tmp_path: Path) -> Non
     assert "--interval-ms" in spec.command
     assert "--socket" not in spec.command
     assert "--health" not in spec.command
-    assert spec.control_socket == workspace.paths.risk_socket()
+    assert spec.control_socket == instance.socket("risk")
 
 
 def test_unix_rest_client_round_trips_http_over_socket(tmp_path: Path) -> None:

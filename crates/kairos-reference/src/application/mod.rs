@@ -2,9 +2,9 @@
 
 mod app;
 pub mod control;
-pub mod protocol;
+pub(crate) mod protocol;
 mod queries;
-pub mod runtime;
 
 pub use app::{ReferenceApplication, ReferenceRefreshResult};
+pub use protocol::{CatalogStore, PublishedSnapshots, ReferenceSource};
 pub use queries::{MarketQuery, ReferenceKind, ReferenceQuery, ReferenceReader, ReferenceRecord};

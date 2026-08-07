@@ -1,9 +1,10 @@
 use flatbuffers::FlatBufferBuilder;
-use kairos_market::application::market::protocol::MarketFeed;
-use kairos_market::application::market::wire::decode_reference_changed;
+use kairos_market::application::wire::decode_reference_changed;
+use kairos_market::application::MarketFeed;
+use kairos_market::composition::MarketActor;
 use kairos_market::{
-    MarketActor, MarketDescriptor, MarketObservation, MarketSelectionQuery, Quote,
-    ReferenceChanged, SubscriptionId,
+    MarketDescriptor, MarketObservation, MarketSelectionQuery, Quote, ReferenceChanged,
+    SubscriptionId,
 };
 use kairos_protocol::generated::kairos::common::v_1::{MessageHeader, MessageHeaderArgs};
 use kairos_protocol::generated::kairos::reference::v_1::{

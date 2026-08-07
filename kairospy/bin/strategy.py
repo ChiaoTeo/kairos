@@ -18,7 +18,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--launch-id", required=True)
     parser.add_argument("--instance-id", "--instance", dest="instance_id", required=True)
     parser.add_argument("--mode", default="paper")
-    parser.add_argument("--strategy-root", type=Path)
     parser.add_argument("--params", default="{}", help="JSON object passed to the strategy factory")
     return parser
 
@@ -38,7 +37,6 @@ async def _run(args: argparse.Namespace) -> None:
         launch_id=args.launch_id,
         instance_id=args.instance_id,
         mode=args.mode,
-        strategy_root=args.strategy_root,
         params=_params(args.params),
     )
     await composition.control.start()

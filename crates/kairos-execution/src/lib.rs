@@ -13,12 +13,11 @@ mod services;
 pub use application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest,
     CancelOrder, ExecuteIntent, ExecutionApplication, ExecutionAuditEvent, ExecutionAuditQuery,
-    ExecutionError, ExecutionEvent, ExecutionFillReport, ExecutionOrderOptions, ExecutionSnapshot,
-    ReplaceOrder, SubmitOrder,
+    ExecutionAuditSink, ExecutionError, ExecutionEvent, ExecutionFillReport, ExecutionOrderOptions,
+    ExecutionProcess, ExecutionSnapshot, ReplaceOrder, SubmitOrder,
 };
 pub use composition::{
     compose_order_entry, ExecutionConnectionOptions, FileExecutionStore, SimulatedOrderEntry,
     SqliteExecutionAudit,
 };
 pub use domain::{ExecutionFill, ExecutionOrder, ExecutionOrderStatus, OrderSide, OrderType};
-pub use services::process::ExecutionProcess;

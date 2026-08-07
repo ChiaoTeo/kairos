@@ -1,7 +1,6 @@
 use kairos_execution::application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestRequest, CancelOrder,
-    ExecuteIntent, ExecutionAuditQuery, ExecutionFillReport, ExecutionStream, RemoteExecutionEvent,
-    SubmitOrder,
+    ExecuteIntent, ExecutionAuditQuery, ExecutionFillReport, RemoteExecutionEvent, SubmitOrder,
 };
 use kairos_execution::composition::{
     compose_order_entry, ExecutionConnectionOptions, FileExecutionStore,
@@ -11,7 +10,9 @@ use kairos_execution::{
     ExecutionApplication, ExecutionEvent, ExecutionOrderStatus, OrderSide, OrderType,
     SqliteExecutionAudit,
 };
-use kairos_integration::application::{Connection, OrderEntryConnection};
+use kairos_integration::application::{
+    Connection, ExecutionStreamConnection, ExternalExecutionEvent, OrderEntryConnection,
+};
 use kairos_integration::domain::{
     AccessScope, ConnectionHealth, ConnectionIdentity, ConnectionLifecycle, ConnectionSpec,
     ConnectionState, IntegrationCapability, OrderEntryEvent, OrderEntryRequest, ProductFamily,
@@ -113,11 +114,95 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
     .unwrap()
 }
 
-struct OneExecutionEvent(Option<RemoteExecutionEvent>);
+struct OneExecutionEvent {
+    event: Option<ExternalExecutionEvent>,
+    state: ConnectionState,
+}
 
-impl ExecutionStream for OneExecutionEvent {
-    fn next_event(&mut self) -> Result<Option<RemoteExecutionEvent>, String> {
-        Ok(self.0.take())
+impl OneExecutionEvent {
+    fn new(event: RemoteExecutionEvent) -> Self {
+        let spec = ConnectionSpec {
+            connection_id: "execution.fixture.stream".into(),
+            provider: "fixture".into(),
+            product: Some(ProductFamily::Equity),
+            access: AccessScope::Private,
+            transport: TransportKind::Rest,
+            capability: IntegrationCapability::ExecutionStream,
+            credential_id: None,
+            asset_type: None,
+        };
+        let identity = ConnectionIdentity::new(
+            spec.connection_id,
+            spec.provider,
+            spec.product,
+            spec.access,
+            spec.transport,
+            spec.capability,
+        )
+        .unwrap();
+        Self {
+            event: Some(ExternalExecutionEvent {
+                order_id: event.order_id,
+                symbol: event.symbol,
+                status: event.status,
+                side: None,
+                order_type: None,
+                quantity: None,
+                limit_price: None,
+                filled_quantity: None,
+                remaining_quantity: None,
+                fill_quantity: event.fill_quantity.map(|value| decimal(&value)),
+                fill_price: event.fill_price.map(|value| decimal(&value)),
+                execution_id: event.execution_id,
+                fee_currency: event.fee_currency,
+                fee_amount: event.fee_amount.map(|value| decimal(&value)),
+                occurred_at_unix_nanos: event.occurred_at_unix_nanos,
+                reason: event.reason,
+            }),
+            state: ConnectionState::new(identity),
+        }
+    }
+}
+
+impl Connection for OneExecutionEvent {
+    fn identity(&self) -> &ConnectionIdentity {
+        &self.state.identity
+    }
+    fn state(&self) -> &ConnectionState {
+        &self.state
+    }
+    fn start(&mut self) -> Result<(), String> {
+        self.state.lifecycle = ConnectionLifecycle::Ready;
+        Ok(())
+    }
+    fn stop(&mut self) -> Result<(), String> {
+        self.state.lifecycle = ConnectionLifecycle::Stopped;
+        Ok(())
+    }
+    fn reconnect(&mut self) -> Result<(), String> {
+        self.start()
+    }
+    fn health(&self) -> ConnectionHealth {
+        ConnectionHealth {
+            lifecycle: self.state.lifecycle,
+            healthy: true,
+            authenticated: true,
+            last_error: None,
+        }
+    }
+}
+
+impl ExecutionStreamConnection for OneExecutionEvent {
+    fn next_execution_event(&mut self) -> Result<Option<ExternalExecutionEvent>, String> {
+        Ok(self.event.take())
+    }
+}
+
+fn decimal(value: &str) -> kairos_integration::domain::DecimalValue {
+    let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+    kairos_integration::domain::DecimalValue {
+        mantissa: format!("{whole}{fraction}").parse().unwrap(),
+        scale: fraction.len() as u8,
     }
 }
 
@@ -141,7 +226,7 @@ fn execution_stream_consumption_reconciles_a_remote_fill() {
         "execution",
         Some(connection),
         None,
-        Some(Box::new(OneExecutionEvent(Some(RemoteExecutionEvent {
+        Some(Box::new(OneExecutionEvent::new(RemoteExecutionEvent {
             order_id: "local-1".into(),
             symbol: "BTCUSDT".into(),
             status: "Filled".into(),
@@ -152,7 +237,7 @@ fn execution_stream_consumption_reconciles_a_remote_fill() {
             fee_amount: None,
             occurred_at_unix_nanos: 42,
             reason: String::new(),
-        })))),
+        }))),
         Some(Box::new(FileExecutionStore::new(&state))),
     )
     .unwrap();

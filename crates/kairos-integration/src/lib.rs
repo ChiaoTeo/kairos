@@ -5,6 +5,7 @@
 //! details behind the integration module boundary.
 
 pub mod application;
+pub mod credentials;
 pub mod domain;
 mod integration;
 pub mod protocol;

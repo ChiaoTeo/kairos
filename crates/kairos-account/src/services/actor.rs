@@ -1,10 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::application::account::protocol::{
-    AccountSnapshotSource, AccountStateStore, AccountStreamSource,
-};
-use crate::application::account::AccountsSnapshot;
-use crate::application::account::{AccountRefreshIssue, AccountRefreshReport};
+use crate::application::protocol::{AccountSnapshotSource, AccountStateStore, AccountStreamSource};
+use crate::application::AccountsSnapshot;
+use crate::application::{AccountRefreshIssue, AccountRefreshReport};
 use crate::domain::{
     Account, AccountEvent, AccountSegment, AccountSnapshot, AccountView, Balance, DecimalValue,
 };
@@ -341,7 +339,7 @@ fn refresh_issue(
 fn compare_snapshot(
     account: &Account,
     snapshot: &AccountSnapshot,
-) -> Vec<crate::application::account::AccountDifference> {
+) -> Vec<crate::application::AccountDifference> {
     let mut differences = Vec::new();
     let state = &account.state;
 
@@ -437,7 +435,7 @@ fn compare_snapshot(
 }
 
 fn compare_balance(
-    differences: &mut Vec<crate::application::account::AccountDifference>,
+    differences: &mut Vec<crate::application::AccountDifference>,
     key: String,
     local: Option<&Balance>,
     external: Option<&Balance>,
@@ -466,7 +464,7 @@ fn compare_balance(
 }
 
 fn compare_decimal(
-    differences: &mut Vec<crate::application::account::AccountDifference>,
+    differences: &mut Vec<crate::application::AccountDifference>,
     field: &str,
     key: String,
     local: Option<DecimalValue>,
@@ -475,7 +473,7 @@ fn compare_decimal(
     let local = local.unwrap_or_default();
     let external = external.unwrap_or_default();
     if (decimal_value(local) - decimal_value(external)).abs() > 0.00000001 {
-        differences.push(crate::application::account::AccountDifference {
+        differences.push(crate::application::AccountDifference {
             field: field.into(),
             key,
             local,

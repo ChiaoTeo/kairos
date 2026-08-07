@@ -1,4 +1,4 @@
-use crate::application::account::protocol::AccountStateStore;
+use crate::application::protocol::AccountStateStore;
 use crate::domain::{Account, AccountSegment, AccountState};
 use std::path::PathBuf;
 

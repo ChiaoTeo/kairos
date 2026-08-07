@@ -11,7 +11,6 @@ mod services;
 
 pub use application::{
     AssessRisk, ConfigureBudgets, ConsumeReservation, ReleaseReservation, ReserveRisk,
-    RiskApplication, RiskAssessment, RiskError, RiskEvent, RiskSnapshot,
+    RiskApplication, RiskAssessment, RiskError, RiskEvent, RiskProcess, RiskSnapshot,
 };
 pub use domain::{Amount, Budget, BudgetRef, Metric, Reservation, ReservationStatus, Usage};
-pub use services::process::RiskProcess;

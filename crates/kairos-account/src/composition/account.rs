@@ -2,16 +2,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use crate::application::account::protocol::{
+use crate::application::protocol::{
     AccountMarketProfileSource, AccountSnapshotSource, AccountStreamSource,
 };
-use crate::application::account::{
-    AccountApplication, AccountEvent, AccountFill, AccountMarketProfile,
-    AccountMarketProfileRequest, AccountModel, AccountSegment, AccountSnapshot, AccountStatus,
-    Balance, DecimalValue, ExternalAccountIdentity, OpenOrder, OrderEvent, OrderStatus, Position,
-};
+use crate::application::{AccountApplication, AccountMarketProfile, AccountMarketProfileRequest};
 use crate::composition::{empty_snapshot, InMemoryAccountSource, JsonAccountStore};
-use crate::domain::{MarginMode, PositionMode};
+use crate::domain::{
+    AccountEvent, AccountFill, AccountModel, AccountSegment, AccountSnapshot, AccountStatus,
+    Balance, DecimalValue, ExternalAccountIdentity, MarginMode, OpenOrder, OrderEvent, OrderStatus,
+    Position, PositionMode,
+};
 use kairos_integration::application::{
     AccountMarketProfileConnection, AccountReadConnection, BufferedIntegrationAccountStream,
     ConnectionSpec, EarnConnection, ExternalAccountCredentialProfile, ExternalMarketProfileRequest,

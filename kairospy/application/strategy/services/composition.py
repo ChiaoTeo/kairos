@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import os
-from pathlib import Path
 from typing import Mapping
 
 from kairospy.application.workspace import Workspace
@@ -31,7 +30,6 @@ def compose_strategy_process(
     launch_id: str,
     instance_id: str,
     mode: str = "paper",
-    strategy_root: str | Path | None = None,
     params: Mapping[str, object] | None = None,
 ) -> StrategyProcessComposition:
     # Import transport adapters only when composing a process.  The transport
@@ -45,10 +43,31 @@ def compose_strategy_process(
         UnixMarketEventStream,
     )
 
-    root = workspace.paths.root if strategy_root is None else Path(strategy_root).expanduser().resolve()
-    entrypoint = load_strategy(strategy_ref, root=root, params=params)
-    market_client = UnixJsonCommandClient(workspace.paths.process_socket("market"))
-    account_client = UnixJsonCommandClient(workspace.paths.process_socket("account"))
+    entrypoint = load_strategy(strategy_ref, root=workspace.paths.project_root, params=params)
+    instance = workspace.instance(mode, launch_id, instance_id)
+    # The launch chooses whether Market is shared or instance-owned. Account
+    # is always instance-owned regardless of the Market topology.
+    market_scope = os.environ.get("KAIROS_MARKET_SCOPE", "shared" if mode == "live" else "instance")
+    if market_scope not in {"shared", "instance"}:
+        raise ValueError("KAIROS_MARKET_SCOPE must be shared or instance")
+    market_runtime = None if market_scope == "shared" else instance
+    market_socket = (
+        workspace.paths.process_socket("market")
+        if market_runtime is None
+        else market_runtime.socket("market")
+    )
+    market_event_socket = (
+        workspace.paths.process_socket("market-events")
+        if market_runtime is None
+        else market_runtime.socket("market-events")
+    )
+    market_snapshot = (
+        workspace.paths.child("state", "market", "market.snapshot")
+        if market_runtime is None
+        else market_runtime.snapshot("market", "market.snapshot")
+    )
+    market_client = UnixJsonCommandClient(market_socket)
+    account_client = UnixJsonCommandClient(instance.socket("account"))
     max_notional = None
     raw_max_notional = os.environ.get("KAIROS_LIVE_MAX_ORDER_NOTIONAL")
     if raw_max_notional:
@@ -65,8 +84,8 @@ def compose_strategy_process(
             require_limit_orders=mode == "live" and os.environ.get("KAIROS_LIVE_REQUIRE_LIMIT_ORDERS", "true") == "true",
         ),
     )
-    snapshots = MmapMarketSnapshotReader(workspace.paths.child("state", "market", "market.snapshot"))
-    stream = UnixMarketEventStream(workspace.paths.process_socket("market-events"))
+    snapshots = MmapMarketSnapshotReader(market_snapshot)
+    stream = UnixMarketEventStream(market_event_socket)
     journal = JsonlLifecycleJournal(
         workspace.paths.child("launches", mode, launch_id, "instances", instance_id, "lifecycle.jsonl")
     )

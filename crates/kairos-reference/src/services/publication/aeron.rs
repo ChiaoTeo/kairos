@@ -8,12 +8,12 @@ use aeron::concurrent::atomic_buffer::{AlignedBuffer, AtomicBuffer};
 use aeron::context::Context;
 use aeron::publication::Publication;
 
-use crate::application::protocol::{PublishedSnapshots, SnapshotPublisher};
+use crate::application::protocol::PublishedSnapshots;
 use crate::domain::{ReferenceCatalog, ReferenceError, ReferenceResult};
 use crate::services::publication::encoder::FlatbuffersSnapshotEncoder;
 
 /// Publishes the three Reference read models through Aeron.
-pub struct AeronSnapshotPublisher {
+pub struct AeronSnapshotWriter {
     _aeron: Aeron,
     catalog: Arc<Mutex<Publication>>,
     markets: Arc<Mutex<Publication>>,
@@ -26,7 +26,7 @@ pub struct AeronSnapshotPublisher {
     encoder: FlatbuffersSnapshotEncoder,
 }
 
-impl AeronSnapshotPublisher {
+impl AeronSnapshotWriter {
     pub fn connect(
         aeron_dir: Option<&str>,
         channel: &str,
@@ -84,8 +84,8 @@ impl AeronSnapshotPublisher {
     }
 }
 
-impl SnapshotPublisher for AeronSnapshotPublisher {
-    fn publish(&mut self, catalog: &ReferenceCatalog) -> ReferenceResult<PublishedSnapshots> {
+impl AeronSnapshotWriter {
+    pub fn publish(&mut self, catalog: &ReferenceCatalog) -> ReferenceResult<PublishedSnapshots> {
         let snapshots = PublishedSnapshots {
             catalog: self.encoder.encode_catalog(catalog)?,
             markets: self.encoder.encode_markets(catalog)?,
@@ -101,7 +101,7 @@ impl SnapshotPublisher for AeronSnapshotPublisher {
         Ok(snapshots)
     }
 
-    fn publish_change(
+    pub fn publish_change(
         &mut self,
         catalog: &ReferenceCatalog,
         events: &[crate::domain::LifecycleEvent],

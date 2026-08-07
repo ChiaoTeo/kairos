@@ -142,6 +142,10 @@ impl InstanceWorkspace {
             .join(Self::components(parts)?.iter().collect::<PathBuf>()))
     }
 
+    pub fn market_state(&self, name: &str) -> io::Result<PathBuf> {
+        Ok(self.root().join("market").join(Self::component(name)?))
+    }
+
     pub fn mode(&self) -> &str {
         &self.mode
     }
@@ -161,6 +165,7 @@ impl InstanceWorkspace {
             self.root().join("snapshots"),
             self.root().join("logs"),
             self.root().join("checkpoints"),
+            self.root().join("market"),
         ] {
             fs::create_dir_all(directory)?;
         }
@@ -219,6 +224,7 @@ impl Workspace {
             workspace.logs_root(),
             workspace.data_root(),
             workspace.reference_root(),
+            workspace.market_connections_root(),
             workspace.child(&["accounts"])?,
             workspace.child(&["credentials"])?,
             workspace.child(&["profiles"])?,
@@ -287,6 +293,10 @@ impl Workspace {
     }
     pub fn reference_root(&self) -> PathBuf {
         self.root.join("reference")
+    }
+
+    pub fn market_connections_root(&self) -> PathBuf {
+        self.root.join("market").join("connections")
     }
 
     pub fn instance(

@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import StringIO
 
 from kairospy.application.launch.application import LaunchControlApplication
+from kairospy.application.launch.application import new_instance_id
 from kairospy.application.timeline import TimelineApplication
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.surface.cli import execute_argv
@@ -16,6 +17,25 @@ def test_cli_exposes_legacy_launch_entry_shape() -> None:
     assert "start" in text
     assert "status" in text
     assert "strategy" in text
+
+
+def test_launch_start_does_not_expose_internal_instance_or_strategy_root_options() -> None:
+    output = StringIO()
+
+    assert execute_argv(["launch", "start", "--help"], output) == 0
+    text = output.getvalue()
+    assert "--instance" not in text
+    assert "--strategy-root" not in text
+
+
+def test_launch_instance_ids_are_opaque_uuids() -> None:
+    first = new_instance_id()
+    second = new_instance_id()
+
+    import uuid
+    assert uuid.UUID(first).version == 4
+    assert uuid.UUID(second).version == 4
+    assert first != second
 
 
 def test_cli_registers_legacy_product_groups() -> None:

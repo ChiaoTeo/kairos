@@ -15,6 +15,7 @@ class RiskProcessConfig:
     """Process-level configuration; risk state remains owned by Rust Risk."""
 
     workspace: Workspace
+    instance_workspace: object
     binary: str = "kairos-risk"
     interval_ms: int = 1_000
     environment: Mapping[str, str] = field(default_factory=dict)
@@ -29,10 +30,12 @@ class RiskProcessConfig:
             raise ValueError("risk stop_timeout must be positive")
 
     def process_spec(self) -> ProcessSpec:
-        socket_path = self.workspace.paths.risk_socket()
-        health_file = self.workspace.paths.risk_health()
+        runtime = self.instance_workspace
+        socket_path = runtime.socket("risk")
+        health_file = runtime.health("risk")
         socket_path.parent.mkdir(parents=True, exist_ok=True)
         command = [self.binary, "--workspace", str(self.workspace.paths.root)]
+        command.extend(("--launch-mode", runtime.mode, "--launch-id", runtime.launch_id, "--instance-id", runtime.instance_id))
         command.extend(("--interval-ms", str(self.interval_ms)))
         return ProcessSpec(
             name="risk",

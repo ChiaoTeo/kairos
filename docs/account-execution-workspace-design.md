@@ -1511,7 +1511,9 @@ Monitor、CLI、UI 和 system 都是 reader/orchestrator，不得成为这些 pr
 - `ComponentProcessApplication.status()` 支持读取 instance-scoped socket；
 - `ComponentProcessApplication.stop()` 支持停止 instance-scoped component；
 - `launch stop` 会按 instance 停止 market、execution、account，再释放账户 lease；
-- project-level 独立 CLI/server 仍保留自己的 project socket，不与 launch instance 混用。
+- Account、Execution、Risk server 都要求 launch identity，只使用 instance socket/state；
+  模块 CLI 的 one-shot 管理命令可以直接组合 application，但不会启动 project-level
+  business runtime。
 
 公共 FlatBuffers 的 `MessageHeader` 和 `SnapshotHeader` 已增加可选的：
 
@@ -1521,14 +1523,101 @@ launch_id
 instance_id
 ```
 
-这些字段保持可选是为了让 project-level 的一次性 CLI 消息继续拥有合法的协议形状；对于 launch instance 内的 publisher，composition 必须填充它们。当前 schema 和生成代码已经完成，现有 publisher 的 identity 注入仍是下一步工作，不能把空字段视为 instance identity 已经完成。
+这些字段保持可选是为了让 project-level 的一次性 CLI 消息继续拥有合法的协议形状；对于 launch instance 内的具体输出 writer，composition 必须填充它们。Market 和 Account 的 instance writer 已经注入并写入这些字段，Transport reader 也会解码校验；不能把 project-level 消息中的空字段误认为 instance identity。
 
 ## 31. Publisher 抽象的收敛原则
 
 Publisher 不应被一律抽象成业务 protocol。实际代码中的职责不同：
 
 - Market snapshot publisher 只是 `MarketProcess` 的输出步骤，因此已删除 `MarketPublisher` protocol，process 直接调用具体的 `MmapMarketSnapshotPublisher`。
-- Account publisher 目前参与 AccountActor 提交后的状态发布，并存在文件、FlatBuffers 和内存测试实现，暂时保留为 Account 模块内部依赖。
-- Execution publisher 同时承担 execution event audit、查询以及内存/SQLite 多种实现，暂时保留为 Execution 模块内部依赖。
+- Account snapshot writer 已移动到 `AccountProcess`，AccountActor/Application 不再持有 publisher，也不再接收 publisher protocol。
+- Execution audit writer 已移动到 `ExecutionProcess`，ExecutionApplication 只保留待输出事件，Process 直接调用具体 SQLite audit writer。
+- Execution 启动时会从持久化 snapshot 恢复待输出事件；SQLite audit 使用 event identity 去重，避免恢复时重复写入。
+- Market event 不再通过 `MarketEventPublisher` protocol 发送。MarketActor 只产生待发送的业务事件，MarketProcess 直接调用具体 FlatBuffers 编码并写入 instance event socket。
 
-后续如果 Account 或 Execution 的输出步骤能够完全移动到各自 process，并且不再需要 application 内的提交后副作用，再分别删除对应 protocol。不能为了统一形式，把真实存在的状态提交边界强行改成具体基础设施依赖。
+因此 Account、Execution、Market 的 publisher protocol 都已经移除。剩余的 `AccountStateStore`、`ExecutionStateStore` 属于业务状态持久化依赖，不是 publisher 抽象。
+
+Risk 和 Reference 也遵循同一条规则：RiskActor 只保留待发送事件，ReferenceApplication/Actor 只负责业务状态和刷新结果；具体 snapshot/event writer 由 process 或 composition 直接持有和调用。全仓不再存在 `*Publisher`、`SnapshotPublisher`、`RiskEventSink` 等输出协议，输出协议的具体实现不再伪装成业务依赖。
+
+## 32. Instance identity 的实际传输落地
+
+实例启动时由 Workspace/System 组合出唯一的 `InstanceIdentity(workspace_id,
+launch_id, instance_id)`，并注入 Market 与 Account 的具体输出 writer：
+
+1. Market mmap snapshot 的 `SnapshotHeader` 写入三项 identity。
+2. Market Unix event socket 的 `MessageHeader` 写入三项 identity。
+3. Account FlatBuffers snapshot 的 `SnapshotHeader` 写入三项 identity。
+4. `kairos-transport` 解码 Market snapshot 时保留三项 identity，调用方可以拒绝跨 instance 数据。
+5. one-shot CLI 可以使用空 identity 直接调用 application；Account、Execution、Risk
+   server 本身不再接受没有 launch identity 的运行时启动。
+
+因此实例边界同时由 socket/snapshot 路径和消息 header 保证：路径隔离防止进程互相读写，header identity 防止消息离开传输层后被错误归属。
+
+## 33. Market live 共享与 backtest instance runtime
+
+Market 的作用域和运行拓扑以
+[`workspace-scope-and-market-runtime.md`](workspace-scope-and-market-runtime.md)
+为准：不新增 `LaunchWorkspace` 或 `MarketWorkspace`。`Market Instance`
+表示正在运行的 `kairos-market-server`，不是额外的业务状态层。
+
+- live 模式允许 Workspace 级共享一个 Market server，复用 provider connection
+  和原始行情 feed；每个 launch consumer 的订阅、cursor、freshness 和派生投影仍须隔离。
+- backtest 模式由每个 Launch Instance 独立运行 Market server；历史数据源可以复用，
+  但 replay clock、event cursor、checkpoint、order book 和完成状态必须归属于该 instance。
+- paper 模式根据数据来源选择共享 live feed 或 instance-owned replay，不改变 Account、
+  Execution 和 Strategy 的 instance 隔离要求。
+
+Binance Equity 行情已通过 Integration 的 REST quote polling 接入：它调用
+`/sapi/v1/equity/market/quote`，并以统一的 MarketStream 语义向 MarketActor 提供
+bid/ask。长期配置应将 provider 和 credential 放在 Workspace 级连接定义中，launch
+只绑定连接名称：
+
+~~~toml
+[market.connections.binance-equity]
+provider = "binance-equity-rest"
+credential_id = "binance-equity-readonly"
+
+[paper.market]
+connection = "binance-equity"
+scope = "instance"
+~~~
+
+该连接使用 API key，签名交易操作才需要 API secret。
+
+具体标的和订阅意图由 Strategy Instance 通过 `context.subscribe(...)` 定义，不放在
+`paper.market` 中。`paper.market` 只选择连接和 Market runtime scope；Market process
+根据策略订阅请求创建对应的市场 descriptor 和 provider subscription。
+
+当前实现中，Workspace 会准备 `market/connections/` 作为共享 live connection 元数据目录；
+instance 会准备 `market/`，Replay Market 将 cursor 写入该目录。`launch start` 对 live
+默认使用 Workspace 级 Market，对 replay/backtest 默认使用 instance 级 Market；launch
+可以通过 `<mode>.market.scope = "instance"` 为 live 或 paper 选择独立 Market，并始终
+按 instance 启动 Account 与 Execution。`launch stop` 不会因停止一个使用 shared scope
+的 launch 而停止共享 Market。
+
+## 34. Account、Execution、Risk 的 instance-only runtime
+
+Account、Execution、Risk 不提供 Workspace 级业务运行实例：
+
+- Account 的 balance、position、equity、account order facts 和 refresh state
+  写入 `<instance>/state/account/`，控制 socket 和 snapshot 也在 instance 下。
+- Execution 的 order lifecycle、fill、audit 和恢复状态写入
+  `<instance>/state/execution/`。
+- Risk 的 budget、reservation、generation 和 event sequence 写入
+  `<instance>/state/risk/risk-state.json`。
+
+三个 server 都由 System/launch 传入同一个 `InstanceWorkspace`。Rust server 只解析
+这个运行上下文，不判断自己是“全局”还是“局部”；没有 launch identity 的 server
+启动会被拒绝。Workspace 级的 accounts、credentials、profiles 只是配置和凭证资源，
+不是业务状态 owner。
+
+一次 launch 的启动顺序是：
+
+    InstanceWorkspace
+    ├── Account server
+    ├── Execution server
+    ├── Risk server
+    └── Strategy server
+
+停止 launch 时按同一 instance 停止 Risk、Execution、Account；共享 Market 仍由
+Workspace/System 的 shared runtime 生命周期管理。

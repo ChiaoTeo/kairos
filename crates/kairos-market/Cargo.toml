@@ -23,8 +23,8 @@ tempfile = "3"
 
 [[bin]]
 name = "kairos-market-server"
-path = "src/main.rs"
+path = "src/bin/kairos-market-server.rs"
 
 [[bin]]
 name = "kairos-market-cli"
-path = "src/bin_cli.rs"
+path = "src/bin/kairos-market-cli.rs"

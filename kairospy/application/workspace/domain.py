@@ -26,6 +26,11 @@ class WorkspacePaths:
     logs: Path
     launches: Path
 
+    @property
+    def project_root(self) -> Path:
+        """Filesystem root from which user strategy modules are imported."""
+        return self.root.parent if self.root.name == ".kairos" else self.root
+
     def child(self, *parts: str) -> Path:
         if not parts or any(not part or part in {".", ".."} for part in parts):
             raise ValueError("workspace child path must contain named components")
@@ -44,6 +49,9 @@ class WorkspacePaths:
 
     def reference_root(self) -> Path:
         return self.child("reference")
+
+    def market_connections_root(self) -> Path:
+        return self.child("market", "connections")
 
     def operations_journal(self) -> Path:
         return self.child("state", "operations.jsonl")
@@ -193,6 +201,9 @@ class InstanceWorkspace:
 
     def log(self, *parts: str) -> Path:
         return self.paths.instance_log(self.mode, self.launch_id, self.instance_id, *self._parts(parts))
+
+    def market_state(self, name: str) -> Path:
+        return self.state("market", name)
 
     def prepare(self) -> None:
         for directory in (self.root, self.root / "sockets", self.root / "health", self.root / "state", self.root / "snapshots", self.root / "logs", self.root / "checkpoints"):

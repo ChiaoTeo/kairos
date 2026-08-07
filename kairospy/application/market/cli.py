@@ -1,4 +1,4 @@
-"""One-shot and remote Market CLI application facade."""
+"""One-shot Market CLI application facade."""
 
 from __future__ import annotations
 
@@ -13,20 +13,13 @@ from ..workspace import Workspace
 
 @dataclass(frozen=True, slots=True)
 class MarketCliApplication:
-    """Invoke Market CLI commands and, for remote commands, its server."""
+    """Invoke the independent Market CLI for direct, one-shot commands."""
 
     workspace: Workspace | None = None
     binary: str | None = None
 
-    def run(self, arguments: list[str], *, remote: bool = False) -> dict[str, Any]:
+    def run(self, arguments: list[str]) -> dict[str, Any]:
         command = [self.binary or resolve_binary("kairos-market-cli"), "--output", "json"]
-        if remote:
-            if self.workspace is None:
-                raise ValueError("a workspace is required for a remote market command")
-            from ..system import ComponentProcessApplication
-
-            ComponentProcessApplication(self.workspace).ensure_running("market")
-            command.extend(("--workspace", str(self.workspace.paths.root)))
         command.extend(arguments)
         result = subprocess.run(
             command,

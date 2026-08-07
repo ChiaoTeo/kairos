@@ -9,6 +9,7 @@ from kairospy.application.launch.application import (
     LaunchConfigurationApplication,
     LaunchControlApplication,
     LaunchRegistryApplication,
+    new_instance_id,
 )
 from kairospy.application.strategy import StrategyProcessApplication
 from kairospy.application.system import ComponentProcessApplication
@@ -91,17 +92,16 @@ def _release_launch_leases(workspace, account_ids: list[str], *, instance: str) 
 @launch_app.command("start")
 def start(
     launch_id: str | None = typer.Argument(None),
-    instance: str = typer.Option("default", "--instance"),
     mode: str | None = typer.Option(None, "--mode"),
     strategy: str | None = typer.Option(None, "--strategy", help="Strategy import path: module:callable"),
     config: Path | None = typer.Option(None, "--config", help="Launch TOML configuration path."),
-    strategy_root: Path | None = typer.Option(None, "--strategy-root"),
     params: str | None = typer.Option(None, "--params", help="JSON object passed to the strategy factory"),
     account_id: list[str] = typer.Option([], "--account-id", help="Account binding to lease; repeatable."),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
+    instance = new_instance_id()
     launch_config = None
     config_path: Path | None = config
     if config_path is None and launch_id is not None:
@@ -153,18 +153,72 @@ def start(
     try:
         instance_workspace = owner.instance(mode, launch_id, instance)
         instance_workspace.prepare()
-        market_provider = "replay" if launch_environment is not None and launch_environment.config.plan().paper_events is not None else None
-        market_replay_file = launch_environment.config.plan().paper_events if launch_environment is not None else None
+        launch_plan = launch_environment.config.plan() if launch_environment is not None else None
+        market_provider = None
+        market_credential_id = None
+        market_replay_file = None
+        if launch_plan is not None:
+            if launch_plan.paper_events is not None:
+                market_provider, market_replay_file = "replay", launch_plan.paper_events
+            elif launch_plan.backtest_replay_file is not None:
+                market_provider, market_replay_file = "replay", launch_plan.backtest_replay_file
+            elif isinstance(launch_plan.mode_config.get("market"), dict):
+                market_config = launch_plan.mode_config["market"]
+                connection_id = market_config.get("connection")
+                if connection_id is not None:
+                    connection = WorkspaceApplication().market_connection(owner, str(connection_id))
+                    market_provider = connection.get("provider")
+                    market_credential_id = connection.get("credential_id")
+                else:
+                    # Compatibility for launch files written before
+                    # Workspace-owned connection profiles were introduced.
+                    market_provider = market_config.get("provider")
+                    market_credential_id = market_config.get("credential_id")
+        execution_config = dict(launch_plan.execution) if launch_plan is not None else {}
+        execution_provider = str(execution_config["provider"]) if execution_config.get("provider") is not None else None
+        execution_product = str(execution_config["product"]) if execution_config.get("product") is not None else None
+        confirm_live = mode == "live" and bool(
+            launch_plan is not None and launch_plan.live_safety and launch_plan.live_safety.get("trading_enabled")
+        )
+        account_provider = None
+        if lease_account_ids:
+            account_provider = str(
+                AccountAdminApplication(owner).show(lease_account_ids[0]).get("broker") or "binance"
+            )
+        # A process can use either the Workspace shared Market or its own
+        # instance Market. Live defaults to shared; replay/backtest default to
+        # instance, while launch.market.scope can override that choice.
+        market_instance_workspace = (
+            instance_workspace if launch_plan is not None and launch_plan.market_scope == "instance"
+            else None
+        )
         ComponentProcessApplication(owner).ensure_running(
             "market", market_provider=market_provider, market_replay_file=market_replay_file,
-            instance_workspace=instance_workspace,
+            market_credential_id=market_credential_id,
+            instance_workspace=market_instance_workspace,
         )
         if lease_account_ids:
             # The launch binds the account actor before the strategy process;
             # account state remains owned by the account module.
             ComponentProcessApplication(owner).ensure_running(
-                "account", account_id=lease_account_ids[0], instance_workspace=instance_workspace
+                "account", account_id=lease_account_ids[0], provider=account_provider,
+                instance_workspace=instance_workspace
             )
+            ComponentProcessApplication(owner).ensure_running(
+                "execution", provider=execution_provider, product=execution_product,
+                confirm_live=confirm_live, instance_workspace=instance_workspace
+            )
+        else:
+            ComponentProcessApplication(owner).ensure_running(
+                "execution", provider=execution_provider, product=execution_product,
+                confirm_live=confirm_live, instance_workspace=instance_workspace
+            )
+        # Account, Execution and Risk are all instance-owned runtime actors.
+        # Risk is started even without an account binding so a strategy cannot
+        # accidentally bypass the instance risk boundary.
+        ComponentProcessApplication(owner).ensure_running(
+            "risk", instance_workspace=instance_workspace
+        )
         strategy_params = dict(launch_config.strategy_params)
         if params:
             import json
@@ -177,7 +231,6 @@ def start(
             strategy_params = {**(strategy_params or {}), **value}
         StrategyProcessApplication(owner).ensure_running(
             strategy, launch_id=launch_id, instance_id=instance, mode=mode,
-            strategy_root=strategy_root or (launch_config.root if launch_config is not None else None),
             params=strategy_params,
             environment=launch_environment.process_environment if launch_environment is not None else None,
         )
@@ -186,6 +239,11 @@ def start(
         started = control.start(target)
         if started.get("status") == "ready":
             started = control.strategy_control(target, "enable")
+        started.update({
+            "launch_id": launch_id,
+            "mode": mode,
+            "instance_id": instance,
+        })
         _emit(started, output)
     except Exception:
         _release_launch_leases(owner, lease_account_ids, instance=instance)
@@ -215,8 +273,24 @@ def stop(
     value = LaunchControlApplication(owner).stop(_target(launch_id, instance, mode, workspace))
     instance_workspace = owner.instance(mode, launch_id, instance)
     components = ComponentProcessApplication(owner)
-    for component in ("market", "execution", "account"):
+    for component in ("risk", "execution", "account"):
         components.stop(component, instance_workspace=instance_workspace)
+    # The live Market is shared by launches and must not be stopped when one
+    # launch instance exits. Instance-owned replay Market can be stopped here.
+    market_shared = mode == "live"
+    for entry in LaunchRegistryApplication(owner).list():
+        if entry.get("launch_id") == launch_id and entry.get("mode") == mode and entry.get("instance_id") == instance:
+            config_value = entry.get("config")
+            if isinstance(config_value, str) and Path(config_value).is_file():
+                try:
+                    market_shared = LaunchConfigurationApplication().load(
+                        config_value, workspace_root=owner.paths.root
+                    ).plan().market_scope == "shared"
+                except (FileNotFoundError, LaunchConfigError, ValueError):
+                    pass
+            break
+    if not market_shared:
+        components.stop("market", instance_workspace=instance_workspace)
     for entry in LaunchRegistryApplication(owner).list():
         if entry.get("launch_id") != launch_id or entry.get("mode") != mode or entry.get("instance_id") != instance:
             continue

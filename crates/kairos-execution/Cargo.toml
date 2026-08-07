@@ -26,8 +26,8 @@ tempfile = "3"
 
 [[bin]]
 name = "kairos-execution-server"
-path = "src/main.rs"
+path = "src/bin/kairos-execution-server.rs"
 
 [[bin]]
 name = "kairos-execution-cli"
-path = "src/bin_cli.rs"
+path = "src/bin/kairos-execution-cli.rs"

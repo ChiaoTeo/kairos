@@ -1,6 +1,4 @@
-use kairos_reference::application::protocol::{
-    CatalogStore, PublishedSnapshots, ReferenceSource, SnapshotPublisher,
-};
+use kairos_reference::application::{CatalogStore, ReferenceSource};
 use kairos_reference::domain::{
     Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceCatalog, ReferenceResult,
 };
@@ -37,15 +35,6 @@ impl CatalogStore for TestStore {
     }
 }
 
-#[derive(Default)]
-struct TestPublisher;
-
-impl SnapshotPublisher for TestPublisher {
-    fn publish(&mut self, _catalog: &ReferenceCatalog) -> ReferenceResult<PublishedSnapshots> {
-        Ok(PublishedSnapshots::default())
-    }
-}
-
 fn application() -> ReferenceApplication {
     ReferenceApplication::new(
         "reference-test",
@@ -53,7 +42,6 @@ fn application() -> ReferenceApplication {
             catalog: provider_catalog(),
         }),
         Box::new(TestStore::default()),
-        Box::new(TestPublisher),
     )
     .unwrap()
 }

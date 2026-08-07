@@ -44,9 +44,11 @@ class LaunchPlan:
     account_refs: tuple[str, ...]
     execution: Mapping[str, Any]
     mode_config: Mapping[str, Any]
+    market_scope: str
     backtest_market: Mapping[str, Any] | None = None
     backtest_data_root: Path | None = None
     backtest_storage_format: str | None = None
+    backtest_replay_file: Path | None = None
     paper_events: Path | None = None
     live_safety: Mapping[str, Any] | None = None
     live_private_sync: Mapping[str, Any] | None = None
@@ -58,9 +60,11 @@ class LaunchPlan:
             "accounts": list(self.account_refs),
             "execution": dict(self.execution),
             self.mode: dict(self.mode_config),
+            "market_scope": self.market_scope,
             "backtest_market": self.backtest_market,
             "backtest_data_root": self.backtest_data_root,
             "backtest_storage_format": self.backtest_storage_format,
+            "backtest_replay_file": self.backtest_replay_file,
             "paper_events": self.paper_events,
             "live_safety": self.live_safety,
             "live_private_sync": self.live_private_sync,
@@ -142,6 +146,8 @@ class LaunchConfig:
         self.require_valid()
         mode = self.mode
         mode_config = dict(_optional_table(self.values.get(mode), mode))
+        market_config = _optional_table(mode_config.get("market"), f"{mode}.market")
+        market_scope = str(market_config.get("scope", "shared" if mode == "live" else "instance"))
         execution = dict(self.execution)
         if mode in {"backtest", "paper"}:
             execution.setdefault("dry_run", True)
@@ -150,6 +156,7 @@ class LaunchConfig:
         backtest_market: Mapping[str, Any] | None = None
         backtest_data_root: Path | None = None
         backtest_storage_format: str | None = None
+        backtest_replay_file: Path | None = None
         paper_events: Path | None = None
         live_safety: Mapping[str, Any] | None = None
         live_private_sync: Mapping[str, Any] | None = None
@@ -158,6 +165,9 @@ class LaunchConfig:
             raw_data_root = mode_config.get("data_root", ".kairos/data")
             backtest_data_root = _resolve_path(raw_data_root, self.root, "backtest.data_root")
             backtest_storage_format = str(mode_config.get("storage_format", "parquet"))
+            raw_replay = backtest_market.get("events")
+            if raw_replay is not None:
+                backtest_replay_file = _resolve_path(raw_replay, self.root, "backtest.market.events")
         elif mode == "paper":
             raw_events = mode_config.get("events")
             if raw_events is not None:
@@ -180,9 +190,11 @@ class LaunchConfig:
             account_refs=self.account_refs,
             execution=execution,
             mode_config=mode_config,
+            market_scope=market_scope,
             backtest_market=backtest_market,
             backtest_data_root=backtest_data_root,
             backtest_storage_format=backtest_storage_format,
+            backtest_replay_file=backtest_replay_file,
             paper_events=paper_events,
             live_safety=live_safety,
             live_private_sync=live_private_sync,
@@ -279,6 +291,24 @@ class LaunchConfig:
         execution = self.values.get("execution")
         if isinstance(execution, Mapping) and "dry_run" in execution and not isinstance(execution["dry_run"], bool):
             issues.append("execution.dry_run must be a boolean")
+        mode_config = self.values.get(mode) if mode else None
+        if isinstance(mode_config, Mapping) and "market" in mode_config:
+            market = mode_config.get("market")
+            if not isinstance(market, Mapping):
+                issues.append(f"[{mode}.market] must be a table")
+            else:
+                if market.get("scope", "shared" if mode == "live" else "instance") not in {"shared", "instance"}:
+                    issues.append(f"{mode}.market.scope must be shared or instance")
+                if market.get("connection") is not None and not isinstance(market.get("connection"), str):
+                    issues.append(f"{mode}.market.connection must be a string")
+        if mode == "backtest" and isinstance(mode_config, Mapping):
+            market = mode_config.get("market")
+            if isinstance(market, Mapping) and market.get("scope", "instance") == "shared":
+                issues.append("backtest.market.scope must be instance")
+        if mode == "paper" and isinstance(mode_config, Mapping):
+            if mode_config.get("events") is not None and isinstance(mode_config.get("market"), Mapping):
+                if mode_config["market"].get("scope", "instance") == "shared":
+                    issues.append("paper.market.scope must be instance when paper.events is configured")
         for forbidden in ("broker", "credentials", "data"):
             if forbidden in self.values:
                 issues.append(f"[{forbidden}] is not valid launch config; use workspace configuration")
@@ -325,6 +355,7 @@ class LaunchEnvironment:
             "KAIROS_LAUNCH_DIRECTORY": str(self.instance_directory),
             "KAIROS_LAUNCH_GROUP_DIRECTORY": str(self.group_directory),
             "KAIROS_LAUNCH_NORMALIZED_CONFIG": str(self.normalized_config_path),
+            "KAIROS_MARKET_SCOPE": plan.market_scope,
             "KAIROS_EXECUTION_DRY_RUN": str(bool(plan.execution.get("dry_run", False))).lower(),
             "KAIROS_ACCOUNT_REFS": json.dumps(list(plan.account_refs), separators=(",", ":")),
             "KAIROS_LIVE_TRADING_ENABLED": str(bool(safety.get("trading_enabled", False))).lower(),
