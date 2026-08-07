@@ -16,6 +16,7 @@ class StrategyContextProtocol(Protocol):
     strategy_id: str
     instance_id: str
     state: MutableMapping[str, object]
+    logger: "StrategyLogger"
 
     @property
     def now(self) -> datetime | None: ...
@@ -30,6 +31,7 @@ class StrategyContextProtocol(Protocol):
         selectors: Sequence[str] = (),
         exchange: str | None = None,
         market_type: str | None = None,
+        asset_type: str | None = None,
         identity: str | None = None,
         params: Mapping[str, object] | None = None,
         dynamic: bool = False,

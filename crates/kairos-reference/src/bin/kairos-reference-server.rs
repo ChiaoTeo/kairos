@@ -34,6 +34,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let default_endpoint = match provider.as_str() {
         "massive-options" => "http://api.massiveprivateserver.site",
         "binance-options" => "https://eapi.binance.com/eapi/v1/exchangeInfo",
+        "binance-usdm-futures" => "https://fapi.binance.com/fapi/v1/exchangeInfo",
+        "binance-coinm-futures" => "https://dapi.binance.com/dapi/v1/exchangeInfo",
+        "okx-spot" | "okx-equity" => "https://www.okx.com",
+        "okx-swap" | "okx-futures" | "okx-options" => "https://www.okx.com",
         _ => "https://api.binance.com/api/v3/exchangeInfo",
     };
     let endpoint = args
@@ -59,6 +63,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     ensure_database_parent(&database)?;
     let config = ReferenceCompositionConfig {
+        workspace: Some(workspace.root().to_path_buf()),
         provider,
         endpoint,
         database,
@@ -190,6 +195,7 @@ async fn handle_client(
                 market_id: params.get("market_id").cloned(),
                 venue_id: params.get("venue_id").cloned(),
                 market_type: params.get("market_type").cloned(),
+                asset_type: params.get("asset_type").cloned(),
                 source_symbol: params.get("symbol").cloned(),
                 active_only: params
                     .get("active_only")
@@ -204,6 +210,7 @@ async fn handle_client(
                 market_id: params.get("market_id").cloned(),
                 venue_id: params.get("venue_id").cloned(),
                 market_type: params.get("market_type").cloned(),
+                asset_type: params.get("asset_type").cloned(),
                 source_symbol: params.get("symbol").cloned(),
                 active_only: params
                     .get("active_only")
@@ -288,8 +295,26 @@ fn query_params(query: &str) -> std::collections::BTreeMap<String, String> {
     query
         .split('&')
         .filter_map(|part| part.split_once('='))
-        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .map(|(key, value)| (percent_decode(key), percent_decode(value)))
         .collect()
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut result = String::with_capacity(value.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(decoded) = u8::from_str_radix(&value[index + 1..index + 3], 16) {
+                result.push(decoded as char);
+                index += 3;
+                continue;
+            }
+        }
+        result.push(bytes[index] as char);
+        index += 1;
+    }
+    result
 }
 
 fn reference_query(params: &std::collections::BTreeMap<String, String>) -> ReferenceQuery {
@@ -307,6 +332,7 @@ fn reference_query(params: &std::collections::BTreeMap<String, String>) -> Refer
         kind,
         venue_id: params.get("venue_id").cloned(),
         market_type: params.get("market_type").cloned(),
+        asset_type: params.get("asset_type").cloned(),
         status: params.get("status").cloned(),
         active_only: params
             .get("active_only")

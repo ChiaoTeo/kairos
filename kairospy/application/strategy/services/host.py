@@ -7,6 +7,7 @@ from ..domain.lifecycle import StrategyLifecycle
 from ..domain.messages import EventEnvelope, LifecycleRecord
 from ..protocol import ContextBus, EventStream, LifecycleJournal, SnapshotReader, Strategy
 from .context import StrategyContext
+from kairospy.strategy import StrategyLogger
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,7 @@ class StrategyHost:
         snapshots: SnapshotReader,
         stream: EventStream,
         journal: LifecycleJournal,
+        logger: StrategyLogger | None = None,
         snapshot_views: tuple[str, ...] = ("market.current",),
     ) -> None:
         if not launch_id.strip() or not instance_id.strip():
@@ -47,17 +49,25 @@ class StrategyHost:
         self._snapshots = snapshots
         self.stream = stream
         self.journal = journal
+        self.logger = logger or StrategyLogger(fields={
+            "launch_id": launch_id,
+            "instance_id": instance_id,
+            "strategy_id": strategy.strategy_id,
+            "component": "strategy",
+        })
         self.context = StrategyContext(
             strategy.strategy_id,
             instance_id=instance_id,
             bus=bus,
             snapshots=snapshots,
             request_observer=self._observe_request,
+            logger=self.logger,
         )
         self.snapshot_views = snapshot_views
         self._status = StrategyHostStatus(launch_id, instance_id, strategy.strategy_id, StrategyLifecycle.CREATED)
         self._subscription_requests: set[str] = set()
         self._stop_requested = asyncio.Event()
+        self._log("strategy host created")
 
     @property
     def status(self) -> StrategyHostStatus:
@@ -67,15 +77,19 @@ class StrategyHost:
         if self._status.state is not StrategyLifecycle.CREATED:
             raise RuntimeError(f"strategy can only start from created: {self._status.state}")
         self._transition(StrategyLifecycle.WAITING_FOR_DEPENDENCIES)
+        self._log("strategy on_start begin")
         try:
             self._call("on_start", self.context._bind(None))
         except Exception as error:
             self._transition(StrategyLifecycle.FAILED, str(error))
             raise
+        self._log(f"strategy on_start completed subscriptions={len(self._subscription_requests)}")
         if not self._refresh_dependencies():
+            self._log(f"waiting for dependencies reason={self._status.reason}")
             return self._status
         try:
             if not self._bootstrap():
+                self._log(f"waiting for snapshot reason={self._status.reason}")
                 return self._status
         except Exception as error:
             self._transition(StrategyLifecycle.FAILED, str(error))
@@ -131,11 +145,22 @@ class StrategyHost:
             "clock": "on_clock",
             "system": "on_system",
         }.get(event.domain, "on_data")
-        try:
-            self._call(hook, self.context, event)
-        except Exception as error:
-            self._transition(StrategyLifecycle.FAILED, str(error))
-            raise
+        event_time_source = (
+            "none" if event.occurred_at is None
+            else "market_event" if event.domain == "data"
+            else f"{event.domain}_event"
+        )
+        with self.logger.bind_event(
+            event_time=event.occurred_at,
+            event_time_source=event_time_source,
+            event_sequence=event.sequence,
+        ):
+            self._log(f"dispatch {hook}", event_kind=event.kind)
+            try:
+                self._call(hook, self.context, event)
+            except Exception as error:
+                self._transition(StrategyLifecycle.FAILED, str(error))
+                raise
         self._status = replace(self._status, event_sequence=event.sequence)
 
     async def run(self) -> None:
@@ -192,9 +217,17 @@ class StrategyHost:
     def _transition(self, state: StrategyLifecycle, reason: str | None = None) -> None:
         self._status = StrategyHostStatus(self.launch_id, self.instance_id, self.strategy.strategy_id, state, reason, self._status.event_sequence)
         self.journal.append(LifecycleRecord(self.launch_id, self.instance_id, self.strategy.strategy_id, state.value, reason, self._status.event_sequence))
+        self._log(
+            f"strategy state={state.value} event_sequence={self._status.event_sequence}"
+            + (f" reason={reason}" if reason else "")
+        )
 
     def _observe_request(self, request: object, handle: object) -> None:
         if getattr(request, "operation", None) == "market.subscribe":
             request_id = getattr(handle, "request_id", None)
             if request_id:
                 self._subscription_requests.add(request_id)
+                self._log(f"market subscription requested request_id={request_id}")
+
+    def _log(self, message: str, **data: object) -> None:
+        self.logger.info(message, **data)

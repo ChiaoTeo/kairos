@@ -4,7 +4,7 @@
 //! deterministic integration tests, and for replay-like polling.  It exposes
 //! stream semantics while making the snapshot-to-event limitation explicit.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::application::connection::Connection;
@@ -25,7 +25,7 @@ pub struct RestPollingMarketStream<R> {
     identity: ConnectionIdentity,
     state: ConnectionState,
     reader: R,
-    subscription: Option<(SubscriptionId, MarketSubscription)>,
+    subscriptions: BTreeMap<SubscriptionId, MarketSubscription>,
     queue: VecDeque<MarketEvent>,
     last_snapshot: HashSet<(String, MarketEventKind, Option<String>, Option<String>)>,
     next_subscription_id: u64,
@@ -37,7 +37,7 @@ impl<R: RestSnapshotReader> RestPollingMarketStream<R> {
             state: ConnectionState::new(identity.clone()),
             identity,
             reader,
-            subscription: None,
+            subscriptions: BTreeMap::new(),
             queue: VecDeque::new(),
             last_snapshot: HashSet::new(),
             next_subscription_id: 1,
@@ -48,12 +48,19 @@ impl<R: RestSnapshotReader> RestPollingMarketStream<R> {
         if self.state.lifecycle != ConnectionLifecycle::Ready {
             return Err(IntegrationError::NotReady);
         }
-        let Some((_, subscription)) = self.subscription.as_ref() else {
+        if self.subscriptions.is_empty() {
             return Err(IntegrationError::InvalidRequest(
                 "market stream must be subscribed before polling".into(),
             ));
-        };
-        let events = self.reader.snapshot(&subscription.symbols)?;
+        }
+        let symbols = self
+            .subscriptions
+            .values()
+            .flat_map(|subscription| subscription.symbols.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let events = self
+            .reader
+            .snapshot(&symbols.into_iter().collect::<Vec<_>>())?;
         let mut current = HashSet::new();
         for event in events {
             let key = (
@@ -94,7 +101,7 @@ impl<R: RestSnapshotReader> Connection for RestPollingMarketStream<R> {
 
     fn stop(&mut self) -> Result<(), String> {
         self.state.lifecycle = ConnectionLifecycle::Stopped;
-        self.subscription = None;
+        self.subscriptions.clear();
         self.queue.clear();
         Ok(())
     }
@@ -128,18 +135,17 @@ impl<R: RestSnapshotReader> MarketStreamConnection for RestPollingMarketStream<R
         }
         let id = SubscriptionId(self.next_subscription_id);
         self.next_subscription_id += 1;
-        self.subscription = Some((id, request));
+        self.subscriptions.insert(id, request);
         self.last_snapshot.clear();
         Ok(id)
     }
 
     fn unsubscribe(&mut self, subscription: SubscriptionId) -> Result<(), IntegrationError> {
-        if self.subscription.as_ref().map(|value| value.0) != Some(subscription) {
+        if self.subscriptions.remove(&subscription).is_none() {
             return Err(IntegrationError::InvalidRequest(
                 "unknown market subscription".into(),
             ));
         }
-        self.subscription = None;
         self.last_snapshot.clear();
         self.queue.clear();
         Ok(())
@@ -149,7 +155,7 @@ impl<R: RestSnapshotReader> MarketStreamConnection for RestPollingMarketStream<R
         if self.state.lifecycle != ConnectionLifecycle::Ready {
             return Err(IntegrationError::NotReady);
         }
-        if self.queue.is_empty() && self.subscription.is_some() {
+        if self.queue.is_empty() && !self.subscriptions.is_empty() {
             self.poll()?;
         }
         Ok(self.queue.pop_front())
@@ -214,6 +220,32 @@ mod tests {
         stream.poll().unwrap();
         assert!(stream.next_event().unwrap().is_some());
         stream.poll().unwrap();
+        assert!(stream.next_event().unwrap().is_none());
+    }
+
+    #[test]
+    fn polling_reader_keeps_multiple_subscriptions_on_one_connection() {
+        let identity = crate::domain::ConnectionIdentity::new(
+            "market.test.rest",
+            "test",
+            Some(ProductFamily::Spot),
+            AccessScope::Public,
+            TransportKind::Rest,
+            IntegrationCapability::MarketStream,
+        )
+        .unwrap();
+        let mut stream = RestPollingMarketStream::new(identity, Reader { calls: 0 });
+        stream.start().unwrap();
+        let first = stream
+            .subscribe(MarketSubscription::new(["btcusdt"]).unwrap())
+            .unwrap();
+        let second = stream
+            .subscribe(MarketSubscription::new(["ethusdt"]).unwrap())
+            .unwrap();
+        stream.poll().unwrap();
+        assert!(stream.next_event().unwrap().is_some());
+        stream.unsubscribe(first).unwrap();
+        stream.unsubscribe(second).unwrap();
         assert!(stream.next_event().unwrap().is_none());
     }
 }

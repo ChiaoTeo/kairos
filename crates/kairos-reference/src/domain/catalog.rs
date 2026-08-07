@@ -78,6 +78,8 @@ pub struct Market {
     pub listing_id: String,
     pub venue_id: String,
     pub market_type: String,
+    #[serde(default)]
+    pub asset_type: Option<String>,
     pub source_symbol: String,
     pub base_asset_id: Option<String>,
     pub quote_asset_id: Option<String>,

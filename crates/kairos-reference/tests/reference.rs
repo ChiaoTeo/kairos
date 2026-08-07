@@ -1,4 +1,5 @@
 use kairos_reference::application::{CatalogStore, ReferenceSource};
+use kairos_reference::composition::{build_application, ReferenceCompositionConfig};
 use kairos_reference::domain::{
     Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceCatalog, ReferenceResult,
 };
@@ -86,6 +87,7 @@ fn provider_catalog() -> ProviderCatalog {
             listing_id: "listing:binance:BTCUSDT".into(),
             venue_id: "binance".into(),
             market_type: "spot".into(),
+            asset_type: Some("crypto".into()),
             source_symbol: "BTCUSDT".into(),
             base_asset_id: Some("asset:btc".into()),
             quote_asset_id: Some("asset:usdt".into()),
@@ -115,6 +117,7 @@ fn application_exposes_read_only_market_queries() {
     let query = MarketQuery {
         venue_id: Some("binance".into()),
         market_type: Some("spot".into()),
+        asset_type: Some("crypto".into()),
         source_symbol: Some("btcusdt".into()),
         active_only: true,
         ..MarketQuery::default()
@@ -125,6 +128,81 @@ fn application_exposes_read_only_market_queries() {
         "market:binance:spot:BTCUSDT"
     );
     assert_eq!(ReferenceReader::markets(&application, &query).len(), 1);
+}
+
+#[test]
+fn workspace_reference_composes_all_market_product_sources_without_network() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path();
+    std::fs::create_dir_all(root.join("credentials")).unwrap();
+    std::fs::write(
+        root.join("kairos.toml"),
+        r#"version = 1
+workspace_id = "reference-test"
+
+[market.connections.binance-spot]
+provider = "binance-spot-rest"
+[market.connections.binance-usdm]
+provider = "binance-usdm-futures-rest"
+[market.connections.binance-coinm]
+provider = "binance-coinm-futures-rest"
+[market.connections.binance-options]
+provider = "binance-options-rest"
+[market.connections.binance-equity]
+provider = "binance-equity-rest"
+credential_id = "binance-readonly"
+[market.connections.okx-spot]
+provider = "okx-spot-rest"
+asset_type = "crypto"
+[market.connections.okx-equity]
+provider = "okx-spot-rest"
+asset_type = "equity"
+[market.connections.okx-swap]
+provider = "okx-swap-rest"
+[market.connections.okx-futures]
+provider = "okx-futures-rest"
+[market.connections.okx-options]
+provider = "okx-options-rest"
+[market.connections.massive-equity]
+provider = "massive-equity-websocket"
+credential_id = "massive-readonly"
+[market.connections.massive-options]
+provider = "massive-options-websocket"
+credential_id = "massive-readonly"
+"#,
+    )
+    .unwrap();
+    for (id, provider) in [
+        ("binance-readonly", "binance"),
+        ("massive-readonly", "massive"),
+    ] {
+        std::fs::write(
+            root.join("credentials").join(format!("{id}.toml")),
+            format!("[credential]\nid = \"{id}\"\nprovider = \"{provider}\"\napi_key = \"test-key\"\napi_secret = \"test-secret\"\n"),
+        )
+        .unwrap();
+    }
+    let composition = build_application(
+        &ReferenceCompositionConfig {
+            workspace: Some(root.to_path_buf()),
+            provider: "workspace".into(),
+            endpoint: "https://example.invalid".into(),
+            database: root.join("reference.sqlite"),
+            api_key: String::new(),
+            binance_api_key: String::new(),
+            secret: String::new(),
+            underlying: "SPY".into(),
+            aeron_dir: None,
+            channel: "aeron:udp?endpoint=localhost:40123".into(),
+            catalog_stream: 1201,
+            markets_stream: 1202,
+            lifecycle_stream: 1203,
+            changes_stream: 1204,
+        },
+        false,
+    )
+    .unwrap();
+    assert_eq!(composition.application.source_id(), "workspace");
 }
 
 #[test]

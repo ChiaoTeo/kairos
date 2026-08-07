@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import typer
@@ -12,7 +13,7 @@ from kairospy.application.launch.application import (
     new_instance_id,
 )
 from kairospy.application.strategy import StrategyProcessApplication
-from kairospy.application.system import ComponentProcessApplication
+from kairospy.application.system import ComponentProcessApplication, ReferenceProcessConfig
 from kairospy.application.timeline import TimelineApplication
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.application.account import AccountAdminApplication, TradeLeaseApplication
@@ -40,6 +41,22 @@ launch_timeline_app = _legacy_group("timeline", ("list",))
 def _target(launch_id: str, instance: str, mode: str, workspace: Path):
     value = WorkspaceApplication().open(workspace)
     return LaunchControlApplication(value).target(launch_id, instance, mode=mode)
+
+
+def _running_instance(owner, launch_id: str, mode: str) -> dict | None:
+    """Return the one live instance for a launch, if one is reachable."""
+    control = LaunchControlApplication(owner)
+    entries = LaunchRegistryApplication(owner).instances(launch_id)
+    for entry in reversed(entries):
+        if entry.get("mode") != mode:
+            continue
+        instance = str(entry.get("instance_id") or "")
+        if not instance:
+            continue
+        status = control.status(control.target(launch_id, instance, mode=mode))
+        if status.get("status") != "not_running":
+            return {**entry, **status}
+    return None
 
 
 def _emit(value: object, output: OutputFormat) -> None:
@@ -86,7 +103,15 @@ def _release_launch_leases(workspace, account_ids: list[str], *, instance: str) 
     leases = TradeLeaseApplication(workspace)
     for account_id in account_ids:
         account = accounts.show(account_id)
-        leases.release(f"{account.get('broker')}.{account_id}", launch_instance_id=instance)
+        try:
+            leases.release_account(
+                str(account.get("broker") or ""),
+                account_id,
+                launch_instance_id=instance,
+            )
+        except (FileNotFoundError, ValueError):
+            # Cleanup must never replace the original launch exception.
+            pass
 
 
 @launch_app.command("start")
@@ -137,7 +162,13 @@ def start(
         raise typer.BadParameter("strategy is required (in launch config or --strategy)")
     configured_account_ids = list(launch_config.account_refs)
     lease_account_ids = list(dict.fromkeys([*configured_account_ids, *account_id]))
-    LaunchRegistryApplication(owner).add(
+    registry = LaunchRegistryApplication(owner)
+    active = _running_instance(owner, launch_id, mode or launch_config.mode)
+    if active is not None:
+        raise typer.BadParameter(
+            f"launch {launch_id} already has a running instance: {active['instance_id']}"
+        )
+    registry.add(
         launch_id,
         mode=mode,
         instance_id=instance,
@@ -149,7 +180,12 @@ def start(
         launch_environment = LaunchConfigurationApplication().environment(
             config_path, workspace_root=owner.paths.root, instance_id=instance
         )
-    _acquire_launch_leases(owner, lease_account_ids, launch_id=launch_id, instance=instance, mode=mode)
+    registry.update_state(launch_id, mode=mode, instance_id=instance, state="starting")
+    try:
+        _acquire_launch_leases(owner, lease_account_ids, launch_id=launch_id, instance=instance, mode=mode)
+    except Exception:
+        registry.update_state(launch_id, mode=mode, instance_id=instance, state="failed")
+        raise
     try:
         instance_workspace = owner.instance(mode, launch_id, instance)
         instance_workspace.prepare()
@@ -164,16 +200,14 @@ def start(
                 market_provider, market_replay_file = "replay", launch_plan.backtest_replay_file
             elif isinstance(launch_plan.mode_config.get("market"), dict):
                 market_config = launch_plan.mode_config["market"]
-                connection_id = market_config.get("connection")
-                if connection_id is not None:
-                    connection = WorkspaceApplication().market_connection(owner, str(connection_id))
-                    market_provider = connection.get("provider")
-                    market_credential_id = connection.get("credential_id")
-                else:
-                    # Compatibility for launch files written before
-                    # Workspace-owned connection profiles were introduced.
-                    market_provider = market_config.get("provider")
-                    market_credential_id = market_config.get("credential_id")
+                # Market loads the complete Workspace connection catalog and
+                # creates the matching provider lazily for each strategy
+                # subscription. Inline provider fields remain a temporary
+                # compatibility path for older launch files.
+                market_provider = market_config.get("provider") or "workspace"
+                market_credential_id = market_config.get("credential_id")
+            if market_provider is None and mode in {"paper", "live"}:
+                market_provider = "workspace"
         execution_config = dict(launch_plan.execution) if launch_plan is not None else {}
         execution_provider = str(execution_config["provider"]) if execution_config.get("provider") is not None else None
         execution_product = str(execution_config["product"]) if execution_config.get("product") is not None else None
@@ -191,6 +225,11 @@ def start(
         market_instance_workspace = (
             instance_workspace if launch_plan is not None and launch_plan.market_scope == "instance"
             else None
+        )
+        # Reference is a Workspace-global catalog runtime. It is started once
+        # and is never placed in an instance workspace.
+        ComponentProcessApplication(owner).ensure_running(
+            "reference", reference_config=ReferenceProcessConfig(owner, provider="workspace")
         )
         ComponentProcessApplication(owner).ensure_running(
             "market", market_provider=market_provider, market_replay_file=market_replay_file,
@@ -244,8 +283,18 @@ def start(
             "mode": mode,
             "instance_id": instance,
         })
+        registry.update_state(
+            launch_id,
+            mode=mode,
+            instance_id=instance,
+            state=str(started.get("status") or "running"),
+        )
         _emit(started, output)
     except Exception:
+        try:
+            registry.update_state(launch_id, mode=mode, instance_id=instance, state="failed")
+        except FileNotFoundError:
+            pass
         _release_launch_leases(owner, lease_account_ids, instance=instance)
         raise
 
@@ -302,6 +351,10 @@ def stop(
             except (FileNotFoundError, LaunchConfigError, ValueError):
                 pass
         break
+    try:
+        LaunchRegistryApplication(owner).update_state(launch_id, mode=mode, instance_id=instance, state="stopped")
+    except FileNotFoundError:
+        pass
     _emit(value, output)
 
 
@@ -422,15 +475,36 @@ def instances(
 @launch_app.command("attach")
 def attach(
     launch_id: str,
-    instance: str = typer.Option("default", "--instance"),
     mode: str = typer.Option("paper", "--mode"),
+    lines: int = typer.Option(100, "--lines", min=0, help="Number of recent strategy log lines to show."),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
+    active = _running_instance(owner, launch_id, mode)
+    if active is None:
+        raise typer.BadParameter(f"launch is not running: {launch_id}")
+    instance = str(active["instance_id"])
     target = _target(launch_id, instance, mode, workspace)
     value = LaunchControlApplication(owner).status(target)
-    value.update({"socket": str(target.socket_path), "mode": mode, "launch_id": launch_id, "instance_id": instance})
+    log_path = owner.paths.logs / "launches" / mode / launch_id / instance / "strategy.log"
+    log_lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:] if log_path.is_file() and lines else []
+    structured_logs = []
+    for line in log_lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            record = {"message": line, "structured": False}
+        structured_logs.append(record)
+    value.update({
+        "socket": str(target.socket_path),
+        "mode": mode,
+        "launch_id": launch_id,
+        "instance_id": instance,
+        "stdout_log": str(log_path),
+        "stdout": log_lines,
+        "logs": structured_logs,
+    })
     _emit(value, output)
 
 

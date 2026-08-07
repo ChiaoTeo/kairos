@@ -69,3 +69,13 @@ def test_launch_lease_helpers_bind_account_to_instance(tmp_path) -> None:
     assert TradeLeaseApplication(workspace).list()[0]["launch_id"] == "run"
     _release_launch_leases(workspace, ["paper"], instance="one")
     assert TradeLeaseApplication(workspace).list() == []
+
+
+def test_launch_lease_helpers_release_normalized_account_key(tmp_path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="account")
+    AccountAdminApplication(workspace).simulate("paper-account")
+    _acquire_launch_leases(workspace, ["paper-account"], launch_id="run", instance="one", mode="paper")
+
+    assert TradeLeaseApplication(workspace).list()[0]["account_key"] == "paper.paper_account"
+    _release_launch_leases(workspace, ["paper-account"], instance="one")
+    assert TradeLeaseApplication(workspace).list() == []

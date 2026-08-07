@@ -29,6 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database = workspace.child(&["reference", "reference.sqlite"])?;
     ensure_database_parent(&database)?;
     let config = ReferenceCompositionConfig {
+        workspace: Some(workspace.root().to_path_buf()),
         provider: args.provider,
         endpoint,
         database,
@@ -255,6 +256,7 @@ impl MarketQueryArgs {
             market_id: self.market_id,
             venue_id: self.venue_id.or(self.venue),
             market_type: self.market_type.or(self.market),
+            asset_type: self.asset_type,
             source_symbol: self.symbol,
             active_only: self.active_only,
             as_of_unix_nanos: None,
@@ -429,6 +431,8 @@ struct MarketQueryArgs {
     venue: Option<String>,
     #[arg(long)]
     market_type: Option<String>,
+    #[arg(long)]
+    asset_type: Option<String>,
     #[arg(long, visible_alias = "market")]
     market: Option<String>,
     #[arg(long)]

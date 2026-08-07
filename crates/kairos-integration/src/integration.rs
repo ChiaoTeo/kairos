@@ -23,6 +23,9 @@ use crate::services::gateways::okx::{
     OkxAccountConnection, OkxAccountMarketProfileConnection, OkxOrderConnection,
 };
 use crate::services::gateways::okx_stream::OkxAccountStreamConnection;
+use crate::services::gateways::public_reference::{
+    binance_derivatives_catalog, okx_catalog, PublicReferenceConnection,
+};
 
 struct MarketStreamEntry {
     provider: String,
@@ -35,6 +38,7 @@ struct ReferenceEntry {
     provider: String,
     product: Option<ProductFamily>,
     transport: TransportKind,
+    asset_type: Option<crate::domain::AssetType>,
     open: Box<dyn Fn() -> Result<Box<dyn ReferenceDataConnection>, IntegrationError> + Send + Sync>,
 }
 
@@ -156,6 +160,7 @@ impl Integration {
             provider: "binance".into(),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::Rest,
+            asset_type: None,
             open: Box::new(move || {
                 reference_factory
                     .open()
@@ -177,11 +182,94 @@ impl Integration {
             provider: "binance".into(),
             product: Some(ProductFamily::Options),
             transport: TransportKind::Rest,
+            asset_type: None,
             open: Box::new(move || {
                 reference_factory
                     .open()
                     .map_err(IntegrationError::InvalidRequest)
             }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_binance_derivatives_reference(
+        mut self,
+        product: ProductFamily,
+        endpoint: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        if !matches!(
+            product,
+            ProductFamily::UsdMFutures | ProductFamily::CoinMFutures
+        ) {
+            return Err(IntegrationError::InvalidRequest(
+                "Binance derivatives reference requires futures product".into(),
+            ));
+        }
+        let endpoint = endpoint.into();
+        let connection = move || {
+            PublicReferenceConnection::new(
+                "binance",
+                product,
+                Some(crate::domain::AssetType::Crypto),
+                endpoint.clone(),
+                binance_derivatives_catalog,
+            )
+            .map(|value| Box::new(value) as Box<dyn ReferenceDataConnection>)
+            .map_err(IntegrationError::InvalidRequest)
+        };
+        self.references.push(ReferenceEntry {
+            provider: "binance".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            asset_type: Some(crate::domain::AssetType::Crypto),
+            open: Box::new(connection),
+        });
+        Ok(self)
+    }
+
+    pub fn with_okx_reference(
+        mut self,
+        product: ProductFamily,
+        asset_type: Option<crate::domain::AssetType>,
+        endpoint: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        if !matches!(
+            product,
+            ProductFamily::Spot
+                | ProductFamily::UsdMFutures
+                | ProductFamily::CoinMFutures
+                | ProductFamily::Options
+        ) {
+            return Err(IntegrationError::InvalidRequest(
+                "unsupported OKX reference product".into(),
+            ));
+        }
+        let endpoint = endpoint.into().trim_end_matches('/').to_string();
+        let inst_type = match product {
+            ProductFamily::Spot => "SPOT",
+            ProductFamily::UsdMFutures => "SWAP",
+            ProductFamily::CoinMFutures => "FUTURES",
+            ProductFamily::Options => "OPTION",
+            _ => unreachable!(),
+        };
+        let endpoint = format!("{endpoint}/api/v5/public/instruments?instType={inst_type}");
+        let connection = move || {
+            PublicReferenceConnection::new(
+                "okx",
+                product,
+                asset_type,
+                endpoint.clone(),
+                okx_catalog,
+            )
+            .map(|value| Box::new(value) as Box<dyn ReferenceDataConnection>)
+            .map_err(IntegrationError::InvalidRequest)
+        };
+        self.references.push(ReferenceEntry {
+            provider: "okx".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            asset_type,
+            open: Box::new(connection),
         });
         Ok(self)
     }
@@ -200,6 +288,7 @@ impl Integration {
             provider: "binance".into(),
             product: Some(ProductFamily::Equity),
             transport: TransportKind::Rest,
+            asset_type: Some(crate::domain::AssetType::Equity),
             open: Box::new(move || {
                 reference_factory
                     .open_connection()
@@ -223,6 +312,7 @@ impl Integration {
             provider: "massive".into(),
             product: None,
             transport: TransportKind::Rest,
+            asset_type: Some(crate::domain::AssetType::Equity),
             open: Box::new(move || {
                 MassiveReferenceConnection::open(reference_client.clone())
                     .map(|connection| Box::new(connection) as Box<dyn ReferenceDataConnection>)
@@ -245,6 +335,7 @@ impl Integration {
             provider: "massive-equity".into(),
             product: Some(ProductFamily::Equity),
             transport: TransportKind::Rest,
+            asset_type: Some(crate::domain::AssetType::Equity),
             open: Box::new(move || {
                 MassiveReferenceConnection::open(reference_client.clone())
                     .map(|connection| Box::new(connection) as Box<dyn ReferenceDataConnection>)
@@ -260,6 +351,7 @@ impl Integration {
             provider: "hyperliquid".into(),
             product: Some(ProductFamily::UsdMFutures),
             transport: TransportKind::Rest,
+            asset_type: Some(crate::domain::AssetType::Crypto),
             open: Box::new(move || {
                 HyperliquidReferenceConnection::open(endpoint.clone())
                     .map(|connection| Box::new(connection) as Box<dyn ReferenceDataConnection>)
@@ -280,6 +372,7 @@ impl Integration {
             provider: "ccxt".into(),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::Rest,
+            asset_type: Some(crate::domain::AssetType::Crypto),
             open: Box::new(move || {
                 CcxtReferenceConnection::open(reference_client.clone())
                     .map(|connection| Box::new(connection) as Box<dyn ReferenceDataConnection>)
@@ -304,6 +397,7 @@ impl Integration {
                 entry.provider == spec.provider
                     && entry.product == spec.product
                     && entry.transport == spec.transport
+                    && entry.asset_type == spec.asset_type
             })
             .ok_or(IntegrationError::UnsupportedOperation)
             .and_then(|entry| (entry.open)())
@@ -378,6 +472,85 @@ impl Integration {
                 )
                 .map(|stream| Box::new(stream) as Box<dyn MarketStreamConnection>)
                 .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_binance_derivatives_market_stream(
+        mut self,
+        product: ProductFamily,
+        endpoint: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        let endpoint = endpoint.into();
+        let path = path.into();
+        binance::derivatives_market::rest_market_stream(endpoint.clone(), path.clone(), product)?;
+        self.market_streams.push(MarketStreamEntry {
+            provider: "binance".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                binance::derivatives_market::rest_market_stream(
+                    endpoint.clone(),
+                    path.clone(),
+                    product,
+                )
+                .map(|stream| Box::new(stream) as Box<dyn MarketStreamConnection>)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_okx_market_stream(
+        mut self,
+        product: ProductFamily,
+        endpoint: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        let endpoint = endpoint.into();
+        crate::services::gateways::okx_market_stream::rest_market_stream(
+            endpoint.clone(),
+            product,
+        )?;
+        self.market_streams.push(MarketStreamEntry {
+            provider: "okx".into(),
+            product: Some(product),
+            transport: TransportKind::Rest,
+            open: Box::new(move || {
+                crate::services::gateways::okx_market_stream::rest_market_stream(
+                    endpoint.clone(),
+                    product,
+                )
+                .map(|stream| Box::new(stream) as Box<dyn MarketStreamConnection>)
+            }),
+        });
+        Ok(self)
+    }
+
+    pub fn with_massive_market_stream(
+        mut self,
+        product: ProductFamily,
+        api_key: impl Into<String>,
+        endpoint: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        let api_key = api_key.into();
+        let endpoint = endpoint.into();
+        crate::services::gateways::massive::market_stream::MassiveMarketStream::new(
+            api_key.clone(),
+            endpoint.clone(),
+            product,
+        )?;
+        self.market_streams.push(MarketStreamEntry {
+            provider: "massive".into(),
+            product: Some(product),
+            transport: TransportKind::WebSocket,
+            open: Box::new(move || {
+                crate::services::gateways::massive::market_stream::MassiveMarketStream::new(
+                    api_key.clone(),
+                    endpoint.clone(),
+                    product,
+                )
+                .map(|stream| Box::new(stream) as Box<dyn MarketStreamConnection>)
             }),
         });
         Ok(self)
@@ -1630,5 +1803,87 @@ mod tests {
             })
             .unwrap();
         assert_eq!(connection.identity().transport, TransportKind::WebSocket);
+    }
+
+    #[test]
+    fn one_integration_facade_composes_every_required_market_product() {
+        let integration = Integration::new()
+            .with_binance_spot_rest_market_stream("https://example.test")
+            .unwrap()
+            .with_binance_derivatives_market_stream(
+                ProductFamily::UsdMFutures,
+                "https://example.test",
+                "/fapi/v1/ticker/bookTicker",
+            )
+            .unwrap()
+            .with_binance_derivatives_market_stream(
+                ProductFamily::CoinMFutures,
+                "https://example.test",
+                "/dapi/v1/ticker/bookTicker",
+            )
+            .unwrap()
+            .with_binance_derivatives_market_stream(
+                ProductFamily::Options,
+                "https://example.test",
+                "/eapi/v1/ticker",
+            )
+            .unwrap()
+            .with_binance_equity_market_stream("key", "secret", "https://example.test")
+            .unwrap()
+            .with_okx_market_stream(ProductFamily::Spot, "https://example.test")
+            .unwrap()
+            .with_okx_market_stream(ProductFamily::UsdMFutures, "https://example.test")
+            .unwrap()
+            .with_okx_market_stream(ProductFamily::CoinMFutures, "https://example.test")
+            .unwrap()
+            .with_okx_market_stream(ProductFamily::Options, "https://example.test")
+            .unwrap()
+            .with_massive_market_stream(
+                ProductFamily::Equity,
+                "massive-key",
+                "wss://example.test/stocks",
+            )
+            .unwrap()
+            .with_massive_market_stream(
+                ProductFamily::Options,
+                "massive-key",
+                "wss://example.test/options",
+            )
+            .unwrap();
+
+        let products = [
+            ("binance", ProductFamily::Spot),
+            ("binance", ProductFamily::UsdMFutures),
+            ("binance", ProductFamily::CoinMFutures),
+            ("binance", ProductFamily::Options),
+            ("binance", ProductFamily::Equity),
+            ("okx", ProductFamily::Spot),
+            ("okx", ProductFamily::UsdMFutures),
+            ("okx", ProductFamily::CoinMFutures),
+            ("okx", ProductFamily::Options),
+            ("massive", ProductFamily::Equity),
+            ("massive", ProductFamily::Options),
+        ];
+        assert_eq!(products.len(), 11);
+        for (index, (provider, product)) in products.into_iter().enumerate() {
+            let connection = integration
+                .connect_market_stream(&ConnectionSpec {
+                    connection_id: format!("market-{index}"),
+                    provider: provider.into(),
+                    product: Some(product),
+                    access: AccessScope::Public,
+                    transport: if provider == "massive" {
+                        TransportKind::WebSocket
+                    } else {
+                        TransportKind::Rest
+                    },
+                    capability: IntegrationCapability::MarketStream,
+                    credential_id: None,
+                    asset_type: None,
+                })
+                .unwrap();
+            assert_eq!(connection.identity().provider, provider);
+            assert_eq!(connection.identity().product, Some(product));
+        }
     }
 }

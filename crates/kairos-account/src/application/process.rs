@@ -18,9 +18,19 @@ use crate::domain::{AccountFill, Intent};
 use crate::services::publication::FileAccountPublisher;
 
 #[derive(serde::Deserialize)]
-struct IntentCommand {
-    request_id: String,
+struct IntentPayload {
     intent: Intent,
+}
+
+#[derive(serde::Deserialize)]
+struct CommandEnvelope<T> {
+    schema_version: u16,
+    command_id: String,
+    idempotency_key: String,
+    operation: String,
+    strategy_id: String,
+    instance_id: String,
+    payload: T,
 }
 
 pub struct AccountProcess {
@@ -222,26 +232,56 @@ impl AccountProcess {
                     json!({"error": format!("invalid account session: {error}")}),
                 ),
             },
-            "/v1/intents/submit" => match serde_json::from_str::<IntentCommand>(body) {
-                Ok(command) if !command.request_id.trim().is_empty() => {
-                    match self.application.record_intent(command.intent.clone()) {
-                        Ok(()) => (
-                            202,
-                            json!({
-                                "request_id": command.request_id,
-                                "intent_id": command.intent.intent_id,
-                                "status": "accepted",
-                            }),
-                        ),
-                        Err(error) => (422, json!({"error": error.to_string()})),
+            "/v1/intents/submit" => {
+                match serde_json::from_str::<CommandEnvelope<IntentPayload>>(body) {
+                    Ok(command)
+                        if command.schema_version == 1
+                            && command.operation == "account.submit_intent"
+                            && !command.command_id.trim().is_empty()
+                            && !command.idempotency_key.trim().is_empty()
+                            && !command.strategy_id.trim().is_empty()
+                            && !command.instance_id.trim().is_empty() =>
+                    {
+                        match self
+                            .application
+                            .record_intent(command.payload.intent.clone())
+                        {
+                            Ok(()) => (
+                                202,
+                                json!({
+                                    "schema_version": 1,
+                                    "command_id": command.command_id,
+                                    "request_id": command.command_id,
+                                    "status": "accepted",
+                                    "result": {
+                                        "intent_id": command.payload.intent.intent_id,
+                                        "strategy_id": command.strategy_id,
+                                        "instance_id": command.instance_id,
+                                    },
+                                    "intent_id": command.payload.intent.intent_id,
+                                }),
+                            ),
+                            Err(error) => (
+                                422,
+                                json!({
+                                    "schema_version": 1,
+                                    "command_id": command.command_id,
+                                    "status": "rejected",
+                                    "error": {"code": "account.intent_invalid", "message": error.to_string(), "retryable": false},
+                                }),
+                            ),
+                        }
                     }
+                    Ok(_) => (
+                        422,
+                        json!({"schema_version": 1, "status": "rejected", "error": {"code": "command.invalid_envelope", "message": "schema_version, operation, command_id, strategy_id and instance_id are required", "retryable": false}}),
+                    ),
+                    Err(error) => (
+                        400,
+                        json!({"schema_version": 1, "status": "rejected", "error": {"code": "command.invalid_json", "message": format!("invalid intent command: {error}"), "retryable": false}}),
+                    ),
                 }
-                Ok(_) => (422, json!({"error":"request_id is required"})),
-                Err(error) => (
-                    400,
-                    json!({"error": format!("invalid intent command: {error}")}),
-                ),
-            },
+            }
             "/v1/fills" => match serde_json::from_str::<AccountFill>(body) {
                 Ok(fill) => match self.application.apply_fill(fill) {
                     Ok(()) => (202, json!({"status": "accepted"})),
@@ -423,7 +463,7 @@ mod tests {
                     }
                     tokio::task::yield_now().await;
                 }
-                let body = r#"{"request_id":"request-1","intent":{"intent_id":"intent-1","strategy_id":"sma","account_id":"main","segment_key":"spot","instrument_id":"BTCUSDT","kind":"TargetPosition","target_quantity":{"mantissa":1,"scale":0},"quantity":null,"limit_price":null,"created_at_unix_nanos":1,"reason":"test"}}"#;
+                let body = r#"{"schema_version":1,"command_id":"request-1","idempotency_key":"request-1","operation":"account.submit_intent","strategy_id":"sma","instance_id":"instance-1","payload":{"intent":{"intent_id":"intent-1","strategy_id":"sma","account_id":"main","segment_key":"spot","instrument_id":"BTCUSDT","kind":"TargetPosition","target_quantity":{"mantissa":1,"scale":0},"quantity":null,"limit_price":null,"created_at_unix_nanos":1,"reason":"test"}}}"#;
                 let response = request(&socket, body).await;
                 assert!(response.contains("\"status\":\"accepted\""));
                 let _ = request_stop(&socket).await;

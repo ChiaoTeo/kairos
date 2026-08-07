@@ -79,6 +79,7 @@ pub fn catalog(payload: &Value) -> Result<ReferenceCatalogPayload, String> {
             listing_id,
             venue_id: "binance".into(),
             market_type: "equity".into(),
+            asset_type: Some("equity".into()),
             source_symbol: key,
             base_asset_id: Some(asset_id),
             quote_asset_id: None,

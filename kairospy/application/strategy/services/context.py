@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Callable, Mapping, Sequence
 
-from kairospy.strategy import StrategyContextProtocol
+from kairospy.strategy import StrategyContextProtocol, StrategyLogger
 
 from ..domain.messages import CommandHandle, ContextRequest, EventEnvelope, SnapshotEnvelope, SubscriptionRequest, TargetPositionRequest
 from ..protocol import ContextBus, SnapshotReader
@@ -22,6 +22,7 @@ class StrategyContext(StrategyContextProtocol):
         snapshots: SnapshotReader,
         state: dict[str, object] | None = None,
         request_observer: Callable[[ContextRequest, CommandHandle], None] | None = None,
+        logger: StrategyLogger | None = None,
     ) -> None:
         if not strategy_id.strip():
             raise ValueError("strategy_id is required")
@@ -31,6 +32,7 @@ class StrategyContext(StrategyContextProtocol):
         self._snapshots = snapshots
         self._request_observer = request_observer
         self.state = state if state is not None else {}
+        self.logger = logger or StrategyLogger(fields={"strategy_id": strategy_id, "instance_id": instance_id})
         self._event: EventEnvelope | None = None
         self._views: dict[str, SnapshotEnvelope] = {}
         self._request_counter = 0
@@ -54,8 +56,8 @@ class StrategyContext(StrategyContextProtocol):
             self._request_observer(request, handle)
         return handle
 
-    def subscribe(self, subject: str, *, selectors: Sequence[str] = (), exchange: str | None = None, market_type: str | None = None, identity: str | None = None, params: Mapping[str, object] | None = None, dynamic: bool = False) -> CommandHandle:
-        request = SubscriptionRequest(subject, tuple(selectors), exchange, market_type, identity, params or {}, dynamic)
+    def subscribe(self, subject: str, *, selectors: Sequence[str] = (), exchange: str | None = None, market_type: str | None = None, asset_type: str | None = None, identity: str | None = None, params: Mapping[str, object] | None = None, dynamic: bool = False) -> CommandHandle:
+        request = SubscriptionRequest(subject=subject, selectors=tuple(selectors), exchange=exchange, market_type=market_type, asset_type=asset_type, identity=identity, params=params or {}, dynamic=dynamic)
         return self._submit("market.subscribe", request)
 
     def unsubscribe(self, subscription: object) -> CommandHandle:

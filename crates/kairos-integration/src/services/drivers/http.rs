@@ -18,6 +18,8 @@ pub enum ExchangeError {
     Http { status: u16, body: String },
     #[error("invalid exchange response: {0}")]
     Response(#[from] serde_json::Error),
+    #[error("exchange returned invalid JSON: {message}; body: {body}")]
+    InvalidJson { message: String, body: String },
     #[error("exchange authentication failed: {0}")]
     Authentication(String),
     #[error("invalid exchange request: {0}")]
@@ -28,16 +30,27 @@ pub enum ExchangeError {
 
 #[derive(Clone)]
 pub struct PublicHttpClient {
-    client: Client,
+    // reqwest::blocking owns an internal Tokio runtime.  Market processes
+    // call it from an async server, so move its final drop off the Tokio
+    // worker thread (otherwise Tokio panics during shutdown).
+    client: Option<Client>,
     max_attempts: usize,
     retry_delay: Duration,
 }
 
 impl PublicHttpClient {
     pub fn new(user_agent: &str) -> Result<Self, ExchangeError> {
-        let client = Client::builder().user_agent(user_agent).build()?;
+        // reqwest::blocking refuses to construct its private runtime while a
+        // Tokio runtime is current. Market control handlers are async, so do
+        // the blocking-client construction on a plain OS thread.
+        let user_agent = user_agent.to_owned();
+        let client = std::thread::spawn(move || Client::builder().user_agent(user_agent).build())
+            .join()
+            .map_err(|_| {
+                ExchangeError::Connection("HTTP client builder thread panicked".into())
+            })??;
         Ok(Self {
-            client,
+            client: Some(client),
             max_attempts: 3,
             retry_delay: Duration::from_millis(250),
         })
@@ -91,11 +104,23 @@ impl PublicHttpClient {
         let mut last_error = None;
         for attempt in 0..self.max_attempts {
             let request = headers.iter().fold(
-                self.client.post(endpoint).json(body),
+                self.client
+                    .as_ref()
+                    .expect("HTTP client is available")
+                    .post(endpoint)
+                    .json(body),
                 |request, (name, value)| request.header(*name, value),
             );
             match request.send() {
-                Ok(response) if response.status().is_success() => return Ok(response.json()?),
+                Ok(response) if response.status().is_success() => {
+                    let body = response.text()?;
+                    return serde_json::from_str(&body).map_err(|error| {
+                        ExchangeError::InvalidJson {
+                            message: error.to_string(),
+                            body: diagnostic_body(&body),
+                        }
+                    });
+                }
                 Ok(response) => {
                     let status = response.status().as_u16();
                     let body = response.text().unwrap_or_default();
@@ -123,11 +148,23 @@ impl PublicHttpClient {
         let mut last_error = None;
         for attempt in 0..self.max_attempts {
             let request = headers.iter().fold(
-                self.client.request(method.clone(), endpoint).query(query),
+                self.client
+                    .as_ref()
+                    .expect("HTTP client is available")
+                    .request(method.clone(), endpoint)
+                    .query(query),
                 |request, (name, value)| request.header(*name, value),
             );
             match request.send() {
-                Ok(response) if response.status().is_success() => return Ok(response.json()?),
+                Ok(response) if response.status().is_success() => {
+                    let body = response.text()?;
+                    return serde_json::from_str(&body).map_err(|error| {
+                        ExchangeError::InvalidJson {
+                            message: error.to_string(),
+                            body: diagnostic_body(&body),
+                        }
+                    });
+                }
                 Ok(response) => {
                     let status = response.status().as_u16();
                     let body = response.text().unwrap_or_default();
@@ -143,5 +180,23 @@ impl PublicHttpClient {
             }
         }
         Err(last_error.expect("at least one HTTP attempt"))
+    }
+}
+
+impl Drop for PublicHttpClient {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take() {
+            std::thread::spawn(move || drop(client));
+        }
+    }
+}
+
+fn diagnostic_body(body: &str) -> String {
+    const LIMIT: usize = 512;
+    let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= LIMIT {
+        normalized
+    } else {
+        format!("{}…", normalized.chars().take(LIMIT).collect::<String>())
     }
 }

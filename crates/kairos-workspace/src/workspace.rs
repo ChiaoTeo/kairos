@@ -6,6 +6,7 @@ use std::{
 };
 
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 fn default_cli_format() -> String {
     "json".into()
@@ -115,10 +116,27 @@ impl InstanceWorkspace {
     }
 
     pub fn socket(&self, name: &str) -> io::Result<PathBuf> {
-        Ok(self
-            .root()
-            .join("sockets")
-            .join(format!("{}.sock", Self::component(name)?)))
+        let name = Self::component(name)?;
+        let candidate = self.root().join("sockets").join(format!("{name}.sock"));
+        if candidate.to_string_lossy().as_bytes().len() <= 100 {
+            return Ok(candidate);
+        }
+        let input = format!(
+            "{}:{}:{}:{}:{}",
+            self.workspace.root.display(),
+            self.mode,
+            self.launch_id,
+            self.instance_id,
+            name
+        );
+        let digest = Sha256::digest(input.as_bytes());
+        let short = digest[..10]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        Ok(PathBuf::from(format!(
+            "/tmp/kairos-instance-{short}-{name}.sock"
+        )))
     }
 
     pub fn health(&self, name: &str) -> io::Result<PathBuf> {
@@ -353,7 +371,7 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::Workspace;
-    use std::fs;
+    use std::{fs, path::Path};
 
     #[test]
     fn opens_manifest_and_derives_process_paths() {
@@ -385,5 +403,30 @@ mod tests {
         assert!(workspace.reference_root().is_dir());
         assert!(workspace.child(&["accounts"]).unwrap().is_dir());
         assert!(workspace.child(&["orders", "journals"]).unwrap().is_dir());
+    }
+
+    #[test]
+    fn instance_socket_uses_short_alias_for_long_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(
+            root.path()
+                .join("workspace-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+            "demo",
+        )
+        .unwrap();
+        let instance = workspace
+            .instance(
+                "paper",
+                "aapl-paper",
+                "0df2adc3-b650-4a93-aa47-e3f12fc7cd69",
+            )
+            .unwrap();
+        let socket = instance.socket("market").unwrap();
+        assert_eq!(socket.parent().unwrap(), Path::new("/tmp"));
+        assert!(socket
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with("-market.sock"));
     }
 }

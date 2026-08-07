@@ -4,10 +4,11 @@ from kairospy.strategy import StrategyBase
 class PrintMarket(StrategyBase):
     strategy_id = "print-market"
 
-    def __init__(self, symbol="BTCUSDT", exchange=None, market_type=None, identity=None):
+    def __init__(self, symbol="BTCUSDT", exchange=None, market_type=None, asset_type=None, identity=None):
         self.symbol = str(symbol).upper()
         self.exchange = exchange
         self.market_type = market_type
+        self.asset_type = asset_type
         self.identity = identity
 
     def on_start(self, context):
@@ -16,6 +17,7 @@ class PrintMarket(StrategyBase):
             selectors=("quote",),
             exchange=self.exchange,
             market_type=self.market_type,
+            asset_type=self.asset_type,
             identity=self.identity,
         )
 

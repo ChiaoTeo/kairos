@@ -12,6 +12,7 @@ from ..workspace import Workspace
 DEFAULT_SPOT_ENDPOINT = "https://api.binance.com/api/v3/exchangeInfo"
 DEFAULT_OPTIONS_ENDPOINT = "https://eapi.binance.com/eapi/v1/exchangeInfo"
 DEFAULT_MASSIVE_ENDPOINT = "http://api.massiveprivateserver.site"
+DEFAULT_OKX_ENDPOINT = "https://www.okx.com"
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +57,12 @@ class ReferenceProcessConfig:
             endpoint = DEFAULT_OPTIONS_ENDPOINT
         if self.provider == "massive-options" and endpoint == DEFAULT_SPOT_ENDPOINT:
             endpoint = DEFAULT_MASSIVE_ENDPOINT
+        if self.provider.startswith("okx-") and endpoint == DEFAULT_SPOT_ENDPOINT:
+            endpoint = DEFAULT_OKX_ENDPOINT
+        if self.provider == "binance-usdm-futures" and endpoint == DEFAULT_SPOT_ENDPOINT:
+            endpoint = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        if self.provider == "binance-coinm-futures" and endpoint == DEFAULT_SPOT_ENDPOINT:
+            endpoint = "https://dapi.binance.com/dapi/v1/exchangeInfo"
         command = [
             self.binary,
             "--provider",

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from io import StringIO
+import json
 import os
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from kairospy.application.strategy.services import (
     StrategyControlServer,
 )
 from kairospy.application.system import UnixRestClient
+from kairospy.strategy import StrategyLogger, StrategyOutput
 
 
 class UserStrategy(StrategyBase):
@@ -36,7 +39,7 @@ class UserStrategy(StrategyBase):
         context.target_position("BTCUSDT", 1)
 
 
-def _host(tmp_path: Path):
+def _host(tmp_path: Path, logger: StrategyLogger | None = None):
     bus = InMemoryContextBus()
     stream = InMemoryEventStream("market-events")
     snapshots = InMemorySnapshotReader({
@@ -53,6 +56,7 @@ def _host(tmp_path: Path):
         snapshots=snapshots,
         stream=stream,
         journal=InMemoryLifecycleJournal(),
+        logger=logger,
     )
     return host, strategy, bus, stream
 
@@ -75,6 +79,49 @@ def test_strategy_dependencies_are_declared_through_context_bus(tmp_path: Path) 
     assert strategy.events == [1]
     assert bus.requests[1].operation == "intent.target_position"
     assert bus.requests[1].payload.instrument_id == "BTCUSDT"
+
+
+def test_strategy_logs_include_system_and_event_time(tmp_path: Path) -> None:
+    output = StringIO()
+    event_time = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    host, _, bus, _ = _host(
+        tmp_path,
+        StrategyLogger(fields={"component": "strategy"}, stream=output),
+    )
+
+    host.start()
+    bus.resolve(bus.requests[0].request_id)
+    host.refresh()
+    host.enable()
+    host.dispatch(EventEnvelope("market-events", 1, "data", "quote", {}, event_time))
+
+    records = [json.loads(line) for line in output.getvalue().splitlines()]
+    dispatch = next(record for record in records if record["message"] == "dispatch on_data")
+    assert dispatch["system_time"]
+    assert dispatch["event_time"] == event_time.isoformat()
+    assert dispatch["event_time_source"] == "market_event"
+    assert dispatch["event_sequence"] == 1
+
+
+def test_legacy_print_is_wrapped_with_event_context() -> None:
+    output = StringIO()
+    logger = StrategyLogger(stream=output)
+    legacy_stdout = StrategyOutput(logger, source="stdout")
+    event_time = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+
+    with logger.bind_event(
+        event_time=event_time,
+        event_time_source="market_event",
+        event_sequence=7,
+    ):
+        legacy_stdout.write("user strategy output")
+        legacy_stdout.flush()
+
+    record = json.loads(output.getvalue())
+    assert record["message"] == "user strategy output"
+    assert record["data"]["source"] == "stdout"
+    assert record["event_time"] == event_time.isoformat()
+    assert record["event_sequence"] == 7
 
 
 def test_strategy_cannot_run_until_snapshot_watermark_is_joined(tmp_path: Path) -> None:

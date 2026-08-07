@@ -14,6 +14,7 @@ class SubscriptionRequest:
     selectors: tuple[str, ...] = ()
     exchange: str | None = None
     market_type: str | None = None
+    asset_type: str | None = None
     identity: str | None = None
     params: Mapping[str, object] = field(default_factory=dict)
     dynamic: bool = False

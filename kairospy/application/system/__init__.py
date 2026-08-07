@@ -141,7 +141,7 @@ class ComponentProcessApplication:
         instance_workspace: Any | None = None,
     ) -> tuple[list[str], Mapping[str, str]]:
         if component == "reference":
-            config = reference_config or ReferenceProcessConfig(self.workspace)
+            config = reference_config or ReferenceProcessConfig(self.workspace, provider="workspace")
             configured = self.binaries.get("reference")
             if configured is not None or config.binary == "kairos-reference-server":
                 config = replace(

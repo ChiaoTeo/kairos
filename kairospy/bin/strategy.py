@@ -4,10 +4,12 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
+import sys
 from typing import Any
 
 from kairospy.application.strategy.services.composition import compose_strategy_process
 from kairospy.application.workspace import WorkspaceApplication
+from kairospy.strategy import StrategyOutput
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -39,11 +41,19 @@ async def _run(args: argparse.Namespace) -> None:
         mode=args.mode,
         params=_params(args.params),
     )
-    await composition.control.start()
+    original_stdout = sys.stdout
+    original_stderr = sys.stderr
+    sys.stdout = StrategyOutput(composition.host.logger, source="stdout")
+    sys.stderr = StrategyOutput(composition.host.logger, source="stderr")
     try:
+        await composition.control.start()
         await composition.control.serve_until_stopped()
     finally:
         await composition.control.close()
+        sys.stdout.flush()
+        sys.stderr.flush()
+        sys.stdout = original_stdout
+        sys.stderr = original_stderr
 
 
 def main() -> int:

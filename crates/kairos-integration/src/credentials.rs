@@ -59,24 +59,29 @@ pub fn load_workspace_credential(
                 }
             })
             .collect();
+        let (api_key_env, api_secret_env, passphrase_env) = match provider.as_str() {
+            "massive" => ("MASSIVE_API_KEY", "MASSIVE_API_SECRET", "OKX_PASSPHRASE"),
+            "okx" | "okex" => ("OKX_API_KEY", "OKX_API_SECRET", "OKX_PASSPHRASE"),
+            _ => ("BINANCE_API_KEY", "BINANCE_API_SECRET", "OKX_PASSPHRASE"),
+        };
         return Ok(Some(WorkspaceCredential {
             api_key: value_or_env(
                 table,
                 "api_key",
                 &format!("KAIROS_CREDENTIAL_{prefix}_API_KEY"),
-                "BINANCE_API_KEY",
+                api_key_env,
             ),
             secret: value_or_env(
                 table,
                 "api_secret",
                 &format!("KAIROS_CREDENTIAL_{prefix}_API_SECRET"),
-                "BINANCE_API_SECRET",
+                api_secret_env,
             ),
             passphrase: value_or_env(
                 table,
                 "passphrase",
                 &format!("KAIROS_CREDENTIAL_{prefix}_PASSPHRASE"),
-                "OKX_PASSPHRASE",
+                passphrase_env,
             ),
         }));
     }

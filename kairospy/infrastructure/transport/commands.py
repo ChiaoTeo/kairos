@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from kairospy.strategy import (
     CommandHandle,
+    CommandEnvelope,
     MarketSubscriptionRequest,
     TargetPositionRequest,
 )
@@ -50,30 +51,42 @@ class UnixJsonCommandClient:
 
 
 class MarketUnixCommandPort:
-    def __init__(self, client: UnixJsonCommandClient) -> None:
+    def __init__(self, client: UnixJsonCommandClient, *, launch_id: str | None = None) -> None:
         self.client = client
+        self.launch_id = launch_id
 
     def subscribe(self, request: MarketSubscriptionRequest, *, strategy_id: str, instance_id: str, request_id: str) -> CommandHandle:
-        status, value = self.client.request("POST", "/v1/subscribe", {
-            "request_id": request_id,
-            "strategy_id": strategy_id,
-            "instance_id": instance_id,
-            "subject": request.subject,
-            "selectors": list(request.selectors),
-            "exchange": request.exchange,
-            "market_type": request.market_type,
-            "identity": request.identity,
-            "dynamic": request.dynamic,
-        })
+        envelope = CommandEnvelope(
+            command_id=request_id,
+            operation="market.subscribe",
+            strategy_id=strategy_id,
+            instance_id=instance_id,
+            launch_id=self.launch_id,
+            payload={
+                "subject": request.subject,
+                "selectors": list(request.selectors),
+                "exchange": request.exchange,
+                "market_type": request.market_type,
+                "asset_type": request.asset_type,
+                "identity": request.identity,
+                "dynamic": request.dynamic,
+            },
+        )
+        status, value = self.client.request("POST", "/v1/subscribe", envelope.as_dict())
         return _handle(request_id, status, value)
 
-    def unsubscribe(self, subscription: object, *, strategy_id: str, request_id: str) -> CommandHandle:
+    def unsubscribe(self, subscription: object, *, strategy_id: str, instance_id: str, request_id: str) -> CommandHandle:
+        if not instance_id.strip():
+            return CommandHandle(request_id, "rejected", error="instance_id is required for market commands")
         subscription_id = subscription if isinstance(subscription, str) else str(subscription)
-        status, value = self.client.request("POST", "/v1/unsubscribe", {
-            "request_id": request_id,
-            "strategy_id": strategy_id,
-            "subscription_id": subscription_id,
-        })
+        envelope = CommandEnvelope(
+            command_id=request_id,
+            operation="market.unsubscribe",
+            strategy_id=strategy_id,
+            instance_id=instance_id,
+            payload={"subscription_id": subscription_id},
+        )
+        status, value = self.client.request("POST", "/v1/unsubscribe", envelope.as_dict())
         return _handle(request_id, status, value)
 
 
@@ -86,14 +99,18 @@ class AccountIntentCommandPort:
         allow_trading: bool = True,
         max_order_notional: Decimal | None = None,
         require_limit_orders: bool = False,
+        launch_id: str | None = None,
     ) -> None:
         self.client = client
         self.default_segment = default_segment
         self.allow_trading = allow_trading
         self.max_order_notional = max_order_notional
         self.require_limit_orders = require_limit_orders
+        self.launch_id = launch_id
 
-    def target_position(self, request: TargetPositionRequest, *, strategy_id: str, request_id: str) -> CommandHandle:
+    def target_position(self, request: TargetPositionRequest, *, strategy_id: str, instance_id: str, request_id: str) -> CommandHandle:
+        if not instance_id.strip():
+            return CommandHandle(request_id, "rejected", error="instance_id is required for account intents")
         intent_id = request.intent_id or f"{strategy_id}:intent:{request_id}"
         if not self.allow_trading:
             return CommandHandle(request_id, "rejected", error="launch live trading is disabled by safety policy")
@@ -103,9 +120,13 @@ class AccountIntentCommandPort:
             if abs(request.quantity * request.limit_price) > self.max_order_notional:
                 return CommandHandle(request_id, "rejected", error="intent exceeds launch max_order_notional")
         account_id = request.account_id or "main"
-        status, value = self.client.request("POST", "/v1/intents/submit", {
-            "request_id": request_id,
-            "intent": {
+        envelope = CommandEnvelope(
+            command_id=request_id,
+            operation="account.submit_intent",
+            strategy_id=strategy_id,
+            instance_id=instance_id,
+            launch_id=self.launch_id,
+            payload={"intent": {
                 "intent_id": intent_id,
                 "strategy_id": strategy_id,
                 "account_id": account_id,
@@ -117,8 +138,9 @@ class AccountIntentCommandPort:
                 "limit_price": None if request.limit_price is None else _decimal(request.limit_price),
                 "created_at_unix_nanos": time.time_ns(),
                 "reason": request.reason,
-            },
-        })
+            }},
+        )
+        status, value = self.client.request("POST", "/v1/intents/submit", envelope.as_dict())
         return _handle(request_id, status, value)
 
     def publish(self, signal: StrategySignal) -> CommandHandle:
@@ -129,7 +151,12 @@ class AccountIntentCommandPort:
                 error="live intent port requires TargetPositionRequest",
             )
         request_id = f"{signal.strategy_id}:signal:{signal.source_sequence or 0}"
-        return self.target_position(signal.intent, strategy_id=signal.strategy_id, request_id=request_id)
+        return self.target_position(
+            signal.intent,
+            strategy_id=signal.strategy_id,
+            instance_id=signal.instance_id,
+            request_id=request_id,
+        )
 
 
 def _decimal(value: Decimal) -> dict[str, int]:
@@ -142,4 +169,20 @@ def _decimal(value: Decimal) -> dict[str, int]:
 
 def _handle(request_id: str, status: int, value: Mapping[str, Any]) -> CommandHandle:
     command_status = "accepted" if 200 <= status < 300 else "rejected"
-    return CommandHandle(request_id, command_status, value, None if status < 400 else str(value.get("error", "command failed")))
+    raw_error = value.get("error")
+    if isinstance(raw_error, Mapping):
+        message = str(raw_error.get("message", "command failed"))
+        error_code = raw_error.get("code")
+        retryable = bool(raw_error.get("retryable", False))
+    else:
+        message = str(raw_error or "command failed")
+        error_code = None
+        retryable = False
+    return CommandHandle(
+        request_id,
+        command_status,
+        value,
+        None if status < 400 else message,
+        None if error_code is None else str(error_code),
+        retryable,
+    )

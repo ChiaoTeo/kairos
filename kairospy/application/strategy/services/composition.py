@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 import os
+import sys
 from typing import Mapping
 
 from kairospy.application.workspace import Workspace
+from kairospy.strategy import StrategyLogger
 
 from ..services.bus import StrategyContextBus
 from ..services.host import StrategyHost
@@ -76,12 +78,13 @@ def compose_strategy_process(
         except InvalidOperation:
             max_notional = None
     bus = StrategyContextBus(
-        market=MarketUnixCommandPort(market_client),
+        market=MarketUnixCommandPort(market_client, launch_id=launch_id),
         intents=AccountIntentCommandPort(
             account_client,
             allow_trading=mode != "live" or os.environ.get("KAIROS_LIVE_TRADING_ENABLED", "false") == "true",
             max_order_notional=max_notional,
             require_limit_orders=mode == "live" and os.environ.get("KAIROS_LIVE_REQUIRE_LIMIT_ORDERS", "true") == "true",
+            launch_id=launch_id,
         ),
     )
     snapshots = MmapMarketSnapshotReader(market_snapshot)
@@ -97,6 +100,12 @@ def compose_strategy_process(
         snapshots=snapshots,
         stream=stream,
         journal=journal,
+        logger=StrategyLogger(fields={
+            "launch_id": launch_id,
+            "instance_id": instance_id,
+            "strategy_id": entrypoint.strategy.strategy_id,
+            "component": "strategy",
+        }, stream=sys.stdout),
     )
     control = StrategyControlServer(
         host,

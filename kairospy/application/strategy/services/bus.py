@@ -51,6 +51,7 @@ class StrategyContextBus(ContextBus):
             return self._market.unsubscribe(
                 request.payload,
                 strategy_id=request.strategy_id,
+                instance_id=request.instance_id,
                 request_id=request.request_id,
             )
         if request.operation == "intent.target_position":
@@ -59,6 +60,7 @@ class StrategyContextBus(ContextBus):
             return self._intents.target_position(
                 request.payload,
                 strategy_id=request.strategy_id,
+                instance_id=request.instance_id,
                 request_id=request.request_id,
             )
         raise ValueError(f"unsupported strategy operation: {request.operation}")

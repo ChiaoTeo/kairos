@@ -123,7 +123,17 @@ class WorkspacePaths:
         return self.child("launches", mode, launch_id, "instances", instance_id)
 
     def instance_socket(self, mode: str, launch_id: str, instance_id: str, name: str) -> Path:
-        return self.launch_instance_root(mode, launch_id, instance_id) / "sockets" / f"{name}.sock"
+        candidate = self.launch_instance_root(mode, launch_id, instance_id) / "sockets" / f"{name}.sock"
+        # macOS limits AF_UNIX socket addresses to a small fixed byte length.
+        # Instance paths contain a generated UUID and can exceed that limit
+        # even when the workspace itself is valid.  Keep the logical path
+        # where possible and use a stable alias for long paths.
+        if len(str(candidate).encode()) <= 100:
+            return candidate
+        digest = hashlib.sha256(
+            f"{self.root}:{mode}:{launch_id}:{instance_id}:{name}".encode()
+        ).hexdigest()[:20]
+        return Path("/tmp") / f"kairos-instance-{digest}-{name}.sock"
 
     def instance_health(self, mode: str, launch_id: str, instance_id: str, name: str) -> Path:
         return self.launch_instance_root(mode, launch_id, instance_id) / "health" / f"{name}.json"

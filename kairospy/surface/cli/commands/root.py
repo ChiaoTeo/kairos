@@ -380,13 +380,14 @@ def _trade_lock(action: str):
         output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
     ) -> None:
         app = TradeLeaseApplication(WorkspaceApplication().open(workspace))
-        key = f"{broker}.{account_id or owner}"
+        account = account_id or owner
+        key = app.account_key(broker, account)
         if action in {"status", "list"}:
             value = app.list()
         elif action == "show":
             value = app.for_account(account_id or owner)
         elif action == "acquire":
-            value = app.acquire(broker=broker, account_id=account_id or owner, environment=environment, launch_id=launch_id, launch_instance_id=launch_instance_id, mode=mode)
+            value = app.acquire(broker=broker, account_id=account, environment=environment, launch_id=launch_id, launch_instance_id=launch_instance_id, mode=mode)
         elif action == "heartbeat":
             value = app.heartbeat(key, launch_instance_id=launch_instance_id)
         else:

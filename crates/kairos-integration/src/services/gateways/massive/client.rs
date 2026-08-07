@@ -132,7 +132,7 @@ fn rows_from_payload(payload: Value, underlying: &str) -> Result<Vec<MassiveMark
             let ticker = value.get("ticker")?.as_str()?.to_string();
             Some(MassiveMarketRow {
                 ticker,
-                market_type: "option".into(),
+                market_type: "options".into(),
                 base: Some(underlying.to_string()),
                 quote: Some("USD".into()),
                 active: value.get("active").and_then(Value::as_bool).unwrap_or(true),

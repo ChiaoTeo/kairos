@@ -96,6 +96,8 @@ class WorkspaceApplication:
             return self.resolve()
         root_path = Path(root).expanduser().resolve()
         manifest = root_path / self.MANIFEST_NAME
+        if not manifest.is_file() and (root_path / "kairos.toml").is_file():
+            manifest = root_path / "kairos.toml"
         if not manifest.is_file() and (root_path / ".kairos" / "kairos.toml").is_file():
             root_path = root_path / ".kairos"
             manifest = root_path / "kairos.toml"

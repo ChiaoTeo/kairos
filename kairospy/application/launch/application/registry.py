@@ -70,6 +70,22 @@ class LaunchRegistryApplication:
         OperationJournal(self.workspace).append("launch.remove", subject=f"{mode}/{launch_id}/{instance_id}")
         return {"launch_id": launch_id, "mode": mode, "instance_id": instance_id, "status": "removed"}
 
+    def update_state(self, launch_id: str, *, mode: str = "paper", instance_id: str, state: str) -> dict[str, Any]:
+        value = self._read()
+        updated = None
+        for entry in value.get("launches", []):
+            if entry.get("launch_id") == launch_id and entry.get("mode") == mode and entry.get("instance_id") == instance_id:
+                entry["state"] = state
+                updated = dict(entry)
+                break
+        if updated is None:
+            raise FileNotFoundError(f"launch instance does not exist: {launch_id}/{instance_id}")
+        self._write(value)
+        current = self.workspace.paths.launch_root(mode, launch_id) / "current.json"
+        current.parent.mkdir(parents=True, exist_ok=True)
+        current.write_text(json.dumps(updated, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return updated
+
     def diagnose(self, launch_id: str, *, mode: str = "paper", instance_id: str = "default") -> dict[str, Any]:
         entry = next((item for item in self.list() if item.get("launch_id") == launch_id and item.get("mode") == mode and item.get("instance_id") == instance_id), None)
         if entry is None:

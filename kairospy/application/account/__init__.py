@@ -280,6 +280,19 @@ class TradeLeaseApplication:
         _write_json(path / "owner.json", record)
         return {"account_key": key, **record, "path": str(path), "stale": False}
 
+    @classmethod
+    def account_key(cls, broker: str, account_id: str) -> str:
+        """Return the canonical workspace key for an account lease."""
+        return cls._key(broker, account_id)
+
+    def release_account(self, broker: str, account_id: str, *, launch_instance_id: str | None = None, force: bool = False) -> dict[str, Any]:
+        """Release a lease using the same canonical key as acquisition."""
+        return self.release(
+            self.account_key(broker, account_id),
+            launch_instance_id=launch_instance_id,
+            force=force,
+        )
+
     def heartbeat(self, account_key: str, *, launch_instance_id: str) -> dict[str, Any]:
         record = self._find(account_key)
         if record.get("launch_instance_id") != launch_instance_id:

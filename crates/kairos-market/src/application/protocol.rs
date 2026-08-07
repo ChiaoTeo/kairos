@@ -18,7 +18,7 @@ pub struct MarketOrderBookUpdate {
     pub snapshot: bool,
 }
 
-pub trait MarketFeed {
+pub trait MarketFeed: Send {
     fn subscribe(&mut self, market: &MarketDescriptor) -> Result<SubscriptionId, String>;
     fn unsubscribe(&mut self, subscription: &SubscriptionId) -> Result<(), String>;
     fn poll(&mut self) -> Result<Vec<MarketObservation>, String>;

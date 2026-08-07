@@ -7,6 +7,7 @@ use kairos_integration::Integration;
 
 pub use crate::services::actor::MarketActor;
 pub use crate::services::aeron::AeronReferenceChangeSource;
+pub use crate::services::composite::{CompositeMarketFeed, MarketFeedFactory, MarketRoute};
 pub use crate::services::integration::IntegrationMarketFeed;
 pub use crate::services::publication::{
     MmapMarketSnapshotPublisher, MmapOrderBookSnapshotPublisher,
@@ -73,6 +74,74 @@ pub fn binance_equity_rest_feed(
             capability: IntegrationCapability::MarketStream,
             credential_id: None,
             asset_type: Some(kairos_integration::domain::AssetType::Equity),
+        })
+        .map_err(|error| error.to_string())?;
+    IntegrationMarketFeed::new(connection)
+}
+
+pub fn binance_derivatives_rest_feed(
+    product: ProductFamily,
+    endpoint: impl Into<String>,
+    path: impl Into<String>,
+) -> Result<IntegrationMarketFeed, String> {
+    let integration = Integration::new()
+        .with_binance_derivatives_market_stream(product, endpoint, path)
+        .map_err(|error| error.to_string())?;
+    let connection = integration
+        .connect_market_stream(&ConnectionSpec {
+            connection_id: format!("market.binance.{product:?}.rest"),
+            provider: "binance".into(),
+            product: Some(product),
+            access: AccessScope::Public,
+            transport: TransportKind::Rest,
+            capability: IntegrationCapability::MarketStream,
+            credential_id: None,
+            asset_type: None,
+        })
+        .map_err(|error| error.to_string())?;
+    IntegrationMarketFeed::new(connection)
+}
+
+pub fn okx_market_rest_feed(
+    product: ProductFamily,
+    endpoint: impl Into<String>,
+) -> Result<IntegrationMarketFeed, String> {
+    let integration = Integration::new()
+        .with_okx_market_stream(product, endpoint)
+        .map_err(|error| error.to_string())?;
+    let connection = integration
+        .connect_market_stream(&ConnectionSpec {
+            connection_id: format!("market.okx.{product:?}.rest"),
+            provider: "okx".into(),
+            product: Some(product),
+            access: AccessScope::Public,
+            transport: TransportKind::Rest,
+            capability: IntegrationCapability::MarketStream,
+            credential_id: None,
+            asset_type: None,
+        })
+        .map_err(|error| error.to_string())?;
+    IntegrationMarketFeed::new(connection)
+}
+
+pub fn massive_market_websocket_feed(
+    product: ProductFamily,
+    api_key: impl Into<String>,
+    endpoint: impl Into<String>,
+) -> Result<IntegrationMarketFeed, String> {
+    let integration = Integration::new()
+        .with_massive_market_stream(product, api_key, endpoint)
+        .map_err(|error| error.to_string())?;
+    let connection = integration
+        .connect_market_stream(&ConnectionSpec {
+            connection_id: format!("market.massive.{product:?}.websocket"),
+            provider: "massive".into(),
+            product: Some(product),
+            access: AccessScope::Public,
+            transport: TransportKind::WebSocket,
+            capability: IntegrationCapability::MarketStream,
+            credential_id: None,
+            asset_type: None,
         })
         .map_err(|error| error.to_string())?;
     IntegrationMarketFeed::new(connection)

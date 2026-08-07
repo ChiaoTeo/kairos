@@ -1,5 +1,6 @@
 //! Binance endpoint vocabulary and provider connections without business entities.
 
+pub(crate) mod derivatives_market;
 pub(crate) mod earn;
 pub(crate) mod equity;
 pub(crate) mod funding;

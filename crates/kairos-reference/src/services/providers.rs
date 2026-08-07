@@ -1,5 +1,7 @@
 //! Provider sources and in-memory implementations for the Reference actor.
 
+use std::collections::BTreeMap;
+
 use kairos_integration::application::reference::{
     ReferenceCatalogPayload, ReferenceDataConnection,
 };
@@ -31,6 +33,14 @@ fn reference_spec(
         credential_id: None,
         asset_type,
     }
+}
+
+pub(crate) fn reference_spec_for_public(
+    provider: &str,
+    product: ProductFamily,
+    asset_type: Option<AssetType>,
+) -> ConnectionSpec {
+    reference_spec("reference.public", provider, Some(product), asset_type)
 }
 
 /// Binance Spot public reference source.
@@ -65,6 +75,91 @@ pub struct HyperliquidSource {
 pub struct CcxtSource {
     id: String,
     connection: Box<dyn ReferenceDataConnection>,
+}
+
+pub struct PublicSource {
+    id: String,
+    connection: Box<dyn ReferenceDataConnection>,
+}
+
+/// Reference-owned fan-in for a workspace catalog. Each provider remains an
+/// independent integration connection; this source only merges normalized
+/// records before they enter the Reference actor.
+pub struct CompositeSource {
+    sources: Vec<Box<dyn ReferenceSource>>,
+}
+
+impl CompositeSource {
+    pub fn new(sources: Vec<Box<dyn ReferenceSource>>) -> ReferenceResult<Self> {
+        if sources.is_empty() {
+            return Err(ReferenceError::Provider(
+                "workspace reference catalog has no sources".into(),
+            ));
+        }
+        Ok(Self { sources })
+    }
+}
+
+impl ReferenceSource for CompositeSource {
+    fn source_id(&self) -> &str {
+        "workspace"
+    }
+
+    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        let mut entities = BTreeMap::new();
+        let mut assets = BTreeMap::new();
+        let mut instruments = BTreeMap::new();
+        let mut listings = BTreeMap::new();
+        let mut markets = BTreeMap::new();
+        for source in &mut self.sources {
+            let catalog = source.fetch_catalog()?;
+            for value in catalog.entities {
+                entities.insert(value.entity_id.clone(), value);
+            }
+            for value in catalog.assets {
+                assets.insert(value.asset_id.clone(), value);
+            }
+            for value in catalog.instruments {
+                instruments.insert(value.instrument_id.clone(), value);
+            }
+            for value in catalog.listings {
+                listings.insert(value.listing_id.clone(), value);
+            }
+            for value in catalog.markets {
+                markets.insert(value.market_id.clone(), value);
+            }
+        }
+        Ok(ProviderCatalog {
+            entities: entities.into_values().collect(),
+            assets: assets.into_values().collect(),
+            instruments: instruments.into_values().collect(),
+            listings: listings.into_values().collect(),
+            markets: markets.into_values().collect(),
+        })
+    }
+}
+
+impl PublicSource {
+    pub fn new(id: impl Into<String>, connection: Box<dyn ReferenceDataConnection>) -> Self {
+        Self {
+            id: id.into(),
+            connection,
+        }
+    }
+}
+
+impl ReferenceSource for PublicSource {
+    fn source_id(&self) -> &str {
+        &self.id
+    }
+
+    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        let payload = self
+            .connection
+            .fetch_reference_catalog()
+            .map_err(ReferenceError::Provider)?;
+        provider_catalog_from_integration(payload)
+    }
 }
 
 impl BinanceSpotSource {
@@ -359,6 +454,7 @@ fn provider_catalog_from_integration(
                 listing_id: value.listing_id,
                 venue_id: value.venue_id,
                 market_type: value.market_type,
+                asset_type: value.asset_type,
                 source_symbol: value.source_symbol,
                 base_asset_id: value.base_asset_id,
                 quote_asset_id: value.quote_asset_id,

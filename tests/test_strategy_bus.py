@@ -28,7 +28,7 @@ class IntentPort:
     targets: list[tuple[TargetPositionRequest, str, str]]
     signals: list[StrategySignal]
 
-    def target_position(self, request, *, strategy_id, request_id):
+    def target_position(self, request, *, strategy_id, instance_id, request_id):
         self.targets.append((request, strategy_id, request_id))
         return CommandHandle(request_id, "accepted")
 

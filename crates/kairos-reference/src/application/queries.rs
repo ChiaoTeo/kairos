@@ -26,6 +26,7 @@ pub struct ReferenceQuery {
     pub kind: ReferenceKind,
     pub venue_id: Option<String>,
     pub market_type: Option<String>,
+    pub asset_type: Option<String>,
     pub status: Option<String>,
     pub active_only: bool,
     pub as_of_unix_nanos: Option<u64>,
@@ -66,6 +67,7 @@ pub struct MarketQuery {
     pub market_id: Option<String>,
     pub venue_id: Option<String>,
     pub market_type: Option<String>,
+    pub asset_type: Option<String>,
     pub source_symbol: Option<String>,
     pub active_only: bool,
     pub as_of_unix_nanos: Option<u64>,
@@ -93,6 +95,10 @@ impl MarketQuery {
                 .market_type
                 .as_deref()
                 .is_some_and(|value| value != market.market_type)
+            || self
+                .asset_type
+                .as_deref()
+                .is_some_and(|value| market.asset_type.as_deref() != Some(value))
             || self
                 .source_symbol
                 .as_deref()

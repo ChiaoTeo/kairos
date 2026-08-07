@@ -3,6 +3,7 @@
 use crate::application::MarketApplication;
 use crate::domain::observations::MarketObservation;
 use crate::services::publication::MmapMarketSnapshotPublisher;
+use crate::services::reference::resolve_market;
 use crate::{MarketDescriptor, SubscriptionId};
 use flatbuffers::FlatBufferBuilder;
 use kairos_protocol::generated::kairos::common::v_1::{
@@ -24,6 +25,29 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::{self, MissedTickBehavior};
 
 #[derive(Debug, Deserialize)]
+struct SubscribePayload {
+    subject: String,
+    selectors: Vec<String>,
+    exchange: Option<String>,
+    market_type: Option<String>,
+    #[serde(default)]
+    asset_type: Option<String>,
+    identity: Option<String>,
+    dynamic: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommandEnvelope<T> {
+    schema_version: u16,
+    command_id: String,
+    idempotency_key: String,
+    operation: String,
+    strategy_id: String,
+    instance_id: String,
+    payload: T,
+}
+
+#[derive(Debug, Deserialize)]
 struct SubscribeRequest {
     request_id: String,
     strategy_id: String,
@@ -32,13 +56,14 @@ struct SubscribeRequest {
     selectors: Vec<String>,
     exchange: Option<String>,
     market_type: Option<String>,
+    #[serde(default)]
+    asset_type: Option<String>,
     identity: Option<String>,
     dynamic: bool,
 }
 
 #[derive(Debug, Deserialize)]
-struct UnsubscribeRequest {
-    request_id: String,
+struct UnsubscribePayload {
     subscription_id: String,
 }
 
@@ -54,6 +79,7 @@ pub struct MarketProcess {
     interval: Duration,
     feed_enabled: bool,
     stop_requested: bool,
+    reference_socket_path: Option<PathBuf>,
 }
 
 impl MarketProcess {
@@ -102,7 +128,13 @@ impl MarketProcess {
             interval,
             feed_enabled,
             stop_requested: false,
+            reference_socket_path: None,
         })
+    }
+
+    pub fn with_reference_socket(mut self, path: impl Into<PathBuf>) -> Self {
+        self.reference_socket_path = Some(path.into());
+        self
     }
 
     pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -146,7 +178,22 @@ impl MarketProcess {
                 }
                 _ = ticks.tick() => {
                     if self.feed_enabled {
-                        self.application.poll_feed().map_err(|error| format!("market feed failed: {error}"))?;
+                        let error = std::thread::scope(|scope| {
+                            match scope.spawn(|| self.application.poll_feed()).join() {
+                                Ok(Ok(_)) => None,
+                                Ok(Err(error)) => Some(error.to_string()),
+                                Err(_) => Some("market feed poll thread panicked".into()),
+                            }
+                        });
+                        if let Some(error) = error {
+                            eprintln!(
+                                "{{\"level\":\"error\",\"component\":\"market\",\"message\":\"market feed poll failed\",\"error\":{}}}",
+                                serde_json::to_string(&error).unwrap_or_else(|_| "\"unknown\"".into())
+                            );
+                            let _ = std::thread::scope(|scope| {
+                                scope.spawn(|| self.application.recover_feed()).join()
+                            });
+                        }
                     }
                     self.publish_pending_events()?;
                     self.publish_snapshot()?;
@@ -193,9 +240,12 @@ impl MarketProcess {
             "/v1/snapshot" => (200, serde_json::to_value(self.application.snapshot())?),
             "/v1/subscribe" => self.subscribe(body),
             "/v1/unsubscribe" => self.unsubscribe(body),
-            "/v1/refresh" | "/v1/recover" => match self.application.recover_feed() {
-                Ok(()) => (202, json!({"status":"recovering"})),
-                Err(error) => (422, json!({"error": error.to_string()})),
+            "/v1/refresh" | "/v1/recover" => match std::thread::scope(|scope| {
+                scope.spawn(|| self.application.recover_feed()).join()
+            }) {
+                Ok(Ok(())) => (202, json!({"status":"recovering"})),
+                Ok(Err(error)) => (422, json!({"error": error.to_string()})),
+                Err(_) => (500, json!({"error":"market recovery thread panicked"})),
             },
             "/v1/stop" => {
                 self.stop_requested = true;
@@ -228,14 +278,36 @@ impl MarketProcess {
     }
 
     fn subscribe(&mut self, body: &str) -> (u16, Value) {
-        let request: SubscribeRequest = match serde_json::from_str(body) {
+        let value: CommandEnvelope<SubscribePayload> = match serde_json::from_str(body) {
             Ok(value) => value,
             Err(error) => {
                 return (
                     400,
-                    json!({"error": format!("invalid subscribe request: {error}")}),
+                    json!({"error":{"code":"command.invalid_json","message":format!("invalid subscribe command: {error}"),"retryable":false}}),
                 )
             }
+        };
+        if value.schema_version != 1
+            || value.operation != "market.subscribe"
+            || value.command_id.trim().is_empty()
+            || value.idempotency_key.trim().is_empty()
+        {
+            return (
+                422,
+                json!({"error":{"code":"command.invalid_envelope","message":"unsupported market command schema or operation","retryable":false}}),
+            );
+        }
+        let request = SubscribeRequest {
+            request_id: value.command_id,
+            strategy_id: value.strategy_id,
+            instance_id: value.instance_id,
+            subject: value.payload.subject,
+            selectors: value.payload.selectors,
+            exchange: value.payload.exchange,
+            market_type: value.payload.market_type,
+            asset_type: value.payload.asset_type,
+            identity: value.payload.identity,
+            dynamic: value.payload.dynamic,
         };
         if request.request_id.trim().is_empty()
             || request.strategy_id.trim().is_empty()
@@ -253,19 +325,45 @@ impl MarketProcess {
                 json!({"error":"dynamic subscriptions are not supported by this process"}),
             );
         }
+        let source_symbol = request
+            .subject
+            .strip_prefix("market.")
+            .unwrap_or(&request.subject)
+            .to_owned();
         let market_id = request
             .identity
             .clone()
-            .unwrap_or_else(|| request.subject.clone());
+            .unwrap_or_else(|| source_symbol.clone());
         let venue = request.exchange.clone().unwrap_or_else(|| "unknown".into());
         let market_type = request.market_type.clone().unwrap_or_else(|| "spot".into());
-        let descriptor = match MarketDescriptor::new(
-            market_id,
-            request.subject.clone(),
-            venue,
-            market_type,
-            request.subject.clone(),
-        ) {
+        let descriptor_result = if let Some(reference_socket) = &self.reference_socket_path {
+            resolve_market(
+                reference_socket,
+                &venue,
+                &market_type,
+                request.asset_type.as_deref(),
+                &source_symbol,
+            )
+        } else {
+            match request.asset_type {
+                Some(asset_type) => MarketDescriptor::new_with_asset_type(
+                    market_id,
+                    source_symbol.clone(),
+                    venue,
+                    market_type,
+                    asset_type,
+                    source_symbol.clone(),
+                ),
+                None => MarketDescriptor::new(
+                    market_id,
+                    source_symbol.clone(),
+                    venue,
+                    market_type,
+                    source_symbol.clone(),
+                ),
+            }
+        };
+        let descriptor = match descriptor_result {
             Ok(value) => value,
             Err(error) => return (422, json!({"error": error})),
         };
@@ -273,50 +371,92 @@ impl MarketProcess {
             Ok(value) => value,
             Err(error) => return (422, json!({"error": error})),
         };
-        match self
-            .application
-            .subscribe_static(subscription_id, request.strategy_id, descriptor)
-        {
-            Ok(()) => (
+        let result = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    self.application.subscribe_static(
+                        subscription_id,
+                        request.strategy_id,
+                        descriptor,
+                    )
+                })
+                .join()
+        });
+        let command_id = request.request_id.clone();
+        let selectors = request.selectors.clone();
+        match result {
+            Err(_) => (
+                500,
+                json!({
+                    "schema_version": 1,
+                    "status": "failed",
+                    "error": {"code": "market.internal", "message": "market subscription thread panicked", "retryable": true}
+                }),
+            ),
+            Ok(Err(error)) => (
+                422,
+                json!({
+                    "schema_version": 1,
+                    "command_id": command_id,
+                    "request_id": request.request_id,
+                    "status": "rejected",
+                    "error": {"code": "market.subscription_rejected", "message": error.to_string(), "retryable": false}
+                }),
+            ),
+            Ok(Ok(())) => (
                 202,
                 json!({
+                    "schema_version": 1,
+                    "command_id": command_id,
                     "request_id": request.request_id,
                     "instance_id": request.instance_id,
                     "status": "accepted",
+                    "result": {
+                        "subscription_id": request.request_id.clone(),
+                        "selectors": selectors.clone(),
+                    },
                     "subscription_id": request.request_id,
-                    "selectors": request.selectors,
+                    "selectors": selectors,
                 }),
-            ),
-            Err(error) => (
-                422,
-                json!({"request_id": request.request_id, "error": error.to_string()}),
             ),
         }
     }
 
     fn unsubscribe(&mut self, body: &str) -> (u16, Value) {
-        let request: UnsubscribeRequest = match serde_json::from_str(body) {
+        let value: CommandEnvelope<UnsubscribePayload> = match serde_json::from_str(body) {
             Ok(value) => value,
             Err(error) => {
                 return (
                     400,
-                    json!({"error": format!("invalid unsubscribe request: {error}")}),
+                    json!({"error":{"code":"command.invalid_json","message":format!("invalid unsubscribe command: {error}"),"retryable":false}}),
                 )
             }
         };
-        let id = match SubscriptionId::new(request.subscription_id.clone()) {
+        if value.schema_version != 1
+            || value.operation != "market.unsubscribe"
+            || value.command_id.trim().is_empty()
+            || value.idempotency_key.trim().is_empty()
+        {
+            return (
+                422,
+                json!({"error":{"code":"command.invalid_envelope","message":"unsupported market command schema or operation","retryable":false}}),
+            );
+        }
+        let request_id = value.command_id;
+        let subscription_id = value.payload.subscription_id;
+        let id = match SubscriptionId::new(subscription_id) {
             Ok(value) => value,
             Err(error) => return (422, json!({"error": error})),
         };
         if self.application.unsubscribe(&id) {
             (
                 202,
-                json!({"request_id": request.request_id, "status":"accepted"}),
+                json!({"schema_version":1, "command_id":request_id, "request_id": request_id, "status":"accepted"}),
             )
         } else {
             (
                 404,
-                json!({"request_id": request.request_id, "error":"subscription not found"}),
+                json!({"schema_version":1, "command_id":request_id, "request_id": request_id, "status":"rejected", "error":{"code":"market.subscription_not_found","message":"subscription not found","retryable":false}}),
             )
         }
     }
@@ -412,6 +552,121 @@ fn encode_event(
             finish_trade_message_buffer(&mut builder, root);
             Ok(builder.finished_data().to_vec())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MarketProcess;
+    use crate::application::protocol::{MarketFeed, MarketOrderBookUpdate};
+    use crate::composition::{CompositeMarketFeed, MarketFeedFactory, MarketRoute};
+    use crate::domain::freshness::FeedStatus;
+    use crate::domain::market::MarketDescriptor;
+    use crate::domain::observations::MarketObservation;
+    use crate::services::actor::MarketActor;
+    use crate::services::publication::MmapMarketSnapshotPublisher;
+    use crate::{MarketApplication, SubscriptionId};
+    use serde_json::json;
+    use std::collections::BTreeMap;
+    use std::time::Duration;
+
+    struct FakeFeed {
+        next: u64,
+    }
+
+    impl MarketFeed for FakeFeed {
+        fn subscribe(&mut self, _market: &MarketDescriptor) -> Result<SubscriptionId, String> {
+            let id = SubscriptionId::new(format!("fake:{}", self.next))?;
+            self.next += 1;
+            Ok(id)
+        }
+
+        fn unsubscribe(&mut self, _subscription: &SubscriptionId) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn poll(&mut self) -> Result<Vec<MarketObservation>, String> {
+            Ok(Vec::new())
+        }
+
+        fn poll_orderbooks(&mut self) -> Result<Vec<MarketOrderBookUpdate>, String> {
+            Ok(Vec::new())
+        }
+
+        fn status(&self) -> FeedStatus {
+            FeedStatus::Ready
+        }
+    }
+
+    #[test]
+    fn command_endpoint_accepts_all_required_product_routes_in_one_process() {
+        let routes = [
+            ("massive", "equity", "equity"),
+            ("massive", "options", "equity"),
+            ("binance", "spot", "crypto"),
+            ("binance", "usd-m-futures", "crypto"),
+            ("binance", "coin-m-futures", "crypto"),
+            ("binance", "options", "crypto"),
+            ("binance", "equity", "equity"),
+            ("okx", "spot", "crypto"),
+            ("okx", "spot", "equity"),
+            ("okx", "swap", "crypto"),
+            ("okx", "futures", "crypto"),
+            ("okx", "options", "crypto"),
+        ];
+        let mut factories: BTreeMap<MarketRoute, MarketFeedFactory> = BTreeMap::new();
+        for (venue, market_type, asset_type) in routes {
+            factories.insert(
+                MarketRoute::with_asset_type(venue, market_type, asset_type),
+                Box::new(|| Ok(Box::new(FakeFeed { next: 1 }) as Box<dyn MarketFeed>)),
+            );
+        }
+        let mut application = MarketApplication::new(MarketActor::new("test-market", 100).unwrap());
+        application.attach_feed(Box::new(CompositeMarketFeed::new(factories).unwrap()));
+        let directory = tempfile::tempdir().unwrap();
+        let publisher = MmapMarketSnapshotPublisher::create(
+            directory.path().join("market.snapshot"),
+            4096,
+            "test-market",
+            "market.events",
+        )
+        .unwrap();
+        let mut process = MarketProcess::new(
+            application,
+            publisher,
+            directory.path().join("market.sock"),
+            directory.path().join("market-events.sock"),
+            Duration::from_secs(1),
+            true,
+        )
+        .unwrap();
+
+        for (index, (venue, market_type, asset_type)) in routes.into_iter().enumerate() {
+            let body = json!({
+                "schema_version": 1,
+                "command_id": format!("command-{index}"),
+                "idempotency_key": format!("command-{index}"),
+                "operation": "market.subscribe",
+                "strategy_id": "all-products",
+                "instance_id": "instance-1",
+                "payload": {
+                    "subject": format!("market.SYMBOL{index}"),
+                    "selectors": ["quote"],
+                    "exchange": venue,
+                    "market_type": market_type,
+                    "asset_type": asset_type,
+                    "identity": null,
+                    "dynamic": false,
+                }
+            })
+            .to_string();
+            let (status, _) = process.subscribe(&body);
+            assert_eq!(status, 202, "route {venue}/{market_type}/{asset_type}");
+        }
+        assert_eq!(
+            process.application.snapshot().subscriptions.len(),
+            routes.len()
+        );
     }
 }
 

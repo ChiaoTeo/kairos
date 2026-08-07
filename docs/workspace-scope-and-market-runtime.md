@@ -38,8 +38,46 @@ TOML。Workspace manifest 中定义可复用的连接，launch 只绑定连接�
 provider = "binance-equity-rest"
 credential_id = "binance-equity-readonly"
 
+[market.connections.binance-spot]
+provider = "binance-spot-rest"
+
+[market.connections.binance-usdm-futures]
+provider = "binance-usdm-futures-rest"
+
+[market.connections.binance-coinm-futures]
+provider = "binance-coinm-futures-rest"
+
+[market.connections.binance-options]
+provider = "binance-options-rest"
+
+[market.connections.okx-options]
+provider = "okx-options-rest"
+market_type = "options"
+
+[market.connections.okx-spot]
+provider = "okx-spot-rest"
+market_type = "spot"
+asset_type = "crypto"
+
+[market.connections.okx-equity]
+provider = "okx-spot-rest"
+market_type = "spot"
+asset_type = "equity"
+
+[market.connections.okx-swap]
+provider = "okx-swap-rest"
+
+[market.connections.okx-futures]
+provider = "okx-futures-rest"
+
+[market.connections.okx-options]
+provider = "okx-options-rest"
+
+[market.connections.massive-equity]
+provider = "massive-equity-websocket"
+credential_id = "massive-readonly"
+
 [paper.market]
-connection = "binance-equity"
 scope = "instance"
 ```
 
@@ -51,6 +89,16 @@ Market 进程启动时解析该连接，并从 Workspace 的
 `context.subscribe(...)` 声明 symbol、exchange、market type 和可选 identity；Market
 进程只根据策略的订阅请求创建 descriptor 并启动对应 provider subscription。这样同一
 个连接可以服务多个策略和多个标的。
+
+`market.connections` 是连接能力目录，不是 launch 对连接的选择。Market process 启动时
+加载整个目录，策略首次订阅某个 `venue + market_type + asset_type` 时才创建对应连接；因此一个
+Market process 可以同时承载 Binance、OKX 和 Massive 的多个产品连接。
+
+Reference 是 Workspace 级全局进程，不属于任何 launch instance。使用
+`kairos-reference-server --provider workspace --workspace <workspace>` 时，它读取同一份
+`market.connections`，为每个 provider/product 创建独立 source，再合并成一份全局 catalog；
+多个 Market instance 共享这份 catalog。Reference 的全局路由维度同样包含
+`venue + market_type + asset_type`，因此 OKX crypto spot 与 equity spot 不会合并。
 
 Market 的运行作用域由 launch 配置显式决定：
 

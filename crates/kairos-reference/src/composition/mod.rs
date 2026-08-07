@@ -5,16 +5,21 @@ use std::path::Path;
 use crate::application::protocol::ReferenceSource;
 use crate::domain::ReferenceResult;
 use crate::services::providers::{
-    BinanceEquitySource, BinanceOptionsSource, BinanceSpotSource, HyperliquidSource,
-    MassiveEquitySource, MassiveSource,
+    BinanceEquitySource, BinanceOptionsSource, BinanceSpotSource, CompositeSource,
+    HyperliquidSource, MassiveEquitySource, MassiveSource, PublicSource,
 };
 use crate::services::storage::SqliteCatalogStore;
 use crate::ReferenceApplication;
 
 use crate::services::publication::AeronSnapshotWriter;
+use kairos_integration::credentials::load_workspace_credential;
+use kairos_integration::domain::{AssetType, ProductFamily};
+use kairos_integration::Integration;
+use kairos_workspace::workspace::Workspace;
 
 #[derive(Clone, Debug)]
 pub struct ReferenceCompositionConfig {
+    pub workspace: Option<std::path::PathBuf>,
     pub provider: String,
     pub endpoint: String,
     pub database: std::path::PathBuf,
@@ -67,8 +72,80 @@ pub fn build_application(
     publish: bool,
 ) -> ReferenceResult<ReferenceComposition> {
     let source: Box<dyn ReferenceSource> = match config.provider.as_str() {
+        "workspace" => build_workspace_source(config)?,
         "binance-spot" => Box::new(BinanceSpotSource::new(config.endpoint.clone())?),
         "binance-options" => Box::new(BinanceOptionsSource::new(config.endpoint.clone())?),
+        "binance-usdm-futures" => {
+            let integration = Integration::new()
+                .with_binance_derivatives_reference(
+                    kairos_integration::domain::ProductFamily::UsdMFutures,
+                    config.endpoint.clone(),
+                )
+                .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
+            Box::new(PublicSource::new(
+                "binance-usdm-futures",
+                integration
+                    .connect_reference(&crate::services::providers::reference_spec_for_public(
+                        "binance",
+                        kairos_integration::domain::ProductFamily::UsdMFutures,
+                        Some(kairos_integration::domain::AssetType::Crypto),
+                    ))
+                    .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?,
+            ))
+        }
+        "binance-coinm-futures" => {
+            let integration = Integration::new()
+                .with_binance_derivatives_reference(
+                    kairos_integration::domain::ProductFamily::CoinMFutures,
+                    config.endpoint.clone(),
+                )
+                .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
+            Box::new(PublicSource::new(
+                "binance-coinm-futures",
+                integration
+                    .connect_reference(&crate::services::providers::reference_spec_for_public(
+                        "binance",
+                        kairos_integration::domain::ProductFamily::CoinMFutures,
+                        Some(kairos_integration::domain::AssetType::Crypto),
+                    ))
+                    .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?,
+            ))
+        }
+        "okx-spot" | "okx-equity" | "okx-swap" | "okx-futures" | "okx-options" => {
+            let (product, asset_type) = match config.provider.as_str() {
+                "okx-spot" => (
+                    kairos_integration::domain::ProductFamily::Spot,
+                    Some(kairos_integration::domain::AssetType::Crypto),
+                ),
+                "okx-equity" => (
+                    kairos_integration::domain::ProductFamily::Spot,
+                    Some(kairos_integration::domain::AssetType::Equity),
+                ),
+                "okx-swap" => (
+                    kairos_integration::domain::ProductFamily::UsdMFutures,
+                    Some(kairos_integration::domain::AssetType::Crypto),
+                ),
+                "okx-futures" => (
+                    kairos_integration::domain::ProductFamily::CoinMFutures,
+                    Some(kairos_integration::domain::AssetType::Crypto),
+                ),
+                _ => (
+                    kairos_integration::domain::ProductFamily::Options,
+                    Some(kairos_integration::domain::AssetType::Crypto),
+                ),
+            };
+            let integration = Integration::new()
+                .with_okx_reference(product, asset_type, config.endpoint.clone())
+                .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
+            Box::new(PublicSource::new(
+                config.provider.clone(),
+                integration
+                    .connect_reference(&crate::services::providers::reference_spec_for_public(
+                        "okx", product, asset_type,
+                    ))
+                    .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?,
+            ))
+        }
         "binance-equity" => Box::new(BinanceEquitySource::new(
             config.binance_api_key.clone(),
             config.secret.clone(),
@@ -110,6 +187,218 @@ pub fn build_application(
         application: ReferenceApplication::new("reference-actor", source, Box::new(store))?,
         snapshot_writer,
     })
+}
+
+fn build_workspace_source(
+    config: &ReferenceCompositionConfig,
+) -> ReferenceResult<Box<dyn ReferenceSource>> {
+    let root = config.workspace.as_ref().ok_or_else(|| {
+        crate::domain::ReferenceError::Provider(
+            "workspace reference provider requires workspace path".into(),
+        )
+    })?;
+    let workspace = Workspace::open(root)
+        .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
+    let manifest = std::fs::read_to_string(workspace.root().join("kairos.toml"))
+        .or_else(|_| std::fs::read_to_string(workspace.root().join("workspace.toml")))
+        .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
+    let value: toml::Value = toml::from_str(&manifest)
+        .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
+    let connections = value
+        .get("market")
+        .and_then(|v| v.get("connections"))
+        .and_then(toml::Value::as_table)
+        .ok_or_else(|| {
+            crate::domain::ReferenceError::Provider(
+                "workspace market.connections is required for workspace Reference provider".into(),
+            )
+        })?;
+    let mut sources: Vec<Box<dyn ReferenceSource>> = Vec::new();
+    for (connection_id, raw) in connections {
+        let table = raw.as_table().ok_or_else(|| {
+            crate::domain::ReferenceError::Provider(format!(
+                "market connection {connection_id} must be a table"
+            ))
+        })?;
+        let provider = table
+            .get("provider")
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| {
+                crate::domain::ReferenceError::Provider(format!(
+                    "market connection {connection_id} requires provider"
+                ))
+            })?;
+        let endpoint = table
+            .get("reference_endpoint")
+            .or_else(|| table.get("endpoint"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or_else(|| reference_endpoint(provider));
+        let credential_id = table.get("credential_id").and_then(toml::Value::as_str);
+        let source: Box<dyn ReferenceSource> = match provider {
+            "binance-spot-rest" | "binance-spot-websocket" => {
+                Box::new(BinanceSpotSource::new(endpoint).map_err(|e| e)?)
+            }
+            "binance-options-rest" => Box::new(BinanceOptionsSource::new(endpoint).map_err(|e| e)?),
+            "binance-equity-rest" => {
+                let credential = load_workspace_credential(
+                    &workspace
+                        .child(&["credentials"])
+                        .map_err(|e| crate::domain::ReferenceError::Provider(e.to_string()))?,
+                    "binance",
+                    credential_id,
+                )
+                .map_err(crate::domain::ReferenceError::Provider)?
+                .ok_or_else(|| {
+                    crate::domain::ReferenceError::Provider(format!(
+                        "missing credential for {connection_id}"
+                    ))
+                })?;
+                Box::new(BinanceEquitySource::new(
+                    credential.api_key,
+                    credential.secret,
+                )?)
+            }
+            "binance-usdm-futures-rest" => Box::new(public_source(
+                "binance-usdm-futures",
+                ProductFamily::UsdMFutures,
+                Some(AssetType::Crypto),
+                endpoint,
+            )?),
+            "binance-coinm-futures-rest" => Box::new(public_source(
+                "binance-coinm-futures",
+                ProductFamily::CoinMFutures,
+                Some(AssetType::Crypto),
+                endpoint,
+            )?),
+            "okx-spot-rest" => {
+                let asset_type = asset_type(table);
+                Box::new(public_source(
+                    "okx-spot",
+                    ProductFamily::Spot,
+                    asset_type,
+                    endpoint,
+                )?)
+            }
+            "okx-swap-rest" => Box::new(public_source(
+                "okx-swap",
+                ProductFamily::UsdMFutures,
+                Some(AssetType::Crypto),
+                endpoint,
+            )?),
+            "okx-futures-rest" => Box::new(public_source(
+                "okx-futures",
+                ProductFamily::CoinMFutures,
+                Some(AssetType::Crypto),
+                endpoint,
+            )?),
+            "okx-options-rest" => Box::new(public_source(
+                "okx-options",
+                ProductFamily::Options,
+                Some(AssetType::Crypto),
+                endpoint,
+            )?),
+            "massive-equity-websocket" => {
+                let credential = load_workspace_credential(
+                    &workspace
+                        .child(&["credentials"])
+                        .map_err(|e| crate::domain::ReferenceError::Provider(e.to_string()))?,
+                    "massive",
+                    credential_id,
+                )
+                .map_err(crate::domain::ReferenceError::Provider)?
+                .ok_or_else(|| {
+                    crate::domain::ReferenceError::Provider(format!(
+                        "missing credential for {connection_id}"
+                    ))
+                })?;
+                Box::new(MassiveEquitySource::new(credential.api_key, endpoint)?)
+            }
+            "massive-options-websocket" => {
+                let credential = load_workspace_credential(
+                    &workspace
+                        .child(&["credentials"])
+                        .map_err(|e| crate::domain::ReferenceError::Provider(e.to_string()))?,
+                    "massive",
+                    credential_id,
+                )
+                .map_err(crate::domain::ReferenceError::Provider)?
+                .ok_or_else(|| {
+                    crate::domain::ReferenceError::Provider(format!(
+                        "missing credential for {connection_id}"
+                    ))
+                })?;
+                Box::new(MassiveSource::new(
+                    credential.api_key,
+                    endpoint,
+                    config.underlying.clone(),
+                )?)
+            }
+            other => {
+                return Err(crate::domain::ReferenceError::Provider(format!(
+                    "unsupported workspace reference provider: {other}"
+                )))
+            }
+        };
+        sources.push(source);
+    }
+    Ok(Box::new(CompositeSource::new(sources)?))
+}
+
+fn public_source(
+    id: &str,
+    product: ProductFamily,
+    asset_type: Option<AssetType>,
+    endpoint: &str,
+) -> ReferenceResult<PublicSource> {
+    let integration = match product {
+        ProductFamily::UsdMFutures | ProductFamily::CoinMFutures => Integration::new()
+            .with_binance_derivatives_reference(product, endpoint)
+            .map_err(|e| crate::domain::ReferenceError::Provider(e.to_string()))?,
+        ProductFamily::Spot | ProductFamily::Options => Integration::new()
+            .with_okx_reference(product, asset_type, endpoint)
+            .map_err(|e| crate::domain::ReferenceError::Provider(e.to_string()))?,
+        _ => {
+            return Err(crate::domain::ReferenceError::Provider(
+                "unsupported public reference product".into(),
+            ))
+        }
+    };
+    let provider = if matches!(
+        product,
+        ProductFamily::UsdMFutures | ProductFamily::CoinMFutures
+    ) {
+        "binance"
+    } else {
+        "okx"
+    };
+    let spec = crate::services::providers::reference_spec_for_public(provider, product, asset_type);
+    let connection = integration
+        .connect_reference(&spec)
+        .map_err(|e| crate::domain::ReferenceError::Provider(e.to_string()))?;
+    Ok(PublicSource::new(id, connection))
+}
+
+fn asset_type(table: &toml::map::Map<String, toml::Value>) -> Option<AssetType> {
+    match table.get("asset_type").and_then(toml::Value::as_str) {
+        Some("equity") => Some(AssetType::Equity),
+        Some("other") => Some(AssetType::Other),
+        _ => Some(AssetType::Crypto),
+    }
+}
+
+fn reference_endpoint(provider: &str) -> &'static str {
+    match provider {
+        "binance-options-rest" => "https://eapi.binance.com/eapi/v1/exchangeInfo",
+        "binance-usdm-futures-rest" => "https://fapi.binance.com/fapi/v1/exchangeInfo",
+        "binance-coinm-futures-rest" => "https://dapi.binance.com/dapi/v1/exchangeInfo",
+        "okx-spot-rest" | "okx-swap-rest" | "okx-futures-rest" | "okx-options-rest" => {
+            "https://www.okx.com"
+        }
+        "massive-equity-websocket" | "massive-options-websocket" => {
+            "http://api.massiveprivateserver.site"
+        }
+        _ => "https://api.binance.com/api/v3/exchangeInfo",
+    }
 }
 
 pub fn ensure_database_parent(path: &Path) -> std::io::Result<()> {

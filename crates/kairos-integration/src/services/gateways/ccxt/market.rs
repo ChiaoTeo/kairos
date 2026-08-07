@@ -206,6 +206,7 @@ pub fn normalize(
             listing_id,
             venue_id: format!("ccxt:{exchange}"),
             market_type,
+            asset_type: Some("crypto".into()),
             source_symbol: row.symbol,
             base_asset_id,
             quote_asset_id,

@@ -6,6 +6,10 @@
 
 本文记录 Kairos 完成 Rust workspace 全量迁移后，账户、执行、交易所接入和工作区的边界。它是后续实现的约束；不保留 legacy 运行时或配置兼容层。
 
+Strategy 侧命令的统一 envelope、幂等、订阅和 intent 规范见
+[`docs/strategy-command-contract.md`](strategy-command-contract.md)。Strategy 不直接
+调用 Account、Risk、Execution 的 service；所有跨模块请求都经过该 command contract。
+
 ## 1. 总体结论
 
 原 kairos-platform 不应继续作为业务组合层。它应收敛并改名为 kairos-workspace，只提供通用工作区、进程、控制通道和生命周期基础设施。kairos-workspace 作为库存在，不承载业务二进制；二进制入口归属对应的业务 crate，系统级组合入口归属 kairospy/system。
@@ -1570,7 +1574,7 @@ Market 的作用域和运行拓扑以
 Binance Equity 行情已通过 Integration 的 REST quote polling 接入：它调用
 `/sapi/v1/equity/market/quote`，并以统一的 MarketStream 语义向 MarketActor 提供
 bid/ask。长期配置应将 provider 和 credential 放在 Workspace 级连接定义中，launch
-只绑定连接名称：
+只声明 Market runtime scope：
 
 ~~~toml
 [market.connections.binance-equity]
@@ -1578,15 +1582,15 @@ provider = "binance-equity-rest"
 credential_id = "binance-equity-readonly"
 
 [paper.market]
-connection = "binance-equity"
 scope = "instance"
 ~~~
 
 该连接使用 API key，签名交易操作才需要 API secret。
 
 具体标的和订阅意图由 Strategy Instance 通过 `context.subscribe(...)` 定义，不放在
-`paper.market` 中。`paper.market` 只选择连接和 Market runtime scope；Market process
-根据策略订阅请求创建对应的市场 descriptor 和 provider subscription。
+`paper.market` 中。`paper.market` 只描述 Market runtime scope；Market process 加载
+Workspace 的完整 connection catalog，并根据策略订阅请求懒加载对应的市场 descriptor
+和 provider subscription。OKX 股票虽然底层属于 `SPOT`，但 Reference 与 Market 都必须使用 `asset_type = "equity"`，与 crypto spot 分开路由。Reference 只运行在 Workspace 全局；launch instance 不创建自己的 Reference actor。
 
 当前实现中，Workspace 会准备 `market/connections/` 作为共享 live connection 元数据目录；
 instance 会准备 `market/`，Replay Market 将 cursor 写入该目录。`launch start` 对 live

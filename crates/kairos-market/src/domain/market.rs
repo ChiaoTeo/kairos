@@ -6,6 +6,8 @@ pub struct MarketDescriptor {
     pub instrument_id: String,
     pub venue_id: String,
     pub market_type: String,
+    #[serde(default)]
+    pub asset_type: Option<String>,
     pub source_symbol: String,
     pub status: String,
 }
@@ -23,10 +25,34 @@ impl MarketDescriptor {
             instrument_id: instrument_id.into(),
             venue_id: venue_id.into(),
             market_type: market_type.into(),
+            asset_type: None,
             source_symbol: source_symbol.into(),
             status: "active".into(),
         };
         value.validate()?;
+        Ok(value)
+    }
+
+    pub fn new_with_asset_type(
+        market_id: impl Into<String>,
+        instrument_id: impl Into<String>,
+        venue_id: impl Into<String>,
+        market_type: impl Into<String>,
+        asset_type: impl Into<String>,
+        source_symbol: impl Into<String>,
+    ) -> Result<Self, String> {
+        let asset_type = asset_type.into();
+        if asset_type.trim().is_empty() {
+            return Err("asset_type is required when provided".into());
+        }
+        let mut value = Self::new(
+            market_id,
+            instrument_id,
+            venue_id,
+            market_type,
+            source_symbol,
+        )?;
+        value.asset_type = Some(asset_type);
         Ok(value)
     }
 
@@ -56,6 +82,7 @@ pub struct MarketSelectionQuery {
     pub market_id: Option<String>,
     pub venue_id: Option<String>,
     pub market_type: Option<String>,
+    pub asset_type: Option<String>,
     pub source_symbol: Option<String>,
     pub active_only: bool,
 }
@@ -74,6 +101,10 @@ impl MarketSelectionQuery {
                 .market_type
                 .as_deref()
                 .is_some_and(|v| v != market.market_type)
+            || self
+                .asset_type
+                .as_deref()
+                .is_some_and(|v| market.asset_type.as_deref() != Some(v))
             || self
                 .source_symbol
                 .as_deref()

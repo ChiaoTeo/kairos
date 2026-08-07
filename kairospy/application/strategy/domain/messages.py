@@ -67,6 +67,7 @@ CommandHandle = CommandResult
 class StrategySignal:
     strategy_id: str
     intent: object
+    instance_id: str = ""
     source_stream_id: str | None = None
     source_sequence: int | None = None
 

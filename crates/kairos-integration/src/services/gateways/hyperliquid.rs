@@ -141,6 +141,7 @@ pub fn normalize(payload: &Value) -> Result<ReferenceCatalogPayload, String> {
             listing_id,
             venue_id: "hyperliquid".into(),
             market_type: "perpetual".into(),
+            asset_type: Some("crypto".into()),
             source_symbol: symbol.into(),
             base_asset_id: Some(asset_id),
             quote_asset_id: Some("asset:fiat:USD".into()),

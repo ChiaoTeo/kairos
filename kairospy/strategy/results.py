@@ -13,6 +13,8 @@ class CommandResult:
     status: str
     result: Mapping[str, object] = field(default_factory=dict)
     error: str | None = None
+    error_code: str | None = None
+    retryable: bool = False
 
     def __post_init__(self) -> None:
         if not self.request_id.strip():

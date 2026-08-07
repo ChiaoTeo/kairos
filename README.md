@@ -143,7 +143,17 @@ launch 配置。`--config` 仅用于显式指定其他配置文件。
 ```bash
 uv run kairospy launch status btc-sma --instance <instance-id> --workspace my-project
 uv run kairospy launch logs btc-sma --instance <instance-id> --limit 100 --workspace my-project
+uv run kairospy launch attach btc-sma --workspace my-project --lines 100
 ```
+
+同一个 `launch_id` 同时只允许一个运行中的 instance。`attach` 会自动解析当前
+运行实例，并显示策略状态、实例身份以及最近的策略 stdout/stderr；完整输出保存在
+`.kairos/logs/launches/<mode>/<launch-id>/<instance-id>/strategy.log`。
+
+策略日志为 JSONL。每条记录都会包含 `system_time`；处理行情事件时还会包含
+`event_time`、`event_time_source=market_event` 和 `event_sequence`。策略代码应使用
+`context.logger.info("message", key=value)` 写运行日志，logger 会自动继承当前行情
+事件上下文；启动和生命周期日志的 `event_time` 为 `null`。
 
 启动内置 system runtime 管理账户和调试下单：
 

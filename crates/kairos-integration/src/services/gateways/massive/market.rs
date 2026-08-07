@@ -101,10 +101,10 @@ pub fn normalize(rows: Vec<MassiveMarketRow>) -> Result<ReferenceCatalogPayload,
         if row.ticker.trim().is_empty() {
             return Err("Massive ticker is required".into());
         }
-        let market_type = if row.market_type.trim().is_empty() {
-            "equity".to_string()
-        } else {
-            row.market_type.to_ascii_lowercase()
+        let market_type = match row.market_type.trim().to_ascii_lowercase().as_str() {
+            "" => "equity".to_string(),
+            "option" => "options".to_string(),
+            value => value.to_string(),
         };
         let asset_class = if market_type == "equity" {
             "equity"
@@ -163,6 +163,7 @@ pub fn normalize(rows: Vec<MassiveMarketRow>) -> Result<ReferenceCatalogPayload,
             listing_id,
             venue_id: "massive".into(),
             market_type,
+            asset_type: Some("equity".into()),
             source_symbol: row.ticker,
             base_asset_id,
             quote_asset_id,
@@ -200,7 +201,7 @@ mod tests {
         fn load_markets(&mut self) -> Result<Vec<MassiveMarketRow>, String> {
             Ok(vec![MassiveMarketRow {
                 ticker: "O:SPY260821C00500000".into(),
-                market_type: "option".into(),
+                market_type: "options".into(),
                 base: Some("SPY".into()),
                 quote: Some("USD".into()),
                 active: true,

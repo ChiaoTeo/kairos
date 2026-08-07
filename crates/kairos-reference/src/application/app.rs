@@ -181,6 +181,7 @@ impl ReferenceApplication {
             let market_query = MarketQuery {
                 venue_id: query.venue_id.clone(),
                 market_type: query.market_type.clone(),
+                asset_type: query.asset_type.clone(),
                 source_symbol: query.text.clone(),
                 active_only: query.active_only,
                 as_of_unix_nanos: query.as_of_unix_nanos,
