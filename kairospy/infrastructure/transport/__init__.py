@@ -8,7 +8,7 @@ from .market import (
     TradeView,
     UnixMarketEventStream,
 )
-from .commands import AccountIntentCommandPort, MarketUnixCommandPort, UnixJsonCommandClient
+from .commands import ExecutionIntentCommandPort, MarketUnixCommandPort, UnixJsonCommandClient
 
 __all__ = [
     "DecimalValue",
@@ -17,7 +17,7 @@ __all__ = [
     "QuoteView",
     "TradeView",
     "UnixMarketEventStream",
-    "AccountIntentCommandPort",
+    "ExecutionIntentCommandPort",
     "MarketUnixCommandPort",
     "UnixJsonCommandClient",
 ]

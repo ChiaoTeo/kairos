@@ -19,7 +19,7 @@ from kairospy.application.strategy.domain.messages import StrategySignal
 class UnixJsonCommandClient:
     """Synchronous, low-frequency JSON-over-Unix command transport."""
 
-    def __init__(self, socket_path: str | Path, *, timeout: float = 5.0) -> None:
+    def __init__(self, socket_path: str | Path, *, timeout: float = 30.0) -> None:
         self.socket_path = Path(socket_path)
         self.timeout = timeout
 
@@ -90,7 +90,7 @@ class MarketUnixCommandPort:
         return _handle(request_id, status, value)
 
 
-class AccountIntentCommandPort:
+class ExecutionIntentCommandPort:
     def __init__(
         self,
         client: UnixJsonCommandClient,
@@ -110,7 +110,7 @@ class AccountIntentCommandPort:
 
     def target_position(self, request: TargetPositionRequest, *, strategy_id: str, instance_id: str, request_id: str) -> CommandHandle:
         if not instance_id.strip():
-            return CommandHandle(request_id, "rejected", error="instance_id is required for account intents")
+            return CommandHandle(request_id, "rejected", error="instance_id is required for execution intents")
         intent_id = request.intent_id or f"{strategy_id}:intent:{request_id}"
         if not self.allow_trading:
             return CommandHandle(request_id, "rejected", error="launch live trading is disabled by safety policy")
@@ -119,24 +119,28 @@ class AccountIntentCommandPort:
         if self.max_order_notional is not None and request.limit_price is not None:
             if abs(request.quantity * request.limit_price) > self.max_order_notional:
                 return CommandHandle(request_id, "rejected", error="intent exceeds launch max_order_notional")
-        account_id = request.account_id or "main"
+        account_ids = list(request.account_ids) or ([request.account_id] if request.account_id else ["main"])
         envelope = CommandEnvelope(
             command_id=request_id,
-            operation="account.submit_intent",
+            operation="execution.submit_intent",
             strategy_id=strategy_id,
             instance_id=instance_id,
             launch_id=self.launch_id,
             payload={"intent": {
                 "intent_id": intent_id,
                 "strategy_id": strategy_id,
-                "account_id": account_id,
+                "launch_id": self.launch_id or "",
+                "instance_id": instance_id,
+                "account_ids": account_ids,
                 "segment_key": self.default_segment,
                 "instrument_id": request.instrument_id,
                 "kind": "TargetPosition",
-                "target_quantity": _decimal(request.quantity),
-                "quantity": None,
-                "limit_price": None if request.limit_price is None else _decimal(request.limit_price),
-                "created_at_unix_nanos": time.time_ns(),
+                "target_quantity_mantissa": _decimal(request.quantity)["mantissa"],
+                "quantity_scale": _decimal(request.quantity)["scale"],
+                "limit_price_mantissa": None if request.limit_price is None else _decimal(request.limit_price)["mantissa"],
+                "limit_price_scale": None if request.limit_price is None else _decimal(request.limit_price)["scale"],
+                "source_snapshot_id": request.source_snapshot_id,
+                "source_event_sequence": request.source_event_sequence,
                 "reason": request.reason,
             }},
         )

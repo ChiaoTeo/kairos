@@ -8,7 +8,8 @@ use kairos_protocol::generated::kairos::reference::v_1::{
     finish_markets_snapshot_buffer, finish_reference_changed_buffer, Asset as FbAsset,
     AssetArgs as FbAssetArgs, Catalog as FbCatalog, CatalogArgs as FbCatalogArgs,
     CatalogSnapshot as FbCatalogSnapshot, CatalogSnapshotArgs as FbCatalogSnapshotArgs,
-    Entity as FbEntity, EntityArgs as FbEntityArgs, Instrument as FbInstrument,
+    Entity as FbEntity, EntityArgs as FbEntityArgs, FinancialProduct as FbFinancialProduct,
+    FinancialProductArgs as FbFinancialProductArgs, Instrument as FbInstrument,
     InstrumentArgs as FbInstrumentArgs, Lifecycle as FbLifecycle, LifecycleArgs as FbLifecycleArgs,
     LifecycleEvent as FbLifecycleEvent, LifecycleEventArgs as FbLifecycleEventArgs,
     LifecycleSnapshot as FbLifecycleSnapshot, LifecycleSnapshotArgs as FbLifecycleSnapshotArgs,
@@ -73,6 +74,48 @@ impl FlatbuffersSnapshotEncoder {
                 )
             })
             .collect();
+        let financial_product_offsets: Vec<_> = catalog
+            .financial_products
+            .values()
+            .map(|v| {
+                let product_id = builder.create_string(&v.product_id);
+                let product_type = builder.create_string(&v.product_type);
+                let name = builder.create_string(&v.name);
+                let asset_id = builder.create_string(&v.asset_id);
+                let provider_product_id = builder.create_string(&v.provider_product_id);
+                let provider_id = v.provider_id.as_ref().map(|x| builder.create_string(x));
+                let issuer_id = v.issuer_id.as_ref().map(|x| builder.create_string(x));
+                let currency_asset_id = v
+                    .currency_asset_id
+                    .as_ref()
+                    .map(|x| builder.create_string(x));
+                let min_amount = decimal64(v.min_amount.as_deref());
+                let max_amount = decimal64(v.max_amount.as_deref());
+                let apr = decimal64(v.apr.as_deref());
+                let status = builder.create_string(&v.status);
+                FbFinancialProduct::create(
+                    &mut builder,
+                    &FbFinancialProductArgs {
+                        product_id: Some(product_id),
+                        product_type: Some(product_type),
+                        name: Some(name),
+                        asset_id: Some(asset_id),
+                        provider_product_id: Some(provider_product_id),
+                        provider_id,
+                        issuer_id,
+                        currency_asset_id,
+                        min_amount: min_amount.as_ref(),
+                        max_amount: max_amount.as_ref(),
+                        apr: apr.as_ref(),
+                        lock_period_days: v.lock_period_days,
+                        maturity_at_unix_nanos: v.maturity_at_unix_nanos.unwrap_or_default(),
+                        status: Some(status),
+                        effective_from_unix_nanos: v.effective_from_unix_nanos,
+                        effective_to_unix_nanos: v.effective_to_unix_nanos.unwrap_or_default(),
+                    },
+                )
+            })
+            .collect();
         let instrument_offsets: Vec<_> = catalog
             .instruments
             .values()
@@ -86,6 +129,8 @@ impl FlatbuffersSnapshotEncoder {
                     .underlying_instrument_id
                     .as_ref()
                     .map(|x| builder.create_string(x));
+                let strike = decimal64(v.strike.as_deref());
+                let option_right = v.option_right.as_ref().map(|x| builder.create_string(x));
                 let status = builder.create_string(&v.status);
                 FbInstrument::create(
                     &mut builder,
@@ -97,6 +142,8 @@ impl FlatbuffersSnapshotEncoder {
                         product_family: family,
                         underlying_instrument_id: underlying,
                         expiry_unix_nanos: v.expiry_unix_nanos.unwrap_or_default(),
+                        strike: strike.as_ref(),
+                        option_right,
                         status: Some(status),
                         ..Default::default()
                     },
@@ -129,6 +176,7 @@ impl FlatbuffersSnapshotEncoder {
         let market_offsets = self.market_offsets(&mut builder, catalog);
         let entities = builder.create_vector(&entity_offsets);
         let assets = builder.create_vector(&asset_offsets);
+        let financial_products = builder.create_vector(&financial_product_offsets);
         let instruments = builder.create_vector(&instrument_offsets);
         let listings = builder.create_vector(&listing_offsets);
         let markets = builder.create_vector(&market_offsets);
@@ -140,10 +188,12 @@ impl FlatbuffersSnapshotEncoder {
                 instrument_count: catalog.instruments.len() as u64,
                 listing_count: catalog.listings.len() as u64,
                 market_count: catalog.markets.len() as u64,
+                financial_product_count: catalog.financial_products.len() as u64,
                 active_market_count: catalog.active_market_count() as u64,
                 lifecycle_event_count: catalog.lifecycle_events.len() as u64,
                 entities: Some(entities),
                 assets: Some(assets),
+                financial_products: Some(financial_products),
                 instruments: Some(instruments),
                 listings: Some(listings),
                 markets: Some(markets),
@@ -414,4 +464,67 @@ fn decimal64(value: Option<&str>) -> Option<Decimal64> {
     let digits = format!("{whole}{fraction}");
     let mantissa = digits.parse::<i64>().ok()?;
     Some(Decimal64::new(mantissa, fraction.len() as u8))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FlatbuffersSnapshotEncoder;
+    use crate::domain::{FinancialProduct, Instrument, ReferenceCatalog};
+    use kairos_protocol::generated::kairos::reference::v_1::root_as_catalog_snapshot;
+
+    #[test]
+    fn catalog_snapshot_round_trips_extended_reference_fields() {
+        let catalog = ReferenceCatalog {
+            instruments: [(
+                "instrument:option:spy:call".into(),
+                Instrument {
+                    instrument_id: "instrument:option:spy:call".into(),
+                    symbol: "O:SPY260821C00600000".into(),
+                    instrument_type: "option".into(),
+                    underlying_instrument_id: Some("instrument:equity:spy".into()),
+                    strike: Some("600.00".into()),
+                    option_right: Some("call".into()),
+                    status: "active".into(),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            financial_products: [(
+                "product:binance:earn:btc".into(),
+                FinancialProduct {
+                    product_id: "product:binance:earn:btc".into(),
+                    product_type: "earn".into(),
+                    name: "BTC Earn".into(),
+                    asset_id: "asset:btc".into(),
+                    provider_product_id: "btc-earn".into(),
+                    apr: Some("0.0525".into()),
+                    status: "active".into(),
+                    effective_from_unix_nanos: 1,
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+
+        let bytes = FlatbuffersSnapshotEncoder::new("reference-test", "reference.changes")
+            .encode_catalog(&catalog)
+            .unwrap();
+        let snapshot = root_as_catalog_snapshot(&bytes).unwrap();
+        let payload = snapshot.payload();
+        let product = payload.financial_products().unwrap().get(0);
+        assert_eq!(product.product_id(), "product:binance:earn:btc");
+        assert_eq!(product.apr().unwrap().mantissa(), 525);
+        assert_eq!(product.apr().unwrap().scale(), 4);
+        let instrument = payload.instruments().unwrap().get(0);
+        assert_eq!(
+            instrument.underlying_instrument_id(),
+            Some("instrument:equity:spy")
+        );
+        assert_eq!(instrument.option_right(), Some("call"));
+        assert_eq!(instrument.strike().unwrap().mantissa(), 60000);
+        assert_eq!(instrument.strike().unwrap().scale(), 2);
+    }
 }

@@ -612,18 +612,6 @@ impl AccountApplication {
         rows
     }
 
-    pub fn intents(&self, account_id: Option<&str>) -> Vec<crate::domain::IntentState> {
-        self.actor
-            .snapshot()
-            .accounts
-            .into_iter()
-            .filter(|view| {
-                account_id.is_none_or(|id| view.account.segment.identity.account_id == id)
-            })
-            .flat_map(|view| view.account.state.intents.into_values())
-            .collect()
-    }
-
     pub fn set_market_profile(&mut self, profile: AccountMarketProfile) {
         self.market_profiles.insert(
             (profile.segment_key.clone(), profile.market_id.clone()),
@@ -660,12 +648,6 @@ impl AccountApplication {
 
     pub fn market_profiles(&self) -> Vec<AccountMarketProfile> {
         self.market_profiles.values().cloned().collect()
-    }
-
-    pub fn record_intent(&mut self, intent: crate::domain::Intent) -> Result<(), AccountError> {
-        self.actor
-            .record_intent(intent)
-            .map_err(AccountError::Invalid)
     }
 
     pub fn plan_order(

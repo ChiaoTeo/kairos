@@ -96,9 +96,6 @@ class AccountSystemClient(SystemRestClient):
     def orders(self, *, order_id: str | None = None) -> dict[str, Any]:
         return self.request("GET", _query("/v1/orders", {"order_id": order_id}))
 
-    def intents(self) -> dict[str, Any]:
-        return self.request("GET", "/v1/intents")
-
     def reconcile(self) -> dict[str, Any]:
         return self.request("POST", "/v1/reconcile")
 
@@ -111,11 +108,16 @@ class AccountSystemClient(SystemRestClient):
     def fees(self) -> dict[str, Any]:
         return self.request("GET", "/v1/fees")
 
+class ExecutionSystemClient(SystemRestClient):
+    def intents(self) -> dict[str, Any]:
+        return self.request("GET", "/v1/intents")
+
+    def intent_events(self, *, intent_id: str | None = None) -> dict[str, Any]:
+        return self.request("GET", _query("/v1/intent-events", {"intent_id": intent_id}))
+
     def submit_intent(self, intent: Mapping[str, Any]) -> dict[str, Any]:
         return self.request("POST", "/v1/intents/submit", intent)
 
-
-class ExecutionSystemClient(SystemRestClient):
     def orders(self, *, account_id: str | None = None) -> dict[str, Any]:
         return self.request("GET", _query("/v1/orders", {"account_id": account_id}))
 

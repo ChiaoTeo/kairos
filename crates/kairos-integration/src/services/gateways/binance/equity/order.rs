@@ -28,7 +28,7 @@ impl BinanceEquityOrderConnection {
         let connection = ManagedConnection::new(
             ConnectionSpec {
                 connection_id: "execution.binance.equity.rest".into(),
-                provider: "binance".into(),
+                route: crate::domain::IntegrationRoute::exchange("binance"),
                 product: Some(ProductFamily::Equity),
                 access: AccessScope::Private,
                 transport: TransportKind::Rest,

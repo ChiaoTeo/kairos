@@ -1,6 +1,7 @@
 //! Long-lived Risk process: control, health and application driving only.
 
 use crate::application::RiskApplication;
+use kairos_workspace::runtime::{HEALTH_PATH, SNAPSHOT_PATH, STOP_PATH};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -36,6 +37,7 @@ impl RiskProcess {
     pub fn application(&self) -> &RiskApplication {
         &self.application
     }
+
     pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
         remove_socket(&self.socket_path)?;
         if let Some(parent) = self.socket_path.parent() {
@@ -51,6 +53,7 @@ impl RiskProcess {
         remove_socket(&self.socket_path)?;
         Ok(())
     }
+
     async fn handle(&mut self, mut stream: UnixStream) -> Result<(), Box<dyn std::error::Error>> {
         let mut buffer = [0; 8192];
         let size = stream.read(&mut buffer).await?;
@@ -65,8 +68,8 @@ impl RiskProcess {
             .unwrap_or("/")
             .to_owned();
         let (status, body) = match path.as_str() {
-            "/v1/health" => (200, self.health_body()),
-            "/v1/snapshot" => (200, serde_json::to_value(self.application.snapshot())?),
+            HEALTH_PATH => (200, self.health_body()),
+            SNAPSHOT_PATH => (200, serde_json::to_value(self.application.snapshot())?),
             "/v1/configure" => self.json_command(raw_body, |application, body| {
                 let request = serde_json::from_slice(body).map_err(|error| error.to_string())?;
                 application
@@ -118,7 +121,7 @@ impl RiskProcess {
                     })
                     .map_err(|error| error.to_string())
             }),
-            "/v1/stop" => {
+            STOP_PATH => {
                 self.stop_requested = true;
                 (202, serde_json::json!({"status":"stopping"}))
             }

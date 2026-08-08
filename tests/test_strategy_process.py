@@ -22,6 +22,12 @@ def test_strategy_process_is_started_per_launch_instance_and_reports_waiting_sna
         "    strategy_id = 'process-strategy'\n",
         encoding="utf-8",
     )
+    instance = workspace.instance("paper", "l", "i")
+    instance.prepare()
+    instance.component_manifest().write_text(
+        '{"schema_version":1,"components":{"execution":{"socket":"%s"}},"accounts":{}}' % instance.socket("execution"),
+        encoding="utf-8",
+    )
     process = StrategyProcessApplication(workspace, ready_timeout=5)
     socket = process.ensure_running(
         "user_strategy:UserStrategy",
@@ -53,6 +59,12 @@ def test_strategy_composition_uses_instance_market_and_account_resources(tmp_pat
         "    strategy_id = 'resource-strategy'\n",
         encoding="utf-8",
     )
+    instance = workspace.instance("backtest", "launch", "run-1")
+    instance.prepare()
+    instance.component_manifest().write_text(
+        '{"schema_version":1,"components":{"execution":{"socket":"%s"}},"accounts":{}}' % instance.socket("execution"),
+        encoding="utf-8",
+    )
     composition = compose_strategy_process(
         workspace,
         strategy_ref="user_strategy:UserStrategy",
@@ -67,5 +79,5 @@ def test_strategy_composition_uses_instance_market_and_account_resources(tmp_pat
         "backtest", "launch", "run-1", "market", "market.snapshot"
     )
     assert composition.host.context._bus._intents.client.socket_path == workspace.paths.instance_socket(
-        "backtest", "launch", "run-1", "account"
+        "backtest", "launch", "run-1", "execution"
     )

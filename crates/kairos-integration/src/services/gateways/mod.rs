@@ -1,5 +1,4 @@
 pub(crate) mod binance;
-pub(crate) mod ccxt;
 pub(crate) mod hyperliquid;
 pub(crate) mod ibkr;
 pub(crate) mod massive;

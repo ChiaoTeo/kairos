@@ -13,7 +13,7 @@ use crate::ReferenceApplication;
 
 use crate::services::publication::AeronSnapshotWriter;
 use kairos_integration::credentials::load_workspace_credential;
-use kairos_integration::domain::{AssetType, ProductFamily};
+use kairos_integration::domain::{AssetType, IntegrationRoute, ProductFamily};
 use kairos_integration::Integration;
 use kairos_workspace::workspace::Workspace;
 
@@ -26,7 +26,6 @@ pub struct ReferenceCompositionConfig {
     pub api_key: String,
     pub binance_api_key: String,
     pub secret: String,
-    pub underlying: String,
     pub aeron_dir: Option<String>,
     pub channel: String,
     pub catalog_stream: i32,
@@ -48,6 +47,33 @@ pub struct ReferenceComposition {
 
 pub struct ReferenceSnapshotWriter {
     inner: AeronSnapshotWriter,
+}
+
+/// Canonical provider endpoint defaults shared by the one-shot CLI and the
+/// long-running Reference server.
+pub fn default_endpoint(provider: &str) -> &'static str {
+    match provider {
+        "hyperliquid" => "https://api.hyperliquid.xyz/info",
+        "binance-options" | "binance-options-rest" => {
+            "https://eapi.binance.com/eapi/v1/exchangeInfo"
+        }
+        "binance-usdm-futures" | "binance-usdm-futures-rest" => {
+            "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        }
+        "binance-coinm-futures" | "binance-coinm-futures-rest" => {
+            "https://dapi.binance.com/dapi/v1/exchangeInfo"
+        }
+        "okx-spot" | "okx-equity" | "okx-swap" | "okx-futures" | "okx-options"
+        | "okx-spot-rest" | "okx-swap-rest" | "okx-futures-rest" | "okx-options-rest" => {
+            "https://www.okx.com"
+        }
+        "massive"
+        | "massive-equity"
+        | "massive-equity-websocket"
+        | "massive-options"
+        | "massive-options-websocket" => "http://api.massiveprivateserver.site",
+        _ => "https://api.binance.com/api/v3/exchangeInfo",
+    }
 }
 
 impl ReferenceSnapshotWriter {
@@ -86,7 +112,7 @@ pub fn build_application(
                 "binance-usdm-futures",
                 integration
                     .connect_reference(&crate::services::providers::reference_spec_for_public(
-                        "binance",
+                        IntegrationRoute::exchange("binance"),
                         kairos_integration::domain::ProductFamily::UsdMFutures,
                         Some(kairos_integration::domain::AssetType::Crypto),
                     ))
@@ -104,7 +130,7 @@ pub fn build_application(
                 "binance-coinm-futures",
                 integration
                     .connect_reference(&crate::services::providers::reference_spec_for_public(
-                        "binance",
+                        IntegrationRoute::exchange("binance"),
                         kairos_integration::domain::ProductFamily::CoinMFutures,
                         Some(kairos_integration::domain::AssetType::Crypto),
                     ))
@@ -141,7 +167,9 @@ pub fn build_application(
                 config.provider.clone(),
                 integration
                     .connect_reference(&crate::services::providers::reference_spec_for_public(
-                        "okx", product, asset_type,
+                        IntegrationRoute::exchange("okx"),
+                        product,
+                        asset_type,
                     ))
                     .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?,
             ))
@@ -153,7 +181,6 @@ pub fn build_application(
         "massive-options" => Box::new(MassiveSource::new(
             config.api_key.clone(),
             config.endpoint.clone(),
-            config.underlying.clone(),
         )?),
         "massive" | "massive-equity" => Box::new(MassiveEquitySource::new(
             config.api_key.clone(),
@@ -207,13 +234,12 @@ fn build_workspace_source(
     let connections = value
         .get("market")
         .and_then(|v| v.get("connections"))
-        .and_then(toml::Value::as_table)
-        .ok_or_else(|| {
-            crate::domain::ReferenceError::Provider(
-                "workspace market.connections is required for workspace Reference provider".into(),
-            )
-        })?;
+        .and_then(toml::Value::as_table);
     let mut sources: Vec<Box<dyn ReferenceSource>> = Vec::new();
+    let Some(connections) = connections else {
+        sources.push(Box::new(BinanceSpotSource::production()?));
+        return Ok(Box::new(CompositeSource::new(sources)?));
+    };
     for (connection_id, raw) in connections {
         let table = raw.as_table().ok_or_else(|| {
             crate::domain::ReferenceError::Provider(format!(
@@ -327,11 +353,7 @@ fn build_workspace_source(
                         "missing credential for {connection_id}"
                     ))
                 })?;
-                Box::new(MassiveSource::new(
-                    credential.api_key,
-                    endpoint,
-                    config.underlying.clone(),
-                )?)
+                Box::new(MassiveSource::new(credential.api_key, endpoint)?)
             }
             other => {
                 return Err(crate::domain::ReferenceError::Provider(format!(
@@ -371,7 +393,12 @@ fn public_source(
     } else {
         "okx"
     };
-    let spec = crate::services::providers::reference_spec_for_public(provider, product, asset_type);
+    let route = if provider == "binance" {
+        IntegrationRoute::exchange("binance")
+    } else {
+        IntegrationRoute::exchange("okx")
+    };
+    let spec = crate::services::providers::reference_spec_for_public(route, product, asset_type);
     let connection = integration
         .connect_reference(&spec)
         .map_err(|e| crate::domain::ReferenceError::Provider(e.to_string()))?;
@@ -387,18 +414,7 @@ fn asset_type(table: &toml::map::Map<String, toml::Value>) -> Option<AssetType> 
 }
 
 fn reference_endpoint(provider: &str) -> &'static str {
-    match provider {
-        "binance-options-rest" => "https://eapi.binance.com/eapi/v1/exchangeInfo",
-        "binance-usdm-futures-rest" => "https://fapi.binance.com/fapi/v1/exchangeInfo",
-        "binance-coinm-futures-rest" => "https://dapi.binance.com/dapi/v1/exchangeInfo",
-        "okx-spot-rest" | "okx-swap-rest" | "okx-futures-rest" | "okx-options-rest" => {
-            "https://www.okx.com"
-        }
-        "massive-equity-websocket" | "massive-options-websocket" => {
-            "http://api.massiveprivateserver.site"
-        }
-        _ => "https://api.binance.com/api/v3/exchangeInfo",
-    }
+    default_endpoint(provider)
 }
 
 pub fn ensure_database_parent(path: &Path) -> std::io::Result<()> {

@@ -5,6 +5,21 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from typing import Sequence
+
+
+def reject_owned_options(arguments: Sequence[str], owned: set[str]) -> None:
+    """Reject options owned by a native CLI adapter before spawning it.
+
+    Native adapters add their owned infrastructure options exactly once. A
+    caller passing one of those options would create an ambiguous command
+    contract, so fail at the Python boundary with a precise error.
+    """
+    for argument in arguments:
+        option = argument.split("=", 1)[0]
+        if option in owned:
+            names = ", ".join(sorted(owned))
+            raise ValueError(f"native CLI adapter owns {names}; do not pass {option}")
 
 
 def resolve_binary(name: str, *, override: str | None = None) -> str:
@@ -37,4 +52,4 @@ def resolve_binary(name: str, *, override: str | None = None) -> str:
     )
 
 
-__all__ = ["resolve_binary"]
+__all__ = ["reject_owned_options", "resolve_binary"]

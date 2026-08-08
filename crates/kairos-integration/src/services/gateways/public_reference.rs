@@ -5,7 +5,7 @@ use crate::application::reference::{ReferenceCatalogPayload, ReferenceDataConnec
 use crate::application::{Connection, ConnectionSpec};
 use crate::domain::{
     AccessScope, AssetType, ConnectionHealth, ConnectionIdentity, ConnectionState,
-    IntegrationCapability, ProductFamily, TransportKind,
+    IntegrationCapability, IntegrationRoute, ProductFamily, TransportKind,
 };
 use crate::services::connections::ManagedConnection;
 use crate::services::drivers::http::PublicHttpClient;
@@ -22,21 +22,21 @@ pub struct PublicReferenceConnection {
 
 impl PublicReferenceConnection {
     pub fn new(
-        provider: impl Into<String>,
+        route: IntegrationRoute,
         product: ProductFamily,
         asset_type: Option<AssetType>,
         endpoint: impl Into<String>,
         normalizer: fn(&Value, ProductFamily) -> Result<ReferenceCatalogPayload, String>,
     ) -> Result<Self, String> {
-        let provider = provider.into();
         let endpoint = endpoint.into();
-        if provider.trim().is_empty() || endpoint.trim().is_empty() {
-            return Err("public reference provider and endpoint are required".into());
+        route.validate()?;
+        if endpoint.trim().is_empty() {
+            return Err("public reference route and endpoint are required".into());
         }
         let connection = ManagedConnection::new(
             ConnectionSpec {
-                connection_id: format!("reference.{provider}.{:?}.rest", product),
-                provider: provider.clone(),
+                connection_id: format!("reference.{}.{:?}.rest", route.primary().id, product),
+                route,
                 product: Some(product),
                 access: AccessScope::Public,
                 transport: TransportKind::Rest,

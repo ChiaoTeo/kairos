@@ -2,9 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub mod intent;
 pub mod order;
-pub use intent::{Intent, IntentEvent, IntentKind, IntentState, IntentStatus};
 pub use order::{OrderEvent, OrderRequest, OrderSide, OrderState, OrderStatus, OrderType};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -149,7 +147,6 @@ pub struct AccountState {
     pub collateral: BTreeMap<String, Balance>,
     pub positions: BTreeMap<String, Position>,
     pub open_orders: BTreeMap<String, OpenOrder>,
-    pub intents: BTreeMap<String, IntentState>,
     pub orders: BTreeMap<String, OrderState>,
     pub status: AccountStatus,
     pub stale: bool,
@@ -329,7 +326,6 @@ pub enum FillSide {
 pub enum AccountEvent {
     Snapshot(AccountSnapshot),
     Fill(AccountFill),
-    Intent(IntentEvent),
     Order(OrderEvent),
     Batch(Vec<AccountEvent>),
 }
@@ -401,34 +397,6 @@ impl Account {
         }
         self.state.event_sequence += 1;
         self.state.generation += 1;
-        Ok(())
-    }
-
-    pub fn record_intent(&mut self, intent: Intent) -> Result<(), String> {
-        if intent.account_id != self.segment.identity.account_id
-            || intent.segment_key != self.segment.segment_key
-        {
-            return Err("intent does not belong to this account segment".into());
-        }
-        if self.state.intents.contains_key(&intent.intent_id) {
-            return Err("intent already exists".into());
-        }
-        let state = IntentState::new(intent)?;
-        self.state
-            .intents
-            .insert(state.intent.intent_id.clone(), state);
-        self.state.event_sequence += 1;
-        Ok(())
-    }
-
-    pub fn apply_intent_event(&mut self, event: IntentEvent) -> Result<(), String> {
-        let state = self
-            .state
-            .intents
-            .get_mut(&event.intent_id)
-            .ok_or_else(|| "unknown intent".to_string())?;
-        state.apply(event)?;
-        self.state.event_sequence += 1;
         Ok(())
     }
 

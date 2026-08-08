@@ -45,6 +45,7 @@ class StrategyContextProtocol(Protocol):
         quantity: Decimal | str | int | float,
         *,
         account: str | None = None,
+        accounts: Sequence[str] | None = None,
         limit_price: Decimal | str | int | float | None = None,
         reason: str = "",
         intent_id: str | None = None,

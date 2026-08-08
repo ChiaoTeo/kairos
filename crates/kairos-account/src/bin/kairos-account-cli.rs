@@ -10,7 +10,7 @@ use kairos_account::composition::account::{
     inspect_account_credential, AccountBindingRecord, AccountCredentialBinding, AccountOptions,
     AccountRegistry, CredentialRecord, CredentialStore,
 };
-use kairos_account::domain::{AccountFill, AccountModel, Intent};
+use kairos_account::domain::{AccountFill, AccountModel};
 use kairos_integration::domain::account::{
     ExternalAccountIdentity, ExternalAccountSegment, ExternalDecimal,
 };
@@ -280,7 +280,6 @@ enum Command {
         limit: Option<usize>,
     },
     Orders,
-    Intents,
     MarketProfiles,
     Capabilities,
     Fees,
@@ -292,12 +291,6 @@ enum Command {
     },
     Refresh,
     Reconcile,
-    SubmitIntent {
-        #[arg(long)]
-        request_id: String,
-        #[arg(long)]
-        file: PathBuf,
-    },
 }
 
 #[derive(Clone, Debug, Subcommand)]
@@ -1145,17 +1138,6 @@ fn run_direct(
         return Ok(());
     }
 
-    if let Command::SubmitIntent { request_id, file } = command {
-        let intent: Intent = serde_json::from_slice(&std::fs::read(file)?)?;
-        composition.application.record_intent(intent.clone())?;
-        print_json(serde_json::json!({
-            "request_id": request_id,
-            "intent_id": intent.intent_id,
-            "status": "accepted",
-        }));
-        return Ok(());
-    }
-
     if let Command::MarketProfile {
         market_id,
         source_symbol,
@@ -1336,9 +1318,6 @@ fn run_direct(
         Command::Orders => {
             serde_json::json!({"orders": composition.application.orders(kairos_account::application::OrderQuery { account_id: Some(account_id), order_id: None })})
         }
-        Command::Intents => {
-            serde_json::json!({"intents": composition.application.intents(Some(&account_id))})
-        }
         Command::MarketProfiles => {
             serde_json::json!({"profiles": composition.application.market_profiles()})
         }
@@ -1348,8 +1327,7 @@ fn run_direct(
         Command::Fees => {
             serde_json::json!({"fees": composition.application.fee_schedules(Some(&account_id))})
         }
-        Command::SubmitIntent { .. }
-        | Command::Fill { .. }
+        Command::Fill { .. }
         | Command::Browse { .. }
         | Command::Inspect { .. }
         | Command::Model { .. }

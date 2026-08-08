@@ -7,4 +7,6 @@ mod queries;
 
 pub use app::{ReferenceApplication, ReferenceRefreshResult};
 pub use protocol::{CatalogStore, PublishedSnapshots, ReferenceSource};
-pub use queries::{MarketQuery, ReferenceKind, ReferenceQuery, ReferenceReader, ReferenceRecord};
+pub use queries::{
+    LifecycleQuery, MarketQuery, ReferenceKind, ReferenceQuery, ReferenceReader, ReferenceRecord,
+};

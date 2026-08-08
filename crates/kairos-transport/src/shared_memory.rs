@@ -33,6 +33,12 @@ pub struct SnapshotMarketData {
     pub first_instrument_id: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedSnapshotPayload {
+    pub generation: u64,
+    pub payload: Vec<u8>,
+}
+
 pub struct SharedSnapshotReader {
     mmap: Mmap,
     slot_size: usize,
@@ -122,6 +128,11 @@ impl SharedSnapshotReader {
     }
 
     pub fn read_market_data(&self) -> Result<SnapshotMarketData, String> {
+        let snapshot = self.read_payload()?;
+        decode_market_data(&snapshot.payload, snapshot.generation)
+    }
+
+    pub fn read_payload(&self) -> Result<SharedSnapshotPayload, String> {
         for _ in 0..8 {
             let active = self.mmap[ACTIVE_OFFSET] as usize;
             if active >= SLOT_COUNT as usize {
@@ -135,13 +146,15 @@ impl SharedSnapshotReader {
                 return Err("shared snapshot active slot is empty or too large".into());
             }
             let start = HEADER_SIZE + active * self.slot_size;
-            let payload = &self.mmap[start..start + length];
-            let decoded = decode_market_data(payload, generation)?;
+            let payload = self.mmap[start..start + length].to_vec();
             let active_after = self.mmap[ACTIVE_OFFSET] as usize;
             let generation_after = read_u64(&self.mmap, SLOT_GENERATION_OFFSET + active * 8)
                 .map_err(|error| error.to_string())?;
             if active == active_after && generation == generation_after {
-                return Ok(decoded);
+                return Ok(SharedSnapshotPayload {
+                    generation,
+                    payload,
+                });
             }
         }
         Err("shared snapshot changed while being read".into())
@@ -199,4 +212,22 @@ fn read_u64(bytes: &[u8], offset: usize) -> io::Result<u64> {
 
 fn invalid_data(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SharedSnapshotReader, SharedSnapshotWriter};
+
+    #[test]
+    fn reads_arbitrary_payloads_without_knowing_the_protocol() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("snapshot.bin");
+        let mut writer = SharedSnapshotWriter::create(&path, 128).unwrap();
+        writer.publish(7, b"protocol-payload").unwrap();
+
+        let reader = SharedSnapshotReader::open(&path).unwrap();
+        let payload = reader.read_payload().unwrap();
+        assert_eq!(payload.generation, 7);
+        assert_eq!(payload.payload, b"protocol-payload");
+    }
 }

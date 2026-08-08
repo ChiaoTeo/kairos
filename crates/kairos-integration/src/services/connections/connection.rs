@@ -27,7 +27,7 @@ impl ManagedConnection {
         spec.validate()?;
         let identity = crate::domain::ConnectionIdentity::new(
             spec.connection_id.clone(),
-            spec.provider.clone(),
+            spec.route.clone(),
             spec.product,
             spec.access,
             spec.transport,
@@ -150,7 +150,7 @@ mod tests {
     fn managed_connection_owns_component_lifecycle() {
         let spec = ConnectionSpec {
             connection_id: "reference.binance.spot.rest".into(),
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Public,
             transport: TransportKind::Rest,

@@ -12,7 +12,7 @@ use kairos_account::composition::FileAccountPublisher;
 use kairos_account::AccountProcess;
 use kairos_integration::application::ConnectionSpec;
 use kairos_integration::domain::{
-    AccessScope, IntegrationCapability, ProductFamily, TransportKind,
+    AccessScope, IntegrationCapability, IntegrationRoute, ProductFamily, TransportKind,
 };
 use kairos_integration::Integration;
 use kairos_protocol::InstanceIdentity;
@@ -26,10 +26,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     instance.prepare()?;
     let transport_identity =
         InstanceIdentity::new(workspace.id(), instance.launch_id(), instance.instance_id());
-    let socket = instance.socket("account")?;
-    let health = instance.health("account")?;
-    let state = instance.state(&["account", "account-state.json"])?;
-    let snapshot = instance.snapshot(&["account", "account.snapshot"])?;
+    let socket_name = args.socket_name.as_deref().unwrap_or("account");
+    let socket = instance.socket(socket_name)?;
+    let health = instance.service_health("account")?;
+    let state = instance.state(&["account", &format!("{socket_name}-state.json")])?;
+    let snapshot = instance.service_snapshot("account")?;
     let registry = AccountRegistry::load(workspace.child(&["accounts", "accounts.toml"])?)
         .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
     let credential_store =
@@ -102,7 +103,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let integration = compose_account_stream(integration, &args, product, segment)?;
             let stream_connection = integration.connect_account_stream(&ConnectionSpec {
                 connection_id: format!("account.{}.{}.private-stream", provider, segment),
-                provider: provider.clone(),
+                route: if provider == "ibkr" {
+                    IntegrationRoute::broker("ibkr")
+                } else {
+                    IntegrationRoute::exchange(provider.clone())
+                },
                 product: Some(product),
                 access: AccessScope::Private,
                 transport: TransportKind::UserStream,
@@ -116,6 +121,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )));
         }
     }
+    let lease_file = record.as_ref().map(|value| {
+        workspace
+            .child(&[
+                "state",
+                "account-locks",
+                &format!(
+                    "{}.{}",
+                    lease_component(&value.provider),
+                    lease_component(&args.account_id)
+                ),
+                "owner.json",
+            ])
+            .expect("validated account lease path")
+    });
     AccountProcess::new(
         composition.application,
         args.account_id,
@@ -128,9 +147,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             transport_identity,
         )),
     )
+    .map(|process| match lease_file {
+        Some(path) => process.with_trade_lease(path, args.instance_id.clone()),
+        None => process,
+    })
     .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?
     .run()
-    .await
+    .await?;
+    Ok(())
 }
 
 #[derive(Debug, Parser)]
@@ -168,10 +192,29 @@ struct Args {
     launch_id: String,
     #[arg(long, default_value = "default")]
     instance_id: String,
+    #[arg(long)]
+    socket_name: Option<String>,
     #[arg(long, env = "ACCOUNT_STREAM_ENDPOINT")]
     account_stream_endpoint: Option<String>,
     #[arg(long, default_value_t = 30_000, value_parser = clap::value_parser!(u64).range(1..))]
     refresh_ms: u64,
+}
+
+fn lease_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("_")
 }
 
 impl Args {

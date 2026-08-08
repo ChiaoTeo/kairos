@@ -69,7 +69,7 @@ impl OkxAccountStreamConnection {
         }
         let spec = ConnectionSpec {
             connection_id: format!("account.okx.{}.private-stream", product_name(product)),
-            provider: "okx".into(),
+            route: crate::domain::IntegrationRoute::exchange("okx"),
             product: Some(product),
             access: AccessScope::Private,
             transport: TransportKind::UserStream,

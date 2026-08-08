@@ -46,7 +46,7 @@ impl BinanceEquityReferenceFactory {
         .map_err(|error| error.to_string())?;
         let spec = ConnectionSpec {
             connection_id: "reference.binance.equity.rest".into(),
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Equity),
             access: AccessScope::Public,
             transport: TransportKind::Rest,
@@ -113,7 +113,7 @@ impl IntegrationConnectionFactory for BinanceEquityReferenceFactory {
 
 impl crate::services::factories::GatewaySelector for BinanceEquityReferenceFactory {
     fn supports(&self, spec: &ConnectionSpec) -> bool {
-        spec.provider == "binance"
+        spec.route == crate::domain::IntegrationRoute::exchange("binance")
             && spec.product == Some(ProductFamily::Equity)
             && spec.access == AccessScope::Public
             && spec.transport == TransportKind::Rest

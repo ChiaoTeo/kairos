@@ -13,7 +13,7 @@ impl FixtureConnection {
     fn new() -> Self {
         let spec = ConnectionSpec {
             connection_id: "account.fixture".into(),
-            provider: "fixture".into(),
+            route: kairos_integration::domain::IntegrationRoute::exchange("fixture"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Private,
             transport: TransportKind::Rest,
@@ -23,7 +23,7 @@ impl FixtureConnection {
         };
         let identity = ConnectionIdentity::new(
             spec.connection_id,
-            spec.provider,
+            spec.route,
             spec.product,
             spec.access,
             spec.transport,
@@ -113,7 +113,7 @@ fn integration_exposes_binance_order_entry_as_a_lifecycle_connection_capability(
     );
     let spec = ConnectionSpec {
         connection_id: "order.fixture".into(),
-        provider: "binance".into(),
+        route: kairos_integration::domain::IntegrationRoute::exchange("binance"),
         product: Some(ProductFamily::Spot),
         access: AccessScope::Private,
         transport: TransportKind::Rest,
@@ -122,7 +122,7 @@ fn integration_exposes_binance_order_entry_as_a_lifecycle_connection_capability(
         asset_type: None,
     };
     let connection = integration.connect_order_entry(&spec).unwrap();
-    assert_eq!(connection.identity().provider, "binance");
+    assert_eq!(connection.identity().route.primary().id, "binance");
     assert!(connection.identity().capability == IntegrationCapability::OrderEntry);
 }
 
@@ -136,7 +136,7 @@ fn integration_composes_binance_equity_order_entry_without_network_access() {
     let connection = integration
         .connect_order_entry(&ConnectionSpec {
             connection_id: "execution.binance.equity".into(),
-            provider: "binance".into(),
+            route: kairos_integration::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Equity),
             access: AccessScope::Private,
             transport: TransportKind::Rest,
@@ -168,7 +168,7 @@ fn integration_composes_binance_futures_and_okx_order_entries_without_network_ac
         .unwrap();
     let spec = |provider: &str| ConnectionSpec {
         connection_id: format!("order.{provider}"),
-        provider: provider.into(),
+        route: kairos_integration::domain::IntegrationRoute::exchange(provider),
         product: Some(ProductFamily::UsdMFutures),
         access: AccessScope::Private,
         transport: TransportKind::Rest,
@@ -181,7 +181,9 @@ fn integration_composes_binance_futures_and_okx_order_entries_without_network_ac
             .connect_order_entry(&spec("binance"))
             .unwrap()
             .identity()
-            .provider,
+            .route
+            .primary()
+            .id,
         "binance"
     );
     assert_eq!(
@@ -189,7 +191,9 @@ fn integration_composes_binance_futures_and_okx_order_entries_without_network_ac
             .connect_order_entry(&spec("okx"))
             .unwrap()
             .identity()
-            .provider,
+            .route
+            .primary()
+            .id,
         "okx"
     );
 }
@@ -224,7 +228,7 @@ fn integration_composes_remote_order_queries_for_native_private_products() {
         );
     let spec = |provider: &str, product: ProductFamily| ConnectionSpec {
         connection_id: format!("query.{provider}.{product:?}"),
-        provider: provider.into(),
+        route: kairos_integration::domain::IntegrationRoute::exchange(provider),
         product: Some(product),
         access: AccessScope::Private,
         transport: TransportKind::Rest,
@@ -256,7 +260,7 @@ fn integration_composes_ibkr_equity_account_order_and_stream_without_network_acc
         .with_ibkr_account_stream("127.0.0.1", 4002, 0, "DU123", "equity");
     let spec = |capability| ConnectionSpec {
         connection_id: format!("ibkr.{capability:?}"),
-        provider: "ibkr".into(),
+        route: kairos_integration::domain::IntegrationRoute::broker("ibkr"),
         product: Some(ProductFamily::Spot),
         access: AccessScope::Private,
         transport: TransportKind::Rest,
@@ -269,7 +273,9 @@ fn integration_composes_ibkr_equity_account_order_and_stream_without_network_acc
             .connect_account(&spec(IntegrationCapability::AccountRead))
             .unwrap()
             .identity()
-            .provider,
+            .route
+            .primary()
+            .id,
         "ibkr"
     );
     assert_eq!(
@@ -277,7 +283,9 @@ fn integration_composes_ibkr_equity_account_order_and_stream_without_network_acc
             .connect_order_entry(&spec(IntegrationCapability::OrderEntry))
             .unwrap()
             .identity()
-            .provider,
+            .route
+            .primary()
+            .id,
         "ibkr"
     );
     assert_eq!(
@@ -285,7 +293,9 @@ fn integration_composes_ibkr_equity_account_order_and_stream_without_network_acc
             .connect_account_stream(&spec(IntegrationCapability::AccountStream))
             .unwrap()
             .identity()
-            .provider,
+            .route
+            .primary()
+            .id,
         "ibkr"
     );
 }
@@ -302,7 +312,7 @@ fn integration_composes_ibkr_execution_stream_without_network_access() {
     let connection = integration
         .connect_execution_stream(&ConnectionSpec {
             connection_id: "execution.ibkr.equity.stream".into(),
-            provider: "ibkr".into(),
+            route: kairos_integration::domain::IntegrationRoute::broker("ibkr"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Private,
             transport: TransportKind::Rest,
@@ -338,7 +348,7 @@ fn integration_composes_okx_options_account_and_order_entry_without_network_acce
         .unwrap();
     let account_spec = ConnectionSpec {
         connection_id: "account.okx.options".into(),
-        provider: "okx".into(),
+        route: kairos_integration::domain::IntegrationRoute::exchange("okx"),
         product: Some(ProductFamily::Options),
         access: AccessScope::Private,
         transport: TransportKind::Rest,
@@ -357,7 +367,9 @@ fn integration_composes_okx_options_account_and_order_entry_without_network_acce
             .connect_account(&account_spec)
             .unwrap()
             .identity()
-            .provider,
+            .route
+            .primary()
+            .id,
         "okx"
     );
     assert_eq!(
@@ -376,7 +388,7 @@ fn integration_composes_binance_spot_market_profile_without_network_access() {
         .with_binance_spot_account_market_profile("api-key", "secret", "http://127.0.0.1:1");
     let spec = ConnectionSpec {
         connection_id: "account.binance.spot.market-profile".into(),
-        provider: "binance".into(),
+        route: kairos_integration::domain::IntegrationRoute::exchange("binance"),
         product: Some(ProductFamily::Spot),
         access: AccessScope::Private,
         transport: TransportKind::Rest,
@@ -410,7 +422,7 @@ fn integration_composes_native_credential_inspection_without_network_access() {
         let connection = integration
             .connect_account_credential_inspection(&ConnectionSpec {
                 connection_id: format!("account.{provider}.inspect"),
-                provider: provider.into(),
+                route: kairos_integration::domain::IntegrationRoute::exchange(provider),
                 product: Some(ProductFamily::Spot),
                 access: AccessScope::Private,
                 transport: TransportKind::Rest,
@@ -419,7 +431,7 @@ fn integration_composes_native_credential_inspection_without_network_access() {
                 asset_type: None,
             })
             .unwrap();
-        assert_eq!(connection.identity().provider, provider);
+        assert_eq!(connection.identity().route.primary().id, provider);
     }
 }
 
@@ -432,7 +444,7 @@ fn integration_composes_binance_margin_account_without_network_access() {
         let connection = integration
             .connect_account(&ConnectionSpec {
                 connection_id: "account.binance.margin".into(),
-                provider: "binance".into(),
+                route: kairos_integration::domain::IntegrationRoute::exchange("binance"),
                 product: Some(product),
                 access: AccessScope::Private,
                 transport: TransportKind::Rest,
@@ -460,7 +472,7 @@ fn integration_composes_okx_margin_account_without_network_access() {
         let connection = integration
             .connect_account(&ConnectionSpec {
                 connection_id: "account.okx.margin".into(),
-                provider: "okx".into(),
+                route: kairos_integration::domain::IntegrationRoute::exchange("okx"),
                 product: Some(product),
                 access: AccessScope::Private,
                 transport: TransportKind::Rest,
@@ -486,7 +498,7 @@ fn integration_composes_okx_market_profile_without_network_access() {
         .unwrap();
     let spec = ConnectionSpec {
         connection_id: "account.okx.swap.market-profile".into(),
-        provider: "okx".into(),
+        route: kairos_integration::domain::IntegrationRoute::exchange("okx"),
         product: Some(ProductFamily::UsdMFutures),
         access: AccessScope::Private,
         transport: TransportKind::Rest,
@@ -499,7 +511,9 @@ fn integration_composes_okx_market_profile_without_network_access() {
             .connect_account_market_profile(&spec)
             .unwrap()
             .identity()
-            .provider,
+            .route
+            .primary()
+            .id,
         "okx"
     );
 }
@@ -515,7 +529,7 @@ fn integration_composes_binance_private_account_stream_without_network_access() 
     );
     let spec = ConnectionSpec {
         connection_id: "account-stream.fixture".into(),
-        provider: "binance".into(),
+        route: kairos_integration::domain::IntegrationRoute::exchange("binance"),
         product: Some(ProductFamily::Spot),
         access: AccessScope::Private,
         transport: TransportKind::UserStream,
@@ -539,7 +553,7 @@ fn integration_composes_binance_transfer_as_a_connection_capability() {
     );
     let spec = ConnectionSpec {
         connection_id: "transfer.fixture".into(),
-        provider: "binance".into(),
+        route: kairos_integration::domain::IntegrationRoute::exchange("binance"),
         product: None,
         access: AccessScope::Private,
         transport: TransportKind::Rest,
@@ -577,7 +591,7 @@ fn integration_composes_futures_and_okx_private_account_streams_without_network_
         .unwrap();
     let spec = |provider: &str, product: ProductFamily| ConnectionSpec {
         connection_id: format!("stream.{provider}"),
-        provider: provider.into(),
+        route: kairos_integration::domain::IntegrationRoute::exchange(provider),
         product: Some(product),
         access: AccessScope::Private,
         transport: TransportKind::UserStream,
@@ -590,7 +604,9 @@ fn integration_composes_futures_and_okx_private_account_streams_without_network_
             .connect_account_stream(&spec("binance", ProductFamily::UsdMFutures))
             .unwrap()
             .identity()
-            .provider,
+            .route
+            .primary()
+            .id,
         "binance"
     );
     assert_eq!(
@@ -598,7 +614,9 @@ fn integration_composes_futures_and_okx_private_account_streams_without_network_
             .connect_account_stream(&spec("okx", ProductFamily::Spot))
             .unwrap()
             .identity()
-            .provider,
+            .route
+            .primary()
+            .id,
         "okx"
     );
 }

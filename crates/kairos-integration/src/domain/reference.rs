@@ -7,6 +7,7 @@ pub struct ReferenceCatalogPayload {
     pub instruments: Vec<ReferenceInstrument>,
     pub listings: Vec<ReferenceListing>,
     pub markets: Vec<ReferenceMarket>,
+    pub financial_products: Vec<ReferenceFinancialProduct>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -68,5 +69,25 @@ pub struct ReferenceMarket {
     pub minimum_quantity: Option<String>,
     pub minimum_notional: Option<String>,
     pub contract_size: Option<String>,
+    pub effective_to_unix_nanos: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ReferenceFinancialProduct {
+    pub product_id: String,
+    pub product_type: String,
+    pub name: String,
+    pub asset_id: String,
+    pub provider_product_id: String,
+    pub provider_id: Option<String>,
+    pub issuer_id: Option<String>,
+    pub currency_asset_id: Option<String>,
+    pub min_amount: Option<String>,
+    pub max_amount: Option<String>,
+    pub apr: Option<String>,
+    pub lock_period_days: i32,
+    pub maturity_at_unix_nanos: Option<u64>,
+    pub status: String,
+    pub effective_from_unix_nanos: u64,
     pub effective_to_unix_nanos: Option<u64>,
 }

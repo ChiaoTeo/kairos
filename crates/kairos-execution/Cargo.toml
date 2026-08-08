@@ -11,7 +11,10 @@ name = "kairos_execution"
 path = "src/lib.rs"
 
 [dependencies]
- kairos-integration = { path = "../kairos-integration" }
+kairos-integration = { path = "../kairos-integration" }
+kairos-protocol = { path = "../kairos-protocol" }
+kairos-transport = { path = "../kairos-transport" }
+flatbuffers = "25.12.19"
 clap = { version = "4", features = ["derive", "env"] }
 kairos-workspace = { path = "../kairos-workspace" }
 serde = { version = "1", features = ["derive"] }

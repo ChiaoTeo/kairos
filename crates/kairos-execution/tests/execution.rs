@@ -1,6 +1,8 @@
+use kairos_execution::application::ExecutionPreflight;
 use kairos_execution::application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestRequest, CancelOrder,
-    ExecuteIntent, ExecutionAuditQuery, ExecutionFillReport, RemoteExecutionEvent, SubmitOrder,
+    ExecuteStrategyIntent, ExecutionAuditQuery, ExecutionFillReport, RemoteExecutionEvent,
+    SubmitOrder,
 };
 use kairos_execution::composition::{
     compose_order_entry, ExecutionConnectionOptions, FileExecutionStore,
@@ -28,7 +30,7 @@ impl FailingOrderEntry {
     fn new() -> Self {
         let spec = ConnectionSpec {
             connection_id: "execution.fixture".into(),
-            provider: "fixture".into(),
+            route: kairos_integration::IntegrationRoute::exchange("fixture"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Private,
             transport: TransportKind::Rest,
@@ -38,7 +40,7 @@ impl FailingOrderEntry {
         };
         let identity = ConnectionIdentity::new(
             spec.connection_id,
-            spec.provider,
+            spec.route,
             spec.product,
             spec.access,
             spec.transport,
@@ -106,12 +108,77 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
         client_id: 0,
     })
     .unwrap();
-    ExecutionApplication::with_dependencies(
+    let mut application = ExecutionApplication::with_dependencies(
         "execution",
         Some(connection),
         Some(Box::new(FileExecutionStore::new(path))),
     )
-    .unwrap()
+    .unwrap();
+    application.attach_preflight(Box::new(TestPreflight));
+    application
+}
+
+struct TestPreflight;
+
+impl ExecutionPreflight for TestPreflight {
+    fn plan_intent(&mut self, intent: &ExecuteStrategyIntent) -> Result<Vec<SubmitOrder>, String> {
+        Ok(intent
+            .account_ids
+            .iter()
+            .enumerate()
+            .map(|(index, account_id)| SubmitOrder {
+                order_id: format!("{}:order:{}", intent.intent_id, index),
+                intent_id: Some(intent.intent_id.clone()),
+                account_id: account_id.clone(),
+                segment_key: intent.segment_key.clone(),
+                instrument_id: intent.instrument_id.clone(),
+                market_id: intent.market_id.clone(),
+                side: OrderSide::Buy,
+                order_type: if intent.limit_price_mantissa.is_some() {
+                    OrderType::Limit
+                } else {
+                    OrderType::Market
+                },
+                quantity_mantissa: intent.target_quantity_mantissa,
+                quantity_scale: intent.quantity_scale,
+                limit_price_mantissa: intent.limit_price_mantissa,
+                limit_price_scale: intent.limit_price_scale,
+                options: Default::default(),
+            })
+            .collect())
+    }
+    fn validate_order(&mut self, _: &SubmitOrder) -> Result<(), String> {
+        Ok(())
+    }
+    fn reserve_order(&mut self, _: &SubmitOrder) -> Result<(), String> {
+        Ok(())
+    }
+    fn release_order(&mut self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn consume_order(&mut self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+struct AlreadySatisfiedPreflight;
+
+impl ExecutionPreflight for AlreadySatisfiedPreflight {
+    fn plan_intent(&mut self, _: &ExecuteStrategyIntent) -> Result<Vec<SubmitOrder>, String> {
+        Ok(Vec::new())
+    }
+    fn validate_order(&mut self, _: &SubmitOrder) -> Result<(), String> {
+        Ok(())
+    }
+    fn reserve_order(&mut self, _: &SubmitOrder) -> Result<(), String> {
+        Ok(())
+    }
+    fn release_order(&mut self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn consume_order(&mut self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 struct OneExecutionEvent {
@@ -123,7 +190,7 @@ impl OneExecutionEvent {
     fn new(event: RemoteExecutionEvent) -> Self {
         let spec = ConnectionSpec {
             connection_id: "execution.fixture.stream".into(),
-            provider: "fixture".into(),
+            route: kairos_integration::IntegrationRoute::exchange("fixture"),
             product: Some(ProductFamily::Equity),
             access: AccessScope::Private,
             transport: TransportKind::Rest,
@@ -133,7 +200,7 @@ impl OneExecutionEvent {
         };
         let identity = ConnectionIdentity::new(
             spec.connection_id,
-            spec.provider,
+            spec.route,
             spec.product,
             spec.access,
             spec.transport,
@@ -383,29 +450,169 @@ fn failed_submission_is_persisted_as_unknown_for_reconciliation() {
 }
 
 #[test]
-fn target_position_intent_creates_the_delta_order() {
+fn strategy_intent_is_execution_owned_and_restored_with_events() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let mut first = application(&path);
+    let accepted = first
+        .submit_intent(ExecuteStrategyIntent {
+            intent_id: "strategy:intent:1".into(),
+            strategy_id: "strategy".into(),
+            launch_id: "launch".into(),
+            instance_id: "instance".into(),
+            instrument_id: "BTCUSDT".into(),
+            market_id: Some("market:btc".into()),
+            account_ids: vec!["main".into(), "hedge".into()],
+            segment_key: "spot".into(),
+            target_quantity_mantissa: 100,
+            quantity_scale: 0,
+            limit_price_mantissa: Some(10_000),
+            limit_price_scale: Some(0),
+            source_snapshot_id: Some("market:7".into()),
+            source_event_sequence: Some(42),
+            reason: "rebalance".into(),
+        })
+        .unwrap();
+    assert_eq!(accepted.status, kairos_execution::IntentStatus::Executing);
+    assert_eq!(first.intents().len(), 1);
+    assert_eq!(first.intent_events(None).len(), 3);
+
+    let second = application(&path);
+    assert_eq!(
+        second.intents()[0].intent.account_ids,
+        vec!["main", "hedge"]
+    );
+    assert_eq!(second.intent_events(Some("strategy:intent:1")).len(), 3);
+}
+
+#[test]
+fn intent_reaches_satisfied_after_all_child_orders_fill() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("execution.json");
     let mut app = application(&path);
-    let order = app
-        .execute_intent(ExecuteIntent {
-            intent_id: "intent-1".into(),
-            current_quantity_mantissa: 40,
-            target_quantity_mantissa: 100,
-            quantity_scale: 0,
-            order_id: "order-1".into(),
-            account_id: "main".into(),
-            segment_key: "spot".into(),
+    let state = app
+        .submit_intent(ExecuteStrategyIntent {
+            intent_id: "intent:satisfied".into(),
+            strategy_id: "strategy".into(),
+            launch_id: "launch".into(),
+            instance_id: "instance".into(),
             instrument_id: "BTCUSDT".into(),
             market_id: None,
+            account_ids: vec!["main".into(), "hedge".into()],
+            segment_key: "spot".into(),
+            target_quantity_mantissa: 3,
+            quantity_scale: 0,
             limit_price_mantissa: None,
             limit_price_scale: None,
+            source_snapshot_id: None,
+            source_event_sequence: None,
+            reason: String::new(),
         })
-        .unwrap()
         .unwrap();
-    assert_eq!(order.quantity_mantissa, 60);
-    assert_eq!(order.side, OrderSide::Buy);
-    assert_eq!(order.intent_id.as_deref(), Some("intent-1"));
+    assert_eq!(state.status, kairos_execution::IntentStatus::Executing);
+    for (index, order_id) in state.order_ids.iter().enumerate() {
+        app.record_fill(ExecutionFillReport {
+            fill_id: format!("fill:{index}"),
+            order_id: order_id.clone(),
+            quantity_mantissa: 3,
+            quantity_scale: 0,
+            price_mantissa: 100,
+            price_scale: 0,
+            fee_mantissa: 0,
+            fee_scale: 0,
+            occurred_at_unix_nanos: None,
+        })
+        .unwrap();
+    }
+    assert_eq!(
+        app.intents()[0].status,
+        kairos_execution::IntentStatus::Satisfied
+    );
+}
+
+#[test]
+fn already_satisfied_intent_is_terminal_without_child_orders() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let connection = compose_order_entry(&ExecutionConnectionOptions {
+        provider: "simulated".into(),
+        product: "spot".into(),
+        api_key: String::new(),
+        secret: String::new(),
+        passphrase: String::new(),
+        base_url: "https://api.binance.com".into(),
+        host: "127.0.0.1".into(),
+        port: 4002,
+        client_id: 0,
+    })
+    .unwrap();
+    let mut app = ExecutionApplication::with_dependencies(
+        "execution",
+        Some(connection),
+        Some(Box::new(FileExecutionStore::new(path))),
+    )
+    .unwrap();
+    app.attach_preflight(Box::new(AlreadySatisfiedPreflight));
+    let state = app
+        .submit_intent(ExecuteStrategyIntent {
+            intent_id: "intent:already-satisfied".into(),
+            strategy_id: "strategy".into(),
+            launch_id: "launch".into(),
+            instance_id: "instance".into(),
+            instrument_id: "BTCUSDT".into(),
+            market_id: None,
+            account_ids: vec!["main".into()],
+            segment_key: "spot".into(),
+            target_quantity_mantissa: 0,
+            quantity_scale: 0,
+            limit_price_mantissa: None,
+            limit_price_scale: None,
+            source_snapshot_id: None,
+            source_event_sequence: None,
+            reason: String::new(),
+        })
+        .unwrap();
+    assert_eq!(state.status, kairos_execution::IntentStatus::Satisfied);
+    assert!(state.order_ids.is_empty());
+}
+
+#[test]
+fn intent_idempotency_survives_restart_without_creating_a_second_intent() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("execution.json");
+    let intent = ExecuteStrategyIntent {
+        intent_id: "intent:idempotent".into(),
+        strategy_id: "strategy".into(),
+        launch_id: "launch".into(),
+        instance_id: "instance".into(),
+        instrument_id: "BTCUSDT".into(),
+        market_id: None,
+        account_ids: vec!["main".into()],
+        segment_key: "spot".into(),
+        target_quantity_mantissa: 1,
+        quantity_scale: 0,
+        limit_price_mantissa: None,
+        limit_price_scale: None,
+        source_snapshot_id: None,
+        source_event_sequence: None,
+        reason: String::new(),
+    };
+    let mut first = application(&path);
+    let (_, duplicate) = first
+        .submit_intent_with_idempotency(intent.clone(), "command-1".into())
+        .unwrap();
+    assert!(!duplicate);
+    let (_, duplicate) = first
+        .submit_intent_with_idempotency(intent.clone(), "command-1".into())
+        .unwrap();
+    assert!(duplicate);
+    let second = application(&path);
+    assert_eq!(second.intents().len(), 1);
+    let mut second = second;
+    let (_, duplicate) = second
+        .submit_intent_with_idempotency(intent, "command-1".into())
+        .unwrap();
+    assert!(duplicate);
 }
 
 #[test]

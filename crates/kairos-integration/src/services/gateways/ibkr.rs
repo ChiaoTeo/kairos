@@ -89,7 +89,7 @@ impl IbkrOrderConnection {
     pub fn new(options: IbkrOptions) -> Result<Self, String> {
         let spec = ConnectionSpec {
             connection_id: "execution.ibkr.equity.rest".into(),
-            provider: "ibkr".into(),
+            route: crate::domain::IntegrationRoute::broker("ibkr"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Private,
             transport: TransportKind::Rest,
@@ -201,7 +201,7 @@ impl IbkrAccountConnection {
     pub fn new(options: IbkrOptions) -> Result<Self, String> {
         let spec = ConnectionSpec {
             connection_id: "account.ibkr.equity.rest".into(),
-            provider: "ibkr".into(),
+            route: crate::domain::IntegrationRoute::broker("ibkr"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Private,
             transport: TransportKind::Rest,
@@ -253,7 +253,7 @@ impl IbkrAccountStreamConnection {
     ) -> Result<Self, String> {
         let spec = ConnectionSpec {
             connection_id: "account.ibkr.equity.stream".into(),
-            provider: "ibkr".into(),
+            route: crate::domain::IntegrationRoute::broker("ibkr"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Private,
             transport: TransportKind::Rest,
@@ -319,7 +319,7 @@ impl IbkrExecutionStreamConnection {
     ) -> Result<Self, String> {
         let spec = ConnectionSpec {
             connection_id: "execution.ibkr.equity.stream".into(),
-            provider: "ibkr".into(),
+            route: crate::domain::IntegrationRoute::broker("ibkr"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Private,
             transport: TransportKind::Rest,

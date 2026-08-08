@@ -11,12 +11,12 @@ import typer
 from typer.main import get_command
 
 from .commands.launch import launch_app
-from .commands.reference import reference_app
+from .commands.reference import _HELP, catalog_passthrough
+from .commands.account import HELP as ACCOUNT_HELP, account_passthrough
+from .commands.market import HELP as MARKET_HELP, market_passthrough
+from .commands.order import HELP as ORDER_HELP, order_passthrough
 from .commands.root import (
-    account_app,
     config_app,
-    market_app,
-    order_app,
     project_app,
     system_app,
     timeline_app,
@@ -28,10 +28,42 @@ app = typer.Typer(no_args_is_help=True, help="KairosPy strategy runtime toolkit"
 app.add_typer(launch_app, name="launch")
 app.add_typer(project_app, name="project")
 app.add_typer(config_app, name="config")
-app.add_typer(account_app, name="account")
-app.add_typer(market_app, name="market")
-app.add_typer(reference_app, name="catalog")
-app.add_typer(order_app, name="order")
+app.command(
+    "account",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    },
+    help=ACCOUNT_HELP,
+)(account_passthrough)
+app.command(
+    "market",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    },
+    help=MARKET_HELP,
+)(market_passthrough)
+app.command(
+    "catalog",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    },
+    help=_HELP,
+)(catalog_passthrough)
+app.command(
+    "order",
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    },
+    help=ORDER_HELP,
+)(order_passthrough)
 app.add_typer(system_app, name="system")
 app.add_typer(timeline_app, name="timeline")
 

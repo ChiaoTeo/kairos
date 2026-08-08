@@ -47,10 +47,10 @@ def test_cli_registers_legacy_product_groups() -> None:
         assert command in text
 
 
-def test_cli_preserves_legacy_nested_command_paths() -> None:
+def test_cli_exposes_canonical_business_command_surfaces() -> None:
     for argv, expected in (
-        (["account", "--help"], ("credential", "query", "trade-lock")),
-        (["market", "--help"], ("source", "dataset", "stream")),
+        (["account", "--help"], ("credential-list", "balances", "snapshot")),
+        (["market", "--help"], ("validate", "once", "replay")),
         (["launch", "--help"], ("targets", "diagnose", "replay")),
         (["catalog", "--help"], ("assets", "participants", "markets")),
         (["system", "--help"], ("account", "restart")),
@@ -60,6 +60,7 @@ def test_cli_preserves_legacy_nested_command_paths() -> None:
         text = output.getvalue()
         for command in expected:
             assert command in text
+
 
 
 def test_cli_version_is_script_friendly() -> None:

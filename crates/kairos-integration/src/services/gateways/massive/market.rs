@@ -42,7 +42,7 @@ impl<C: MassiveMarketClient> MassiveReferenceConnection<C> {
     pub fn open(client: C) -> Result<Self, String> {
         let spec = ConnectionSpec {
             connection_id: "reference.massive.market".into(),
-            provider: "massive".into(),
+            route: crate::domain::IntegrationRoute::data_provider("massive"),
             product: Some(ProductFamily::Equity),
             access: AccessScope::Public,
             transport: TransportKind::Rest,

@@ -3,8 +3,8 @@
 use crate::application::Connection;
 
 pub use crate::domain::reference::{
-    ReferenceAsset, ReferenceCatalogPayload, ReferenceEntity, ReferenceInstrument,
-    ReferenceListing, ReferenceMarket,
+    ReferenceAsset, ReferenceCatalogPayload, ReferenceEntity, ReferenceFinancialProduct,
+    ReferenceInstrument, ReferenceListing, ReferenceMarket,
 };
 
 pub trait ReferenceDataConnection: Connection {

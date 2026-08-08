@@ -21,16 +21,22 @@ impl<'a> ::flatbuffers::Follow<'a> for Intent<'a> {
 
 impl<'a> Intent<'a> {
     pub const VT_INTENT_ID: ::flatbuffers::VOffsetT = 4;
-    pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 6;
-    pub const VT_STATUS: ::flatbuffers::VOffsetT = 8;
-    pub const VT_ACTIVE: ::flatbuffers::VOffsetT = 10;
-    pub const VT_UPDATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 12;
-    pub const VT_STRATEGY_ID: ::flatbuffers::VOffsetT = 14;
-    pub const VT_ACCOUNT_ID: ::flatbuffers::VOffsetT = 16;
-    pub const VT_ACCOUNT_SEGMENT: ::flatbuffers::VOffsetT = 18;
-    pub const VT_ORDER_IDS: ::flatbuffers::VOffsetT = 20;
-    pub const VT_TARGET_QUANTITY: ::flatbuffers::VOffsetT = 22;
-    pub const VT_REASON: ::flatbuffers::VOffsetT = 24;
+    pub const VT_STRATEGY_ID: ::flatbuffers::VOffsetT = 6;
+    pub const VT_LAUNCH_ID: ::flatbuffers::VOffsetT = 8;
+    pub const VT_INSTANCE_ID: ::flatbuffers::VOffsetT = 10;
+    pub const VT_INSTRUMENT_ID: ::flatbuffers::VOffsetT = 12;
+    pub const VT_MARKET_ID: ::flatbuffers::VOffsetT = 14;
+    pub const VT_STATUS: ::flatbuffers::VOffsetT = 16;
+    pub const VT_ACTIVE: ::flatbuffers::VOffsetT = 18;
+    pub const VT_UPDATED_AT_UNIX_NANOS: ::flatbuffers::VOffsetT = 20;
+    pub const VT_ACCOUNT_IDS: ::flatbuffers::VOffsetT = 22;
+    pub const VT_ACCOUNT_SEGMENT: ::flatbuffers::VOffsetT = 24;
+    pub const VT_ORDER_IDS: ::flatbuffers::VOffsetT = 26;
+    pub const VT_TARGET_QUANTITY: ::flatbuffers::VOffsetT = 28;
+    pub const VT_COMPLETED_QUANTITY: ::flatbuffers::VOffsetT = 30;
+    pub const VT_SOURCE_SNAPSHOT_ID: ::flatbuffers::VOffsetT = 32;
+    pub const VT_SOURCE_EVENT_SEQUENCE: ::flatbuffers::VOffsetT = 34;
+    pub const VT_REASON: ::flatbuffers::VOffsetT = 36;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -47,9 +53,16 @@ impl<'a> Intent<'a> {
         args: &'args IntentArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<Intent<'bldr>> {
         let mut builder = IntentBuilder::new(_fbb);
+        builder.add_source_event_sequence(args.source_event_sequence);
         builder.add_updated_at_unix_nanos(args.updated_at_unix_nanos);
         if let Some(x) = args.reason {
             builder.add_reason(x);
+        }
+        if let Some(x) = args.source_snapshot_id {
+            builder.add_source_snapshot_id(x);
+        }
+        if let Some(x) = args.completed_quantity {
+            builder.add_completed_quantity(x);
         }
         if let Some(x) = args.target_quantity {
             builder.add_target_quantity(x);
@@ -60,17 +73,26 @@ impl<'a> Intent<'a> {
         if let Some(x) = args.account_segment {
             builder.add_account_segment(x);
         }
-        if let Some(x) = args.account_id {
-            builder.add_account_id(x);
-        }
-        if let Some(x) = args.strategy_id {
-            builder.add_strategy_id(x);
+        if let Some(x) = args.account_ids {
+            builder.add_account_ids(x);
         }
         if let Some(x) = args.status {
             builder.add_status(x);
         }
+        if let Some(x) = args.market_id {
+            builder.add_market_id(x);
+        }
         if let Some(x) = args.instrument_id {
             builder.add_instrument_id(x);
+        }
+        if let Some(x) = args.instance_id {
+            builder.add_instance_id(x);
+        }
+        if let Some(x) = args.launch_id {
+            builder.add_launch_id(x);
+        }
+        if let Some(x) = args.strategy_id {
+            builder.add_strategy_id(x);
         }
         if let Some(x) = args.intent_id {
             builder.add_intent_id(x);
@@ -91,6 +113,39 @@ impl<'a> Intent<'a> {
         }
     }
     #[inline]
+    pub fn strategy_id(&self) -> &'a str {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Intent::VT_STRATEGY_ID, None)
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn launch_id(&self) -> &'a str {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Intent::VT_LAUNCH_ID, None)
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn instance_id(&self) -> &'a str {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Intent::VT_INSTANCE_ID, None)
+                .unwrap()
+        }
+    }
+    #[inline]
     pub fn instrument_id(&self) -> Option<&'a str> {
         // Safety:
         // Created from valid Table for this object
@@ -98,6 +153,16 @@ impl<'a> Intent<'a> {
         unsafe {
             self._tab
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(Intent::VT_INSTRUMENT_ID, None)
+        }
+    }
+    #[inline]
+    pub fn market_id(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Intent::VT_MARKET_ID, None)
         }
     }
     #[inline]
@@ -134,23 +199,16 @@ impl<'a> Intent<'a> {
         }
     }
     #[inline]
-    pub fn strategy_id(&self) -> Option<&'a str> {
+    pub fn account_ids(
+        &self,
+    ) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>> {
         // Safety:
         // Created from valid Table for this object
         // which contains a valid value in this slot
         unsafe {
-            self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Intent::VT_STRATEGY_ID, None)
-        }
-    }
-    #[inline]
-    pub fn account_id(&self) -> Option<&'a str> {
-        // Safety:
-        // Created from valid Table for this object
-        // which contains a valid value in this slot
-        unsafe {
-            self._tab
-                .get::<::flatbuffers::ForwardsUOffset<&str>>(Intent::VT_ACCOUNT_ID, None)
+            self._tab.get::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>,
+            >>(Intent::VT_ACCOUNT_IDS, None)
         }
     }
     #[inline]
@@ -187,6 +245,37 @@ impl<'a> Intent<'a> {
         }
     }
     #[inline]
+    pub fn completed_quantity(&self) -> Option<&'a super::super::common::v_1::Decimal64> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<super::super::common::v_1::Decimal64>(Intent::VT_COMPLETED_QUANTITY, None)
+        }
+    }
+    #[inline]
+    pub fn source_snapshot_id(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Intent::VT_SOURCE_SNAPSHOT_ID, None)
+        }
+    }
+    #[inline]
+    pub fn source_event_sequence(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(Intent::VT_SOURCE_EVENT_SEQUENCE, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
     pub fn reason(&self) -> Option<&'a str> {
         // Safety:
         // Created from valid Table for this object
@@ -211,8 +300,28 @@ impl ::flatbuffers::Verifiable for Intent<'_> {
                 true,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "strategy_id",
+                Self::VT_STRATEGY_ID,
+                true,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "launch_id",
+                Self::VT_LAUNCH_ID,
+                true,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "instance_id",
+                Self::VT_INSTANCE_ID,
+                true,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "instrument_id",
                 Self::VT_INSTRUMENT_ID,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "market_id",
+                Self::VT_MARKET_ID,
                 false,
             )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("status", Self::VT_STATUS, true)?
@@ -222,16 +331,9 @@ impl ::flatbuffers::Verifiable for Intent<'_> {
                 Self::VT_UPDATED_AT_UNIX_NANOS,
                 false,
             )?
-            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "strategy_id",
-                Self::VT_STRATEGY_ID,
-                false,
-            )?
-            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
-                "account_id",
-                Self::VT_ACCOUNT_ID,
-                false,
-            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<&'_ str>>,
+            >>("account_ids", Self::VT_ACCOUNT_IDS, false)?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
                 "account_segment",
                 Self::VT_ACCOUNT_SEGMENT,
@@ -245,6 +347,21 @@ impl ::flatbuffers::Verifiable for Intent<'_> {
                 Self::VT_TARGET_QUANTITY,
                 false,
             )?
+            .visit_field::<super::super::common::v_1::Decimal64>(
+                "completed_quantity",
+                Self::VT_COMPLETED_QUANTITY,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "source_snapshot_id",
+                Self::VT_SOURCE_SNAPSHOT_ID,
+                false,
+            )?
+            .visit_field::<u64>(
+                "source_event_sequence",
+                Self::VT_SOURCE_EVENT_SEQUENCE,
+                false,
+            )?
             .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("reason", Self::VT_REASON, false)?
             .finish();
         Ok(())
@@ -252,12 +369,19 @@ impl ::flatbuffers::Verifiable for Intent<'_> {
 }
 pub struct IntentArgs<'a> {
     pub intent_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub strategy_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub launch_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub instance_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub instrument_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub market_id: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub status: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub active: bool,
     pub updated_at_unix_nanos: u64,
-    pub strategy_id: Option<::flatbuffers::WIPOffset<&'a str>>,
-    pub account_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub account_ids: Option<
+        ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>,
+        >,
+    >,
     pub account_segment: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub order_ids: Option<
         ::flatbuffers::WIPOffset<
@@ -265,22 +389,31 @@ pub struct IntentArgs<'a> {
         >,
     >,
     pub target_quantity: Option<&'a super::super::common::v_1::Decimal64>,
+    pub completed_quantity: Option<&'a super::super::common::v_1::Decimal64>,
+    pub source_snapshot_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub source_event_sequence: u64,
     pub reason: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for IntentArgs<'a> {
     #[inline]
     fn default() -> Self {
         IntentArgs {
-            intent_id: None, // required field
+            intent_id: None,   // required field
+            strategy_id: None, // required field
+            launch_id: None,   // required field
+            instance_id: None, // required field
             instrument_id: None,
+            market_id: None,
             status: None, // required field
             active: false,
             updated_at_unix_nanos: 0,
-            strategy_id: None,
-            account_id: None,
+            account_ids: None,
             account_segment: None,
             order_ids: None,
             target_quantity: None,
+            completed_quantity: None,
+            source_snapshot_id: None,
+            source_event_sequence: 0,
             reason: None,
         }
     }
@@ -297,11 +430,31 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IntentBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Intent::VT_INTENT_ID, intent_id);
     }
     #[inline]
+    pub fn add_strategy_id(&mut self, strategy_id: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Intent::VT_STRATEGY_ID, strategy_id);
+    }
+    #[inline]
+    pub fn add_launch_id(&mut self, launch_id: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Intent::VT_LAUNCH_ID, launch_id);
+    }
+    #[inline]
+    pub fn add_instance_id(&mut self, instance_id: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Intent::VT_INSTANCE_ID, instance_id);
+    }
+    #[inline]
     pub fn add_instrument_id(&mut self, instrument_id: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
             Intent::VT_INSTRUMENT_ID,
             instrument_id,
         );
+    }
+    #[inline]
+    pub fn add_market_id(&mut self, market_id: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Intent::VT_MARKET_ID, market_id);
     }
     #[inline]
     pub fn add_status(&mut self, status: ::flatbuffers::WIPOffset<&'b str>) {
@@ -319,14 +472,14 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IntentBuilder<'a, 'b, A> {
             .push_slot::<u64>(Intent::VT_UPDATED_AT_UNIX_NANOS, updated_at_unix_nanos, 0);
     }
     #[inline]
-    pub fn add_strategy_id(&mut self, strategy_id: ::flatbuffers::WIPOffset<&'b str>) {
+    pub fn add_account_ids(
+        &mut self,
+        account_ids: ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<&'b str>>,
+        >,
+    ) {
         self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Intent::VT_STRATEGY_ID, strategy_id);
-    }
-    #[inline]
-    pub fn add_account_id(&mut self, account_id: ::flatbuffers::WIPOffset<&'b str>) {
-        self.fbb_
-            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Intent::VT_ACCOUNT_ID, account_id);
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Intent::VT_ACCOUNT_IDS, account_ids);
     }
     #[inline]
     pub fn add_account_segment(&mut self, account_segment: ::flatbuffers::WIPOffset<&'b str>) {
@@ -354,6 +507,32 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IntentBuilder<'a, 'b, A> {
             );
     }
     #[inline]
+    pub fn add_completed_quantity(
+        &mut self,
+        completed_quantity: &super::super::common::v_1::Decimal64,
+    ) {
+        self.fbb_
+            .push_slot_always::<&super::super::common::v_1::Decimal64>(
+                Intent::VT_COMPLETED_QUANTITY,
+                completed_quantity,
+            );
+    }
+    #[inline]
+    pub fn add_source_snapshot_id(
+        &mut self,
+        source_snapshot_id: ::flatbuffers::WIPOffset<&'b str>,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            Intent::VT_SOURCE_SNAPSHOT_ID,
+            source_snapshot_id,
+        );
+    }
+    #[inline]
+    pub fn add_source_event_sequence(&mut self, source_event_sequence: u64) {
+        self.fbb_
+            .push_slot::<u64>(Intent::VT_SOURCE_EVENT_SEQUENCE, source_event_sequence, 0);
+    }
+    #[inline]
     pub fn add_reason(&mut self, reason: ::flatbuffers::WIPOffset<&'b str>) {
         self.fbb_
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Intent::VT_REASON, reason);
@@ -370,6 +549,9 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> IntentBuilder<'a, 'b, A> {
     pub fn finish(self) -> ::flatbuffers::WIPOffset<Intent<'a>> {
         let o = self.fbb_.end_table(self.start_);
         self.fbb_.required(o, Intent::VT_INTENT_ID, "intent_id");
+        self.fbb_.required(o, Intent::VT_STRATEGY_ID, "strategy_id");
+        self.fbb_.required(o, Intent::VT_LAUNCH_ID, "launch_id");
+        self.fbb_.required(o, Intent::VT_INSTANCE_ID, "instance_id");
         self.fbb_.required(o, Intent::VT_STATUS, "status");
         ::flatbuffers::WIPOffset::new(o.value())
     }
@@ -379,15 +561,21 @@ impl ::core::fmt::Debug for Intent<'_> {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         let mut ds = f.debug_struct("Intent");
         ds.field("intent_id", &self.intent_id());
+        ds.field("strategy_id", &self.strategy_id());
+        ds.field("launch_id", &self.launch_id());
+        ds.field("instance_id", &self.instance_id());
         ds.field("instrument_id", &self.instrument_id());
+        ds.field("market_id", &self.market_id());
         ds.field("status", &self.status());
         ds.field("active", &self.active());
         ds.field("updated_at_unix_nanos", &self.updated_at_unix_nanos());
-        ds.field("strategy_id", &self.strategy_id());
-        ds.field("account_id", &self.account_id());
+        ds.field("account_ids", &self.account_ids());
         ds.field("account_segment", &self.account_segment());
         ds.field("order_ids", &self.order_ids());
         ds.field("target_quantity", &self.target_quantity());
+        ds.field("completed_quantity", &self.completed_quantity());
+        ds.field("source_snapshot_id", &self.source_snapshot_id());
+        ds.field("source_event_sequence", &self.source_event_sequence());
         ds.field("reason", &self.reason());
         ds.finish()
     }

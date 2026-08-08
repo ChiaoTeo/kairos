@@ -11,15 +11,6 @@ mod integration;
 pub mod protocol;
 pub(crate) mod services;
 
-/// Optional CCXT client-adapter contract.
-///
-/// This is the only provider-specific extension exposed by the crate: callers
-/// may supply a CCXT market loader to [`Integration::with_ccxt_reference`].
-/// The concrete connection and factory remain private.
-pub mod ccxt {
-    pub use crate::services::gateways::ccxt::market::{CcxtMarketClient, CcxtMarketRow};
-}
-
 pub use application::OrderEntryConnection;
 pub use application::{
     AccountEventStreamConnection, AccountMarketProfileConnection, AccountReadConnection,
@@ -30,4 +21,5 @@ pub use application::{
     TransferRequest, TransferResult,
 };
 pub use domain::{DecimalValue, OrderEntryEvent, OrderEntryRequest, OrderEntryStatus};
+pub use domain::{IntegrationRoute, ParticipantKind, ParticipantRef};
 pub use integration::Integration;

@@ -89,7 +89,7 @@ pub fn rest_market_stream(
     };
     let identity = ConnectionIdentity::new(
         format!("market.binance.{product_name}.rest-stream"),
-        "binance",
+        crate::domain::IntegrationRoute::exchange("binance"),
         Some(product),
         AccessScope::Public,
         TransportKind::Rest,

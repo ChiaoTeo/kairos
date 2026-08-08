@@ -5,8 +5,9 @@
 //! request ids, or JSON payloads beyond this boundary.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::io::ErrorKind;
 use std::net::TcpStream;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use tungstenite::{connect, Message, WebSocket};
@@ -53,7 +54,7 @@ impl BinanceSpotWebSocketMarketStream {
         }
         let identity = ConnectionIdentity::new(
             "market.binance.spot.websocket",
-            "binance",
+            crate::domain::IntegrationRoute::exchange("binance"),
             Some(ProductFamily::Spot),
             AccessScope::Public,
             TransportKind::WebSocket,
@@ -76,6 +77,7 @@ impl BinanceSpotWebSocketMarketStream {
     fn open(&mut self) -> Result<(), String> {
         let (socket, _) = connect(self.endpoint.as_str()).map_err(|error| error.to_string())?;
         self.socket = Some(socket);
+        self.set_read_timeout(Duration::from_millis(100))?;
         let subscriptions: Vec<Vec<String>> = self.subscriptions.values().cloned().collect();
         for symbols in subscriptions {
             self.send_subscription("SUBSCRIBE", &symbols)?;
@@ -85,6 +87,24 @@ impl BinanceSpotWebSocketMarketStream {
         self.state.connected_at_unix_nanos = Some(now_unix_nanos());
         self.state.last_error = None;
         Ok(())
+    }
+
+    fn set_read_timeout(&mut self, timeout: Duration) -> Result<(), String> {
+        let stream = self
+            .socket
+            .as_mut()
+            .ok_or_else(|| "Binance Spot WebSocket is not connected".to_string())?
+            .get_mut();
+        match stream {
+            tungstenite::stream::MaybeTlsStream::Plain(stream) => stream
+                .set_read_timeout(Some(timeout))
+                .map_err(|error| error.to_string()),
+            tungstenite::stream::MaybeTlsStream::NativeTls(stream) => stream
+                .get_ref()
+                .set_read_timeout(Some(timeout))
+                .map_err(|error| error.to_string()),
+            _ => Err("unsupported Binance WebSocket transport".into()),
+        }
     }
 
     fn send_subscription(&mut self, method: &str, symbols: &[String]) -> Result<(), String> {
@@ -141,14 +161,27 @@ impl BinanceSpotWebSocketMarketStream {
         if value.get("result").is_some() || value.get("id").is_some() && value.get("e").is_none() {
             return Ok(None);
         }
-        let kind = value.get("e").and_then(Value::as_str).unwrap_or_default();
-        let event_time = value.get("E").and_then(Value::as_u64).unwrap_or_default();
+        let kind = value
+            .get("e")
+            .and_then(Value::as_str)
+            .or_else(|| {
+                (value.get("b").is_some()
+                    && value.get("B").is_some()
+                    && value.get("a").is_some()
+                    && value.get("A").is_some())
+                .then_some("bookTicker")
+            })
+            .unwrap_or_default();
+        let observed_at_unix_nanos = value
+            .get("E")
+            .and_then(Value::as_u64)
+            .map(|milliseconds| milliseconds.saturating_mul(1_000_000))
+            .unwrap_or_else(now_unix_nanos);
         let symbol = value
             .get("s")
             .and_then(Value::as_str)
             .ok_or_else(|| "Binance market event has no symbol".to_string())?
             .to_ascii_uppercase();
-        let observed_at_unix_nanos = event_time.saturating_mul(1_000_000);
         match kind {
             "trade" => Ok(Some(MarketEvent {
                 symbol,
@@ -312,16 +345,24 @@ impl MarketStreamConnection for BinanceSpotWebSocketMarketStream {
             if let Some(event) = self.pending_events.pop_front() {
                 return Ok(Some(event));
             }
-            let message = self
+            let message = match self
                 .socket
                 .as_mut()
                 .ok_or(IntegrationError::NotReady)?
                 .read()
-                .map_err(|error| {
+            {
+                Ok(message) => message,
+                Err(tungstenite::Error::Io(error))
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => {
                     self.state.lifecycle = ConnectionLifecycle::Degraded;
                     self.state.last_error = Some(error.to_string());
-                    IntegrationError::Transport(error.to_string())
-                })?;
+                    return Err(IntegrationError::Transport(error.to_string()));
+                }
+            };
             match message {
                 Message::Text(text) => {
                     if let Some(event) = Self::parse_event(text.as_ref())
@@ -421,7 +462,7 @@ mod tests {
         assert_eq!(trade.sequence, Some(42));
 
         let quote = BinanceSpotWebSocketMarketStream::parse_event(
-            r#"{"e":"bookTicker","u":9,"E":1700000000000,"s":"BTCUSDT","b":"100","B":"2","a":"101","A":"3"}"#,
+            r#"{"u":9,"s":"BTCUSDT","b":"100","B":"2","a":"101","A":"3"}"#,
         )
         .unwrap()
         .unwrap();

@@ -88,52 +88,6 @@ def _execution_submit_args(
     return arguments
 
 
-def _client(component: str, workspace: Path, *, account_id: str | None = None) -> ComponentControlApplication:
-    owner = WorkspaceApplication().open(workspace)
-    process = {"account": "account", "market": "market", "order": "execution"}.get(component)
-    if process is None:
-        raise typer.BadParameter(f"unsupported component: {component}")
-    return ComponentProcessApplication(owner).ensure_running(process, account_id=account_id)
-
-
-def _status_command(component: str):
-    def status(
-        workspace: Path = typer.Option(None, "--workspace"),
-        account_id: str | None = typer.Option(None, "--account-id"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        owner = WorkspaceApplication().open(workspace)
-        native = "execution" if component == "order" else "account"
-        arguments = ["snapshot"]
-        if native == "account" and account_id:
-            arguments = ["--account-id", account_id, "snapshot"]
-        value = AccountCliApplication(owner).run(arguments) if native == "account" else NativeCliApplication(owner).run(native, arguments)
-        _emit(value, output)
-
-    status.__name__ = f"{component}_status"
-    return status
-
-
-def _socket_action(component: str, action: str):
-    def command(
-        workspace: Path = typer.Option(None, "--workspace"),
-        account_id: str | None = typer.Option(None, "--account-id"),
-        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
-    ) -> None:
-        client = _client(component, workspace, account_id=account_id)
-        operation = {
-            "snapshot": client.snapshot,
-            "refresh": client.refresh,
-            "stop": client.stop,
-        }.get(action)
-        if operation is None:
-            raise typer.BadParameter(f"unsupported component action: {action}")
-        _emit(operation(), output)
-
-    command.__name__ = f"component_{action}"
-    return command
-
-
 def _order_query_action(action: str):
     def command(
         order_id: str | None = typer.Option(None, "--order-id", "--id"),
@@ -152,6 +106,40 @@ def _order_query_action(action: str):
     return command
 
 
+def _status_command(component: str):
+    """Retained only for the private command registry in this module.
+
+    The public account/market surfaces are registered as canonical passthrough
+    commands from ``app.py``. Order status remains a cross-module input adapter.
+    """
+    def status(
+        workspace: Path = typer.Option(None, "--workspace"),
+        account_id: str | None = typer.Option(None, "--account-id"),
+        output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+    ) -> None:
+        if component != "order":
+            raise typer.BadParameter("account and market commands are canonical passthroughs")
+        owner = WorkspaceApplication().open(workspace)
+        arguments = ["snapshot"]
+        if account_id:
+            arguments = ["--account-id", account_id, "snapshot"]
+        _emit(NativeCliApplication(owner).run("execution", arguments), output)
+
+    status.__name__ = f"{component}_status"
+    return status
+
+
+def _socket_action(component: str, action: str):
+    """Fail clearly if an unregistered process command is reached."""
+    def command() -> None:
+        raise typer.BadParameter(
+            f"{component} process control belongs to kairos system; use system commands"
+        )
+
+    command.__name__ = f"{component}_{action}"
+    return command
+
+
 def _add_group(parent: typer.Typer, name: str, commands: tuple[str, ...]) -> typer.Typer:
     group = typer.Typer(no_args_is_help=True, help=f"{name} commands")
     parent.add_typer(group, name=name)
@@ -161,8 +149,8 @@ def _add_group(parent: typer.Typer, name: str, commands: tuple[str, ...]) -> typ
 
 project_app = typer.Typer(no_args_is_help=True, help="Project commands")
 config_app = typer.Typer(no_args_is_help=True, help="Configuration commands")
-account_app = typer.Typer(no_args_is_help=True, help="Account commands")
-market_app = typer.Typer(no_args_is_help=True, help="Market commands")
+account_app = typer.Typer(no_args_is_help=True, help="Private account command registry")
+market_app = typer.Typer(no_args_is_help=True, help="Private market command registry")
 order_app = typer.Typer(no_args_is_help=True, help="Order commands")
 system_app = typer.Typer(no_args_is_help=True, help="System runtime commands")
 timeline_app = typer.Typer(no_args_is_help=True, help="Timeline commands")
@@ -214,13 +202,8 @@ def project_doctor(
 
 # Keep the established top-level names as thin input adapters. Module use
 # cases are invoked through their application-owned CLI/application paths.
-for _app, _name in (
-    (account_app, "account"), (order_app, "order"),
-):
+for _app, _name in ((order_app, "order"),):
     _app.command("status")(_status_command(_name))
-
-for _command_name in ("snapshot", "refresh", "stop"):
-    account_app.command(_command_name)(_socket_action("account", _command_name))
 
 
 def _market_remote_action(action: str):
@@ -268,11 +251,16 @@ def market_validate(
 
 @market_app.command("once")
 def market_once(
-    provider: str = typer.Option("binance-spot-rest", "--provider"),
-    endpoint: str = typer.Option("https://api.binance.com", "--endpoint"),
+    provider: str | None = typer.Option(None, "--provider"),
+    endpoint: str | None = typer.Option(None, "--endpoint"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    value = MarketCliApplication().run(["once", "--provider", provider, "--endpoint", endpoint])
+    arguments = ["once"]
+    if provider is not None:
+        arguments.extend(("--provider", provider))
+    if endpoint is not None:
+        arguments.extend(("--endpoint", endpoint))
+    value = MarketCliApplication().run(arguments)
     _emit(value, output)
 
 

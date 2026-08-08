@@ -3,7 +3,8 @@ use kairos_reference::application::control;
 use kairos_reference::application::MarketQuery;
 use kairos_reference::application::{ReferenceApplication, ReferenceKind, ReferenceQuery};
 use kairos_reference::composition::{
-    build_application, ensure_database_parent, ReferenceCompositionConfig, ReferenceSnapshotWriter,
+    build_application, default_endpoint, ensure_database_parent, ReferenceCompositionConfig,
+    ReferenceSnapshotWriter,
 };
 use kairos_reference::domain::Asset;
 use kairos_workspace::workspace::Workspace;
@@ -31,22 +32,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let provider = args.provider;
-    let default_endpoint = match provider.as_str() {
-        "massive-options" => "http://api.massiveprivateserver.site",
-        "binance-options" => "https://eapi.binance.com/eapi/v1/exchangeInfo",
-        "binance-usdm-futures" => "https://fapi.binance.com/fapi/v1/exchangeInfo",
-        "binance-coinm-futures" => "https://dapi.binance.com/dapi/v1/exchangeInfo",
-        "okx-spot" | "okx-equity" => "https://www.okx.com",
-        "okx-swap" | "okx-futures" | "okx-options" => "https://www.okx.com",
-        _ => "https://api.binance.com/api/v3/exchangeInfo",
-    };
     let endpoint = args
         .endpoint
-        .unwrap_or_else(|| default_endpoint.to_string());
+        .unwrap_or_else(|| default_endpoint(&provider).to_string());
     let api_key = args.api_key.unwrap_or_default();
     let binance_api_key = args.binance_api_key.unwrap_or_default();
     let secret = args.secret.unwrap_or_default();
-    let underlying = args.underlying;
     let database = args
         .database
         .unwrap_or(workspace.child(&["reference", "reference.sqlite"])?);
@@ -70,7 +61,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         api_key,
         binance_api_key,
         secret,
-        underlying,
         aeron_dir: args.aeron_dir,
         channel,
         catalog_stream,
@@ -82,16 +72,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut application = composition.application;
     let mut snapshot_writer = composition.snapshot_writer;
 
-    let result = application.refresh()?;
+    application.refresh()?;
     if let Some(writer) = snapshot_writer.as_mut() {
         writer.publish(application.catalog())?;
-        writer.publish_change(application.catalog(), &result.events)?;
+        let events = application.pending_events()?;
+        writer.publish_change(application.catalog(), &events)?;
+        application.acknowledge_published_events()?;
     }
     println!(
         "reference generation={} event_sequence={} events={}",
-        result.generation,
-        result.event_sequence,
-        result.events.len()
+        application.catalog().generation,
+        application.catalog().event_sequence,
+        application.catalog().lifecycle_events.len()
     );
     if args.once {
         return Ok(());
@@ -103,7 +95,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     if !socket.starts_with(workspace.root()) {
         return Err("reference socket must be inside workspace".into());
     }
-    let health_file = args.health_file;
+    let health_file = args
+        .health_file
+        .or_else(|| workspace.health_file("reference").ok());
     let refresh_seconds = args.refresh_seconds;
     tokio::runtime::Builder::new_current_thread()
         .enable_io()
@@ -142,10 +136,12 @@ async fn run_process(
             }
             _ = interval.tick() => {
                 let status = match application.refresh() {
-                    Ok(result) => {
+                    Ok(_) => {
                         if let Some(writer) = snapshot_writer.as_mut() {
                             writer.publish(application.catalog())?;
-                            writer.publish_change(application.catalog(), &result.events)?;
+                            let events = application.pending_events()?;
+                            writer.publish_change(application.catalog(), &events)?;
+                            application.acknowledge_published_events()?;
                         }
                         "ready"
                     }
@@ -238,17 +234,20 @@ async fn handle_client(
             }
         }
         control::REFRESH => match application.refresh() {
-            Ok(result) => (
-                200,
-                json!({"generation": result.generation, "event_sequence": result.event_sequence, "events": result.events.len()}),
-                false,
-            ),
+            Ok(result) => match publish_pending(writer, application) {
+                Ok(events) => (
+                    200,
+                    json!({"generation": result.generation, "event_sequence": result.event_sequence, "events": events}),
+                    false,
+                ),
+                Err(error) => (503, json!({"error": error.to_string()}), false),
+            },
             Err(error) => (503, json!({"error": error.to_string()}), false),
         },
-        control::PUBLISH => match publish(writer, application, &[]) {
-            Ok(()) => (
+        control::PUBLISH => match publish_pending(writer, application) {
+            Ok(events) => (
                 200,
-                json!({"generation": application.catalog().generation}),
+                json!({"generation": application.catalog().generation, "events": events}),
                 false,
             ),
             Err(error) => (503, json!({"error": error.to_string()}), false),
@@ -291,6 +290,17 @@ fn publish(
     writer.publish_change(application.catalog(), events)
 }
 
+fn publish_pending(
+    writer: Option<&mut ReferenceSnapshotWriter>,
+    application: &mut ReferenceApplication,
+) -> kairos_reference::domain::ReferenceResult<usize> {
+    let events = application.pending_events()?;
+    let count = events.len();
+    publish(writer, application, &events)?;
+    application.acknowledge_published_events()?;
+    Ok(count)
+}
+
 fn query_params(query: &str) -> std::collections::BTreeMap<String, String> {
     query
         .split('&')
@@ -324,6 +334,7 @@ fn reference_query(params: &std::collections::BTreeMap<String, String>) -> Refer
         Some("instrument") => ReferenceKind::Instrument,
         Some("listing") => ReferenceKind::Listing,
         Some("market") => ReferenceKind::Market,
+        Some("financial-product") | Some("financial_product") => ReferenceKind::FinancialProduct,
         Some("event") => ReferenceKind::Event,
         _ => ReferenceKind::All,
     };
@@ -333,12 +344,28 @@ fn reference_query(params: &std::collections::BTreeMap<String, String>) -> Refer
         venue_id: params.get("venue_id").cloned(),
         market_type: params.get("market_type").cloned(),
         asset_type: params.get("asset_type").cloned(),
+        underlying_instrument_id: params
+            .get("underlying_instrument_id")
+            .or_else(|| params.get("underlying"))
+            .cloned(),
         status: params.get("status").cloned(),
         active_only: params
             .get("active_only")
             .is_some_and(|value| value == "true"),
         as_of_unix_nanos: params
             .get("as_of_unix_nanos")
+            .and_then(|value| value.parse().ok()),
+        sequence_from: params
+            .get("sequence_from")
+            .and_then(|value| value.parse().ok()),
+        sequence_to: params
+            .get("sequence_to")
+            .and_then(|value| value.parse().ok()),
+        event_time_from_unix_nanos: params
+            .get("event_time_from_unix_nanos")
+            .and_then(|value| value.parse().ok()),
+        event_time_to_unix_nanos: params
+            .get("event_time_to_unix_nanos")
             .and_then(|value| value.parse().ok()),
         limit: params.get("limit").and_then(|value| value.parse().ok()),
     }
@@ -409,8 +436,6 @@ struct Args {
     binance_api_key: Option<String>,
     #[arg(long, env = "BINANCE_API_SECRET")]
     secret: Option<String>,
-    #[arg(long, default_value = "SPY", env = "MASSIVE_OPTION_UNDERLYING")]
-    underlying: String,
     #[arg(long)]
     workspace: PathBuf,
     #[arg(long)]

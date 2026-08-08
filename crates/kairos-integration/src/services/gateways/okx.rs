@@ -51,7 +51,7 @@ impl OkxAccountMarketProfileConnection {
             .map_err(|error| error.to_string())?;
         let spec = ConnectionSpec {
             connection_id: format!("account.okx.{}.market-profile.rest", product_name(product)),
-            provider: "okx".into(),
+            route: crate::domain::IntegrationRoute::exchange("okx"),
             product: Some(product),
             access: AccessScope::Private,
             transport: TransportKind::Rest,
@@ -133,7 +133,7 @@ impl OkxAccountConnection {
             .map_err(|error| error.to_string())?;
         let spec = ConnectionSpec {
             connection_id: format!("account.okx.{}.rest", product_name(product)),
-            provider: "okx".into(),
+            route: crate::domain::IntegrationRoute::exchange("okx"),
             product: Some(product),
             access: AccessScope::Private,
             transport: TransportKind::Rest,
@@ -397,7 +397,7 @@ impl OkxOrderQueryConnection {
         let connection = ManagedConnection::new(
             ConnectionSpec {
                 connection_id: format!("execution.okx.{}.order-read.rest", product_name(product)),
-                provider: "okx".into(),
+                route: crate::domain::IntegrationRoute::exchange("okx"),
                 product: Some(product),
                 access: AccessScope::Private,
                 transport: TransportKind::Rest,
@@ -533,7 +533,7 @@ impl OkxOrderConnection {
             .map_err(|error| error.to_string())?;
         let spec = ConnectionSpec {
             connection_id: format!("execution.okx.{}.rest", product_name(product)),
-            provider: "okx".into(),
+            route: crate::domain::IntegrationRoute::exchange("okx"),
             product: Some(product),
             access: AccessScope::Private,
             transport: TransportKind::Rest,

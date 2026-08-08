@@ -68,7 +68,7 @@ impl BinanceSpotAccountStreamConnection {
         }
         let spec = ConnectionSpec {
             connection_id: format!("account.binance.{product:?}.user-stream").to_ascii_lowercase(),
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product),
             access: AccessScope::Private,
             transport: TransportKind::UserStream,

@@ -63,14 +63,17 @@ class StrategyContext(StrategyContextProtocol):
     def unsubscribe(self, subscription: object) -> CommandHandle:
         return self._submit("market.unsubscribe", subscription)
 
-    def target_position(self, instrument: str, quantity: Decimal | str | int | float, *, account: str | None = None, limit_price: Decimal | str | int | float | None = None, reason: str = "", intent_id: str | None = None) -> CommandHandle:
+    def target_position(self, instrument: str, quantity: Decimal | str | int | float, *, account: str | None = None, accounts: Sequence[str] | None = None, limit_price: Decimal | str | int | float | None = None, reason: str = "", intent_id: str | None = None) -> CommandHandle:
         return self._submit("intent.target_position", TargetPositionRequest(
             instrument_id=instrument,
             quantity=Decimal(str(quantity)),
             account_id=account,
+            account_ids=tuple(accounts or ()),
             limit_price=None if limit_price is None else Decimal(str(limit_price)),
             reason=reason,
             intent_id=intent_id,
+            source_snapshot_id=None if self._event is None else self._event.stream_id,
+            source_event_sequence=None if self._event is None else self._event.sequence,
         ))
 
     def view(self, view_key: str, default: object = None) -> object:

@@ -52,7 +52,8 @@ are selected by composition.
 | Responsibility | Owner |
 | --- | --- |
 | balances, positions, equity, freshness | Account application/domain |
-| account intent and account-side order facts | Account application/domain |
+| account-side order facts | Account application/domain |
+| strategy intent and intent execution lifecycle | Execution application/domain |
 | external order lifecycle and execution audit | Execution application/domain |
 | risk reservations | Risk application/domain |
 | market and reference state | Market/Reference application/domain |
@@ -119,6 +120,13 @@ application API.
   client for an instance-scoped socket.
 
 ## Verification
+
+Long-lived business process control and snapshot resources follow
+[`service-runtime-spec.md`](service-runtime-spec.md). The specification is a
+cross-process system contract; it is not represented as a shared Rust trait.
+`kairos-workspace` owns canonical instance resource paths, while
+`kairos-protocol` owns FlatBuffers schemas and `kairos-transport` owns byte
+transport implementations.
 
 Changes should be checked with:
 

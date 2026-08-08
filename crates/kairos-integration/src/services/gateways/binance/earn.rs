@@ -28,7 +28,7 @@ impl BinanceSimpleEarnConnection {
             .map_err(|error| error.to_string())?;
         let spec = ConnectionSpec {
             connection_id: "account.binance.earn.rest".into(),
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Earn),
             access: AccessScope::Private,
             transport: TransportKind::Rest,

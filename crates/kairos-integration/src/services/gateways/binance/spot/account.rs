@@ -41,7 +41,7 @@ impl BinanceSpotAccountMarketProfileConnection {
             .map_err(|error| error.to_string())?;
         let spec = ConnectionSpec {
             connection_id: "account.binance.spot.market-profile.rest".into(),
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Private,
             transport: TransportKind::Rest,
@@ -115,7 +115,7 @@ impl BinanceSpotAccountConnection {
             .map_err(|error| error.to_string())?;
         let spec = ConnectionSpec {
             connection_id: "account.binance.spot.rest".into(),
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Private,
             transport: TransportKind::Rest,

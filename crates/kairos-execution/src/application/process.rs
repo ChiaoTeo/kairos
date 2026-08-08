@@ -1,18 +1,40 @@
 use crate::application::{
-    BacktestApplication, BacktestRequest, CancelOrder, ExecuteIntent, ExecutionApplication,
+    BacktestApplication, BacktestRequest, CancelOrder, ExecuteStrategyIntent, ExecutionApplication,
     ExecutionAuditEvent, ExecutionAuditQuery, ExecutionAuditSink, ExecutionFillReport,
     RemoteOrderQuery, ReplaceOrder, SubmitOrder,
 };
+use crate::composition::{SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher};
+use kairos_workspace::runtime::{HEALTH_PATH, SNAPSHOT_PATH, STOP_PATH};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
+
+#[derive(serde::Deserialize)]
+struct IntentPayload {
+    intent: ExecuteStrategyIntent,
+}
+
+#[derive(serde::Deserialize)]
+struct CommandEnvelope<T> {
+    schema_version: u16,
+    command_id: String,
+    idempotency_key: String,
+    operation: String,
+    strategy_id: String,
+    instance_id: String,
+    #[serde(default)]
+    launch_id: String,
+    payload: T,
+}
 
 pub struct ExecutionProcess {
     application: ExecutionApplication,
     socket_path: PathBuf,
     audit: Option<Box<dyn ExecutionAuditSink>>,
     stopping: bool,
+    snapshot_publisher: Option<SharedExecutionSnapshotPublisher>,
+    intent_snapshot_publisher: Option<SharedIntentSnapshotPublisher>,
 }
 
 impl ExecutionProcess {
@@ -22,6 +44,8 @@ impl ExecutionProcess {
             socket_path: socket_path.into(),
             audit: None,
             stopping: false,
+            snapshot_publisher: None,
+            intent_snapshot_publisher: None,
         }
     }
 
@@ -35,7 +59,22 @@ impl ExecutionProcess {
             socket_path: socket_path.into(),
             audit: Some(Box::new(audit)),
             stopping: false,
+            snapshot_publisher: None,
+            intent_snapshot_publisher: None,
         }
+    }
+
+    pub fn with_snapshot_publisher(mut self, publisher: SharedExecutionSnapshotPublisher) -> Self {
+        self.snapshot_publisher = Some(publisher);
+        self
+    }
+
+    pub fn with_intent_snapshot_publisher(
+        mut self,
+        publisher: SharedIntentSnapshotPublisher,
+    ) -> Self {
+        self.intent_snapshot_publisher = Some(publisher);
+        self
     }
 
     pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -45,12 +84,25 @@ impl ExecutionProcess {
         }
         let listener = UnixListener::bind(&self.socket_path)?;
         self.flush_events()?;
+        self.publish_snapshots()?;
         while !self.stopping {
             let (stream, _) = listener.accept().await?;
             self.handle(stream).await?;
             self.flush_events()?;
+            self.publish_snapshots()?;
         }
         remove_socket(&self.socket_path)?;
+        Ok(())
+    }
+
+    fn publish_snapshots(&mut self) -> Result<(), String> {
+        let snapshot = self.application.snapshot();
+        if let Some(publisher) = self.snapshot_publisher.as_mut() {
+            publisher.publish(&snapshot)?;
+        }
+        if let Some(publisher) = self.intent_snapshot_publisher.as_mut() {
+            publisher.publish(&snapshot)?;
+        }
         Ok(())
     }
 
@@ -68,11 +120,16 @@ impl ExecutionProcess {
             .unwrap_or("/");
         let (path, query) = target.split_once('?').unwrap_or((target, ""));
         let (status, payload) = match path {
-            "/v1/health" => (
+            HEALTH_PATH => (
                 200,
                 json!({"status":"ready","actor_id":self.application.snapshot().actor_id,"generation":self.application.snapshot().generation,"event_sequence":self.application.snapshot().event_sequence,"order_count":self.application.snapshot().orders.len()}),
             ),
-            "/v1/snapshot" => (200, serde_json::to_value(self.application.snapshot())?),
+            SNAPSHOT_PATH => (200, serde_json::to_value(self.application.snapshot())?),
+            "/v1/intents" => (200, json!({"intents": self.application.intents()})),
+            "/v1/intent-events" => (
+                200,
+                json!({"events": self.application.intent_events(query_value(query, "intent_id").as_deref())}),
+            ),
             "/v1/orders" => (
                 200,
                 json!({"orders": self.application.orders(query_value(query, "account_id").as_deref())}),
@@ -147,6 +204,38 @@ impl ExecutionProcess {
                 Ok(order) => (202, serde_json::to_value(order)?),
                 Err(error) => (422, json!({"error":error})),
             },
+            "/v1/intents/submit" => {
+                match serde_json::from_str::<CommandEnvelope<IntentPayload>>(body)
+                    .map_err(|error| error.to_string())
+                    .and_then(|command| {
+                        if command.schema_version != 1
+                            || command.command_id.trim().is_empty()
+                            || command.idempotency_key.trim().is_empty()
+                            || command.operation != "execution.submit_intent"
+                            || command.strategy_id != command.payload.intent.strategy_id
+                            || command.instance_id != command.payload.intent.instance_id
+                            || (!command.launch_id.is_empty()
+                                && command.launch_id != command.payload.intent.launch_id)
+                        {
+                            return Err("invalid execution intent command envelope".into());
+                        }
+                        self.application
+                            .submit_intent_with_idempotency(
+                                command.payload.intent,
+                                command.idempotency_key,
+                            )
+                            .map_err(|error| error.to_string())
+                    }) {
+                    Ok((intent, duplicate)) => (
+                        202,
+                        json!({"schema_version":1,"status":if duplicate { "duplicate" } else { "accepted" },"result":intent}),
+                    ),
+                    Err(error) => (
+                        422,
+                        json!({"schema_version":1,"status":"rejected","error":{"code":"execution.intent_invalid","message":error,"retryable":false}}),
+                    ),
+                }
+            }
             "/v1/preview-submit" => match serde_json::from_str::<SubmitOrder>(body)
                 .map_err(|error| error.to_string())
                 .and_then(|request| {
@@ -177,16 +266,6 @@ impl ExecutionProcess {
                 Ok(order) => (202, serde_json::to_value(order)?),
                 Err(error) => (422, json!({"error":error})),
             },
-            "/v1/intents/execute" => match serde_json::from_str::<ExecuteIntent>(body)
-                .map_err(|error| error.to_string())
-                .and_then(|request| {
-                    self.application
-                        .execute_intent(request)
-                        .map_err(|error| error.to_string())
-                }) {
-                Ok(order) => (202, serde_json::to_value(order)?),
-                Err(error) => (422, json!({"error":error})),
-            },
             "/v1/fill" => match serde_json::from_str::<ExecutionFillReport>(body)
                 .map_err(|error| error.to_string())
                 .and_then(|request| {
@@ -197,7 +276,7 @@ impl ExecutionProcess {
                 Ok(order) => (202, serde_json::to_value(order)?),
                 Err(error) => (422, json!({"error":error})),
             },
-            "/v1/stop" => {
+            STOP_PATH => {
                 self.stopping = true;
                 (202, json!({"status":"stopping"}))
             }
@@ -214,6 +293,10 @@ impl ExecutionProcess {
         let events = self.application.drain_events();
         for event in &events {
             audit.publish(event)?;
+        }
+        let intent_events = self.application.drain_intent_events();
+        for event in &intent_events {
+            audit.publish_intent(event)?;
         }
         Ok(())
     }

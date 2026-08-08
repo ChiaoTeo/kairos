@@ -9,7 +9,7 @@ use crate::domain::{Asset, Market, ReferenceError, ReferenceResult};
 
 use crate::application::protocol::{CatalogStore, ReferenceSource};
 use crate::application::queries::{
-    MarketQuery, ReferenceKind, ReferenceQuery, ReferenceReader, ReferenceRecord,
+    LifecycleQuery, MarketQuery, ReferenceKind, ReferenceQuery, ReferenceReader, ReferenceRecord,
 };
 use crate::services::actor::ReferenceActor;
 
@@ -57,6 +57,44 @@ impl ReferenceApplication {
     pub fn upsert_asset(&mut self, asset: Asset) -> ReferenceResult<u64> {
         self.actor.upsert_asset(asset)?;
         Ok(self.actor.catalog.generation)
+    }
+
+    pub fn pending_events(&mut self) -> ReferenceResult<Vec<LifecycleEvent>> {
+        self.actor.pending_events()
+    }
+
+    /// Read the append-only lifecycle history by stable sequence and time.
+    pub fn lifecycle_events(&self, query: &LifecycleQuery) -> Vec<LifecycleEvent> {
+        let mut events = self
+            .actor
+            .catalog
+            .lifecycle_events
+            .iter()
+            .enumerate()
+            .filter(|(index, event)| query.matches(*index as u64 + 1, event))
+            .map(|(_, event)| event.clone())
+            .collect::<Vec<_>>();
+        if let Some(limit) = query.limit {
+            events.truncate(limit);
+        }
+        events
+    }
+
+    /// Replay lifecycle events in their persisted sequence order.
+    pub fn replay_lifecycle_events(
+        &self,
+        sequence_from: Option<u64>,
+        sequence_to: Option<u64>,
+    ) -> Vec<LifecycleEvent> {
+        self.lifecycle_events(&LifecycleQuery {
+            sequence_from,
+            sequence_to,
+            ..LifecycleQuery::default()
+        })
+    }
+
+    pub fn acknowledge_published_events(&mut self) -> ReferenceResult<()> {
+        self.actor.acknowledge_pending_events()
     }
 
     /// Read the current catalog for diagnostics and controlled projections.
@@ -145,6 +183,9 @@ impl ReferenceApplication {
                                 value.name.as_deref().unwrap_or(""),
                                 value.instrument_type.as_str(),
                             ])
+                            && query.underlying_instrument_id.as_deref().is_none_or(|id| {
+                                value.underlying_instrument_id.as_deref() == Some(id)
+                            })
                     })
                     .cloned()
                     .map(ReferenceRecord::Instrument),
@@ -194,18 +235,40 @@ impl ReferenceApplication {
                     .map(ReferenceRecord::Market),
             );
         }
-        if include(ReferenceKind::Event) {
+        if include(ReferenceKind::FinancialProduct) {
             records.extend(
                 self.actor
                     .catalog
-                    .lifecycle_events
-                    .iter()
+                    .financial_products
+                    .values()
                     .filter(|value| {
-                        query
-                            .venue_id
-                            .as_deref()
-                            .is_none_or(|venue| value.venue_id.as_deref() == Some(venue))
-                            && query.matches_status(value.current_status.as_deref().unwrap_or(""))
+                        query.matches_status(&value.status)
+                            && query.matches_text(&[
+                                &value.product_id,
+                                &value.provider_product_id,
+                                &value.product_type,
+                                &value.name,
+                            ])
+                    })
+                    .cloned()
+                    .map(ReferenceRecord::FinancialProduct),
+            );
+        }
+        if include(ReferenceKind::Event) {
+            let lifecycle_query = LifecycleQuery {
+                sequence_from: query.sequence_from,
+                sequence_to: query.sequence_to,
+                venue_id: query.venue_id.clone(),
+                event_time_from_unix_nanos: query.event_time_from_unix_nanos,
+                event_time_to_unix_nanos: query.event_time_to_unix_nanos,
+                limit: None,
+                ..LifecycleQuery::default()
+            };
+            records.extend(
+                self.lifecycle_events(&lifecycle_query)
+                    .into_iter()
+                    .filter(|value| {
+                        query.matches_status(value.current_status.as_deref().unwrap_or(""))
                             && query.matches_text(&[
                                 &value.event_id,
                                 &value.event_type,
@@ -213,7 +276,6 @@ impl ReferenceApplication {
                                 value.source_symbol.as_deref().unwrap_or(""),
                             ])
                     })
-                    .cloned()
                     .map(ReferenceRecord::Event),
             );
         }
@@ -239,6 +301,9 @@ impl ReferenceApplication {
         }
         if let Some(value) = self.actor.catalog.markets.get(identifier) {
             matches.push(ReferenceRecord::Market(value.clone()));
+        }
+        if let Some(value) = self.actor.catalog.financial_products.get(identifier) {
+            matches.push(ReferenceRecord::FinancialProduct(value.clone()));
         }
         matches.extend(
             self.actor

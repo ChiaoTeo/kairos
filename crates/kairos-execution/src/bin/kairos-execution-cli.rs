@@ -1,7 +1,7 @@
 use clap::{Args, Parser, Subcommand};
 use kairos_execution::{
     application::{
-        BacktestApplication, BacktestRequest, CancelOrder, ExecuteIntent, ExecutionAuditQuery,
+        BacktestApplication, BacktestRequest, CancelOrder, ExecutionAuditQuery,
         ExecutionFillReport, ExecutionOrderOptions, RemoteOrderQuery, ReplaceOrder, SubmitOrder,
     },
     composition::{
@@ -50,25 +50,25 @@ struct Cli {
 
 #[derive(Clone, Debug, Args)]
 struct ConnectionArgs {
-    #[arg(long, default_value = "simulated")]
+    #[arg(long, global = true, default_value = "simulated")]
     provider: String,
-    #[arg(long, default_value = "spot")]
+    #[arg(long, global = true, default_value = "spot")]
     product: String,
-    #[arg(long, env = "BINANCE_API_KEY", default_value = "")]
+    #[arg(long, global = true, env = "BINANCE_API_KEY", default_value = "")]
     api_key: String,
-    #[arg(long, env = "BINANCE_API_SECRET", default_value = "")]
+    #[arg(long, global = true, env = "BINANCE_API_SECRET", default_value = "")]
     secret: String,
-    #[arg(long)]
+    #[arg(long, global = true)]
     credential_id: Option<String>,
-    #[arg(long, env = "OKX_PASSPHRASE", default_value = "")]
+    #[arg(long, global = true, env = "OKX_PASSPHRASE", default_value = "")]
     passphrase: String,
-    #[arg(long, default_value = "https://api.binance.com")]
+    #[arg(long, global = true, default_value = "https://api.binance.com")]
     base_url: String,
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(long, global = true, default_value = "127.0.0.1")]
     host: String,
-    #[arg(long, default_value_t = 4002)]
+    #[arg(long, global = true, default_value_t = 4002)]
     port: u16,
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, global = true, default_value_t = 0)]
     client_id: i32,
 }
 
@@ -201,7 +201,6 @@ enum Command {
         #[command(flatten)]
         replacement: SubmitArgs,
     },
-    IntentExecute(IntentArgs),
 }
 
 #[derive(Clone, Debug, Args)]
@@ -248,32 +247,6 @@ struct SubmitArgs {
     trading_session: Option<String>,
     #[arg(long)]
     tokenize: Option<bool>,
-}
-
-#[derive(Clone, Debug, Args)]
-struct IntentArgs {
-    #[arg(long)]
-    intent_id: String,
-    #[arg(long)]
-    current_quantity_mantissa: i64,
-    #[arg(long)]
-    target_quantity_mantissa: i64,
-    #[arg(long, default_value_t = 0)]
-    quantity_scale: u8,
-    #[arg(long)]
-    order_id: String,
-    #[arg(long)]
-    account_id: String,
-    #[arg(long, default_value = "spot")]
-    segment_key: String,
-    #[arg(long)]
-    instrument_id: String,
-    #[arg(long)]
-    market_id: Option<String>,
-    #[arg(long)]
-    limit_price_mantissa: Option<i64>,
-    #[arg(long)]
-    limit_price_scale: Option<u8>,
 }
 
 #[derive(Clone, Debug, Args)]
@@ -426,21 +399,6 @@ fn run_direct_with_options(
             order_id,
             replacement: submit_request(replacement)?,
         })?)?,
-        Command::IntentExecute(args) => {
-            serde_json::to_value(application.execute_intent(ExecuteIntent {
-                intent_id: args.intent_id,
-                current_quantity_mantissa: args.current_quantity_mantissa,
-                target_quantity_mantissa: args.target_quantity_mantissa,
-                quantity_scale: args.quantity_scale,
-                order_id: args.order_id,
-                account_id: args.account_id,
-                segment_key: args.segment_key,
-                instrument_id: args.instrument_id,
-                market_id: args.market_id,
-                limit_price_mantissa: args.limit_price_mantissa,
-                limit_price_scale: args.limit_price_scale,
-            })?)?
-        }
     };
     print_json(value);
     Ok(())

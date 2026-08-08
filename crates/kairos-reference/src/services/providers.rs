@@ -8,24 +8,23 @@ use kairos_integration::application::reference::{
 use kairos_integration::application::{
     AccessScope, AssetType, IntegrationCapability, ProductFamily, TransportKind,
 };
-use kairos_integration::ccxt::CcxtMarketClient;
-use kairos_integration::{ConnectionSpec, Integration};
+use kairos_integration::{ConnectionSpec, Integration, IntegrationRoute};
 
 use crate::application::protocol::{CatalogStore, ReferenceSource};
 use crate::domain::{
-    Asset, Entity, Instrument, Listing, Market, ProviderCatalog, ReferenceCatalog, ReferenceError,
-    ReferenceResult,
+    Asset, Entity, FinancialProduct, Instrument, Listing, Market, ProviderCatalog,
+    ReferenceCatalog, ReferenceError, ReferenceResult,
 };
 
 fn reference_spec(
     connection_id: &str,
-    provider: &str,
+    route: IntegrationRoute,
     product: Option<ProductFamily>,
     asset_type: Option<AssetType>,
 ) -> ConnectionSpec {
     ConnectionSpec {
         connection_id: connection_id.into(),
-        provider: provider.into(),
+        route,
         product,
         access: AccessScope::Public,
         transport: TransportKind::Rest,
@@ -36,11 +35,11 @@ fn reference_spec(
 }
 
 pub(crate) fn reference_spec_for_public(
-    provider: &str,
+    route: IntegrationRoute,
     product: ProductFamily,
     asset_type: Option<AssetType>,
 ) -> ConnectionSpec {
-    reference_spec("reference.public", provider, Some(product), asset_type)
+    reference_spec("reference.public", route, Some(product), asset_type)
 }
 
 /// Binance Spot public reference source.
@@ -69,11 +68,6 @@ pub struct MassiveEquitySource {
 }
 
 pub struct HyperliquidSource {
-    connection: Box<dyn ReferenceDataConnection>,
-}
-
-pub struct CcxtSource {
-    id: String,
     connection: Box<dyn ReferenceDataConnection>,
 }
 
@@ -111,6 +105,7 @@ impl ReferenceSource for CompositeSource {
         let mut instruments = BTreeMap::new();
         let mut listings = BTreeMap::new();
         let mut markets = BTreeMap::new();
+        let mut financial_products = BTreeMap::new();
         for source in &mut self.sources {
             let catalog = source.fetch_catalog()?;
             for value in catalog.entities {
@@ -128,6 +123,9 @@ impl ReferenceSource for CompositeSource {
             for value in catalog.markets {
                 markets.insert(value.market_id.clone(), value);
             }
+            for value in catalog.financial_products {
+                financial_products.insert(value.product_id.clone(), value);
+            }
         }
         Ok(ProviderCatalog {
             entities: entities.into_values().collect(),
@@ -135,6 +133,7 @@ impl ReferenceSource for CompositeSource {
             instruments: instruments.into_values().collect(),
             listings: listings.into_values().collect(),
             markets: markets.into_values().collect(),
+            financial_products: financial_products.into_values().collect(),
         })
     }
 }
@@ -170,7 +169,7 @@ impl BinanceSpotSource {
         let connection = integration
             .connect_reference(&reference_spec(
                 "reference.binance.spot.rest",
-                "binance",
+                IntegrationRoute::exchange("binance"),
                 Some(ProductFamily::Spot),
                 None,
             ))
@@ -179,7 +178,7 @@ impl BinanceSpotSource {
     }
 
     pub fn production() -> ReferenceResult<Self> {
-        Self::new("https://api.binance.com/api/v3/exchangeInfo")
+        Self::new(crate::composition::default_endpoint("binance-spot"))
     }
 }
 
@@ -191,7 +190,7 @@ impl BinanceOptionsSource {
         let connection = integration
             .connect_reference(&reference_spec(
                 "reference.binance.options.rest",
-                "binance",
+                IntegrationRoute::exchange("binance"),
                 Some(ProductFamily::Options),
                 None,
             ))
@@ -206,7 +205,7 @@ impl BinanceEquitySource {
         let connection = integration
             .connect_reference(&reference_spec(
                 "reference.binance.equity.rest",
-                "binance",
+                IntegrationRoute::exchange("binance"),
                 Some(ProductFamily::Equity),
                 Some(AssetType::Equity),
             ))
@@ -216,18 +215,14 @@ impl BinanceEquitySource {
 }
 
 impl MassiveSource {
-    pub fn new(
-        api_key: impl Into<String>,
-        base_url: impl Into<String>,
-        underlying: impl Into<String>,
-    ) -> ReferenceResult<Self> {
+    pub fn new(api_key: impl Into<String>, base_url: impl Into<String>) -> ReferenceResult<Self> {
         let integration = Integration::new()
-            .with_massive_reference(api_key, base_url, underlying)
+            .with_massive_reference(api_key, base_url)
             .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         let connection = integration
             .connect_reference(&reference_spec(
                 "reference.massive.market",
-                "massive",
+                IntegrationRoute::data_provider("massive"),
                 None,
                 Some(AssetType::Equity),
             ))
@@ -244,7 +239,7 @@ impl MassiveEquitySource {
         let connection = integration
             .connect_reference(&reference_spec(
                 "reference.massive.equity",
-                "massive-equity",
+                IntegrationRoute::data_provider("massive"),
                 Some(ProductFamily::Equity),
                 Some(AssetType::Equity),
             ))
@@ -259,36 +254,12 @@ impl HyperliquidSource {
         let connection = integration
             .connect_reference(&reference_spec(
                 "reference.hyperliquid.info",
-                "hyperliquid",
+                IntegrationRoute::exchange("hyperliquid"),
                 Some(ProductFamily::UsdMFutures),
                 Some(AssetType::Crypto),
             ))
             .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         Ok(Self { connection })
-    }
-}
-
-impl CcxtSource {
-    pub fn new<C: CcxtMarketClient + Clone + 'static>(client: C) -> ReferenceResult<Self> {
-        let exchange_id = client.exchange_id().trim().to_ascii_lowercase();
-        if exchange_id.is_empty() {
-            return Err(ReferenceError::Provider(
-                "CCXT exchange id is required".into(),
-            ));
-        }
-        let integration = Integration::new().with_ccxt_reference(client);
-        let connection = integration
-            .connect_reference(&reference_spec(
-                &format!("reference.ccxt.{exchange_id}.market"),
-                "ccxt",
-                Some(ProductFamily::Spot),
-                Some(AssetType::Crypto),
-            ))
-            .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-        Ok(Self {
-            id: format!("ccxt-{exchange_id}"),
-            connection,
-        })
     }
 }
 
@@ -365,20 +336,6 @@ impl ReferenceSource for MassiveEquitySource {
 impl ReferenceSource for HyperliquidSource {
     fn source_id(&self) -> &str {
         "hyperliquid"
-    }
-
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let payload = self
-            .connection
-            .fetch_reference_catalog()
-            .map_err(ReferenceError::Provider)?;
-        provider_catalog_from_integration(payload)
-    }
-}
-
-impl ReferenceSource for CcxtSource {
-    fn source_id(&self) -> &str {
-        &self.id
     }
 
     fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
@@ -468,6 +425,28 @@ fn provider_catalog_from_integration(
                 contract_size: value.contract_size,
                 effective_to_unix_nanos: value.effective_to_unix_nanos,
                 ..Market::default()
+            })
+            .collect(),
+        financial_products: payload
+            .financial_products
+            .into_iter()
+            .map(|value| FinancialProduct {
+                product_id: value.product_id,
+                product_type: value.product_type,
+                name: value.name,
+                asset_id: value.asset_id,
+                provider_product_id: value.provider_product_id,
+                provider_id: value.provider_id,
+                issuer_id: value.issuer_id,
+                currency_asset_id: value.currency_asset_id,
+                min_amount: value.min_amount,
+                max_amount: value.max_amount,
+                apr: value.apr,
+                lock_period_days: value.lock_period_days,
+                maturity_at_unix_nanos: value.maturity_at_unix_nanos,
+                status: value.status,
+                effective_from_unix_nanos: value.effective_from_unix_nanos,
+                effective_to_unix_nanos: value.effective_to_unix_nanos,
             })
             .collect(),
     })

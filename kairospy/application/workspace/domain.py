@@ -147,6 +147,9 @@ class WorkspacePaths:
     def instance_log(self, mode: str, launch_id: str, instance_id: str, *parts: str) -> Path:
         return self.launch_instance_root(mode, launch_id, instance_id).joinpath("logs", *parts)
 
+    def instance_manifest(self, mode: str, launch_id: str, instance_id: str) -> Path:
+        return self.instance_state(mode, launch_id, instance_id, "component-endpoints.json")
+
     def launch_config(self, launch_id: str) -> Path:
         return self.child("config", "launches", f"{launch_id}.toml")
 
@@ -211,6 +214,9 @@ class InstanceWorkspace:
 
     def log(self, *parts: str) -> Path:
         return self.paths.instance_log(self.mode, self.launch_id, self.instance_id, *self._parts(parts))
+
+    def component_manifest(self) -> Path:
+        return self.paths.instance_manifest(self.mode, self.launch_id, self.instance_id)
 
     def market_state(self, name: str) -> Path:
         return self.state("market", name)

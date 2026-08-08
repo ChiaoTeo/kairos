@@ -205,7 +205,7 @@ mod tests {
     fn polling_reader_has_stream_semantics_and_deduplicates_snapshots() {
         let identity = crate::domain::ConnectionIdentity::new(
             "market.test.rest",
-            "test",
+            crate::domain::IntegrationRoute::exchange("test"),
             Some(ProductFamily::Spot),
             AccessScope::Public,
             TransportKind::Rest,
@@ -227,7 +227,7 @@ mod tests {
     fn polling_reader_keeps_multiple_subscriptions_on_one_connection() {
         let identity = crate::domain::ConnectionIdentity::new(
             "market.test.rest",
-            "test",
+            crate::domain::IntegrationRoute::exchange("test"),
             Some(ProductFamily::Spot),
             AccessScope::Public,
             TransportKind::Rest,

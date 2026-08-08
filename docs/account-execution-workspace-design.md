@@ -80,22 +80,22 @@ Account 是账户状态和账户业务事实的唯一拥有者，负责：
 - balance、collateral、position；
 - open order 的账户视图；
 - snapshot、freshness、stale 和 reconcile；
-- intent journal；
 - 账户侧 order fact 和 fill 对账户状态的影响；
 - market profile、fee schedule、margin mode、position mode；
 - 状态持久化、快照发布和查询。
 
-Account application 通过自己的 protocol 接收外部能力。具体 integration connection 在 account composition 中注入，并在边界转换为 account domain 类型。
+Account application 通过自己的 protocol 接收外部能力。具体 integration connection 在 account composition 中注入，并在边界转换为 account domain 类型。策略 Intent 的执行生命周期归 Execution；Account 只拥有账户状态、交易授权以及订单/成交事实。
 
 ### 2.4 kairos-execution
 
-Execution 是外部订单执行生命周期的唯一拥有者，负责：
+Execution 是策略 Intent 和外部订单执行生命周期的唯一拥有者，负责：
 
 - submit、cancel、replace；
 - 外部订单状态；
 - submitting、accepted、partially filled、filled、rejected、expired、unknown、failed 等生命周期；
 - execution event history 和 trace；
 - execution audit；
+- strategy intent、跨账户执行计划以及 intent snapshot/event；
 - live、paper、backtest、simulation 执行实现。
 
 Execution 不拥有账户内部状态，也不直接修改 account domain。它通过 integration 的 OrderEntryConnection 发送订单，并把执行事件交给 account application 或更高层 system composition。
@@ -146,17 +146,17 @@ kairos-integration、kairos-workspace、kairos-network 和 kairos-transport 默�
 Account 和 Execution 不共享可变订单对象：
 
 ~~~text
-Account record Intent
-    → plan business Order
+Strategy record Intent
+    → Execution plan across accounts
     → Risk reservation
-    → Execution submit
+    → Execution submit/cancel/replace
     → Execution event
     → Account apply order/fill fact
 ~~~
 
 | 状态 | 拥有者 |
 | --- | --- |
-| Intent | Account |
+| Strategy Intent | Execution |
 | 账户侧 Order fact | Account |
 | 外部提交状态 | Execution |
 | 外部订单生命周期 | Execution |
@@ -188,7 +188,7 @@ credential list/create/delete
 schema/schemas/doctor
 trade-lock list/acquire/release/status
 connect
-snapshot/balances/positions/open-orders/orders/intents
+snapshot/balances/positions/open-orders/orders
 market-profile/market-profiles
 refresh/reconcile/submit-intent
 ~~~
@@ -197,7 +197,7 @@ Execution CLI 需要覆盖：
 
 ~~~text
 snapshot/orders/open-orders/history/events/trace/status/inspect
-submit/cancel/replace/intent-execute
+submit/cancel/replace
 ~~~
 
 ## 5. Legacy 能力映射
@@ -215,13 +215,13 @@ Legacy account 不只是余额查询，还包括：
 | market profile、fee schedule | Account application + integration profile connection |
 | account model、margin/position mode | Account domain |
 | account lock/trade authority | workspace persistence，由 account/system application 使用 |
-| intent journal、order/fill projection | Account domain/application |
+| intent journal、order/fill projection | Execution domain/application |
 | paper/backtest account | Account composition/runtime |
 | live/paper/backtest execution | Execution composition/runtime |
 | execution audit | Execution |
 | launch lifecycle | kairospy/system + workspace resources |
 
-Legacy integration 已覆盖 Binance Spot、Futures、Options、Equity、Funding、Transfer、private stream，以及 OKX Spot、Swap/Futures、Options。CCXT private account/execution 暂不迁移，因为 Rust 没有可直接使用的 CCXT 库；CCXT 可以保留在 market/reference provider 能力中。
+Legacy integration 已覆盖 Binance Spot、Futures、Options、Equity、Funding、Transfer、private stream，以及 OKX Spot、Swap/Futures、Options。当前 Integration 只保留原生交易所、券商和数据商连接。
 
 ## 6. Workspace 设计
 
@@ -359,7 +359,7 @@ kairos-integration 不依赖业务 crate
 CLI 不进入 services
 provider payload 不离开 gateway
 Account 是账户状态唯一拥有者
-Execution 是外部执行生命周期唯一拥有者
+Execution 是策略 Intent 和外部执行生命周期唯一拥有者
 CLI 可脱离 server 一次性运行
 server 可独立运行并持有 Actor
 workspace 只负责资源和生命周期，不负责业务规则
@@ -1429,7 +1429,7 @@ workspace/launches/<mode>/<launch-id>/instances/<instance-id>/account/
 └── account-c/
 ~~~
 
-Execution intent、order 和 fill 必须明确携带 `account_id` 与 `instance_id`，由 Account Application 路由到正确的 Account Actor，不能依赖全局默认账户。
+Execution intent、order 和 fill 必须明确携带 `account_id` 与 `instance_id`，由 Execution application 路由到正确的 Account application，不能依赖全局默认账户。
 
 ## 27. Instance 内的完整数据流
 

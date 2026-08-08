@@ -10,8 +10,7 @@ use kairos_account::composition::{
 };
 use kairos_account::domain::{
     Account, AccountEvent, AccountFill, AccountSegment, AccountSnapshot, AccountStatus, Balance,
-    DecimalValue, ExternalAccountIdentity, FillSide, Intent, IntentEvent, IntentKind, IntentStatus,
-    OrderRequest, OrderSide, OrderType, Position,
+    DecimalValue, ExternalAccountIdentity, FillSide, OrderRequest, OrderSide, OrderType, Position,
 };
 use kairos_account::{
     AccountApplication, AccountDataQuery, AccountQuery, ReconcileAccount, RefreshAccount,
@@ -591,84 +590,6 @@ fn partial_snapshot_merges_balances_and_removes_zero_positions() {
 
 struct TestStream {
     events: Vec<Option<AccountEvent>>,
-}
-
-#[test]
-fn account_owns_intent_and_order_lifecycle_but_accepts_execution_facts_as_events() {
-    let source = InMemoryAccountSource {
-        snapshots: BTreeMap::from([("spot".into(), empty_snapshot("spot"))]),
-    };
-    let mut app =
-        AccountApplication::with_dependencies(vec![segment("spot")], Box::new(source), None)
-            .unwrap();
-    app.record_intent(Intent {
-        intent_id: "intent-1".into(),
-        strategy_id: "strategy-1".into(),
-        account_id: "main".into(),
-        segment_key: "spot".into(),
-        instrument_id: "instrument:btc".into(),
-        kind: IntentKind::TargetPosition,
-        target_quantity: Some(DecimalValue::new(2, 0)),
-        quantity: None,
-        limit_price: None,
-        created_at_unix_nanos: 1,
-        reason: String::new(),
-    })
-    .unwrap();
-    app.plan_order(
-        OrderRequest {
-            order_id: "order-1".into(),
-            intent_id: Some("intent-1".into()),
-            account_id: "main".into(),
-            segment_key: "spot".into(),
-            instrument_id: "instrument:btc".into(),
-            market_id: None,
-            side: OrderSide::Buy,
-            quantity: DecimalValue::new(2, 0),
-            order_type: OrderType::Market,
-            limit_price: None,
-        },
-        2,
-    )
-    .unwrap();
-    app.attach_stream(Box::new(TestStream {
-        events: vec![
-            Some(AccountEvent::Intent(IntentEvent {
-                intent_id: "intent-1".into(),
-                status: IntentStatus::Accepted,
-                order_ids: vec!["order-1".into()],
-                occurred_at_unix_nanos: 3,
-                reason: String::new(),
-            })),
-            Some(AccountEvent::Order(kairos_account::domain::OrderEvent {
-                order_id: "order-1".into(),
-                status: kairos_account::domain::OrderStatus::Acknowledged,
-                venue_order_id: Some("venue-1".into()),
-                filled_quantity: None,
-                occurred_at_unix_nanos: 4,
-                reason: String::new(),
-            })),
-        ],
-    }));
-    assert!(app.poll_stream_once().unwrap());
-    assert!(app.poll_stream_once().unwrap());
-    let account = &app
-        .query(AccountQuery {
-            account_id: "main".into(),
-            segments: vec![],
-            max_age_seconds: None,
-            now_unix_nanos: None,
-        })
-        .unwrap()[0]
-        .account;
-    assert_eq!(
-        account.state.intents["intent-1"].status,
-        IntentStatus::Accepted
-    );
-    assert_eq!(
-        account.state.orders["order-1"].status,
-        kairos_account::domain::OrderStatus::Acknowledged
-    );
 }
 
 #[test]

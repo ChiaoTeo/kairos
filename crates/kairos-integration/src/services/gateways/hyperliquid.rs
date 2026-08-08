@@ -27,7 +27,7 @@ impl HyperliquidReferenceConnection {
         }
         let spec = ConnectionSpec {
             connection_id: "reference.hyperliquid.info".into(),
-            provider: "hyperliquid".into(),
+            route: crate::domain::IntegrationRoute::exchange("hyperliquid"),
             product: Some(ProductFamily::UsdMFutures),
             access: AccessScope::Public,
             transport: TransportKind::Rest,

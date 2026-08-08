@@ -52,7 +52,7 @@ impl MassiveMarketStream {
         };
         let identity = ConnectionIdentity::new(
             format!("market.massive.{name}.websocket"),
-            "massive",
+            crate::domain::IntegrationRoute::data_provider("massive"),
             Some(product),
             AccessScope::Public,
             TransportKind::WebSocket,

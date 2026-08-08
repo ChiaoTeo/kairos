@@ -12,7 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 kairos-workspace = { path = "../kairos-workspace" }
-aeron = { version = "0.2", default-features = false }
+kairos-transport = { path = "../kairos-transport" }
 clap = { version = "4", features = ["derive", "env"] }
 flatbuffers = "25.12.19"
 kairos-integration = { path = "../kairos-integration" }

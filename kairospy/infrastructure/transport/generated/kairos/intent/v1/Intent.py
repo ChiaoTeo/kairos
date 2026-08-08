@@ -32,57 +32,91 @@ class Intent(object):
         return None
 
     # Intent
-    def InstrumentId(self):
+    def StrategyId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(6))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Intent
-    def Status(self):
+    def LaunchId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(8))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Intent
-    def Active(self):
+    def InstanceId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(10))
         if o != 0:
-            return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
-        return False
+            return self._tab.String(o + self._tab.Pos)
+        return None
 
     # Intent
-    def UpdatedAtUnixNanos(self):
+    def InstrumentId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
         if o != 0:
-            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
-        return 0
+            return self._tab.String(o + self._tab.Pos)
+        return None
 
     # Intent
-    def StrategyId(self):
+    def MarketId(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Intent
-    def AccountId(self):
+    def Status(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Intent
-    def AccountSegment(self):
+    def Active(self):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(18))
+        if o != 0:
+            return bool(self._tab.Get(flatbuffers.number_types.BoolFlags, o + self._tab.Pos))
+        return False
+
+    # Intent
+    def UpdatedAtUnixNanos(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # Intent
+    def AccountIds(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        if o != 0:
+            a = self._tab.Vector(o)
+            return self._tab.String(a + flatbuffers.number_types.UOffsetTFlags.py_type(j * 4))
+        return ""
+
+    # Intent
+    def AccountIdsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # Intent
+    def AccountIdsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        return o == 0
+
+    # Intent
+    def AccountSegment(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
     # Intent
     def OrderIds(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             a = self._tab.Vector(o)
             return self._tab.String(a + flatbuffers.number_types.UOffsetTFlags.py_type(j * 4))
@@ -90,19 +124,19 @@ class Intent(object):
 
     # Intent
     def OrderIdsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # Intent
     def OrderIdsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(20))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
         return o == 0
 
     # Intent
     def TargetQuantity(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(22))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(28))
         if o != 0:
             x = o + self._tab.Pos
             from kairos.common.v1.Decimal64 import Decimal64
@@ -112,14 +146,39 @@ class Intent(object):
         return None
 
     # Intent
+    def CompletedQuantity(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
+        if o != 0:
+            x = o + self._tab.Pos
+            from kairos.common.v1.Decimal64 import Decimal64
+            obj = Decimal64()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # Intent
+    def SourceSnapshotId(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
+    # Intent
+    def SourceEventSequence(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # Intent
     def Reason(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(36))
         if o != 0:
             return self._tab.String(o + self._tab.Pos)
         return None
 
 def IntentStart(builder):
-    builder.StartObject(11)
+    builder.StartObject(17)
 
 def Start(builder):
     IntentStart(builder)
@@ -130,50 +189,74 @@ def IntentAddIntentId(builder, intentId):
 def AddIntentId(builder, intentId):
     IntentAddIntentId(builder, intentId)
 
+def IntentAddStrategyId(builder, strategyId):
+    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(strategyId), 0)
+
+def AddStrategyId(builder, strategyId):
+    IntentAddStrategyId(builder, strategyId)
+
+def IntentAddLaunchId(builder, launchId):
+    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(launchId), 0)
+
+def AddLaunchId(builder, launchId):
+    IntentAddLaunchId(builder, launchId)
+
+def IntentAddInstanceId(builder, instanceId):
+    builder.PrependUOffsetTRelativeSlot(3, flatbuffers.number_types.UOffsetTFlags.py_type(instanceId), 0)
+
+def AddInstanceId(builder, instanceId):
+    IntentAddInstanceId(builder, instanceId)
+
 def IntentAddInstrumentId(builder, instrumentId):
-    builder.PrependUOffsetTRelativeSlot(1, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(instrumentId), 0)
 
 def AddInstrumentId(builder, instrumentId):
     IntentAddInstrumentId(builder, instrumentId)
 
+def IntentAddMarketId(builder, marketId):
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(marketId), 0)
+
+def AddMarketId(builder, marketId):
+    IntentAddMarketId(builder, marketId)
+
 def IntentAddStatus(builder, status):
-    builder.PrependUOffsetTRelativeSlot(2, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(status), 0)
 
 def AddStatus(builder, status):
     IntentAddStatus(builder, status)
 
 def IntentAddActive(builder, active):
-    builder.PrependBoolSlot(3, active, 0)
+    builder.PrependBoolSlot(7, active, 0)
 
 def AddActive(builder, active):
     IntentAddActive(builder, active)
 
 def IntentAddUpdatedAtUnixNanos(builder, updatedAtUnixNanos):
-    builder.PrependUint64Slot(4, updatedAtUnixNanos, 0)
+    builder.PrependUint64Slot(8, updatedAtUnixNanos, 0)
 
 def AddUpdatedAtUnixNanos(builder, updatedAtUnixNanos):
     IntentAddUpdatedAtUnixNanos(builder, updatedAtUnixNanos)
 
-def IntentAddStrategyId(builder, strategyId):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(strategyId), 0)
+def IntentAddAccountIds(builder, accountIds):
+    builder.PrependUOffsetTRelativeSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(accountIds), 0)
 
-def AddStrategyId(builder, strategyId):
-    IntentAddStrategyId(builder, strategyId)
+def AddAccountIds(builder, accountIds):
+    IntentAddAccountIds(builder, accountIds)
 
-def IntentAddAccountId(builder, accountId):
-    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(accountId), 0)
+def IntentStartAccountIdsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
 
-def AddAccountId(builder, accountId):
-    IntentAddAccountId(builder, accountId)
+def StartAccountIdsVector(builder, numElems):
+    return IntentStartAccountIdsVector(builder, numElems)
 
 def IntentAddAccountSegment(builder, accountSegment):
-    builder.PrependUOffsetTRelativeSlot(7, flatbuffers.number_types.UOffsetTFlags.py_type(accountSegment), 0)
+    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(accountSegment), 0)
 
 def AddAccountSegment(builder, accountSegment):
     IntentAddAccountSegment(builder, accountSegment)
 
 def IntentAddOrderIds(builder, orderIds):
-    builder.PrependUOffsetTRelativeSlot(8, flatbuffers.number_types.UOffsetTFlags.py_type(orderIds), 0)
+    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(orderIds), 0)
 
 def AddOrderIds(builder, orderIds):
     IntentAddOrderIds(builder, orderIds)
@@ -185,13 +268,31 @@ def StartOrderIdsVector(builder, numElems):
     return IntentStartOrderIdsVector(builder, numElems)
 
 def IntentAddTargetQuantity(builder, targetQuantity):
-    builder.PrependStructSlot(9, flatbuffers.number_types.UOffsetTFlags.py_type(targetQuantity), 0)
+    builder.PrependStructSlot(12, flatbuffers.number_types.UOffsetTFlags.py_type(targetQuantity), 0)
 
 def AddTargetQuantity(builder, targetQuantity):
     IntentAddTargetQuantity(builder, targetQuantity)
 
+def IntentAddCompletedQuantity(builder, completedQuantity):
+    builder.PrependStructSlot(13, flatbuffers.number_types.UOffsetTFlags.py_type(completedQuantity), 0)
+
+def AddCompletedQuantity(builder, completedQuantity):
+    IntentAddCompletedQuantity(builder, completedQuantity)
+
+def IntentAddSourceSnapshotId(builder, sourceSnapshotId):
+    builder.PrependUOffsetTRelativeSlot(14, flatbuffers.number_types.UOffsetTFlags.py_type(sourceSnapshotId), 0)
+
+def AddSourceSnapshotId(builder, sourceSnapshotId):
+    IntentAddSourceSnapshotId(builder, sourceSnapshotId)
+
+def IntentAddSourceEventSequence(builder, sourceEventSequence):
+    builder.PrependUint64Slot(15, sourceEventSequence, 0)
+
+def AddSourceEventSequence(builder, sourceEventSequence):
+    IntentAddSourceEventSequence(builder, sourceEventSequence)
+
 def IntentAddReason(builder, reason):
-    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(reason), 0)
+    builder.PrependUOffsetTRelativeSlot(16, flatbuffers.number_types.UOffsetTFlags.py_type(reason), 0)
 
 def AddReason(builder, reason):
     IntentAddReason(builder, reason)

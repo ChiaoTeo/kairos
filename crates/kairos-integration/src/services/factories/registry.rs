@@ -40,8 +40,8 @@ impl GatewayRegistry {
             .find(|gateway| gateway.supports(spec))
             .ok_or_else(|| {
                 format!(
-                    "no integration gateway supports provider={}, product={:?}, capability={:?}, transport={:?}",
-                    spec.provider, spec.product, spec.capability, spec.transport
+                    "no integration gateway supports route={:?}, product={:?}, capability={:?}, transport={:?}",
+                    spec.route, spec.product, spec.capability, spec.transport
                 )
             })?
             .connect(spec)
@@ -69,7 +69,7 @@ mod tests {
         );
         let spec = ConnectionSpec {
             connection_id: "reference.binance.spot.rest".into(),
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Public,
             transport: TransportKind::Rest,
@@ -78,7 +78,7 @@ mod tests {
             asset_type: None,
         };
         let connection = registry.connect(&spec).unwrap();
-        assert_eq!(connection.identity().provider, "binance");
+        assert_eq!(connection.identity().route.primary().id, "binance");
     }
 
     #[test]
@@ -86,7 +86,7 @@ mod tests {
         let registry = GatewayRegistry::new();
         let spec = ConnectionSpec {
             connection_id: "reference.unknown".into(),
-            provider: "unknown".into(),
+            route: crate::domain::IntegrationRoute::exchange("unknown"),
             product: None,
             access: AccessScope::Public,
             transport: TransportKind::Rest,

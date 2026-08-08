@@ -1,8 +1,8 @@
 //! Execution business boundary.
 //!
-//! Execution owns the exchange-facing order lifecycle. Account owns the
-//! business order and fill facts; the two modules communicate through
-//! application-level commands and events at composition boundaries.
+//! Execution owns strategy intent and the exchange-facing order lifecycle.
+//! Account owns account balances, positions and account-side order/fill facts;
+//! the modules communicate through application-level commands and events.
 
 pub mod application;
 pub mod composition;
@@ -12,12 +12,14 @@ mod services;
 
 pub use application::{
     BacktestApplication, BacktestEquityPoint, BacktestFill, BacktestMetrics, BacktestRequest,
-    CancelOrder, ExecuteIntent, ExecutionApplication, ExecutionAuditEvent, ExecutionAuditQuery,
-    ExecutionAuditSink, ExecutionError, ExecutionEvent, ExecutionFillReport, ExecutionOrderOptions,
-    ExecutionProcess, ExecutionSnapshot, ReplaceOrder, SubmitOrder,
+    CancelOrder, ExecuteStrategyIntent, ExecutionApplication, ExecutionAuditEvent,
+    ExecutionAuditQuery, ExecutionAuditSink, ExecutionError, ExecutionEvent, ExecutionFillReport,
+    ExecutionOrderOptions, ExecutionProcess, ExecutionSnapshot, IntentEvent, IntentState,
+    IntentStatus, ReplaceOrder, SubmitOrder,
 };
 pub use composition::{
-    compose_order_entry, ExecutionConnectionOptions, FileExecutionStore, SimulatedOrderEntry,
-    SqliteExecutionAudit,
+    compose_order_entry, ExecutionConnectionOptions, FileExecutionStore,
+    SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher, SimulatedOrderEntry,
+    SocketExecutionPreflight, SqliteExecutionAudit,
 };
 pub use domain::{ExecutionFill, ExecutionOrder, ExecutionOrderStatus, OrderSide, OrderType};

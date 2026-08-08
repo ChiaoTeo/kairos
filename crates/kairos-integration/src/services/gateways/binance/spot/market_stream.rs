@@ -77,7 +77,7 @@ pub fn rest_market_stream(
 ) -> Result<BinanceSpotRestMarketStream, IntegrationError> {
     let identity = ConnectionIdentity::new(
         "market.binance.spot.rest-stream",
-        "binance",
+        crate::domain::IntegrationRoute::exchange("binance"),
         Some(ProductFamily::Spot),
         AccessScope::Public,
         TransportKind::Rest,

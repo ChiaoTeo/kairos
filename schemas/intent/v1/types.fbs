@@ -4,14 +4,20 @@ namespace kairos.intent.v1;
 
 table Intent {
   intent_id:string (required);
+  strategy_id:string (required);
+  launch_id:string (required);
+  instance_id:string (required);
   instrument_id:string;
+  market_id:string;
   status:string (required);
   active:bool;
   updated_at_unix_nanos:ulong;
-  strategy_id:string;
-  account_id:string;
+  account_ids:[string];
   account_segment:string;
   order_ids:[string];
   target_quantity:kairos.common.v1.Decimal64;
+  completed_quantity:kairos.common.v1.Decimal64;
+  source_snapshot_id:string;
+  source_event_sequence:ulong;
   reason:string;
 }

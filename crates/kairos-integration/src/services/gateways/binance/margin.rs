@@ -43,7 +43,7 @@ impl BinanceMarginAccountConnection {
         let connection = ManagedConnection::new(
             ConnectionSpec {
                 connection_id: format!("account.binance.{}.rest", product_name(product)),
-                provider: "binance".into(),
+                route: crate::domain::IntegrationRoute::exchange("binance"),
                 product: Some(product),
                 access: AccessScope::Private,
                 transport: TransportKind::Rest,

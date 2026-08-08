@@ -7,16 +7,13 @@
 use crate::application::reference::ReferenceDataConnection;
 use crate::application::{
     AccountCredentialInspectionConnection, AccountEventStreamConnection,
-    AccountMarketProfileConnection, AccountReadConnection, Connection, ConnectionSpec,
-    EarnConnection, ExecutionStreamConnection, IntegrationError, MarketStreamConnection,
-    OrderEntryConnection, OrderQueryConnection, TransferConnection,
+    AccountMarketProfileConnection, AccountReadConnection, ConnectionSpec, EarnConnection,
+    ExecutionStreamConnection, IntegrationError, MarketStreamConnection, OrderEntryConnection,
+    OrderQueryConnection, TransferConnection,
 };
-use crate::domain::{IntegrationCapability, ProductFamily, TransportKind};
+use crate::domain::{IntegrationCapability, IntegrationRoute, ProductFamily, TransportKind};
 use crate::services::factories::GatewayRegistry;
 use crate::services::gateways::binance::{self, equity};
-use crate::services::gateways::ccxt::{
-    CcxtMarketClient, CcxtReferenceConnection, CcxtReferenceFactory,
-};
 use crate::services::gateways::hyperliquid::HyperliquidReferenceConnection;
 use crate::services::gateways::massive::{MassiveReferenceConnection, MassiveStocksRestClient};
 use crate::services::gateways::okx::{
@@ -27,105 +24,115 @@ use crate::services::gateways::public_reference::{
     binance_derivatives_catalog, okx_catalog, PublicReferenceConnection,
 };
 
-struct MarketStreamEntry {
-    provider: String,
-    product: Option<ProductFamily>,
-    transport: TransportKind,
-    open: Box<dyn Fn() -> Result<Box<dyn MarketStreamConnection>, IntegrationError> + Send + Sync>,
+#[path = "integration_connections.rs"]
+mod integration_connections;
+
+pub(super) struct MarketStreamEntry {
+    pub(super) route: IntegrationRoute,
+    pub(super) product: Option<ProductFamily>,
+    pub(super) transport: TransportKind,
+    pub(super) open:
+        Box<dyn Fn() -> Result<Box<dyn MarketStreamConnection>, IntegrationError> + Send + Sync>,
 }
 
-struct ReferenceEntry {
-    provider: String,
-    product: Option<ProductFamily>,
-    transport: TransportKind,
-    asset_type: Option<crate::domain::AssetType>,
-    open: Box<dyn Fn() -> Result<Box<dyn ReferenceDataConnection>, IntegrationError> + Send + Sync>,
+pub(super) struct ReferenceEntry {
+    pub(super) route: IntegrationRoute,
+    pub(super) product: Option<ProductFamily>,
+    pub(super) transport: TransportKind,
+    pub(super) asset_type: Option<crate::domain::AssetType>,
+    pub(super) open:
+        Box<dyn Fn() -> Result<Box<dyn ReferenceDataConnection>, IntegrationError> + Send + Sync>,
 }
 
 /// Configured integration composition root.
 pub struct Integration {
-    gateways: GatewayRegistry,
-    references: Vec<ReferenceEntry>,
-    market_streams: Vec<MarketStreamEntry>,
-    accounts: Vec<AccountEntry>,
-    account_market_profiles: Vec<AccountMarketProfileEntry>,
-    order_entries: Vec<OrderEntry>,
-    order_queries: Vec<OrderQueryEntry>,
-    account_streams: Vec<AccountStreamEntry>,
-    execution_streams: Vec<ExecutionStreamEntry>,
-    credential_inspections: Vec<CredentialInspectionEntry>,
-    earns: Vec<EarnEntry>,
-    transfers: Vec<TransferEntry>,
+    pub(super) gateways: GatewayRegistry,
+    pub(super) references: Vec<ReferenceEntry>,
+    pub(super) market_streams: Vec<MarketStreamEntry>,
+    pub(super) accounts: Vec<AccountEntry>,
+    pub(super) account_market_profiles: Vec<AccountMarketProfileEntry>,
+    pub(super) order_entries: Vec<OrderEntry>,
+    pub(super) order_queries: Vec<OrderQueryEntry>,
+    pub(super) account_streams: Vec<AccountStreamEntry>,
+    pub(super) execution_streams: Vec<ExecutionStreamEntry>,
+    pub(super) credential_inspections: Vec<CredentialInspectionEntry>,
+    pub(super) earns: Vec<EarnEntry>,
+    pub(super) transfers: Vec<TransferEntry>,
 }
 
-struct AccountEntry {
-    provider: String,
-    product: Option<ProductFamily>,
-    transport: TransportKind,
-    open: Box<dyn Fn() -> Result<Box<dyn AccountReadConnection>, IntegrationError> + Send + Sync>,
+pub(super) struct AccountEntry {
+    pub(super) route: IntegrationRoute,
+    pub(super) product: Option<ProductFamily>,
+    pub(super) transport: TransportKind,
+    pub(super) open:
+        Box<dyn Fn() -> Result<Box<dyn AccountReadConnection>, IntegrationError> + Send + Sync>,
 }
 
-struct AccountMarketProfileEntry {
-    provider: String,
-    product: Option<ProductFamily>,
-    transport: TransportKind,
-    open: Box<
+pub(super) struct AccountMarketProfileEntry {
+    pub(super) route: IntegrationRoute,
+    pub(super) product: Option<ProductFamily>,
+    pub(super) transport: TransportKind,
+    pub(super) open: Box<
         dyn Fn() -> Result<Box<dyn AccountMarketProfileConnection>, IntegrationError> + Send + Sync,
     >,
 }
 
-struct OrderEntry {
-    provider: String,
-    product: Option<ProductFamily>,
-    transport: TransportKind,
-    open: Box<dyn Fn() -> Result<Box<dyn OrderEntryConnection>, IntegrationError> + Send + Sync>,
+pub(super) struct OrderEntry {
+    pub(super) route: IntegrationRoute,
+    pub(super) product: Option<ProductFamily>,
+    pub(super) transport: TransportKind,
+    pub(super) open:
+        Box<dyn Fn() -> Result<Box<dyn OrderEntryConnection>, IntegrationError> + Send + Sync>,
 }
 
-struct OrderQueryEntry {
-    provider: String,
-    product: Option<ProductFamily>,
-    transport: TransportKind,
-    open: Box<dyn Fn() -> Result<Box<dyn OrderQueryConnection>, IntegrationError> + Send + Sync>,
+pub(super) struct OrderQueryEntry {
+    pub(super) route: IntegrationRoute,
+    pub(super) product: Option<ProductFamily>,
+    pub(super) transport: TransportKind,
+    pub(super) open:
+        Box<dyn Fn() -> Result<Box<dyn OrderQueryConnection>, IntegrationError> + Send + Sync>,
 }
 
-struct AccountStreamEntry {
-    provider: String,
-    product: Option<ProductFamily>,
-    transport: TransportKind,
-    open: Box<
+pub(super) struct AccountStreamEntry {
+    pub(super) route: IntegrationRoute,
+    pub(super) product: Option<ProductFamily>,
+    pub(super) transport: TransportKind,
+    pub(super) open: Box<
         dyn Fn() -> Result<Box<dyn AccountEventStreamConnection>, IntegrationError> + Send + Sync,
     >,
 }
 
-struct ExecutionStreamEntry {
-    provider: String,
-    product: Option<ProductFamily>,
-    transport: TransportKind,
-    open:
+pub(super) struct ExecutionStreamEntry {
+    pub(super) route: IntegrationRoute,
+    pub(super) product: Option<ProductFamily>,
+    pub(super) transport: TransportKind,
+    pub(super) open:
         Box<dyn Fn() -> Result<Box<dyn ExecutionStreamConnection>, IntegrationError> + Send + Sync>,
 }
 
-struct CredentialInspectionEntry {
-    provider: String,
-    product: Option<ProductFamily>,
-    transport: TransportKind,
-    open: Box<
+pub(super) struct CredentialInspectionEntry {
+    pub(super) route: IntegrationRoute,
+    pub(super) product: Option<ProductFamily>,
+    pub(super) transport: TransportKind,
+    pub(super) open: Box<
         dyn Fn() -> Result<Box<dyn AccountCredentialInspectionConnection>, IntegrationError>
             + Send
             + Sync,
     >,
 }
 
-struct EarnEntry {
-    provider: String,
-    transport: TransportKind,
-    open: Box<dyn Fn() -> Result<Box<dyn EarnConnection>, IntegrationError> + Send + Sync>,
+pub(super) struct EarnEntry {
+    pub(super) route: IntegrationRoute,
+    pub(super) transport: TransportKind,
+    pub(super) open:
+        Box<dyn Fn() -> Result<Box<dyn EarnConnection>, IntegrationError> + Send + Sync>,
 }
 
-struct TransferEntry {
-    provider: String,
-    transport: TransportKind,
-    open: Box<dyn Fn() -> Result<Box<dyn TransferConnection>, IntegrationError> + Send + Sync>,
+pub(super) struct TransferEntry {
+    pub(super) route: IntegrationRoute,
+    pub(super) transport: TransportKind,
+    pub(super) open:
+        Box<dyn Fn() -> Result<Box<dyn TransferConnection>, IntegrationError> + Send + Sync>,
 }
 
 impl Integration {
@@ -157,7 +164,7 @@ impl Integration {
         let reference_factory = factory.clone();
         self.gateways.register(factory);
         self.references.push(ReferenceEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::Rest,
             asset_type: None,
@@ -179,7 +186,7 @@ impl Integration {
         let reference_factory = factory.clone();
         self.gateways.register(factory);
         self.references.push(ReferenceEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Options),
             transport: TransportKind::Rest,
             asset_type: None,
@@ -208,7 +215,7 @@ impl Integration {
         let endpoint = endpoint.into();
         let connection = move || {
             PublicReferenceConnection::new(
-                "binance",
+                crate::domain::IntegrationRoute::exchange("binance"),
                 product,
                 Some(crate::domain::AssetType::Crypto),
                 endpoint.clone(),
@@ -218,7 +225,7 @@ impl Integration {
             .map_err(IntegrationError::InvalidRequest)
         };
         self.references.push(ReferenceEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product),
             transport: TransportKind::Rest,
             asset_type: Some(crate::domain::AssetType::Crypto),
@@ -255,7 +262,7 @@ impl Integration {
         let endpoint = format!("{endpoint}/api/v5/public/instruments?instType={inst_type}");
         let connection = move || {
             PublicReferenceConnection::new(
-                "okx",
+                crate::domain::IntegrationRoute::exchange("okx"),
                 product,
                 asset_type,
                 endpoint.clone(),
@@ -265,7 +272,7 @@ impl Integration {
             .map_err(IntegrationError::InvalidRequest)
         };
         self.references.push(ReferenceEntry {
-            provider: "okx".into(),
+            route: crate::domain::IntegrationRoute::exchange("okx"),
             product: Some(product),
             transport: TransportKind::Rest,
             asset_type,
@@ -285,7 +292,7 @@ impl Integration {
         let reference_factory = factory.clone();
         self.gateways.register(factory);
         self.references.push(ReferenceEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Equity),
             transport: TransportKind::Rest,
             asset_type: Some(crate::domain::AssetType::Equity),
@@ -302,14 +309,13 @@ impl Integration {
         mut self,
         api_key: impl Into<String>,
         base_url: impl Into<String>,
-        underlying: impl Into<String>,
     ) -> Result<Self, IntegrationError> {
         let client = MassiveStocksRestClient::with_base_url(api_key, base_url)
             .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?
-            .for_underlying(underlying);
+            .for_options();
         let reference_client = client.clone();
         self.references.push(ReferenceEntry {
-            provider: "massive".into(),
+            route: crate::domain::IntegrationRoute::data_provider("massive"),
             product: None,
             transport: TransportKind::Rest,
             asset_type: Some(crate::domain::AssetType::Equity),
@@ -332,7 +338,7 @@ impl Integration {
             .for_equity();
         let reference_client = client.clone();
         self.references.push(ReferenceEntry {
-            provider: "massive-equity".into(),
+            route: IntegrationRoute::data_provider("massive"),
             product: Some(ProductFamily::Equity),
             transport: TransportKind::Rest,
             asset_type: Some(crate::domain::AssetType::Equity),
@@ -348,33 +354,12 @@ impl Integration {
     pub fn with_hyperliquid_reference(mut self, endpoint: impl Into<String>) -> Self {
         let endpoint = endpoint.into();
         self.references.push(ReferenceEntry {
-            provider: "hyperliquid".into(),
+            route: crate::domain::IntegrationRoute::exchange("hyperliquid"),
             product: Some(ProductFamily::UsdMFutures),
             transport: TransportKind::Rest,
             asset_type: Some(crate::domain::AssetType::Crypto),
             open: Box::new(move || {
                 HyperliquidReferenceConnection::open(endpoint.clone())
-                    .map(|connection| Box::new(connection) as Box<dyn ReferenceDataConnection>)
-                    .map_err(IntegrationError::InvalidRequest)
-            }),
-        });
-        self
-    }
-
-    pub fn with_ccxt_reference<C>(mut self, client: C) -> Self
-    where
-        C: CcxtMarketClient + Clone + Sync + 'static,
-    {
-        let factory = CcxtReferenceFactory::new(client.clone());
-        let reference_client = client;
-        self.gateways.register(factory);
-        self.references.push(ReferenceEntry {
-            provider: "ccxt".into(),
-            product: Some(ProductFamily::Spot),
-            transport: TransportKind::Rest,
-            asset_type: Some(crate::domain::AssetType::Crypto),
-            open: Box::new(move || {
-                CcxtReferenceConnection::open(reference_client.clone())
                     .map(|connection| Box::new(connection) as Box<dyn ReferenceDataConnection>)
                     .map_err(IntegrationError::InvalidRequest)
             }),
@@ -394,7 +379,7 @@ impl Integration {
         self.references
             .iter()
             .find(|entry| {
-                entry.provider == spec.provider
+                entry.route.matches_primary(&spec.route)
                     && entry.product == spec.product
                     && entry.transport == spec.transport
                     && entry.asset_type == spec.asset_type
@@ -414,7 +399,7 @@ impl Integration {
         // the composition root.
         binance::spot::market_stream::BinanceSpotSnapshotReader::new(endpoint.clone())?;
         self.market_streams.push(MarketStreamEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -433,7 +418,7 @@ impl Integration {
         let endpoint = endpoint.into();
         binance::spot::websocket::BinanceSpotWebSocketMarketStream::new(endpoint.clone())?;
         self.market_streams.push(MarketStreamEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::WebSocket,
             open: Box::new(move || {
@@ -461,7 +446,7 @@ impl Integration {
             endpoint.clone(),
         )?;
         self.market_streams.push(MarketStreamEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Equity),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -487,7 +472,7 @@ impl Integration {
         let path = path.into();
         binance::derivatives_market::rest_market_stream(endpoint.clone(), path.clone(), product)?;
         self.market_streams.push(MarketStreamEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -513,7 +498,7 @@ impl Integration {
             product,
         )?;
         self.market_streams.push(MarketStreamEntry {
-            provider: "okx".into(),
+            route: crate::domain::IntegrationRoute::exchange("okx"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -541,7 +526,7 @@ impl Integration {
             product,
         )?;
         self.market_streams.push(MarketStreamEntry {
-            provider: "massive".into(),
+            route: crate::domain::IntegrationRoute::data_provider("massive"),
             product: Some(product),
             transport: TransportKind::WebSocket,
             open: Box::new(move || {
@@ -569,7 +554,7 @@ impl Integration {
         let inspection_secret = secret.clone();
         let inspection_base_url = base_url.clone();
         self.accounts.push(AccountEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -583,7 +568,7 @@ impl Integration {
             }),
         });
         self.credential_inspections.push(CredentialInspectionEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -612,7 +597,7 @@ impl Integration {
         let base_url = base_url.into();
         self.account_market_profiles
             .push(AccountMarketProfileEntry {
-                provider: "binance".into(),
+                route: crate::domain::IntegrationRoute::exchange("binance"),
                 product: Some(ProductFamily::Spot),
                 transport: TransportKind::Rest,
                 open: Box::new(move || {
@@ -643,7 +628,7 @@ impl Integration {
         let inspection_secret = secret.clone();
         let inspection_base_url = base_url.clone();
         self.accounts.push(AccountEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: None,
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -657,7 +642,7 @@ impl Integration {
             }),
         });
         self.credential_inspections.push(CredentialInspectionEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: None,
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -697,7 +682,7 @@ impl Integration {
         let inspection_secret = secret.clone();
         let inspection_base_url = base_url.clone();
         self.accounts.push(AccountEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -712,7 +697,7 @@ impl Integration {
             }),
         });
         self.credential_inspections.push(CredentialInspectionEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -750,7 +735,7 @@ impl Integration {
         let secret = secret.into();
         let base_url = base_url.into();
         self.order_entries.push(OrderEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -794,7 +779,7 @@ impl Integration {
         let base_url = base_url.into();
         self.account_market_profiles
             .push(AccountMarketProfileEntry {
-                provider: "okx".into(),
+                route: crate::domain::IntegrationRoute::exchange("okx"),
                 product: Some(product),
                 transport: TransportKind::Rest,
                 open: Box::new(move || {
@@ -825,7 +810,7 @@ impl Integration {
         let inspection_secret = secret.clone();
         let inspection_base_url = base_url.clone();
         self.accounts.push(AccountEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Options),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -839,7 +824,7 @@ impl Integration {
             }),
         });
         self.credential_inspections.push(CredentialInspectionEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Options),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -867,7 +852,7 @@ impl Integration {
         let secret = secret.into();
         let base_url = base_url.into();
         self.order_entries.push(OrderEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Options),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -893,7 +878,7 @@ impl Integration {
         let secret = secret.into();
         let base_url = base_url.into();
         self.order_entries.push(OrderEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -919,7 +904,7 @@ impl Integration {
         let secret = secret.into();
         let base_url = base_url.into();
         self.order_entries.push(OrderEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Equity),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -945,7 +930,7 @@ impl Integration {
         let secret = secret.into();
         let base_url = base_url.into();
         self.order_queries.push(OrderQueryEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Equity),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -972,7 +957,7 @@ impl Integration {
         let secret = secret.into();
         let base_url = base_url.into();
         self.order_queries.push(OrderQueryEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -1002,7 +987,7 @@ impl Integration {
         let passphrase = passphrase.into();
         let base_url = base_url.into();
         self.order_queries.push(OrderQueryEntry {
-            provider: "okx".into(),
+            route: crate::domain::IntegrationRoute::exchange("okx"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -1028,7 +1013,7 @@ impl Integration {
     ) -> Self {
         let host = host.into();
         self.order_entries.push(OrderEntry {
-            provider: "ibkr".into(),
+            route: crate::domain::IntegrationRoute::broker("ibkr"),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -1044,7 +1029,7 @@ impl Integration {
     pub fn with_ibkr_account(mut self, host: impl Into<String>, port: u16, client_id: i32) -> Self {
         let host = host.into();
         self.accounts.push(AccountEntry {
-            provider: "ibkr".into(),
+            route: crate::domain::IntegrationRoute::broker("ibkr"),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -1069,7 +1054,7 @@ impl Integration {
         let account_id = account_id.into();
         let segment_key = segment_key.into();
         self.account_streams.push(AccountStreamEntry {
-            provider: "ibkr".into(),
+            route: crate::domain::IntegrationRoute::broker("ibkr"),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -1099,7 +1084,7 @@ impl Integration {
         let host = host.into();
         let account_id = account_id.into();
         self.execution_streams.push(ExecutionStreamEntry {
-            provider: "ibkr".into(),
+            route: crate::domain::IntegrationRoute::broker("ibkr"),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -1134,7 +1119,7 @@ impl Integration {
         let websocket_endpoint = websocket_endpoint.into();
         let segment_key = segment_key.into();
         self.account_streams.push(AccountStreamEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             transport: TransportKind::UserStream,
             open: Box::new(move || {
@@ -1175,7 +1160,7 @@ impl Integration {
         let websocket_endpoint = websocket_endpoint.into();
         let segment_key = segment_key.into();
         self.account_streams.push(AccountStreamEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product),
             transport: TransportKind::UserStream,
             open: Box::new(move || {
@@ -1222,7 +1207,7 @@ impl Integration {
         let websocket_endpoint = websocket_endpoint.into();
         let segment_key = segment_key.into();
         self.account_streams.push(AccountStreamEntry {
-            provider: "okx".into(),
+            route: crate::domain::IntegrationRoute::exchange("okx"),
             product: Some(product),
             transport: TransportKind::UserStream,
             open: Box::new(move || {
@@ -1265,7 +1250,7 @@ impl Integration {
         let websocket_endpoint = websocket_endpoint.into();
         let segment_key = segment_key.into();
         self.account_streams.push(AccountStreamEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product),
             transport: TransportKind::UserStream,
             open: Box::new(move || {
@@ -1294,7 +1279,7 @@ impl Integration {
         let secret = secret.into();
         let base_url = base_url.into();
         self.earns.push(EarnEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             transport: TransportKind::Rest,
             open: Box::new(move || {
                 binance::earn::BinanceSimpleEarnConnection::new(
@@ -1319,7 +1304,7 @@ impl Integration {
         let secret = secret.into();
         let base_url = base_url.into();
         self.transfers.push(TransferEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             transport: TransportKind::Rest,
             open: Box::new(move || {
                 binance::transfer::BinanceTransferConnection::new(
@@ -1359,7 +1344,7 @@ impl Integration {
         let inspection_secret = secret.clone();
         let inspection_base_url = base_url.clone();
         self.accounts.push(AccountEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -1374,7 +1359,7 @@ impl Integration {
             }),
         });
         self.credential_inspections.push(CredentialInspectionEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -1412,7 +1397,7 @@ impl Integration {
         let secret = secret.into();
         let base_url = base_url.into();
         self.order_entries.push(OrderEntry {
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -1459,7 +1444,7 @@ impl Integration {
         let inspection_passphrase = passphrase.clone();
         let inspection_base_url = base_url.clone();
         self.accounts.push(AccountEntry {
-            provider: "okx".into(),
+            route: crate::domain::IntegrationRoute::exchange("okx"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -1476,7 +1461,7 @@ impl Integration {
             }),
         });
         self.credential_inspections.push(CredentialInspectionEntry {
-            provider: "okx".into(),
+            route: crate::domain::IntegrationRoute::exchange("okx"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -1522,7 +1507,7 @@ impl Integration {
         let passphrase = passphrase.into();
         let base_url = base_url.into();
         self.order_entries.push(OrderEntry {
-            provider: "okx".into(),
+            route: crate::domain::IntegrationRoute::exchange("okx"),
             product: Some(product),
             transport: TransportKind::Rest,
             open: Box::new(move || {
@@ -1539,204 +1524,6 @@ impl Integration {
             }),
         });
         Ok(self)
-    }
-
-    pub fn connect_account(
-        &self,
-        spec: &ConnectionSpec,
-    ) -> Result<Box<dyn AccountReadConnection>, IntegrationError> {
-        if spec.capability != IntegrationCapability::AccountRead {
-            return Err(IntegrationError::InvalidRequest(
-                "connection spec is not account read".into(),
-            ));
-        }
-        self.accounts
-            .iter()
-            .find(|entry| {
-                entry.provider == spec.provider
-                    && entry.product == spec.product
-                    && entry.transport == spec.transport
-            })
-            .ok_or(IntegrationError::UnsupportedOperation)
-            .and_then(|entry| (entry.open)())
-    }
-
-    pub fn connect_account_credential_inspection(
-        &self,
-        spec: &ConnectionSpec,
-    ) -> Result<Box<dyn AccountCredentialInspectionConnection>, IntegrationError> {
-        if spec.capability != IntegrationCapability::AccountCredentialInspection {
-            return Err(IntegrationError::InvalidRequest(
-                "connection spec is not account credential inspection".into(),
-            ));
-        }
-        self.credential_inspections
-            .iter()
-            .find(|entry| {
-                entry.provider == spec.provider
-                    && entry.product == spec.product
-                    && entry.transport == spec.transport
-            })
-            .ok_or(IntegrationError::UnsupportedOperation)
-            .and_then(|entry| (entry.open)())
-    }
-
-    pub fn connect_account_market_profile(
-        &self,
-        spec: &ConnectionSpec,
-    ) -> Result<Box<dyn AccountMarketProfileConnection>, IntegrationError> {
-        if spec.capability != IntegrationCapability::AccountMarketProfileRead {
-            return Err(IntegrationError::InvalidRequest(
-                "connection spec is not an account market profile read".into(),
-            ));
-        }
-        self.account_market_profiles
-            .iter()
-            .find(|entry| {
-                entry.provider == spec.provider
-                    && entry.product == spec.product
-                    && entry.transport == spec.transport
-            })
-            .ok_or(IntegrationError::UnsupportedOperation)
-            .and_then(|entry| (entry.open)())
-    }
-
-    pub fn connect_order_entry(
-        &self,
-        spec: &ConnectionSpec,
-    ) -> Result<Box<dyn OrderEntryConnection>, IntegrationError> {
-        if spec.capability != IntegrationCapability::OrderEntry {
-            return Err(IntegrationError::InvalidRequest(
-                "connection spec is not order entry".into(),
-            ));
-        }
-        self.order_entries
-            .iter()
-            .find(|entry| {
-                entry.provider == spec.provider
-                    && entry.product == spec.product
-                    && entry.transport == spec.transport
-            })
-            .ok_or(IntegrationError::UnsupportedOperation)
-            .and_then(|entry| (entry.open)())
-    }
-
-    pub fn connect_order_query(
-        &self,
-        spec: &ConnectionSpec,
-    ) -> Result<Box<dyn OrderQueryConnection>, IntegrationError> {
-        if spec.capability != IntegrationCapability::OrderRead {
-            return Err(IntegrationError::InvalidRequest(
-                "connection spec is not order read".into(),
-            ));
-        }
-        self.order_queries
-            .iter()
-            .find(|entry| {
-                entry.provider == spec.provider
-                    && entry.product == spec.product
-                    && entry.transport == spec.transport
-            })
-            .ok_or(IntegrationError::UnsupportedOperation)
-            .and_then(|entry| (entry.open)())
-    }
-
-    pub fn connect_account_stream(
-        &self,
-        spec: &ConnectionSpec,
-    ) -> Result<Box<dyn AccountEventStreamConnection>, IntegrationError> {
-        if spec.capability != IntegrationCapability::AccountStream {
-            return Err(IntegrationError::InvalidRequest(
-                "connection spec is not an account stream".into(),
-            ));
-        }
-        self.account_streams
-            .iter()
-            .find(|entry| {
-                entry.provider == spec.provider
-                    && entry.product == spec.product
-                    && entry.transport == spec.transport
-            })
-            .ok_or(IntegrationError::UnsupportedOperation)
-            .and_then(|entry| (entry.open)())
-    }
-
-    pub fn connect_execution_stream(
-        &self,
-        spec: &ConnectionSpec,
-    ) -> Result<Box<dyn ExecutionStreamConnection>, IntegrationError> {
-        if spec.capability != IntegrationCapability::ExecutionStream {
-            return Err(IntegrationError::InvalidRequest(
-                "connection spec is not execution stream".into(),
-            ));
-        }
-        self.execution_streams
-            .iter()
-            .find(|entry| {
-                entry.provider == spec.provider
-                    && entry.product == spec.product
-                    && entry.transport == spec.transport
-            })
-            .ok_or(IntegrationError::UnsupportedOperation)
-            .and_then(|entry| (entry.open)())
-    }
-
-    pub fn connect_earn(
-        &self,
-        spec: &ConnectionSpec,
-    ) -> Result<Box<dyn EarnConnection>, IntegrationError> {
-        if spec.capability != IntegrationCapability::Earn {
-            return Err(IntegrationError::InvalidRequest(
-                "connection spec is not earn".into(),
-            ));
-        }
-        self.earns
-            .iter()
-            .find(|entry| entry.provider == spec.provider && entry.transport == spec.transport)
-            .ok_or(IntegrationError::UnsupportedOperation)
-            .and_then(|entry| (entry.open)())
-    }
-
-    pub fn connect_transfer(
-        &self,
-        spec: &ConnectionSpec,
-    ) -> Result<Box<dyn TransferConnection>, IntegrationError> {
-        if spec.capability != IntegrationCapability::Transfer {
-            return Err(IntegrationError::InvalidRequest(
-                "connection spec is not transfer".into(),
-            ));
-        }
-        self.transfers
-            .iter()
-            .find(|entry| entry.provider == spec.provider && entry.transport == spec.transport)
-            .ok_or(IntegrationError::UnsupportedOperation)
-            .and_then(|entry| (entry.open)())
-    }
-
-    pub fn connect(&self, spec: &ConnectionSpec) -> Result<Box<dyn Connection>, IntegrationError> {
-        self.gateways
-            .connect(spec)
-            .map_err(IntegrationError::InvalidRequest)
-    }
-
-    pub fn connect_market_stream(
-        &self,
-        spec: &ConnectionSpec,
-    ) -> Result<Box<dyn MarketStreamConnection>, IntegrationError> {
-        if spec.capability != IntegrationCapability::MarketStream {
-            return Err(IntegrationError::InvalidRequest(
-                "connection spec is not a market stream".into(),
-            ));
-        }
-        self.market_streams
-            .iter()
-            .find(|entry| {
-                entry.provider == spec.provider
-                    && entry.product == spec.product
-                    && entry.transport == spec.transport
-            })
-            .ok_or(IntegrationError::UnsupportedOperation)
-            .and_then(|entry| (entry.open)())
     }
 }
 
@@ -1755,7 +1542,7 @@ mod tests {
     fn reference_spec() -> ConnectionSpec {
         ConnectionSpec {
             connection_id: "reference.binance.spot.rest".into(),
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Public,
             transport: TransportKind::Rest,
@@ -1777,8 +1564,8 @@ mod tests {
                 ..reference_spec()
             })
             .unwrap();
-        assert_eq!(first.identity().provider, "binance");
-        assert_eq!(second.identity().provider, "binance");
+        assert_eq!(first.identity().route.primary().id, "binance");
+        assert_eq!(second.identity().route.primary().id, "binance");
         first.start().unwrap();
         second.start().unwrap();
         assert!(first.health().healthy);
@@ -1793,7 +1580,7 @@ mod tests {
         let connection = integration
             .connect_market_stream(&ConnectionSpec {
                 connection_id: "market.binance.spot.websocket".into(),
-                provider: "binance".into(),
+                route: crate::domain::IntegrationRoute::exchange("binance"),
                 product: Some(ProductFamily::Spot),
                 access: AccessScope::Public,
                 transport: TransportKind::WebSocket,
@@ -1869,7 +1656,11 @@ mod tests {
             let connection = integration
                 .connect_market_stream(&ConnectionSpec {
                     connection_id: format!("market-{index}"),
-                    provider: provider.into(),
+                    route: if provider == "massive" {
+                        crate::domain::IntegrationRoute::data_provider(provider)
+                    } else {
+                        crate::domain::IntegrationRoute::exchange(provider)
+                    },
                     product: Some(product),
                     access: AccessScope::Public,
                     transport: if provider == "massive" {
@@ -1882,7 +1673,7 @@ mod tests {
                     asset_type: None,
                 })
                 .unwrap();
-            assert_eq!(connection.identity().provider, provider);
+            assert_eq!(connection.identity().route.primary().id, provider);
             assert_eq!(connection.identity().product, Some(product));
         }
     }

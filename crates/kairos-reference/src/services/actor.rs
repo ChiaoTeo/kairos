@@ -33,7 +33,7 @@ impl ReferenceActor {
         let incoming = self.source.fetch_catalog()?;
         incoming.validate()?;
         let events = self.catalog.apply(incoming, unix_nanos());
-        self.store.save(&self.catalog)?;
+        self.store.save_refresh(&self.catalog, &events)?;
         Ok(RefreshResult {
             generation: self.catalog.generation,
             event_sequence: self.catalog.event_sequence,
@@ -51,6 +51,14 @@ impl ReferenceActor {
         self.catalog.generation = self.catalog.generation.saturating_add(1);
         self.store.save(&self.catalog)?;
         Ok(())
+    }
+
+    pub fn pending_events(&mut self) -> ReferenceResult<Vec<LifecycleEvent>> {
+        self.store.pending_events()
+    }
+
+    pub fn acknowledge_pending_events(&mut self) -> ReferenceResult<()> {
+        self.store.acknowledge_pending_events()
     }
 }
 

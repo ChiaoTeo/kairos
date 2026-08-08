@@ -83,7 +83,7 @@ impl BinanceReferenceConnection {
         }
         let spec = ConnectionSpec {
             connection_id: format!("reference.binance.{}.rest", market_name(market)),
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(product_family(market)),
             access: AccessScope::Public,
             transport: TransportKind::Rest,
@@ -156,7 +156,7 @@ impl BinanceReferenceFactory {
 
 impl IntegrationConnectionFactory for BinanceReferenceFactory {
     fn connect(&self, spec: &ConnectionSpec) -> Result<Box<dyn Connection>, String> {
-        if spec.provider != "binance"
+        if spec.route != crate::domain::IntegrationRoute::exchange("binance")
             || spec.capability != IntegrationCapability::Reference
             || spec.access != AccessScope::Public
             || spec.product != Some(product_family(self.market))
@@ -172,7 +172,7 @@ impl IntegrationConnectionFactory for BinanceReferenceFactory {
 
 impl GatewaySelector for BinanceReferenceFactory {
     fn supports(&self, spec: &ConnectionSpec) -> bool {
-        spec.provider == "binance"
+        spec.route == crate::domain::IntegrationRoute::exchange("binance")
             && spec.capability == IntegrationCapability::Reference
             && spec.access == AccessScope::Public
             && spec.product == Some(product_family(self.market))
@@ -220,7 +220,7 @@ mod tests {
         let factory =
             BinanceReferenceFactory::new("https://api.binance.com/api/v3/exchangeInfo").unwrap();
         let connection = factory.open().unwrap();
-        assert_eq!(connection.identity().provider, "binance");
+        assert_eq!(connection.identity().route.primary().id, "binance");
         assert_eq!(
             connection.identity().capability,
             crate::domain::IntegrationCapability::Reference
@@ -239,7 +239,7 @@ mod tests {
         );
         assert!(factory.supports(&crate::application::ConnectionSpec {
             connection_id: "reference.binance.options.rest".into(),
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(crate::domain::ProductFamily::Options),
             access: crate::domain::AccessScope::Public,
             transport: crate::domain::TransportKind::Rest,

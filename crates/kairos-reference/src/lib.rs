@@ -6,6 +6,6 @@ pub mod domain;
 mod services;
 
 pub use application::{
-    MarketQuery, ReferenceApplication, ReferenceKind, ReferenceQuery, ReferenceReader,
-    ReferenceRecord, ReferenceRefreshResult,
+    LifecycleQuery, MarketQuery, ReferenceApplication, ReferenceKind, ReferenceQuery,
+    ReferenceReader, ReferenceRecord, ReferenceRefreshResult,
 };

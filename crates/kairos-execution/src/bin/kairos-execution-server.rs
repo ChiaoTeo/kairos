@@ -2,7 +2,8 @@ use clap::Parser;
 use kairos_execution::application::ExecutionApplication;
 use kairos_execution::composition::{
     compose_execution_stream, compose_order_entry, compose_order_query, ExecutionConnectionOptions,
-    FileExecutionStore, SqliteExecutionAudit,
+    FileExecutionStore, SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher,
+    SocketExecutionPreflight, SqliteExecutionAudit,
 };
 use kairos_execution::credentials::load_workspace_credential;
 use kairos_execution::ExecutionProcess;
@@ -17,6 +18,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let options = args.connection_options(&workspace)?;
     let state = instance.state(&["execution", "execution-state.json"])?;
     let audit = instance.state(&["execution", "execution-audit.sqlite"])?;
+    let execution_snapshot = instance.service_snapshot("execution")?;
+    let intent_snapshot = instance.service_snapshot("intent")?;
+    if let Some(parent) = execution_snapshot.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if let Some(parent) = intent_snapshot.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let connection = compose_order_entry(&options)?;
     let query = compose_order_query(&options)?;
     let stream = compose_execution_stream(&options)?;
@@ -28,6 +37,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Box::new(FileExecutionStore::new(state))),
     )?;
     let mut application = application;
+    let manifest = instance.component_manifest()?;
+    application.attach_preflight(Box::new(SocketExecutionPreflight::from_manifest(manifest)?));
     application.configure_live_trading(
         !matches!(
             options.provider.trim().to_ascii_lowercase().as_str(),
@@ -37,6 +48,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let socket = instance.socket("execution")?;
     ExecutionProcess::with_audit(application, socket, SqliteExecutionAudit::new(audit))
+        .with_snapshot_publisher(SharedExecutionSnapshotPublisher::create(
+            execution_snapshot,
+            1024 * 1024,
+            format!("execution:{}", args.instance_id),
+        )?)
+        .with_intent_snapshot_publisher(SharedIntentSnapshotPublisher::create(
+            intent_snapshot,
+            1024 * 1024,
+            format!("execution:{}", args.instance_id),
+        )?)
         .run()
         .await
 }

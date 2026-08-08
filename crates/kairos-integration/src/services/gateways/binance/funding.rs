@@ -34,7 +34,7 @@ impl BinanceFundingAccountConnection {
             .map_err(|error| error.to_string())?;
         let spec = ConnectionSpec {
             connection_id: "account.binance.funding.rest".into(),
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: None,
             access: AccessScope::Private,
             transport: TransportKind::Rest,

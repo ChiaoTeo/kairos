@@ -20,17 +20,16 @@ from .clients import (
     SystemRestClient,
 )
 from .reference import ReferenceProcessConfig
-from .binaries import resolve_binary
+from .binaries import reject_owned_options, resolve_binary
 from .risk import RiskProcessConfig
 
 
 @dataclass(frozen=True, slots=True)
 class ComponentControlApplication(SystemRestClient):
-    """Compatibility facade for generic system control.
+    """Generic facade for system component control.
 
-    New business calls should use the typed ``*SystemClient`` classes.  This
-    generic facade remains for system-level component inspection and the
-    control aggregator, where no business endpoint is being modeled.
+    Typed ``*SystemClient`` classes own business endpoints. This generic
+    facade is only for system-level component inspection and control commands.
     """
 
     def command(self, component: str, command: dict[str, Any]) -> dict[str, Any]:
@@ -51,6 +50,7 @@ class ComponentProcessApplication:
         component: str,
         *,
         account_id: str | None = None,
+        socket_name: str | None = None,
         reference_config: ReferenceProcessConfig | None = None,
         market_provider: str | None = None,
         market_credential_id: str | None = None,
@@ -61,8 +61,10 @@ class ComponentProcessApplication:
         instance_workspace: Any | None = None,
     ) -> SystemRestClient:
         runtime = instance_workspace
-        socket = runtime.socket(component) if runtime is not None else self.workspace.paths.process_socket(component)
-        control = self.client(component, socket)
+        runtime_name = socket_name or component
+        socket = runtime.socket(runtime_name) if runtime is not None else self.workspace.paths.process_socket(runtime_name)
+        client_component = "account" if component == "account" else component
+        control = self.client(client_component, socket)
         try:
             health = control.status()
             if health.get("status") in {"ok", "ready", "running"}:
@@ -73,6 +75,7 @@ class ComponentProcessApplication:
         command, extra_environment = self._command(
             component,
             account_id=account_id,
+            socket_name=socket_name,
             reference_config=reference_config,
             market_provider=market_provider,
             market_credential_id=market_credential_id,
@@ -97,7 +100,7 @@ class ComponentProcessApplication:
             )
         finally:
             log.close()
-        return self._wait_ready(component, control)
+        return self._wait_ready(runtime_name, control)
 
     @staticmethod
     def client(component: str, socket: Path) -> SystemRestClient:
@@ -110,27 +113,30 @@ class ComponentProcessApplication:
         }
         return clients.get(component, ComponentControlApplication)(socket)
 
-    def stop(self, component: str, *, instance_workspace: Any | None = None) -> dict[str, Any]:
-        socket = instance_workspace.socket(component) if instance_workspace is not None else self.workspace.paths.process_socket(component)
+    def stop(self, component: str, *, instance_workspace: Any | None = None, socket_name: str | None = None) -> dict[str, Any]:
+        runtime_name = socket_name or component
+        socket = instance_workspace.socket(runtime_name) if instance_workspace is not None else self.workspace.paths.process_socket(runtime_name)
         if not socket.exists():
             return {"component": component, "status": "not_running", "control_socket": str(socket)}
-        return self.client(component, socket).stop()
+        return self.client("account" if component == "account" else component, socket).stop()
 
-    def status(self, component: str, *, instance_workspace: Any | None = None) -> dict[str, Any]:
-        socket = instance_workspace.socket(component) if instance_workspace is not None else self.workspace.paths.process_socket(component)
+    def status(self, component: str, *, instance_workspace: Any | None = None, socket_name: str | None = None) -> dict[str, Any]:
+        runtime_name = socket_name or component
+        socket = instance_workspace.socket(runtime_name) if instance_workspace is not None else self.workspace.paths.process_socket(runtime_name)
         if not socket.exists():
             return {
                 "component": component,
                 "status": "not_running",
                 "control_socket": str(socket),
             }
-        return self.client(component, socket).status()
+        return self.client("account" if component == "account" else component, socket).status()
 
     def _command(
         self,
         component: str,
         *,
         account_id: str | None,
+        socket_name: str | None = None,
         reference_config: ReferenceProcessConfig | None = None,
         market_provider: str | None = None,
         market_credential_id: str | None = None,
@@ -182,6 +188,8 @@ class ComponentProcessApplication:
             if not resolved_account:
                 raise RuntimeError("account process requires --account-id or KAIROS_ACCOUNT_ID")
             command.extend(("--account-id", resolved_account))
+            if socket_name and socket_name != "account":
+                command.extend(("--socket-name", socket_name))
             if provider is not None:
                 command.extend(("--provider", provider))
         return command, child_environment
@@ -207,38 +215,34 @@ class NativeCliApplication:
     workspace: Any
     binaries: Mapping[str, str] = field(default_factory=dict)
 
-    def run(self, component: str, arguments: list[str]) -> dict[str, Any]:
+    def command(self, component: str, arguments: list[str], *, output: str | None = "json") -> list[str]:
         if component != "execution":
             raise ValueError(f"unsupported native CLI component: {component}")
         binary_name = "kairos-execution-cli"
-        global_flags = {"--confirm-live"}
-        global_flags |= {"--provider", "--product", "--credential-id"}
-        prefix: list[str] = []
-        command_arguments: list[str] = []
-        index = 0
-        while index < len(arguments):
-            item = arguments[index]
-            if item in global_flags:
-                prefix.append(item)
-                if item != "--confirm-live":
-                    index += 1
-                    if index >= len(arguments):
-                        raise ValueError(f"missing value for {item}")
-                    prefix.append(arguments[index])
-            else:
-                command_arguments.append(item)
-            index += 1
+        reject_owned_options(arguments, {"--workspace"})
         command = [
             self.binaries.get(component) or resolve_binary(binary_name),
             "--workspace",
             str(self.workspace.paths.root),
-            "--output",
-            "json",
-            *prefix,
-            *command_arguments,
         ]
+        if output is not None:
+            command.extend(("--output", output))
+        command.extend(arguments)
+        return command
+
+    def invoke(self, component: str, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            self.command(component, arguments, output=None),
+            cwd=str(self.workspace.paths.root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def run(self, component: str, arguments: list[str]) -> dict[str, Any]:
+        reject_owned_options(arguments, {"--output", "--format"})
         result = subprocess.run(
-            command,
+            self.command(component, arguments),
             cwd=str(self.workspace.paths.root),
             capture_output=True,
             text=True,

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import tomllib
 from pathlib import Path
 
 import typer
@@ -25,17 +27,17 @@ strategy_app = typer.Typer(no_args_is_help=True, help="Manage the strategy insid
 launch_app.add_typer(strategy_app, name="strategy")
 
 
-def _legacy_group(name: str, commands: tuple[str, ...]) -> typer.Typer:
-    group = typer.Typer(no_args_is_help=True, help=f"Legacy launch {name} commands")
+def _group(name: str, commands: tuple[str, ...]) -> typer.Typer:
+    group = typer.Typer(no_args_is_help=True, help=f"Launch {name} commands")
     launch_app.add_typer(group, name=name)
     del commands
     return group
 
 
-targets_app = _legacy_group("targets", ("add", "remove", "index", "list", "browse"))
-diagnose_app = _legacy_group("diagnose", ("validate", "explain"))
-replay_app = _legacy_group("replay", ("events",))
-launch_timeline_app = _legacy_group("timeline", ("list",))
+targets_app = _group("targets", ("add", "remove", "index", "list", "browse"))
+diagnose_app = _group("diagnose", ("validate", "explain"))
+replay_app = _group("replay", ("events",))
+launch_timeline_app = _group("timeline", ("list",))
 
 
 def _target(launch_id: str, instance: str, mode: str, workspace: Path):
@@ -111,6 +113,59 @@ def _release_launch_leases(workspace, account_ids: list[str], *, instance: str) 
             )
         except (FileNotFoundError, ValueError):
             # Cleanup must never replace the original launch exception.
+            pass
+
+
+def _workspace_has_market_connections(workspace) -> bool:
+    """Return whether the workspace opted into an explicit market catalog."""
+    try:
+        values = tomllib.loads(workspace.paths.manifest.read_text(encoding="utf-8"))
+    except (FileNotFoundError, tomllib.TOMLDecodeError):
+        return False
+    market = values.get("market")
+    connections = market.get("connections") if isinstance(market, dict) else None
+    return isinstance(connections, dict) and bool(connections)
+
+
+def _account_component_name(account_id: str) -> str:
+    value = re.sub(r"[^a-zA-Z0-9_-]+", "-", account_id.strip()).strip("-")
+    if not value:
+        raise ValueError("account id cannot produce an empty component name")
+    return f"account-{value}"
+
+
+def _write_instance_manifest(instance_workspace, *, accounts: dict[str, dict], components: dict[str, dict]) -> None:
+    manifest = instance_workspace.component_manifest()
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "launch_id": instance_workspace.launch_id,
+        "instance_id": instance_workspace.instance_id,
+        "mode": instance_workspace.mode,
+        "accounts": accounts,
+        "components": components,
+    }
+    temporary = manifest.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary.replace(manifest)
+
+
+def _cleanup_instance_components(owner, instance_workspace, account_ids: list[str] | None = None) -> None:
+    components = ComponentProcessApplication(owner)
+    try:
+        manifest = json.loads(instance_workspace.component_manifest().read_text(encoding="utf-8"))
+        account_names = [str(value.get("socket_name")) for value in manifest.get("accounts", {}).values() if value.get("socket_name")]
+    except (FileNotFoundError, json.JSONDecodeError, AttributeError, TypeError):
+        account_names = [_account_component_name(value) for value in (account_ids or [])] or ["account"]
+    for component in ("risk", "execution"):
+        try:
+            components.stop(component, instance_workspace=instance_workspace)
+        except (OSError, RuntimeError, ValueError):
+            pass
+    for socket_name in account_names:
+        try:
+            components.stop("account", socket_name=socket_name, instance_workspace=instance_workspace)
+        except (OSError, RuntimeError, ValueError):
             pass
 
 
@@ -193,6 +248,7 @@ def start(
         market_provider = None
         market_credential_id = None
         market_replay_file = None
+        has_market_connections = _workspace_has_market_connections(owner)
         if launch_plan is not None:
             if launch_plan.paper_events is not None:
                 market_provider, market_replay_file = "replay", launch_plan.paper_events
@@ -202,23 +258,24 @@ def start(
                 market_config = launch_plan.mode_config["market"]
                 # Market loads the complete Workspace connection catalog and
                 # creates the matching provider lazily for each strategy
-                # subscription. Inline provider fields remain a temporary
-                # compatibility path for older launch files.
-                market_provider = market_config.get("provider") or "workspace"
+                # subscription. Inline provider fields remain a supported
+                # launch-plan input form.
+                market_provider = market_config.get("provider") or (
+                    "workspace" if has_market_connections else "binance-spot-websocket"
+                )
                 market_credential_id = market_config.get("credential_id")
             if market_provider is None and mode in {"paper", "live"}:
-                market_provider = "workspace"
+                market_provider = "workspace" if has_market_connections else "binance-spot-websocket"
         execution_config = dict(launch_plan.execution) if launch_plan is not None else {}
         execution_provider = str(execution_config["provider"]) if execution_config.get("provider") is not None else None
         execution_product = str(execution_config["product"]) if execution_config.get("product") is not None else None
         confirm_live = mode == "live" and bool(
             launch_plan is not None and launch_plan.live_safety and launch_plan.live_safety.get("trading_enabled")
         )
-        account_provider = None
-        if lease_account_ids:
-            account_provider = str(
-                AccountAdminApplication(owner).show(lease_account_ids[0]).get("broker") or "binance"
-            )
+        account_records = {
+            account_id: AccountAdminApplication(owner).show(account_id)
+            for account_id in lease_account_ids
+        }
         # A process can use either the Workspace shared Market or its own
         # instance Market. Live defaults to shared; replay/backtest default to
         # instance, while launch.market.scope can override that choice.
@@ -228,36 +285,54 @@ def start(
         )
         # Reference is a Workspace-global catalog runtime. It is started once
         # and is never placed in an instance workspace.
-        ComponentProcessApplication(owner).ensure_running(
-            "reference", reference_config=ReferenceProcessConfig(owner, provider="workspace")
-        )
+        if has_market_connections:
+            ComponentProcessApplication(owner).ensure_running(
+                "reference", reference_config=ReferenceProcessConfig(owner, provider="workspace")
+            )
         ComponentProcessApplication(owner).ensure_running(
             "market", market_provider=market_provider, market_replay_file=market_replay_file,
             market_credential_id=market_credential_id,
             instance_workspace=market_instance_workspace,
         )
-        if lease_account_ids:
-            # The launch binds the account actor before the strategy process;
-            # account state remains owned by the account module.
-            ComponentProcessApplication(owner).ensure_running(
-                "account", account_id=lease_account_ids[0], provider=account_provider,
-                instance_workspace=instance_workspace
+        components = ComponentProcessApplication(owner)
+        account_endpoints: dict[str, dict] = {}
+        for account_id in lease_account_ids:
+            socket_name = _account_component_name(account_id)
+            account_provider = str(account_records[account_id].get("broker") or "binance")
+            components.ensure_running(
+                "account", account_id=account_id, socket_name=socket_name,
+                provider=account_provider, instance_workspace=instance_workspace
             )
-            ComponentProcessApplication(owner).ensure_running(
-                "execution", provider=execution_provider, product=execution_product,
-                confirm_live=confirm_live, instance_workspace=instance_workspace
-            )
-        else:
-            ComponentProcessApplication(owner).ensure_running(
-                "execution", provider=execution_provider, product=execution_product,
-                confirm_live=confirm_live, instance_workspace=instance_workspace
-            )
+            account_endpoints[account_id] = {
+                "socket": str(instance_workspace.socket(socket_name)),
+                "health": str(instance_workspace.health(socket_name)),
+                "socket_name": socket_name,
+            }
         # Account, Execution and Risk are all instance-owned runtime actors.
         # Risk is started even without an account binding so a strategy cannot
         # accidentally bypass the instance risk boundary.
-        ComponentProcessApplication(owner).ensure_running(
-            "risk", instance_workspace=instance_workspace
+        components.ensure_running("risk", instance_workspace=instance_workspace)
+        component_endpoints = {
+            "risk": {"socket": str(instance_workspace.socket("risk")), "health": str(instance_workspace.health("risk"))},
+            "market": {
+                "socket": str(instance_workspace.socket("market")) if market_instance_workspace is not None else str(owner.paths.process_socket("market")),
+                "health": str(instance_workspace.health("market")) if market_instance_workspace is not None else str(owner.paths.health_file("market")),
+            },
+        }
+        if has_market_connections:
+            component_endpoints["reference"] = {"socket": str(owner.paths.process_socket("reference")), "health": str(owner.paths.health_file("reference"))}
+        # Execution reads this manifest during its own construction, so the
+        # dependency endpoints must already be present before it starts.
+        _write_instance_manifest(instance_workspace, accounts=account_endpoints, components=component_endpoints)
+        components.ensure_running(
+            "execution", provider=execution_provider, product=execution_product,
+            confirm_live=confirm_live, instance_workspace=instance_workspace
         )
+        component_endpoints["execution"] = {
+            "socket": str(instance_workspace.socket("execution")),
+            "health": str(instance_workspace.health("execution")),
+        }
+        _write_instance_manifest(instance_workspace, accounts=account_endpoints, components=component_endpoints)
         strategy_params = dict(launch_config.strategy_params)
         if params:
             import json
@@ -295,7 +370,10 @@ def start(
             registry.update_state(launch_id, mode=mode, instance_id=instance, state="failed")
         except FileNotFoundError:
             pass
-        _release_launch_leases(owner, lease_account_ids, instance=instance)
+        try:
+            _cleanup_instance_components(owner, owner.instance(mode, launch_id, instance), lease_account_ids)
+        finally:
+            _release_launch_leases(owner, lease_account_ids, instance=instance)
         raise
 
 
@@ -322,8 +400,16 @@ def stop(
     value = LaunchControlApplication(owner).stop(_target(launch_id, instance, mode, workspace))
     instance_workspace = owner.instance(mode, launch_id, instance)
     components = ComponentProcessApplication(owner)
-    for component in ("risk", "execution", "account"):
+    manifest_accounts: list[str] = []
+    try:
+        manifest = json.loads(instance_workspace.component_manifest().read_text(encoding="utf-8"))
+        manifest_accounts = [str(value.get("socket_name")) for value in manifest.get("accounts", {}).values() if value.get("socket_name")]
+    except (FileNotFoundError, json.JSONDecodeError, AttributeError, TypeError):
+        pass
+    for component in ("risk", "execution"):
         components.stop(component, instance_workspace=instance_workspace)
+    for socket_name in manifest_accounts or ["account"]:
+        components.stop("account", socket_name=socket_name, instance_workspace=instance_workspace)
     # The live Market is shared by launches and must not be stopped when one
     # launch instance exits. Instance-owned replay Market can be stopped here.
     market_shared = mode == "live"

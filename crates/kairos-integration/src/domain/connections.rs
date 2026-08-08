@@ -1,4 +1,4 @@
-use super::{AccessScope, IntegrationCapability, ProductFamily, TransportKind};
+use super::{AccessScope, IntegrationCapability, IntegrationRoute, ProductFamily, TransportKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConnectionLifecycle {
@@ -14,7 +14,7 @@ pub enum ConnectionLifecycle {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConnectionIdentity {
     pub connection_id: String,
-    pub provider: String,
+    pub route: IntegrationRoute,
     pub product: Option<ProductFamily>,
     pub access: AccessScope,
     pub transport: TransportKind,
@@ -24,23 +24,20 @@ pub struct ConnectionIdentity {
 impl ConnectionIdentity {
     pub fn new(
         connection_id: impl Into<String>,
-        provider: impl Into<String>,
+        route: IntegrationRoute,
         product: Option<ProductFamily>,
         access: AccessScope,
         transport: TransportKind,
         capability: IntegrationCapability,
     ) -> Result<Self, String> {
         let connection_id = connection_id.into();
-        let provider = provider.into();
         if connection_id.trim().is_empty() {
             return Err("connection id is required".into());
         }
-        if provider.trim().is_empty() {
-            return Err("connection provider is required".into());
-        }
+        route.validate()?;
         Ok(Self {
             connection_id,
-            provider,
+            route,
             product,
             access,
             transport,

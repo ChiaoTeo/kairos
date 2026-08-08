@@ -30,19 +30,27 @@ class SubscriptionRequest:
 
 @dataclass(frozen=True, slots=True)
 class TargetPositionRequest:
-    """A strategy request translated by the Account application."""
+    """A strategy target translated into an Execution-owned Intent."""
 
     instrument_id: str
     quantity: Decimal
     account_id: str | None = None
+    account_ids: tuple[str, ...] = ()
     limit_price: Decimal | None = None
     reason: str = ""
     intent_id: str | None = None
+    source_snapshot_id: str | None = None
+    source_event_sequence: int | None = None
 
     def __post_init__(self) -> None:
         if not self.instrument_id.strip():
             raise ValueError("instrument_id is required")
         if self.account_id is not None and not self.account_id.strip():
             raise ValueError("account_id cannot be blank")
+        if any(not isinstance(account, str) or not account.strip() for account in self.account_ids):
+            raise ValueError("account_ids must contain non-empty strings")
+        object.__setattr__(self, "account_ids", tuple(self.account_ids))
         if self.intent_id is not None and not self.intent_id.strip():
             raise ValueError("intent_id cannot be blank")
+        if self.source_snapshot_id is not None and not self.source_snapshot_id.strip():
+            raise ValueError("source_snapshot_id cannot be blank")

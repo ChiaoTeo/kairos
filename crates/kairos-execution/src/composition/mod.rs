@@ -1,6 +1,7 @@
 use crate::application::protocol::ExecutionStateStore;
 use crate::application::{
-    ExecutionAuditEvent, ExecutionAuditQuery, ExecutionAuditSink, ExecutionEvent, ExecutionSnapshot,
+    ExecutionAuditEvent, ExecutionAuditQuery, ExecutionAuditSink, ExecutionEvent,
+    ExecutionSnapshot, IntentEvent,
 };
 use kairos_integration::application::{
     Connection, ExecutionStreamConnection, OrderEntryConnection, OrderQueryConnection,
@@ -12,6 +13,10 @@ use kairos_integration::domain::{
 };
 use kairos_integration::{ConnectionSpec, Integration};
 use std::path::PathBuf;
+
+pub use crate::services::publication::{
+    SharedExecutionSnapshotPublisher, SharedIntentSnapshotPublisher,
+};
 
 pub struct SimulatedOrderEntry {
     state: ConnectionState,
@@ -150,10 +155,10 @@ pub fn compose_order_entry(
     integration
         .connect_order_entry(&ConnectionSpec {
             connection_id: format!("execution.{provider}.{product_name}.rest"),
-            provider: if provider == "okex" {
-                "okx".into()
+            route: if provider == "okex" {
+                kairos_integration::IntegrationRoute::exchange("okx")
             } else {
-                provider
+                kairos_integration::IntegrationRoute::exchange(provider)
             },
             product: Some(product),
             access: AccessScope::Private,
@@ -181,7 +186,7 @@ pub fn compose_order_query(
                     )
                     .connect_order_query(&ConnectionSpec {
                         connection_id: "execution.binance.equity.order-read.rest".into(),
-                        provider: "binance".into(),
+                        route: kairos_integration::IntegrationRoute::exchange("binance"),
                         product: Some(ProductFamily::Equity),
                         access: AccessScope::Private,
                         transport: TransportKind::Rest,
@@ -219,10 +224,10 @@ pub fn compose_order_query(
     let connection = integration
         .connect_order_query(&ConnectionSpec {
             connection_id: "execution.binance.equity.order-read.rest".into(),
-            provider: if provider == "okex" {
-                "okx".into()
+            route: if provider == "okex" {
+                kairos_integration::IntegrationRoute::exchange("okx")
             } else {
-                provider.clone()
+                kairos_integration::IntegrationRoute::exchange(provider.clone())
             },
             product: Some(product_family),
             access: AccessScope::Private,
@@ -252,7 +257,7 @@ pub fn compose_execution_stream(
     let connection = integration
         .connect_execution_stream(&ConnectionSpec {
             connection_id: "execution.ibkr.equity.stream".into(),
-            provider: "ibkr".into(),
+            route: kairos_integration::IntegrationRoute::broker("ibkr"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Private,
             transport: TransportKind::Rest,
@@ -268,7 +273,7 @@ impl Default for SimulatedOrderEntry {
     fn default() -> Self {
         let identity = ConnectionIdentity::new(
             "execution.simulated.order-entry",
-            "simulated",
+            kairos_integration::IntegrationRoute::exchange("simulated"),
             Some(ProductFamily::Spot),
             AccessScope::Private,
             TransportKind::Rest,
@@ -425,12 +430,55 @@ impl ExecutionAuditSink for SqliteExecutionAudit {
         Self::publish(self, event)
     }
 
+    fn publish_intent(&mut self, event: &IntentEvent) -> Result<(), String> {
+        Self::publish_intent(self, event)
+    }
+
     fn query(&mut self, query: &ExecutionAuditQuery) -> Result<Vec<ExecutionAuditEvent>, String> {
         Self::query(self, query)
     }
 }
 
 impl SqliteExecutionAudit {
+    pub fn publish_intent(&mut self, event: &IntentEvent) -> Result<(), String> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let connection =
+            rusqlite::Connection::open(&self.path).map_err(|error| error.to_string())?;
+        connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS intent_events (\
+                    sequence INTEGER PRIMARY KEY AUTOINCREMENT,\
+                    intent_id TEXT NOT NULL,\
+                    status TEXT NOT NULL,\
+                    order_ids TEXT NOT NULL,\
+                    completed_quantity_mantissa INTEGER NOT NULL,\
+                    occurred_at_unix_nanos INTEGER NOT NULL,\
+                    reason TEXT NOT NULL,\
+                    event_key TEXT NOT NULL UNIQUE\
+                )",
+            )
+            .map_err(|error| error.to_string())?;
+        let order_ids =
+            serde_json::to_string(&event.order_ids).map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO intent_events (intent_id, status, order_ids, completed_quantity_mantissa, occurred_at_unix_nanos, reason, event_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    event.intent_id,
+                    format!("{:?}", event.status).to_ascii_lowercase(),
+                    order_ids,
+                    event.completed_quantity_mantissa,
+                    event.occurred_at_unix_nanos as i64,
+                    event.reason,
+                    format!("{}|{:?}|{}|{}|{}", event.intent_id, event.status, event.occurred_at_unix_nanos, event.completed_quantity_mantissa, event.reason),
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     pub fn publish(&mut self, event: &ExecutionEvent) -> Result<(), String> {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -556,3 +604,6 @@ impl ExecutionStateStore for FileExecutionStore {
         std::fs::rename(&temporary, &self.path).map_err(|error| error.to_string())
     }
 }
+mod preflight;
+
+pub use preflight::SocketExecutionPreflight;

@@ -6,7 +6,9 @@
 
 use serde::Serialize;
 
-use crate::domain::{Asset, Entity, Instrument, LifecycleEvent, Listing, Market, ReferenceResult};
+use crate::domain::{
+    Asset, Entity, FinancialProduct, Instrument, LifecycleEvent, Listing, Market, ReferenceResult,
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ReferenceKind {
@@ -15,6 +17,7 @@ pub enum ReferenceKind {
     Instrument,
     Listing,
     Market,
+    FinancialProduct,
     Event,
     #[default]
     All,
@@ -27,10 +30,53 @@ pub struct ReferenceQuery {
     pub venue_id: Option<String>,
     pub market_type: Option<String>,
     pub asset_type: Option<String>,
+    pub underlying_instrument_id: Option<String>,
     pub status: Option<String>,
     pub active_only: bool,
     pub as_of_unix_nanos: Option<u64>,
+    pub sequence_from: Option<u64>,
+    pub sequence_to: Option<u64>,
+    pub event_time_from_unix_nanos: Option<u64>,
+    pub event_time_to_unix_nanos: Option<u64>,
     pub limit: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LifecycleQuery {
+    /// Lifecycle sequence numbers are one-based and stable across restarts.
+    pub sequence_from: Option<u64>,
+    pub sequence_to: Option<u64>,
+    pub event_type: Option<String>,
+    pub market_id: Option<String>,
+    pub venue_id: Option<String>,
+    pub event_time_from_unix_nanos: Option<u64>,
+    pub event_time_to_unix_nanos: Option<u64>,
+    pub limit: Option<usize>,
+}
+
+impl LifecycleQuery {
+    pub fn matches(&self, sequence: u64, event: &LifecycleEvent) -> bool {
+        self.sequence_from.is_none_or(|value| sequence >= value)
+            && self.sequence_to.is_none_or(|value| sequence <= value)
+            && self
+                .event_type
+                .as_deref()
+                .is_none_or(|value| value.eq_ignore_ascii_case(&event.event_type))
+            && self
+                .market_id
+                .as_deref()
+                .is_none_or(|value| event.market_id.as_deref() == Some(value))
+            && self
+                .venue_id
+                .as_deref()
+                .is_none_or(|value| event.venue_id.as_deref() == Some(value))
+            && self
+                .event_time_from_unix_nanos
+                .is_none_or(|value| event.event_time_unix_nanos >= value)
+            && self
+                .event_time_to_unix_nanos
+                .is_none_or(|value| event.event_time_unix_nanos < value)
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -41,6 +87,7 @@ pub enum ReferenceRecord {
     Instrument(Instrument),
     Listing(Listing),
     Market(Market),
+    FinancialProduct(FinancialProduct),
     Event(LifecycleEvent),
 }
 

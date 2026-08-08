@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
+import json
 import os
 import sys
 from typing import Mapping
@@ -38,7 +39,7 @@ def compose_strategy_process(
     # package also exposes market domain views, and importing it while the
     # strategy package is initializing would create a package-init cycle.
     from kairospy.infrastructure.transport import (
-        AccountIntentCommandPort,
+        ExecutionIntentCommandPort,
         MarketUnixCommandPort,
         MmapMarketSnapshotReader,
         UnixJsonCommandClient,
@@ -69,7 +70,13 @@ def compose_strategy_process(
         else market_runtime.snapshot("market", "market.snapshot")
     )
     market_client = UnixJsonCommandClient(market_socket)
-    account_client = UnixJsonCommandClient(instance.socket("account"))
+    manifest_path = instance.component_manifest()
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        execution_socket = manifest["components"]["execution"]["socket"]
+    except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError) as error:
+        raise RuntimeError("strategy instance component endpoint manifest is incomplete") from error
+    execution_client = UnixJsonCommandClient(execution_socket)
     max_notional = None
     raw_max_notional = os.environ.get("KAIROS_LIVE_MAX_ORDER_NOTIONAL")
     if raw_max_notional:
@@ -79,8 +86,8 @@ def compose_strategy_process(
             max_notional = None
     bus = StrategyContextBus(
         market=MarketUnixCommandPort(market_client, launch_id=launch_id),
-        intents=AccountIntentCommandPort(
-            account_client,
+        intents=ExecutionIntentCommandPort(
+            execution_client,
             allow_trading=mode != "live" or os.environ.get("KAIROS_LIVE_TRADING_ENABLED", "false") == "true",
             max_order_notional=max_notional,
             require_limit_orders=mode == "live" and os.environ.get("KAIROS_LIVE_REQUIRE_LIMIT_ORDERS", "true") == "true",

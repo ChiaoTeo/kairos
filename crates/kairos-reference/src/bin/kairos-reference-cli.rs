@@ -3,10 +3,11 @@
 //! Every invocation constructs the application, performs one use case, writes
 //! one JSON value to stdout, and exits. It never starts or discovers a server.
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use kairos_reference::application::{ReferenceKind, ReferenceQuery};
 use kairos_reference::composition::{
-    build_application, ensure_database_parent, ReferenceCompositionConfig, ReferenceSnapshotWriter,
+    build_application, default_endpoint, ensure_database_parent, ReferenceCompositionConfig,
+    ReferenceSnapshotWriter,
 };
 use kairos_reference::domain::Asset;
 use kairos_workspace::workspace::Workspace;
@@ -14,17 +15,9 @@ use serde_json::{json, Value};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
-    let endpoint = match args.provider.as_str() {
-        "hyperliquid" if args.endpoint == Cli::default_endpoint() => {
-            "https://api.hyperliquid.xyz/info".to_string()
-        }
-        "massive" | "massive-options" | "massive-equity"
-            if args.endpoint == Cli::default_endpoint() =>
-        {
-            "https://api.polygon.io".to_string()
-        }
-        _ => args.endpoint.clone(),
-    };
+    let endpoint = args
+        .endpoint
+        .unwrap_or_else(|| default_endpoint(&args.provider).to_string());
     let workspace = Workspace::open(&args.workspace)?;
     let database = workspace.child(&["reference", "reference.sqlite"])?;
     ensure_database_parent(&database)?;
@@ -36,7 +29,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_key: args.api_key.unwrap_or_default(),
         binance_api_key: args.binance_api_key.unwrap_or_default(),
         secret: args.secret.unwrap_or_default(),
-        underlying: args.underlying,
         aeron_dir: args.aeron_dir,
         channel: args.channel,
         catalog_stream: args.catalog_stream,
@@ -51,8 +43,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         composition.snapshot_writer.as_mut(),
         args.command,
     )?;
-    println!("{}", serde_json::to_string_pretty(&value)?);
+    print_value(&value, args.output);
     Ok(())
+}
+
+fn print_value(value: &Value, output: OutputFormat) {
+    match output {
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(value).unwrap()),
+        OutputFormat::Text => print_text(value, ""),
+    }
+}
+
+fn print_text(value: &Value, prefix: &str) {
+    match value {
+        Value::Object(values) => {
+            for (key, value) in values {
+                let name = if prefix.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{prefix}.{key}")
+                };
+                print_text(value, &name);
+            }
+        }
+        Value::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                print_text(value, &format!("{prefix}[{index}]"));
+            }
+        }
+        _ => println!("{prefix}: {value}"),
+    }
 }
 
 fn execute(
@@ -83,7 +103,7 @@ fn execute(
         }),
         Command::Refresh | Command::Sync => {
             let result = application.refresh()?;
-            publish(writer, application, &result.events)?;
+            publish_pending(writer, application)?;
             json!({
                 "generation": result.generation,
                 "event_sequence": result.event_sequence,
@@ -91,15 +111,23 @@ fn execute(
             })
         }
         Command::Publish => {
-            publish(writer, application, &[])?;
+            publish_pending(writer, application)?;
             json!({ "generation": application.catalog().generation })
         }
-        Command::Assets { command } => assets(application, command)?,
+        Command::Assets { command } => {
+            let publishes = matches!(&command, AssetCommand::Add(_));
+            let value = assets(application, command)?;
+            if publishes {
+                publish_pending(writer, application)?;
+            }
+            value
+        }
         Command::Participants { command } => participants(application, command),
         Command::Markets { command } => markets(application, command)?,
         Command::Events(args) => match args.action {
             Some(EventAction::Sync(sync)) => {
                 let result = application.refresh()?;
+                publish_pending(writer, application)?;
                 let ticker = sync.ticker.to_ascii_lowercase();
                 let events = result
                     .events
@@ -159,6 +187,16 @@ fn publish(
     };
     writer.publish(application.catalog())?;
     writer.publish_change(application.catalog(), events)?;
+    Ok(())
+}
+
+fn publish_pending(
+    writer: Option<&mut ReferenceSnapshotWriter>,
+    application: &mut kairos_reference::ReferenceApplication,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let events = application.pending_events()?;
+    publish(writer, application, &events)?;
+    application.acknowledge_published_events()?;
     Ok(())
 }
 
@@ -271,9 +309,14 @@ impl QueryArgs {
             text: self.text,
             venue_id: self.venue_id,
             market_type: self.market_type,
+            underlying_instrument_id: self.underlying_instrument_id,
             status: self.status,
             active_only: self.active_only,
             as_of_unix_nanos: self.as_of_unix_nanos,
+            sequence_from: self.sequence_from,
+            sequence_to: self.sequence_to,
+            event_time_from_unix_nanos: self.event_time_from_unix_nanos,
+            event_time_to_unix_nanos: self.event_time_to_unix_nanos,
             limit: self.limit,
             ..ReferenceQuery::default()
         }
@@ -311,38 +354,43 @@ impl Command {
 struct Cli {
     #[arg(long)]
     workspace: std::path::PathBuf,
-    #[arg(long, default_value = "binance-spot")]
+    #[arg(long, global = true, visible_alias = "format", value_enum, default_value_t = OutputFormat::Json)]
+    output: OutputFormat,
+    #[arg(long, global = true, default_value = "binance-spot")]
     provider: String,
-    #[arg(long, default_value = "https://api.binance.com/api/v3/exchangeInfo")]
-    endpoint: String,
-    #[arg(long, env = "MASSIVE_API_KEY")]
+    #[arg(long, global = true)]
+    endpoint: Option<String>,
+    #[arg(long, global = true, env = "MASSIVE_API_KEY")]
     api_key: Option<String>,
-    #[arg(long, env = "BINANCE_API_KEY")]
+    #[arg(long, global = true, env = "BINANCE_API_KEY")]
     binance_api_key: Option<String>,
-    #[arg(long, env = "BINANCE_API_SECRET")]
+    #[arg(long, global = true, env = "BINANCE_API_SECRET")]
     secret: Option<String>,
-    #[arg(long, default_value = "SPY", env = "MASSIVE_OPTION_UNDERLYING")]
-    underlying: String,
-    #[arg(long, default_value = "aeron:udp?endpoint=localhost:40123")]
+    #[arg(
+        long,
+        global = true,
+        default_value = "aeron:udp?endpoint=localhost:40123"
+    )]
     channel: String,
-    #[arg(long, default_value_t = 1201)]
+    #[arg(long, global = true, default_value_t = 1201)]
     catalog_stream: i32,
-    #[arg(long, default_value_t = 1202)]
+    #[arg(long, global = true, default_value_t = 1202)]
     markets_stream: i32,
-    #[arg(long, default_value_t = 1203)]
+    #[arg(long, global = true, default_value_t = 1203)]
     lifecycle_stream: i32,
-    #[arg(long, default_value_t = 1204)]
+    #[arg(long, global = true, default_value_t = 1204)]
     changes_stream: i32,
-    #[arg(long)]
+    #[arg(long, global = true)]
     aeron_dir: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
 
-impl Cli {
-    fn default_endpoint() -> String {
-        "https://api.binance.com/api/v3/exchangeInfo".to_string()
-    }
+#[derive(Clone, Copy, Debug, Default, ValueEnum)]
+enum OutputFormat {
+    #[default]
+    Json,
+    Text,
 }
 
 #[derive(Debug, Subcommand)]
@@ -453,12 +501,22 @@ struct QueryArgs {
     venue_id: Option<String>,
     #[arg(long)]
     market_type: Option<String>,
+    #[arg(long, visible_alias = "underlying")]
+    underlying_instrument_id: Option<String>,
     #[arg(long)]
     status: Option<String>,
     #[arg(long)]
     active_only: bool,
     #[arg(long)]
     as_of_unix_nanos: Option<u64>,
+    #[arg(long)]
+    sequence_from: Option<u64>,
+    #[arg(long)]
+    sequence_to: Option<u64>,
+    #[arg(long)]
+    event_time_from_unix_nanos: Option<u64>,
+    #[arg(long)]
+    event_time_to_unix_nanos: Option<u64>,
     #[arg(long)]
     limit: Option<usize>,
 }
@@ -505,6 +563,7 @@ impl QueryArgs {
             "instrument" => ReferenceKind::Instrument,
             "listing" => ReferenceKind::Listing,
             "market" => ReferenceKind::Market,
+            "financial-product" | "financial_product" => ReferenceKind::FinancialProduct,
             "event" => ReferenceKind::Event,
             _ => ReferenceKind::All,
         }

@@ -15,6 +15,7 @@ use kairos_protocol::generated::kairos::market::v_1::{
     TradeArgs as FbTradeArgs, TradeMessage, TradeMessageArgs,
 };
 use kairos_protocol::InstanceIdentity;
+use kairos_workspace::runtime::{HEALTH_PATH, SNAPSHOT_PATH, STOP_PATH};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -177,7 +178,7 @@ impl MarketProcess {
                     }
                 }
                 _ = ticks.tick() => {
-                    if self.feed_enabled {
+                    if self.feed_enabled && !self.application.snapshot().subscriptions.is_empty() {
                         let error = std::thread::scope(|scope| {
                             match scope.spawn(|| self.application.poll_feed()).join() {
                                 Ok(Ok(_)) => None,
@@ -236,8 +237,8 @@ impl MarketProcess {
             .and_then(|line| line.split_whitespace().nth(1))
             .unwrap_or("/");
         let (status, payload) = match path {
-            "/v1/health" => (200, self.health()),
-            "/v1/snapshot" => (200, serde_json::to_value(self.application.snapshot())?),
+            HEALTH_PATH => (200, self.health()),
+            SNAPSHOT_PATH => (200, serde_json::to_value(self.application.snapshot())?),
             "/v1/subscribe" => self.subscribe(body),
             "/v1/unsubscribe" => self.unsubscribe(body),
             "/v1/refresh" | "/v1/recover" => match std::thread::scope(|scope| {
@@ -247,13 +248,17 @@ impl MarketProcess {
                 Ok(Err(error)) => (422, json!({"error": error.to_string()})),
                 Err(_) => (500, json!({"error":"market recovery thread panicked"})),
             },
-            "/v1/stop" => {
+            STOP_PATH => {
                 self.stop_requested = true;
                 (202, json!({"status":"stopping"}))
             }
             _ => (404, json!({"error":"unknown market control path"})),
         };
-        write_json(&mut stream, status, &payload).await?;
+        if let Err(error) = write_json(&mut stream, status, &payload).await {
+            if error.kind() != std::io::ErrorKind::BrokenPipe {
+                return Err(error.into());
+            }
+        }
         Ok(())
     }
 
@@ -334,7 +339,7 @@ impl MarketProcess {
             .identity
             .clone()
             .unwrap_or_else(|| source_symbol.clone());
-        let venue = request.exchange.clone().unwrap_or_else(|| "unknown".into());
+        let venue = request.exchange.clone().unwrap_or_else(|| "binance".into());
         let market_type = request.market_type.clone().unwrap_or_else(|| "spot".into());
         let descriptor_result = if let Some(reference_socket) = &self.reference_socket_path {
             resolve_market(
@@ -355,12 +360,26 @@ impl MarketProcess {
                     source_symbol.clone(),
                 ),
                 None => MarketDescriptor::new(
-                    market_id,
+                    market_id.clone(),
                     source_symbol.clone(),
-                    venue,
-                    market_type,
+                    venue.clone(),
+                    market_type.clone(),
                     source_symbol.clone(),
-                ),
+                )
+                .and_then(|descriptor| {
+                    if venue == "binance" && market_type == "spot" {
+                        MarketDescriptor::new_with_asset_type(
+                            descriptor.market_id,
+                            descriptor.instrument_id,
+                            descriptor.venue_id,
+                            descriptor.market_type,
+                            "crypto",
+                            descriptor.source_symbol,
+                        )
+                    } else {
+                        Ok(descriptor)
+                    }
+                }),
             }
         };
         let descriptor = match descriptor_result {
@@ -733,7 +752,8 @@ async fn write_json(
     };
     let header = format!("HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
     stream.write_all(header.as_bytes()).await?;
-    stream.write_all(&body).await
+    stream.write_all(&body).await?;
+    stream.shutdown().await
 }
 
 fn remove_socket(path: &Path) -> Result<(), std::io::Error> {

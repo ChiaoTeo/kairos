@@ -1064,7 +1064,10 @@ name = "kairos-execution"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "flatbuffers",
  "kairos-integration",
+ "kairos-protocol",
+ "kairos-transport",
  "kairos-workspace",
  "rusqlite",
  "serde",
@@ -1100,7 +1103,6 @@ dependencies = [
 name = "kairos-market"
 version = "0.1.0"
 dependencies = [
- "aeron",
  "clap",
  "flatbuffers",
  "kairos-integration",
@@ -1132,11 +1134,11 @@ dependencies = [
 name = "kairos-reference"
 version = "0.1.0"
 dependencies = [
- "aeron",
  "clap",
  "flatbuffers",
  "kairos-integration",
  "kairos-protocol",
+ "kairos-transport",
  "kairos-workspace",
  "rusqlite",
  "serde",
@@ -1165,9 +1167,11 @@ dependencies = [
 name = "kairos-transport"
 version = "0.1.0"
 dependencies = [
+ "aeron",
  "kairos-protocol",
  "memmap2",
  "serde",
+ "tempfile",
 ]
 
 [[package]]

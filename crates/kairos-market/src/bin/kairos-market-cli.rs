@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use kairos_market::composition::{
-    binance_spot_rest_feed, binance_spot_websocket_feed, MarketActor, ReplayMarketFeed,
+    binance_spot_rest_feed, binance_spot_websocket_feed, default_endpoint, MarketActor,
+    ReplayMarketFeed,
 };
 use kairos_market::{MarketApplication, MarketDescriptor, SubscriptionId};
 use serde_json::{json, Value};
@@ -45,9 +46,12 @@ fn once(command: OnceCommand) -> Result<Value, Box<dyn std::error::Error>> {
     )?;
     let actor = MarketActor::new(command.actor_id, 10_000)?;
     let mut application = MarketApplication::new(actor);
+    let endpoint = command
+        .endpoint
+        .unwrap_or_else(|| default_endpoint(command.provider.as_str()).to_string());
     let feed = match command.provider {
-        Provider::BinanceSpotRest => binance_spot_rest_feed(command.endpoint)?,
-        Provider::BinanceSpotWebsocket => binance_spot_websocket_feed(command.endpoint)?,
+        Provider::BinanceSpotRest => binance_spot_rest_feed(endpoint)?,
+        Provider::BinanceSpotWebsocket => binance_spot_websocket_feed(endpoint)?,
     };
     application.attach_feed(Box::new(feed));
     application.subscribe_static(SubscriptionId::new("cli-once")?, "cli", market)?;
@@ -180,8 +184,8 @@ struct OnceCommand {
     market: DescriptorArgs,
     #[arg(long, value_enum, default_value_t = Provider::BinanceSpotRest)]
     provider: Provider,
-    #[arg(long, default_value = "https://api.binance.com")]
-    endpoint: String,
+    #[arg(long)]
+    endpoint: Option<String>,
     #[arg(long, default_value = "market-cli")]
     actor_id: String,
 }
@@ -200,4 +204,13 @@ struct ReplayCommand {
 enum Provider {
     BinanceSpotRest,
     BinanceSpotWebsocket,
+}
+
+impl Provider {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::BinanceSpotRest => "binance-spot-rest",
+            Self::BinanceSpotWebsocket => "binance-spot-websocket",
+        }
+    }
 }

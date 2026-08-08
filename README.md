@@ -11,14 +11,13 @@ KairosPy 是一个面向量化交易实验的 Python 工具包，提供策略运
 交易所接入说明：
 
 - [Binance 产品](docs/binance-products.md)
-- [OKX 与 Hyperliquid 的 CCXT 接入](docs/ccxt-crypto-integrations.md)
 
 ## ✨ 功能亮点
 
 - 🚀 **策略运行时**：通过 `kairospy` / `kairos` CLI 启动、停止、查看和诊断 launch。
 - 📈 **回测与纸交易**：内置 backtest、paper、live 等运行模式的配置入口。
 - 🧾 **账户与订单视图**：围绕 account、order、execution、risk、trace 等领域组织状态投影。
-- 🔌 **交易所与数据集成**：包含 Binance、CCXT、Massive 等 integration scaffold。
+- 🔌 **交易所与数据集成**：包含 Binance、OKX、Hyperliquid、Massive 等 integration scaffold。
 - 🖥️ **终端界面**：通过 CLI 和 Textual 组织运行时状态与时间线数据。
 - 🧪 **测试覆盖**：使用 pytest 覆盖 CLI、运行时、市场、账户、执行和参考数据模块。
 
@@ -228,7 +227,7 @@ trade = false
 
 账户可以被多个 launch 重复引用，但同一账户同一时间只有一个 launch 可以持有交易锁并下单。`trade = false` 表示只读引用：可以读取账户数据，但不会申请交易锁，也不会被标记为可下单。launch account 默认展开已发现的全部 segment；如果某个 launch 只想管理少数 segment，可以额外写 `segments = ["spot"]` 作为过滤。
 
-Binance 产品按账户 book 分开管理：`spot`、`usd_m_futures`、`options` 和 `earn`。USDⓈ-M Futures 的行情、账户和标准订单优先使用可注入的 CCXT 连接；BTC 期权和 Simple Earn 使用 Binance 原生 API，因为它们分别包含期权合约/结算语义和理财产品申赎语义。示例见 [`examples/configs/binance_products_live.toml`](examples/configs/binance_products_live.toml)。
+Binance 产品按账户 book 分开管理：`spot`、`usd_m_futures`、`options` 和 `earn`。行情、账户和订单均使用明确的交易所连接能力；BTC 期权和 Simple Earn 使用 Binance 原生 API，因为它们分别包含期权合约/结算语义和理财产品申赎语义。示例见 [`examples/configs/binance_products_live.toml`](examples/configs/binance_products_live.toml)。
 
 内置 system runtime 的 launch id 固定为 `kairos-system`。它启动后会加载 workspace 中的全部账户，并尝试占有当前未被锁定的可交易账户；被其他 launch 锁定的账户仍可读取状态，但 system 下单前会重新检查账户锁，只有锁归当前 system instance 时才允许交易。
 

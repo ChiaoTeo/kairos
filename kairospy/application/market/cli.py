@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 import subprocess
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
 
-from ..system.binaries import resolve_binary
+from ..system.binaries import reject_owned_options, resolve_binary
 from ..workspace import Workspace
 
 
@@ -18,11 +18,29 @@ class MarketCliApplication:
     workspace: Workspace | None = None
     binary: str | None = None
 
-    def run(self, arguments: list[str]) -> dict[str, Any]:
-        command = [self.binary or resolve_binary("kairos-market-cli"), "--output", "json"]
+    def command(self, arguments: Sequence[str], *, output: str | None = "json") -> list[str]:
+        """Build a Rust command; output is explicit adapter configuration."""
+        command = [self.binary or resolve_binary("kairos-market-cli")]
+        if output is not None:
+            command.extend(("--output", output))
         command.extend(arguments)
+        return command
+
+    def invoke(self, arguments: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        """Forward canonical Rust argv without changing its output mode."""
+        return subprocess.run(
+            self.command(arguments, output=None),
+            cwd=str(self.workspace.paths.root) if self.workspace is not None else None,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def run(self, arguments: Sequence[str]) -> dict[str, Any]:
+        """Run an internal JSON call with the adapter's machine output."""
+        reject_owned_options(arguments, {"--output", "--format"})
         result = subprocess.run(
-            command,
+            self.command(arguments),
             cwd=str(self.workspace.paths.root) if self.workspace is not None else None,
             capture_output=True,
             text=True,

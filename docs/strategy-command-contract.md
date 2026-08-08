@@ -7,7 +7,7 @@ Strategy 发出的命令必须能够在 Market、Account、Risk、Execution 之�
 本规范覆盖两类 Strategy command：
 
 - `market.subscribe` / `market.unsubscribe`
-- `account.submit_intent`
+- `execution.submit_intent`
 
 后续 Account → Risk、Account → Execution 的内部 command 也复用同一套 envelope 和 result 语义，但不直接暴露 provider payload。
 
@@ -95,7 +95,7 @@ Strategy 发出的命令必须能够在 Market、Account、Risk、Execution 之�
 - `subscription_id` 是策略侧幂等身份；同一策略重复提交相同 subscription 不得创建第二条业务订阅。
 - `mode=static` 表示订阅固定 Reference market；动态查询另定义 `market.subscribe_query`，不能用一个 `dynamic` 布尔值掩盖两种语义。
 
-## 5. Account Intent Command
+## 5. Execution Strategy Intent Command
 
 ```json
 {
@@ -125,7 +125,7 @@ Strategy 发出的命令必须能够在 Market、Account、Risk、Execution 之�
 
 - `intent_id` 必须由 Strategy 或上层 command 稳定生成，不能由 transport 接收后随意替换。
 - `account_id` 和 `segment_key` 必须显式传递；不允许使用 `main`、`spot` 等隐式默认值跨越 Account 边界。
-- Account 负责接受、校验、持久化 intent；Risk 负责 reservation/budget；Execution 负责把已批准的 intent 转换为订单生命周期。
+- Execution 负责接受、校验、持久化并执行 intent；Account 提供授权、余额和持仓事实；Risk 负责 reservation/budget；Execution 负责把 intent 转换为跨账户订单生命周期。
 - `target_position` 与具体订单参数分离；订单策略只表达允许的业务约束，不能携带 Binance/OKX/Massive 的原始字段。
 - intent 必须保留创建时的 source event identity，便于 Execution 审计使用了哪一份行情/快照。
 
@@ -135,12 +135,13 @@ Strategy 发出的命令必须能够在 Market、Account、Risk、Execution 之�
 Strategy
   -> StrategyCommandBus
       -> MarketApplication      (market.subscribe)
-      -> AccountApplication      (account.submit_intent)
-          -> RiskApplication      (reserve/release)
-          -> ExecutionApplication (submit/cancel/replace)
+      -> ExecutionApplication     (execution.submit_intent)
+          -> AccountApplication    (authorization/balance/position/facts)
+          -> RiskApplication       (reserve/release)
+          -> ExecutionApplication  (submit/cancel/replace)
 ```
 
-每个业务模块只接受自己的 command；Strategy 不直接调用另一个模块的 service、provider 或 Unix socket。Unix JSON、FlatBuffers 或未来的网络 transport 都只是 envelope 的编码方式，不能各自定义一套字段语义。
+每个业务模块只接受自己的 command；Strategy 只通过实例级 Execution application boundary 提交策略 Intent，不直接调用其他模块的 service、provider 或 Unix socket。Unix JSON、FlatBuffers 或未来的网络 transport 都只是 envelope 的编码方式，不能各自定义一套字段语义。
 
 ## 7. 当前代码迁移顺序
 

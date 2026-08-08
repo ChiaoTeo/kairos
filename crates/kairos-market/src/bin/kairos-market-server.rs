@@ -7,9 +7,9 @@ use kairos_integration::domain::ProductFamily;
 use kairos_integration::credentials::load_workspace_credential;
 use kairos_market::composition::{
     binance_derivatives_rest_feed, binance_equity_rest_feed, binance_spot_rest_feed,
-    binance_spot_websocket_feed, massive_market_websocket_feed, okx_market_rest_feed,
-    CompositeMarketFeed, MarketActor, MarketFeedFactory, MarketRoute, MmapMarketSnapshotPublisher,
-    ReplayMarketFeed,
+    binance_spot_websocket_feed, default_endpoint, default_market_feed,
+    massive_market_websocket_feed, okx_market_rest_feed, CompositeMarketFeed, MarketActor,
+    MarketFeedFactory, MarketRoute, MmapMarketSnapshotPublisher, ReplayMarketFeed,
 };
 use kairos_market::{MarketApplication, MarketObservation, MarketProcess};
 use kairos_protocol::InstanceIdentity;
@@ -34,9 +34,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_default();
     let snapshot_path = instance
         .as_ref()
-        .map(|value| value.snapshot(&["market", "market.snapshot"]))
+        .map(|value| value.service_snapshot("market"))
         .transpose()?
-        .unwrap_or(workspace.child(&["state", "market", "market.snapshot"])?);
+        .unwrap_or(workspace.service_snapshot("market")?);
     let socket_path = instance
         .as_ref()
         .map(|value| value.socket("market"))
@@ -51,6 +51,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider = args.provider;
     let once = args.once;
     let refresh_ms = args.refresh_ms;
+    let endpoint = args
+        .endpoint
+        .unwrap_or_else(|| default_endpoint(&provider).to_owned());
     if slot_size == 0 || refresh_ms == 0 {
         return Err("slot_size and refresh_ms must be positive".into());
     }
@@ -145,16 +148,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err("Binance Equity Market credential has no API key".into());
         }
         let feed =
-            binance_equity_rest_feed(credential.api_key, credential.secret, args.endpoint.clone())?;
+            binance_equity_rest_feed(credential.api_key, credential.secret, endpoint.clone())?;
         application.attach_feed(Box::new(feed));
     } else {
         if provider != "binance-spot-rest" && provider != "binance-spot-websocket" {
             return Err(format!("unsupported market provider: {provider}").into());
         }
         let feed = if provider == "binance-spot-websocket" {
-            binance_spot_websocket_feed(args.endpoint.clone())?
+            binance_spot_websocket_feed(endpoint.clone())?
         } else {
-            binance_spot_rest_feed(args.endpoint.clone())?
+            binance_spot_rest_feed(endpoint.clone())?
         };
         application.attach_feed(Box::new(feed));
     }
@@ -199,8 +202,8 @@ struct Args {
     once: bool,
     #[arg(long, default_value_t = 1_000)]
     refresh_ms: u64,
-    #[arg(long, default_value = "https://api.binance.com")]
-    endpoint: String,
+    #[arg(long)]
+    endpoint: Option<String>,
     #[arg(long)]
     credential_id: Option<String>,
 }
@@ -214,8 +217,10 @@ fn workspace_market_feed(
     let connections = value
         .get("market")
         .and_then(|market| market.get("connections"))
-        .and_then(toml::Value::as_table)
-        .ok_or("workspace market.connections is required for workspace Market provider")?;
+        .and_then(toml::Value::as_table);
+    let Some(connections) = connections else {
+        return Ok(default_market_feed()?);
+    };
     let mut factories: std::collections::BTreeMap<MarketRoute, MarketFeedFactory> =
         std::collections::BTreeMap::new();
     for (connection_id, raw) in connections {
@@ -402,20 +407,6 @@ fn infer_asset_type(provider: &str) -> Option<String> {
         Some("crypto".into())
     } else {
         None
-    }
-}
-
-fn default_endpoint(provider: &str) -> &'static str {
-    match provider {
-        "binance-usdm-futures-rest" => "https://fapi.binance.com",
-        "binance-coinm-futures-rest" => "https://dapi.binance.com",
-        "binance-options-rest" => "https://eapi.binance.com",
-        "okx-spot-rest" | "okx-swap-rest" | "okx-futures-rest" | "okx-options-rest" => {
-            "https://www.okx.com"
-        }
-        "massive-equity-websocket" => "wss://socket.massiveprivateserver.site/stocks",
-        "massive-options-websocket" => "wss://socket.massiveprivateserver.site/options",
-        _ => "https://api.binance.com",
     }
 }
 

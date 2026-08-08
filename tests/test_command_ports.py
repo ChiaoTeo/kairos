@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from kairospy.strategy import MarketSubscriptionRequest, TargetPositionRequest
-from kairospy.infrastructure.transport import AccountIntentCommandPort, MarketUnixCommandPort
+from kairospy.infrastructure.transport import ExecutionIntentCommandPort, MarketUnixCommandPort
 
 
 class RecordingClient:
@@ -45,9 +45,9 @@ def test_market_port_preserves_asset_type_route_key() -> None:
     assert client.calls[0][2]["payload"]["asset_type"] == "equity"
 
 
-def test_account_port_encodes_decimal_intent_without_vendor_payloads() -> None:
+def test_execution_port_encodes_decimal_intent_without_vendor_payloads() -> None:
     client = RecordingClient()
-    port = AccountIntentCommandPort(client)
+    port = ExecutionIntentCommandPort(client)
 
     handle = port.target_position(
         TargetPositionRequest("BTCUSDT", Decimal("1.250"), account_id="main"),
@@ -59,14 +59,15 @@ def test_account_port_encodes_decimal_intent_without_vendor_payloads() -> None:
     assert handle.status == "accepted"
     method, path, body = client.calls[0]
     assert (method, path) == ("POST", "/v1/intents/submit")
-    assert body["operation"] == "account.submit_intent"
-    assert body["payload"]["intent"]["target_quantity"] == {"mantissa": 125, "scale": 2}
+    assert body["operation"] == "execution.submit_intent"
+    assert body["payload"]["intent"]["target_quantity_mantissa"] == 125
+    assert body["payload"]["intent"]["quantity_scale"] == 2
     assert body["payload"]["intent"]["strategy_id"] == "sma"
 
 
-def test_account_port_applies_launch_live_safety_before_owner_command() -> None:
+def test_execution_port_applies_launch_live_safety_before_owner_command() -> None:
     client = RecordingClient()
-    port = AccountIntentCommandPort(client, allow_trading=False, require_limit_orders=True)
+    port = ExecutionIntentCommandPort(client, allow_trading=False, require_limit_orders=True)
 
     handle = port.target_position(
         TargetPositionRequest("BTCUSDT", Decimal("1"), account_id="main"),

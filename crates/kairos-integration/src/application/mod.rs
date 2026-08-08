@@ -18,7 +18,8 @@ pub mod transfer;
 
 pub use crate::domain::ConnectionSpec;
 pub use crate::domain::{
-    AccessScope, AssetType, IntegrationCapability, ProductFamily, TransportKind,
+    AccessScope, AssetType, IntegrationCapability, IntegrationRoute, ParticipantKind,
+    ParticipantRef, ProductFamily, TransportKind,
 };
 pub use account::{
     AccountEventStreamConnection, AccountMarketProfileConnection, AccountReadConnection,

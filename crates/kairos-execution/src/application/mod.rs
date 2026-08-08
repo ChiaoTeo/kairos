@@ -4,11 +4,12 @@ pub(crate) mod protocol;
 mod service;
 
 pub use process::ExecutionProcess;
-pub use protocol::ExecutionStateStore;
+pub use protocol::{ExecutionPreflight, ExecutionStateStore};
 pub use service::{
-    CancelOrder, ExecuteIntent, ExecutionApplication, ExecutionAuditEvent, ExecutionAuditQuery,
-    ExecutionError, ExecutionEvent, ExecutionFillReport, ExecutionOrderOptions, ExecutionSnapshot,
-    RemoteOrder, RemoteOrderQuery, ReplaceOrder, SubmitOrder,
+    CancelOrder, ExecuteStrategyIntent, ExecutionApplication, ExecutionAuditEvent,
+    ExecutionAuditQuery, ExecutionError, ExecutionEvent, ExecutionFillReport,
+    ExecutionOrderOptions, ExecutionSnapshot, IntentEvent, IntentState, IntentStatus, RemoteOrder,
+    RemoteOrderQuery, ReplaceOrder, SubmitOrder,
 };
 
 pub use backtest::{
@@ -17,6 +18,9 @@ pub use backtest::{
 
 pub trait ExecutionAuditSink: Send {
     fn publish(&mut self, event: &ExecutionEvent) -> Result<(), String>;
+    fn publish_intent(&mut self, _event: &IntentEvent) -> Result<(), String> {
+        Ok(())
+    }
     fn query(&mut self, query: &ExecutionAuditQuery) -> Result<Vec<ExecutionAuditEvent>, String>;
 }
 

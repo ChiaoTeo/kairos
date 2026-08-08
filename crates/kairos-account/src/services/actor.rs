@@ -54,15 +54,6 @@ impl AccountActor {
         &self.actor_id
     }
 
-    pub fn record_intent(&mut self, intent: crate::domain::Intent) -> Result<(), String> {
-        let account = self
-            .accounts
-            .get_mut(&intent.segment_key)
-            .ok_or_else(|| format!("intent segment is not configured: {}", intent.segment_key))?;
-        account.record_intent(intent)?;
-        self.persist()
-    }
-
     pub fn plan_order(
         &mut self,
         request: crate::domain::OrderRequest,
@@ -146,14 +137,6 @@ impl AccountActor {
             }
             AccountEvent::Fill(fill) => {
                 self.apply_fill(fill)?;
-            }
-            AccountEvent::Intent(event) => {
-                let account = self
-                    .accounts
-                    .values_mut()
-                    .find(|account| account.state.intents.contains_key(&event.intent_id))
-                    .ok_or_else(|| format!("intent is not configured: {}", event.intent_id))?;
-                account.apply_intent_event(event)?;
             }
             AccountEvent::Order(event) => {
                 let account = self

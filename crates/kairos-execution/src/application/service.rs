@@ -61,21 +61,6 @@ pub struct ReplaceOrder {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct ExecuteIntent {
-    pub intent_id: String,
-    pub current_quantity_mantissa: i64,
-    pub target_quantity_mantissa: i64,
-    pub quantity_scale: u8,
-    pub order_id: String,
-    pub account_id: String,
-    pub segment_key: String,
-    pub instrument_id: String,
-    pub market_id: Option<String>,
-    pub limit_price_mantissa: Option<i64>,
-    pub limit_price_scale: Option<u8>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionFillReport {
     pub fill_id: String,
     pub order_id: String,
@@ -115,6 +100,12 @@ pub struct ExecutionSnapshot {
     pub events: Vec<ExecutionEvent>,
     #[serde(default)]
     pub fills: Vec<ExecutionFill>,
+    #[serde(default)]
+    pub intents: Vec<IntentState>,
+    #[serde(default)]
+    pub intent_events: Vec<IntentEvent>,
+    #[serde(default)]
+    pub intent_idempotency: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -159,6 +150,62 @@ pub struct ExecutionAuditEvent {
     pub reason: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub enum IntentStatus {
+    Accepted,
+    Planning,
+    Executing,
+    PartiallyFilled,
+    Satisfied,
+    Rejected,
+    Canceled,
+    Failed,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ExecuteStrategyIntent {
+    pub intent_id: String,
+    pub strategy_id: String,
+    pub launch_id: String,
+    pub instance_id: String,
+    pub instrument_id: String,
+    pub market_id: Option<String>,
+    pub account_ids: Vec<String>,
+    pub segment_key: String,
+    pub target_quantity_mantissa: i64,
+    pub quantity_scale: u8,
+    pub limit_price_mantissa: Option<i64>,
+    pub limit_price_scale: Option<u8>,
+    #[serde(default)]
+    pub source_snapshot_id: Option<String>,
+    #[serde(default)]
+    pub source_event_sequence: Option<u64>,
+    #[serde(default)]
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IntentState {
+    pub intent: ExecuteStrategyIntent,
+    pub status: IntentStatus,
+    pub order_ids: Vec<String>,
+    pub completed_quantity_mantissa: i64,
+    pub updated_at_unix_nanos: u64,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct IntentEvent {
+    pub intent_id: String,
+    #[serde(default)]
+    pub event_sequence: u64,
+    pub status: IntentStatus,
+    pub order_ids: Vec<String>,
+    pub completed_quantity_mantissa: i64,
+    pub occurred_at_unix_nanos: u64,
+    pub reason: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
     #[error("invalid execution request: {0}")]
@@ -177,10 +224,15 @@ pub struct ExecutionApplication {
     events: Vec<ExecutionEvent>,
     pending_events: Vec<ExecutionEvent>,
     fills: Vec<ExecutionFill>,
+    intents: BTreeMap<String, IntentState>,
+    intent_events: Vec<IntentEvent>,
+    pending_intent_events: Vec<IntentEvent>,
+    intent_idempotency: BTreeMap<String, String>,
     order_entry: Option<Box<dyn OrderEntryConnection>>,
     order_query: Option<Box<dyn OrderQueryConnection>>,
     execution_stream: Option<Box<dyn ExecutionStreamConnection>>,
     store: Option<Box<dyn ExecutionStateStore>>,
+    preflight: Option<Box<dyn super::ExecutionPreflight>>,
     live_trading: bool,
     live_confirmed: bool,
 }
@@ -228,10 +280,15 @@ impl ExecutionApplication {
             events: Vec::new(),
             pending_events: Vec::new(),
             fills: Vec::new(),
+            intents: BTreeMap::new(),
+            intent_events: Vec::new(),
+            pending_intent_events: Vec::new(),
+            intent_idempotency: BTreeMap::new(),
             order_entry,
             order_query,
             execution_stream,
             store,
+            preflight: None,
             live_trading: false,
             live_confirmed: false,
         };
@@ -247,6 +304,14 @@ impl ExecutionApplication {
                 application.events = snapshot.events;
                 application.pending_events = application.events.clone();
                 application.fills = snapshot.fills;
+                application.intents = snapshot
+                    .intents
+                    .into_iter()
+                    .map(|intent| (intent.intent.intent_id.clone(), intent))
+                    .collect();
+                application.intent_events = snapshot.intent_events;
+                application.pending_intent_events = application.intent_events.clone();
+                application.intent_idempotency = snapshot.intent_idempotency;
             }
         }
         Ok(application)
@@ -395,6 +460,9 @@ impl ExecutionApplication {
             orders: self.orders.values().cloned().collect(),
             events: self.events.clone(),
             fills: self.fills.clone(),
+            intents: self.intents.values().cloned().collect(),
+            intent_events: self.intent_events.clone(),
+            intent_idempotency: self.intent_idempotency.clone(),
         }
     }
 
@@ -402,9 +470,277 @@ impl ExecutionApplication {
         std::mem::take(&mut self.pending_events)
     }
 
+    pub fn intents(&self) -> Vec<IntentState> {
+        self.intents.values().cloned().collect()
+    }
+
+    pub fn intent_events(&self, intent_id: Option<&str>) -> Vec<IntentEvent> {
+        self.intent_events
+            .iter()
+            .filter(|event| intent_id.is_none_or(|id| event.intent_id == id))
+            .cloned()
+            .collect()
+    }
+
+    pub fn drain_intent_events(&mut self) -> Vec<IntentEvent> {
+        std::mem::take(&mut self.pending_intent_events)
+    }
+
+    pub fn submit_intent(
+        &mut self,
+        intent: ExecuteStrategyIntent,
+    ) -> Result<IntentState, ExecutionError> {
+        if intent.intent_id.trim().is_empty()
+            || intent.strategy_id.trim().is_empty()
+            || intent.launch_id.trim().is_empty()
+            || intent.instance_id.trim().is_empty()
+            || intent.instrument_id.trim().is_empty()
+            || intent.segment_key.trim().is_empty()
+        {
+            return Err(ExecutionError::Invalid(
+                "intent identity is required".into(),
+            ));
+        }
+        if intent.account_ids.is_empty() || intent.account_ids.iter().any(|id| id.trim().is_empty())
+        {
+            return Err(ExecutionError::Invalid(
+                "intent must target at least one account".into(),
+            ));
+        }
+        if intent.target_quantity_mantissa < 0 {
+            return Err(ExecutionError::Invalid(
+                "intent target quantity cannot be negative".into(),
+            ));
+        }
+        if let Some(existing) = self.intents.get(&intent.intent_id) {
+            return Ok(existing.clone());
+        }
+        let planned_orders = self
+            .preflight
+            .as_mut()
+            .ok_or_else(|| ExecutionError::Invalid("execution preflight is not configured".into()))?
+            .plan_intent(&intent)
+            .map_err(ExecutionError::Invalid)?;
+        if planned_orders.is_empty() {
+            let now = now_nanos();
+            let state = IntentState {
+                intent: intent.clone(),
+                status: IntentStatus::Satisfied,
+                order_ids: Vec::new(),
+                completed_quantity_mantissa: intent.target_quantity_mantissa,
+                updated_at_unix_nanos: now,
+                reason: "target position already satisfied".into(),
+            };
+            self.intents.insert(intent.intent_id.clone(), state.clone());
+            self.commit_intent(IntentEvent {
+                intent_id: intent.intent_id,
+                event_sequence: 0,
+                status: IntentStatus::Satisfied,
+                order_ids: Vec::new(),
+                completed_quantity_mantissa: state.completed_quantity_mantissa,
+                occurred_at_unix_nanos: now,
+                reason: state.reason.clone(),
+            })?;
+            return Ok(state);
+        }
+        if planned_orders.iter().any(|order| {
+            order.intent_id.as_deref() != Some(intent.intent_id.as_str())
+                || !intent.account_ids.iter().any(|id| id == &order.account_id)
+        }) {
+            return Err(ExecutionError::Invalid(
+                "intent plan contains an order outside its intent accounts".into(),
+            ));
+        }
+        let now = now_nanos();
+        let state = IntentState {
+            intent: intent.clone(),
+            status: IntentStatus::Accepted,
+            order_ids: Vec::new(),
+            completed_quantity_mantissa: 0,
+            updated_at_unix_nanos: now,
+            reason: String::new(),
+        };
+        self.intents.insert(intent.intent_id.clone(), state.clone());
+        self.commit_intent(IntentEvent {
+            intent_id: intent.intent_id.clone(),
+            event_sequence: 0,
+            status: IntentStatus::Accepted,
+            order_ids: Vec::new(),
+            completed_quantity_mantissa: 0,
+            occurred_at_unix_nanos: now,
+            reason: String::new(),
+        })?;
+        let mut accepted = state;
+        for order in planned_orders {
+            match self.submit(order) {
+                Ok(order) => {
+                    self.commit_intent(IntentEvent {
+                        intent_id: intent.intent_id.clone(),
+                        event_sequence: 0,
+                        status: IntentStatus::Executing,
+                        order_ids: vec![order.order_id.clone()],
+                        completed_quantity_mantissa: 0,
+                        occurred_at_unix_nanos: now_nanos(),
+                        reason: "child order created".into(),
+                    })?;
+                    accepted.order_ids.push(order.order_id);
+                    accepted.status = IntentStatus::Executing;
+                }
+                Err(error) => {
+                    let reason = error.to_string();
+                    self.commit_intent(IntentEvent {
+                        intent_id: intent.intent_id.clone(),
+                        event_sequence: 0,
+                        status: IntentStatus::Failed,
+                        order_ids: accepted.order_ids.clone(),
+                        completed_quantity_mantissa: 0,
+                        occurred_at_unix_nanos: now_nanos(),
+                        reason,
+                    })?;
+                    return Err(error);
+                }
+            }
+        }
+        Ok(self
+            .intents
+            .get(&intent.intent_id)
+            .cloned()
+            .unwrap_or(accepted))
+    }
+
+    pub fn submit_intent_with_idempotency(
+        &mut self,
+        intent: ExecuteStrategyIntent,
+        idempotency_key: String,
+    ) -> Result<(IntentState, bool), ExecutionError> {
+        if idempotency_key.trim().is_empty() {
+            return Err(ExecutionError::Invalid(
+                "idempotency_key is required".into(),
+            ));
+        }
+        if let Some(intent_id) = self.intent_idempotency.get(&idempotency_key) {
+            let state = self.intents.get(intent_id).cloned().ok_or_else(|| {
+                ExecutionError::Persistence("idempotency record references missing intent".into())
+            })?;
+            return Ok((state, true));
+        }
+        let state = self.submit_intent(intent)?;
+        self.intent_idempotency
+            .insert(idempotency_key, state.intent.intent_id.clone());
+        self.persist_snapshot()?;
+        Ok((state, false))
+    }
+
+    fn commit_intent(&mut self, mut event: IntentEvent) -> Result<(), ExecutionError> {
+        let Some(state) = self.intents.get_mut(&event.intent_id) else {
+            return Err(ExecutionError::Invalid(
+                "intent event references unknown intent".into(),
+            ));
+        };
+        state.status = event.status;
+        state.order_ids.extend(event.order_ids.iter().cloned());
+        state.order_ids.sort();
+        state.order_ids.dedup();
+        state.completed_quantity_mantissa = event.completed_quantity_mantissa;
+        state.updated_at_unix_nanos = event.occurred_at_unix_nanos;
+        state.reason = event.reason.clone();
+        self.event_sequence += 1;
+        event.event_sequence = self.event_sequence;
+        self.intent_events.push(event.clone());
+        self.pending_intent_events.push(event);
+        self.generation += 1;
+        self.persist_snapshot()?;
+        Ok(())
+    }
+
+    fn persist_snapshot(&mut self) -> Result<(), ExecutionError> {
+        let snapshot = self.snapshot();
+        if let Some(store) = self.store.as_mut() {
+            store.save(&snapshot).map_err(ExecutionError::Persistence)?;
+        }
+        Ok(())
+    }
+
+    fn refresh_intent(&mut self, intent_id: &str) -> Result<(), ExecutionError> {
+        let Some(state) = self.intents.get(intent_id).cloned() else {
+            return Ok(());
+        };
+        let orders: Vec<ExecutionOrder> = state
+            .order_ids
+            .iter()
+            .filter_map(|order_id| self.orders.get(order_id).cloned())
+            .collect();
+        if orders.is_empty() {
+            return Ok(());
+        }
+        let completed = orders
+            .iter()
+            .try_fold(0_i64, |total, order| {
+                total.checked_add(order.filled_quantity_mantissa)
+            })
+            .ok_or_else(|| ExecutionError::Invalid("intent completed quantity overflow".into()))?;
+        let all_filled = orders
+            .iter()
+            .all(|order| order.status == ExecutionOrderStatus::Filled);
+        let all_canceled = orders
+            .iter()
+            .all(|order| order.status == ExecutionOrderStatus::Canceled);
+        let has_active = orders.iter().any(|order| !order.status.terminal());
+        let has_failed = orders.iter().any(|order| {
+            matches!(
+                order.status,
+                ExecutionOrderStatus::Rejected
+                    | ExecutionOrderStatus::Expired
+                    | ExecutionOrderStatus::Unknown
+                    | ExecutionOrderStatus::Failed
+            )
+        });
+        let status = if all_filled {
+            IntentStatus::Satisfied
+        } else if all_canceled {
+            IntentStatus::Canceled
+        } else if has_active {
+            if completed > 0 {
+                IntentStatus::PartiallyFilled
+            } else {
+                IntentStatus::Executing
+            }
+        } else if has_failed {
+            if completed > 0 {
+                IntentStatus::PartiallyFilled
+            } else {
+                IntentStatus::Failed
+            }
+        } else {
+            IntentStatus::Executing
+        };
+        if state.status == status && state.completed_quantity_mantissa == completed {
+            return Ok(());
+        }
+        self.commit_intent(IntentEvent {
+            intent_id: intent_id.to_owned(),
+            event_sequence: 0,
+            status,
+            order_ids: state.order_ids,
+            completed_quantity_mantissa: completed,
+            occurred_at_unix_nanos: now_nanos(),
+            reason: match status {
+                IntentStatus::Satisfied => "all child orders filled".into(),
+                IntentStatus::PartiallyFilled => "child orders partially filled".into(),
+                IntentStatus::Canceled => "all child orders canceled".into(),
+                IntentStatus::Failed => "all child orders failed".into(),
+                _ => "child execution progressing".into(),
+            },
+        })
+    }
+
     pub fn configure_live_trading(&mut self, enabled: bool, confirmed: bool) {
         self.live_trading = enabled;
         self.live_confirmed = confirmed;
+    }
+
+    pub fn attach_preflight(&mut self, preflight: Box<dyn super::ExecutionPreflight>) {
+        self.preflight = Some(preflight);
     }
 
     pub fn preview_submit(&self, request: &SubmitOrder) -> Result<ExecutionOrder, ExecutionError> {
@@ -552,7 +888,7 @@ impl ExecutionApplication {
             occurred_at_unix_nanos: now,
         };
         self.orders.insert(next.order_id.clone(), next.clone());
-        self.fills.push(fill);
+        self.fills.push(fill.clone());
         self.commit(ExecutionEvent {
             order_id: next.order_id.clone(),
             status: next.status,
@@ -563,6 +899,34 @@ impl ExecutionApplication {
             filled_quantity_mantissa: Some(filled),
             filled_quantity_scale: Some(next.filled_quantity_scale),
         })?;
+        if let Some(preflight) = self.preflight.as_mut() {
+            preflight
+                .publish_fill(&fill)
+                .map_err(ExecutionError::Invalid)?;
+            preflight
+                .publish_order(&next)
+                .map_err(ExecutionError::Invalid)?;
+        }
+        if let Some(preflight) = self.preflight.as_mut() {
+            if next.status == ExecutionOrderStatus::Filled {
+                preflight
+                    .consume_order(&next.order_id)
+                    .map_err(ExecutionError::Invalid)?;
+            } else if next.status == ExecutionOrderStatus::PartiallyFilled {
+                let remaining = next
+                    .quantity_mantissa
+                    .checked_sub(next.filled_quantity_mantissa)
+                    .ok_or_else(|| {
+                        ExecutionError::Invalid("remaining quantity underflow".into())
+                    })?;
+                preflight
+                    .resize_order(&next.order_id, remaining, next.quantity_scale)
+                    .map_err(ExecutionError::Invalid)?;
+            }
+        }
+        if let Some(intent_id) = next.intent_id.as_deref() {
+            self.refresh_intent(intent_id)?;
+        }
         Ok(next)
     }
 
@@ -575,6 +939,18 @@ impl ExecutionApplication {
         let now = now_nanos();
         if self.orders.contains_key(&request.order_id) {
             return Err(ExecutionError::Invalid("order_id already exists".into()));
+        }
+        if let Some(preflight) = self.preflight.as_mut() {
+            preflight
+                .validate_order(&request)
+                .map_err(ExecutionError::Invalid)?;
+            preflight
+                .reserve_order(&request)
+                .map_err(ExecutionError::Invalid)?;
+            if let Err(error) = preflight.prepare_order(&request) {
+                let _ = preflight.release_order(&request.order_id);
+                return Err(ExecutionError::Invalid(error));
+            }
         }
         let mut order = ExecutionOrder::new(
             request.order_id.clone(),
@@ -614,6 +990,9 @@ impl ExecutionApplication {
                 }) {
                 Ok(event) => event,
                 Err(error) => {
+                    if let Some(preflight) = self.preflight.as_mut() {
+                        let _ = preflight.release_order(&order.order_id);
+                    }
                     self.mark_unknown_after_gateway_error(&order.order_id, error.to_string())?;
                     return Err(error);
                 }
@@ -628,6 +1007,21 @@ impl ExecutionApplication {
             order.status = ExecutionOrderStatus::Unknown;
             order.reason = "accepted order did not return a venue order id".into();
         }
+        if let Some(preflight) = self.preflight.as_mut() {
+            match order.status {
+                ExecutionOrderStatus::Rejected
+                | ExecutionOrderStatus::Canceled
+                | ExecutionOrderStatus::Expired
+                | ExecutionOrderStatus::Failed
+                | ExecutionOrderStatus::Unknown => {
+                    let _ = preflight.release_order(&order.order_id);
+                }
+                ExecutionOrderStatus::Filled => {
+                    let _ = preflight.consume_order(&order.order_id);
+                }
+                _ => {}
+            }
+        }
         self.orders.insert(order.order_id.clone(), order.clone());
         self.commit(ExecutionEvent {
             order_id: order.order_id.clone(),
@@ -639,6 +1033,18 @@ impl ExecutionApplication {
             filled_quantity_mantissa: None,
             filled_quantity_scale: None,
         })?;
+        if let Some(preflight) = self.preflight.as_mut() {
+            preflight
+                .publish_order(&order)
+                .map_err(ExecutionError::Invalid)?;
+        }
+        if let Some(intent_id) = order
+            .intent_id
+            .as_deref()
+            .filter(|id| self.intents.contains_key(*id))
+        {
+            self.refresh_intent(intent_id)?;
+        }
         Ok(order)
     }
 
@@ -664,54 +1070,11 @@ impl ExecutionApplication {
             fill_id: None,
             filled_quantity_mantissa: None,
             filled_quantity_scale: None,
-        })
-    }
-
-    /// Resolve a target-position intent into one order.  Account remains the
-    /// owner of the intent journal; execution only owns this translation and
-    /// the resulting exchange lifecycle.
-    pub fn execute_intent(
-        &mut self,
-        request: ExecuteIntent,
-    ) -> Result<Option<ExecutionOrder>, ExecutionError> {
-        if request.intent_id.trim().is_empty() {
-            return Err(ExecutionError::Invalid("intent_id is required".into()));
-        }
-        let delta = request
-            .target_quantity_mantissa
-            .checked_sub(request.current_quantity_mantissa)
-            .ok_or_else(|| ExecutionError::Invalid("intent quantity overflow".into()))?;
-        if delta == 0 {
-            return Ok(None);
-        }
-        let order_type = if request.limit_price_mantissa.is_some() {
-            OrderType::Limit
-        } else {
-            OrderType::Market
-        };
-        let quantity_mantissa = delta
-            .checked_abs()
-            .ok_or_else(|| ExecutionError::Invalid("intent quantity overflow".into()))?;
-        let order = self.submit(SubmitOrder {
-            order_id: request.order_id,
-            intent_id: Some(request.intent_id),
-            account_id: request.account_id,
-            segment_key: request.segment_key,
-            instrument_id: request.instrument_id,
-            market_id: request.market_id,
-            side: if delta > 0 {
-                OrderSide::Buy
-            } else {
-                OrderSide::Sell
-            },
-            order_type,
-            quantity_mantissa,
-            quantity_scale: request.quantity_scale,
-            limit_price_mantissa: request.limit_price_mantissa,
-            limit_price_scale: request.limit_price_scale,
-            options: ExecutionOrderOptions::default(),
         })?;
-        Ok(Some(order))
+        if let Some(intent_id) = order.intent_id.as_deref() {
+            self.refresh_intent(intent_id)?;
+        }
+        Ok(())
     }
 
     pub fn cancel(&mut self, request: CancelOrder) -> Result<ExecutionOrder, ExecutionError> {
@@ -763,6 +1126,27 @@ impl ExecutionApplication {
             filled_quantity_mantissa: None,
             filled_quantity_scale: None,
         })?;
+        if let Some(preflight) = self.preflight.as_mut() {
+            preflight
+                .publish_order(&next)
+                .map_err(ExecutionError::Invalid)?;
+        }
+        if matches!(
+            next.status,
+            ExecutionOrderStatus::Canceled
+                | ExecutionOrderStatus::Rejected
+                | ExecutionOrderStatus::Expired
+                | ExecutionOrderStatus::Failed
+        ) {
+            if let Some(preflight) = self.preflight.as_mut() {
+                preflight
+                    .release_order(&next.order_id)
+                    .map_err(ExecutionError::Invalid)?;
+            }
+        }
+        if let Some(intent_id) = next.intent_id.as_deref() {
+            self.refresh_intent(intent_id)?;
+        }
         Ok(next)
     }
 

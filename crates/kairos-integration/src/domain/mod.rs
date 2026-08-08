@@ -6,6 +6,7 @@ pub mod capabilities;
 pub mod connections;
 pub mod market;
 pub mod order;
+pub mod participants;
 pub mod products;
 pub mod reference;
 pub mod spec;
@@ -24,6 +25,7 @@ pub use order::{
     DecimalValue, ExecutionReport, Order, OrderEntryEvent, OrderEntryOptions, OrderEntryRequest,
     OrderEntryStatus, OrderRequest, OrderSide, OrderStatus, OrderType, TimeInForce,
 };
+pub use participants::{IntegrationRoute, ParticipantKind, ParticipantRef};
 pub use products::ProductFamily;
 pub use reference::{
     ReferenceAsset, ReferenceCatalogPayload, ReferenceEntity, ReferenceInstrument,

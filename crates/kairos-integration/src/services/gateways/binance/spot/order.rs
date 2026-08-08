@@ -29,7 +29,7 @@ impl BinanceSpotOrderConnection {
             .map_err(|error| error.to_string())?;
         let spec = ConnectionSpec {
             connection_id: "execution.binance.spot.rest".into(),
-            provider: "binance".into(),
+            route: crate::domain::IntegrationRoute::exchange("binance"),
             product: Some(ProductFamily::Spot),
             access: AccessScope::Private,
             transport: TransportKind::Rest,

@@ -103,7 +103,7 @@ pub fn rest_market_stream(
     };
     let identity = ConnectionIdentity::new(
         format!("market.okx.{product_name}.rest-stream"),
-        "okx",
+        crate::domain::IntegrationRoute::exchange("okx"),
         Some(product),
         AccessScope::Public,
         TransportKind::Rest,

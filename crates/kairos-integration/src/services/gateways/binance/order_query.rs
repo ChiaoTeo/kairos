@@ -103,7 +103,7 @@ impl BinanceOrderQueryConnection {
                     "execution.binance.{}.order-read.rest",
                     product_name(product)
                 ),
-                provider: "binance".into(),
+                route: crate::domain::IntegrationRoute::exchange("binance"),
                 product: Some(product),
                 access: AccessScope::Private,
                 transport: TransportKind::Rest,

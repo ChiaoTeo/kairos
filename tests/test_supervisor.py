@@ -89,30 +89,38 @@ def test_supervisor_stops_reference_through_control_socket_before_signal() -> No
     asyncio.run(scenario())
 
 
-def test_options_provider_selects_options_default_endpoint(tmp_path: Path) -> None:
+def test_reference_process_leaves_provider_endpoint_defaults_to_rust(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace")
     spec = ReferenceProcessConfig(
         workspace=workspace,
         provider="binance-options",
     ).process_spec()
+    assert "--endpoint" not in spec.command
+
+
+def test_reference_process_forwards_explicit_endpoint(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace")
+    spec = ReferenceProcessConfig(
+        workspace=workspace,
+        provider="binance-options",
+        endpoint="https://reference.example.test",
+    ).process_spec()
     endpoint_index = spec.command.index("--endpoint") + 1
-    assert spec.command[endpoint_index] == "https://eapi.binance.com/eapi/v1/exchangeInfo"
+    assert spec.command[endpoint_index] == "https://reference.example.test"
 
 
-def test_massive_reference_spec_keeps_credentials_out_of_command_line(tmp_path: Path) -> None:
+def test_massive_reference_spec_uses_full_universe_without_underlying_filter(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace")
     spec = ReferenceProcessConfig(
         workspace=workspace,
         provider="massive-options",
         api_key="massive-secret",
-        underlying="AAPL",
     ).process_spec()
     assert "massive-secret" not in spec.command
     assert spec.environment["MASSIVE_API_KEY"] == "massive-secret"
-    assert spec.environment["MASSIVE_OPTION_UNDERLYING"] == "AAPL"
+    assert "MASSIVE_OPTION_UNDERLYING" not in spec.environment
     assert spec.health_file == workspace.paths.reference_health()
-    endpoint_index = spec.command.index("--endpoint") + 1
-    assert spec.command[endpoint_index] == "http://api.massiveprivateserver.site"
+    assert "--endpoint" not in spec.command
 
 
 def test_risk_process_spec_contains_only_process_controls(tmp_path: Path) -> None:

@@ -146,6 +146,14 @@ impl InstanceWorkspace {
             .join(format!("{}.json", Self::component(name)?)))
     }
 
+    pub fn component_manifest(&self) -> io::Result<PathBuf> {
+        self.state(&["component-endpoints.json"])
+    }
+
+    pub fn service_health(&self, service: &str) -> io::Result<PathBuf> {
+        self.health(service)
+    }
+
     pub fn state(&self, parts: &[&str]) -> io::Result<PathBuf> {
         Ok(self
             .root()
@@ -158,6 +166,11 @@ impl InstanceWorkspace {
             .root()
             .join("snapshots")
             .join(Self::components(parts)?.iter().collect::<PathBuf>()))
+    }
+
+    pub fn service_snapshot(&self, service: &str) -> io::Result<PathBuf> {
+        let service = Self::component(service)?;
+        self.snapshot(&[service, &format!("{service}.snapshot")])
     }
 
     pub fn market_state(&self, name: &str) -> io::Result<PathBuf> {
@@ -366,6 +379,25 @@ impl Workspace {
     pub fn health_file(&self, name: &str) -> io::Result<PathBuf> {
         self.child(&["run", name, "health.json"])
     }
+
+    pub fn service_health(&self, service: &str) -> io::Result<PathBuf> {
+        self.health_file(service)
+    }
+
+    pub fn service_snapshot(&self, service: &str) -> io::Result<PathBuf> {
+        if service.trim().is_empty()
+            || service == "."
+            || service == ".."
+            || service.contains('/')
+            || service.contains('\\')
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid service name",
+            ));
+        }
+        self.child(&["snapshots", service, &format!("{service}.snapshot")])
+    }
 }
 
 #[cfg(test)]
@@ -428,5 +460,25 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .ends_with("-market.sock"));
+    }
+
+    #[test]
+    fn derives_canonical_service_snapshot_resources() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(root.path(), "demo").unwrap();
+        let instance = workspace.instance("paper", "launch", "default").unwrap();
+        assert!(instance
+            .service_snapshot("market")
+            .unwrap()
+            .ends_with("snapshots/market/market.snapshot"));
+        assert!(instance
+            .service_health("market")
+            .unwrap()
+            .ends_with("health/market.json"));
+        assert!(instance.service_snapshot("../market").is_err());
+        assert!(workspace
+            .service_snapshot("risk")
+            .unwrap()
+            .ends_with("snapshots/risk/risk.snapshot"));
     }
 }

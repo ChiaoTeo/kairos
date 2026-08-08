@@ -112,12 +112,33 @@ pub struct LifecycleEvent {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FinancialProduct {
+    pub product_id: String,
+    pub product_type: String,
+    pub name: String,
+    pub asset_id: String,
+    pub provider_product_id: String,
+    pub provider_id: Option<String>,
+    pub issuer_id: Option<String>,
+    pub currency_asset_id: Option<String>,
+    pub min_amount: Option<String>,
+    pub max_amount: Option<String>,
+    pub apr: Option<String>,
+    pub lock_period_days: i32,
+    pub maturity_at_unix_nanos: Option<u64>,
+    pub status: String,
+    pub effective_from_unix_nanos: u64,
+    pub effective_to_unix_nanos: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProviderCatalog {
     pub entities: Vec<Entity>,
     pub assets: Vec<Asset>,
     pub instruments: Vec<Instrument>,
     pub listings: Vec<Listing>,
     pub markets: Vec<Market>,
+    pub financial_products: Vec<FinancialProduct>,
 }
 
 impl ProviderCatalog {
@@ -149,6 +170,9 @@ impl ProviderCatalog {
         })?;
         unique(&self.listings, "listing", |value| &value.listing_id)?;
         unique(&self.markets, "market", |value| &value.market_id)?;
+        unique(&self.financial_products, "financial product", |value| {
+            &value.product_id
+        })?;
 
         let instrument_ids: std::collections::BTreeSet<_> = self
             .instruments
@@ -164,6 +188,11 @@ impl ProviderCatalog {
             .entities
             .iter()
             .map(|value| value.entity_id.as_str())
+            .collect();
+        let asset_ids: std::collections::BTreeSet<_> = self
+            .assets
+            .iter()
+            .map(|value| value.asset_id.as_str())
             .collect();
         for listing in &self.listings {
             if !instrument_ids.contains(listing.instrument_id.as_str()) {
@@ -199,6 +228,31 @@ impl ProviderCatalog {
                 )));
             }
         }
+        for product in &self.financial_products {
+            if !asset_ids.contains(product.asset_id.as_str()) {
+                return Err(ReferenceError::Invalid(format!(
+                    "financial product {} references missing asset {}",
+                    product.product_id, product.asset_id
+                )));
+            }
+            if let Some(currency_asset_id) = product.currency_asset_id.as_deref() {
+                if !asset_ids.contains(currency_asset_id) {
+                    return Err(ReferenceError::Invalid(format!(
+                        "financial product {} references missing currency asset {}",
+                        product.product_id, currency_asset_id
+                    )));
+                }
+            }
+            if product
+                .effective_to_unix_nanos
+                .is_some_and(|end| end <= product.effective_from_unix_nanos)
+            {
+                return Err(ReferenceError::Invalid(format!(
+                    "financial product {} has an invalid effective interval",
+                    product.product_id
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -210,6 +264,7 @@ pub struct ReferenceCatalog {
     pub instruments: BTreeMap<String, Instrument>,
     pub listings: BTreeMap<String, Listing>,
     pub markets: BTreeMap<String, Market>,
+    pub financial_products: BTreeMap<String, FinancialProduct>,
     pub lifecycle_events: Vec<LifecycleEvent>,
     pub generation: u64,
     pub event_sequence: u64,
@@ -222,6 +277,7 @@ impl ReferenceCatalog {
         let previous_instruments = self.instruments.clone();
         let previous_listings = self.listings.clone();
         let previous_markets = self.markets.clone();
+        let previous_financial_products = self.financial_products.clone();
         self.entities = incoming
             .entities
             .into_iter()
@@ -241,6 +297,11 @@ impl ReferenceCatalog {
             .listings
             .into_iter()
             .map(|v| (v.listing_id.clone(), v))
+            .collect();
+        self.financial_products = incoming
+            .financial_products
+            .into_iter()
+            .map(|v| (v.product_id.clone(), v))
             .collect();
 
         let mut next_markets: BTreeMap<_, _> = incoming
@@ -287,7 +348,7 @@ impl ReferenceCatalog {
         }
         let mut delisted_records = Vec::new();
         for (id, previous) in &self.markets {
-            if !next_markets.contains_key(id) {
+            if !next_markets.contains_key(id) && previous.status != "delisted" {
                 let mut delisted = previous.clone();
                 delisted.status = "delisted".to_string();
                 delisted.effective_to_unix_nanos = Some(now);
@@ -323,6 +384,7 @@ impl ReferenceCatalog {
             || previous_instruments != self.instruments
             || previous_listings != self.listings
             || previous_markets != self.markets
+            || previous_financial_products != self.financial_products
         {
             self.generation += 1;
         }
@@ -334,6 +396,91 @@ impl ReferenceCatalog {
             .values()
             .filter(|market| market.status == "active" || market.status == "trading")
             .count()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        Asset, Entity, FinancialProduct, Instrument, Listing, Market, ProviderCatalog,
+        ReferenceCatalog,
+    };
+
+    fn catalog_with_market(status: &str) -> ProviderCatalog {
+        ProviderCatalog {
+            entities: vec![Entity {
+                entity_id: "venue:test".into(),
+                entity_type: "venue".into(),
+                name: "Test Venue".into(),
+                status: "active".into(),
+            }],
+            instruments: vec![Default::default()],
+            listings: vec![Listing {
+                listing_id: "listing:test".into(),
+                instrument_id: "instrument:test".into(),
+                venue_id: "venue:test".into(),
+                venue_symbol: "TEST".into(),
+                status: status.into(),
+                effective_from_unix_nanos: 1,
+                ..Default::default()
+            }],
+            markets: vec![Market {
+                market_id: "market:test".into(),
+                market_key: "test.spot.TEST".into(),
+                instrument_id: "instrument:test".into(),
+                listing_id: "listing:test".into(),
+                venue_id: "venue:test".into(),
+                market_type: "spot".into(),
+                source_symbol: "TEST".into(),
+                status: status.into(),
+                effective_from_unix_nanos: 1,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn delisted_market_emits_only_one_delisted_event() {
+        let mut catalog = ReferenceCatalog::default();
+        assert_eq!(catalog.apply(catalog_with_market("active"), 10).len(), 1);
+        assert_eq!(catalog.apply(ProviderCatalog::default(), 20).len(), 1);
+        assert!(catalog.apply(ProviderCatalog::default(), 30).is_empty());
+        assert_eq!(catalog.lifecycle_events.len(), 2);
+    }
+
+    #[test]
+    fn delisted_market_can_be_relisted() {
+        let mut catalog = ReferenceCatalog::default();
+        catalog.apply(catalog_with_market("active"), 10);
+        catalog.apply(ProviderCatalog::default(), 20);
+        let events = catalog.apply(catalog_with_market("active"), 30);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "status_changed");
+        assert_eq!(catalog.markets["market:test"].status, "active");
+    }
+
+    #[test]
+    fn validation_rejects_unresolved_reference_relationships() {
+        let catalog = ProviderCatalog {
+            assets: vec![Asset {
+                asset_id: "asset:btc".into(),
+                ..Default::default()
+            }],
+            instruments: vec![Instrument {
+                instrument_id: "instrument:option".into(),
+                underlying_instrument_id: Some("instrument:missing".into()),
+                ..Default::default()
+            }],
+            financial_products: vec![FinancialProduct {
+                product_id: "product:earn".into(),
+                asset_id: "asset:missing".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let error = catalog.validate().unwrap_err().to_string();
+        assert!(error.contains("missing asset"));
     }
 }
 

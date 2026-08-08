@@ -14,24 +14,9 @@ use crate::application::{
     AccountApplication, AccountDataQuery, AccountRefreshReport, AccountSession, LoginAccount,
     OrderQuery, RefreshAccount,
 };
-use crate::domain::{AccountFill, Intent};
+use crate::domain::{AccountFill, OrderEvent, OrderRequest};
 use crate::services::publication::FileAccountPublisher;
-
-#[derive(serde::Deserialize)]
-struct IntentPayload {
-    intent: Intent,
-}
-
-#[derive(serde::Deserialize)]
-struct CommandEnvelope<T> {
-    schema_version: u16,
-    command_id: String,
-    idempotency_key: String,
-    operation: String,
-    strategy_id: String,
-    instance_id: String,
-    payload: T,
-}
+use kairos_workspace::runtime::{HEALTH_PATH, SNAPSHOT_PATH, STOP_PATH};
 
 pub struct AccountProcess {
     application: AccountApplication,
@@ -44,6 +29,8 @@ pub struct AccountProcess {
     last_error: Option<String>,
     last_refresh: Option<AccountRefreshReport>,
     stream_enabled: bool,
+    lease_file: Option<PathBuf>,
+    lease_instance_id: Option<String>,
 }
 
 impl AccountProcess {
@@ -74,7 +61,19 @@ impl AccountProcess {
             last_error: None,
             last_refresh: None,
             stream_enabled,
+            lease_file: None,
+            lease_instance_id: None,
         })
+    }
+
+    pub fn with_trade_lease(
+        mut self,
+        lease_file: impl Into<PathBuf>,
+        instance_id: impl Into<String>,
+    ) -> Self {
+        self.lease_file = Some(lease_file.into());
+        self.lease_instance_id = Some(instance_id.into());
+        self
     }
 
     pub fn application(&self) -> &AccountApplication {
@@ -94,7 +93,13 @@ impl AccountProcess {
         if let Err(error) = self.publish_snapshot() {
             self.last_error = Some(error);
         }
-        let _ = self.write_health("ready").await;
+        let _ = self
+            .write_health(if self.lease_valid() {
+                "ready"
+            } else {
+                "unavailable"
+            })
+            .await;
         while !self.stop_requested {
             tokio::select! {
                 accepted = listener.accept() => {
@@ -111,7 +116,7 @@ impl AccountProcess {
                     if let Err(error) = self.publish_snapshot() {
                         self.last_error = Some(error);
                     }
-                    let _ = self.write_health(if self.last_error.is_some() { "degraded" } else { "ready" }).await;
+                    let _ = self.write_health(if self.last_error.is_some() || !self.lease_valid() { "degraded" } else { "ready" }).await;
                 }
             }
         }
@@ -168,8 +173,8 @@ impl AccountProcess {
             .map(str::to_owned);
         let account_query = parse_account_query(query, &self.account_id);
         let (status, body) = match path {
-            "/v1/health" => (200, self.health_json()),
-            "/v1/snapshot" => (
+            HEALTH_PATH => (200, self.health_json()),
+            SNAPSHOT_PATH => (
                 200,
                 serde_json::to_value(self.application.snapshot_query(&account_query))?,
             ),
@@ -197,7 +202,34 @@ impl AccountProcess {
                     order_id,
                 })}),
             ),
-            "/v1/intents" => (200, json!({"intents": self.application.intents(None)})),
+            "/v1/plan-order" => self.json_command(body, |application, body| {
+                let request: OrderRequest =
+                    serde_json::from_slice(body).map_err(|error| error.to_string())?;
+                application
+                    .plan_order(request, unix_now_nanos())
+                    .map_err(|error| error.to_string())
+                    .and_then(|order| {
+                        serde_json::to_value(order).map_err(|error| error.to_string())
+                    })
+            }),
+            "/v1/order-event" => self.json_command(body, |application, body| {
+                let event: OrderEvent =
+                    serde_json::from_slice(body).map_err(|error| error.to_string())?;
+                application
+                    .apply_order_event(event)
+                    .map_err(|error| error.to_string())
+                    .and_then(|order| {
+                        serde_json::to_value(order).map_err(|error| error.to_string())
+                    })
+            }),
+            "/v1/fill" => self.json_command(body, |application, body| {
+                let fill: AccountFill =
+                    serde_json::from_slice(body).map_err(|error| error.to_string())?;
+                application
+                    .apply_fill(fill)
+                    .map(|_| json!({"status":"applied"}))
+                    .map_err(|error| error.to_string())
+            }),
             "/v1/market-profiles" => (200, json!({"profiles": self.application.market_profiles()})),
             "/v1/capabilities" => (
                 200,
@@ -232,56 +264,6 @@ impl AccountProcess {
                     json!({"error": format!("invalid account session: {error}")}),
                 ),
             },
-            "/v1/intents/submit" => {
-                match serde_json::from_str::<CommandEnvelope<IntentPayload>>(body) {
-                    Ok(command)
-                        if command.schema_version == 1
-                            && command.operation == "account.submit_intent"
-                            && !command.command_id.trim().is_empty()
-                            && !command.idempotency_key.trim().is_empty()
-                            && !command.strategy_id.trim().is_empty()
-                            && !command.instance_id.trim().is_empty() =>
-                    {
-                        match self
-                            .application
-                            .record_intent(command.payload.intent.clone())
-                        {
-                            Ok(()) => (
-                                202,
-                                json!({
-                                    "schema_version": 1,
-                                    "command_id": command.command_id,
-                                    "request_id": command.command_id,
-                                    "status": "accepted",
-                                    "result": {
-                                        "intent_id": command.payload.intent.intent_id,
-                                        "strategy_id": command.strategy_id,
-                                        "instance_id": command.instance_id,
-                                    },
-                                    "intent_id": command.payload.intent.intent_id,
-                                }),
-                            ),
-                            Err(error) => (
-                                422,
-                                json!({
-                                    "schema_version": 1,
-                                    "command_id": command.command_id,
-                                    "status": "rejected",
-                                    "error": {"code": "account.intent_invalid", "message": error.to_string(), "retryable": false},
-                                }),
-                            ),
-                        }
-                    }
-                    Ok(_) => (
-                        422,
-                        json!({"schema_version": 1, "status": "rejected", "error": {"code": "command.invalid_envelope", "message": "schema_version, operation, command_id, strategy_id and instance_id are required", "retryable": false}}),
-                    ),
-                    Err(error) => (
-                        400,
-                        json!({"schema_version": 1, "status": "rejected", "error": {"code": "command.invalid_json", "message": format!("invalid intent command: {error}"), "retryable": false}}),
-                    ),
-                }
-            }
             "/v1/fills" => match serde_json::from_str::<AccountFill>(body) {
                 Ok(fill) => match self.application.apply_fill(fill) {
                     Ok(()) => (202, json!({"status": "accepted"})),
@@ -314,7 +296,7 @@ impl AccountProcess {
                     Err(error) => (503, json!({"error": error.to_string()})),
                 }
             }
-            "/v1/stop" => {
+            STOP_PATH => {
                 self.stop_requested = true;
                 (202, json!({"status":"stopping"}))
             }
@@ -334,8 +316,40 @@ impl AccountProcess {
         publisher.publish(&self.application.snapshot())
     }
 
+    fn json_command<F>(&mut self, body: &str, handler: F) -> (u16, Value)
+    where
+        F: FnOnce(&mut AccountApplication, &[u8]) -> Result<Value, String>,
+    {
+        match handler(&mut self.application, body.as_bytes()) {
+            Ok(value) => (202, value),
+            Err(error) => (422, json!({"error": error})),
+        }
+    }
+
     fn health_json(&self) -> Value {
-        json!({"status": if self.last_error.is_some() { "degraded" } else { "ready" }, "account_id": self.account_id, "actor_id": self.application.snapshot().actor_id, "generation": self.application.snapshot().generation, "event_sequence": self.application.snapshot().event_sequence, "last_error": self.last_error, "last_refresh": self.last_refresh})
+        json!({"status": if self.last_error.is_some() { "degraded" } else if !self.lease_valid() { "unavailable" } else { "ready" }, "account_id": self.account_id, "actor_id": self.application.snapshot().actor_id, "generation": self.application.snapshot().generation, "event_sequence": self.application.snapshot().event_sequence, "last_error": self.last_error, "last_refresh": self.last_refresh, "lease_valid": self.lease_valid()})
+    }
+
+    fn lease_valid(&self) -> bool {
+        let (Some(path), Some(instance_id)) = (&self.lease_file, &self.lease_instance_id) else {
+            return true;
+        };
+        let Ok(bytes) = std::fs::read(path) else {
+            return false;
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+            return false;
+        };
+        if value.get("launch_instance_id").and_then(Value::as_str) != Some(instance_id.as_str()) {
+            return false;
+        }
+        let Ok(modified) = std::fs::metadata(path).and_then(|metadata| metadata.modified()) else {
+            return false;
+        };
+        SystemTime::now()
+            .duration_since(modified)
+            .map(|age| age <= Duration::from_secs(60))
+            .unwrap_or(false)
     }
 
     async fn write_health(&self, status: &str) -> Result<(), std::io::Error> {
@@ -405,81 +419,4 @@ fn parse_account_query(query: &str, account_id: &str) -> AccountDataQuery {
         }
     }
     request
-}
-
-#[cfg(test)]
-mod tests {
-    use super::AccountProcess;
-    use crate::application::AccountApplication;
-    use crate::composition::{empty_snapshot, InMemoryAccountSource};
-    use crate::domain::{AccountSegment, ExternalAccountIdentity};
-    use std::collections::BTreeMap;
-    use std::time::Duration;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::UnixStream;
-
-    async fn request(socket: &std::path::Path, body: &str) -> String {
-        let mut stream = UnixStream::connect(socket).await.unwrap();
-        let request = format!(
-            "POST /v1/intents/submit HTTP/1.1\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(request.as_bytes()).await.unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).await.unwrap();
-        response
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn intent_command_enters_account_application() {
-        let directory = tempfile::tempdir().unwrap();
-        let socket = directory.path().join("account.sock");
-        let segment = AccountSegment {
-            identity: ExternalAccountIdentity::new("binance", "main").unwrap(),
-            segment_key: "spot".into(),
-            environment: "paper".into(),
-            account_model: Some("no_margin".into()),
-        };
-        let source = InMemoryAccountSource {
-            snapshots: BTreeMap::from([("spot".into(), empty_snapshot("spot"))]),
-        };
-        let application =
-            AccountApplication::with_dependencies(vec![segment], Box::new(source), None).unwrap();
-        let process = AccountProcess::new(
-            application,
-            "main",
-            &socket,
-            Duration::from_secs(60),
-            None,
-            None,
-        )
-        .unwrap();
-        tokio::task::LocalSet::new()
-            .run_until(async move {
-                let task = tokio::task::spawn_local(process.run());
-                for _ in 0..100 {
-                    if socket.exists() {
-                        break;
-                    }
-                    tokio::task::yield_now().await;
-                }
-                let body = r#"{"schema_version":1,"command_id":"request-1","idempotency_key":"request-1","operation":"account.submit_intent","strategy_id":"sma","instance_id":"instance-1","payload":{"intent":{"intent_id":"intent-1","strategy_id":"sma","account_id":"main","segment_key":"spot","instrument_id":"BTCUSDT","kind":"TargetPosition","target_quantity":{"mantissa":1,"scale":0},"quantity":null,"limit_price":null,"created_at_unix_nanos":1,"reason":"test"}}}"#;
-                let response = request(&socket, body).await;
-                assert!(response.contains("\"status\":\"accepted\""));
-                let _ = request_stop(&socket).await;
-                task.await.unwrap().unwrap();
-            })
-            .await;
-    }
-
-    async fn request_stop(socket: &std::path::Path) -> String {
-        let mut stream = UnixStream::connect(socket).await.unwrap();
-        stream
-            .write_all(b"POST /v1/stop HTTP/1.1\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
-            .await
-            .unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).await.unwrap();
-        response
-    }
 }

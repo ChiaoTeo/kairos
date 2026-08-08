@@ -4,25 +4,19 @@ from kairospy.strategy import StrategyBase
 class PrintMarket(StrategyBase):
     strategy_id = "print-market"
 
-    def __init__(self, symbol="BTCUSDT", exchange=None, market_type=None, asset_type=None, identity=None):
+    def __init__(self, symbol="BTCUSDT"):
         self.symbol = str(symbol).upper()
-        self.exchange = exchange
-        self.market_type = market_type
-        self.asset_type = asset_type
-        self.identity = identity
 
     def on_start(self, context):
         context.subscribe(
             f"market.{self.symbol}",
             selectors=("quote",),
-            exchange=self.exchange,
-            market_type=self.market_type,
-            asset_type=self.asset_type,
-            identity=self.identity,
         )
 
     def on_data(self, context, event):
         print(
-            f"market event kind={event.kind} payload={event.payload}",
+            f"market event kind={event.kind} symbol={event.payload.instrument_id} "
+            f"bid={event.payload.bid_price.value if event.payload.bid_price else '-'} "
+            f"ask={event.payload.ask_price.value if event.payload.ask_price else '-'}",
             flush=True,
         )
