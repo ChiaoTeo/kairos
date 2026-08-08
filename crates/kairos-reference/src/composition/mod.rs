@@ -76,6 +76,155 @@ pub fn default_endpoint(provider: &str) -> &'static str {
     }
 }
 
+/// Build the normal Workspace Reference catalog.
+///
+/// Reference owns the source selection for the global catalog. Public Binance
+/// products are built in; credentialed providers are opt-in through the
+/// `[reference.providers.*]` tables (or by an existing matching Workspace
+/// credential). The legacy `workspace` provider remains available below for
+/// migration of old manifests that described Reference sources under
+/// `market.connections`.
+fn build_default_source(config: &ReferenceCompositionConfig) -> ReferenceResult<Box<dyn ReferenceSource>> {
+    let manifest = config
+        .workspace
+        .as_ref()
+        .and_then(|root| std::fs::read_to_string(root.join("kairos.toml")).ok())
+        .or_else(|| {
+            config
+                .workspace
+                .as_ref()
+                .and_then(|root| std::fs::read_to_string(root.join("workspace.toml")).ok())
+        })
+        .map(|text| toml::from_str::<toml::Value>(&text))
+        .transpose()
+        .map_err(|error| crate::domain::ReferenceError::Provider(error.to_string()))?;
+
+    let mut sources: Vec<Box<dyn ReferenceSource>> = vec![
+        Box::new(BinanceSpotSource::new(default_endpoint("binance-spot"))?),
+        Box::new(public_source(
+            "binance-usdm-futures",
+            ProductFamily::UsdMFutures,
+            Some(AssetType::Crypto),
+            default_endpoint("binance-usdm-futures"),
+        )?),
+        Box::new(public_source(
+            "binance-coinm-futures",
+            ProductFamily::CoinMFutures,
+            Some(AssetType::Crypto),
+            default_endpoint("binance-coinm-futures"),
+        )?),
+        Box::new(BinanceOptionsSource::new(default_endpoint("binance-options"))?),
+    ];
+
+    let credentials_root = config
+        .workspace
+        .as_ref()
+        .map(|root| root.join("credentials"));
+    let reference = manifest
+        .as_ref()
+        .and_then(|value| value.get("reference"))
+        .and_then(toml::Value::as_table);
+
+    if reference_provider_enabled(reference, "massive") {
+        let credential_id = reference_provider_credential(reference, "massive");
+        let credential = credentials_root
+            .as_deref()
+            .and_then(|root| load_workspace_credential(root, "massive", credential_id).ok().flatten())
+            .ok_or_else(|| {
+                crate::domain::ReferenceError::Provider(
+                    "Reference Massive source is enabled but its credential is missing".into(),
+                )
+            })?;
+        sources.push(Box::new(MassiveEquitySource::new(
+            credential.api_key.clone(),
+            default_endpoint("massive"),
+        )?));
+        sources.push(Box::new(MassiveSource::new(
+            credential.api_key,
+            default_endpoint("massive-options"),
+        )?));
+    }
+
+    if reference_product_enabled(reference, "binance", "equity") {
+        let credential_id = reference_product_credential(reference, "binance", "equity");
+        let credential = credentials_root
+            .as_deref()
+            .and_then(|root| load_workspace_credential(root, "binance", credential_id).ok().flatten())
+            .ok_or_else(|| {
+                crate::domain::ReferenceError::Provider(
+                    "Reference Binance equity source is enabled but its credential is missing".into(),
+                )
+            })?;
+        sources.push(Box::new(BinanceEquitySource::new(
+            credential.api_key,
+            credential.secret,
+        )?));
+    }
+
+    Ok(Box::new(CompositeSource::new(sources)?))
+}
+
+fn reference_provider_enabled(
+    reference: Option<&toml::map::Map<String, toml::Value>>,
+    provider: &str,
+) -> bool {
+    let Some(table) = reference
+        .and_then(|value| value.get("providers"))
+        .and_then(toml::Value::as_table)
+        .and_then(|providers| providers.get(provider))
+        .and_then(toml::Value::as_table)
+    else {
+        return false;
+    };
+    table.get("enabled").and_then(toml::Value::as_bool).unwrap_or(true)
+}
+
+fn reference_provider_credential<'a>(
+    reference: Option<&'a toml::map::Map<String, toml::Value>>,
+    provider: &str,
+) -> Option<&'a str> {
+    reference
+        .and_then(|value| value.get("providers"))
+        .and_then(toml::Value::as_table)
+        .and_then(|providers| providers.get(provider))
+        .and_then(toml::Value::as_table)
+        .and_then(|table| table.get("credential_id"))
+        .and_then(toml::Value::as_str)
+}
+
+fn reference_product_enabled(
+    reference: Option<&toml::map::Map<String, toml::Value>>,
+    provider: &str,
+    product: &str,
+) -> bool {
+    reference
+        .and_then(|value| value.get("products"))
+        .and_then(toml::Value::as_table)
+        .and_then(|products| products.get(provider))
+        .and_then(toml::Value::as_table)
+        .and_then(|provider| provider.get(product))
+        .and_then(toml::Value::as_table)
+        .and_then(|table| table.get("enabled"))
+        .and_then(toml::Value::as_bool)
+        .unwrap_or(false)
+}
+
+fn reference_product_credential<'a>(
+    reference: Option<&'a toml::map::Map<String, toml::Value>>,
+    provider: &str,
+    product: &str,
+) -> Option<&'a str> {
+    reference
+        .and_then(|value| value.get("products"))
+        .and_then(toml::Value::as_table)
+        .and_then(|products| products.get(provider))
+        .and_then(toml::Value::as_table)
+        .and_then(|provider| provider.get(product))
+        .and_then(toml::Value::as_table)
+        .and_then(|table| table.get("credential_id"))
+        .and_then(toml::Value::as_str)
+}
+
 impl ReferenceSnapshotWriter {
     pub fn publish(
         &mut self,
@@ -98,6 +247,7 @@ pub fn build_application(
     publish: bool,
 ) -> ReferenceResult<ReferenceComposition> {
     let source: Box<dyn ReferenceSource> = match config.provider.as_str() {
+        "default" => build_default_source(config)?,
         "workspace" => build_workspace_source(config)?,
         "binance-spot" => Box::new(BinanceSpotSource::new(config.endpoint.clone())?),
         "binance-options" => Box::new(BinanceOptionsSource::new(config.endpoint.clone())?),

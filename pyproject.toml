@@ -39,10 +39,14 @@ kairospy-strategy-server = "kairospy.bin.strategy:main"
 
 [build-system]
 requires = ["setuptools>=68", "wheel>=0.43"]
-build-backend = "setuptools.build_meta"
+build-backend = "backend"
+backend-path = ["."]
 
 [tool.setuptools.packages.find]
 include = ["kairospy*"]
+
+[tool.setuptools]
+py-modules = ["backend"]
 
 [tool.setuptools.package-data]
 kairospy = ["_bin/**/*"]
