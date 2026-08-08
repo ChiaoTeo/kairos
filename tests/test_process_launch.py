@@ -64,6 +64,27 @@ def test_component_status_does_not_start_a_missing_process(tmp_path: Path) -> No
     assert not workspace.paths.process_socket("market").exists()
 
 
+def test_component_list_reports_all_system_components_without_starting_them(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="list")
+
+    value = ComponentProcessApplication(workspace).list_status()
+
+    assert set(value) == {"reference", "market", "account", "risk", "execution"}
+    assert all(item["status"] == "not_running" for item in value.values())
+    assert not any(workspace.paths.process_socket(name).exists() for name in value)
+
+
+def test_component_list_treats_a_stale_socket_as_not_running(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="stale")
+    socket = workspace.paths.process_socket("reference")
+    socket.parent.mkdir(parents=True, exist_ok=True)
+    socket.touch()
+
+    value = ComponentProcessApplication(workspace).list_status()
+
+    assert value["reference"]["status"] == "not_running"
+
+
 def test_component_command_uses_instance_workspace_namespace(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="instance")
     instance = workspace.instance("backtest", "btc-sma", "run-001")
@@ -71,8 +92,9 @@ def test_component_command_uses_instance_workspace_namespace(tmp_path: Path) -> 
         "market", account_id=None, instance_workspace=instance
     )
 
-    assert command[-6:] == [
-        "--launch-mode", "backtest", "--launch-id", "btc-sma", "--instance-id", "run-001"
+    assert command[-8:] == [
+        "--launch-mode", "backtest", "--launch-id", "btc-sma", "--instance-id", "run-001",
+        "--provider", "workspace",
     ]
 
 

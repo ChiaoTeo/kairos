@@ -43,8 +43,9 @@ def test_cli_registers_legacy_product_groups() -> None:
 
     assert execute_argv(["--help"], output) == 0
     text = output.getvalue()
-    for command in ("project", "config", "launch", "account", "market", "catalog", "order", "system", "timeline"):
+    for command in ("project", "config", "launch", "account", "market", "reference", "order", "system", "timeline"):
         assert command in text
+    assert "catalog" not in text
 
 
 def test_cli_exposes_canonical_business_command_surfaces() -> None:
@@ -52,14 +53,40 @@ def test_cli_exposes_canonical_business_command_surfaces() -> None:
         (["account", "--help"], ("credential-list", "balances", "snapshot")),
         (["market", "--help"], ("validate", "once", "replay")),
         (["launch", "--help"], ("targets", "diagnose", "replay")),
-        (["catalog", "--help"], ("assets", "participants", "markets")),
-        (["system", "--help"], ("account", "restart")),
+        (["reference", "--help"], ("health", "snapshot", "markets")),
+        (["system", "--help"], ("account", "restart", "list")),
     ):
         output = StringIO()
         assert execute_argv(argv, output) == 0
         text = output.getvalue()
         for command in expected:
             assert command in text
+
+
+def test_system_list_renders_a_prettytable_by_default(tmp_path) -> None:
+    WorkspaceApplication().init_project(tmp_path / "demo", workspace_id="demo")
+    output = StringIO()
+
+    assert execute_argv(["system", "list", "--workspace", str(tmp_path / "demo")], output) == 0
+
+    text = output.getvalue()
+    assert "+" in text
+    assert "component" in text
+    assert "reference" in text
+
+
+def test_system_list_keeps_json_output_machine_readable(tmp_path) -> None:
+    WorkspaceApplication().init_project(tmp_path / "demo", workspace_id="demo")
+    output = StringIO()
+
+    assert execute_argv(
+        ["system", "list", "--workspace", str(tmp_path / "demo"), "--format", "json"],
+        output,
+    ) == 0
+
+    import json
+    value = json.loads(output.getvalue())
+    assert value["reference"]["status"] == "not_running"
 
 
 

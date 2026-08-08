@@ -9,6 +9,7 @@ from typing import Mapping
 
 from kairospy.application.workspace import Workspace
 from kairospy.strategy import StrategyLogger
+from kairospy.application.reference import ReferenceSnapshotClient
 
 from ..services.bus import StrategyContextBus
 from ..services.host import StrategyHost
@@ -65,7 +66,7 @@ def compose_strategy_process(
         else market_runtime.socket("market-events")
     )
     market_snapshot = (
-        workspace.paths.child("state", "market", "market.snapshot")
+        workspace.paths.child("snapshots", "market", "market.snapshot")
         if market_runtime is None
         else market_runtime.snapshot("market", "market.snapshot")
     )
@@ -105,6 +106,11 @@ def compose_strategy_process(
         instance_id=instance_id,
         bus=bus,
         snapshots=snapshots,
+        reference=ReferenceSnapshotClient(
+            socket_path=workspace.paths.reference_socket(),
+            snapshot_path=workspace.paths.reference_snapshot("catalog"),
+            markets_snapshot_path=workspace.paths.reference_snapshot("markets"),
+        ),
         stream=stream,
         journal=journal,
         logger=StrategyLogger(fields={

@@ -1,10 +1,11 @@
 use clap::Parser;
+use kairos_protocol::InstanceIdentity;
 use kairos_reference::application::control;
 use kairos_reference::application::MarketQuery;
 use kairos_reference::application::{ReferenceApplication, ReferenceKind, ReferenceQuery};
 use kairos_reference::composition::{
     build_application, default_endpoint, ensure_database_parent, ReferenceCompositionConfig,
-    ReferenceSnapshotWriter,
+    ReferenceMmapSnapshotWriter, ReferenceSnapshotWriter,
 };
 use kairos_reference::domain::Asset;
 use kairos_workspace::workspace::Workspace;
@@ -31,6 +32,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Err("reference health file must be inside workspace".into());
         }
     }
+    let _process_lock = workspace.process_lock("reference").map_err(|error| {
+        if error.kind() == std::io::ErrorKind::AlreadyExists {
+            "reference is already running for this workspace".to_string()
+        } else {
+            format!("acquire reference workspace lock: {error}")
+        }
+    })?;
     let provider = args.provider;
     let endpoint = args
         .endpoint
@@ -73,6 +81,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut snapshot_writer = composition.snapshot_writer;
 
     application.refresh()?;
+
+    let snapshot_root = workspace.child(&["snapshots", "reference"])?;
+    std::fs::create_dir_all(&snapshot_root)?;
+    let mut mmap_writer = ReferenceMmapSnapshotWriter::create(
+        snapshot_root.join("catalog.snapshot"),
+        snapshot_root.join("markets.snapshot"),
+        snapshot_root.join("lifecycle.snapshot"),
+        args.snapshot_slot_size,
+        InstanceIdentity::new(workspace.id(), "reference", "global"),
+    )?;
+
+    mmap_writer.publish(application.catalog())?;
     if let Some(writer) = snapshot_writer.as_mut() {
         writer.publish(application.catalog())?;
         let events = application.pending_events()?;
@@ -106,6 +126,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .block_on(run_process(
             application,
             snapshot_writer,
+            mmap_writer,
             socket,
             health_file,
             Duration::from_secs(refresh_seconds),
@@ -115,6 +136,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_process(
     mut application: ReferenceApplication,
     mut snapshot_writer: Option<ReferenceSnapshotWriter>,
+    mut mmap_writer: ReferenceMmapSnapshotWriter,
     socket: PathBuf,
     health_file: Option<PathBuf>,
     refresh_interval: Duration,
@@ -122,11 +144,14 @@ async fn run_process(
     if let Some(parent) = socket.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
+    // The workspace process lock is already held by the caller. Only now is
+    // it safe to remove a stale socket from a previous crashed process.
     let _ = std::fs::remove_file(&socket);
     let listener = UnixListener::bind(&socket)?;
     let mut interval = tokio::time::interval(refresh_interval);
     interval.tick().await;
     write_health(&health_file, &application, "ready").await?;
+    mmap_writer.publish(application.catalog())?;
     let mut stopping = false;
     while !stopping {
         tokio::select! {
@@ -143,6 +168,7 @@ async fn run_process(
                             writer.publish_change(application.catalog(), &events)?;
                             application.acknowledge_published_events()?;
                         }
+                        mmap_writer.publish(application.catalog())?;
                         "ready"
                     }
                     Err(_) => "degraded",
@@ -176,6 +202,14 @@ async fn handle_client(
     let params = query_params(query);
     let (status, body, stopping) = match path {
         control::HEALTH => (200, health_json(application, "ready"), false),
+        control::PROVIDERS => (
+            200,
+            json!({
+                "mode": application.source_id(),
+                "source_id": application.source_id(),
+            }),
+            false,
+        ),
         control::SNAPSHOT => (
             200,
             json!({
@@ -424,7 +458,7 @@ async fn write_json(
     about = "Refresh and publish Reference data"
 )]
 struct Args {
-    #[arg(long, default_value = "binance-spot")]
+    #[arg(long, default_value = "default")]
     provider: String,
     #[arg(long)]
     endpoint: Option<String>,
@@ -458,4 +492,9 @@ struct Args {
     refresh_seconds: u64,
     #[arg(long, default_value_t = false)]
     once: bool,
+    // Lifecycle snapshots contain the append-only history and can be much
+    // larger than the catalog/markets views. Keep enough room for a mature
+    // workspace while retaining the explicit CLI override for larger ones.
+    #[arg(long, default_value_t = 64 * 1024 * 1024)]
+    snapshot_slot_size: usize,
 }

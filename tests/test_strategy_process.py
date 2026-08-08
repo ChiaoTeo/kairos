@@ -34,6 +34,8 @@ def test_strategy_process_is_started_per_launch_instance_and_reports_waiting_sna
         launch_id="l",
         instance_id="i",
     )
+    assert workspace.instance("paper", "l", "i").log("strategy.log").is_file()
+    assert not (workspace.paths.logs / "launches" / "paper" / "l" / "i" / "strategy.log").exists()
     try:
         started = asyncio.run(UnixRestClient(socket).request("POST", "/v1/start"))
         assert started["status"] == "waiting_for_dependencies"

@@ -76,7 +76,7 @@ pub struct PublicSource {
     connection: Box<dyn ReferenceDataConnection>,
 }
 
-/// Reference-owned fan-in for a workspace catalog. Each provider remains an
+/// Reference-owned fan-in for the global catalog. Each provider remains an
 /// independent integration connection; this source only merges normalized
 /// records before they enter the Reference actor.
 pub struct CompositeSource {
@@ -87,7 +87,7 @@ impl CompositeSource {
     pub fn new(sources: Vec<Box<dyn ReferenceSource>>) -> ReferenceResult<Self> {
         if sources.is_empty() {
             return Err(ReferenceError::Provider(
-                "workspace reference catalog has no sources".into(),
+                "reference catalog has no sources".into(),
             ));
         }
         Ok(Self { sources })
@@ -96,7 +96,7 @@ impl CompositeSource {
 
 impl ReferenceSource for CompositeSource {
     fn source_id(&self) -> &str {
-        "workspace"
+        "reference-default"
     }
 
     fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
@@ -176,10 +176,6 @@ impl BinanceSpotSource {
             .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         Ok(Self { connection })
     }
-
-    pub fn production() -> ReferenceResult<Self> {
-        Self::new(crate::composition::default_endpoint("binance-spot"))
-    }
 }
 
 impl BinanceOptionsSource {
@@ -216,8 +212,16 @@ impl BinanceEquitySource {
 
 impl MassiveSource {
     pub fn new(api_key: impl Into<String>, base_url: impl Into<String>) -> ReferenceResult<Self> {
+        Self::new_with_underlying(api_key, base_url, None)
+    }
+
+    pub fn new_with_underlying(
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+        underlying: Option<String>,
+    ) -> ReferenceResult<Self> {
         let integration = Integration::new()
-            .with_massive_reference(api_key, base_url)
+            .with_massive_reference_for_underlying(api_key, base_url, underlying)
             .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         let connection = integration
             .connect_reference(&reference_spec(
@@ -350,6 +354,31 @@ impl ReferenceSource for HyperliquidSource {
 fn provider_catalog_from_integration(
     payload: ReferenceCatalogPayload,
 ) -> ReferenceResult<ProviderCatalog> {
+    let instruments: Vec<Instrument> = payload
+        .instruments
+        .into_iter()
+        .map(|value| Instrument {
+            instrument_id: value.instrument_id,
+            symbol: value.symbol,
+            instrument_type: value.instrument_type,
+            product_family: value.product_family,
+            underlying_instrument_id: value.underlying_instrument_id,
+            expiry_unix_nanos: value.expiry_unix_nanos,
+            strike: value.strike,
+            option_right: value.option_right,
+            status: value.status,
+            ..Instrument::default()
+        })
+        .collect();
+    let underlying_by_instrument: BTreeMap<_, _> = instruments
+        .iter()
+        .filter_map(|value| {
+            value
+                .underlying_instrument_id
+                .as_ref()
+                .map(|underlying| (value.instrument_id.clone(), underlying.clone()))
+        })
+        .collect();
     Ok(ProviderCatalog {
         entities: payload
             .entities
@@ -372,22 +401,7 @@ fn provider_catalog_from_integration(
                 ..Asset::default()
             })
             .collect(),
-        instruments: payload
-            .instruments
-            .into_iter()
-            .map(|value| Instrument {
-                instrument_id: value.instrument_id,
-                symbol: value.symbol,
-                instrument_type: value.instrument_type,
-                product_family: value.product_family,
-                underlying_instrument_id: value.underlying_instrument_id,
-                expiry_unix_nanos: value.expiry_unix_nanos,
-                strike: value.strike,
-                option_right: value.option_right,
-                status: value.status,
-                ..Instrument::default()
-            })
-            .collect(),
+        instruments,
         listings: payload
             .listings
             .into_iter()
@@ -404,27 +418,33 @@ fn provider_catalog_from_integration(
         markets: payload
             .markets
             .into_iter()
-            .map(|value| Market {
-                market_id: value.market_id,
-                market_key: value.market_key,
-                instrument_id: value.instrument_id,
-                listing_id: value.listing_id,
-                venue_id: value.venue_id,
-                market_type: value.market_type,
-                asset_type: value.asset_type,
-                source_symbol: value.source_symbol,
-                base_asset_id: value.base_asset_id,
-                quote_asset_id: value.quote_asset_id,
-                status: value.status,
-                price_tick: value.price_tick,
-                quantity_tick: value.quantity_tick,
-                price_precision: value.price_precision,
-                quantity_precision: value.quantity_precision,
-                minimum_quantity: value.minimum_quantity,
-                minimum_notional: value.minimum_notional,
-                contract_size: value.contract_size,
-                effective_to_unix_nanos: value.effective_to_unix_nanos,
-                ..Market::default()
+            .map(|value| {
+                let instrument_id = value.instrument_id.clone();
+                Market {
+                    market_id: value.market_id,
+                    market_key: value.market_key,
+                    instrument_id,
+                    listing_id: value.listing_id,
+                    venue_id: value.venue_id,
+                    market_type: value.market_type,
+                    asset_type: value.asset_type,
+                    underlying_instrument_id: underlying_by_instrument
+                        .get(&value.instrument_id)
+                        .cloned(),
+                    source_symbol: value.source_symbol,
+                    base_asset_id: value.base_asset_id,
+                    quote_asset_id: value.quote_asset_id,
+                    status: value.status,
+                    price_tick: value.price_tick,
+                    quantity_tick: value.quantity_tick,
+                    price_precision: value.price_precision,
+                    quantity_precision: value.quantity_precision,
+                    minimum_quantity: value.minimum_quantity,
+                    minimum_notional: value.minimum_notional,
+                    contract_size: value.contract_size,
+                    effective_to_unix_nanos: value.effective_to_unix_nanos,
+                    ..Market::default()
+                }
             })
             .collect(),
         financial_products: payload

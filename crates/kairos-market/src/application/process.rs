@@ -3,7 +3,7 @@
 use crate::application::MarketApplication;
 use crate::domain::observations::MarketObservation;
 use crate::services::publication::MmapMarketSnapshotPublisher;
-use crate::services::reference::resolve_market;
+use crate::services::reference::{resolve_market, resolve_option_markets};
 use crate::{MarketDescriptor, SubscriptionId};
 use flatbuffers::FlatBufferBuilder;
 use kairos_protocol::generated::kairos::common::v_1::{
@@ -18,6 +18,7 @@ use kairos_protocol::InstanceIdentity;
 use kairos_workspace::runtime::{HEALTH_PATH, SNAPSHOT_PATH, STOP_PATH};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -34,6 +35,8 @@ struct SubscribePayload {
     #[serde(default)]
     asset_type: Option<String>,
     identity: Option<String>,
+    #[serde(default)]
+    params: BTreeMap<String, Value>,
     dynamic: bool,
 }
 
@@ -60,7 +63,14 @@ struct SubscribeRequest {
     #[serde(default)]
     asset_type: Option<String>,
     identity: Option<String>,
+    params: BTreeMap<String, Value>,
     dynamic: bool,
+}
+
+struct DynamicChainRequest {
+    venue: String,
+    asset_type: Option<String>,
+    underlying: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -81,6 +91,7 @@ pub struct MarketProcess {
     feed_enabled: bool,
     stop_requested: bool,
     reference_socket_path: Option<PathBuf>,
+    dynamic_chains: BTreeMap<SubscriptionId, DynamicChainRequest>,
 }
 
 impl MarketProcess {
@@ -130,6 +141,7 @@ impl MarketProcess {
             feed_enabled,
             stop_requested: false,
             reference_socket_path: None,
+            dynamic_chains: BTreeMap::new(),
         })
     }
 
@@ -178,6 +190,12 @@ impl MarketProcess {
                     }
                 }
                 _ = ticks.tick() => {
+                    if let Err(error) = self.reconcile_dynamic_chains() {
+                        eprintln!(
+                            "{{\"level\":\"error\",\"component\":\"market\",\"message\":\"dynamic subscription reconciliation failed\",\"error\":{}}}",
+                            serde_json::to_string(&error).unwrap_or_else(|_| "\"unknown\"".into())
+                        );
+                    }
                     if self.feed_enabled && !self.application.snapshot().subscriptions.is_empty() {
                         let error = std::thread::scope(|scope| {
                             match scope.spawn(|| self.application.poll_feed()).join() {
@@ -312,6 +330,7 @@ impl MarketProcess {
             market_type: value.payload.market_type,
             asset_type: value.payload.asset_type,
             identity: value.payload.identity,
+            params: value.payload.params,
             dynamic: value.payload.dynamic,
         };
         if request.request_id.trim().is_empty()
@@ -324,12 +343,11 @@ impl MarketProcess {
                 json!({"error":"request_id, strategy_id, instance_id and subject are required"}),
             );
         }
-        if request.dynamic {
-            return (
-                422,
-                json!({"error":"dynamic subscriptions are not supported by this process"}),
-            );
-        }
+        let chain_mode = request
+            .params
+            .get("mode")
+            .and_then(Value::as_str)
+            .is_some_and(|mode| mode.eq_ignore_ascii_case("chain"));
         let source_symbol = request
             .subject
             .strip_prefix("market.")
@@ -341,6 +359,110 @@ impl MarketProcess {
             .unwrap_or_else(|| source_symbol.clone());
         let venue = request.exchange.clone().unwrap_or_else(|| "binance".into());
         let market_type = request.market_type.clone().unwrap_or_else(|| "spot".into());
+        let subscription_id = match SubscriptionId::new(request.request_id.clone()) {
+            Ok(value) => value,
+            Err(error) => return (422, json!({"error": error})),
+        };
+        if chain_mode {
+            let underlying = match request.params.get("underlying").and_then(Value::as_str) {
+                Some(value) if !value.trim().is_empty() => value.trim().to_owned(),
+                _ => {
+                    return (
+                        422,
+                        json!({"error":"chain subscription requires params.underlying"}),
+                    )
+                }
+            };
+            let Some(reference_socket) = &self.reference_socket_path else {
+                return (
+                    422,
+                    json!({"error":"chain subscription requires Reference"}),
+                );
+            };
+            if market_type != "options" {
+                return (
+                    422,
+                    json!({"error":"chain subscription requires market_type=options"}),
+                );
+            }
+            let markets = match resolve_option_markets(
+                reference_socket,
+                &venue,
+                request.asset_type.as_deref(),
+                &underlying,
+            ) {
+                Ok(value) if !value.is_empty() => value,
+                Ok(_) => {
+                    return (
+                        422,
+                        json!({"error":format!("Reference has no active option markets for {underlying}")}),
+                    )
+                }
+                Err(error) => return (422, json!({"error": error})),
+            };
+            let query = crate::MarketSelectionQuery {
+                venue_id: Some(venue.clone()),
+                market_type: Some(market_type),
+                asset_type: request.asset_type.clone(),
+                underlying_instrument_id: markets[0].underlying_instrument_id.clone(),
+                active_only: true,
+                ..Default::default()
+            };
+            let result = std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        self.application.subscribe_dynamic(
+                            subscription_id.clone(),
+                            request.strategy_id.clone(),
+                            query,
+                            markets,
+                        )
+                    })
+                    .join()
+            });
+            let command_id = request.request_id.clone();
+            return match result {
+                Err(_) => (
+                    500,
+                    json!({"status":"failed","error":"market subscription thread panicked"}),
+                ),
+                Ok(Err(error)) => (
+                    422,
+                    json!({"status":"rejected","error":{"code":"market.subscription_rejected","message":error.to_string()}}),
+                ),
+                Ok(Ok(diff)) => {
+                    self.dynamic_chains.insert(
+                        subscription_id.clone(),
+                        DynamicChainRequest {
+                            venue,
+                            asset_type: request.asset_type,
+                            underlying,
+                        },
+                    );
+                    (
+                        202,
+                        json!({
+                            "schema_version": 1,
+                            "command_id": command_id,
+                            "request_id": request.request_id,
+                            "instance_id": request.instance_id,
+                            "status": "accepted",
+                            "mode": "chain",
+                            "subscription_id": subscription_id.0,
+                            "added": diff.added,
+                            "removed": diff.removed,
+                            "changed": diff.changed,
+                        }),
+                    )
+                }
+            };
+        }
+        if request.dynamic {
+            return (
+                422,
+                json!({"error":"dynamic subscriptions require params.mode=chain"}),
+            );
+        }
         let descriptor_result = if let Some(reference_socket) = &self.reference_socket_path {
             resolve_market(
                 reference_socket,
@@ -383,10 +505,6 @@ impl MarketProcess {
             }
         };
         let descriptor = match descriptor_result {
-            Ok(value) => value,
-            Err(error) => return (422, json!({"error": error})),
-        };
-        let subscription_id = match SubscriptionId::new(request.request_id.clone()) {
             Ok(value) => value,
             Err(error) => return (422, json!({"error": error})),
         };
@@ -467,6 +585,7 @@ impl MarketProcess {
             Ok(value) => value,
             Err(error) => return (422, json!({"error": error})),
         };
+        self.dynamic_chains.remove(&id);
         if self.application.unsubscribe(&id) {
             (
                 202,
@@ -478,6 +597,28 @@ impl MarketProcess {
                 json!({"schema_version":1, "command_id":request_id, "request_id": request_id, "status":"rejected", "error":{"code":"market.subscription_not_found","message":"subscription not found","retryable":false}}),
             )
         }
+    }
+
+    fn reconcile_dynamic_chains(&mut self) -> Result<(), String> {
+        if self.dynamic_chains.is_empty() {
+            return Ok(());
+        }
+        let Some(reference_socket) = &self.reference_socket_path else {
+            return Err("dynamic subscriptions require Reference".into());
+        };
+        let mut markets = Vec::new();
+        for request in self.dynamic_chains.values() {
+            markets.extend(resolve_option_markets(
+                reference_socket,
+                &request.venue,
+                request.asset_type.as_deref(),
+                &request.underlying,
+            )?);
+        }
+        self.application
+            .reconcile_reference(markets)
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     }
 }
 

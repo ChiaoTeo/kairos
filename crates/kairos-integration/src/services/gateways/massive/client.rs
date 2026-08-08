@@ -12,6 +12,7 @@ pub struct MassiveStocksRestClient {
     api_key: String,
     base_url: String,
     options: bool,
+    option_underlying: Option<String>,
 }
 
 impl MassiveStocksRestClient {
@@ -36,11 +37,20 @@ impl MassiveStocksRestClient {
             api_key,
             base_url: base_url.trim_end_matches('/').into(),
             options: false,
+            option_underlying: None,
         })
     }
 
     pub fn for_options(mut self) -> Self {
         self.options = true;
+        self
+    }
+
+    pub fn with_option_underlying(mut self, underlying: impl Into<String>) -> Self {
+        let underlying = underlying.into();
+        if !underlying.trim().is_empty() {
+            self.option_underlying = Some(underlying);
+        }
         self
     }
 
@@ -62,13 +72,17 @@ impl MassiveStocksRestClient {
             let query = if url.contains('?') {
                 vec![("apiKey", self.api_key.clone())]
             } else {
-                vec![
+                let mut query = vec![
                     ("expired", "false".into()),
                     ("limit", "1000".into()),
                     ("sort", "expiration_date".into()),
                     ("order", "asc".into()),
                     ("apiKey", self.api_key.clone()),
-                ]
+                ];
+                if let Some(underlying) = &self.option_underlying {
+                    query.push(("underlying_ticker", underlying.clone()));
+                }
+                query
             };
             let payload = self
                 .http
@@ -78,7 +92,7 @@ impl MassiveStocksRestClient {
             next_url = payload
                 .get("next_url")
                 .and_then(Value::as_str)
-                .map(str::to_owned);
+                .map(|url| private_next_url(url, &self.base_url));
         }
         Ok(rows)
     }
@@ -97,6 +111,17 @@ impl MassiveStocksRestClient {
             .map_err(|error| error.to_string())?;
         equity_rows_from_payload(payload)
     }
+}
+
+/// Massive's private proxy may return a pagination URL pointing at the
+/// public api.massive.com host. Keep pagination inside the configured proxy;
+/// the proxy is the endpoint that recognizes the workspace credential.
+fn private_next_url(next_url: &str, base_url: &str) -> String {
+    let Some((_, rest)) = next_url.split_once("://") else {
+        return next_url.to_owned();
+    };
+    let path = rest.find('/').map(|index| &rest[index..]).unwrap_or("/");
+    format!("{}{}", base_url.trim_end_matches('/'), path)
 }
 
 impl MassiveMarketClient for MassiveStocksRestClient {
@@ -217,7 +242,18 @@ fn date_to_unix_nanos(value: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{equity_rows_from_payload, rows_from_payload};
+    use super::{equity_rows_from_payload, private_next_url, rows_from_payload};
+
+    #[test]
+    fn pagination_stays_on_private_massive_proxy() {
+        assert_eq!(
+            private_next_url(
+                "https://api.massive.com/v3/reference/options/contracts?cursor=abc",
+                "http://api.massiveprivateserver.site",
+            ),
+            "http://api.massiveprivateserver.site/v3/reference/options/contracts?cursor=abc"
+        );
+    }
 
     #[test]
     fn maps_massive_option_contract_payload_to_market_rows() {

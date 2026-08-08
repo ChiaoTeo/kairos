@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .cli import ReferenceCliApplication
+from .client import ReferenceSnapshotClient
 
 
-__all__ = ["ReferenceCliApplication"]
+__all__ = ["ReferenceSnapshotClient"]

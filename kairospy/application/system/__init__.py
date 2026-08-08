@@ -24,6 +24,9 @@ from .binaries import reject_owned_options, resolve_binary
 from .risk import RiskProcessConfig
 
 
+SYSTEM_COMPONENTS = ("reference", "market", "account", "risk", "execution")
+
+
 @dataclass(frozen=True, slots=True)
 class ComponentControlApplication(SystemRestClient):
     """Generic facade for system component control.
@@ -60,6 +63,8 @@ class ComponentProcessApplication:
         confirm_live: bool = False,
         instance_workspace: Any | None = None,
     ) -> SystemRestClient:
+        if component == "reference" or (component == "market" and market_provider in {None, "workspace"}):
+            self._ensure_aeron_driver()
         runtime = instance_workspace
         runtime_name = socket_name or component
         socket = runtime.socket(runtime_name) if runtime is not None else self.workspace.paths.process_socket(runtime_name)
@@ -102,6 +107,49 @@ class ComponentProcessApplication:
             log.close()
         return self._wait_ready(runtime_name, control)
 
+    def _ensure_aeron_driver(self) -> None:
+        health_file = self.workspace.paths.health_file("aeron")
+        if health_file.is_file():
+            try:
+                value = json.loads(health_file.read_text(encoding="utf-8"))
+                pid = int(value.get("pid", 0))
+                os.kill(pid, 0)
+                if value.get("status") == "ready":
+                    return
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+            health_file.unlink(missing_ok=True)
+
+        binary = self.binaries.get("aeron") or resolve_binary("kairos-aeron-driver")
+        log_dir = self.workspace.paths.logs / "processes"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log = (log_dir / "aeron.log").open("ab")
+        try:
+            subprocess.Popen(
+                [binary, "--health-file", str(health_file)],
+                cwd=str(self.workspace.paths.root),
+                env=os.environ.copy(),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+            )
+        finally:
+            log.close()
+
+        deadline = time.monotonic() + self.ready_timeout
+        while time.monotonic() < deadline:
+            try:
+                value = json.loads(health_file.read_text(encoding="utf-8"))
+                pid = int(value.get("pid", 0))
+                os.kill(pid, 0)
+                if value.get("status") == "ready":
+                    return
+            except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+            time.sleep(0.05)
+        raise TimeoutError("Aeron media driver did not become ready; inspect workspace logs")
+
     @staticmethod
     def client(component: str, socket: Path) -> SystemRestClient:
         clients = {
@@ -131,6 +179,25 @@ class ComponentProcessApplication:
             }
         return self.client("account" if component == "account" else component, socket).status()
 
+    def list_status(self) -> dict[str, dict[str, Any]]:
+        """Return the status of every workspace-scoped system component.
+
+        Listing is read-only and must not start a missing component.  A stale
+        control socket is reported as not running so the inventory remains
+        useful after an unclean process exit.
+        """
+        result: dict[str, dict[str, Any]] = {}
+        for component in SYSTEM_COMPONENTS:
+            try:
+                result[component] = self.status(component)
+            except (OSError, RuntimeError, ValueError):
+                result[component] = {
+                    "component": component,
+                    "status": "not_running",
+                    "control_socket": str(self.workspace.paths.process_socket(component)),
+                }
+        return result
+
     def _command(
         self,
         component: str,
@@ -147,7 +214,7 @@ class ComponentProcessApplication:
         instance_workspace: Any | None = None,
     ) -> tuple[list[str], Mapping[str, str]]:
         if component == "reference":
-            config = reference_config or ReferenceProcessConfig(self.workspace, provider="workspace")
+            config = reference_config or ReferenceProcessConfig(self.workspace, provider="default")
             configured = self.binaries.get("reference")
             if configured is not None or config.binary == "kairos-reference-server":
                 config = replace(
@@ -170,8 +237,8 @@ class ComponentProcessApplication:
         if instance_workspace is not None:
             command.extend(("--launch-mode", instance_workspace.mode, "--launch-id", instance_workspace.launch_id, "--instance-id", instance_workspace.instance_id))
         child_environment: dict[str, str] = {}
-        if component == "market" and market_provider is not None:
-            command.extend(("--provider", market_provider))
+        if component == "market":
+            command.extend(("--provider", market_provider or "workspace"))
             if market_credential_id is not None:
                 command.extend(("--credential-id", market_credential_id))
             if market_replay_file is not None:
@@ -274,5 +341,6 @@ __all__ = [
     "ComponentControlApplication",
     "ComponentProcessApplication",
     "NativeCliApplication",
+    "SYSTEM_COMPONENTS",
     "resolve_binary",
 ]

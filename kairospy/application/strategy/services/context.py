@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Callable, Mapping, Sequence
 
 from kairospy.strategy import StrategyContextProtocol, StrategyLogger
+from kairospy.application.reference import ReferenceSnapshotClient
 
 from ..domain.messages import CommandHandle, ContextRequest, EventEnvelope, SnapshotEnvelope, SubscriptionRequest, TargetPositionRequest
 from ..protocol import ContextBus, SnapshotReader
@@ -20,6 +21,7 @@ class StrategyContext(StrategyContextProtocol):
         instance_id: str = "",
         bus: ContextBus,
         snapshots: SnapshotReader,
+        reference: ReferenceSnapshotClient | None = None,
         state: dict[str, object] | None = None,
         request_observer: Callable[[ContextRequest, CommandHandle], None] | None = None,
         logger: StrategyLogger | None = None,
@@ -30,6 +32,7 @@ class StrategyContext(StrategyContextProtocol):
         self.instance_id = instance_id
         self._bus = bus
         self._snapshots = snapshots
+        self.reference = reference
         self._request_observer = request_observer
         self.state = state if state is not None else {}
         self.logger = logger or StrategyLogger(fields={"strategy_id": strategy_id, "instance_id": instance_id})
@@ -59,6 +62,7 @@ class StrategyContext(StrategyContextProtocol):
     def subscribe(self, subject: str, *, selectors: Sequence[str] = (), exchange: str | None = None, market_type: str | None = None, asset_type: str | None = None, identity: str | None = None, params: Mapping[str, object] | None = None, dynamic: bool = False) -> CommandHandle:
         request = SubscriptionRequest(subject=subject, selectors=tuple(selectors), exchange=exchange, market_type=market_type, asset_type=asset_type, identity=identity, params=params or {}, dynamic=dynamic)
         return self._submit("market.subscribe", request)
+
 
     def unsubscribe(self, subscription: object) -> CommandHandle:
         return self._submit("market.unsubscribe", subscription)
@@ -98,7 +102,7 @@ class StrategyContext(StrategyContextProtocol):
     def _request_id(self, operation: str) -> str:
         self._request_counter += 1
         sequence = self._event_sequence() or 0
-        return f"{self.strategy_id}:{operation}:{sequence}:{self._request_counter}"
+        return f"{self.strategy_id}:{self.instance_id}:{operation}:{sequence}:{self._request_counter}"
 
     def _event_sequence(self) -> int | None:
         return None if self._event is None else self._event.sequence

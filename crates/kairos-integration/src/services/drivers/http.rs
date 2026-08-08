@@ -44,11 +44,16 @@ impl PublicHttpClient {
         // Tokio runtime is current. Market control handlers are async, so do
         // the blocking-client construction on a plain OS thread.
         let user_agent = user_agent.to_owned();
-        let client = std::thread::spawn(move || Client::builder().user_agent(user_agent).build())
-            .join()
-            .map_err(|_| {
-                ExchangeError::Connection("HTTP client builder thread panicked".into())
-            })??;
+        let client = std::thread::spawn(move || {
+            Client::builder()
+                .user_agent(user_agent)
+                // Reference exchangeInfo responses can be tens of megabytes
+                // uncompressed. Keep enough time for slow public API routes.
+                .timeout(Duration::from_secs(120))
+                .build()
+        })
+        .join()
+        .map_err(|_| ExchangeError::Connection("HTTP client builder thread panicked".into()))??;
         Ok(Self {
             client: Some(client),
             max_attempts: 3,

@@ -232,6 +232,19 @@ impl ReferenceApplication {
             records.extend(
                 self.markets(&market_query)
                     .into_iter()
+                    .filter(|market| {
+                        query
+                            .underlying_instrument_id
+                            .as_deref()
+                            .is_none_or(|underlying| {
+                                self.actor
+                                    .catalog
+                                    .markets
+                                    .get(&market.market_id)
+                                    .and_then(|value| value.underlying_instrument_id.as_deref())
+                                    == Some(underlying)
+                            })
+                    })
                     .map(ReferenceRecord::Market),
             );
         }

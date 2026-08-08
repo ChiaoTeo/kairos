@@ -36,7 +36,7 @@ def resolve_binary(name: str, *, override: str | None = None) -> str:
         return value
     package_root = Path(__file__).resolve().parents[2]
     packaged = package_root / "_bin" / name
-    if packaged.is_file():
+    if packaged.is_file() and os.access(packaged, os.X_OK):
         return str(packaged)
     for development in (
         package_root.parent / "target" / "debug" / name,

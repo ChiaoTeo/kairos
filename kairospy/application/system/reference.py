@@ -14,7 +14,7 @@ class ReferenceProcessConfig:
     """Business-level configuration for one Reference process instance."""
 
     workspace: Workspace
-    provider: str = "binance-spot"
+    provider: str = "default"
     endpoint: str | None = None
     binary: str = "kairos-reference-server"
     channel: str = "aeron:udp?endpoint=localhost:40123"
@@ -67,7 +67,7 @@ class ReferenceProcessConfig:
         command.extend(("--socket", str(socket_path), "--health-file", str(health_file)))
         environment = dict(self.environment)
         if self.api_key is not None:
-            if self.provider == "massive-options":
+            if self.provider in {"default", "massive", "massive-equity", "massive-options"}:
                 environment["MASSIVE_API_KEY"] = self.api_key
             elif self.provider == "binance-equity":
                 environment["BINANCE_API_KEY"] = self.api_key

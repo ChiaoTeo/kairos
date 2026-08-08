@@ -20,6 +20,7 @@ capability is not complete until its acceptance condition has a focused test.
 | Change publication | Persisted changes remain retryable after publication failure | Implemented |
 | Query facade | Application exposes typed ID, text, venue, status, underlying, and as-of queries | Implemented |
 | Server control | Health, snapshot, refresh, publish, query, asset upsert, and stop work over the control socket | Implemented |
+| Provider discovery/control | Default startup discovers configured credentialed sources; provider mode and refresh are available through the control CLI | Implemented |
 
 ## Provider coverage
 

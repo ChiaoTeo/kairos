@@ -18,12 +18,14 @@ use kairos_protocol::generated::kairos::reference::v_1::{
     MarketsSnapshot as FbMarketsSnapshot, MarketsSnapshotArgs as FbMarketsSnapshotArgs,
     ReferenceChanged as FbReferenceChanged, ReferenceChangedArgs as FbReferenceChangedArgs,
 };
+use kairos_protocol::InstanceIdentity;
 
 use crate::domain::{unix_nanos, LifecycleEvent, ReferenceCatalog, ReferenceResult};
 
 pub(crate) struct FlatbuffersSnapshotEncoder {
     pub actor_id: String,
     pub event_stream_id: String,
+    pub identity: InstanceIdentity,
 }
 
 impl FlatbuffersSnapshotEncoder {
@@ -31,6 +33,19 @@ impl FlatbuffersSnapshotEncoder {
         Self {
             actor_id: actor_id.into(),
             event_stream_id: event_stream_id.into(),
+            identity: InstanceIdentity::default(),
+        }
+    }
+
+    pub fn with_identity(
+        actor_id: impl Into<String>,
+        event_stream_id: impl Into<String>,
+        identity: InstanceIdentity,
+    ) -> Self {
+        Self {
+            actor_id: actor_id.into(),
+            event_stream_id: event_stream_id.into(),
+            identity,
         }
     }
 
@@ -342,15 +357,18 @@ impl FlatbuffersSnapshotEncoder {
             .collect();
         let market_ids = builder.create_vector(&market_ids);
         let change_kinds = builder.create_vector(&change_kinds);
+        let workspace_id = non_empty_string(&mut builder, &self.identity.workspace_id);
+        let launch_id = non_empty_string(&mut builder, &self.identity.launch_id);
+        let instance_id = non_empty_string(&mut builder, &self.identity.instance_id);
         let header = MessageHeader::create(
             &mut builder,
             &MessageHeaderArgs {
                 message_id: Some(message_id),
                 stream_id: Some(stream_id),
                 producer_id: Some(producer_id),
-                workspace_id: None,
-                launch_id: None,
-                instance_id: None,
+                workspace_id,
+                launch_id,
+                instance_id,
                 sequence: catalog.event_sequence,
                 event_time_unix_nanos: events
                     .last()
@@ -437,6 +455,9 @@ impl FlatbuffersSnapshotEncoder {
         let view = builder.create_string(view_key);
         let actor = builder.create_string(&self.actor_id);
         let stream = builder.create_string(&self.event_stream_id);
+        let workspace_id = non_empty_string(builder, &self.identity.workspace_id);
+        let launch_id = non_empty_string(builder, &self.identity.launch_id);
+        let instance_id = non_empty_string(builder, &self.identity.instance_id);
         SnapshotHeader::create(
             builder,
             &SnapshotHeaderArgs {
@@ -444,9 +465,9 @@ impl FlatbuffersSnapshotEncoder {
                 view_key: Some(view),
                 owner_actor_id: Some(actor),
                 event_stream_id: Some(stream),
-                workspace_id: None,
-                launch_id: None,
-                instance_id: None,
+                workspace_id,
+                launch_id,
+                instance_id,
                 event_sequence: catalog.event_sequence,
                 version: catalog.generation,
                 generation: catalog.generation,
@@ -456,6 +477,13 @@ impl FlatbuffersSnapshotEncoder {
             },
         )
     }
+}
+
+fn non_empty_string<'a, 'b, A: flatbuffers::Allocator + 'a>(
+    builder: &'b mut flatbuffers::FlatBufferBuilder<'a, A>,
+    value: &str,
+) -> Option<flatbuffers::WIPOffset<&'a str>> {
+    (!value.is_empty()).then(|| builder.create_string(value))
 }
 
 fn decimal64(value: Option<&str>) -> Option<Decimal64> {

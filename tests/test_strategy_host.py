@@ -128,7 +128,7 @@ def test_strategy_cannot_run_until_snapshot_watermark_is_joined(tmp_path: Path) 
     host, _, bus, stream = _host(tmp_path)
     stream.first_sequence = 20
     host.start()
-    bus.resolve("user-sma:market.subscribe:0:1")
+    bus.resolve("user-sma:instance-1:market.subscribe:0:1")
 
     try:
         host.refresh()

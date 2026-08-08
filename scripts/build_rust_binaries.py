@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARIES = {
+    "kairos-transport": ("kairos-aeron-driver",),
     "kairos-reference": ("kairos-reference-server", "kairos-reference-cli"),
     "kairos-market": ("kairos-market-server", "kairos-market-cli"),
     "kairos-risk": ("kairos-risk-server", "kairos-risk-cli"),

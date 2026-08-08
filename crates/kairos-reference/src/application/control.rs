@@ -11,3 +11,4 @@ pub const ASSETS: &str = "/v1/assets";
 pub const QUERY: &str = "/v1/query";
 pub const SHOW: &str = "/v1/show";
 pub const EVENTS: &str = "/v1/events";
+pub const PROVIDERS: &str = "/v1/providers";

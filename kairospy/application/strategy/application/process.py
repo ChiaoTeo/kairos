@@ -46,9 +46,13 @@ class StrategyProcessApplication:
                     raise RuntimeError("strategy server is already failed; stop and recreate the instance")
                 return socket
 
-        log_dir = self.workspace.paths.logs / "launches" / mode / launch_id / instance_id
+        # Strategy is an instance-owned process. Keep its stdout beside the
+        # other instance runtime logs so all instance resources use one
+        # canonical layout.
+        instance_workspace = self.workspace.instance(mode, launch_id, instance_id)
+        log_path = instance_workspace.log("strategy.log")
+        log_dir = log_path.parent
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = log_dir / "strategy.log"
         log = log_path.open("ab")
         command = [
             sys.executable, "-m", "kairospy.bin.strategy",

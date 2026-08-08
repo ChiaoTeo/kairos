@@ -164,61 +164,18 @@ fn application_exposes_read_only_market_queries() {
 }
 
 #[test]
-fn workspace_reference_composes_all_market_product_sources_without_network() {
+fn default_reference_registry_composes_without_market_configuration() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
-    std::fs::create_dir_all(root.join("credentials")).unwrap();
     std::fs::write(
         root.join("kairos.toml"),
-        r#"version = 1
-workspace_id = "reference-test"
-
-[market.connections.binance-spot]
-provider = "binance-spot-rest"
-[market.connections.binance-usdm]
-provider = "binance-usdm-futures-rest"
-[market.connections.binance-coinm]
-provider = "binance-coinm-futures-rest"
-[market.connections.binance-options]
-provider = "binance-options-rest"
-[market.connections.binance-equity]
-provider = "binance-equity-rest"
-credential_id = "binance-readonly"
-[market.connections.okx-spot]
-provider = "okx-spot-rest"
-asset_type = "crypto"
-[market.connections.okx-equity]
-provider = "okx-spot-rest"
-asset_type = "equity"
-[market.connections.okx-swap]
-provider = "okx-swap-rest"
-[market.connections.okx-futures]
-provider = "okx-futures-rest"
-[market.connections.okx-options]
-provider = "okx-options-rest"
-[market.connections.massive-equity]
-provider = "massive-equity-websocket"
-credential_id = "massive-readonly"
-[market.connections.massive-options]
-provider = "massive-options-websocket"
-credential_id = "massive-readonly"
-"#,
+        "version = 1\nworkspace_id = \"reference-test\"\n",
     )
     .unwrap();
-    for (id, provider) in [
-        ("binance-readonly", "binance"),
-        ("massive-readonly", "massive"),
-    ] {
-        std::fs::write(
-            root.join("credentials").join(format!("{id}.toml")),
-            format!("[credential]\nid = \"{id}\"\nprovider = \"{provider}\"\napi_key = \"test-key\"\napi_secret = \"test-secret\"\n"),
-        )
-        .unwrap();
-    }
     let composition = build_application(
         &ReferenceCompositionConfig {
             workspace: Some(root.to_path_buf()),
-            provider: "workspace".into(),
+            provider: "default".into(),
             endpoint: "https://example.invalid".into(),
             database: root.join("reference.sqlite"),
             api_key: String::new(),
@@ -234,7 +191,7 @@ credential_id = "massive-readonly"
         false,
     )
     .unwrap();
-    assert_eq!(composition.application.source_id(), "workspace");
+    assert_eq!(composition.application.source_id(), "reference-default");
 }
 
 #[test]

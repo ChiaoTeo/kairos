@@ -69,6 +69,7 @@ class MarketUnixCommandPort:
                 "market_type": request.market_type,
                 "asset_type": request.asset_type,
                 "identity": request.identity,
+                "params": dict(request.params),
                 "dynamic": request.dynamic,
             },
         )

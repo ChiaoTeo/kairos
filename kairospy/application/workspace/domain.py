@@ -98,6 +98,11 @@ class WorkspacePaths:
     def reference_health(self) -> Path:
         return self.child("run", "reference", "health.json")
 
+    def reference_snapshot(self, view: str = "catalog") -> Path:
+        if view not in {"catalog", "markets", "lifecycle"}:
+            raise ValueError(f"unsupported reference snapshot view: {view}")
+        return self.child("snapshots", "reference", f"{view}.snapshot")
+
     def risk_socket(self) -> Path:
         return self.child("run", "risk", "risk.sock")
 

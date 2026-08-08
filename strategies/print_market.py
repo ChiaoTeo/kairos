@@ -14,9 +14,12 @@ class PrintMarket(StrategyBase):
         )
 
     def on_data(self, context, event):
+        if event.kind != "quote":
+            return
+        payload = event.payload
         print(
-            f"market event kind={event.kind} symbol={event.payload.instrument_id} "
-            f"bid={event.payload.bid_price.value if event.payload.bid_price else '-'} "
-            f"ask={event.payload.ask_price.value if event.payload.ask_price else '-'}",
+            f"market event kind=quote symbol={payload.instrument_id} "
+            f"bid={payload.bid_price.value if payload.bid_price else '-'} "
+            f"ask={payload.ask_price.value if payload.ask_price else '-'}",
             flush=True,
         )

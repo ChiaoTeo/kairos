@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-import tomllib
+import time
 from pathlib import Path
 
 import typer
@@ -114,17 +114,6 @@ def _release_launch_leases(workspace, account_ids: list[str], *, instance: str) 
         except (FileNotFoundError, ValueError):
             # Cleanup must never replace the original launch exception.
             pass
-
-
-def _workspace_has_market_connections(workspace) -> bool:
-    """Return whether the workspace opted into an explicit market catalog."""
-    try:
-        values = tomllib.loads(workspace.paths.manifest.read_text(encoding="utf-8"))
-    except (FileNotFoundError, tomllib.TOMLDecodeError):
-        return False
-    market = values.get("market")
-    connections = market.get("connections") if isinstance(market, dict) else None
-    return isinstance(connections, dict) and bool(connections)
 
 
 def _account_component_name(account_id: str) -> str:
@@ -248,7 +237,6 @@ def start(
         market_provider = None
         market_credential_id = None
         market_replay_file = None
-        has_market_connections = _workspace_has_market_connections(owner)
         if launch_plan is not None:
             if launch_plan.paper_events is not None:
                 market_provider, market_replay_file = "replay", launch_plan.paper_events
@@ -256,16 +244,12 @@ def start(
                 market_provider, market_replay_file = "replay", launch_plan.backtest_replay_file
             elif isinstance(launch_plan.mode_config.get("market"), dict):
                 market_config = launch_plan.mode_config["market"]
-                # Market loads the complete Workspace connection catalog and
-                # creates the matching provider lazily for each strategy
-                # subscription. Inline provider fields remain a supported
-                # launch-plan input form.
-                market_provider = market_config.get("provider") or (
-                    "workspace" if has_market_connections else "binance-spot-websocket"
-                )
+                # Market owns the built-in provider catalog and discovers
+                # credentialed products from the Workspace automatically.
+                market_provider = market_config.get("provider") or "workspace"
                 market_credential_id = market_config.get("credential_id")
             if market_provider is None and mode in {"paper", "live"}:
-                market_provider = "workspace" if has_market_connections else "binance-spot-websocket"
+                market_provider = "workspace"
         execution_config = dict(launch_plan.execution) if launch_plan is not None else {}
         execution_provider = str(execution_config["provider"]) if execution_config.get("provider") is not None else None
         execution_product = str(execution_config["product"]) if execution_config.get("product") is not None else None
@@ -283,12 +267,11 @@ def start(
             instance_workspace if launch_plan is not None and launch_plan.market_scope == "instance"
             else None
         )
-        # Reference is a Workspace-global catalog runtime. It is started once
-        # and is never placed in an instance workspace.
-        if has_market_connections:
-            ComponentProcessApplication(owner).ensure_running(
-                "reference", reference_config=ReferenceProcessConfig(owner, provider="workspace")
-            )
+        # Reference is a Workspace-global catalog runtime. Its source registry
+        # is built into Reference; it must not depend on Market configuration.
+        ComponentProcessApplication(owner).ensure_running(
+            "reference", reference_config=ReferenceProcessConfig(owner, provider="default")
+        )
         ComponentProcessApplication(owner).ensure_running(
             "market", market_provider=market_provider, market_replay_file=market_replay_file,
             market_credential_id=market_credential_id,
@@ -319,8 +302,7 @@ def start(
                 "health": str(instance_workspace.health("market")) if market_instance_workspace is not None else str(owner.paths.health_file("market")),
             },
         }
-        if has_market_connections:
-            component_endpoints["reference"] = {"socket": str(owner.paths.process_socket("reference")), "health": str(owner.paths.health_file("reference"))}
+        component_endpoints["reference"] = {"socket": str(owner.paths.process_socket("reference")), "health": str(owner.paths.health_file("reference"))}
         # Execution reads this manifest during its own construction, so the
         # dependency endpoints must already be present before it starts.
         _write_instance_manifest(instance_workspace, accounts=account_endpoints, components=component_endpoints)
@@ -573,7 +555,7 @@ def attach(
     instance = str(active["instance_id"])
     target = _target(launch_id, instance, mode, workspace)
     value = LaunchControlApplication(owner).status(target)
-    log_path = owner.paths.logs / "launches" / mode / launch_id / instance / "strategy.log"
+    log_path = owner.instance(mode, launch_id, instance).log("strategy.log")
     log_lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:] if log_path.is_file() and lines else []
     structured_logs = []
     for line in log_lines:
@@ -597,20 +579,47 @@ def attach(
 @launch_app.command("logs")
 def logs(
     launch_id: str,
-    instance: str = typer.Option("default", "--instance"),
+    instance: str | None = typer.Option(None, "--instance"),
     mode: str = typer.Option("paper", "--mode"),
     workspace: Path = typer.Option(None, "--workspace"),
+    follow: bool = typer.Option(False, "-f", "--follow", help="Follow the selected log file."),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
-    root = owner.paths.logs / "launches" / mode / launch_id / instance
+    if instance is None:
+        active = _running_instance(owner, launch_id, mode)
+        if active is not None:
+            instance = str(active["instance_id"])
+        else:
+            entries = LaunchRegistryApplication(owner).instances(launch_id)
+            matching = [entry for entry in entries if entry.get("mode") == mode]
+            if matching:
+                instance = str(matching[-1].get("instance_id") or "default")
+            else:
+                instance = "default"
+    if follow and output is not OutputFormat.TEXT:
+        raise typer.BadParameter("--follow currently supports text output only")
+    root = owner.instance(mode, launch_id, instance).root / "logs"
     files = sorted(path for path in root.rglob("*") if path.is_file()) if root.is_dir() else []
     payload = {"path": str(root), "exists": root.exists(), "files": [str(path) for path in files]}
     if files:
         latest = files[-1]
         payload["latest"] = str(latest)
-        payload["lines"] = latest.read_text(encoding="utf-8", errors="replace").splitlines()[-100:]
+        lines = latest.read_text(encoding="utf-8", errors="replace").splitlines()[-100:]
+        payload["lines"] = lines
     _emit(payload, output)
+    if follow and files:
+        position = latest.stat().st_size
+        while True:
+            try:
+                with latest.open("r", encoding="utf-8", errors="replace") as stream:
+                    stream.seek(position)
+                    for line in stream:
+                        typer.echo(line.rstrip("\n"), color=False)
+                    position = stream.tell()
+                time.sleep(0.25)
+            except KeyboardInterrupt:
+                return
 
 
 @launch_app.command("artifacts")

@@ -356,7 +356,7 @@ struct Cli {
     workspace: std::path::PathBuf,
     #[arg(long, global = true, visible_alias = "format", value_enum, default_value_t = OutputFormat::Json)]
     output: OutputFormat,
-    #[arg(long, global = true, default_value = "binance-spot")]
+    #[arg(long, global = true, default_value = "default")]
     provider: String,
     #[arg(long, global = true)]
     endpoint: Option<String>,

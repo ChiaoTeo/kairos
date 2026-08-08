@@ -15,6 +15,26 @@ An instrument may still contain `underlying_instrument_id`; that is a domain
 relationship describing the instrument, not a provider query option. Consumers
 may filter query results by underlying after the full catalog has been built.
 
+## Default startup
+
+Reference owns its provider/product source registry. Start the Workspace-global
+server without selecting a provider:
+
+```text
+kairos-reference-server --workspace <workspace>
+```
+
+Binance public products are built in. Credentialed sources such as Massive are
+added when their Workspace credential exists, with optional overrides under
+`[reference.providers.*]` or `[reference.products.*]`. Reference does not read
+`market.connections`; that section belongs to the Market runtime.
+
+Normal process control does not require a provider flag. The default registry
+skips credential files with no resolved API key, includes credentialed sources
+when their namespaced or conventional environment secret is available, and
+reports the resulting source mode through `reference providers`. Use
+`reference refresh` to request a refresh through the running process.
+
 ## Architecture
 
 ```text

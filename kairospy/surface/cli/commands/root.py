@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import typer
+from prettytable import PrettyTable
 
 from kairospy.application.system import (
     ComponentControlApplication,
@@ -741,6 +742,25 @@ def system_status(
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
     _emit(ComponentProcessApplication(owner).status(component), output)
+
+
+@system_app.command("list")
+def system_list(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """List workspace-scoped system components without starting them."""
+    owner = WorkspaceApplication().open(workspace)
+    value = ComponentProcessApplication(owner).list_status()
+    if output is OutputFormat.JSON:
+        _emit(value, output)
+        return
+    table = PrettyTable()
+    table.field_names = ["component", "status", "control socket"]
+    table.align = "l"
+    for component, status in value.items():
+        table.add_row([component, status.get("status", "unknown"), status.get("control_socket", "")])
+    typer.echo(table)
 @timeline_app.command("list")
 def timeline_list(
     file: Path = typer.Option(..., "--file"),

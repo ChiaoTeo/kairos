@@ -45,6 +45,28 @@ def test_market_port_preserves_asset_type_route_key() -> None:
     assert client.calls[0][2]["payload"]["asset_type"] == "equity"
 
 
+def test_market_port_forwards_chain_subscription_parameters() -> None:
+    client = RecordingClient()
+    port = MarketUnixCommandPort(client)
+    port.subscribe(
+        MarketSubscriptionRequest(
+            "market.AAPL",
+            selectors=("quote",),
+            exchange="massive",
+            market_type="options",
+            asset_type="equity",
+            params={"mode": "chain", "underlying": "AAPL"},
+        ),
+        strategy_id="options",
+        instance_id="instance-1",
+        request_id="request-options",
+    )
+    assert client.calls[0][2]["payload"]["params"] == {
+        "mode": "chain",
+        "underlying": "AAPL",
+    }
+
+
 def test_execution_port_encodes_decimal_intent_without_vendor_payloads() -> None:
     client = RecordingClient()
     port = ExecutionIntentCommandPort(client)

@@ -67,6 +67,11 @@ in-place operation visible to existing readers.
 Business crates select channels and stream ids, but do not depend directly on
 the Aeron SDK.
 
+Reference has three business-owned views, so its resource directory contains
+`catalog.snapshot`, `markets.snapshot`, and `lifecycle.snapshot`. Its Unix
+socket remains the control/query plane; clients must use the mmap views for
+current-state reads.
+
 The shared region is the live current state. A process initializes it once and
 then mutates it in place; it must not rebuild and replace a complete payload
 for each business event.

@@ -17,6 +17,7 @@ class StrategyContextProtocol(Protocol):
     instance_id: str
     state: MutableMapping[str, object]
     logger: "StrategyLogger"
+    reference: object
 
     @property
     def now(self) -> datetime | None: ...
@@ -36,6 +37,7 @@ class StrategyContextProtocol(Protocol):
         params: Mapping[str, object] | None = None,
         dynamic: bool = False,
     ) -> CommandResult: ...
+
 
     def unsubscribe(self, subscription: object) -> CommandResult: ...
 

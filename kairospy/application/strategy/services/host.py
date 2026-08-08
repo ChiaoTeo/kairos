@@ -8,6 +8,7 @@ from ..domain.messages import EventEnvelope, LifecycleRecord
 from ..protocol import ContextBus, EventStream, LifecycleJournal, SnapshotReader, Strategy
 from .context import StrategyContext
 from kairospy.strategy import StrategyLogger
+from kairospy.application.reference import ReferenceSnapshotClient
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +36,7 @@ class StrategyHost:
         instance_id: str,
         bus: ContextBus,
         snapshots: SnapshotReader,
+        reference: ReferenceSnapshotClient | None = None,
         stream: EventStream,
         journal: LifecycleJournal,
         logger: StrategyLogger | None = None,
@@ -60,6 +62,7 @@ class StrategyHost:
             instance_id=instance_id,
             bus=bus,
             snapshots=snapshots,
+            reference=reference,
             request_observer=self._observe_request,
             logger=self.logger,
         )
@@ -134,10 +137,11 @@ class StrategyHost:
             return
         if event.stream_id != self.stream.stream_id:
             raise ValueError("event belongs to a different stream")
-        if event.sequence != self._status.event_sequence + 1:
-            error = RuntimeError("event stream is not continuous")
-            self._transition(StrategyLifecycle.FAILED, str(error))
-            raise error
+        # The live Unix stream has no replay/acknowledgement handshake, so a
+        # subscriber can legitimately miss events while attaching.  The
+        # snapshot supplies the initial state; thereafter the stream advances
+        # the watermark to each received event without claiming replay-grade
+        # continuity.
         self.context._bind(event)
         hook = {
             "data": "on_data",

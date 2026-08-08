@@ -1,9 +1,13 @@
 //! Shared workspace identity and layout validation for Rust processes.
 
 use std::{
-    fs, io,
+    fs::{self, File, OpenOptions},
+    io,
     path::{Path, PathBuf},
 };
+
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -26,18 +30,50 @@ impl Default for WorkspaceCliConfig {
     }
 }
 
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceMassiveConfig {
+    pub rest_base_url: Option<String>,
+    pub websocket_base_url: Option<String>,
+    pub option_underlying: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceMarketConfig {
+    #[serde(default)]
+    pub massive: WorkspaceMassiveConfig,
+}
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct WorkspaceManifest {
     pub version: u32,
     pub workspace_id: String,
     #[serde(default)]
     pub cli: WorkspaceCliConfig,
+    #[serde(default)]
+    pub market: WorkspaceMarketConfig,
 }
 
 #[derive(Debug, Clone)]
 pub struct Workspace {
     root: PathBuf,
     manifest: WorkspaceManifest,
+}
+
+/// A workspace-scoped process lock held for the lifetime of its file handle.
+///
+/// The lock file is intentionally retained on disk. The advisory OS lock,
+/// rather than stale PID or socket contents, is the source of truth; the OS
+/// releases it automatically if the owner exits unexpectedly.
+#[derive(Debug)]
+pub struct WorkspaceProcessLock {
+    _file: File,
+    path: PathBuf,
+}
+
+impl WorkspaceProcessLock {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -307,6 +343,10 @@ impl Workspace {
         &self.manifest.cli.format
     }
 
+    pub fn market_config(&self) -> &WorkspaceMarketConfig {
+        &self.manifest.market
+    }
+
     pub fn config_root(&self) -> PathBuf {
         self.root.join("config")
     }
@@ -372,6 +412,45 @@ impl Workspace {
         self.control_socket(process)
     }
 
+    pub fn process_lock(&self, process: &str) -> io::Result<WorkspaceProcessLock> {
+        let path = self.child(&["run", process, &format!("{process}.lock")])?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)?;
+
+        #[cfg(unix)]
+        {
+            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if result != 0 {
+                let error = io::Error::last_os_error();
+                if matches!(error.raw_os_error(), Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("process lock is already held: {}", path.display()),
+                    ));
+                }
+                return Err(error);
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = file;
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "workspace process locks are only implemented on Unix",
+            ));
+        }
+
+        Ok(WorkspaceProcessLock { _file: file, path })
+    }
+
     pub fn control_socket(&self, name: &str) -> io::Result<PathBuf> {
         self.child(&["run", name, &format!("{name}.sock")])
     }
@@ -425,6 +504,20 @@ mod tests {
             .health_file("risk")
             .unwrap()
             .ends_with("run/risk/health.json"));
+    }
+
+    #[test]
+    fn process_lock_rejects_a_second_owner_until_the_first_is_dropped() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(root.path().join("workspace"), "demo").unwrap();
+        let first = workspace.process_lock("reference").unwrap();
+        assert!(first.path().ends_with("run/reference/reference.lock"));
+        assert_eq!(
+            workspace.process_lock("reference").unwrap_err().kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        drop(first);
+        assert!(workspace.process_lock("reference").is_ok());
     }
 
     #[test]

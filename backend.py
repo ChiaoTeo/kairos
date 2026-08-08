@@ -14,6 +14,7 @@ from setuptools import build_meta as _setuptools
 
 ROOT = Path(__file__).resolve().parent
 BINARIES = (
+    "kairos-aeron-driver",
     "kairos-reference-server", "kairos-reference-cli",
     "kairos-market-server", "kairos-market-cli",
     "kairos-risk-server", "kairos-risk-cli",
@@ -44,16 +45,26 @@ def _rewrite_wheel(wheel: Path, binaries: Path) -> None:
     files[wheel_metadata] = files[wheel_metadata].replace(b"Root-Is-Purelib: true", b"Root-Is-Purelib: false")
     for binary in BINARIES:
         data = (binaries / binary).read_bytes()
-        files[f"kairospy/_bin/{binary}"] = data
-        files[f"{wheel_data}/{binary}"] = data
+        for name in (f"kairospy/_bin/{binary}", f"{wheel_data}/{binary}"):
+            info = zipfile.ZipInfo(name)
+            info.create_system = 3
+            info.external_attr = 0o100755 << 16
+            files[name] = (data, info)
     record = f"{dist_info}/RECORD"
-    rows = [f"{name},{_digest(data)},{len(data)}" for name, data in files.items() if name != record]
+    rows = [
+        f"{name},{_digest(data if isinstance(data, bytes) else data[0])},{len(data if isinstance(data, bytes) else data[0])}"
+        for name, data in files.items()
+        if name != record
+    ]
     rows.append(f"{record},,")
     files[record] = ("\n".join(rows) + "\n").encode()
     temporary = wheel.with_suffix(".tmp.whl")
     with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as target:
         for name, data in files.items():
-            target.writestr(name, data)
+            if isinstance(data, tuple):
+                target.writestr(data[1], data[0])
+            else:
+                target.writestr(name, data)
     temporary.replace(wheel)
 
 
@@ -68,6 +79,15 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
 
 def build_sdist(sdist_directory, config_settings=None):
     return _setuptools.build_sdist(sdist_directory, config_settings)
+
+
+def build_editable(wheel_directory, config_settings=None, metadata_directory=None):
+    """Delegate editable installs to setuptools without rebuilding native files."""
+    return _setuptools.build_editable(wheel_directory, config_settings, metadata_directory)
+
+
+def prepare_metadata_for_build_editable(metadata_directory, config_settings=None):
+    return _setuptools.prepare_metadata_for_build_editable(metadata_directory, config_settings)
 
 
 def prepare_metadata_for_build_wheel(metadata_directory, config_settings=None):

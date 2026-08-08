@@ -11,7 +11,7 @@ import typer
 from typer.main import get_command
 
 from .commands.launch import launch_app
-from .commands.reference import _HELP, catalog_passthrough
+from .commands.reference import reference_app
 from .commands.account import HELP as ACCOUNT_HELP, account_passthrough
 from .commands.market import HELP as MARKET_HELP, market_passthrough
 from .commands.order import HELP as ORDER_HELP, order_passthrough
@@ -47,15 +47,6 @@ app.command(
     help=MARKET_HELP,
 )(market_passthrough)
 app.command(
-    "catalog",
-    context_settings={
-        "allow_extra_args": True,
-        "ignore_unknown_options": True,
-        "help_option_names": [],
-    },
-    help=_HELP,
-)(catalog_passthrough)
-app.command(
     "order",
     context_settings={
         "allow_extra_args": True,
@@ -66,6 +57,7 @@ app.command(
 )(order_passthrough)
 app.add_typer(system_app, name="system")
 app.add_typer(timeline_app, name="timeline")
+app.add_typer(reference_app, name="reference")
 
 
 def _cli_format(argv: Sequence[str]) -> str:

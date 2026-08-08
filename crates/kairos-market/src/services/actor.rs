@@ -34,6 +34,7 @@ pub struct MarketSnapshot {
 pub struct ReconcileResult {
     pub added: Vec<String>,
     pub removed: Vec<String>,
+    pub changed: Vec<String>,
     pub unchanged: Vec<String>,
 }
 
@@ -203,6 +204,9 @@ impl MarketActor {
                     .insert((subscription_id.clone(), market_id), provider_id);
             }
         }
+        if let Some(feed) = self.feed.as_ref() {
+            self.feed_status = feed.status();
+        }
         self.generation += 1;
         Ok(diff_members(&previous, &selected))
     }
@@ -250,8 +254,21 @@ impl MarketActor {
             let previous = intent.members.clone();
             let previous_ids: BTreeSet<_> = previous.keys().cloned().collect();
             let selected_ids: BTreeSet<_> = selected.keys().cloned().collect();
-            let added_ids: Vec<_> = selected_ids.difference(&previous_ids).cloned().collect();
-            let removed_ids: Vec<_> = previous_ids.difference(&selected_ids).cloned().collect();
+            let changed_ids: Vec<_> = selected_ids
+                .intersection(&previous_ids)
+                .filter(|market_id| previous.get(*market_id) != selected.get(*market_id))
+                .cloned()
+                .collect();
+            let added_ids: Vec<_> = selected_ids
+                .difference(&previous_ids)
+                .cloned()
+                .chain(changed_ids.iter().cloned())
+                .collect();
+            let removed_ids: Vec<_> = previous_ids
+                .difference(&selected_ids)
+                .cloned()
+                .chain(changed_ids.iter().cloned())
+                .collect();
             if let Some(feed) = self.feed.as_mut() {
                 let mut added_provider_ids = Vec::new();
                 for market_id in &added_ids {
@@ -290,9 +307,12 @@ impl MarketActor {
                     }
                 }
             }
+            if let Some(feed) = self.feed.as_ref() {
+                self.feed_status = feed.status();
+            }
             intent.members = selected.clone();
             let diff = diff_members(&previous, &selected);
-            if diff.added.len() + diff.removed.len() > 0 {
+            if diff.added.len() + diff.removed.len() + diff.changed.len() > 0 {
                 self.generation += 1;
             }
             results.insert(id, diff);
@@ -476,9 +496,19 @@ fn diff_members(
 ) -> ReconcileResult {
     let previous_ids: BTreeSet<_> = previous.keys().cloned().collect();
     let current_ids: BTreeSet<_> = current.keys().cloned().collect();
+    let changed: BTreeSet<_> = current_ids
+        .intersection(&previous_ids)
+        .filter(|market_id| previous.get(*market_id) != current.get(*market_id))
+        .cloned()
+        .collect();
     ReconcileResult {
         added: current_ids.difference(&previous_ids).cloned().collect(),
         removed: previous_ids.difference(&current_ids).cloned().collect(),
-        unchanged: current_ids.intersection(&previous_ids).cloned().collect(),
+        changed: changed.iter().cloned().collect(),
+        unchanged: current_ids
+            .intersection(&previous_ids)
+            .filter(|market_id| !changed.contains(*market_id))
+            .cloned()
+            .collect(),
     }
 }

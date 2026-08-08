@@ -30,59 +30,45 @@ Market 是否 Workspace 级共享，取决于运行模式：
 `MarketStreamConnection`，由 instance-local Market runtime 定时轮询。该连接需要
 Binance API key；下单等签名操作仍额外需要 API secret。
 
-连接定义和凭证都属于 Workspace 资源，不应把 provider 或原始 key/secret 写入 launch
-TOML。Workspace manifest 中定义可复用的连接，launch 只绑定连接名称：
+Reference 是默认可启动的 Workspace 全局目录服务。Binance Spot、USDM Futures、
+COIN-M Futures 和 Options 的 source 由 Reference 内置，不需要在 Workspace manifest
+中声明。Massive 等需要凭证的 provider 在发现对应 Workspace credential 后自动加入；
+只有需要显式启用/禁用或指定凭证时才写 Reference override：
 
 ```toml
-[market.connections.binance-equity]
-provider = "binance-equity-rest"
-credential_id = "binance-equity-readonly"
-
-[market.connections.binance-spot]
-provider = "binance-spot-rest"
-
-[market.connections.binance-usdm-futures]
-provider = "binance-usdm-futures-rest"
-
-[market.connections.binance-coinm-futures]
-provider = "binance-coinm-futures-rest"
-
-[market.connections.binance-options]
-provider = "binance-options-rest"
-
-[market.connections.okx-options]
-provider = "okx-options-rest"
-market_type = "options"
-
-[market.connections.okx-spot]
-provider = "okx-spot-rest"
-market_type = "spot"
-asset_type = "crypto"
-
-[market.connections.okx-equity]
-provider = "okx-spot-rest"
-market_type = "spot"
-asset_type = "equity"
-
-[market.connections.okx-swap]
-provider = "okx-swap-rest"
-
-[market.connections.okx-futures]
-provider = "okx-futures-rest"
-
-[market.connections.okx-options]
-provider = "okx-options-rest"
-
-[market.connections.massive-equity]
-provider = "massive-equity-websocket"
+[reference.providers.massive]
 credential_id = "massive-readonly"
 
-[paper.market]
-scope = "instance"
+[reference.products.binance.equity]
+enabled = true
+credential_id = "binance-equity-readonly"
 ```
 
-Market 进程启动时解析该连接，并从 Workspace 的
-`credentials/<id>.toml` 读取非敏感元数据，再通过同名的
+Reference 不读取 `market.connections`；Market 也不要求用户维护连接目录。
+Market composition 内置 Binance、OKX 等公共行情能力，并在启动时自动发现
+Workspace credential，按 provider/product 加入需要鉴权的行情能力。用户只需要配置
+必要的 credential 元数据或通过环境变量提供敏感值：
+
+Massive 的连接地址属于 Workspace 配置，不放在 `.env`：
+
+```toml
+[market.massive]
+rest_base_url = "http://api.massiveprivateserver.site"
+websocket_base_url = "http://socket.massiveprivateserver.site"
+option_underlying = "AAPL"
+```
+
+两个地址都可省略，系统会使用内置默认值；命令行 `--endpoint` 仅作为一次性运行的覆盖。
+`option_underlying` 用于避免启动时扫描整个期权市场；策略订阅其他标的时，将其改为对应的标的代码。
+
+```toml
+# .kairos/credentials/binance-equity-readonly.toml
+[credential]
+id = "binance-equity-readonly"
+provider = "binance"
+```
+
+Market 进程从 Workspace 的 `credentials/<id>.toml` 读取非敏感元数据，再通过同名的
 `KAIROS_CREDENTIAL_<ID>_API_KEY` / `..._API_SECRET` 环境变量或外部密钥存储取得敏感值。
 
 具体订阅标的属于策略，而不是 `paper.market`。策略通过
@@ -90,15 +76,27 @@ Market 进程启动时解析该连接，并从 Workspace 的
 进程只根据策略的订阅请求创建 descriptor 并启动对应 provider subscription。这样同一
 个连接可以服务多个策略和多个标的。
 
-`market.connections` 是连接能力目录，不是 launch 对连接的选择。Market process 启动时
-加载整个目录，策略首次订阅某个 `venue + market_type + asset_type` 时才创建对应连接；因此一个
-Market process 可以同时承载 Binance、OKX 和 Massive 的多个产品连接。
+Market process 启动时加载内置能力目录，策略首次订阅某个
+`venue + market_type + asset_type` 时才懒加载对应连接；因此一个 Market process 可以同时承载
+Binance、OKX 和 Massive 的多个产品连接。
 
 Reference 是 Workspace 级全局进程，不属于任何 launch instance。使用
-`kairos-reference-server --provider workspace --workspace <workspace>` 时，它读取同一份
-`market.connections`，为每个 provider/product 创建独立 source，再合并成一份全局 catalog；
-多个 Market instance 共享这份 catalog。Reference 的全局路由维度同样包含
+`kairos-reference-server --workspace <workspace>` 时，它使用 Reference 内置的
+provider/product source registry，为每个启用的 provider/product 创建独立 source，再合并成一份
+全局 catalog；多个 Market instance 共享这份 catalog。Reference 的全局路由维度同样包含
 `venue + market_type + asset_type`，因此 OKX crypto spot 与 equity spot 不会合并。
+
+本地运行 Reference/Market 前，Workspace 需要先启动共享的 Aeron Media Driver：
+
+```bash
+cargo run -p kairos-transport --bin kairos-aeron-driver
+cargo run -p kairos-reference --bin kairos-reference-server -- --workspace <workspace>
+cargo run -p kairos-market --bin kairos-market-server -- --workspace <workspace> --provider workspace
+```
+
+`kairos-aeron-driver` 使用与客户端相同的默认 Aeron directory；部署时也可以通过
+`kairos-aeron-driver --aeron-dir <dir>` 和 Reference 的 `--aeron-dir <dir>` 指向同一目录。Aeron 是 Workspace/System
+运行时基础设施，不属于 Reference 或 Market 的业务配置。
 
 Market 的运行作用域由 launch 配置显式决定：
 

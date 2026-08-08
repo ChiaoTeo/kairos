@@ -10,7 +10,7 @@ Every business module has one canonical Rust one-shot CLI:
 
 | Surface | Canonical binary | Business owner |
 | --- | --- | --- |
-| catalog/reference | `kairos-reference-cli` | Reference application |
+| reference | `kairospy reference` / `kairos-reference-cli` | Reference application |
 | account | `kairos-account-cli` | Account application |
 | market | `kairos-market-cli` | Market application |
 | order/execution | `kairos-execution-cli` | Execution application |
@@ -58,7 +58,7 @@ CLI and server.
 For example:
 
 ```text
-catalog --provider binance-spot refresh
+kairos-reference-cli --provider binance-spot refresh
   -> kairos-reference-cli --workspace <workspace> --provider binance-spot refresh
 ```
 

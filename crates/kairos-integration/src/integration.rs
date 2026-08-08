@@ -306,13 +306,27 @@ impl Integration {
     }
 
     pub fn with_massive_reference(
+        self,
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        self.with_massive_reference_for_underlying(api_key, base_url, None)
+    }
+
+    pub fn with_massive_reference_for_underlying(
         mut self,
         api_key: impl Into<String>,
         base_url: impl Into<String>,
+        underlying: Option<String>,
     ) -> Result<Self, IntegrationError> {
         let client = MassiveStocksRestClient::with_base_url(api_key, base_url)
             .map_err(|error| IntegrationError::InvalidRequest(error.to_string()))?
             .for_options();
+        let client = if let Some(value) = underlying.filter(|value| !value.trim().is_empty()) {
+            client.with_option_underlying(value)
+        } else {
+            client
+        };
         let reference_client = client.clone();
         self.references.push(ReferenceEntry {
             route: crate::domain::IntegrationRoute::data_provider("massive"),

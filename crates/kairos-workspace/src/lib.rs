@@ -8,4 +8,7 @@ pub use runtime::{
     DEGRADED_STATUS, HEALTH_PATH, READY_STATUS, RUNTIME_PROTOCOL_VERSION, SNAPSHOT_PATH,
     STOPPING_STATUS, STOP_PATH,
 };
-pub use workspace::{InstanceWorkspace, Workspace, WorkspaceManifest};
+pub use workspace::{
+    InstanceWorkspace, Workspace, WorkspaceManifest, WorkspaceMarketConfig, WorkspaceMassiveConfig,
+    WorkspaceProcessLock,
+};

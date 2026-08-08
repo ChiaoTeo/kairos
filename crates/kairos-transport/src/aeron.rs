@@ -2,23 +2,29 @@
 //!
 //! This module owns Aeron connection, publication back-pressure, and frame
 //! extraction. It deliberately does not know any Kairos business schema.
+//!
+//! The client is provided by `rusteron-client`, which tracks the Aeron C ABI
+//! and CnC layout used by the current Media Driver. Keeping that pairing in
+//! one dependency avoids the silent layout mismatch of the old `aeron 0.2`
+//! Rust port.
 
-use aeron::aeron::Aeron;
-use aeron::concurrent::atomic_buffer::{AlignedBuffer, AtomicBuffer};
-use aeron::context::Context;
-use aeron::publication::Publication;
-use aeron::subscription::Subscription;
+use rusteron_client::{Aeron, AeronContext, AeronPublication, AeronSubscription};
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-const DEFAULT_BUFFER_CAPACITY: usize = 4 * 1024 * 1024;
+// Reference catalogs containing a useful option chain can exceed 4 MiB after
+// FlatBuffers encoding. Keep one transport default large enough for a full
+// snapshot while retaining the explicit capacity constructor for tighter
+// consumers.
+const DEFAULT_BUFFER_CAPACITY: usize = 16 * 1024 * 1024;
 const DEFAULT_RETRY_LIMIT: usize = 10_000;
+const MEDIA_DRIVER_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct AeronBytePublisher {
     _aeron: Aeron,
-    publication: Arc<Mutex<Publication>>,
-    buffer: AlignedBuffer,
+    publication: Arc<Mutex<AeronPublication>>,
     buffer_capacity: usize,
     retry_limit: usize,
 }
@@ -37,22 +43,14 @@ impl AeronBytePublisher {
         if buffer_capacity == 0 {
             return Err("Aeron buffer capacity must be positive".into());
         }
-        let buffer_capacity_i32 = i32::try_from(buffer_capacity)
-            .map_err(|_| "Aeron buffer capacity exceeds i32::MAX".to_string())?;
-        let mut context = Context::new();
-        if let Some(directory) = aeron_dir {
-            context.set_aeron_dir(directory.to_owned());
-        }
-        let mut aeron = Aeron::new(context).map_err(|error| format!("connect Aeron: {error:?}"))?;
+        let aeron = connect_client(aeron_dir)?;
         let channel = CString::new(channel).map_err(|error| error.to_string())?;
-        let registration_id = aeron
-            .add_publication(channel, stream_id)
+        let publication = aeron
+            .add_publication(&channel, stream_id, MEDIA_DRIVER_TIMEOUT)
             .map_err(|error| format!("add Aeron publication: {error:?}"))?;
-        let publication = wait_for_publication(&mut aeron, registration_id)?;
         Ok(Self {
             _aeron: aeron,
-            publication,
-            buffer: AlignedBuffer::with_capacity(buffer_capacity_i32),
+            publication: Arc::new(Mutex::new(publication)),
             buffer_capacity,
             retry_limit: DEFAULT_RETRY_LIMIT,
         })
@@ -69,17 +67,28 @@ impl AeronBytePublisher {
                 self.buffer_capacity
             ));
         }
-        let atomic = AtomicBuffer::from_aligned(&self.buffer);
-        atomic.put_bytes(0, bytes);
+        // Reference can start before Market (or another consumer) has opened
+        // its subscriptions. Keep the catalog durable in Reference's store;
+        // the next refresh will publish it once a subscriber is connected.
+        if !self
+            .publication
+            .lock()
+            .map_err(|_| "Aeron publication mutex poisoned".to_string())?
+            .is_connected()
+        {
+            return Ok(());
+        }
         for _ in 0..self.retry_limit {
-            match self
+            let result = self
                 .publication
                 .lock()
                 .map_err(|_| "Aeron publication mutex poisoned".to_string())?
-                .offer_part(atomic, 0, bytes.len() as i32)
-            {
+                .offer(bytes);
+            match result {
                 Ok(_) => return Ok(()),
-                Err(_) => std::thread::yield_now(),
+                Err(rusteron_client::AeronOfferError::NotConnected) => return Ok(()),
+                Err(error) if error.is_retryable() => std::thread::yield_now(),
+                Err(error) => return Err(format!("Aeron publication offer: {error:?}")),
             }
         }
         Err("Aeron publication remained back-pressured".into())
@@ -88,25 +97,26 @@ impl AeronBytePublisher {
 
 pub struct AeronByteSubscription {
     _aeron: Aeron,
-    subscription: Arc<Mutex<Subscription>>,
+    subscription: Arc<Mutex<AeronSubscription>>,
     queue: VecDeque<Vec<u8>>,
 }
 
 impl AeronByteSubscription {
     pub fn connect(aeron_dir: Option<&str>, channel: &str, stream_id: i32) -> Result<Self, String> {
-        let mut context = Context::new();
-        if let Some(directory) = aeron_dir {
-            context.set_aeron_dir(directory.to_owned());
-        }
-        let mut aeron = Aeron::new(context).map_err(|error| format!("connect Aeron: {error:?}"))?;
+        let aeron = connect_client(aeron_dir)?;
         let channel = CString::new(channel).map_err(|error| error.to_string())?;
-        let registration_id = aeron
-            .add_subscription(channel, stream_id)
+        let subscription = aeron
+            .add_subscription(
+                &channel,
+                stream_id,
+                rusteron_client::Handlers::NONE,
+                rusteron_client::Handlers::NONE,
+                MEDIA_DRIVER_TIMEOUT,
+            )
             .map_err(|error| format!("add Aeron subscription: {error:?}"))?;
-        let subscription = wait_for_subscription(&mut aeron, registration_id)?;
         Ok(Self {
             _aeron: aeron,
-            subscription,
+            subscription: Arc::new(Mutex::new(subscription)),
             queue: VecDeque::new(),
         })
     }
@@ -121,49 +131,32 @@ impl AeronByteSubscription {
             return Err("Aeron fragment limit must be positive".into());
         }
         let mut frames = Vec::new();
-        self.subscription
+        let count = self
+            .subscription
             .lock()
             .map_err(|_| "Aeron subscription mutex poisoned".to_string())?
-            .poll(
-                &mut |buffer, offset, length, _header| {
-                    let mut payload = vec![0_u8; length as usize];
-                    buffer.get_bytes(offset, payload.as_mut_ptr(), length);
-                    frames.push(payload);
-                },
-                fragment_limit,
-            );
-        let count = frames.len();
+            .poll_fn(
+                |buffer, _header| frames.push(buffer.to_vec()),
+                fragment_limit as usize,
+            )
+            .map_err(|error| format!("poll Aeron subscription: {error:?}"))?;
         self.queue.extend(frames);
-        Ok(count)
+        Ok(count as usize)
     }
 }
 
-fn wait_for_publication(
-    aeron: &mut Aeron,
-    registration_id: i64,
-) -> Result<Arc<Mutex<Publication>>, String> {
-    for _ in 0..DEFAULT_RETRY_LIMIT {
-        if let Ok(publication) = aeron.find_publication(registration_id) {
-            return Ok(publication);
-        }
-        std::thread::yield_now();
+fn connect_client(aeron_dir: Option<&str>) -> Result<Aeron, String> {
+    let context =
+        AeronContext::new().map_err(|error| format!("create Aeron context: {error:?}"))?;
+    if let Some(directory) = aeron_dir {
+        let directory = CString::new(directory).map_err(|error| error.to_string())?;
+        context
+            .set_dir(&directory)
+            .map_err(|error| format!("set Aeron directory: {error:?}"))?;
     }
-    Err(format!(
-        "Aeron publication {registration_id} was not acknowledged"
-    ))
-}
-
-fn wait_for_subscription(
-    aeron: &mut Aeron,
-    registration_id: i64,
-) -> Result<Arc<Mutex<Subscription>>, String> {
-    for _ in 0..DEFAULT_RETRY_LIMIT {
-        if let Ok(subscription) = aeron.find_subscription(registration_id) {
-            return Ok(subscription);
-        }
-        std::thread::yield_now();
-    }
-    Err(format!(
-        "Aeron subscription {registration_id} was not acknowledged"
-    ))
+    let aeron = Aeron::new(&context).map_err(|error| format!("connect Aeron: {error:?}"))?;
+    aeron
+        .start()
+        .map_err(|error| format!("start Aeron client: {error:?}"))?;
+    Ok(aeron)
 }

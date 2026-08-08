@@ -6,10 +6,18 @@ license = "MIT"
 description = "Aeron and shared-memory transport adapters for Kairos"
 
 [dependencies]
-aeron = { version = "0.2", default-features = false }
+# Keep the Rust client and the Aeron C ABI in one release train. The bundled
+# precompiled C client avoids requiring a local CMake/Java toolchain and uses
+# the same CnC layout as the current Media Driver.
+rusteron-client = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
+rusteron-media-driver = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
 kairos-protocol = { path = "../kairos-protocol" }
 memmap2 = "0.9"
 serde = { version = "1", features = ["derive"] }
+
+[[bin]]
+name = "kairos-aeron-driver"
+path = "src/bin/kairos-aeron-driver.rs"
 
 [dev-dependencies]
 tempfile = "3"

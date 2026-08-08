@@ -1,10 +1,12 @@
 //! Massive Stocks and Options WebSocket market streams.
 
 use std::collections::BTreeMap;
+use std::io::ErrorKind;
 use std::net::TcpStream;
+use std::time::Duration;
 
 use serde_json::{json, Value};
-use tungstenite::{connect, Message, WebSocket};
+use tungstenite::{connect, stream::MaybeTlsStream, Error as TungsteniteError, Message, WebSocket};
 
 use crate::application::{
     Connection, IntegrationError, MarketEvent, MarketEventKind, MarketStreamConnection,
@@ -39,7 +41,18 @@ impl MassiveMarketStream {
                 "Massive market stream requires equity or options product".into(),
             ));
         }
-        let endpoint = endpoint.into().trim_end_matches('/').to_string();
+        let endpoint = endpoint.into();
+        // The private HTTP endpoint redirects to HTTPS. Use secure WebSocket
+        // directly so tungstenite does not receive an unsupported `https://`
+        // redirect location from the proxy.
+        let endpoint = if let Some(rest) = endpoint.strip_prefix("http://") {
+            format!("wss://{rest}")
+        } else if let Some(rest) = endpoint.strip_prefix("https://") {
+            format!("wss://{rest}")
+        } else {
+            endpoint
+        };
+        let endpoint = endpoint.trim_end_matches('/').to_string();
         if endpoint.is_empty() {
             return Err(IntegrationError::InvalidRequest(
                 "Massive market endpoint is required".into(),
@@ -95,7 +108,10 @@ impl Connection for MassiveMarketStream {
             return Err("Massive market stream API key is required".into());
         }
         self.state.lifecycle = ConnectionLifecycle::Starting;
-        let (socket, _) = connect(self.endpoint.as_str()).map_err(|error| error.to_string())?;
+        let (socket, _) = connect(self.endpoint.as_str())
+            .map_err(|error| format!("connect Massive WebSocket {}: {error}", self.endpoint))?;
+        let mut socket = socket;
+        set_read_timeout(&mut socket).map_err(|error| error.to_string())?;
         self.socket = Some(socket);
         self.send(json!({"action":"auth","params":self.api_key}))?;
         self.state.lifecycle = ConnectionLifecycle::Ready;
@@ -168,12 +184,20 @@ impl MarketStreamConnection for MassiveMarketStream {
             return Err(IntegrationError::NotReady);
         }
         loop {
-            let message = self
+            let message = match self
                 .socket
                 .as_mut()
                 .ok_or(IntegrationError::NotReady)?
                 .read()
-                .map_err(|error| IntegrationError::Transport(error.to_string()))?;
+            {
+                Ok(message) => message,
+                Err(TungsteniteError::Io(error))
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => return Err(IntegrationError::Transport(error.to_string())),
+            };
             let Message::Text(text) = message else {
                 continue;
             };
@@ -186,6 +210,16 @@ impl MarketStreamConnection for MassiveMarketStream {
                 }
             }
         }
+    }
+}
+
+fn set_read_timeout(socket: &mut Socket) -> Result<(), std::io::Error> {
+    match socket.get_mut() {
+        MaybeTlsStream::Plain(stream) => stream.set_read_timeout(Some(Duration::from_millis(100))),
+        MaybeTlsStream::NativeTls(stream) => stream
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(100))),
+        _ => Ok(()),
     }
 }
 

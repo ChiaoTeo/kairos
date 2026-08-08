@@ -18,12 +18,13 @@ def test_reference_process_config_builds_business_process_spec(tmp_path: Path) -
     workspace = WorkspaceApplication().init(tmp_path / "workspace")
     spec = ReferenceProcessConfig(
         workspace=workspace,
-        provider="binance-spot",
+        provider="default",
         once=True,
     ).process_spec()
     assert spec.name == "reference"
     assert spec.command[-1] == "--once"
     assert "--provider" in spec.command
+    assert spec.command[spec.command.index("--provider") + 1] == "default"
     assert "--database" not in spec.command
     assert "--health-file" in spec.command
     assert "--socket" in spec.command

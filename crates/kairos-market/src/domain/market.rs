@@ -8,6 +8,8 @@ pub struct MarketDescriptor {
     pub market_type: String,
     #[serde(default)]
     pub asset_type: Option<String>,
+    #[serde(default)]
+    pub underlying_instrument_id: Option<String>,
     pub source_symbol: String,
     pub status: String,
 }
@@ -26,6 +28,7 @@ impl MarketDescriptor {
             venue_id: venue_id.into(),
             market_type: market_type.into(),
             asset_type: None,
+            underlying_instrument_id: None,
             source_symbol: source_symbol.into(),
             status: "active".into(),
         };
@@ -84,6 +87,8 @@ pub struct MarketSelectionQuery {
     pub market_type: Option<String>,
     pub asset_type: Option<String>,
     pub source_symbol: Option<String>,
+    #[serde(default)]
+    pub underlying_instrument_id: Option<String>,
     pub active_only: bool,
 }
 
@@ -109,6 +114,10 @@ impl MarketSelectionQuery {
                 .source_symbol
                 .as_deref()
                 .is_some_and(|v| !v.eq_ignore_ascii_case(&market.source_symbol))
+            || self
+                .underlying_instrument_id
+                .as_deref()
+                .is_some_and(|v| market.underlying_instrument_id.as_deref() != Some(v))
         {
             return false;
         }
