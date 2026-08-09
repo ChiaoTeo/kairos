@@ -7,6 +7,7 @@ from typing import Any
 
 from ...system import UnixRestClient
 from ...workspace import Workspace
+from .registry import LaunchRegistryApplication
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,14 +43,27 @@ class LaunchControlApplication:
         return asyncio.run(UnixRestClient(target.socket_path).request(method, path))
 
     def status(self, target: InstanceControlTarget) -> dict[str, Any]:
+        registered = next(
+            (
+                entry for entry in LaunchRegistryApplication(self.workspace).list()
+                if entry.get("launch_id") == target.launch_id
+                and entry.get("instance_id") == target.instance_id
+            ),
+            None,
+        )
         if not target.socket_path.exists():
             return {
                 "launch_id": target.launch_id,
                 "instance_id": target.instance_id,
                 "status": "not_running",
                 "control_socket": str(target.socket_path),
+                "registry_state": registered.get("state") if registered else None,
+                "registry_consistent": registered is None or registered.get("state") in {"stopped", "failed", "created"},
             }
-        return self.request(target, "GET", "/v1/status")
+        value = self.request(target, "GET", "/v1/status")
+        value["registry_state"] = registered.get("state") if registered else None
+        value["registry_consistent"] = registered is None or registered.get("state") == value.get("status")
+        return value
 
     def start(self, target: InstanceControlTarget) -> dict[str, Any]:
         return self.request(target, "POST", "/v1/start")

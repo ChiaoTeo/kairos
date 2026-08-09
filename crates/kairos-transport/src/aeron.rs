@@ -14,11 +14,23 @@ use std::ffi::CString;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// Workspace-wide Aeron stream identifiers.
+///
+/// Keep these identifiers in one place so publishers and subscribers cannot
+/// silently drift apart while each service carries its own magic number.
+pub mod stream_ids {
+    /// Reference lifecycle changes consumed by Market and other projections.
+    pub const REFERENCE_CHANGES: i32 = 1201;
+}
+
+/// Default local Aeron channel used by Workspace-managed services.
+pub const DEFAULT_CHANNEL: &str = "aeron:udp?endpoint=localhost:40123";
+
 // Reference catalogs containing a useful option chain can exceed 4 MiB after
 // FlatBuffers encoding. Keep one transport default large enough for a full
 // snapshot while retaining the explicit capacity constructor for tighter
 // consumers.
-const DEFAULT_BUFFER_CAPACITY: usize = 16 * 1024 * 1024;
+const DEFAULT_BUFFER_CAPACITY: usize = 64 * 1024 * 1024;
 const DEFAULT_RETRY_LIMIT: usize = 10_000;
 const MEDIA_DRIVER_TIMEOUT: Duration = Duration::from_secs(10);
 

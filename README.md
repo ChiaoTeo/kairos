@@ -11,6 +11,7 @@ KairosPy 是一个面向量化交易实验的 Python 工具包，提供策略运
 交易所接入说明：
 
 - [Binance 产品](docs/binance-products.md)
+- [策略运行可观测性](docs/strategy-observability.md)
 
 ## ✨ 功能亮点
 
@@ -64,6 +65,19 @@ python -m pip install pytest
 ```bash
 uv run kairospy --help
 uv run kairos --help
+```
+
+打开只读系统观测台（需要一个已经初始化的 workspace）：
+
+```bash
+uv run kairos observe --workspace my-project
+```
+
+观测台不会自动启动业务进程；它读取 System health、组件状态和可用的
+Market snapshot。无界面或脚本场景可以使用一次性 JSON 输出：
+
+```bash
+uv run kairos observe --workspace my-project --once
 ```
 
 初始化一个 Kairos 项目（省略参数时会交互式询问目录和项目名）：
@@ -126,8 +140,16 @@ uv run kairospy launch diagnose explain btc-sma --workspace my-project
 uv run kairospy launch start btc-sma --workspace my-project
 ```
 
-启动会自动生成本次运行的 UUID `instance_id` 并在结果中返回；不需要也不应
-手工指定 instance。查询或停止某次运行时，使用启动结果中的 `instance_id`：
+启动会自动生成本次运行的 UUID `instance_id` 并在结果中返回。日常查询、日志和停止
+命令会自动解析当前运行中的 instance；只有需要操作历史运行时才传入 instance：
+
+```bash
+uv run kairospy launch status btc-sma --workspace my-project
+uv run kairospy launch logs btc-sma --follow --workspace my-project
+uv run kairospy launch stop btc-sma --workspace my-project
+```
+
+需要查询或停止某次历史运行时，再显式指定启动结果中的 `instance_id`：
 
 ```bash
 uv run kairospy launch status btc-sma --instance <instance-id> --workspace my-project
@@ -140,9 +162,23 @@ launch 配置。`--config` 仅用于显式指定其他配置文件。
 查看运行状态和日志：
 
 ```bash
-uv run kairospy launch status btc-sma --instance <instance-id> --workspace my-project
-uv run kairospy launch logs btc-sma --instance <instance-id> --limit 100 --workspace my-project
+uv run kairospy launch status btc-sma --workspace my-project
+uv run kairospy launch logs btc-sma --lines 100 --workspace my-project
 uv run kairospy launch attach btc-sma --workspace my-project --lines 100
+```
+
+`launch status` 返回 launch 整体状态，同时包含策略状态、依赖组件状态以及异常组件；
+mode 由 launch 配置和 instance identity 决定，查询、日志和停止命令不需要重复传入
+`--mode`；`system list` 和 `system logs` 适合进一步排查单个底层进程。
+
+Rust 业务 server 的运行日志统一输出为 JSONL，并由 system supervisor 写入
+`logs/processes/<component>.log`（实例模式下位于对应 instance 的日志目录）。日志会记录
+进程生命周期、控制请求、业务用例结果、状态变化、持久化和快照发布等关键节点；业务 stdout
+仍只保留 CLI 的机器可读结果。直接运行 server 时日志输出到 stderr。排查时可以用
+`RUST_LOG=debug` 临时打开更细的 poll、行情和内部事件日志，例如：
+
+```bash
+RUST_LOG=debug kairos-market-server ...
 ```
 
 同一个 `launch_id` 同时只允许一个运行中的 instance。`attach` 会自动解析当前
@@ -154,15 +190,55 @@ uv run kairospy launch attach btc-sma --workspace my-project --lines 100
 `context.logger.info("message", key=value)` 写运行日志，logger 会自动继承当前行情
 事件上下文；启动和生命周期日志的 `event_time` 为 `null`。
 
-启动内置 system runtime 管理账户和调试下单：
+查看和管理 Workspace 级 system runtime：
 
 ```bash
 uv run kairospy system up --workspace my-project
 uv run kairospy system status --workspace my-project
+uv run kairospy system list --workspace my-project
+uv run kairospy system doctor --workspace my-project
+uv run kairospy system logs market --lines 100 --workspace my-project
+uv run kairospy system logs market --follow --workspace my-project
+uv run kairospy system up --component market --workspace my-project
+uv run kairospy market status --workspace my-project --format json
+uv run kairospy market snapshot --workspace my-project --format json
+uv run kairospy market snapshot quote --symbol BTCUSDT --exchange binance --market-type spot
+uv run kairospy market snapshot orderbook --symbol BTCUSDT --exchange binance --market-type spot --depth 5
+uv run kairospy market snapshot bar --symbol BTCUSDT --exchange binance --market-type spot --timeframe 1m
+uv run kairospy market snapshot greeks --symbol BTC-260814-70000-C --exchange binance --market-type options
+uv run kairospy market subscribe --workspace my-project \
+  --subscription-id btc-quotes --subject BTCUSDT \
+  --exchange binance --market-type spot --selector quote
+uv run kairospy market subscribe --workspace my-project \
+  --subscription-id btc-option-greeks --subject BTC-260814-70000-C \
+  --exchange binance --market-type options --asset-type crypto --selector greeks
+uv run kairospy market unsubscribe --workspace my-project \
+  --subscription-id btc-quotes
 uv run kairospy account trade-lock list --workspace my-project
 uv run kairospy account trade-lock acquire --account-id main --workspace my-project
 uv run kairospy account trade-lock release --account-id main --broker binance --workspace my-project
 ```
+
+`system list` 会显示控制状态、PID、PID 是否仍为非 zombie 进程以及进程日志路径。
+`system doctor` 会检查残留 socket、health 文件和 advisory lock；如果组件显示为
+`stale`，表示运行时文件还在但对应进程已经退出，可以先确认日志后执行：
+
+`kairospy market subscribe/unsubscribe` 通过 Market 的 Unix 控制 socket 管理运行中
+订阅；订阅关系仍然属于当前 Market runtime，不会写入全局 manifest。
+
+```bash
+uv run kairospy system repair --workspace my-project
+```
+
+`system up` 会注册期望运行的组件，并启动一个 workspace supervisor。生产环境建议
+再由 macOS `launchd` 或 Linux `systemd` 托管这个 supervisor；开发环境可以使用
+`system supervise --component market --workspace my-project` 前台运行单组件监控。
+
+Workspace supervisor 只管理 Workspace 级常驻服务 `reference` 和共享 `market`。
+Account、Risk、Execution、Strategy 以及 instance-local Market 由 `launch start` 和
+`launch stop` 管理，不应通过 `system up/down/supervise` 单独启动或停止。普通开发环境
+不需要预先启动这些服务：首次 launch 会按需启动 Reference 和所需的 Market，并在
+launch 停止后保留共享服务供下一次运行复用。
 
 导出时间线数据：
 

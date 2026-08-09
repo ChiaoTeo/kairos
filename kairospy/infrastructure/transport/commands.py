@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 from decimal import Decimal
-import socket
 import time
 from pathlib import Path
 from typing import Any, Mapping
@@ -14,6 +12,7 @@ from kairospy.strategy import (
     TargetPositionRequest,
 )
 from kairospy.application.strategy.domain.messages import StrategySignal
+from ..unix_http import request_sync
 
 
 class UnixJsonCommandClient:
@@ -24,30 +23,7 @@ class UnixJsonCommandClient:
         self.timeout = timeout
 
     def request(self, method: str, path: str, body: Mapping[str, object] | None = None) -> tuple[int, dict[str, Any]]:
-        payload = b"" if body is None else json.dumps(body, separators=(",", ":")).encode()
-        request = (
-            f"{method} {path} HTTP/1.1\r\n"
-            "Host: localhost\r\n"
-            "Connection: close\r\n"
-            "Content-Type: application/json\r\n"
-            f"Content-Length: {len(payload)}\r\n\r\n"
-        ).encode() + payload
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-            connection.settimeout(self.timeout)
-            connection.connect(str(self.socket_path))
-            connection.sendall(request)
-            response = bytearray()
-            while True:
-                chunk = connection.recv(64 * 1024)
-                if not chunk:
-                    break
-                response.extend(chunk)
-        head, raw_body = bytes(response).split(b"\r\n\r\n", 1)
-        status = int(head.splitlines()[0].split()[1])
-        value = json.loads(raw_body or b"{}")
-        if not isinstance(value, dict):
-            raise ValueError("command response must be a JSON object")
-        return status, value
+        return request_sync(self.socket_path, method, path, body, timeout=self.timeout)
 
 
 class MarketUnixCommandPort:

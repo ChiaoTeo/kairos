@@ -5,9 +5,11 @@
 //! useful before the websocket adapter exists and remains deterministic in
 //! integration tests.
 
+use serde_json::Value;
+
 use crate::application::{IntegrationError, MarketEvent, MarketEventKind};
 use crate::domain::{
-    AccessScope, ConnectionIdentity, IntegrationCapability, ProductFamily, TransportKind,
+    AccessScope, ConnectionIdentity, IntegrationCapability, MarketBar, ProductFamily, TransportKind,
 };
 use crate::services::drivers::http::PublicHttpClient;
 use crate::services::streams::{RestPollingMarketStream, RestSnapshotReader};
@@ -35,7 +37,7 @@ impl RestSnapshotReader for BinanceSpotSnapshotReader {
     fn snapshot(&mut self, symbols: &[String]) -> Result<Vec<MarketEvent>, IntegrationError> {
         symbols
             .iter()
-            .map(|symbol| {
+            .map(|symbol| -> Result<Vec<MarketEvent>, IntegrationError> {
                 let payload = self
                     .http
                     .get_json_with_query(
@@ -51,7 +53,7 @@ impl RestSnapshotReader for BinanceSpotSnapshotReader {
                             "Binance ticker response has no price".into(),
                         )
                     })?;
-                Ok(MarketEvent {
+                let quote = MarketEvent {
                     symbol: symbol.clone(),
                     kind: MarketEventKind::Quote,
                     price: Some(price.to_string()),
@@ -60,13 +62,93 @@ impl RestSnapshotReader for BinanceSpotSnapshotReader {
                     ask_quantity: None,
                     bids: Vec::new(),
                     asks: Vec::new(),
+                    bar: None,
+                    greeks: None,
                     first_sequence: None,
                     last_sequence: None,
                     sequence: None,
                     observed_at_unix_nanos: now_unix_nanos(),
-                })
+                };
+                let bar_payload = self
+                    .http
+                    .get_json_with_query(
+                        &format!("{}/api/v3/klines", self.endpoint),
+                        &[
+                            ("symbol", symbol.clone()),
+                            ("interval", "1m".into()),
+                            ("limit", "1".into()),
+                        ],
+                    )
+                    .map_err(|error| IntegrationError::Transport(error.to_string()))?;
+                let values = bar_payload
+                    .as_array()
+                    .and_then(|values| values.first())
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| {
+                        IntegrationError::InvalidPayload(
+                            "Binance kline response has no candle".into(),
+                        )
+                    })?;
+                let bar = MarketEvent {
+                    symbol: symbol.clone(),
+                    kind: MarketEventKind::Bar,
+                    price: None,
+                    quantity: None,
+                    ask_price: None,
+                    ask_quantity: None,
+                    bids: Vec::new(),
+                    asks: Vec::new(),
+                    bar: Some(MarketBar {
+                        timeframe: "1m".into(),
+                        open: values
+                            .get(1)
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                IntegrationError::InvalidPayload(
+                                    "Binance kline open is missing".into(),
+                                )
+                            })?
+                            .into(),
+                        high: values
+                            .get(2)
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                IntegrationError::InvalidPayload(
+                                    "Binance kline high is missing".into(),
+                                )
+                            })?
+                            .into(),
+                        low: values
+                            .get(3)
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                IntegrationError::InvalidPayload(
+                                    "Binance kline low is missing".into(),
+                                )
+                            })?
+                            .into(),
+                        close: values
+                            .get(4)
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                IntegrationError::InvalidPayload(
+                                    "Binance kline close is missing".into(),
+                                )
+                            })?
+                            .into(),
+                        volume: values.get(5).and_then(Value::as_str).map(str::to_owned),
+                        derivation: "binance-kline".into(),
+                    }),
+                    greeks: None,
+                    first_sequence: None,
+                    last_sequence: None,
+                    sequence: None,
+                    observed_at_unix_nanos: now_unix_nanos(),
+                };
+                Ok(vec![quote, bar])
             })
-            .collect()
+            .collect::<Result<Vec<_>, _>>()
+            .map(|events| events.into_iter().flatten().collect())
     }
 }
 

@@ -3,13 +3,13 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import mmap
 from pathlib import Path
 import struct
 import sys
 from typing import AsyncIterator
 
 from kairospy.application.strategy.domain.messages import EventEnvelope, SnapshotEnvelope
+from kairospy.infrastructure.transport.shared_snapshot import SharedSnapshotReader
 
 # The generated FlatBuffers modules use their schema namespace (``kairos``)
 # for sibling imports. Keep that generated namespace private to this adapter
@@ -58,52 +58,85 @@ class TradeView:
 
 
 @dataclass(frozen=True, slots=True)
+class BarView:
+    instrument_id: str
+    market_id: str | None
+    timeframe: str
+    open: DecimalValue
+    high: DecimalValue
+    low: DecimalValue
+    close: DecimalValue
+    volume: DecimalValue | None
+    event_time_unix_nanos: int
+    source_id: str | None
+    derivation: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class GreeksView:
+    instrument_id: str
+    market_id: str | None
+    expiry_unix_nanos: int
+    strike: DecimalValue | None
+    delta: DecimalValue | None
+    gamma: DecimalValue | None
+    vega: DecimalValue | None
+    theta: DecimalValue | None
+    implied_volatility: DecimalValue | None
+    event_time_unix_nanos: int
+    source_id: str | None
+    derivation: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class MarketDataView:
     quotes: tuple[QuoteView, ...]
     trades: tuple[TradeView, ...] = ()
+    bars: tuple[BarView, ...] = ()
+    greeks: tuple[GreeksView, ...] = ()
 
     def current(self, instrument_id: str) -> QuoteView | None:
         return next((quote for quote in self.quotes if quote.instrument_id == instrument_id), None)
 
 
-class MmapMarketSnapshotReader:
-    """Read the Rust double-slot market.current snapshot without owning it."""
+class EventStreamGap(RuntimeError):
+    """Raised when a live stream skips a sequence and needs snapshot recovery."""
 
-    _MAGIC = b"KSS1"
-    _HEADER_SIZE = 64
-    _SLOT_COUNT = 2
+    def __init__(self, stream_id: str, expected: int, actual: int) -> None:
+        super().__init__(
+            f"event stream {stream_id} gap: expected sequence {expected}, received {actual}"
+        )
+        self.stream_id = stream_id
+        self.expected = expected
+        self.actual = actual
+
+
+class MmapMarketSnapshotReader:
+    """Read a Market current view from the Rust double-slot snapshots.
+
+    ``market.current`` remains the compatibility aggregate. New view keys use
+    the deterministic layout ``views/<source>/<market>/<kind>/current.snapshot``.
+    """
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        self._reader = SharedSnapshotReader(self.path)
 
     def read(self, view_key: str) -> SnapshotEnvelope:
-        if view_key != "market.current":
+        if view_key == "market.current":
+            return self._decode(self._reader.read().payload)
+        prefix = "market.view."
+        if not view_key.startswith(prefix):
             raise KeyError(view_key)
-        with self.path.open("rb") as file:
-            with mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
-                return self._decode(self._active_payload(mapped))
-
-    def _active_payload(self, mapped: mmap.mmap) -> bytes:
-        if len(mapped) < self._HEADER_SIZE or mapped[:4] != self._MAGIC:
-            raise ValueError("invalid shared snapshot header")
-        version, slots, slot_size = struct.unpack_from("<HHI", mapped, 4)
-        if version != 1 or slots != self._SLOT_COUNT or slot_size <= 0:
-            raise ValueError("unsupported shared snapshot layout")
-        if len(mapped) < self._HEADER_SIZE + slots * slot_size:
-            raise ValueError("truncated shared snapshot file")
-        for _ in range(8):
-            active = mapped[12]
-            if active >= slots:
-                raise ValueError("invalid active snapshot slot")
-            length = struct.unpack_from("<I", mapped, 24 + active * 4)[0]
-            generation = struct.unpack_from("<Q", mapped, 32 + active * 8)[0]
-            if not 0 < length <= slot_size:
-                raise ValueError("active snapshot slot is empty or too large")
-            start = self._HEADER_SIZE + active * slot_size
-            payload = bytes(mapped[start:start + length])
-            if active == mapped[12] and generation == struct.unpack_from("<Q", mapped, 32 + active * 8)[0]:
-                return payload
-        raise RuntimeError("shared snapshot changed while being read")
+        parts = view_key[len(prefix):].split(".", 3)
+        if len(parts) not in (3, 4) or not all(parts):
+            raise KeyError(view_key)
+        source_id, market_id, kind, *qualifier = parts
+        path = self.path.parent / "views" / source_id / market_id / kind
+        if qualifier:
+            path /= qualifier[0]
+        path /= "current.snapshot"
+        return self._decode(SharedSnapshotReader(path).read().payload)
 
     @staticmethod
     def _decode(payload: bytes) -> SnapshotEnvelope:
@@ -117,6 +150,8 @@ class MmapMarketSnapshotReader:
         if header is None or data is None:
             raise ValueError("market snapshot is missing header or payload")
         quotes = tuple(_decode_quote(data.Quotes(index)) for index in range(data.QuotesLength()))
+        bars = tuple(_decode_bar(data.Bars(index)) for index in range(data.BarsLength()))
+        greeks = tuple(_decode_greeks(data.Greeks(index)) for index in range(data.GreeksLength()))
         return SnapshotEnvelope(
             view_key=header.ViewKey().decode(),
             snapshot_id=header.SnapshotId().decode(),
@@ -124,7 +159,7 @@ class MmapMarketSnapshotReader:
             event_stream_id=header.EventStreamId().decode(),
             event_sequence=header.EventSequence(),
             generation=header.Generation(),
-            payload=MarketDataView(quotes=quotes),
+            payload=MarketDataView(quotes=quotes, bars=bars, greeks=greeks),
         )
 
 
@@ -149,40 +184,128 @@ def _decode_quote(value: object) -> QuoteView:
     )
 
 
-class UnixMarketEventStream:
-    """Consume length-prefixed QuoteMessage frames from kairos-market."""
+def _decode_bar(value: object) -> BarView:
+    def text(name: str) -> str | None:
+        raw = getattr(value, name)()
+        return None if raw is None else raw.decode()
 
-    def __init__(self, socket_path: str | Path, *, stream_id: str = "market.events", replayable: bool = False) -> None:
+    def decimal(name: str) -> DecimalValue:
+        raw = getattr(value, name)()
+        return DecimalValue(raw.Mantissa(), raw.Scale())
+
+    def optional_decimal(name: str) -> DecimalValue | None:
+        raw = getattr(value, name)()
+        return None if raw is None else DecimalValue(raw.Mantissa(), raw.Scale())
+
+    return BarView(
+        instrument_id=text("InstrumentId") or "",
+        market_id=text("MarketId"),
+        timeframe=text("Timeframe") or "",
+        open=decimal("Open"),
+        high=decimal("High"),
+        low=decimal("Low"),
+        close=decimal("Close"),
+        volume=optional_decimal("Volume"),
+        event_time_unix_nanos=value.EventTimeUnixNanos(),
+        source_id=text("SourceId"),
+        derivation=text("Derivation"),
+    )
+
+
+def _decode_greeks(value: object) -> GreeksView:
+    def text(name: str) -> str | None:
+        raw = getattr(value, name)()
+        return None if raw is None else raw.decode()
+
+    def decimal(name: str) -> DecimalValue | None:
+        raw = getattr(value, name)()
+        return None if raw is None else DecimalValue(raw.Mantissa(), raw.Scale())
+
+    return GreeksView(
+        instrument_id=text("InstrumentId") or "",
+        market_id=text("MarketId"),
+        expiry_unix_nanos=value.ExpiryUnixNanos(),
+        strike=decimal("Strike"),
+        delta=decimal("Delta"),
+        gamma=decimal("Gamma"),
+        vega=decimal("Vega"),
+        theta=decimal("Theta"),
+        implied_volatility=decimal("ImpliedVolatility"),
+        event_time_unix_nanos=value.EventTimeUnixNanos(),
+        source_id=text("SourceId"),
+        derivation=text("Derivation"),
+    )
+
+
+class UnixMarketEventStream:
+    """Consume live Market frames with reconnect and sequence validation.
+
+    The current Unix socket is a live-only change plane.  It has no replay
+    handshake, so a disconnect or gap is surfaced to the host, which must
+    re-read the contract snapshot before resuming.
+    """
+
+    def __init__(
+        self,
+        socket_path: str | Path,
+        *,
+        stream_id: str = "market.events",
+        replayable: bool = False,
+        reconnect_delay: float = 0.25,
+    ) -> None:
         self.socket_path = Path(socket_path)
         self.stream_id = stream_id
         self.replayable = replayable
+        if reconnect_delay < 0:
+            raise ValueError("reconnect_delay cannot be negative")
+        self.reconnect_delay = reconnect_delay
 
     def can_join(self, event_sequence: int) -> bool:
-        return event_sequence == 0 or self.replayable
+        # Snapshot recovery establishes a new join point for the live-only
+        # stream.  ``replayable`` remains available for future transports.
+        return event_sequence >= 0 or self.replayable
 
     async def events(self, after_sequence: int = 0) -> AsyncIterator[EventEnvelope]:
-        reader, writer = await asyncio.open_unix_connection(self.socket_path)
-        try:
-            while True:
-                prefix = await reader.readexactly(4)
-                (length,) = struct.unpack(">I", prefix)
-                if length == 0 or length > 4 * 1024 * 1024:
-                    raise ValueError("invalid market event frame length")
-                payload = await reader.readexactly(length)
-                event = _decode_market_event(payload)
-                if event.sequence <= after_sequence:
-                    continue
-                yield event
-        except asyncio.IncompleteReadError:
-            return
-        finally:
-            writer.close()
-            await writer.wait_closed()
+        cursor = max(0, after_sequence)
+        while True:
+            try:
+                reader, writer = await asyncio.open_unix_connection(self.socket_path)
+            except (FileNotFoundError, ConnectionError, OSError):
+                await asyncio.sleep(self.reconnect_delay)
+                continue
+            try:
+                while True:
+                    prefix = await reader.readexactly(4)
+                    (length,) = struct.unpack(">I", prefix)
+                    if length == 0 or length > 4 * 1024 * 1024:
+                        raise ValueError("invalid market event frame length")
+                    payload = await reader.readexactly(length)
+                    event = _decode_market_event(payload)
+                    if event.sequence <= cursor:
+                        continue
+                    expected = cursor + 1
+                    if event.sequence != expected:
+                        raise EventStreamGap(self.stream_id, expected, event.sequence)
+                    cursor = event.sequence
+                    yield event
+            except asyncio.IncompleteReadError:
+                pass
+            finally:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except OSError:
+                    pass
+            await asyncio.sleep(self.reconnect_delay)
 
 
 def _decode_market_event(payload: bytes) -> EventEnvelope:
     if payload[4:8] == b"MTR1":
         return _decode_trade_event(payload)
+    if payload[4:8] == b"MBA1":
+        return _decode_bar_event(payload)
+    if payload[4:8] == b"MGR1":
+        return _decode_greeks_event(payload)
     return _decode_quote_event(payload)
 
 
@@ -241,5 +364,45 @@ def _decode_trade_event(payload: bytes) -> EventEnvelope:
             event_time_unix_nanos=trade.EventTimeUnixNanos(),
             source_id=text("SourceId"),
         ),
+        occurred_at=occurred_at,
+    )
+
+
+def _decode_bar_event(payload: bytes) -> EventEnvelope:
+    from kairospy.infrastructure.transport.generated.kairos.market.v1.BarMessage import BarMessage
+
+    root = BarMessage.GetRootAs(payload, 0)
+    header = root.Header()
+    bar = root.Payload()
+    if header is None or bar is None:
+        raise ValueError("bar message is missing header or payload")
+    event_time = header.EventTimeUnixNanos()
+    occurred_at = None if not event_time else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
+    return EventEnvelope(
+        stream_id=header.StreamId().decode(),
+        sequence=header.Sequence(),
+        domain="data",
+        kind="bar",
+        payload=_decode_bar(bar),
+        occurred_at=occurred_at,
+    )
+
+
+def _decode_greeks_event(payload: bytes) -> EventEnvelope:
+    from kairospy.infrastructure.transport.generated.kairos.market.v1.GreeksMessage import GreeksMessage
+
+    root = GreeksMessage.GetRootAs(payload, 0)
+    header = root.Header()
+    greeks = root.Payload()
+    if header is None or greeks is None:
+        raise ValueError("greeks message is missing header or payload")
+    event_time = header.EventTimeUnixNanos()
+    occurred_at = None if not event_time else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
+    return EventEnvelope(
+        stream_id=header.StreamId().decode(),
+        sequence=header.Sequence(),
+        domain="data",
+        kind="greeks",
+        payload=_decode_greeks(greeks),
         occurred_at=occurred_at,
     )

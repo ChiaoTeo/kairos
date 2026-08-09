@@ -230,8 +230,40 @@ class Catalog(object):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(30))
         return o == 0
 
+    # Catalog
+    def ExecutionAccessCount(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(32))
+        if o != 0:
+            return self._tab.Get(flatbuffers.number_types.Uint64Flags, o + self._tab.Pos)
+        return 0
+
+    # Catalog
+    def ExecutionAccesses(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.reference.v1.ExecutionAccess import ExecutionAccess
+            obj = ExecutionAccess()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # Catalog
+    def ExecutionAccessesLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # Catalog
+    def ExecutionAccessesIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(34))
+        return o == 0
+
 def CatalogStart(builder):
-    builder.StartObject(14)
+    builder.StartObject(16)
 
 def Start(builder):
     CatalogStart(builder)
@@ -355,6 +387,24 @@ def CatalogStartFinancialProductsVector(builder, numElems):
 
 def StartFinancialProductsVector(builder, numElems):
     return CatalogStartFinancialProductsVector(builder, numElems)
+
+def CatalogAddExecutionAccessCount(builder, executionAccessCount):
+    builder.PrependUint64Slot(14, executionAccessCount, 0)
+
+def AddExecutionAccessCount(builder, executionAccessCount):
+    CatalogAddExecutionAccessCount(builder, executionAccessCount)
+
+def CatalogAddExecutionAccesses(builder, executionAccesses):
+    builder.PrependUOffsetTRelativeSlot(15, flatbuffers.number_types.UOffsetTFlags.py_type(executionAccesses), 0)
+
+def AddExecutionAccesses(builder, executionAccesses):
+    CatalogAddExecutionAccesses(builder, executionAccesses)
+
+def CatalogStartExecutionAccessesVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartExecutionAccessesVector(builder, numElems):
+    return CatalogStartExecutionAccessesVector(builder, numElems)
 
 def CatalogEnd(builder):
     return builder.EndObject()

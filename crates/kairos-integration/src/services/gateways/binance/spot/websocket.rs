@@ -19,7 +19,7 @@ use crate::application::market_stream::{
 };
 use crate::domain::{
     AccessScope, ConnectionHealth, ConnectionIdentity, ConnectionLifecycle, ConnectionState,
-    IntegrationCapability, MarketEvent, MarketEventKind, ProductFamily, TransportKind,
+    IntegrationCapability, MarketBar, MarketEvent, MarketEventKind, ProductFamily, TransportKind,
 };
 
 type Socket = WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>;
@@ -116,6 +116,7 @@ impl BinanceSpotWebSocketMarketStream {
                     format!("{symbol}@trade"),
                     format!("{symbol}@bookTicker"),
                     format!("{symbol}@depth@100ms"),
+                    format!("{symbol}@kline_1m"),
                 ]
             })
             .collect::<Vec<_>>();
@@ -192,6 +193,8 @@ impl BinanceSpotWebSocketMarketStream {
                 ask_quantity: None,
                 bids: Vec::new(),
                 asks: Vec::new(),
+                bar: None,
+                greeks: None,
                 first_sequence: None,
                 last_sequence: None,
                 sequence: value.get("t").and_then(Value::as_u64),
@@ -206,6 +209,8 @@ impl BinanceSpotWebSocketMarketStream {
                 ask_quantity: string_field(&value, "A"),
                 bids: Vec::new(),
                 asks: Vec::new(),
+                bar: None,
+                greeks: None,
                 first_sequence: None,
                 last_sequence: None,
                 sequence: value.get("u").and_then(Value::as_u64),
@@ -220,11 +225,42 @@ impl BinanceSpotWebSocketMarketStream {
                 ask_quantity: None,
                 bids: levels(&value, "b")?,
                 asks: levels(&value, "a")?,
+                bar: None,
+                greeks: None,
                 first_sequence: value.get("U").and_then(Value::as_u64),
                 last_sequence: value.get("u").and_then(Value::as_u64),
                 sequence: value.get("u").and_then(Value::as_u64),
                 observed_at_unix_nanos,
             })),
+            "kline" => {
+                let kline = value
+                    .get("k")
+                    .ok_or_else(|| "Binance kline event has no kline payload".to_string())?;
+                Ok(Some(MarketEvent {
+                    symbol,
+                    kind: MarketEventKind::Bar,
+                    price: None,
+                    quantity: None,
+                    ask_price: None,
+                    ask_quantity: None,
+                    bids: Vec::new(),
+                    asks: Vec::new(),
+                    bar: Some(MarketBar {
+                        timeframe: string_field(kline, "i").unwrap_or_else(|| "1m".into()),
+                        open: required_string_field(kline, "o")?,
+                        high: required_string_field(kline, "h")?,
+                        low: required_string_field(kline, "l")?,
+                        close: required_string_field(kline, "c")?,
+                        volume: string_field(kline, "v"),
+                        derivation: "binance-kline".into(),
+                    }),
+                    greeks: None,
+                    first_sequence: None,
+                    last_sequence: None,
+                    sequence: kline.get("L").and_then(Value::as_u64),
+                    observed_at_unix_nanos,
+                }))
+            }
             _ => Ok(None),
         }
     }
@@ -399,6 +435,10 @@ fn string_field(value: &Value, key: &str) -> Option<String> {
     value.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
+fn required_string_field(value: &Value, key: &str) -> Result<String, String> {
+    string_field(value, key).ok_or_else(|| format!("Binance kline event has no {key} field"))
+}
+
 fn snapshot_event(symbol: &str, value: &Value, sequence: u64) -> Result<MarketEvent, String> {
     Ok(MarketEvent {
         symbol: symbol.to_string(),
@@ -409,6 +449,8 @@ fn snapshot_event(symbol: &str, value: &Value, sequence: u64) -> Result<MarketEv
         ask_quantity: None,
         bids: levels(value, "bids")?,
         asks: levels(value, "asks")?,
+        bar: None,
+        greeks: None,
         first_sequence: Some(sequence),
         last_sequence: Some(sequence),
         sequence: Some(sequence),
@@ -479,6 +521,17 @@ mod tests {
         assert_eq!(depth.first_sequence, Some(10));
         assert_eq!(depth.last_sequence, Some(11));
         assert_eq!(depth.bids, vec![("100".into(), "2".into())]);
+
+        let bar = BinanceSpotWebSocketMarketStream::parse_event(
+            r#"{"e":"kline","E":1700000000000,"s":"BTCUSDT","k":{"i":"1m","o":"100","h":"102","l":"99","c":"101","v":"12.5","L":77}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(bar.kind, MarketEventKind::Bar);
+        let bar_data = bar.bar.expect("bar payload");
+        assert_eq!(bar_data.timeframe, "1m");
+        assert_eq!(bar_data.close, "101");
+        assert_eq!(bar_data.volume.as_deref(), Some("12.5"));
     }
 
     #[test]

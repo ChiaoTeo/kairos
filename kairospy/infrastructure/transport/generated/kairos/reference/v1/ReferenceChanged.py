@@ -61,8 +61,33 @@ class ReferenceChanged(object):
         return None
 
     # ReferenceChanged
-    def AffectedMarketIds(self, j):
+    def Events(self, j):
         o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        if o != 0:
+            x = self._tab.Vector(o)
+            x += flatbuffers.number_types.UOffsetTFlags.py_type(j) * 4
+            x = self._tab.Indirect(x)
+            from kairos.reference.v1.LifecycleEvent import LifecycleEvent
+            obj = LifecycleEvent()
+            obj.Init(self._tab.Bytes, x)
+            return obj
+        return None
+
+    # ReferenceChanged
+    def EventsLength(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        if o != 0:
+            return self._tab.VectorLen(o)
+        return 0
+
+    # ReferenceChanged
+    def EventsIsNone(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        return o == 0
+
+    # ReferenceChanged
+    def AffectedMarketIds(self, j):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             a = self._tab.Vector(o)
             return self._tab.String(a + flatbuffers.number_types.UOffsetTFlags.py_type(j * 4))
@@ -70,19 +95,19 @@ class ReferenceChanged(object):
 
     # ReferenceChanged
     def AffectedMarketIdsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # ReferenceChanged
     def AffectedMarketIdsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(12))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
         return o == 0
 
     # ReferenceChanged
     def ChangeKinds(self, j):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             a = self._tab.Vector(o)
             return self._tab.String(a + flatbuffers.number_types.UOffsetTFlags.py_type(j * 4))
@@ -90,18 +115,18 @@ class ReferenceChanged(object):
 
     # ReferenceChanged
     def ChangeKindsLength(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         if o != 0:
             return self._tab.VectorLen(o)
         return 0
 
     # ReferenceChanged
     def ChangeKindsIsNone(self):
-        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(14))
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(16))
         return o == 0
 
 def ReferenceChangedStart(builder):
-    builder.StartObject(6)
+    builder.StartObject(7)
 
 def Start(builder):
     ReferenceChangedStart(builder)
@@ -130,8 +155,20 @@ def ReferenceChangedAddSnapshotId(builder, snapshotId):
 def AddSnapshotId(builder, snapshotId):
     ReferenceChangedAddSnapshotId(builder, snapshotId)
 
+def ReferenceChangedAddEvents(builder, events):
+    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(events), 0)
+
+def AddEvents(builder, events):
+    ReferenceChangedAddEvents(builder, events)
+
+def ReferenceChangedStartEventsVector(builder, numElems):
+    return builder.StartVector(4, numElems, 4)
+
+def StartEventsVector(builder, numElems):
+    return ReferenceChangedStartEventsVector(builder, numElems)
+
 def ReferenceChangedAddAffectedMarketIds(builder, affectedMarketIds):
-    builder.PrependUOffsetTRelativeSlot(4, flatbuffers.number_types.UOffsetTFlags.py_type(affectedMarketIds), 0)
+    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(affectedMarketIds), 0)
 
 def AddAffectedMarketIds(builder, affectedMarketIds):
     ReferenceChangedAddAffectedMarketIds(builder, affectedMarketIds)
@@ -143,7 +180,7 @@ def StartAffectedMarketIdsVector(builder, numElems):
     return ReferenceChangedStartAffectedMarketIdsVector(builder, numElems)
 
 def ReferenceChangedAddChangeKinds(builder, changeKinds):
-    builder.PrependUOffsetTRelativeSlot(5, flatbuffers.number_types.UOffsetTFlags.py_type(changeKinds), 0)
+    builder.PrependUOffsetTRelativeSlot(6, flatbuffers.number_types.UOffsetTFlags.py_type(changeKinds), 0)
 
 def AddChangeKinds(builder, changeKinds):
     ReferenceChangedAddChangeKinds(builder, changeKinds)

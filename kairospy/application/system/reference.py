@@ -9,6 +9,8 @@ from pathlib import Path
 from .supervisor import ProcessSpec
 from ..workspace import Workspace
 
+REFERENCE_CHANGES_STREAM = 1201
+
 @dataclass(frozen=True, slots=True)
 class ReferenceProcessConfig:
     """Business-level configuration for one Reference process instance."""
@@ -16,17 +18,17 @@ class ReferenceProcessConfig:
     workspace: Workspace
     provider: str = "default"
     endpoint: str | None = None
+    credential_id: str | None = None
     binary: str = "kairos-reference-server"
-    channel: str = "aeron:udp?endpoint=localhost:40123"
+    aeron_channel: str = "aeron:udp?endpoint=localhost:40123"
     aeron_dir: Path | None = None
-    refresh_seconds: int = 300
-    catalog_stream: int = 1201
-    markets_stream: int = 1202
-    lifecycle_stream: int = 1203
+    refresh_interval: str = "5m"
+    reference_changes_stream: int = REFERENCE_CHANGES_STREAM
+    snapshot_slot_size_mib: int = 64
     api_key: str | None = None
     secret: str | None = None
     environment: Mapping[str, str] = field(default_factory=dict)
-    once: bool = False
+    run_mode: str = "daemon"
     stop_timeout: float = 15.0
 
     def __post_init__(self) -> None:
@@ -34,10 +36,29 @@ class ReferenceProcessConfig:
             raise ValueError("reference endpoint is required")
         if not self.provider.strip():
             raise ValueError("reference provider is required")
-        if self.refresh_seconds <= 0:
-            raise ValueError("refresh_seconds must be positive")
-        if min(self.catalog_stream, self.markets_stream, self.lifecycle_stream) < 0:
-            raise ValueError("reference stream ids must be non-negative")
+        if self.provider not in {
+            "default", "binance-spot", "binance-options", "binance-usdm-futures",
+            "binance-coinm-futures", "binance-equity", "okx-spot", "okx-equity",
+            "okx-swap", "okx-futures", "okx-options", "massive", "massive-equity",
+            "massive-options", "hyperliquid",
+        }:
+            raise ValueError(f"unsupported reference provider: {self.provider}")
+        if self.run_mode not in {"daemon", "once"}:
+            raise ValueError("run_mode must be daemon or once")
+        if self.credential_id is not None and not self.credential_id.strip():
+            raise ValueError("reference credential_id must not be empty")
+        if not self.refresh_interval.strip():
+            raise ValueError("refresh_interval is required")
+        if self.reference_changes_stream <= 0:
+            raise ValueError("reference stream ids must be positive")
+        if self.reference_changes_stream != REFERENCE_CHANGES_STREAM:
+            raise ValueError(
+                f"reference_changes_stream must be {REFERENCE_CHANGES_STREAM}"
+            )
+        if not self.aeron_channel.strip():
+            raise ValueError("reference Aeron channel is required")
+        if not 1 <= self.snapshot_slot_size_mib <= 4096:
+            raise ValueError("snapshot_slot_size_mib must be between 1 and 4096")
 
     def process_spec(self) -> ProcessSpec:
         socket_path = self.workspace.paths.reference_socket()
@@ -49,32 +70,29 @@ class ReferenceProcessConfig:
             str(self.workspace.paths.root),
             "--provider",
             self.provider,
-            "--channel",
-            self.channel,
-            "--refresh-seconds",
-            str(self.refresh_seconds),
-            "--catalog-stream",
-            str(self.catalog_stream),
-            "--markets-stream",
-            str(self.markets_stream),
-            "--lifecycle-stream",
-            str(self.lifecycle_stream),
+            "--aeron-channel",
+            self.aeron_channel,
+            "--refresh-interval",
+            self.refresh_interval,
+            "--reference-changes-stream",
+            str(self.reference_changes_stream),
+            "--snapshot-slot-size-mib",
+            str(self.snapshot_slot_size_mib),
         ]
         if self.endpoint is not None:
             command.extend(("--endpoint", self.endpoint))
+        if self.credential_id is not None:
+            command.extend(("--credential-id", self.credential_id))
         if self.aeron_dir is not None:
             command.extend(("--aeron-dir", str(self.aeron_dir)))
         command.extend(("--socket", str(socket_path), "--health-file", str(health_file)))
         environment = dict(self.environment)
         if self.api_key is not None:
-            if self.provider in {"default", "massive", "massive-equity", "massive-options"}:
-                environment["MASSIVE_API_KEY"] = self.api_key
-            elif self.provider == "binance-equity":
+            if self.provider == "binance-equity":
                 environment["BINANCE_API_KEY"] = self.api_key
         if self.secret is not None:
             environment["BINANCE_API_SECRET"] = self.secret
-        if self.once:
-            command.append("--once")
+        command.extend(("--run-mode", self.run_mode))
         return ProcessSpec(
             name="reference",
             command=tuple(command),

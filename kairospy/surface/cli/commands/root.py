@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 
 import typer
-from prettytable import PrettyTable
 
 from kairospy.application.system import (
     ComponentControlApplication,
     ComponentProcessApplication,
     NativeCliApplication,
+    SystemRuntimeSupervisor,
 )
 from decimal import Decimal
 from decimal import InvalidOperation
@@ -17,7 +18,7 @@ from kairospy.application.config import ConfigApplication
 from kairospy.application.account import AccountAdminApplication, AccountCliApplication, CredentialApplication, TradeLeaseApplication
 from kairospy.application.market import MarketCliApplication, MarketDataApplication
 from kairospy.application.workspace import WorkspaceApplication
-from kairospy.surface.cli.options import OutputFormat, render
+from kairospy.surface.cli.options import OutputFormat, effective_output, render
 
 
 def _emit(value: object, output: OutputFormat) -> None:
@@ -637,8 +638,21 @@ def system_up(
     account_id: str | None = typer.Option(None, "--account-id"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
+    if component not in {"reference", "market"}:
+        raise typer.BadParameter(
+            "system up manages only workspace services: reference and market; "
+            "launch starts instance-owned components"
+        )
     owner = WorkspaceApplication().open(workspace)
-    control = ComponentProcessApplication(owner).ensure_running(component, account_id=account_id)
+    process = ComponentProcessApplication(owner)
+    control = process.ensure_running(
+        component,
+        account_id=account_id,
+        stream_startup_logs=component == "reference" and effective_output(output) is OutputFormat.TEXT,
+    )
+    supervisor = SystemRuntimeSupervisor(process)
+    supervisor.register(component, {"account_id": account_id} if account_id else {})
+    supervisor.start_background()
     _emit(control.status(), output)
 
 
@@ -648,8 +662,16 @@ def system_down(
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
+    if component not in {"reference", "market"}:
+        raise typer.BadParameter(
+            "system down manages only workspace services: reference and market; "
+            "use launch stop for instance-owned components"
+        )
     owner = WorkspaceApplication().open(workspace)
-    _emit(ComponentProcessApplication(owner).stop(component), output)
+    process = ComponentProcessApplication(owner)
+    supervisor = SystemRuntimeSupervisor(process)
+    supervisor.unregister(component)
+    _emit(process.stop(component), output)
 
 
 @system_app.command("restart")
@@ -659,13 +681,26 @@ def system_restart(
     account_id: str | None = typer.Option(None, "--account-id"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
+    if component not in {"reference", "market"}:
+        raise typer.BadParameter(
+            "system restart manages only workspace services: reference and market; "
+            "use launch start/stop for instance-owned components"
+        )
     owner = WorkspaceApplication().open(workspace)
     process = ComponentProcessApplication(owner)
     try:
         process.stop(component)
     except (OSError, RuntimeError, ValueError):
         pass
-    _emit(process.ensure_running(component, account_id=account_id).status(), output)
+    control = process.ensure_running(
+        component,
+        account_id=account_id,
+        stream_startup_logs=component == "reference" and effective_output(output) is OutputFormat.TEXT,
+    )
+    supervisor = SystemRuntimeSupervisor(process)
+    supervisor.register(component, {"account_id": account_id} if account_id else {})
+    supervisor.start_background()
+    _emit(control.status(), output)
 @config_app.command("paths")
 def config_paths(workspace: Path = typer.Option(None, "--workspace"), output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format")) -> None:
     _emit(ConfigApplication(WorkspaceApplication().open(workspace)).paths(), output)
@@ -750,17 +785,121 @@ def system_list(
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     """List workspace-scoped system components without starting them."""
+    output = effective_output(output)
     owner = WorkspaceApplication().open(workspace)
     value = ComponentProcessApplication(owner).list_status()
     if output is OutputFormat.JSON:
         _emit(value, output)
         return
-    table = PrettyTable()
-    table.field_names = ["component", "status", "control socket"]
-    table.align = "l"
-    for component, status in value.items():
-        table.add_row([component, status.get("status", "unknown"), status.get("control_socket", "")])
-    typer.echo(table)
+    _emit(
+        [
+            {
+                "component": component,
+                "status": status.get("status", "unknown"),
+                "pid": status.get("pid", ""),
+                "pid_alive": status.get("pid_alive", ""),
+                "control_socket": status.get("control_socket", ""),
+                "log_file": status.get("log_file", ""),
+            }
+            for component, status in value.items()
+        ],
+        OutputFormat.TABLE,
+    )
+
+
+@system_app.command("logs")
+def system_logs(
+    component: str = typer.Argument(..., help="Component name, for example account or execution."),
+    lines: int = typer.Option(100, "--lines", min=0, help="Number of recent lines to show."),
+    follow: bool = typer.Option(False, "-f", "--follow", help="Continue printing new output."),
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Show a component's combined stdout/stderr log."""
+    components = {"reference", "market", "account", "risk", "execution", "aeron", "system-supervisor"}
+    if component not in components:
+        raise typer.BadParameter(f"unsupported component: {component}")
+    if follow and effective_output(output) is not OutputFormat.TEXT:
+        raise typer.BadParameter("--follow currently supports text output only")
+    owner = WorkspaceApplication().open(workspace)
+    path = owner.paths.logs / "processes" / f"{component}.log"
+    if effective_output(output) is OutputFormat.JSON:
+        value = {
+            "component": component,
+            "path": str(path),
+            "exists": path.is_file(),
+            "lines": path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:] if path.is_file() and lines else [],
+        }
+        _emit(value, output)
+        return
+    if path.is_file() and lines:
+        typer.echo("\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]))
+    elif not path.is_file():
+        typer.echo(f"log file does not exist: {path}")
+    if not follow:
+        return
+    position = path.stat().st_size if path.is_file() else 0
+    try:
+        while True:
+            if path.is_file():
+                with path.open("r", encoding="utf-8", errors="replace") as stream:
+                    stream.seek(position)
+                    for line in stream:
+                        typer.echo(line.rstrip("\n"), color=False)
+                    position = stream.tell()
+            time.sleep(0.25)
+    except KeyboardInterrupt:
+        return
+
+
+@system_app.command("doctor")
+def system_doctor(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Diagnose sockets, health files, locks, and unresponsive components."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(ComponentProcessApplication(owner).doctor(), output)
+
+
+@system_app.command("repair")
+def system_repair(
+    workspace: Path = typer.Option(None, "--workspace"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Remove only confirmed stale runtime resources."""
+    owner = WorkspaceApplication().open(workspace)
+    _emit(ComponentProcessApplication(owner).repair(), output)
+
+
+@system_app.command("supervise")
+def system_supervise(
+    component: str = typer.Option(..., "--component"),
+    workspace: Path = typer.Option(None, "--workspace"),
+    account_id: str | None = typer.Option(None, "--account-id"),
+    interval: float = typer.Option(1.0, "--interval", min=0.1),
+    once: bool = typer.Option(False, "--once"),
+    output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
+) -> None:
+    """Run the workspace runtime reconciler for one desired component."""
+    if component not in {"reference", "market"}:
+        raise typer.BadParameter(
+            "system supervise manages only workspace services: reference and market; "
+            "launch owns instance components"
+        )
+    owner = WorkspaceApplication().open(workspace)
+    desired: dict[str, object] = {}
+    if component == "account" and account_id:
+        desired["account_id"] = account_id
+    supervisor = SystemRuntimeSupervisor(
+        ComponentProcessApplication(owner),
+        desired={component: desired},
+    )
+    value = supervisor.reconcile_once()
+    if once:
+        _emit(value[component], output)
+        return
+    supervisor.run_forever(interval=interval)
 @timeline_app.command("list")
 def timeline_list(
     file: Path = typer.Option(..., "--file"),

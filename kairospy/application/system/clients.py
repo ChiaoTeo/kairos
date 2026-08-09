@@ -21,10 +21,13 @@ class SystemRestClient:
     """Synchronous typed facade over the asynchronous Unix REST transport."""
 
     socket_path: Path
+    timeout: float = 3.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.socket_path, Path):
             object.__setattr__(self, "socket_path", Path(self.socket_path))
+        if self.timeout <= 0:
+            raise ValueError("timeout must be positive")
 
     def request(
         self,
@@ -38,7 +41,11 @@ class SystemRestClient:
             payload = body
         import asyncio
 
-        return asyncio.run(UnixRestClient(self.socket_path).request(method, path, payload))
+        return asyncio.run(
+            UnixRestClient(self.socket_path, timeout=self.timeout).request(
+                method, path, payload
+            )
+        )
 
     def status(self) -> dict[str, Any]:
         return self.request("GET", "/v1/health")

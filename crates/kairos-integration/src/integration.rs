@@ -501,6 +501,24 @@ impl Integration {
         Ok(self)
     }
 
+    pub fn with_binance_options_websocket_market_stream(
+        mut self,
+        endpoint: impl Into<String>,
+    ) -> Result<Self, IntegrationError> {
+        let endpoint = endpoint.into();
+        binance::derivatives_market::websocket_market_stream(endpoint.clone())?;
+        self.market_streams.push(MarketStreamEntry {
+            route: crate::domain::IntegrationRoute::exchange("binance"),
+            product: Some(ProductFamily::Options),
+            transport: TransportKind::WebSocket,
+            open: Box::new(move || {
+                binance::derivatives_market::websocket_market_stream(endpoint.clone())
+                    .map(|stream| Box::new(stream) as Box<dyn MarketStreamConnection>)
+            }),
+        });
+        Ok(self)
+    }
+
     pub fn with_okx_market_stream(
         mut self,
         product: ProductFamily,

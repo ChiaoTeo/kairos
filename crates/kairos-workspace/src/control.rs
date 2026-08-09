@@ -12,12 +12,12 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use http_body_util::{BodyExt, Full};
+use hyper::{body::Bytes, Request, Uri};
+use hyperlocal_next::{UnixClientExt, Uri as UnixUri};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{UnixListener, UnixStream},
-};
+use tokio::net::UnixListener;
 
 pub const CONTROL_API_VERSION: &str = "v1";
 pub const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
@@ -216,59 +216,44 @@ impl RestControlClient {
 
     async fn request(&self, method: &str, path: &str, body: Option<&[u8]>) -> io::Result<Value> {
         let body = body.unwrap_or_default();
-        let content_type = if body.is_empty() {
-            ""
-        } else {
-            "Content-Type: application/json\r\n"
-        };
-        let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n{content_type}Content-Length: {}\r\n\r\n",
-            body.len()
-        );
-
-        let mut stream = UnixStream::connect(&self.socket_path).await?;
-        stream.write_all(request.as_bytes()).await?;
+        let uri: Uri = UnixUri::new(&self.socket_path, path).into();
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("host", "localhost")
+            .header("connection", "close")
+            .header("content-length", body.len())
+            .body(Full::new(Bytes::copy_from_slice(body)))
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
         if !body.is_empty() {
-            stream.write_all(body).await?;
+            request.headers_mut().insert(
+                "content-type",
+                "application/json".parse().expect("static header value"),
+            );
         }
-        stream.flush().await?;
-
-        let mut response = Vec::new();
-        stream.read_to_end(&mut response).await?;
-        parse_http_json(&response)
+        let client = hyper_util::client::legacy::Client::unix();
+        let response = client.request(request).await.map_err(io::Error::other)?;
+        let status = response.status();
+        let bytes = response
+            .into_body()
+            .collect()
+            .await
+            .map_err(io::Error::other)?
+            .to_bytes();
+        let value: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if !status.is_success() {
+            return Err(io::Error::other(format!(
+                "control request failed ({}): {value}",
+                status.as_u16()
+            )));
+        }
+        Ok(value)
     }
 }
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
-}
-
-fn parse_http_json(response: &[u8]) -> io::Result<Value> {
-    let separator = b"\r\n\r\n";
-    let header_end = response
-        .windows(separator.len())
-        .position(|window| window == separator)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid HTTP response"))?;
-    let status_line_end = response[..header_end]
-        .windows(2)
-        .position(|window| window == b"\r\n")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing HTTP status"))?;
-    let status_line = std::str::from_utf8(&response[..status_line_end])
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let status = status_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|value| value.parse::<u16>().ok())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid HTTP status"))?;
-    let body = &response[header_end + separator.len()..];
-    let value: Value = serde_json::from_slice(body)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    if !(200..300).contains(&status) {
-        return Err(io::Error::other(format!(
-            "control request failed ({status}): {value}"
-        )));
-    }
-    Ok(value)
 }
 
 fn remove_stale_socket(path: &Path) -> io::Result<()> {

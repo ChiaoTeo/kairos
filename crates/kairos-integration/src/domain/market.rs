@@ -6,8 +6,33 @@ pub enum MarketEventKind {
     BookSnapshot,
     Quote,
     Trade,
+    Bar,
+    Greeks,
     BookDelta,
     Heartbeat,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MarketBar {
+    pub timeframe: String,
+    pub open: String,
+    pub high: String,
+    pub low: String,
+    pub close: String,
+    pub volume: Option<String>,
+    pub derivation: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MarketGreeks {
+    pub expiry_unix_nanos: Option<u64>,
+    pub strike: Option<String>,
+    pub delta: Option<String>,
+    pub gamma: Option<String>,
+    pub vega: Option<String>,
+    pub theta: Option<String>,
+    pub implied_volatility: Option<String>,
+    pub derivation: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,6 +45,8 @@ pub struct MarketEvent {
     pub ask_quantity: Option<String>,
     pub bids: Vec<(String, String)>,
     pub asks: Vec<(String, String)>,
+    pub bar: Option<MarketBar>,
+    pub greeks: Option<MarketGreeks>,
     pub first_sequence: Option<u64>,
     pub last_sequence: Option<u64>,
     pub sequence: Option<u64>,

@@ -55,6 +55,8 @@ impl RestSnapshotReader for BinanceEquitySnapshotReader {
                     ask_quantity: string(&payload, "askSize"),
                     bids: Vec::new(),
                     asks: Vec::new(),
+                    bar: None,
+                    greeks: None,
                     first_sequence: None,
                     last_sequence: None,
                     sequence: None,

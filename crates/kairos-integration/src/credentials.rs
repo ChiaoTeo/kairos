@@ -49,58 +49,21 @@ pub fn load_workspace_credential(
         {
             continue;
         }
-        let prefix: String = id
-            .chars()
-            .map(|value| {
-                if value.is_ascii_alphanumeric() {
-                    value.to_ascii_uppercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        let (api_key_env, api_secret_env, passphrase_env) = match provider.as_str() {
-            "massive" => ("MASSIVE_API_KEY", "MASSIVE_API_SECRET", "OKX_PASSPHRASE"),
-            "okx" | "okex" => ("OKX_API_KEY", "OKX_API_SECRET", "OKX_PASSPHRASE"),
-            _ => ("BINANCE_API_KEY", "BINANCE_API_SECRET", "OKX_PASSPHRASE"),
-        };
         return Ok(Some(WorkspaceCredential {
-            api_key: value_or_env(
-                table,
-                "api_key",
-                &format!("KAIROS_CREDENTIAL_{prefix}_API_KEY"),
-                api_key_env,
-            ),
-            secret: value_or_env(
-                table,
-                "api_secret",
-                &format!("KAIROS_CREDENTIAL_{prefix}_API_SECRET"),
-                api_secret_env,
-            ),
-            passphrase: value_or_env(
-                table,
-                "passphrase",
-                &format!("KAIROS_CREDENTIAL_{prefix}_PASSPHRASE"),
-                passphrase_env,
-            ),
+            api_key: value_from_table(table, "api_key"),
+            secret: value_from_table(table, "api_secret"),
+            passphrase: value_from_table(table, "passphrase"),
         }));
     }
     Ok(None)
 }
 
-fn value_or_env(
-    table: &toml::map::Map<String, toml::Value>,
-    key: &str,
-    namespaced: &str,
-    conventional: &str,
-) -> String {
+fn value_from_table(table: &toml::map::Map<String, toml::Value>, key: &str) -> String {
     table
         .get(key)
         .and_then(toml::Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
-        .or_else(|| std::env::var(namespaced).ok())
-        .or_else(|| std::env::var(conventional).ok())
         .unwrap_or_default()
 }
 
@@ -109,7 +72,7 @@ mod tests {
     use super::load_workspace_credential;
 
     #[test]
-    fn loads_workspace_credential_by_id_and_resolves_external_secret() {
+    fn loads_workspace_credential_by_id_from_toml_only() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(
             directory.path().join("binance-equity-readonly.toml"),
@@ -120,15 +83,12 @@ api_key = "stored-key"
 "#,
         )
         .unwrap();
-        let name = "KAIROS_CREDENTIAL_BINANCE_EQUITY_READONLY_API_SECRET";
-        std::env::set_var(name, "external-secret");
         let credential =
             load_workspace_credential(directory.path(), "binance", Some("binance-equity-readonly"))
                 .unwrap()
                 .unwrap();
-        std::env::remove_var(name);
 
         assert_eq!(credential.api_key, "stored-key");
-        assert_eq!(credential.secret, "external-secret");
+        assert!(credential.secret.is_empty());
     }
 }

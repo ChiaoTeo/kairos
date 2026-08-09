@@ -80,3 +80,5 @@ class LifecycleRecord:
     state: str
     reason: str | None = None
     event_sequence: int | None = None
+    readiness: str | None = None
+    data_health: str | None = None

@@ -78,6 +78,8 @@ impl RestSnapshotReader for OkxSnapshotReader {
                     ask_quantity: text(row, "askSz"),
                     bids: Vec::new(),
                     asks: Vec::new(),
+                    bar: None,
+                    greeks: None,
                     first_sequence: None,
                     last_sequence: None,
                     sequence: None,

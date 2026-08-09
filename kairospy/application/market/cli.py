@@ -20,7 +20,10 @@ class MarketCliApplication:
 
     def command(self, arguments: Sequence[str], *, output: str | None = "json") -> list[str]:
         """Build a Rust command; output is explicit adapter configuration."""
+        reject_owned_options(arguments, {"--workspace"})
         command = [self.binary or resolve_binary("kairos-market-cli")]
+        if self.workspace is not None:
+            command.extend(("--workspace", str(self.workspace.paths.root)))
         if output is not None:
             command.extend(("--output", output))
         command.extend(arguments)

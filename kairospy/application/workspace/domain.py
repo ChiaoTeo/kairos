@@ -72,7 +72,17 @@ class WorkspacePaths:
         return self.child("run", name, "health.json")
 
     def process_socket(self, process: str) -> Path:
-        return self.child("run", process, f"{process}.sock")
+        candidate = self.child("run", process, f"{process}.sock")
+        # macOS limits AF_UNIX socket addresses to a small fixed byte length.
+        # Use the same stable alias as the Rust workspace library when the
+        # logical workspace path cannot be represented by the OS.
+        if len(str(candidate).encode()) <= 100:
+            return candidate
+        digest = hashlib.sha256(f"{self.root}:{process}".encode()).hexdigest()[:20]
+        return Path("/tmp") / f"kairos-process-{digest}-{process}.sock"
+
+    def process_lock(self, process: str) -> Path:
+        return self.child("run", process, f"{process}.lock")
 
     def account_config(self) -> Path:
         return self.child("accounts", "accounts.toml")
@@ -99,7 +109,10 @@ class WorkspacePaths:
         return self.child("run", "reference", "health.json")
 
     def reference_snapshot(self, view: str = "catalog") -> Path:
-        if view not in {"catalog", "markets", "lifecycle"}:
+        if view not in {
+            "catalog", "entities", "assets", "instruments", "listings", "markets",
+            "financial-products", "execution-accesses",
+        }:
             raise ValueError(f"unsupported reference snapshot view: {view}")
         return self.child("snapshots", "reference", f"{view}.snapshot")
 
@@ -211,6 +224,10 @@ class InstanceWorkspace:
     def health(self, name: str) -> Path:
         return self.paths.instance_health(self.mode, self.launch_id, self.instance_id, self._parts((name,))[0])
 
+    def lock(self, name: str) -> Path:
+        component = self._parts((name,))[0]
+        return self.root / "locks" / f"{component}.lock"
+
     def state(self, *parts: str) -> Path:
         return self.paths.instance_state(self.mode, self.launch_id, self.instance_id, *self._parts(parts))
 
@@ -227,5 +244,5 @@ class InstanceWorkspace:
         return self.state("market", name)
 
     def prepare(self) -> None:
-        for directory in (self.root, self.root / "sockets", self.root / "health", self.root / "state", self.root / "snapshots", self.root / "logs", self.root / "checkpoints"):
+        for directory in (self.root, self.root / "sockets", self.root / "health", self.root / "locks", self.root / "state", self.root / "snapshots", self.root / "logs", self.root / "checkpoints"):
             directory.mkdir(parents=True, exist_ok=True)

@@ -22,6 +22,10 @@ from .commands.root import (
     timeline_app,
 )
 from kairospy.application.workspace import WorkspaceApplication
+from kairospy.application.system import ComponentProcessApplication
+from kairospy.surface.console import ObserveApp
+from kairospy.surface.console.data import SystemObserveReader
+from .options import OutputFormat, reset_command_output, set_command_output
 
 
 app = typer.Typer(no_args_is_help=True, help="KairosPy strategy runtime toolkit")
@@ -86,10 +90,28 @@ def shell(workspace: str | None = typer.Option(None, "--workspace")) -> None:
     typer.echo(f"kairos shell session for {value.workspace_id}; use subcommands with --workspace {value.paths.root}")
 
 
-@app.command("tui")
-def tui(workspace: str | None = typer.Option(None, "--workspace")) -> None:
+@app.command("observe")
+def observe(
+    workspace: str | None = typer.Option(None, "--workspace"),
+    refresh: float = typer.Option(2.0, "--refresh", min=0.2, help="Refresh interval in seconds"),
+    once: bool = typer.Option(False, "--once", help="Print one JSON observation and exit"),
+) -> None:
+    """Open the read-only system and market observation console."""
     value = WorkspaceApplication().resolve(workspace)
-    typer.echo(f"kairos read-only TUI surface for {value.workspace_id}: {value.paths.root}")
+    reader = SystemObserveReader(ComponentProcessApplication(value), value.workspace_id)
+    if once:
+        import json
+
+        snapshot = reader.read()
+        typer.echo(json.dumps({"workspace_id": snapshot.workspace_id, "components": snapshot.components, "market_snapshot": snapshot.market_snapshot}, default=str))
+        return
+    ObserveApp(reader, refresh_seconds=refresh).run()
+
+
+@app.command("tui", hidden=True)
+def tui(workspace: str | None = typer.Option(None, "--workspace")) -> None:
+    """Compatibility alias for ``observe``."""
+    observe(workspace=workspace)
 
 
 @app.command("browse")
@@ -107,7 +129,9 @@ def version() -> None:
 def execute_argv(argv: Sequence[str], stdout: TextIO) -> int:
     command = get_command(app)
     previous_format = os.environ.get("KAIROS_CLI_FORMAT")
-    os.environ["KAIROS_CLI_FORMAT"] = _cli_format(argv)
+    effective_format = OutputFormat(_cli_format(argv))
+    render_token = set_command_output(effective_format)
+    os.environ["KAIROS_CLI_FORMAT"] = effective_format.value
     try:
         with redirect_stdout(stdout), redirect_stderr(stdout):
             command.main(args=list(argv), prog_name="kairospy", standalone_mode=False)
@@ -120,6 +144,7 @@ def execute_argv(argv: Sequence[str], stdout: TextIO) -> int:
         stdout.write(f"Error: {error}\n")
         return 1
     finally:
+        reset_command_output(render_token)
         if previous_format is None:
             os.environ.pop("KAIROS_CLI_FORMAT", None)
         else:

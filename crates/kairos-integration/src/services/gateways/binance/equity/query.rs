@@ -184,17 +184,7 @@ fn decimal(value: &Value) -> Result<DecimalValue, String> {
     if text == "null" || text.is_empty() {
         return Ok(DecimalValue::new(0, 0));
     }
-    let negative = text.starts_with('-');
-    let unsigned = text.trim_start_matches('-');
-    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
-    let digits = format!("{whole}{fraction}");
-    let mantissa = digits
-        .parse::<i64>()
-        .map_err(|_| format!("invalid decimal: {text}"))?;
-    Ok(DecimalValue::new(
-        if negative { -mantissa } else { mantissa },
-        fraction.len() as u8,
-    ))
+    DecimalValue::parse(&text)
 }
 
 fn value_string(value: &Value) -> String {

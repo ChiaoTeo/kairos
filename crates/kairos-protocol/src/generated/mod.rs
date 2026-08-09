@@ -26,6 +26,8 @@ pub mod kairos {
             pub use entity_generated::*;
             mod financial_product_generated;
             pub use financial_product_generated::*;
+            mod execution_access_generated;
+            pub use execution_access_generated::*;
             mod instrument_generated;
             pub use instrument_generated::*;
             mod listing_generated;
@@ -40,12 +42,12 @@ pub mod kairos {
             pub use catalog_generated::*;
             mod catalog_snapshot_generated;
             pub use catalog_snapshot_generated::*;
+            mod reference_collections_generated;
+            pub use reference_collections_generated::*;
+            mod reference_collections_snapshot_generated;
+            pub use reference_collections_snapshot_generated::*;
             mod lifecycle_event_generated;
             pub use lifecycle_event_generated::*;
-            mod lifecycle_generated;
-            pub use lifecycle_generated::*;
-            mod lifecycle_snapshot_generated;
-            pub use lifecycle_snapshot_generated::*;
             mod markets_generated;
             pub use markets_generated::*;
             mod markets_snapshot_generated;
@@ -58,8 +60,12 @@ pub mod kairos {
         pub mod v_1 {
             mod bar_generated;
             pub use bar_generated::*;
+            mod bar_message_generated;
+            pub use bar_message_generated::*;
             mod greeks_generated;
             pub use greeks_generated::*;
+            mod greeks_message_generated;
+            pub use greeks_message_generated::*;
             mod quote_generated;
             pub use quote_generated::*;
             mod quote_message_generated;

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
+from datetime import datetime
 from typing import Any
 
+from aiohttp import web
+
+from ..domain.lifecycle import StrategyLifecycle
 from .host import StrategyHost
 
 
@@ -22,7 +25,12 @@ class StrategyControlServer:
         self._stopped.clear()
         self.socket_path.unlink(missing_ok=True)
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
-        self._server = await asyncio.start_unix_server(self._handle, path=str(self.socket_path))
+        application = web.Application(client_max_size=1024 * 1024)
+        application.router.add_route("*", "/{path_info:.*}", self._handle)
+        self._runner = web.AppRunner(application)
+        await self._runner.setup()
+        self._site = web.UnixSite(self._runner, str(self.socket_path))
+        await self._site.start()
 
     async def serve_until_stopped(self) -> None:
         await self._stopped.wait()
@@ -36,34 +44,29 @@ class StrategyControlServer:
                 pass
         self._event_task = None
         self._stopped.set()
-        if self._server is None:
+        if getattr(self, "_runner", None) is None:
             return
-        self._server.close()
-        await self._server.wait_closed()
+        await self._runner.cleanup()
+        self._runner = None
         self.socket_path.unlink(missing_ok=True)
 
-    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    async def _handle(self, request: web.Request) -> web.Response:
         try:
-            request = await reader.readuntil(b"\r\n\r\n")
-            header, _, body = request.partition(b"\r\n\r\n")
-            lines = header.decode("ascii").splitlines()
-            method, path, _ = lines[0].split(" ", 2)
-            length = next((int(line.split(":", 1)[1].strip()) for line in lines[1:] if line.lower().startswith("content-length:")), 0)
-            if length:
-                body += await reader.readexactly(length - len(body))
-            result = self._dispatch(method, path, body)
-            self._write(writer, 200, result)
+            body = await request.read()
+            target = request.path
+            if request.query_string:
+                target += f"?{request.query_string}"
+            result = self._dispatch(request.method, target, body)
+            return web.json_response(result)
         except Exception as error:
-            self._write(writer, 400, {"error": str(error)})
-        finally:
-            await writer.drain()
-            writer.close()
-            await writer.wait_closed()
+            return web.json_response({"error": str(error)}, status=400)
 
     def _dispatch(self, method: str, path: str, body: bytes) -> dict[str, Any]:
         if method == "GET" and path == "/v1/health":
             status = self.host.status
-            return {"status": "ready", "strategy_state": status.state.value, "launch_id": status.launch_id, "instance_id": status.instance_id, "strategy_id": status.strategy_id, "event_sequence": status.event_sequence, "reason": status.reason}
+            return self._status(status) | {
+                "status": "ready" if status.state not in {StrategyLifecycle.FAILED, StrategyLifecycle.STOPPED} else "not_ready"
+            }
         if method == "GET" and path == "/v1/status":
             return self._status(self.host.status)
         if method == "POST" and path == "/v1/start":
@@ -88,10 +91,25 @@ class StrategyControlServer:
 
     @staticmethod
     def _status(status: object) -> dict[str, Any]:
-        return {"status": getattr(status.state, "value", str(status.state)), "launch_id": status.launch_id, "instance_id": status.instance_id, "strategy_id": status.strategy_id, "event_sequence": status.event_sequence, "reason": status.reason}
-
-    @staticmethod
-    def _write(writer: asyncio.StreamWriter, status: int, value: dict[str, Any]) -> None:
-        body = json.dumps(value, default=str).encode("utf-8")
-        reason = "OK" if status == 200 else "Bad Request"
-        writer.write(f"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode("ascii") + body)
+        last_event_time = status.last_event_time.isoformat() if status.last_event_time else None
+        last_event_age_ms = None
+        if status.last_event_time is not None:
+            last_event_age_ms = max(0, int((datetime.now(status.last_event_time.tzinfo) - status.last_event_time).total_seconds() * 1000))
+        return {
+            "status": getattr(status.state, "value", str(status.state)),
+            "launch_id": status.launch_id,
+            "instance_id": status.instance_id,
+            "strategy_id": status.strategy_id,
+            "event_sequence": status.event_sequence,
+            "reason": status.reason,
+            "readiness": status.readiness.value,
+            "data_health": status.data_health.value,
+            "subscription_count": status.subscription_count,
+            "active_subscription_count": status.active_subscription_count,
+            "first_event_received": status.first_event_received,
+            "last_event_time": status.last_event_time.isoformat() if status.last_event_time else None,
+            "last_event_age_ms": last_event_age_ms,
+            "last_event_kind": status.last_event_kind,
+            "event_count": status.event_count,
+            "subscriptions": [dict(subscription) for subscription in status.subscriptions],
+        }

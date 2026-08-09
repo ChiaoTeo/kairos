@@ -1,9 +1,13 @@
-//! Fixed-capacity, in-place FlatBuffer state regions.
+//! Experimental fixed-capacity, in-place FlatBuffer state regions.
 //!
 //! The region owns no business schema. A business module creates a
 //! preallocated FlatBuffer once and mutates its existing fields/slots through
 //! the payload passed to `update`. The outer runtime header provides the
 //! cross-process seqlock and state watermark.
+//!
+//! This profile is not part of the canonical service snapshot contract. The
+//! current service contract is the KSS1 double-slot envelope in
+//! `shared_memory`.
 
 use memmap2::{Mmap, MmapMut, MmapOptions};
 use std::fs::{File, OpenOptions};

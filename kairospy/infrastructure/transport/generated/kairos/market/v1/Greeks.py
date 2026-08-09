@@ -125,8 +125,15 @@ class Greeks(object):
             return self._tab.String(o + self._tab.Pos)
         return None
 
+    # Greeks
+    def Derivation(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(26))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
 def GreeksStart(builder):
-    builder.StartObject(11)
+    builder.StartObject(12)
 
 def Start(builder):
     GreeksStart(builder)
@@ -196,6 +203,12 @@ def GreeksAddSourceId(builder, sourceId):
 
 def AddSourceId(builder, sourceId):
     GreeksAddSourceId(builder, sourceId)
+
+def GreeksAddDerivation(builder, derivation):
+    builder.PrependUOffsetTRelativeSlot(11, flatbuffers.number_types.UOffsetTFlags.py_type(derivation), 0)
+
+def AddDerivation(builder, derivation):
+    GreeksAddDerivation(builder, derivation)
 
 def GreeksEnd(builder):
     return builder.EndObject()

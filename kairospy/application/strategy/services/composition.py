@@ -9,9 +9,9 @@ from typing import Mapping
 
 from kairospy.application.workspace import Workspace
 from kairospy.strategy import StrategyLogger
-from kairospy.application.reference import ReferenceSnapshotClient
 
 from ..services.bus import StrategyContextBus
+from ..services.context import StrategyClientBundle
 from ..services.host import StrategyHost
 from ..services.journal import JsonlLifecycleJournal
 from ..services.loader import StrategyEntrypoint, load_strategy
@@ -36,16 +36,11 @@ def compose_strategy_process(
     mode: str = "paper",
     params: Mapping[str, object] | None = None,
 ) -> StrategyProcessComposition:
-    # Import transport adapters only when composing a process.  The transport
-    # package also exposes market domain views, and importing it while the
-    # strategy package is initializing would create a package-init cycle.
-    from kairospy.infrastructure.transport import (
-        ExecutionIntentCommandPort,
-        MarketUnixCommandPort,
-        MmapMarketSnapshotReader,
-        UnixJsonCommandClient,
-        UnixMarketEventStream,
-    )
+    # Contract facades own all strategy process-boundary adapters.  Concrete
+    # wire decoding and Unix transport remain private implementation details.
+    from kairospy.infrastructure.contracts.execution import intent_port
+    from kairospy.infrastructure.contracts.market import command_port, event_stream, snapshot_reader
+    from kairospy.infrastructure.contracts.reference import client as reference_client
 
     entrypoint = load_strategy(strategy_ref, root=workspace.paths.project_root, params=params)
     instance = workspace.instance(mode, launch_id, instance_id)
@@ -70,14 +65,13 @@ def compose_strategy_process(
         if market_runtime is None
         else market_runtime.snapshot("market", "market.snapshot")
     )
-    market_client = UnixJsonCommandClient(market_socket)
+    market_client = command_port(market_socket, launch_id=launch_id)
     manifest_path = instance.component_manifest()
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         execution_socket = manifest["components"]["execution"]["socket"]
     except (FileNotFoundError, json.JSONDecodeError, KeyError, TypeError) as error:
         raise RuntimeError("strategy instance component endpoint manifest is incomplete") from error
-    execution_client = UnixJsonCommandClient(execution_socket)
     max_notional = None
     raw_max_notional = os.environ.get("KAIROS_LIVE_MAX_ORDER_NOTIONAL")
     if raw_max_notional:
@@ -85,18 +79,19 @@ def compose_strategy_process(
             max_notional = Decimal(raw_max_notional)
         except InvalidOperation:
             max_notional = None
-    bus = StrategyContextBus(
-        market=MarketUnixCommandPort(market_client, launch_id=launch_id),
-        intents=ExecutionIntentCommandPort(
-            execution_client,
-            allow_trading=mode != "live" or os.environ.get("KAIROS_LIVE_TRADING_ENABLED", "false") == "true",
-            max_order_notional=max_notional,
-            require_limit_orders=mode == "live" and os.environ.get("KAIROS_LIVE_REQUIRE_LIMIT_ORDERS", "true") == "true",
-            launch_id=launch_id,
-        ),
+    execution_client = intent_port(
+        execution_socket,
+        allow_trading=mode != "live" or os.environ.get("KAIROS_LIVE_TRADING_ENABLED", "false") == "true",
+        max_order_notional=max_notional,
+        require_limit_orders=mode == "live" and os.environ.get("KAIROS_LIVE_REQUIRE_LIMIT_ORDERS", "true") == "true",
+        launch_id=launch_id,
     )
-    snapshots = MmapMarketSnapshotReader(market_snapshot)
-    stream = UnixMarketEventStream(market_event_socket)
+    bus = StrategyContextBus(
+        market=market_client,
+        intents=execution_client,
+    )
+    snapshots = snapshot_reader(market_snapshot)
+    stream = event_stream(market_event_socket)
     journal = JsonlLifecycleJournal(
         workspace.paths.child("launches", mode, launch_id, "instances", instance_id, "lifecycle.jsonl")
     )
@@ -104,14 +99,18 @@ def compose_strategy_process(
         entrypoint.strategy,
         launch_id=launch_id,
         instance_id=instance_id,
-        bus=bus,
-        snapshots=snapshots,
-        reference=ReferenceSnapshotClient(
-            socket_path=workspace.paths.reference_socket(),
-            snapshot_path=workspace.paths.reference_snapshot("catalog"),
-            markets_snapshot_path=workspace.paths.reference_snapshot("markets"),
+        clients=StrategyClientBundle(
+            commands=bus,
+            market_commands=market_client,
+            execution_commands=execution_client,
+            market_snapshots=snapshots,
+            market_events=stream,
+            reference=reference_client(
+                socket_path=workspace.paths.reference_socket(),
+                snapshot_path=workspace.paths.reference_snapshot("catalog"),
+                markets_snapshot_path=workspace.paths.reference_snapshot("markets"),
+            ),
         ),
-        stream=stream,
         journal=journal,
         logger=StrategyLogger(fields={
             "launch_id": launch_id,

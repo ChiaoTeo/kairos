@@ -35,12 +35,19 @@ def resolve_binary(name: str, *, override: str | None = None) -> str:
     if value := os.environ.get(env_name):
         return value
     package_root = Path(__file__).resolve().parents[2]
-    packaged = package_root / "_bin" / name
-    if packaged.is_file() and os.access(packaged, os.X_OK):
-        return str(packaged)
+    packaged_candidates = [package_root / "_bin" / name]
+    if os.name == "nt":
+        packaged_candidates.insert(0, package_root / "_bin" / f"{name}.exe")
+    for packaged in packaged_candidates:
+        if packaged.is_file() and os.access(packaged, os.X_OK):
+            return str(packaged)
+    development_names = [name]
+    if os.name == "nt":
+        development_names.insert(0, f"{name}.exe")
     for development in (
-        package_root.parent / "target" / "debug" / name,
-        package_root.parent / "target" / "release" / name,
+        package_root.parent / "target" / profile / filename
+        for profile in ("debug", "release")
+        for filename in development_names
     ):
         if development.is_file():
             return str(development)

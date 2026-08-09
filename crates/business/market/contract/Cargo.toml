@@ -1,0 +1,16 @@
+[package]
+name = "kairos-market-contract"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Market module cross-process read and write contract"
+
+[lib]
+name = "kairos_market_contract"
+path = "src/lib.rs"
+
+[dependencies]
+flatbuffers = "25.12.19"
+kairos-protocol = { path = "../../../kairos-protocol" }
+kairos-transport = { path = "../../../kairos-transport" }
+serde = { version = "1", features = ["derive"] }

@@ -260,26 +260,11 @@ fn product_name(product: ProductFamily) -> &'static str {
 }
 
 fn decimal(value: &str) -> Result<DecimalValue, String> {
-    let negative = value.starts_with('-');
-    let unsigned = value.trim_start_matches('-');
-    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
-    let mantissa = format!("{whole}{fraction}")
-        .parse::<i64>()
-        .map_err(|_| format!("invalid Binance margin decimal: {value}"))?;
-    Ok(DecimalValue::new(
-        if negative { -mantissa } else { mantissa },
-        fraction.len() as u8,
-    ))
+    DecimalValue::parse(value)
 }
 
 fn rescale(value: DecimalValue, scale: u8) -> Result<i64, String> {
-    if value.scale > scale {
-        return Err("decimal scale cannot shrink".into());
-    }
-    value
-        .mantissa
-        .checked_mul(10_i64.pow((scale - value.scale) as u32))
-        .ok_or_else(|| "decimal rescale overflow".into())
+    value.rescale_exact(scale).map(|value| value.mantissa)
 }
 
 fn now_nanos() -> u64 {

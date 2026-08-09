@@ -16,7 +16,7 @@ HELP = """Account commands are owned by kairos-account-cli.
 Canonical commands include:
   list, show, register, modify, simulate, schemas, schema, doctor
   credential-list, credential-create, credential-show, credential-delete
-  balances, positions, open-orders, orders, snapshot, refresh
+  balances, positions, open-orders, snapshot, refresh
 
 """
 

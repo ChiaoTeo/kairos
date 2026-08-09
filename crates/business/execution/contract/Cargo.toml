@@ -1,0 +1,21 @@
+[package]
+name = "kairos-execution-contract"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Execution module cross-process read and write contract"
+
+[lib]
+name = "kairos_execution_contract"
+path = "src/lib.rs"
+
+[dependencies]
+kairos-protocol = { path = "../../../kairos-protocol" }
+kairos-transport = { path = "../../../kairos-transport" }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+flatbuffers = "25.12.19"
+
+[dev-dependencies]
+tempfile = "3"

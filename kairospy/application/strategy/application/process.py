@@ -38,7 +38,7 @@ class StrategyProcessApplication:
         client = UnixRestClient(socket)
         try:
             health = asyncio.run(client.request("GET", "/v1/health"))
-        except (OSError, RuntimeError, ValueError):
+        except Exception:
             pass
         else:
             if health.get("status") == "ready":
@@ -86,7 +86,7 @@ class StrategyProcessApplication:
                 health = asyncio.run(client.request("GET", "/v1/health"))
                 if health.get("status") == "ready":
                     return socket
-            except (OSError, RuntimeError, ValueError):
+            except Exception:
                 pass
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"strategy server did not become ready; inspect {log_path}")

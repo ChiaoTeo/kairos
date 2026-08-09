@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import platform
 import subprocess
+import sys
 import tempfile
 import zipfile
 from pathlib import Path
@@ -23,9 +25,51 @@ BINARIES = (
 )
 
 
+def _binary_filename(name: str) -> str:
+    """Return the native filename used by the current operating system."""
+    return f"{name}.exe" if os.name == "nt" else name
+
+
+def _platform_tag() -> str:
+    """Return a conservative wheel platform tag for the build host.
+
+    The package contains executable Rust programs rather than a CPython
+    extension, so setuptools otherwise treats it as a universal pure-Python
+    wheel.  That tag would allow pip to install, for example, an x86_64
+    executable on an arm64 machine.
+    """
+    machine = platform.machine().lower()
+    if sys.platform == "win32":
+        return {
+            "amd64": "win_amd64",
+            "x86_64": "win_amd64",
+            "arm64": "win_arm64",
+            "aarch64": "win_arm64",
+            "x86": "win32",
+            "i386": "win32",
+        }.get(machine, f"win_{machine}")
+    if sys.platform == "darwin":
+        if machine in {"arm64", "aarch64"}:
+            return "macosx_11_0_arm64"
+        if machine in {"x86_64", "amd64"}:
+            return "macosx_10_15_x86_64"
+        return f"macosx_10_15_{machine}"
+    if sys.platform == "linux":
+        # The release runner uses Ubuntu 22.04 (glibc 2.35).  Keep the tag
+        # conservative for Linux and let pip restrict installation to Linux
+        # of the matching CPU architecture.
+        return {
+            "x86_64": "linux_x86_64",
+            "amd64": "linux_x86_64",
+            "aarch64": "linux_aarch64",
+            "arm64": "linux_aarch64",
+        }.get(machine, f"linux_{machine}")
+    return f"{sys.platform}_{machine}"
+
+
 def _build_binaries(output: Path) -> None:
     subprocess.run(
-        [os.environ.get("PYTHON", "python3"), str(ROOT / "scripts" / "build_rust_binaries.py"), "--output", str(output)],
+        [os.environ.get("PYTHON", sys.executable), str(ROOT / "scripts" / "build_rust_binaries.py"), "--output", str(output)],
         cwd=ROOT,
         check=True,
     )
@@ -43,13 +87,21 @@ def _rewrite_wheel(wheel: Path, binaries: Path) -> None:
     wheel_data = f"{dist_info.removesuffix('.dist-info')}.data/scripts"
     wheel_metadata = f"{dist_info}/WHEEL"
     files[wheel_metadata] = files[wheel_metadata].replace(b"Root-Is-Purelib: true", b"Root-Is-Purelib: false")
+    platform_tag = _platform_tag()
     for binary in BINARIES:
-        data = (binaries / binary).read_bytes()
-        for name in (f"kairospy/_bin/{binary}", f"{wheel_data}/{binary}"):
+        filename = _binary_filename(binary)
+        data = (binaries / filename).read_bytes()
+        for name in (f"kairospy/_bin/{filename}", f"{wheel_data}/{filename}"):
             info = zipfile.ZipInfo(name)
             info.create_system = 3
             info.external_attr = 0o100755 << 16
             files[name] = (data, info)
+    wheel_text = files[wheel_metadata].decode()
+    wheel_text = "\n".join(
+        f"Tag: py3-none-{platform_tag}" if line.startswith("Tag: ") else line
+        for line in wheel_text.splitlines()
+    ) + "\n"
+    files[wheel_metadata] = wheel_text.encode()
     record = f"{dist_info}/RECORD"
     rows = [
         f"{name},{_digest(data if isinstance(data, bytes) else data[0])},{len(data if isinstance(data, bytes) else data[0])}"
@@ -65,7 +117,13 @@ def _rewrite_wheel(wheel: Path, binaries: Path) -> None:
                 target.writestr(data[1], data[0])
             else:
                 target.writestr(name, data)
-    temporary.replace(wheel)
+    wheel_stem = wheel.stem
+    distribution_version = wheel_stem.rsplit("-", 3)[0]
+    platform_wheel = wheel.with_name(f"{distribution_version}-py3-none-{platform_tag}.whl")
+    temporary.replace(platform_wheel)
+    if platform_wheel != wheel:
+        wheel.unlink()
+    return platform_wheel.name
 
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
@@ -73,8 +131,7 @@ def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
         binaries = Path(temporary)
         _build_binaries(binaries)
         filename = _setuptools.build_wheel(wheel_directory, config_settings, metadata_directory)
-        _rewrite_wheel(Path(wheel_directory) / filename, binaries)
-        return filename
+        return _rewrite_wheel(Path(wheel_directory) / filename, binaries)
 
 
 def build_sdist(sdist_directory, config_settings=None):

@@ -114,8 +114,15 @@ class Bar(object):
             return self._tab.String(o + self._tab.Pos)
         return None
 
+    # Bar
+    def Derivation(self):
+        o = flatbuffers.number_types.UOffsetTFlags.py_type(self._tab.Offset(24))
+        if o != 0:
+            return self._tab.String(o + self._tab.Pos)
+        return None
+
 def BarStart(builder):
-    builder.StartObject(10)
+    builder.StartObject(11)
 
 def Start(builder):
     BarStart(builder)
@@ -179,6 +186,12 @@ def BarAddSourceId(builder, sourceId):
 
 def AddSourceId(builder, sourceId):
     BarAddSourceId(builder, sourceId)
+
+def BarAddDerivation(builder, derivation):
+    builder.PrependUOffsetTRelativeSlot(10, flatbuffers.number_types.UOffsetTFlags.py_type(derivation), 0)
+
+def AddDerivation(builder, derivation):
+    BarAddDerivation(builder, derivation)
 
 def BarEnd(builder):
     return builder.EndObject()

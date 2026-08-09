@@ -1,0 +1,443 @@
+use std::collections::BTreeMap;
+
+use crate::application::{AccountProjection, AccountsSnapshot};
+use crate::domain::{
+    Account, AccountEvent, AccountSegment, AccountSnapshot, AccountState, ApplyOutcome, Balance,
+    Decimal, SegmentKey, SnapshotKind,
+};
+
+pub(crate) struct ActorUndo {
+    states: Vec<(SegmentKey, AccountState)>,
+    generation: u64,
+    event_sequence: u64,
+}
+
+#[derive(Clone)]
+pub(crate) struct AccountActor {
+    actor_id: String,
+    accounts: BTreeMap<SegmentKey, Account>,
+    generation: u64,
+    event_sequence: u64,
+}
+
+impl AccountActor {
+    pub(crate) fn new(
+        segments: Vec<AccountSegment>,
+        restored: Vec<(AccountSegment, crate::domain::AccountState)>,
+        generation: u64,
+        event_sequence: u64,
+    ) -> Result<Self, String> {
+        let mut accounts = BTreeMap::new();
+        for segment in segments {
+            let key = segment.segment_key.clone();
+            if accounts.contains_key(&key) {
+                return Err(format!("duplicate account segment: {key}"));
+            }
+            accounts.insert(
+                key,
+                Account::new(segment).map_err(|error| error.to_string())?,
+            );
+        }
+        for (segment, state) in restored {
+            let account = accounts.get_mut(&segment.segment_key).ok_or_else(|| {
+                format!("stored segment is not configured: {}", segment.segment_key)
+            })?;
+            account.restore_state(state);
+        }
+        Ok(Self {
+            actor_id: "account".into(),
+            accounts,
+            generation,
+            event_sequence,
+        })
+    }
+
+    pub(crate) fn record_fill(
+        &mut self,
+        fill: crate::domain::AccountFill,
+    ) -> Result<ApplyOutcome, String> {
+        let account = self
+            .accounts
+            .get_mut(&fill.segment_key)
+            .ok_or_else(|| format!("fill segment is not configured: {}", fill.segment_key))?;
+        let outcome = account
+            .record_fill(fill)
+            .map_err(|error| error.to_string())?;
+        if outcome == ApplyOutcome::Applied {
+            self.event_sequence += 1;
+            self.generation += 1;
+        }
+        Ok(outcome)
+    }
+
+    pub(crate) fn apply_events(&mut self, event: AccountEvent) -> Result<u64, String> {
+        let events = match event {
+            AccountEvent::Batch(events) => events,
+            event => vec![event],
+        };
+        let mut applied = 0_u64;
+        for event in events {
+            if self.apply_event(event)? == ApplyOutcome::Applied {
+                applied += 1;
+            }
+        }
+        self.event_sequence += applied;
+        self.generation += u64::from(applied > 0);
+        Ok(applied)
+    }
+
+    pub(crate) fn undo_for_events(&self, events: &[AccountEvent]) -> ActorUndo {
+        let mut keys = Vec::new();
+        let mut all_accounts = false;
+        for event in events {
+            collect_event_keys(event, &mut keys, &mut all_accounts);
+        }
+        let states = if all_accounts {
+            self.accounts
+                .iter()
+                .map(|(key, account)| (key.clone(), account.state().clone()))
+                .collect()
+        } else {
+            keys.sort();
+            keys.dedup();
+            keys.into_iter()
+                .filter_map(|key| {
+                    self.accounts
+                        .get(&key)
+                        .map(|account| (key, account.state().clone()))
+                })
+                .collect()
+        };
+        ActorUndo {
+            states,
+            generation: self.generation,
+            event_sequence: self.event_sequence,
+        }
+    }
+
+    pub(crate) fn restore_undo(&mut self, undo: ActorUndo) {
+        for (key, state) in undo.states {
+            if let Some(account) = self.accounts.get_mut(&key) {
+                account.restore_state(state);
+            }
+        }
+        self.generation = undo.generation;
+        self.event_sequence = undo.event_sequence;
+    }
+
+    fn apply_event(&mut self, event: AccountEvent) -> Result<ApplyOutcome, String> {
+        match event {
+            AccountEvent::Snapshot(snapshot) => {
+                let account = self
+                    .accounts
+                    .values_mut()
+                    .find(|value| value.segment().segment_key == snapshot.segment_key)
+                    .ok_or_else(|| {
+                        format!("stream segment is not configured: {}", snapshot.segment_key)
+                    })?;
+                account
+                    .apply_snapshot(snapshot)
+                    .map_err(|error| error.to_string())
+            }
+            AccountEvent::Fill(fill) => {
+                let account = self.accounts.get_mut(&fill.segment_key).ok_or_else(|| {
+                    format!("fill segment is not configured: {}", fill.segment_key)
+                })?;
+                account.record_fill(fill).map_err(|error| error.to_string())
+            }
+            AccountEvent::OrderObserved(observation) => {
+                let Some(account) = self.accounts.values_mut().find(|account| {
+                    account
+                        .state()
+                        .open_orders()
+                        .contains_key(&observation.order_id)
+                }) else {
+                    return Ok(ApplyOutcome::NoChange);
+                };
+                Ok(account.apply_order_observation(observation))
+            }
+            AccountEvent::Batch(_) => Err("nested account event batch is not supported".into()),
+        }
+    }
+
+    pub(crate) fn selected_segments(
+        &self,
+        account_id: &str,
+        segments: &[String],
+    ) -> Result<Vec<AccountSegment>, String> {
+        let selected: Vec<_> = self
+            .accounts
+            .values()
+            .filter(|account| {
+                account.segment().identity.account_id == account_id
+                    && segment_selected(segments, &account.segment().segment_key)
+            })
+            .map(|account| account.segment().clone())
+            .collect();
+        if selected.is_empty() {
+            return Err(format!("no configured segments for account: {account_id}"));
+        }
+        Ok(selected)
+    }
+
+    pub(crate) fn apply_snapshot(
+        &mut self,
+        snapshot: AccountSnapshot,
+    ) -> Result<(ApplyOutcome, Vec<crate::application::AccountDifference>), String> {
+        let account = self
+            .accounts
+            .get_mut(&snapshot.segment_key)
+            .ok_or_else(|| {
+                format!(
+                    "snapshot segment is not configured: {}",
+                    snapshot.segment_key
+                )
+            })?;
+        let differences = compare_snapshot(account, &snapshot);
+        let outcome = account
+            .apply_snapshot(snapshot)
+            .map_err(|error| error.to_string())?;
+        if outcome == ApplyOutcome::Applied {
+            self.event_sequence += 1;
+            self.generation += 1;
+        }
+        Ok((outcome, differences))
+    }
+
+    pub(crate) fn begin_reconciliation(
+        &mut self,
+        account_id: &str,
+        segments: &[String],
+    ) -> Result<bool, String> {
+        let keys: Vec<_> = self
+            .selected_segments(account_id, segments)?
+            .into_iter()
+            .map(|segment| segment.segment_key)
+            .collect();
+        let mut changed = false;
+        for key in &keys {
+            changed |= self
+                .accounts
+                .get_mut(key)
+                .expect("key collected")
+                .begin_reconciliation()
+                == ApplyOutcome::Applied;
+        }
+        if changed {
+            self.generation += 1;
+            self.event_sequence += 1;
+        }
+        Ok(changed)
+    }
+
+    pub(crate) fn persistent_accounts(&self) -> Vec<Account> {
+        self.accounts.values().cloned().collect()
+    }
+
+    pub(crate) fn persistence_metadata(&self) -> (&str, u64, u64) {
+        (&self.actor_id, self.generation, self.event_sequence)
+    }
+
+    pub(crate) fn projection(&self, segment_key: &SegmentKey) -> Option<AccountProjection> {
+        self.accounts
+            .get(segment_key)
+            .map(AccountProjection::from_account)
+    }
+
+    pub fn query(&self, account_id: &str, segments: &[String]) -> Vec<AccountProjection> {
+        self.accounts
+            .values()
+            .filter(|account| {
+                account.segment().identity.account_id == account_id
+                    && segment_selected(segments, &account.segment().segment_key)
+            })
+            .map(AccountProjection::from_account)
+            .collect()
+    }
+
+    pub fn snapshot(&self) -> AccountsSnapshot {
+        AccountsSnapshot {
+            actor_id: self.actor_id.clone(),
+            generation: self.generation,
+            event_sequence: self.event_sequence,
+            accounts: self
+                .accounts
+                .values()
+                .map(AccountProjection::from_account)
+                .collect(),
+        }
+    }
+}
+
+fn collect_event_keys(event: &AccountEvent, keys: &mut Vec<SegmentKey>, all_accounts: &mut bool) {
+    match event {
+        AccountEvent::Snapshot(snapshot) => keys.push(snapshot.segment_key.clone()),
+        AccountEvent::Fill(fill) => keys.push(fill.segment_key.clone()),
+        AccountEvent::OrderObserved(_) => *all_accounts = true,
+        AccountEvent::Batch(events) => {
+            for event in events {
+                collect_event_keys(event, keys, all_accounts);
+            }
+        }
+    }
+}
+
+fn segment_selected(segments: &[String], key: &SegmentKey) -> bool {
+    segments.is_empty() || segments.iter().any(|value| key == value)
+}
+
+fn compare_snapshot(
+    account: &Account,
+    snapshot: &AccountSnapshot,
+) -> Vec<crate::application::AccountDifference> {
+    let mut differences = Vec::new();
+    let state = account.state();
+
+    let external_balances: BTreeMap<_, _> = snapshot
+        .balances
+        .iter()
+        .map(|value| (value.asset_id.clone(), value))
+        .collect();
+    if snapshot.kind == SnapshotKind::Delta {
+        for (key, external) in external_balances {
+            compare_balance(
+                &mut differences,
+                key.to_string(),
+                state.balances().get(&key),
+                Some(external),
+            );
+        }
+    } else {
+        let keys = state
+            .balances()
+            .keys()
+            .chain(external_balances.keys())
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        for key in keys {
+            compare_balance(
+                &mut differences,
+                key.to_string(),
+                state.balances().get(&key),
+                external_balances.get(&key).copied(),
+            );
+        }
+    }
+
+    let external_positions: BTreeMap<_, _> = snapshot
+        .positions
+        .iter()
+        .map(|value| (value.instrument_id.clone(), value))
+        .collect();
+    let position_keys: Vec<crate::domain::InstrumentId> = if snapshot.kind == SnapshotKind::Delta {
+        external_positions.keys().cloned().collect()
+    } else {
+        state
+            .positions()
+            .keys()
+            .chain(external_positions.keys())
+            .cloned()
+            .collect()
+    };
+    for key in position_keys {
+        let local = state.positions().get(&key).map(|value| value.quantity);
+        let external = external_positions.get(&key).map(|value| value.quantity);
+        compare_decimal(
+            &mut differences,
+            "position.quantity",
+            key.to_string(),
+            local,
+            external,
+        );
+    }
+
+    let external_orders: BTreeMap<_, _> = snapshot
+        .open_orders
+        .iter()
+        .map(|value| (value.order_id.clone(), value))
+        .collect();
+    let order_keys: Vec<String> = if snapshot.kind == SnapshotKind::Delta {
+        external_orders.keys().cloned().collect()
+    } else {
+        state
+            .open_orders()
+            .keys()
+            .chain(external_orders.keys())
+            .cloned()
+            .collect()
+    };
+    for key in order_keys {
+        let local = state.open_orders().get(&key).map(|value| value.quantity);
+        let external = external_orders.get(&key).map(|value| value.quantity);
+        if local.is_none() || external.is_none() {
+            compare_decimal(
+                &mut differences,
+                "open_order.present",
+                key,
+                local.map(|_| Decimal::new(1, 0)),
+                external.map(|_| Decimal::new(1, 0)),
+            );
+        } else {
+            compare_decimal(
+                &mut differences,
+                "open_order.quantity",
+                key,
+                local,
+                external,
+            );
+        }
+    }
+    differences
+}
+
+fn compare_balance(
+    differences: &mut Vec<crate::application::AccountDifference>,
+    key: String,
+    local: Option<&Balance>,
+    external: Option<&Balance>,
+) {
+    compare_decimal(
+        differences,
+        "balance.total",
+        key.clone(),
+        local.map(|value| value.total),
+        external.map(|value| value.total),
+    );
+    compare_decimal(
+        differences,
+        "balance.available",
+        key.clone(),
+        local.and_then(|value| value.available),
+        external.and_then(|value| value.available),
+    );
+    compare_decimal(
+        differences,
+        "balance.locked",
+        key,
+        local.and_then(|value| value.locked),
+        external.and_then(|value| value.locked),
+    );
+}
+
+fn compare_decimal(
+    differences: &mut Vec<crate::application::AccountDifference>,
+    field: &str,
+    key: String,
+    local: Option<Decimal>,
+    external: Option<Decimal>,
+) {
+    let local = local.unwrap_or_default();
+    let external = external.unwrap_or_default();
+    let differs = local
+        .cmp_value(external)
+        .map(|ordering| ordering != std::cmp::Ordering::Equal)
+        .unwrap_or(true);
+    if differs {
+        differences.push(crate::application::AccountDifference {
+            field: field.into(),
+            key,
+            local,
+            external,
+        });
+    }
+}

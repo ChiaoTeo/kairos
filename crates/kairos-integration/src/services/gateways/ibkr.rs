@@ -684,16 +684,7 @@ fn decimal_f64_value(value: f64) -> ExternalDecimal {
     decimal_text(&text).unwrap_or_default()
 }
 fn decimal_text(value: &str) -> Result<ExternalDecimal, String> {
-    let negative = value.starts_with('-');
-    let unsigned = value.trim_start_matches('-');
-    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, ""));
-    let mantissa = format!("{whole}{fraction}")
-        .parse::<i64>()
-        .map_err(|_| format!("invalid IBKR decimal: {value}"))?;
-    Ok(ExternalDecimal::new(
-        if negative { -mantissa } else { mantissa },
-        fraction.len() as u8,
-    ))
+    ExternalDecimal::parse(value)
 }
 fn now_nanos() -> u64 {
     SystemTime::now()

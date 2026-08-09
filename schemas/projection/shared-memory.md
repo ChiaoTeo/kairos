@@ -1,4 +1,8 @@
-# Shared snapshot layout
+# KSS1 shared snapshot layout
+
+This is the canonical binary envelope for current service snapshots. It is
+not a business schema: the payload in each slot is one FlatBuffers root owned
+by the publishing business module.
 
 The first portable implementation uses a file-backed mmap. On Unix the same
 layout can be placed in a memfd or POSIX shared-memory object without changing
@@ -22,6 +26,11 @@ metadata, and then publishes the active slot and generation. Readers verify the
 active slot and generation before and after decoding. A zero-copy view is only
 valid while its slot remains active; callers that need a durable value should
 use an owned copy or a future reader-lease API.
+
+The slot size is fixed for the lifetime of a process. A payload that outgrows
+the slot is a publication error; resizing requires recreating the resource as
+part of process startup. The payload must be a complete FlatBuffers message
+with a schema-specific root and file identifier.
 
 The FlatBuffers `SnapshotHeader` inside each slot carries the owning Actor,
 the publication generation, the event stream identifier, and the event

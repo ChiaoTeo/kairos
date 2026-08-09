@@ -55,5 +55,13 @@ class LaunchInstanceApplication:
             "reason": value.reason,
             "event_sequence": value.event_sequence,
             "control_socket": str(self.instance.control_socket),
+            "readiness": value.readiness.value,
+            "data_health": value.data_health.value,
+            "subscription_count": value.subscription_count,
+            "active_subscription_count": value.active_subscription_count,
+            "first_event_received": value.first_event_received,
+            "last_event_time": value.last_event_time.isoformat() if value.last_event_time else None,
+            "last_event_kind": value.last_event_kind,
+            "event_count": value.event_count,
+            "subscriptions": [dict(subscription) for subscription in value.subscriptions],
         }
-

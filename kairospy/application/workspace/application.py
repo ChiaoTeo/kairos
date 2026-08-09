@@ -112,8 +112,8 @@ class WorkspaceApplication:
         identity = WorkspaceIdentity(values.get("workspace_id", ""))
         cli = values.get("cli", {})
         cli_format = cli.get("format", "json") if isinstance(cli, dict) else "json"
-        if cli_format not in {"text", "json"}:
-            raise ValueError("workspace cli.format must be text or json")
+        if cli_format not in {"text", "json", "table"}:
+            raise ValueError("workspace cli.format must be text, json, or table")
         paths = WorkspacePaths(
             root=root_path,
             manifest=manifest,

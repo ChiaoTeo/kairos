@@ -13,12 +13,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 BINARIES = {
     "kairos-transport": ("kairos-aeron-driver",),
-    "kairos-reference": ("kairos-reference-server", "kairos-reference-cli"),
-    "kairos-market": ("kairos-market-server", "kairos-market-cli"),
-    "kairos-risk": ("kairos-risk-server", "kairos-risk-cli"),
-    "kairos-execution": ("kairos-execution-server", "kairos-execution-cli"),
-    "kairos-account": ("kairos-account-server", "kairos-account-cli"),
+    "kairos-reference-service": ("kairos-reference-server", "kairos-reference-cli"),
+    "kairos-market-service": ("kairos-market-server", "kairos-market-cli"),
+    "kairos-risk-service": ("kairos-risk-server", "kairos-risk-cli"),
+    "kairos-execution-service": ("kairos-execution-server", "kairos-execution-cli"),
+    "kairos-account-service": ("kairos-account-server", "kairos-account-cli"),
 }
+
+
+def _binary_filename(name: str) -> str:
+    return f"{name}.exe" if os.name == "nt" else name
 
 
 def build(output: Path) -> None:
@@ -31,10 +35,11 @@ def build(output: Path) -> None:
                 cwd=ROOT,
                 check=True,
             )
-            source = ROOT / "target" / "release" / binary
+            filename = _binary_filename(binary)
+            source = ROOT / "target" / "release" / filename
             if not source.is_file():
                 raise FileNotFoundError(f"cargo did not produce {source}")
-            destination = output / binary
+            destination = output / filename
             shutil.copy2(source, destination)
             destination.chmod(destination.stat().st_mode | 0o111)
 

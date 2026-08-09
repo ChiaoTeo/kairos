@@ -24,8 +24,9 @@ impl<'a> ReferenceChanged<'a> {
     pub const VT_GENERATION: ::flatbuffers::VOffsetT = 6;
     pub const VT_EVENT_SEQUENCE: ::flatbuffers::VOffsetT = 8;
     pub const VT_SNAPSHOT_ID: ::flatbuffers::VOffsetT = 10;
-    pub const VT_AFFECTED_MARKET_IDS: ::flatbuffers::VOffsetT = 12;
-    pub const VT_CHANGE_KINDS: ::flatbuffers::VOffsetT = 14;
+    pub const VT_EVENTS: ::flatbuffers::VOffsetT = 12;
+    pub const VT_AFFECTED_MARKET_IDS: ::flatbuffers::VOffsetT = 14;
+    pub const VT_CHANGE_KINDS: ::flatbuffers::VOffsetT = 16;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -49,6 +50,9 @@ impl<'a> ReferenceChanged<'a> {
         }
         if let Some(x) = args.affected_market_ids {
             builder.add_affected_market_ids(x);
+        }
+        if let Some(x) = args.events {
+            builder.add_events(x);
         }
         if let Some(x) = args.snapshot_id {
             builder.add_snapshot_id(x);
@@ -107,6 +111,19 @@ impl<'a> ReferenceChanged<'a> {
         }
     }
     #[inline]
+    pub fn events(
+        &self,
+    ) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<LifecycleEvent<'a>>>> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<LifecycleEvent>>,
+            >>(ReferenceChanged::VT_EVENTS, None)
+        }
+    }
+    #[inline]
     pub fn affected_market_ids(
         &self,
     ) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>> {
@@ -145,6 +162,7 @@ impl ::flatbuffers::Verifiable for ReferenceChanged<'_> {
      .visit_field::<u64>("generation", Self::VT_GENERATION, false)?
      .visit_field::<u64>("event_sequence", Self::VT_EVENT_SEQUENCE, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("snapshot_id", Self::VT_SNAPSHOT_ID, true)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<LifecycleEvent>>>>("events", Self::VT_EVENTS, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<&'_ str>>>>("affected_market_ids", Self::VT_AFFECTED_MARKET_IDS, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<&'_ str>>>>("change_kinds", Self::VT_CHANGE_KINDS, false)?
      .finish();
@@ -156,6 +174,11 @@ pub struct ReferenceChangedArgs<'a> {
     pub generation: u64,
     pub event_sequence: u64,
     pub snapshot_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub events: Option<
+        ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<LifecycleEvent<'a>>>,
+        >,
+    >,
     pub affected_market_ids: Option<
         ::flatbuffers::WIPOffset<
             ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>,
@@ -175,6 +198,7 @@ impl<'a> Default for ReferenceChangedArgs<'a> {
             generation: 0,
             event_sequence: 0,
             snapshot_id: None, // required field
+            events: None,
             affected_market_ids: None,
             change_kinds: None,
         }
@@ -213,6 +237,16 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ReferenceChangedBuilder<'a, '
             ReferenceChanged::VT_SNAPSHOT_ID,
             snapshot_id,
         );
+    }
+    #[inline]
+    pub fn add_events(
+        &mut self,
+        events: ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<LifecycleEvent<'b>>>,
+        >,
+    ) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(ReferenceChanged::VT_EVENTS, events);
     }
     #[inline]
     pub fn add_affected_market_ids(
@@ -265,6 +299,7 @@ impl ::core::fmt::Debug for ReferenceChanged<'_> {
         ds.field("generation", &self.generation());
         ds.field("event_sequence", &self.event_sequence());
         ds.field("snapshot_id", &self.snapshot_id());
+        ds.field("events", &self.events());
         ds.field("affected_market_ids", &self.affected_market_ids());
         ds.field("change_kinds", &self.change_kinds());
         ds.finish()

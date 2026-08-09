@@ -19,7 +19,7 @@ from kairospy.application.system import ComponentProcessApplication, ReferencePr
 from kairospy.application.timeline import TimelineApplication
 from kairospy.application.workspace import WorkspaceApplication
 from kairospy.application.account import AccountAdminApplication, TradeLeaseApplication
-from kairospy.surface.cli.options import OutputFormat, render
+from kairospy.surface.cli.options import OutputFormat, effective_output, render
 
 
 launch_app = typer.Typer(no_args_is_help=True, help="Manage launch instances")
@@ -45,20 +45,173 @@ def _target(launch_id: str, instance: str, mode: str, workspace: Path):
     return LaunchControlApplication(value).target(launch_id, instance, mode=mode)
 
 
-def _running_instance(owner, launch_id: str, mode: str) -> dict | None:
+def _running_instance(owner, launch_id: str, mode: str | None = None) -> dict | None:
     """Return the one live instance for a launch, if one is reachable."""
     control = LaunchControlApplication(owner)
     entries = LaunchRegistryApplication(owner).instances(launch_id)
+    running: list[dict] = []
     for entry in reversed(entries):
-        if entry.get("mode") != mode:
+        if mode is not None and entry.get("mode") != mode:
             continue
         instance = str(entry.get("instance_id") or "")
         if not instance:
             continue
-        status = control.status(control.target(launch_id, instance, mode=mode))
+        entry_mode = str(entry.get("mode") or mode or "paper")
+        status = control.status(control.target(launch_id, instance, mode=entry_mode))
         if status.get("status") != "not_running":
-            return {**entry, **status}
+            running.append({**entry, **status})
+    if mode is None and len(running) > 1:
+        raise typer.BadParameter(
+            f"launch {launch_id} has multiple running instances; pass --instance"
+        )
+    if running:
+        return running[0]
     return None
+
+
+def _resolve_launch_target(
+    owner,
+    launch_id: str,
+    mode: str | None,
+    instance: str | None,
+) -> tuple[str, str]:
+    """Resolve the user-facing launch target without requiring identity flags."""
+    if instance and mode:
+        return instance, mode
+    active = _running_instance(owner, launch_id, mode)
+    if active is not None:
+        return str(active["instance_id"]), str(active.get("mode") or mode or "paper")
+    entries = LaunchRegistryApplication(owner).instances(launch_id)
+    matching = [
+        entry for entry in entries
+        if (mode is None or entry.get("mode") == mode)
+        and (instance is None or entry.get("instance_id") == instance)
+    ]
+    if matching:
+        entry = matching[-1]
+        return str(entry.get("instance_id") or instance or "default"), str(entry.get("mode") or mode or "paper")
+    return instance or "default", mode or "paper"
+
+
+def _resolve_instance(owner, launch_id: str, mode: str, instance: str | None) -> str:
+    """Backward-compatible instance-only resolver for callers with a mode."""
+    return _resolve_launch_target(owner, launch_id, mode, instance)[0]
+
+
+def _read_component_manifest(instance_workspace) -> dict:
+    try:
+        value = json.loads(instance_workspace.component_manifest().read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _launch_component_status(owner, instance_workspace) -> dict[str, dict]:
+    """Return component health for one launch without exposing service internals."""
+    components = ComponentProcessApplication(owner)
+    manifest = _read_component_manifest(instance_workspace)
+    endpoints = manifest.get("components", {})
+    result: dict[str, dict] = {}
+
+    result["reference"] = components.status("reference")
+    market = endpoints.get("market", {}) if isinstance(endpoints, dict) else {}
+    market_socket = str(market.get("socket") or "") if isinstance(market, dict) else ""
+    instance_market = market_socket == str(instance_workspace.socket("market"))
+    result["market"] = components.status(
+        "market",
+        instance_workspace=instance_workspace if instance_market else None,
+    )
+    for name in ("risk", "execution"):
+        result[name] = components.status(name, instance_workspace=instance_workspace)
+
+    accounts = manifest.get("accounts", {})
+    if isinstance(accounts, dict):
+        for account_id, value in accounts.items():
+            socket_name = value.get("socket_name") if isinstance(value, dict) else None
+            key = f"account:{account_id}"
+            result[key] = components.status(
+                "account",
+                instance_workspace=instance_workspace,
+                socket_name=str(socket_name) if socket_name else None,
+            )
+    return result
+
+
+def _decorate_launch_status(owner, launch_id: str, instance: str, mode: str, value: dict) -> dict:
+    """Add an aggregate launch view while preserving the strategy status fields."""
+    instance_workspace = owner.instance(mode, launch_id, instance)
+    component_status = _launch_component_status(owner, instance_workspace)
+    strategy_status = value.get("status", "not_running")
+    unhealthy = {
+        name: status.get("status")
+        for name, status in component_status.items()
+        if status.get("status") not in {"ready", "running", "ok"}
+    }
+    all_stopped = all(
+        status.get("status") in {"not_running", "stale"}
+        for status in component_status.values()
+    )
+    aggregate = "healthy" if strategy_status in {"ready", "running"} and not unhealthy else "degraded"
+    if strategy_status == "not_running" and all_stopped:
+        aggregate = "not_running"
+    return {
+        **value,
+        "launch_id": launch_id,
+        "instance_id": instance,
+        "mode": mode,
+        "strategy_status": strategy_status,
+        "launch_status": aggregate,
+        "component_status": component_status,
+        "component_issues": unhealthy,
+    }
+
+
+def _resolve_stop_instance(
+    owner,
+    launch_id: str,
+    instance: str | None,
+    mode: str | None,
+) -> tuple[str, str]:
+    """Resolve the instance targeted by ``launch stop``."""
+    if instance is not None and mode is not None:
+        return instance, mode
+
+    entries = LaunchRegistryApplication(owner).instances(launch_id)
+    if mode is not None:
+        entries = [entry for entry in entries if entry.get("mode") == mode]
+    if instance is not None:
+        entries = [entry for entry in entries if entry.get("instance_id") == instance]
+
+    control = LaunchControlApplication(owner)
+    running: list[dict] = []
+    for entry in entries:
+        entry_instance = str(entry.get("instance_id") or "")
+        entry_mode = str(entry.get("mode") or "")
+        if not entry_instance or not entry_mode:
+            continue
+        status = control.status(control.target(launch_id, entry_instance, mode=entry_mode))
+        if status.get("status") != "not_running":
+            running.append({**entry, **status})
+
+    if len(running) > 1:
+        raise typer.BadParameter(
+            f"launch {launch_id} has multiple running instances; pass --instance"
+        )
+    if running:
+        return str(running[0]["instance_id"]), str(running[0]["mode"])
+
+    # An explicit identity component may still identify a stopped registry entry.
+    if instance is not None or mode is not None:
+        if len(entries) == 1:
+            entry = entries[0]
+            return str(entry["instance_id"]), str(entry["mode"])
+        if not entries:
+            raise typer.BadParameter(f"launch instance is not registered: {launch_id}")
+        raise typer.BadParameter(
+            f"launch {launch_id} has multiple matching instances; pass --instance"
+        )
+
+    raise typer.BadParameter(f"launch is not running: {launch_id}")
 
 
 def _emit(value: object, output: OutputFormat) -> None:
@@ -104,7 +257,10 @@ def _release_launch_leases(workspace, account_ids: list[str], *, instance: str) 
     accounts = AccountAdminApplication(workspace)
     leases = TradeLeaseApplication(workspace)
     for account_id in account_ids:
-        account = accounts.show(account_id)
+        try:
+            account = accounts.show(account_id)
+        except (FileNotFoundError, ValueError):
+            continue
         try:
             leases.release_account(
                 str(account.get("broker") or ""),
@@ -139,29 +295,76 @@ def _write_instance_manifest(instance_workspace, *, accounts: dict[str, dict], c
     temporary.replace(manifest)
 
 
-def _cleanup_instance_components(owner, instance_workspace, account_ids: list[str] | None = None) -> None:
+def _stop_component_safely(
+    components: ComponentProcessApplication,
+    component: str,
+    *,
+    instance_workspace=None,
+    socket_name: str | None = None,
+) -> dict:
+    """Stop one component without allowing stale runtime files to abort cleanup."""
+    try:
+        return components.stop(
+            component,
+            instance_workspace=instance_workspace,
+            socket_name=socket_name,
+        )
+    except Exception as error:
+        return {
+            "component": component,
+            "status": "stop_failed",
+            "error": str(error),
+        }
+
+
+def _cleanup_instance_components(
+    owner,
+    instance_workspace,
+    account_ids: list[str] | None = None,
+    *,
+    stop_strategy: bool = True,
+    stop_market: bool = False,
+) -> dict[str, dict]:
+    """Best-effort cleanup for an instance, including partial-start rollback."""
     components = ComponentProcessApplication(owner)
+    stopped: dict[str, dict] = {}
+    if stop_strategy:
+        try:
+            value = StrategyProcessApplication(owner).stop(
+                instance_workspace.launch_id,
+                instance_workspace.instance_id,
+                instance_workspace.mode,
+            )
+            stopped["strategy"] = value
+        except Exception as error:
+            stopped["strategy"] = {"component": "strategy", "status": "stop_failed", "error": str(error)}
     try:
         manifest = json.loads(instance_workspace.component_manifest().read_text(encoding="utf-8"))
         account_names = [str(value.get("socket_name")) for value in manifest.get("accounts", {}).values() if value.get("socket_name")]
     except (FileNotFoundError, json.JSONDecodeError, AttributeError, TypeError):
         account_names = [_account_component_name(value) for value in (account_ids or [])] or ["account"]
-    for component in ("risk", "execution"):
-        try:
-            components.stop(component, instance_workspace=instance_workspace)
-        except (OSError, RuntimeError, ValueError):
-            pass
+    # Execution must quiesce before Risk and Account are torn down.
+    for component in ("execution", "risk"):
+        stopped[component] = _stop_component_safely(
+            components, component, instance_workspace=instance_workspace
+        )
     for socket_name in account_names:
-        try:
-            components.stop("account", socket_name=socket_name, instance_workspace=instance_workspace)
-        except (OSError, RuntimeError, ValueError):
-            pass
+        stopped[f"account:{socket_name}"] = _stop_component_safely(
+            components,
+            "account",
+            socket_name=socket_name,
+            instance_workspace=instance_workspace,
+        )
+    if stop_market:
+        stopped["market"] = _stop_component_safely(
+            components, "market", instance_workspace=instance_workspace
+        )
+    return stopped
 
 
 @launch_app.command("start")
 def start(
     launch_id: str | None = typer.Argument(None),
-    mode: str | None = typer.Option(None, "--mode"),
     strategy: str | None = typer.Option(None, "--strategy", help="Strategy import path: module:callable"),
     config: Path | None = typer.Option(None, "--config", help="Launch TOML configuration path."),
     params: str | None = typer.Option(None, "--params", help="JSON object passed to the strategy factory"),
@@ -188,8 +391,6 @@ def start(
         if launch_id is not None and not positional_config and launch_id != launch_config.launch_id:
             raise typer.BadParameter("launch id does not match launch config")
         launch_id = launch_config.launch_id
-        if mode is not None and mode != launch_config.mode:
-            raise typer.BadParameter("--mode does not match launch config")
         mode = launch_config.mode
         if strategy is not None and strategy != launch_config.strategy:
             raise typer.BadParameter("--strategy does not match launch config")
@@ -200,8 +401,6 @@ def start(
         )
     if not launch_id:
         raise typer.BadParameter("launch_id or --config is required")
-    if not mode:
-        mode = "paper"
     if not strategy:
         raise typer.BadParameter("strategy is required (in launch config or --strategy)")
     configured_account_ids = list(launch_config.account_refs)
@@ -230,6 +429,7 @@ def start(
     except Exception:
         registry.update_state(launch_id, mode=mode, instance_id=instance, state="failed")
         raise
+    market_instance_workspace = None
     try:
         instance_workspace = owner.instance(mode, launch_id, instance)
         instance_workspace.prepare()
@@ -353,7 +553,13 @@ def start(
         except FileNotFoundError:
             pass
         try:
-            _cleanup_instance_components(owner, owner.instance(mode, launch_id, instance), lease_account_ids)
+            _cleanup_instance_components(
+                owner,
+                owner.instance(mode, launch_id, instance),
+                lease_account_ids,
+                stop_strategy=True,
+                stop_market=market_instance_workspace is not None,
+            )
         finally:
             _release_launch_leases(owner, lease_account_ids, instance=instance)
         raise
@@ -362,36 +568,61 @@ def start(
 @launch_app.command("status")
 def status(
     launch_id: str,
-    instance: str = typer.Option(..., "--instance"),
-    mode: str = typer.Option("paper", "--mode"),
+    instance: str | None = typer.Option(None, "--instance"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
-    _emit(LaunchControlApplication(WorkspaceApplication().open(workspace)).status(_target(launch_id, instance, mode, workspace)), output)
+    owner = WorkspaceApplication().open(workspace)
+    instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    value = LaunchControlApplication(owner).status(_target(launch_id, instance, mode, workspace))
+    _emit(_decorate_launch_status(owner, launch_id, instance, mode, value), output)
 
 
 @launch_app.command("stop")
 def stop(
     launch_id: str,
-    instance: str = typer.Option(..., "--instance"),
-    mode: str = typer.Option("paper", "--mode"),
+    instance: str | None = typer.Option(None, "--instance"),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
-    value = LaunchControlApplication(owner).stop(_target(launch_id, instance, mode, workspace))
+    instance, mode = _resolve_stop_instance(owner, launch_id, instance, None)
     instance_workspace = owner.instance(mode, launch_id, instance)
     components = ComponentProcessApplication(owner)
     manifest_accounts: list[str] = []
+    account_ids: list[str] = []
     try:
         manifest = json.loads(instance_workspace.component_manifest().read_text(encoding="utf-8"))
-        manifest_accounts = [str(value.get("socket_name")) for value in manifest.get("accounts", {}).values() if value.get("socket_name")]
+        accounts = manifest.get("accounts", {})
+        if isinstance(accounts, dict):
+            account_ids = [str(value) for value in accounts]
+            manifest_accounts = [
+                str(value.get("socket_name"))
+                for value in accounts.values()
+                if isinstance(value, dict) and value.get("socket_name")
+            ]
     except (FileNotFoundError, json.JSONDecodeError, AttributeError, TypeError):
         pass
-    for component in ("risk", "execution"):
-        components.stop(component, instance_workspace=instance_workspace)
+
+    stopped: dict[str, dict] = {}
+    try:
+        stopped["strategy"] = LaunchControlApplication(owner).stop(
+            _target(launch_id, instance, mode, workspace)
+        )
+    except Exception as error:
+        stopped["strategy"] = {"component": "strategy", "status": "stop_failed", "error": str(error)}
+
+    for component in ("execution", "risk"):
+        stopped[component] = _stop_component_safely(
+            components, component, instance_workspace=instance_workspace
+        )
     for socket_name in manifest_accounts or ["account"]:
-        components.stop("account", socket_name=socket_name, instance_workspace=instance_workspace)
+        stopped[f"account:{socket_name}"] = _stop_component_safely(
+            components,
+            "account",
+            socket_name=socket_name,
+            instance_workspace=instance_workspace,
+        )
     # The live Market is shared by launches and must not be stopped when one
     # launch instance exits. Instance-owned replay Market can be stopped here.
     market_shared = mode == "live"
@@ -407,22 +638,47 @@ def stop(
                     pass
             break
     if not market_shared:
-        components.stop("market", instance_workspace=instance_workspace)
-    for entry in LaunchRegistryApplication(owner).list():
-        if entry.get("launch_id") != launch_id or entry.get("mode") != mode or entry.get("instance_id") != instance:
-            continue
-        config_value = entry.get("config")
-        if isinstance(config_value, str) and Path(config_value).is_file():
-            try:
-                refs = list(LaunchConfigurationApplication().load(config_value, workspace_root=owner.paths.root).account_refs)
-                _release_launch_leases(owner, refs, instance=instance)
-            except (FileNotFoundError, LaunchConfigError, ValueError):
-                pass
-        break
+        stopped["market"] = _stop_component_safely(
+            components, "market", instance_workspace=instance_workspace
+        )
+
+    # Cleanup is intentionally idempotent: a failed stop request must not keep
+    # the account lease or leave the registry in a running state.
+    if not account_ids:
+        for entry in LaunchRegistryApplication(owner).list():
+            if entry.get("launch_id") == launch_id and entry.get("mode") == mode and entry.get("instance_id") == instance:
+                config_value = entry.get("config")
+                if isinstance(config_value, str) and Path(config_value).is_file():
+                    try:
+                        account_ids = list(
+                            LaunchConfigurationApplication().load(
+                                config_value, workspace_root=owner.paths.root
+                            ).account_refs
+                        )
+                    except (FileNotFoundError, LaunchConfigError, ValueError):
+                        pass
+                break
+    _release_launch_leases(owner, account_ids, instance=instance)
     try:
-        LaunchRegistryApplication(owner).update_state(launch_id, mode=mode, instance_id=instance, state="stopped")
+        LaunchRegistryApplication(owner).update_state(
+            launch_id, mode=mode, instance_id=instance, state="stopped"
+        )
     except FileNotFoundError:
         pass
+    issues = {
+        name: result.get("error")
+        for name, result in stopped.items()
+        if result.get("status") == "stop_failed"
+    }
+    value = {
+        **stopped.get("strategy", {}),
+        "launch_id": launch_id,
+        "instance_id": instance,
+        "mode": mode,
+        "status": "stopped" if not issues else "degraded",
+        "stopped_components": stopped,
+        "stop_issues": issues,
+    }
     _emit(value, output)
 
 
@@ -543,18 +799,24 @@ def instances(
 @launch_app.command("attach")
 def attach(
     launch_id: str,
-    mode: str = typer.Option("paper", "--mode"),
     lines: int = typer.Option(100, "--lines", min=0, help="Number of recent strategy log lines to show."),
     workspace: Path = typer.Option(None, "--workspace"),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
-    active = _running_instance(owner, launch_id, mode)
+    active = _running_instance(owner, launch_id)
     if active is None:
         raise typer.BadParameter(f"launch is not running: {launch_id}")
     instance = str(active["instance_id"])
+    mode = str(active.get("mode") or "paper")
     target = _target(launch_id, instance, mode, workspace)
-    value = LaunchControlApplication(owner).status(target)
+    value = _decorate_launch_status(
+        owner,
+        launch_id,
+        instance,
+        mode,
+        LaunchControlApplication(owner).status(target),
+    )
     log_path = owner.instance(mode, launch_id, instance).log("strategy.log")
     log_lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:] if log_path.is_file() and lines else []
     structured_logs = []
@@ -580,33 +842,24 @@ def attach(
 def logs(
     launch_id: str,
     instance: str | None = typer.Option(None, "--instance"),
-    mode: str = typer.Option("paper", "--mode"),
+    lines: int = typer.Option(100, "--lines", min=0, help="Number of recent log lines to show."),
     workspace: Path = typer.Option(None, "--workspace"),
     follow: bool = typer.Option(False, "-f", "--follow", help="Follow the selected log file."),
     output: OutputFormat = typer.Option(OutputFormat.TEXT, "--output", "--format"),
 ) -> None:
     owner = WorkspaceApplication().open(workspace)
-    if instance is None:
-        active = _running_instance(owner, launch_id, mode)
-        if active is not None:
-            instance = str(active["instance_id"])
-        else:
-            entries = LaunchRegistryApplication(owner).instances(launch_id)
-            matching = [entry for entry in entries if entry.get("mode") == mode]
-            if matching:
-                instance = str(matching[-1].get("instance_id") or "default")
-            else:
-                instance = "default"
-    if follow and output is not OutputFormat.TEXT:
+    instance, mode = _resolve_launch_target(owner, launch_id, None, instance)
+    if follow and effective_output(output) is not OutputFormat.TEXT:
         raise typer.BadParameter("--follow currently supports text output only")
     root = owner.instance(mode, launch_id, instance).root / "logs"
     files = sorted(path for path in root.rglob("*") if path.is_file()) if root.is_dir() else []
     payload = {"path": str(root), "exists": root.exists(), "files": [str(path) for path in files]}
     if files:
-        latest = files[-1]
+        strategy_log = root / "strategy.log"
+        latest = strategy_log if strategy_log.is_file() else files[-1]
         payload["latest"] = str(latest)
-        lines = latest.read_text(encoding="utf-8", errors="replace").splitlines()[-100:]
-        payload["lines"] = lines
+        content = latest.read_text(encoding="utf-8", errors="replace").splitlines()
+        payload["lines"] = content[-lines:] if lines else []
     _emit(payload, output)
     if follow and files:
         position = latest.stat().st_size

@@ -5,7 +5,7 @@ import textwrap
 import time
 from pathlib import Path
 
-from kairospy.application.system import ComponentProcessApplication
+from kairospy.application.system import ComponentProcessApplication, SystemRuntimeSupervisor
 from kairospy.application.workspace import WorkspaceApplication
 
 
@@ -83,6 +83,121 @@ def test_component_list_treats_a_stale_socket_as_not_running(tmp_path: Path) -> 
     value = ComponentProcessApplication(workspace).list_status()
 
     assert value["reference"]["status"] == "not_running"
+
+
+def test_component_list_includes_process_metadata_from_health_file(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="metadata")
+    health = workspace.paths.health_file("market")
+    health.parent.mkdir(parents=True, exist_ok=True)
+    health.write_text('{"status":"ready","pid":999999}', encoding="utf-8")
+
+    value = ComponentProcessApplication(workspace).list_status()["market"]
+
+    assert value["pid"] == 999999
+    assert value["pid_alive"] is False
+    assert value["health_file"] == str(health)
+    assert value["log_file"].endswith("logs/processes/market.log")
+
+
+def test_component_list_marks_dead_health_pid_as_stale(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="stale-pid")
+    health = workspace.paths.health_file("reference")
+    health.parent.mkdir(parents=True, exist_ok=True)
+    health.write_text('{"status":"ready","pid":999999}', encoding="utf-8")
+
+    value = ComponentProcessApplication(workspace).list_status()["reference"]
+
+    assert value["status"] == "stale"
+    assert value["pid_alive"] is False
+
+
+def test_system_repair_removes_unlocked_stale_socket(tmp_path: Path) -> None:
+    import shutil
+    root = Path(f"/tmp/kairos-repair-{__import__('os').getpid()}")
+    shutil.rmtree(root, ignore_errors=True)
+    workspace = WorkspaceApplication().init(root, workspace_id="repair")
+    socket = workspace.paths.process_socket("market")
+    socket.parent.mkdir(parents=True, exist_ok=True)
+    import socket as socket_module
+
+    listener = socket_module.socket(socket_module.AF_UNIX)
+    listener.bind(str(socket))
+    listener.close()
+
+    result = ComponentProcessApplication(workspace).repair()
+
+    assert "market" in result["repaired"]
+    assert not socket.exists()
+
+
+def test_system_repair_does_not_remove_lock_owned_socket(tmp_path: Path) -> None:
+    import shutil
+    root = Path(f"/tmp/kairos-repair-locked-{__import__('os').getpid()}")
+    shutil.rmtree(root, ignore_errors=True)
+    workspace = WorkspaceApplication().init(root, workspace_id="locked")
+    socket_path = workspace.paths.process_socket("market")
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    import socket as socket_module
+    listener = socket_module.socket(socket_module.AF_UNIX)
+    listener.bind(str(socket_path))
+    lock_path = workspace.paths.process_lock("market")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    import subprocess
+    holder = subprocess.Popen(
+        [
+            __import__("sys").executable,
+            "-c",
+            "import fcntl,os,sys,time; f=open(sys.argv[1], 'a+'); fcntl.flock(f.fileno(), fcntl.LOCK_EX); f.write(str(os.getpid())); f.flush(); time.sleep(5)",
+            str(lock_path),
+        ]
+    )
+    try:
+        import time
+        for _ in range(50):
+            if lock_path.exists() and lock_path.read_text(encoding="utf-8"):
+                break
+            time.sleep(0.02)
+        result = ComponentProcessApplication(workspace).repair()
+        assert "market" not in result["repaired"]
+        assert socket_path.exists()
+    finally:
+        holder.terminate()
+        holder.wait()
+        listener.close()
+        socket_path.unlink(missing_ok=True)
+
+
+def test_runtime_supervisor_does_not_manage_instance_components(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="supervisor")
+    socket = workspace.paths.process_socket("execution")
+    socket.parent.mkdir(parents=True, exist_ok=True)
+    socket.touch()
+
+    result = SystemRuntimeSupervisor(
+        ComponentProcessApplication(workspace),
+        desired={"execution": {}},
+    ).reconcile_once()
+
+    assert result["execution"]["status"] == "not_running"
+
+
+def test_runtime_supervisor_rejects_instance_component_registration(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="supervisor-boundary")
+    supervisor = SystemRuntimeSupervisor(ComponentProcessApplication(workspace))
+
+    import pytest
+    with pytest.raises(ValueError, match="launch-owned"):
+        supervisor.register("execution")
+
+
+def test_runtime_supervisor_persists_and_removes_desired_components(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="desired")
+    supervisor = SystemRuntimeSupervisor(ComponentProcessApplication(workspace))
+
+    supervisor.register("market", {"market_provider": "workspace"})
+    assert "market" in supervisor.desired_path.read_text(encoding="utf-8")
+    supervisor.unregister("market")
+    assert supervisor.desired_path.read_text(encoding="utf-8") == "{}"
 
 
 def test_component_command_uses_instance_workspace_namespace(tmp_path: Path) -> None:

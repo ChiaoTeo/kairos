@@ -34,6 +34,8 @@ impl<'a> Catalog<'a> {
     pub const VT_LISTINGS: ::flatbuffers::VOffsetT = 26;
     pub const VT_MARKETS: ::flatbuffers::VOffsetT = 28;
     pub const VT_FINANCIAL_PRODUCTS: ::flatbuffers::VOffsetT = 30;
+    pub const VT_EXECUTION_ACCESS_COUNT: ::flatbuffers::VOffsetT = 32;
+    pub const VT_EXECUTION_ACCESSES: ::flatbuffers::VOffsetT = 34;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -50,6 +52,7 @@ impl<'a> Catalog<'a> {
         args: &'args CatalogArgs<'args>,
     ) -> ::flatbuffers::WIPOffset<Catalog<'bldr>> {
         let mut builder = CatalogBuilder::new(_fbb);
+        builder.add_execution_access_count(args.execution_access_count);
         builder.add_lifecycle_event_count(args.lifecycle_event_count);
         builder.add_active_market_count(args.active_market_count);
         builder.add_financial_product_count(args.financial_product_count);
@@ -58,6 +61,9 @@ impl<'a> Catalog<'a> {
         builder.add_instrument_count(args.instrument_count);
         builder.add_asset_count(args.asset_count);
         builder.add_entity_count(args.entity_count);
+        if let Some(x) = args.execution_accesses {
+            builder.add_execution_accesses(x);
+        }
         if let Some(x) = args.financial_products {
             builder.add_financial_products(x);
         }
@@ -246,6 +252,31 @@ impl<'a> Catalog<'a> {
             >>(Catalog::VT_FINANCIAL_PRODUCTS, None)
         }
     }
+    #[inline]
+    pub fn execution_access_count(&self) -> u64 {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<u64>(Catalog::VT_EXECUTION_ACCESS_COUNT, Some(0))
+                .unwrap()
+        }
+    }
+    #[inline]
+    pub fn execution_accesses(
+        &self,
+    ) -> Option<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<ExecutionAccess<'a>>>>
+    {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab.get::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<ExecutionAccess>>,
+            >>(Catalog::VT_EXECUTION_ACCESSES, None)
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for Catalog<'_> {
@@ -289,6 +320,14 @@ impl ::flatbuffers::Verifiable for Catalog<'_> {
             .visit_field::<::flatbuffers::ForwardsUOffset<
                 ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<FinancialProduct>>,
             >>("financial_products", Self::VT_FINANCIAL_PRODUCTS, false)?
+            .visit_field::<u64>(
+                "execution_access_count",
+                Self::VT_EXECUTION_ACCESS_COUNT,
+                false,
+            )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<
+                ::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<ExecutionAccess>>,
+            >>("execution_accesses", Self::VT_EXECUTION_ACCESSES, false)?
             .finish();
         Ok(())
     }
@@ -332,6 +371,12 @@ pub struct CatalogArgs<'a> {
             ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<FinancialProduct<'a>>>,
         >,
     >,
+    pub execution_access_count: u64,
+    pub execution_accesses: Option<
+        ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<ExecutionAccess<'a>>>,
+        >,
+    >,
 }
 impl<'a> Default for CatalogArgs<'a> {
     #[inline]
@@ -351,6 +396,8 @@ impl<'a> Default for CatalogArgs<'a> {
             listings: None,
             markets: None,
             financial_products: None,
+            execution_access_count: 0,
+            execution_accesses: None,
         }
     }
 }
@@ -466,6 +513,26 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> CatalogBuilder<'a, 'b, A> {
         );
     }
     #[inline]
+    pub fn add_execution_access_count(&mut self, execution_access_count: u64) {
+        self.fbb_.push_slot::<u64>(
+            Catalog::VT_EXECUTION_ACCESS_COUNT,
+            execution_access_count,
+            0,
+        );
+    }
+    #[inline]
+    pub fn add_execution_accesses(
+        &mut self,
+        execution_accesses: ::flatbuffers::WIPOffset<
+            ::flatbuffers::Vector<'b, ::flatbuffers::ForwardsUOffset<ExecutionAccess<'b>>>,
+        >,
+    ) {
+        self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(
+            Catalog::VT_EXECUTION_ACCESSES,
+            execution_accesses,
+        );
+    }
+    #[inline]
     pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> CatalogBuilder<'a, 'b, A> {
         let start = _fbb.start_table();
         CatalogBuilder {
@@ -497,6 +564,8 @@ impl ::core::fmt::Debug for Catalog<'_> {
         ds.field("listings", &self.listings());
         ds.field("markets", &self.markets());
         ds.field("financial_products", &self.financial_products());
+        ds.field("execution_access_count", &self.execution_access_count());
+        ds.field("execution_accesses", &self.execution_accesses());
         ds.finish()
     }
 }

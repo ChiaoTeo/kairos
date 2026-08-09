@@ -1,6 +1,7 @@
 import asyncio
 import os
 import sys
+import time
 from pathlib import Path
 
 from kairospy.application.system import (
@@ -19,13 +20,17 @@ def test_reference_process_config_builds_business_process_spec(tmp_path: Path) -
     spec = ReferenceProcessConfig(
         workspace=workspace,
         provider="default",
-        once=True,
+        run_mode="once",
     ).process_spec()
     assert spec.name == "reference"
-    assert spec.command[-1] == "--once"
+    assert spec.command[spec.command.index("--run-mode") + 1] == "once"
     assert "--provider" in spec.command
     assert spec.command[spec.command.index("--provider") + 1] == "default"
     assert "--database" not in spec.command
+    assert "--aeron-channel" in spec.command
+    assert "--reference-changes-stream" in spec.command
+    assert "--refresh-interval" in spec.command
+    assert "--snapshot-slot-size-mib" in spec.command
     assert "--health-file" in spec.command
     assert "--socket" in spec.command
     assert spec.control_socket == workspace.paths.reference_socket()
@@ -110,6 +115,17 @@ def test_reference_process_forwards_explicit_endpoint(tmp_path: Path) -> None:
     assert spec.command[endpoint_index] == "https://reference.example.test"
 
 
+def test_reference_process_forwards_duration_and_credential_reference(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace")
+    spec = ReferenceProcessConfig(
+        workspace=workspace,
+        refresh_interval="15m",
+        credential_id="massive-primary",
+    ).process_spec()
+    assert spec.command[spec.command.index("--refresh-interval") + 1] == "15m"
+    assert spec.command[spec.command.index("--credential-id") + 1] == "massive-primary"
+
+
 def test_massive_reference_spec_uses_full_universe_without_underlying_filter(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace")
     spec = ReferenceProcessConfig(
@@ -118,7 +134,7 @@ def test_massive_reference_spec_uses_full_universe_without_underlying_filter(tmp
         api_key="massive-secret",
     ).process_spec()
     assert "massive-secret" not in spec.command
-    assert spec.environment["MASSIVE_API_KEY"] == "massive-secret"
+    assert "MASSIVE_API_KEY" not in spec.environment
     assert "MASSIVE_OPTION_UNDERLYING" not in spec.environment
     assert spec.health_file == workspace.paths.reference_health()
     assert "--endpoint" not in spec.command
@@ -161,6 +177,32 @@ def test_unix_rest_client_round_trips_http_over_socket(tmp_path: Path) -> None:
         try:
             response = await UnixRestClient(socket).health()
             assert response == {"status": "ok", "generation": 3}
+        finally:
+            server.close()
+            await server.wait_closed()
+            socket.unlink(missing_ok=True)
+
+        asyncio.run(scenario())
+
+
+def test_unix_rest_client_times_out_on_unresponsive_socket(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        socket = Path(f"/tmp/kairos-unresponsive-{os.getpid()}.sock")
+
+        async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            await reader.read(65536)
+            await asyncio.sleep(0.2)
+
+        server = await asyncio.start_unix_server(handler, path=str(socket))
+        try:
+            started = time.monotonic()
+            try:
+                await UnixRestClient(socket, timeout=0.05).health()
+            except TimeoutError:
+                pass
+            else:
+                raise AssertionError("unresponsive socket did not time out")
+            assert time.monotonic() - started < 1.0
         finally:
             server.close()
             await server.wait_closed()

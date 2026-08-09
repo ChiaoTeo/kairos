@@ -34,7 +34,6 @@ impl Default for WorkspaceCliConfig {
 pub struct WorkspaceMassiveConfig {
     pub rest_base_url: Option<String>,
     pub websocket_base_url: Option<String>,
-    pub option_underlying: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -182,6 +181,36 @@ impl InstanceWorkspace {
             .join(format!("{}.json", Self::component(name)?)))
     }
 
+    pub fn process_lock(&self, name: &str) -> io::Result<WorkspaceProcessLock> {
+        let name = Self::component(name)?;
+        let path = self.root().join("locks").join(format!("{}.lock", name));
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&path)?;
+        #[cfg(unix)]
+        {
+            let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+            if result != 0 {
+                let error = io::Error::last_os_error();
+                if matches!(error.raw_os_error(), Some(code) if code == libc::EAGAIN || code == libc::EWOULDBLOCK)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        format!("process lock is already held: {}", path.display()),
+                    ));
+                }
+                return Err(error);
+            }
+        }
+        let _ = std::fs::write(&path, std::process::id().to_string());
+        Ok(WorkspaceProcessLock { _file: file, path })
+    }
+
     pub fn component_manifest(&self) -> io::Result<PathBuf> {
         self.state(&["component-endpoints.json"])
     }
@@ -232,6 +261,7 @@ impl InstanceWorkspace {
             self.root().join("snapshots"),
             self.root().join("logs"),
             self.root().join("checkpoints"),
+            self.root().join("locks"),
             self.root().join("market"),
         ] {
             fs::create_dir_all(directory)?;
@@ -323,10 +353,10 @@ impl Workspace {
                 "invalid workspace manifest",
             ));
         }
-        if !matches!(manifest.cli.format.as_str(), "text" | "json") {
+        if !matches!(manifest.cli.format.as_str(), "text" | "json" | "table") {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "workspace cli.format must be text or json",
+                "workspace cli.format must be text, json, or table",
             ));
         }
         Ok(Self { root, manifest })
@@ -448,11 +478,35 @@ impl Workspace {
             ));
         }
 
+        let _ = std::fs::write(&path, std::process::id().to_string());
         Ok(WorkspaceProcessLock { _file: file, path })
     }
 
     pub fn control_socket(&self, name: &str) -> io::Result<PathBuf> {
-        self.child(&["run", name, &format!("{name}.sock")])
+        if name.trim().is_empty()
+            || name == "."
+            || name == ".."
+            || name.contains('/')
+            || name.contains('\\')
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid process socket name",
+            ));
+        }
+        let candidate = self.child(&["run", name, &format!("{name}.sock")])?;
+        if candidate.to_string_lossy().as_bytes().len() <= 100 {
+            return Ok(candidate);
+        }
+        let input = format!("{}:{}", self.root.display(), name);
+        let digest = Sha256::digest(input.as_bytes());
+        let short = digest[..10]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        Ok(PathBuf::from(format!(
+            "/tmp/kairos-process-{short}-{name}.sock"
+        )))
     }
 
     pub fn health_file(&self, name: &str) -> io::Result<PathBuf> {
@@ -553,6 +607,24 @@ mod tests {
             .unwrap()
             .to_string_lossy()
             .ends_with("-market.sock"));
+    }
+
+    #[test]
+    fn process_socket_uses_short_alias_for_long_paths() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(
+            root.path()
+                .join("workspace-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+            "demo",
+        )
+        .unwrap();
+        let socket = workspace.process_socket("reference").unwrap();
+        assert_eq!(socket.parent().unwrap(), Path::new("/tmp"));
+        assert!(socket
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with("-reference.sock"));
     }
 
     #[test]

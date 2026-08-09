@@ -53,6 +53,19 @@ def test_launch_status_and_stop_are_safe_when_instance_is_not_running(tmp_path: 
     assert application.stop(target)["status"] == "not_running"
 
 
+def test_launch_status_includes_registered_state_when_instance_is_not_running(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="sp-registry")
+    application = LaunchControlApplication(workspace)
+    from kairospy.application.launch import LaunchRegistryApplication
+
+    LaunchRegistryApplication(workspace).add("launch", instance_id="instance", strategy_ref="user:Strategy")
+    value = application.status(application.target("launch", "instance"))
+
+    assert value["status"] == "not_running"
+    assert value["registry_state"] == "created"
+    assert value["registry_consistent"] is True
+
+
 def test_strategy_composition_uses_instance_market_and_account_resources(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "workspace", workspace_id="sp-resources")
     (workspace.paths.root / "user_strategy.py").write_text(

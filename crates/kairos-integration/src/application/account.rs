@@ -63,16 +63,24 @@ pub struct ExternalMarketProfile {
 pub struct BufferedIntegrationAccountStream {
     receiver: Receiver<Result<Option<ExternalAccountEvent>, String>>,
     stop: Arc<AtomicBool>,
+    pending: Arc<std::sync::atomic::AtomicUsize>,
     worker: Option<JoinHandle<()>>,
 }
 
 impl BufferedIntegrationAccountStream {
     pub fn next_event(&mut self) -> Result<Option<ExternalAccountEvent>, String> {
         match self.receiver.try_recv() {
-            Ok(event) => event,
+            Ok(event) => {
+                self.pending.fetch_sub(1, Ordering::Relaxed);
+                event
+            }
             Err(TryRecvError::Empty) => Ok(None),
             Err(TryRecvError::Disconnected) => Err("account stream worker stopped".into()),
         }
+    }
+
+    pub fn pending_events(&self) -> usize {
+        self.pending.load(Ordering::Relaxed)
     }
 }
 
@@ -94,18 +102,23 @@ impl<C> IntegrationAccountStream<C> {
     {
         let (sender, receiver) = mpsc::sync_channel(256);
         let stop = Arc::new(AtomicBool::new(false));
+        let pending = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let worker_stop = Arc::clone(&stop);
+        let worker_pending = Arc::clone(&pending);
         let mut connection = self.connection;
         let worker = std::thread::spawn(move || {
             while !worker_stop.load(Ordering::Relaxed) {
                 match connection.next_account_event() {
                     Ok(Some(event)) => {
+                        worker_pending.fetch_add(1, Ordering::Relaxed);
                         if sender.send(Ok(Some(event))).is_err() {
+                            worker_pending.fetch_sub(1, Ordering::Relaxed);
                             break;
                         }
                     }
                     Ok(None) => std::thread::sleep(std::time::Duration::from_millis(5)),
                     Err(error) => {
+                        worker_pending.fetch_add(1, Ordering::Relaxed);
                         let _ = sender.send(Err(error.to_string()));
                         break;
                     }
@@ -115,6 +128,7 @@ impl<C> IntegrationAccountStream<C> {
         BufferedIntegrationAccountStream {
             receiver,
             stop,
+            pending,
             worker: Some(worker),
         }
     }

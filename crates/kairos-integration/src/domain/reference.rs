@@ -8,6 +8,25 @@ pub struct ReferenceCatalogPayload {
     pub listings: Vec<ReferenceListing>,
     pub markets: Vec<ReferenceMarket>,
     pub financial_products: Vec<ReferenceFinancialProduct>,
+    pub execution_accesses: Vec<ReferenceExecutionAccess>,
+}
+
+/// A provider-specific execution path for a canonical instrument.
+///
+/// This is deliberately separate from `ReferenceMarket`: a broker or gateway
+/// can expose an instrument for execution without being the instrument's
+/// primary price venue.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReferenceExecutionAccess {
+    pub access_id: String,
+    pub instrument_id: String,
+    pub provider_id: String,
+    pub product_family: String,
+    pub provider_symbol: String,
+    pub settlement_asset_id: Option<String>,
+    pub status: String,
+    pub effective_from_unix_nanos: u64,
+    pub effective_to_unix_nanos: Option<u64>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

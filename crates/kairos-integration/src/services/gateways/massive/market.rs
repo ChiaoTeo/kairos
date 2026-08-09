@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::application::reference::{
-    ReferenceAsset, ReferenceCatalogPayload, ReferenceDataConnection, ReferenceEntity,
-    ReferenceInstrument, ReferenceListing, ReferenceMarket,
+    ReferenceAsset, ReferenceCatalogPage, ReferenceCatalogPayload, ReferenceDataConnection,
+    ReferenceEntity, ReferenceInstrument, ReferenceListing, ReferenceMarket,
 };
 use crate::application::{Connection, ConnectionSpec};
 use crate::domain::{AccessScope, IntegrationCapability, ProductFamily, TransportKind};
@@ -31,6 +31,18 @@ pub struct MassiveMarketRow {
 
 pub trait MassiveMarketClient: Send {
     fn load_markets(&mut self) -> Result<Vec<MassiveMarketRow>, String>;
+
+    fn load_markets_page(
+        &mut self,
+        _cursor: Option<&str>,
+        _limit: usize,
+    ) -> Result<super::client::MassiveMarketPage, String> {
+        Ok(super::client::MassiveMarketPage {
+            rows: self.load_markets()?,
+            next_cursor: None,
+            complete: true,
+        })
+    }
 }
 
 pub struct MassiveReferenceConnection<C> {
@@ -83,11 +95,26 @@ impl<C: MassiveMarketClient> ReferenceDataConnection for MassiveReferenceConnect
         self.start()?;
         normalize(self.client.load_markets()?)
     }
+
+    fn fetch_reference_catalog_page(
+        &mut self,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<ReferenceCatalogPage, String> {
+        self.start()?;
+        let page = self.client.load_markets_page(cursor, limit)?;
+        Ok(ReferenceCatalogPage {
+            catalog: normalize(page.rows)?,
+            next_cursor: page.next_cursor,
+            complete: page.complete,
+        })
+    }
 }
 
 pub fn normalize(rows: Vec<MassiveMarketRow>) -> Result<ReferenceCatalogPayload, String> {
     let now = now_unix_nanos();
     let mut assets = BTreeMap::new();
+    let mut underlyings = BTreeMap::<String, ()>::new();
     let mut result = ReferenceCatalogPayload {
         entities: vec![ReferenceEntity {
             entity_id: "massive".into(),
@@ -121,6 +148,11 @@ pub fn normalize(rows: Vec<MassiveMarketRow>) -> Result<ReferenceCatalogPayload,
             });
             id
         });
+        if market_type == "options" {
+            if let Some(underlying) = row.underlying.as_ref() {
+                underlyings.insert(underlying.to_ascii_uppercase(), ());
+            }
+        }
         let quote_asset_id = row.quote.as_ref().map(|quote| {
             let id = format!("asset:fiat:{}", quote.to_ascii_uppercase());
             assets.entry(id.clone()).or_insert_with(|| ReferenceAsset {
@@ -178,6 +210,52 @@ pub fn normalize(rows: Vec<MassiveMarketRow>) -> Result<ReferenceCatalogPayload,
             effective_to_unix_nanos: row.expiry_unix_nanos,
         });
     }
+    for underlying in underlyings.keys() {
+        let base_asset_id = format!("asset:equity:{underlying}");
+        let quote_asset_id = "asset:fiat:USD".to_owned();
+        let instrument_id = format!("instrument:massive:{underlying}");
+        let listing_id = format!("listing:massive:{underlying}");
+        result.instruments.push(ReferenceInstrument {
+            instrument_id: instrument_id.clone(),
+            symbol: underlying.clone(),
+            instrument_type: "equity".into(),
+            product_family: Some("equity".into()),
+            underlying_instrument_id: None,
+            expiry_unix_nanos: None,
+            strike: None,
+            option_right: None,
+            status: "active".into(),
+        });
+        result.listings.push(ReferenceListing {
+            listing_id: listing_id.clone(),
+            instrument_id: instrument_id.clone(),
+            venue_id: "massive".into(),
+            venue_symbol: underlying.clone(),
+            status: "active".into(),
+            effective_from_unix_nanos: now,
+        });
+        result.markets.push(ReferenceMarket {
+            market_id: format!("market:massive:{underlying}"),
+            market_key: format!("massive.equity.{underlying}"),
+            instrument_id,
+            listing_id,
+            venue_id: "massive".into(),
+            market_type: "equity".into(),
+            asset_type: Some("equity".into()),
+            source_symbol: underlying.clone(),
+            base_asset_id: Some(base_asset_id),
+            quote_asset_id: Some(quote_asset_id),
+            status: "active".into(),
+            price_tick: Some("0.01".into()),
+            quantity_tick: Some("1".into()),
+            price_precision: 2,
+            quantity_precision: 0,
+            minimum_quantity: None,
+            minimum_notional: None,
+            contract_size: Some("1".into()),
+            effective_to_unix_nanos: None,
+        });
+    }
     result.assets = assets.into_values().collect();
     Ok(result)
 }
@@ -226,6 +304,10 @@ mod tests {
         assert_eq!(payload.instruments[0].option_right.as_deref(), Some("call"));
         assert_eq!(payload.instruments[0].strike.as_deref(), Some("500"));
         assert_eq!(payload.markets[0].contract_size.as_deref(), Some("100"));
+        assert!(payload
+            .instruments
+            .iter()
+            .any(|value| value.symbol == "SPY" && value.instrument_type == "equity"));
     }
 
     #[test]

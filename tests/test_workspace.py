@@ -68,6 +68,16 @@ def test_workspace_cli_format_is_loaded_from_manifest(tmp_path: Path) -> None:
     assert WorkspaceApplication().open(workspace.paths.root).cli_format == "text"
 
 
+def test_workspace_accepts_table_as_cli_format(tmp_path: Path) -> None:
+    workspace = WorkspaceApplication().init(tmp_path / "demo", workspace_id="demo")
+    workspace.paths.manifest.write_text(
+        'version = 1\nworkspace_id = "demo"\n\n[cli]\nformat = "table"\n',
+        encoding="utf-8",
+    )
+
+    assert WorkspaceApplication().open(workspace.paths.root).cli_format == "table"
+
+
 def test_workspace_resolves_market_connection_from_manifest(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(tmp_path / "demo", workspace_id="demo")
     workspace.paths.manifest.write_text(

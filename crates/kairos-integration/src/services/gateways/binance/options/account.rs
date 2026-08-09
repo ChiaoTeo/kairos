@@ -293,24 +293,7 @@ fn decimal_field(row: &Value, field: &str) -> Option<DecimalValue> {
         .and_then(|value| decimal(value).ok())
 }
 fn decimal(value: &str) -> Result<DecimalValue, String> {
-    let negative = value.starts_with('-');
-    let unsigned = value.trim_start_matches('-');
-    let mut parts = unsigned.split('.');
-    let whole = parts.next().unwrap_or("0");
-    let fraction = parts.next().unwrap_or("");
-    if parts.next().is_some()
-        || !whole.chars().all(|c| c.is_ascii_digit())
-        || !fraction.chars().all(|c| c.is_ascii_digit())
-    {
-        return Err(format!("invalid decimal: {value}"));
-    }
-    let mut mantissa = format!("{whole}{fraction}")
-        .parse::<i64>()
-        .map_err(|_| format!("decimal overflow: {value}"))?;
-    if negative {
-        mantissa = -mantissa;
-    }
-    Ok(DecimalValue::new(mantissa, fraction.len() as u8))
+    DecimalValue::parse(value)
 }
 fn now_millis() -> u64 {
     SystemTime::now()

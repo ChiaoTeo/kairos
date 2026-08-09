@@ -584,29 +584,7 @@ fn rescale(value: DecimalValue, scale: u8) -> Result<i64, String> {
 }
 
 fn decimal(value: &str) -> Result<DecimalValue, String> {
-    let value = value.trim();
-    let negative = value.starts_with('-');
-    let unsigned = value.trim_start_matches('-');
-    let mut parts = unsigned.split('.');
-    let whole = parts.next().unwrap_or("0");
-    let fraction = parts.next().unwrap_or("");
-    if parts.next().is_some()
-        || whole.is_empty()
-        || !whole.chars().all(|c| c.is_ascii_digit())
-        || !fraction.chars().all(|c| c.is_ascii_digit())
-        || fraction.len() > 18
-    {
-        return Err(format!("invalid decimal: {value}"));
-    }
-    let scale = fraction.len() as u8;
-    let digits = format!("{whole}{fraction}");
-    let mut mantissa = digits
-        .parse::<i64>()
-        .map_err(|_| format!("decimal overflow: {value}"))?;
-    if negative {
-        mantissa = -mantissa;
-    }
-    Ok(DecimalValue::new(mantissa, scale))
+    DecimalValue::parse(value)
 }
 
 fn now_millis() -> u64 {

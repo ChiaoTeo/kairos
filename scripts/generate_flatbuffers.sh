@@ -31,6 +31,8 @@ flatc -I "$schema_root" --python -o "$python_out" \
   "$schema_root/market/v1/quote.fbs" \
   "$schema_root/market/v1/trade.fbs" \
   "$schema_root/market/v1/data.fbs" \
+  "$schema_root/market/v1/bar_message.fbs" \
+  "$schema_root/market/v1/greeks_message.fbs" \
   "$schema_root/account/v1/types.fbs" \
   "$schema_root/execution/v1/types.fbs" \
   "$schema_root/execution/v1/order_intent.fbs" \
@@ -46,7 +48,7 @@ flatc -I "$schema_root" --python -o "$python_out" \
   "$schema_root/system/v1/types.fbs" \
   "$schema_root/projection/reference/v1/catalog.fbs" \
   "$schema_root/projection/reference/v1/markets.fbs" \
-  "$schema_root/projection/reference/v1/lifecycle.fbs" \
+  "$schema_root/projection/reference/v1/collections.fbs" \
   "$schema_root/projection/market/v1/current.fbs" \
   "$schema_root/projection/market/v1/orderbook.fbs" \
   "$schema_root/projection/market/v1/history.fbs" \
@@ -72,6 +74,8 @@ for schema in \
   "$schema_root/market/v1/quote.fbs" \
   "$schema_root/market/v1/trade.fbs" \
   "$schema_root/market/v1/data.fbs" \
+  "$schema_root/market/v1/bar_message.fbs" \
+  "$schema_root/market/v1/greeks_message.fbs" \
   "$schema_root/account/v1/types.fbs" \
   "$schema_root/execution/v1/types.fbs" \
   "$schema_root/execution/v1/order_intent.fbs" \
@@ -87,7 +91,7 @@ for schema in \
   "$schema_root/system/v1/types.fbs" \
   "$schema_root/projection/reference/v1/catalog.fbs" \
   "$schema_root/projection/reference/v1/markets.fbs" \
-  "$schema_root/projection/reference/v1/lifecycle.fbs" \
+  "$schema_root/projection/reference/v1/collections.fbs" \
   "$schema_root/projection/market/v1/current.fbs" \
   "$schema_root/projection/market/v1/orderbook.fbs" \
   "$schema_root/projection/market/v1/history.fbs" \

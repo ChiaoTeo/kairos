@@ -1,5 +1,7 @@
+pub mod cli;
 pub mod control;
 pub mod data;
+pub mod logging;
 pub mod runtime;
 pub mod workspace;
 

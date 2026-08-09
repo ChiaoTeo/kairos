@@ -11,9 +11,9 @@ description = "Aeron and shared-memory transport adapters for Kairos"
 # the same CnC layout as the current Media Driver.
 rusteron-client = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
 rusteron-media-driver = { version = "0.2.4", default-features = false, features = ["static", "precompile-rustls"] }
-kairos-protocol = { path = "../kairos-protocol" }
 memmap2 = "0.9"
-serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 [[bin]]
 name = "kairos-aeron-driver"

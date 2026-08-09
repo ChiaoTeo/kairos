@@ -2,13 +2,25 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from dataclasses import dataclass
 from typing import Callable, Mapping, Sequence
 
 from kairospy.strategy import StrategyContextProtocol, StrategyLogger
-from kairospy.application.reference import ReferenceSnapshotClient
-
+from kairospy.infrastructure.contracts.reference import ReferenceSnapshotClient
 from ..domain.messages import CommandHandle, ContextRequest, EventEnvelope, SnapshotEnvelope, SubscriptionRequest, TargetPositionRequest
-from ..protocol import ContextBus, SnapshotReader
+from ..protocol import ContextBus, EventStream, IntentCommandPort, MarketCommandPort, SnapshotReader
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyClientBundle:
+    """All process-boundary capabilities owned by one strategy instance."""
+
+    commands: ContextBus
+    market_commands: MarketCommandPort
+    execution_commands: IntentCommandPort
+    market_snapshots: SnapshotReader
+    market_events: EventStream
+    reference: ReferenceSnapshotClient | None = None
 
 
 class StrategyContext(StrategyContextProtocol):
@@ -19,9 +31,7 @@ class StrategyContext(StrategyContextProtocol):
         strategy_id: str,
         *,
         instance_id: str = "",
-        bus: ContextBus,
-        snapshots: SnapshotReader,
-        reference: ReferenceSnapshotClient | None = None,
+        clients: StrategyClientBundle,
         state: dict[str, object] | None = None,
         request_observer: Callable[[ContextRequest, CommandHandle], None] | None = None,
         logger: StrategyLogger | None = None,
@@ -30,9 +40,12 @@ class StrategyContext(StrategyContextProtocol):
             raise ValueError("strategy_id is required")
         self.strategy_id = strategy_id
         self.instance_id = instance_id
-        self._bus = bus
-        self._snapshots = snapshots
-        self.reference = reference
+        self.clients = clients
+        # Compatibility aliases for existing diagnostics; new code uses the
+        # explicit client bundle.
+        self._bus = clients.commands
+        self._snapshots = clients.market_snapshots
+        self.reference = clients.reference
         self._request_observer = request_observer
         self.state = state if state is not None else {}
         self.logger = logger or StrategyLogger(fields={"strategy_id": strategy_id, "instance_id": instance_id})
@@ -54,10 +67,55 @@ class StrategyContext(StrategyContextProtocol):
 
     def _submit(self, operation: str, payload: object) -> CommandHandle:
         request = ContextRequest(operation, payload, self.strategy_id, self._request_id(operation), self.instance_id)
-        handle = self._bus.submit(request)
+        self.logger.info(
+            "strategy command submitted",
+            event="strategy_command_submitted",
+            operation=operation,
+            request_id=request.request_id,
+            payload_type=type(payload).__name__,
+            **self._command_observability(payload),
+        )
+        try:
+            handle = self.clients.commands.submit(request)
+        except Exception as error:
+            self.logger.error(
+                "strategy command raised",
+                event="strategy_command_raised",
+                operation=operation,
+                request_id=request.request_id,
+                error=str(error),
+            )
+            raise
+        self.logger.info(
+            "strategy command result",
+            event="strategy_command_result",
+            operation=operation,
+            request_id=request.request_id,
+            command_status=handle.status,
+            error=handle.error,
+            error_code=handle.error_code,
+            retryable=handle.retryable,
+            result=dict(handle.result),
+        )
         if self._request_observer is not None:
             self._request_observer(request, handle)
         return handle
+
+    @staticmethod
+    def _command_observability(payload: object) -> dict[str, object]:
+        """Return business request facts without leaking provider objects."""
+        if isinstance(payload, SubscriptionRequest):
+            return {
+                "subject": payload.subject,
+                "selectors": list(payload.selectors),
+                "exchange": payload.exchange,
+                "market_type": payload.market_type,
+                "asset_type": payload.asset_type,
+                "identity": payload.identity,
+                "dynamic": payload.dynamic,
+                "params": dict(payload.params),
+            }
+        return {}
 
     def subscribe(self, subject: str, *, selectors: Sequence[str] = (), exchange: str | None = None, market_type: str | None = None, asset_type: str | None = None, identity: str | None = None, params: Mapping[str, object] | None = None, dynamic: bool = False) -> CommandHandle:
         request = SubscriptionRequest(subject=subject, selectors=tuple(selectors), exchange=exchange, market_type=market_type, asset_type=asset_type, identity=identity, params=params or {}, dynamic=dynamic)
@@ -82,7 +140,7 @@ class StrategyContext(StrategyContextProtocol):
 
     def view(self, view_key: str, default: object = None) -> object:
         try:
-            return self._views.get(view_key, self._snapshots.read(view_key)).payload
+            return self._views.get(view_key, self.clients.market_snapshots.read(view_key)).payload
         except (KeyError, FileNotFoundError):
             return default
 
@@ -95,7 +153,7 @@ class StrategyContext(StrategyContextProtocol):
     def _snapshot(self, view_key: str) -> SnapshotEnvelope:
         snapshot = self._views.get(view_key)
         if snapshot is None:
-            snapshot = self._snapshots.read(view_key)
+            snapshot = self.clients.market_snapshots.read(view_key)
             self._views[view_key] = snapshot
         return snapshot
 

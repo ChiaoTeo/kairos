@@ -2,13 +2,18 @@
 resolver = "2"
 members = [
     "crates/kairos-workspace",
-    "crates/kairos-market",
+    "crates/business/market/service",
     "crates/kairos-integration",
     "crates/kairos-network",
     "crates/kairos-protocol",
     "crates/kairos-transport",
-    "crates/kairos-reference",
-    "crates/kairos-account",
-    "crates/kairos-risk",
-    "crates/kairos-execution",
+    "crates/business/reference/service",
+    "crates/business/account/service",
+    "crates/business/risk/service",
+    "crates/business/execution/service",
+    "crates/business/reference/contract",
+    "crates/business/market/contract",
+    "crates/business/account/contract",
+    "crates/business/risk/contract",
+    "crates/business/execution/contract",
 ]

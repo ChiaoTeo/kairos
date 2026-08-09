@@ -5,6 +5,15 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    init_logging();
+    let result = run();
+    if let Err(error) = &result {
+        tracing::error!(event = "process_failed", component = "aeron", error = %error, "Aeron driver failed");
+    }
+    result
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut arguments = env::args().skip(1);
     let mut aeron_dir = None;
     let mut health_file: Option<PathBuf> = None;
@@ -35,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             format!("{{\"status\":\"ready\",\"pid\":{}}}\n", std::process::id()),
         )?;
     }
-    println!("kairos-aeron-driver ready dir={directory}");
+    tracing::info!(event = "process_ready", component = "aeron", directory = %directory, "Aeron media driver ready");
     while !driver.is_finished() {
         std::thread::sleep(Duration::from_secs(1));
     }
@@ -44,4 +53,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     driver.join()?;
     Ok(())
+}
+
+fn init_logging() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let _ = tracing_subscriber::fmt()
+        .json()
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_ansi(false)
+        .with_env_filter(filter)
+        .try_init();
 }

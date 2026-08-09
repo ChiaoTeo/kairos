@@ -3,6 +3,8 @@ from __future__ import annotations
 from decimal import Decimal
 
 from kairospy.strategy import MarketSubscriptionRequest, TargetPositionRequest
+from kairospy.infrastructure.contracts.execution import intent_port
+from kairospy.infrastructure.contracts.market import command_port
 from kairospy.infrastructure.transport import ExecutionIntentCommandPort, MarketUnixCommandPort
 
 
@@ -101,3 +103,13 @@ def test_execution_port_applies_launch_live_safety_before_owner_command() -> Non
     assert handle.status == "rejected"
     assert "disabled" in (handle.error or "")
     assert client.calls == []
+
+
+def test_contract_facades_construct_the_strategy_command_ports(tmp_path) -> None:
+    market = command_port(tmp_path / "market.sock", launch_id="launch-1")
+    execution = intent_port(tmp_path / "execution.sock", launch_id="launch-1")
+
+    assert isinstance(market, MarketUnixCommandPort)
+    assert isinstance(execution, ExecutionIntentCommandPort)
+    assert market.launch_id == "launch-1"
+    assert execution.launch_id == "launch-1"

@@ -6,6 +6,13 @@ use crate::services::drivers::http::{ExchangeError, PublicHttpClient};
 
 use super::market::{MassiveMarketClient, MassiveMarketRow};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MassiveMarketPage {
+    pub rows: Vec<MassiveMarketRow>,
+    pub next_cursor: Option<String>,
+    pub complete: bool,
+}
+
 #[derive(Clone)]
 pub struct MassiveStocksRestClient {
     http: PublicHttpClient,
@@ -97,19 +104,105 @@ impl MassiveStocksRestClient {
         Ok(rows)
     }
 
-    pub fn equity_tickers(&self) -> Result<Vec<MassiveMarketRow>, String> {
-        let endpoint = format!("{}/v3/reference/tickers", self.base_url);
-        let query = vec![
-            ("market", "stocks".into()),
-            ("active", "true".into()),
-            ("limit", "1000".into()),
+    pub fn option_contracts_page(
+        &self,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<MassiveMarketPage, String> {
+        let endpoint = format!("{}/v3/reference/options/contracts", self.base_url);
+        let limit = limit.clamp(1, 1000);
+        let mut query = vec![
+            ("expired", "false".into()),
+            ("limit", limit.to_string()),
+            ("sort", "expiration_date".into()),
+            ("order", "asc".into()),
             ("apiKey", self.api_key.clone()),
         ];
+        if let Some(cursor) = cursor {
+            query.push(("cursor", cursor.to_owned()));
+        }
+        if let Some(underlying) = &self.option_underlying {
+            query.push(("underlying_ticker", underlying.clone()));
+        }
         let payload = self
             .http
             .get_json_with_query(&endpoint, &query)
             .map_err(|error| error.to_string())?;
-        equity_rows_from_payload(payload)
+        let rows = rows_from_payload(&payload)?;
+        let next_cursor = payload
+            .get("next_url")
+            .and_then(Value::as_str)
+            .and_then(|next_url| {
+                url::Url::parse(next_url).ok().and_then(|parsed| {
+                    parsed
+                        .query_pairs()
+                        .find(|(key, _)| key == "cursor")
+                        .map(|(_, value)| value.into_owned())
+                })
+            })
+            .filter(|value| !value.is_empty());
+        Ok(MassiveMarketPage {
+            complete: next_cursor.is_none(),
+            rows,
+            next_cursor,
+        })
+    }
+
+    pub fn equity_tickers(&self) -> Result<Vec<MassiveMarketRow>, String> {
+        let mut cursor = None;
+        let mut rows = Vec::new();
+        let mut pages = 0;
+        loop {
+            pages += 1;
+            if pages > 10_000 {
+                return Err("Massive equity pagination exceeded safety limit".into());
+            }
+            let page = self.equity_tickers_page(cursor.as_deref(), 1000)?;
+            rows.extend(page.rows);
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                return Ok(rows);
+            }
+        }
+    }
+
+    fn equity_tickers_page(
+        &self,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<MassiveMarketPage, String> {
+        let endpoint = format!("{}/v3/reference/tickers", self.base_url);
+        let mut query = vec![
+            ("market", "stocks".into()),
+            ("active", "true".into()),
+            ("limit", limit.clamp(1, 1000).to_string()),
+            ("apiKey", self.api_key.clone()),
+        ];
+        if let Some(cursor) = cursor {
+            query.push(("cursor", cursor.to_owned()));
+        }
+        let payload = self
+            .http
+            .get_json_with_query(&endpoint, &query)
+            .map_err(|error| error.to_string())?;
+        let rows = equity_rows_from_payload(payload.clone())?;
+        let next_cursor = payload
+            .get("next_url")
+            .and_then(Value::as_str)
+            .and_then(|next_url| {
+                url::Url::parse(next_url).ok().and_then(|parsed| {
+                    parsed
+                        .query_pairs()
+                        .find(|(key, _)| key == "cursor")
+                        .map(|(_, value)| value.into_owned())
+                })
+            })
+            .filter(|value| !value.is_empty());
+        Ok(MassiveMarketPage {
+            complete: next_cursor.is_none(),
+            rows,
+            next_cursor,
+        })
     }
 }
 
@@ -130,6 +223,18 @@ impl MassiveMarketClient for MassiveStocksRestClient {
             self.option_contracts()
         } else {
             self.equity_tickers()
+        }
+    }
+
+    fn load_markets_page(
+        &mut self,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<MassiveMarketPage, String> {
+        if self.options {
+            self.option_contracts_page(cursor, limit)
+        } else {
+            self.equity_tickers_page(cursor, limit)
         }
     }
 }

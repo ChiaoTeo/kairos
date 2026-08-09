@@ -243,40 +243,8 @@ fn format_decimal(value: DecimalValue) -> String {
     )
 }
 fn decimal_from_str(value: &str) -> Result<DecimalValue, String> {
-    let negative = value.starts_with('-');
-    let unsigned = value.trim_start_matches('-');
-    let mut parts = unsigned.split('.');
-    let whole = parts.next().unwrap_or("0");
-    let fraction = parts.next().unwrap_or("");
-    if parts.next().is_some()
-        || whole.is_empty()
-        || !whole.chars().all(|c| c.is_ascii_digit())
-        || !fraction.chars().all(|c| c.is_ascii_digit())
-        || fraction.len() > 18
-    {
-        return Err(format!("invalid decimal: {value}"));
-    }
-    let mut mantissa = format!("{whole}{fraction}")
-        .parse::<i64>()
-        .map_err(|_| format!("decimal overflow: {value}"))?;
-    if negative {
-        mantissa = -mantissa;
-    }
-    Ok(DecimalValue::new(mantissa, fraction.len() as u8))
+    DecimalValue::parse(value)
 }
 fn rescale(value: DecimalValue, scale: u8) -> Result<DecimalValue, String> {
-    if value.scale > scale {
-        let divisor = 10_i64.pow((value.scale - scale) as u32);
-        if value.mantissa % divisor != 0 {
-            return Err("decimal precision exceeds order quantity scale".into());
-        }
-        return Ok(DecimalValue::new(value.mantissa / divisor, scale));
-    }
-    Ok(DecimalValue::new(
-        value
-            .mantissa
-            .checked_mul(10_i64.pow((scale - value.scale) as u32))
-            .ok_or_else(|| "decimal rescale overflow".to_string())?,
-        scale,
-    ))
+    value.rescale_exact(scale)
 }

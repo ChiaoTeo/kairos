@@ -31,6 +31,7 @@ impl<'a> Greeks<'a> {
     pub const VT_IMPLIED_VOLATILITY: ::flatbuffers::VOffsetT = 20;
     pub const VT_EVENT_TIME_UNIX_NANOS: ::flatbuffers::VOffsetT = 22;
     pub const VT_SOURCE_ID: ::flatbuffers::VOffsetT = 24;
+    pub const VT_DERIVATION: ::flatbuffers::VOffsetT = 26;
 
     #[inline]
     pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -49,6 +50,9 @@ impl<'a> Greeks<'a> {
         let mut builder = GreeksBuilder::new(_fbb);
         builder.add_event_time_unix_nanos(args.event_time_unix_nanos);
         builder.add_expiry_unix_nanos(args.expiry_unix_nanos);
+        if let Some(x) = args.derivation {
+            builder.add_derivation(x);
+        }
         if let Some(x) = args.source_id {
             builder.add_source_id(x);
         }
@@ -192,6 +196,16 @@ impl<'a> Greeks<'a> {
                 .get::<::flatbuffers::ForwardsUOffset<&str>>(Greeks::VT_SOURCE_ID, None)
         }
     }
+    #[inline]
+    pub fn derivation(&self) -> Option<&'a str> {
+        // Safety:
+        // Created from valid Table for this object
+        // which contains a valid value in this slot
+        unsafe {
+            self._tab
+                .get::<::flatbuffers::ForwardsUOffset<&str>>(Greeks::VT_DERIVATION, None)
+        }
+    }
 }
 
 impl ::flatbuffers::Verifiable for Greeks<'_> {
@@ -232,6 +246,11 @@ impl ::flatbuffers::Verifiable for Greeks<'_> {
                 Self::VT_SOURCE_ID,
                 false,
             )?
+            .visit_field::<::flatbuffers::ForwardsUOffset<&str>>(
+                "derivation",
+                Self::VT_DERIVATION,
+                false,
+            )?
             .finish();
         Ok(())
     }
@@ -248,6 +267,7 @@ pub struct GreeksArgs<'a> {
     pub implied_volatility: Option<&'a super::super::common::v_1::Decimal64>,
     pub event_time_unix_nanos: u64,
     pub source_id: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub derivation: Option<::flatbuffers::WIPOffset<&'a str>>,
 }
 impl<'a> Default for GreeksArgs<'a> {
     #[inline]
@@ -264,6 +284,7 @@ impl<'a> Default for GreeksArgs<'a> {
             implied_volatility: None,
             event_time_unix_nanos: 0,
             source_id: None,
+            derivation: None,
         }
     }
 }
@@ -337,6 +358,11 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> GreeksBuilder<'a, 'b, A> {
             .push_slot_always::<::flatbuffers::WIPOffset<_>>(Greeks::VT_SOURCE_ID, source_id);
     }
     #[inline]
+    pub fn add_derivation(&mut self, derivation: ::flatbuffers::WIPOffset<&'b str>) {
+        self.fbb_
+            .push_slot_always::<::flatbuffers::WIPOffset<_>>(Greeks::VT_DERIVATION, derivation);
+    }
+    #[inline]
     pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> GreeksBuilder<'a, 'b, A> {
         let start = _fbb.start_table();
         GreeksBuilder {
@@ -367,6 +393,7 @@ impl ::core::fmt::Debug for Greeks<'_> {
         ds.field("implied_volatility", &self.implied_volatility());
         ds.field("event_time_unix_nanos", &self.event_time_unix_nanos());
         ds.field("source_id", &self.source_id());
+        ds.field("derivation", &self.derivation());
         ds.finish()
     }
 }

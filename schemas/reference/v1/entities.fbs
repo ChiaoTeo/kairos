@@ -78,6 +78,8 @@ table Catalog {
   listings:[kairos.reference.v1.Listing];
   markets:[kairos.reference.v1.Market];
   financial_products:[kairos.reference.v1.FinancialProduct];
+  execution_access_count:ulong;
+  execution_accesses:[kairos.reference.v1.ExecutionAccess];
 }
 
 table Entity {
@@ -115,6 +117,18 @@ table FinancialProduct {
   apr:kairos.common.v1.Decimal64;
   lock_period_days:int;
   maturity_at_unix_nanos:ulong;
+  status:string (required);
+  effective_from_unix_nanos:ulong;
+  effective_to_unix_nanos:ulong;
+}
+
+table ExecutionAccess {
+  access_id:string (required);
+  instrument_id:string (required);
+  provider_id:string (required);
+  product_family:string (required);
+  provider_symbol:string (required);
+  settlement_asset_id:string;
   status:string (required);
   effective_from_unix_nanos:ulong;
   effective_to_unix_nanos:ulong;

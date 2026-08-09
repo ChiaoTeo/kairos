@@ -8,6 +8,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from ...infrastructure.unix_http import request_async
+
 
 class ProcessState(StrEnum):
     STARTING = "starting"
@@ -212,8 +214,11 @@ class ProcessSupervisor:
 class UnixRestClient:
     """Minimal HTTP/1.1 client over a Unix domain socket."""
 
-    def __init__(self, socket_path: Path) -> None:
+    def __init__(self, socket_path: Path, *, timeout: float = 3.0) -> None:
+        if timeout <= 0:
+            raise ValueError("timeout must be positive")
         self.socket_path = Path(socket_path)
+        self.timeout = timeout
 
     async def request(
         self,
@@ -223,42 +228,10 @@ class UnixRestClient:
     ) -> dict[str, Any]:
         if not method or not path.startswith("/"):
             raise ValueError("invalid Unix REST request")
-        payload = body or b""
-        request = (
-            f"{method.upper()} {path} HTTP/1.1\r\n"
-            "Host: localhost\r\n"
-            "Connection: close\r\n"
-            "Content-Type: application/json\r\n"
-            f"Content-Length: {len(payload)}\r\n\r\n"
-        ).encode("ascii") + payload
-        reader, writer = await asyncio.open_unix_connection(str(self.socket_path))
-        try:
-            writer.write(request)
-            await writer.drain()
-            response = await reader.read()
-        finally:
-            writer.close()
-            await writer.wait_closed()
-        return self._parse_response(response)
-
-    @staticmethod
-    def _parse_response(response: bytes) -> dict[str, Any]:
-        header, separator, body = response.partition(b"\r\n\r\n")
-        if not separator:
-            raise ValueError("invalid Unix REST response")
-        status_line = header.split(b"\r\n", 1)[0].decode("ascii")
-        parts = status_line.split()
-        if len(parts) < 2 or not parts[1].isdigit():
-            raise ValueError("invalid Unix REST status")
-        status = int(parts[1])
-        import json
-
-        value = json.loads(body.decode("utf-8"))
-        if not isinstance(value, dict):
-            raise ValueError("Unix REST response must be an object")
-        if status < 200 or status >= 300:
-            raise RuntimeError(f"reference control request failed ({status}): {value}")
-        return value
+        return await asyncio.wait_for(
+            request_async(self.socket_path, method.upper(), path, body, timeout=self.timeout),
+            timeout=self.timeout,
+        )
 
     async def health(self) -> dict[str, Any]:
         return await self.request("GET", "/v1/health")

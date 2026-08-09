@@ -5,12 +5,6 @@ use std::io;
 use std::path::Path;
 
 use memmap2::{Mmap, MmapMut, MmapOptions};
-use serde::Serialize;
-
-use kairos_protocol::generated::kairos::market::v_1::{
-    market_data_snapshot_buffer_has_identifier, root_as_market_data_snapshot,
-};
-
 const MAGIC: &[u8; 4] = b"KSS1";
 const FORMAT_VERSION: u16 = 1;
 const HEADER_SIZE: usize = 64;
@@ -18,20 +12,6 @@ const SLOT_COUNT: u16 = 2;
 const ACTIVE_OFFSET: usize = 12;
 const SLOT_LENGTH_OFFSET: usize = 24;
 const SLOT_GENERATION_OFFSET: usize = 32;
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct SnapshotMarketData {
-    pub generation: u64,
-    pub snapshot_id: String,
-    pub view_key: String,
-    pub owner_actor_id: String,
-    pub workspace_id: Option<String>,
-    pub launch_id: Option<String>,
-    pub instance_id: Option<String>,
-    pub version: u64,
-    pub item_count: usize,
-    pub first_instrument_id: Option<String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedSnapshotPayload {
@@ -55,6 +35,9 @@ impl SharedSnapshotWriter {
     pub fn create(path: impl AsRef<Path>, slot_size: usize) -> io::Result<Self> {
         if slot_size == 0 {
             return Err(invalid_data("shared snapshot slot size must be positive"));
+        }
+        if let Some(parent) = path.as_ref().parent() {
+            std::fs::create_dir_all(parent)?;
         }
         let file = OpenOptions::new()
             .create(true)
@@ -127,11 +110,6 @@ impl SharedSnapshotReader {
         Ok(Self { mmap, slot_size })
     }
 
-    pub fn read_market_data(&self) -> Result<SnapshotMarketData, String> {
-        let snapshot = self.read_payload()?;
-        decode_market_data(&snapshot.payload, snapshot.generation)
-    }
-
     pub fn read_payload(&self) -> Result<SharedSnapshotPayload, String> {
         for _ in 0..8 {
             let active = self.mmap[ACTIVE_OFFSET] as usize;
@@ -159,32 +137,6 @@ impl SharedSnapshotReader {
         }
         Err("shared snapshot changed while being read".into())
     }
-}
-
-fn decode_market_data(payload: &[u8], generation: u64) -> Result<SnapshotMarketData, String> {
-    if !market_data_snapshot_buffer_has_identifier(payload) {
-        return Err("shared snapshot payload has an invalid market data identifier".into());
-    }
-    let snapshot = root_as_market_data_snapshot(payload)
-        .map_err(|error| format!("invalid MarketDataSnapshot: {error}"))?;
-    let header = snapshot.header();
-    let data = snapshot.payload();
-    let item_count = data.quotes().map_or(0, |quotes| quotes.len());
-    let first_instrument_id = data
-        .quotes()
-        .and_then(|items| (items.len() > 0).then(|| items.get(0).instrument_id().to_owned()));
-    Ok(SnapshotMarketData {
-        generation,
-        snapshot_id: header.snapshot_id().to_owned(),
-        view_key: header.view_key().to_owned(),
-        owner_actor_id: header.owner_actor_id().to_owned(),
-        workspace_id: header.workspace_id().map(str::to_owned),
-        launch_id: header.launch_id().map(str::to_owned),
-        instance_id: header.instance_id().map(str::to_owned),
-        version: header.version(),
-        item_count,
-        first_instrument_id,
-    })
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> io::Result<u16> {

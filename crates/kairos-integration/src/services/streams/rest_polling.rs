@@ -193,6 +193,8 @@ mod tests {
                 ask_quantity: None,
                 bids: Vec::new(),
                 asks: Vec::new(),
+                bar: None,
+                greeks: None,
                 first_sequence: None,
                 last_sequence: None,
                 sequence: None,
