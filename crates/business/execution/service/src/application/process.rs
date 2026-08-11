@@ -69,7 +69,149 @@ pub struct ExecutionProcess<
     last_remote_reconcile_unix_nanos: u64,
     async_order_entry: Option<E>,
     async_order_query: Option<Q>,
-    async_execution_streams: Vec<S>,
+    async_execution_streams: Vec<ExecutionAsyncRoute<S>>,
+    route_readiness: std::sync::Arc<std::sync::Mutex<Vec<ExecutionRouteReadiness>>>,
+}
+
+/// Execution-owned runtime policy for one Integration order-event source.
+/// The provider connection remains Integration-owned; required/optional
+/// classification and business readiness belong to Execution.
+pub struct ExecutionAsyncRoute<S> {
+    pub route_id: String,
+    pub required: bool,
+    pub binding_id: Option<String>,
+    source: S,
+}
+
+impl<S> ExecutionAsyncRoute<S> {
+    pub fn new(route_id: impl Into<String>, required: bool, source: S) -> Self {
+        Self {
+            route_id: route_id.into(),
+            required,
+            binding_id: None,
+            source,
+        }
+    }
+
+    pub fn with_binding_id(mut self, binding_id: impl Into<String>) -> Self {
+        self.binding_id = Some(binding_id.into());
+        self
+    }
+
+    pub(crate) fn into_source(self) -> S {
+        self.source
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct ExecutionRouteReadiness {
+    route_id: String,
+    required: bool,
+    binding_id: Option<String>,
+    status: &'static str,
+    last_error: Option<String>,
+}
+
+fn set_route_readiness(
+    readiness: &std::sync::Arc<std::sync::Mutex<Vec<ExecutionRouteReadiness>>>,
+    index: usize,
+    status: &'static str,
+    last_error: Option<String>,
+) {
+    if let Ok(mut routes) = readiness.lock() {
+        if let Some(route) = routes.get_mut(index) {
+            route.status = status;
+            route.last_error = last_error;
+        }
+    }
+}
+
+fn process_readiness(
+    readiness: &std::sync::Arc<std::sync::Mutex<Vec<ExecutionRouteReadiness>>>,
+) -> (&'static str, Vec<ExecutionRouteReadiness>) {
+    let routes = readiness
+        .lock()
+        .map(|routes| routes.clone())
+        .unwrap_or_default();
+    let required_unready = routes
+        .iter()
+        .any(|route| route.required && route.status != "ready");
+    let optional_unready = routes
+        .iter()
+        .any(|route| !route.required && route.status != "ready");
+    let status = if required_unready {
+        "not_ready"
+    } else if optional_unready {
+        "degraded"
+    } else {
+        "ready"
+    };
+    (status, routes)
+}
+
+fn route_status(
+    readiness: &std::sync::Arc<std::sync::Mutex<Vec<ExecutionRouteReadiness>>>,
+    index: usize,
+) -> Option<&'static str> {
+    readiness
+        .lock()
+        .ok()
+        .and_then(|routes| routes.get(index).map(|route| route.status))
+}
+
+#[cfg(test)]
+fn resync_required(
+    readiness: &std::sync::Arc<std::sync::Mutex<Vec<ExecutionRouteReadiness>>>,
+) -> bool {
+    readiness
+        .lock()
+        .map(|routes| routes.iter().any(|route| route.status == "resync_required"))
+        .unwrap_or(true)
+}
+
+fn resync_targets(
+    readiness: &std::sync::Arc<std::sync::Mutex<Vec<ExecutionRouteReadiness>>>,
+) -> Vec<(usize, Option<String>)> {
+    readiness
+        .lock()
+        .map(|routes| {
+            routes
+                .iter()
+                .enumerate()
+                .filter(|(_, route)| route.status == "resync_required")
+                .map(|(index, route)| (index, route.binding_id.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn release_route_recovery_barrier(
+    readiness: &std::sync::Arc<std::sync::Mutex<Vec<ExecutionRouteReadiness>>>,
+    route_index: usize,
+) {
+    if let Ok(mut routes) = readiness.lock() {
+        if let Some(route) = routes.get_mut(route_index) {
+            if route.status == "resync_required" {
+                route.status = "recovering";
+                route.last_error = None;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn release_recovery_barrier(
+    readiness: &std::sync::Arc<std::sync::Mutex<Vec<ExecutionRouteReadiness>>>,
+) {
+    if let Ok(mut routes) = readiness.lock() {
+        for route in routes
+            .iter_mut()
+            .filter(|route| route.status == "resync_required")
+        {
+            route.status = "recovering";
+            route.last_error = None;
+        }
+    }
 }
 
 /// Empty async order-entry type used by legacy providers and fixtures.
@@ -229,6 +371,7 @@ impl
             async_order_entry: None,
             async_order_query: None,
             async_execution_streams: Vec::new(),
+            route_readiness: Default::default(),
         }
     }
 
@@ -253,6 +396,7 @@ impl
             async_order_entry: None,
             async_order_query: None,
             async_execution_streams: Vec::new(),
+            route_readiness: Default::default(),
         }
     }
 }
@@ -275,6 +419,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             async_order_entry: connection,
             async_order_query: self.async_order_query,
             async_execution_streams: self.async_execution_streams,
+            route_readiness: self.route_readiness,
         }
     }
 
@@ -295,6 +440,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             async_order_entry: self.async_order_entry,
             async_order_query: connection,
             async_execution_streams: self.async_execution_streams,
+            route_readiness: self.route_readiness,
         }
     }
 
@@ -303,6 +449,30 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
     }
 
     pub fn with_async_execution_streams<T>(self, sources: Vec<T>) -> ExecutionProcess<E, Q, T> {
+        let routes = sources
+            .into_iter()
+            .enumerate()
+            .map(|(index, source)| {
+                ExecutionAsyncRoute::new(format!("async-route-{index}"), true, source)
+            })
+            .collect();
+        self.with_async_execution_routes(routes)
+    }
+
+    pub fn with_async_execution_routes<T>(
+        self,
+        routes: Vec<ExecutionAsyncRoute<T>>,
+    ) -> ExecutionProcess<E, Q, T> {
+        let readiness = routes
+            .iter()
+            .map(|route| ExecutionRouteReadiness {
+                route_id: route.route_id.clone(),
+                required: route.required,
+                binding_id: route.binding_id.clone(),
+                status: "created",
+                last_error: None,
+            })
+            .collect();
         ExecutionProcess {
             application: self.application,
             simulator: self.simulator,
@@ -318,7 +488,8 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
             last_remote_reconcile_unix_nanos: self.last_remote_reconcile_unix_nanos,
             async_order_entry: self.async_order_entry,
             async_order_query: self.async_order_query,
-            async_execution_streams: sources,
+            async_execution_streams: routes,
+            route_readiness: std::sync::Arc::new(std::sync::Mutex::new(readiness)),
         }
     }
 
@@ -350,6 +521,10 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         S: AsyncOrderEventSource + 'static,
     {
         info!(event = "process_starting", component = "execution", socket = %self.socket_path.display(), "execution process starting");
+        // A control socket is not business readiness. Required private order
+        // streams must finish provider authentication/subscription before the
+        // process can advertise ready or accept live commands.
+        self.connect_async_execution_streams().await?;
         remove_socket(&self.socket_path)?;
         if let Some(parent) = self.socket_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
@@ -509,14 +684,66 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
     where
         S: AsyncOrderEventSource + 'static,
     {
+        let route_readiness = std::sync::Arc::clone(&self.route_readiness);
         self.async_execution_streams
             .drain(..)
-            .map(|mut stream| {
+            .enumerate()
+            .map(|(route_index, mut route)| {
                 let sender = sender.clone();
                 let metrics = std::sync::Arc::clone(&metrics);
                 let mut shutdown = shutdown.clone();
+                let readiness = std::sync::Arc::clone(&route_readiness);
+                let route_id = route.route_id.clone();
                 tokio::spawn(async move {
-            loop {
+            'stream: loop {
+                if matches!(
+                    route_status(&readiness, route_index),
+                    Some("resync_required" | "recovering")
+                ) {
+                    let _ = route.source.disconnect_channel().await;
+                    if route_status(&readiness, route_index) == Some("resync_required") {
+                        loop {
+                            if route_status(&readiness, route_index) == Some("recovering") {
+                                break;
+                            }
+                            tokio::select! {
+                                changed = shutdown.changed() => {
+                                    if changed.is_err() || *shutdown.borrow() {
+                                        break 'stream;
+                                    }
+                                }
+                                _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+                            }
+                        }
+                    }
+                    let reconnect = tokio::select! {
+                        biased;
+                        changed = shutdown.changed() => {
+                            if changed.is_err() || *shutdown.borrow() {
+                                break 'stream;
+                            }
+                            continue 'stream;
+                        }
+                        result = route.source.reconnect_channel() => result,
+                    };
+                    match reconnect {
+                        Ok(()) => {
+                            kairos_workspace::logging::record_counter("kairos.reconnect", 1);
+                            set_route_readiness(&readiness, route_index, "ready", None);
+                        }
+                        Err(error) => {
+                            set_route_readiness(
+                                &readiness,
+                                route_index,
+                                "degraded",
+                                Some(error.to_string()),
+                            );
+                            tracing::warn!(event = "async_exchange_stream_recovery_failed", component = "execution", route_id = %route_id, error = %error, "execution stream failed after reconciliation barrier");
+                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        }
+                    }
+                    continue;
+                }
                 let result = tokio::select! {
                     biased;
                     changed = shutdown.changed() => {
@@ -525,7 +752,7 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                         }
                         continue;
                     }
-                    result = stream.next_order_event() => result,
+                    result = route.source.next_order_event() => result,
                 };
                 match result {
                     Ok(envelope) => {
@@ -543,9 +770,16 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                                 tracing::warn!(
                                     event = "exchange_event_mailbox_overflow",
                                     component = "execution",
+                                    route_id = %route_id,
                                     "execution event mailbox overflowed; stop stream and reconcile"
                                 );
-                                break;
+                                set_route_readiness(
+                                    &readiness,
+                                    route_index,
+                                    "resync_required",
+                                    Some("execution event mailbox overflowed".into()),
+                                );
+                                continue;
                             }
                             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
                                 metrics
@@ -556,7 +790,26 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                         }
                     }
                     Err(error) => {
-                        tracing::warn!(event = "async_exchange_stream_error", component = "execution", error = %error, "async exchange stream read failed");
+                        if matches!(
+                            error,
+                            IntegrationError::ResyncRequired(_)
+                                | IntegrationError::Backpressure(_)
+                        ) {
+                            set_route_readiness(
+                                &readiness,
+                                route_index,
+                                "resync_required",
+                                Some(error.to_string()),
+                            );
+                            continue;
+                        }
+                        set_route_readiness(
+                            &readiness,
+                            route_index,
+                            "degraded",
+                            Some(error.to_string()),
+                        );
+                        tracing::warn!(event = "async_exchange_stream_error", component = "execution", route_id = %route_id, error = %error, "async exchange stream read failed");
                         let reconnect = tokio::select! {
                             biased;
                             changed = shutdown.changed() => {
@@ -565,11 +818,12 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                                 }
                                 continue;
                             }
-                            result = stream.reconnect_channel() => result,
+                            result = route.source.reconnect_channel() => result,
                         };
                         match reconnect {
                             Ok(()) => {
                                 kairos_workspace::logging::record_counter("kairos.reconnect", 1);
+                                set_route_readiness(&readiness, route_index, "ready", None);
                             }
                             Err(reconnect_error) => {
                                 kairos_workspace::logging::record_counter("kairos.retry", 1);
@@ -587,10 +841,50 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
                     }
                 }
             }
-            let _ = stream.disconnect_channel().await;
+            let _ = route.source.disconnect_channel().await;
                 })
             })
             .collect()
+    }
+
+    async fn connect_async_execution_streams(&mut self) -> Result<(), IntegrationError>
+    where
+        S: AsyncOrderEventSource,
+    {
+        for index in 0..self.async_execution_streams.len() {
+            if let Err(error) = self.async_execution_streams[index]
+                .source
+                .connect_channel()
+                .await
+            {
+                set_route_readiness(
+                    &self.route_readiness,
+                    index,
+                    "degraded",
+                    Some(error.to_string()),
+                );
+                if !self.async_execution_streams[index].required {
+                    continue;
+                }
+                for connected in &mut self.async_execution_streams[..index] {
+                    let _ = connected.source.disconnect_channel().await;
+                }
+                return Err(error);
+            }
+            let health = self.async_execution_streams[index].source.channel_health();
+            if !health.healthy || !health.authenticated {
+                set_route_readiness(&self.route_readiness, index, "degraded", health.last_error);
+                if !self.async_execution_streams[index].required {
+                    continue;
+                }
+                for connected in &mut self.async_execution_streams[..=index] {
+                    let _ = connected.source.disconnect_channel().await;
+                }
+                return Err(IntegrationError::NotReady);
+            }
+            set_route_readiness(&self.route_readiness, index, "ready", None);
+        }
+        Ok(())
     }
 
     fn start_stream_consumer(
@@ -708,31 +1002,51 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         self.publish_snapshots()?;
         while !self.stopping {
             let now = now_unix_nanos();
+            let recovery_targets = resync_targets(&self.route_readiness);
+            let recovery_required = !recovery_targets.is_empty();
             if self.application.has_order_query()
-                && now.saturating_sub(self.last_remote_reconcile_unix_nanos) >= 5_000_000_000
+                && (recovery_required
+                    || now.saturating_sub(self.last_remote_reconcile_unix_nanos) >= 5_000_000_000)
             {
                 self.last_remote_reconcile_unix_nanos = now;
-                match self.application.reconcile_remote_orders(RemoteOrderQuery {
-                    limit: Some(200),
-                    ..RemoteOrderQuery::default()
-                }) {
-                    Ok(changed) if changed > 0 => {
-                        tracing::info!(
-                            event = "remote_order_reconciliation_completed",
+                let queries = if recovery_required {
+                    recovery_targets
+                } else {
+                    vec![(usize::MAX, None)]
+                };
+                let mut total_changed = 0;
+                for (route_index, binding_id) in queries {
+                    match self.application.reconcile_remote_orders(RemoteOrderQuery {
+                        binding_id: binding_id.clone(),
+                        limit: Some(200),
+                        ..RemoteOrderQuery::default()
+                    }) {
+                        Ok(changed) => {
+                            total_changed += changed;
+                            if route_index != usize::MAX {
+                                release_route_recovery_barrier(&self.route_readiness, route_index);
+                            }
+                            tracing::info!(
+                                event = "remote_order_reconciliation_completed",
+                                component = "execution",
+                                changed,
+                                binding_id = ?binding_id,
+                                recovery_barrier = route_index != usize::MAX,
+                                "remote order reconciliation completed"
+                            );
+                        }
+                        Err(error) => tracing::warn!(
+                            event = "remote_order_reconciliation_failed",
                             component = "execution",
-                            changed,
-                            "remote order reconciliation completed"
-                        );
-                        self.flush_events()?;
-                        self.publish_snapshots()?;
+                            binding_id = ?binding_id,
+                            error = %error,
+                            "remote order reconciliation failed"
+                        ),
                     }
-                    Ok(_) => {}
-                    Err(error) => tracing::warn!(
-                        event = "remote_order_reconciliation_failed",
-                        component = "execution",
-                        error = %error,
-                        "remote order reconciliation failed"
-                    ),
+                }
+                if total_changed > 0 {
+                    self.flush_events()?;
+                    self.publish_snapshots()?;
                 }
             }
             if self.application.refresh_maker_quotes()? > 0 {
@@ -940,10 +1254,10 @@ impl<E, Q, S> ExecutionProcess<E, Q, S> {
         let (path, query) = target.split_once('?').unwrap_or((target, ""));
         info!(event = "control_request", component = "execution", path = %path, "execution control request received");
         let (status, payload) = match path {
-            HEALTH_PATH => (
-                200,
-                json!({"status":"ready","pid":std::process::id(),"actor_id":self.application.snapshot().actor_id,"generation":self.application.snapshot().generation,"event_sequence":self.application.snapshot().event_sequence,"order_count":self.application.snapshot().orders.len(),"dependency_watermarks":self.application.dependency_watermarks(),"runtime_metrics":self.metrics.snapshot()}),
-            ),
+            HEALTH_PATH => (200, {
+                let (status, routes) = process_readiness(&self.route_readiness);
+                json!({"status":status,"pid":std::process::id(),"actor_id":self.application.snapshot().actor_id,"generation":self.application.snapshot().generation,"event_sequence":self.application.snapshot().event_sequence,"order_count":self.application.snapshot().orders.len(),"dependency_watermarks":self.application.dependency_watermarks(),"routes":routes,"runtime_metrics":self.metrics.snapshot()})
+            }),
             SNAPSHOT_PATH => (200, serde_json::to_value(self.application.snapshot())?),
             "/v1/intents" => (200, json!({"intents": self.application.intents()})),
             "/v1/intent" => match self
@@ -1562,7 +1876,10 @@ fn now_unix_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{request_class, ExecutionApplication, ExecutionProcess, RequestClass};
+    use super::{
+        process_readiness, request_class, resync_targets, set_route_readiness,
+        ExecutionApplication, ExecutionAsyncRoute, ExecutionProcess, RequestClass,
+    };
     use kairos_integration::application::{
         AsyncOrderEventSource, ExternalEventEnvelope, ExternalExecutionEvent, IntegrationError,
     };
@@ -1595,6 +1912,32 @@ mod tests {
         assert!(process.accept_exchange_event("fill-1"));
         assert!(!process.accept_exchange_event("fill-1"));
         assert!(process.accept_exchange_event("fill-2"));
+    }
+
+    #[test]
+    fn recovery_targets_only_the_binding_owned_by_the_failed_route() {
+        let application = ExecutionApplication::with_dependencies("execution", None, None)
+            .expect("fixture application");
+        let process = ExecutionProcess::new(
+            application,
+            PathBuf::from("/tmp/execution-route-recovery-test.sock"),
+        )
+        .with_async_execution_routes(vec![
+            ExecutionAsyncRoute::new("binance", true, ()).with_binding_id("binance.principal.main"),
+            ExecutionAsyncRoute::new("okx", true, ()).with_binding_id("okx.principal.main"),
+        ]);
+
+        set_route_readiness(
+            &process.route_readiness,
+            1,
+            "resync_required",
+            Some("gap".into()),
+        );
+
+        assert_eq!(
+            resync_targets(&process.route_readiness),
+            vec![(1, Some("okx.principal.main".into()))]
+        );
     }
 
     struct ReconnectingStream {
@@ -1676,6 +2019,7 @@ mod tests {
                         reason: "received after reconnect".into(),
                     };
                     Ok(Some(ExternalEventEnvelope {
+                        participant: self.state.identity.participant.clone(),
                         binding_id: self.state.identity.binding_id.clone(),
                         channel_id: "execution.test.reconnecting-stream.orders".into(),
                         channel_epoch: self.reconnects.load(Ordering::SeqCst) as u64 + 1,
@@ -1722,6 +2066,7 @@ mod tests {
     struct AsyncReconnectingStream {
         calls: usize,
         reconnects: Arc<AtomicUsize>,
+        resync_before_reconnect: bool,
     }
 
     impl AsyncOrderEventSource for AsyncReconnectingStream {
@@ -1752,6 +2097,9 @@ mod tests {
         ) -> Result<ExternalEventEnvelope<ExternalExecutionEvent>, IntegrationError> {
             self.calls += 1;
             match self.calls {
+                1 if self.resync_before_reconnect => Err(IntegrationError::Backpressure(
+                    "simulated async stream overflow".into(),
+                )),
                 1 => Err(IntegrationError::Transport(
                     "simulated async stream disconnect".into(),
                 )),
@@ -1778,6 +2126,11 @@ mod tests {
                         reason: "received by async runtime".into(),
                     };
                     Ok(ExternalEventEnvelope {
+                        participant: kairos_integration::application::ParticipantRef::new(
+                            kairos_integration::application::ParticipantKind::Exchange,
+                            "test",
+                        )
+                        .unwrap(),
                         binding_id: "execution.test.async-stream".into(),
                         channel_id: "execution.test.async-stream.orders".into(),
                         channel_epoch: 2,
@@ -1803,6 +2156,7 @@ mod tests {
                 .with_async_execution_stream(Some(AsyncReconnectingStream {
                     calls: 0,
                     reconnects: Arc::clone(&reconnects),
+                    resync_before_reconnect: false,
                 }));
         let (sender, receiver) = mpsc::sync_channel(1);
         let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -1820,5 +2174,187 @@ mod tests {
         handle.await.unwrap();
         assert_eq!(event.event_id, "async-recovered-event");
         assert_eq!(reconnects.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resync_error_waits_for_reconciliation_barrier_before_reconnect() {
+        let reconnects = Arc::new(AtomicUsize::new(0));
+        let application = ExecutionApplication::with_dependencies("execution", None, None)
+            .expect("fixture application");
+        let mut process = ExecutionProcess::new(
+            application,
+            PathBuf::from("/tmp/execution-resync-test.sock"),
+        )
+        .with_async_execution_stream(Some(AsyncReconnectingStream {
+            calls: 0,
+            reconnects: Arc::clone(&reconnects),
+            resync_before_reconnect: true,
+        }));
+        let readiness = Arc::clone(&process.route_readiness);
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+        let mut handles =
+            process.start_async_stream_consumers(sender, shutdown_rx, Arc::clone(&process.metrics));
+        let handle = handles.pop().expect("async stream task");
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !super::resync_required(&readiness) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("stream must request reconciliation");
+        assert_eq!(reconnects.load(Ordering::SeqCst), 0);
+
+        super::release_recovery_barrier(&readiness);
+        let event = tokio::task::spawn_blocking(move || {
+            receiver.recv_timeout(std::time::Duration::from_secs(2))
+        })
+        .await
+        .unwrap()
+        .expect("event after reconciliation and reconnect");
+        shutdown.send(true).unwrap();
+        handle.await.unwrap();
+        assert_eq!(event.event_id, "async-recovered-event");
+        assert_eq!(reconnects.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resync_barrier_isolates_the_failed_route() {
+        let failed_route_reconnects = Arc::new(AtomicUsize::new(0));
+        let healthy_route_reconnects = Arc::new(AtomicUsize::new(0));
+        let application = ExecutionApplication::with_dependencies("execution", None, None)
+            .expect("fixture application");
+        let mut process = ExecutionProcess::new(
+            application,
+            PathBuf::from("/tmp/execution-route-isolation-test.sock"),
+        )
+        .with_async_execution_routes(vec![
+            ExecutionAsyncRoute::new(
+                "binance",
+                true,
+                AsyncReconnectingStream {
+                    calls: 0,
+                    reconnects: Arc::clone(&failed_route_reconnects),
+                    resync_before_reconnect: true,
+                },
+            )
+            .with_binding_id("binance.principal.main"),
+            ExecutionAsyncRoute::new(
+                "okx",
+                true,
+                AsyncReconnectingStream {
+                    calls: 0,
+                    reconnects: Arc::clone(&healthy_route_reconnects),
+                    resync_before_reconnect: false,
+                },
+            )
+            .with_binding_id("okx.principal.main"),
+        ]);
+        let readiness = Arc::clone(&process.route_readiness);
+        let (sender, receiver) = mpsc::sync_channel(2);
+        let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+        let handles =
+            process.start_async_stream_consumers(sender, shutdown_rx, Arc::clone(&process.metrics));
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while super::route_status(&readiness, 0) != Some("resync_required") {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("failed route must wait at its reconciliation barrier");
+
+        let event = tokio::task::spawn_blocking(move || {
+            receiver.recv_timeout(std::time::Duration::from_secs(2))
+        })
+        .await
+        .unwrap()
+        .expect("healthy route must keep delivering");
+        assert_eq!(event.event_id, "async-recovered-event");
+        assert_eq!(failed_route_reconnects.load(Ordering::SeqCst), 0);
+        assert_eq!(healthy_route_reconnects.load(Ordering::SeqCst), 1);
+        assert_eq!(super::route_status(&readiness, 0), Some("resync_required"));
+        assert_eq!(super::route_status(&readiness, 1), Some("ready"));
+        assert_eq!(
+            resync_targets(&readiness),
+            vec![(0, Some("binance.principal.main".into()))]
+        );
+
+        shutdown.send(true).unwrap();
+        for handle in handles {
+            handle.await.unwrap();
+        }
+    }
+
+    struct UnreadyAsyncStream;
+
+    impl AsyncOrderEventSource for UnreadyAsyncStream {
+        async fn connect_channel(&mut self) -> Result<(), IntegrationError> {
+            Err(IntegrationError::Authentication(
+                "fixture login rejected".into(),
+            ))
+        }
+
+        async fn disconnect_channel(&mut self) -> Result<(), IntegrationError> {
+            Ok(())
+        }
+
+        fn channel_health(&self) -> ConnectionHealth {
+            ConnectionHealth {
+                lifecycle: ConnectionLifecycle::Degraded,
+                healthy: false,
+                authenticated: false,
+                last_error: Some("fixture login rejected".into()),
+            }
+        }
+
+        async fn next_order_event(
+            &mut self,
+        ) -> Result<ExternalEventEnvelope<ExternalExecutionEvent>, IntegrationError> {
+            std::future::pending().await
+        }
+    }
+
+    #[tokio::test]
+    async fn required_async_stream_must_authenticate_before_process_readiness() {
+        let application = ExecutionApplication::with_dependencies("execution", None, None)
+            .expect("fixture application");
+        let mut process = ExecutionProcess::new(
+            application,
+            PathBuf::from("/tmp/execution-unready-test.sock"),
+        )
+        .with_async_execution_stream(Some(UnreadyAsyncStream));
+
+        let error = process
+            .connect_async_execution_streams()
+            .await
+            .expect_err("failed provider authentication must block readiness");
+        assert!(matches!(error, IntegrationError::Authentication(_)));
+    }
+
+    #[tokio::test]
+    async fn optional_async_stream_failure_degrades_without_blocking_readiness() {
+        let application = ExecutionApplication::with_dependencies("execution", None, None)
+            .expect("fixture application");
+        let mut process = ExecutionProcess::new(
+            application,
+            PathBuf::from("/tmp/execution-degraded-test.sock"),
+        )
+        .with_async_execution_routes(vec![ExecutionAsyncRoute::new(
+            "optional-route",
+            false,
+            UnreadyAsyncStream,
+        )]);
+
+        process
+            .connect_async_execution_streams()
+            .await
+            .expect("optional route must not prevent process startup");
+        let (status, routes) = process_readiness(&process.route_readiness);
+        assert_eq!(status, "degraded");
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].route_id, "optional-route");
+        assert_eq!(routes[0].status, "degraded");
     }
 }

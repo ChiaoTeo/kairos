@@ -20,6 +20,7 @@ members = [
 ]
 
 [workspace.dependencies]
+async-trait = "0.1"
 criterion = "0.8"
 opentelemetry = { version = "0.31", default-features = false, features = ["trace", "metrics"] }
 opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "metrics", "reqwest-blocking-client"] }

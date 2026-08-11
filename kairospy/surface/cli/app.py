@@ -196,9 +196,12 @@ def execute_argv(argv: Sequence[str], stdout: TextIO) -> int:
     effective_format = OutputFormat(_cli_format(argv))
     render_token = set_command_output(effective_format)
     os.environ["KAIROS_CLI_FORMAT"] = effective_format.value
+    command_result: object = None
     try:
         with redirect_stdout(stdout), redirect_stderr(stdout):
-            command.main(args=list(argv), prog_name="kairospy", standalone_mode=False)
+            command_result = command.main(
+                args=list(argv), prog_name="kairospy", standalone_mode=False
+            )
     except click.ClickException as error:
         error.show(file=stdout)
         return error.exit_code
@@ -213,7 +216,7 @@ def execute_argv(argv: Sequence[str], stdout: TextIO) -> int:
             os.environ.pop("KAIROS_CLI_FORMAT", None)
         else:
             os.environ["KAIROS_CLI_FORMAT"] = previous_format
-    return 0
+    return command_result if isinstance(command_result, int) else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

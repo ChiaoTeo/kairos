@@ -42,6 +42,7 @@ flatc -I "$schema_root" --python -o "$python_stage" \
   "$schema_root/market/v1/funding_rate_message.fbs" \
   "$schema_root/market/v1/open_interest_message.fbs" \
   "$schema_root/market/v1/instrument_status_message.fbs" \
+  "$schema_root/market/v1/orderbook_message.fbs" \
   "$schema_root/account/v1/types.fbs" \
   "$schema_root/execution/v1/types.fbs" \
   "$schema_root/execution/v1/order_intent.fbs" \
@@ -94,6 +95,7 @@ for schema in \
   "$schema_root/market/v1/funding_rate_message.fbs" \
   "$schema_root/market/v1/open_interest_message.fbs" \
   "$schema_root/market/v1/instrument_status_message.fbs" \
+  "$schema_root/market/v1/orderbook_message.fbs" \
   "$schema_root/account/v1/types.fbs" \
   "$schema_root/execution/v1/types.fbs" \
   "$schema_root/execution/v1/order_intent.fbs" \

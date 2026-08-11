@@ -115,6 +115,18 @@ impl BinanceOrderQueryConnection {
         })
     }
 
+    pub(crate) fn futures_from_client(client: BinanceFuturesAccountClient) -> Self {
+        Self {
+            client: Client::Futures(client),
+        }
+    }
+
+    pub(crate) fn options_from_client(client: BinanceOptionsAccountClient) -> Self {
+        Self {
+            client: Client::Options(client),
+        }
+    }
+
     pub(crate) async fn open_orders_async(
         &mut self,
         query: &ExternalOrderQuery,
@@ -124,7 +136,14 @@ impl BinanceOrderQueryConnection {
                 .query_open_orders_async(params(query))
                 .await
                 .map_err(map_spot_error)?,
-            _ => return Err(IntegrationError::UnsupportedOperation),
+            Client::Futures(client) => client
+                .query_open_orders_async(params(query))
+                .await
+                .map_err(map_spot_error)?,
+            Client::Options(client) => client
+                .request_async("/eapi/v1/openOrders", params(query), OptionsMethod::Get)
+                .await
+                .map_err(map_spot_error)?,
         };
         normalize_many(&payload).map_err(IntegrationError::InvalidPayload)
     }
@@ -138,7 +157,14 @@ impl BinanceOrderQueryConnection {
                 .query_history_async(params(query))
                 .await
                 .map_err(map_spot_error)?,
-            _ => return Err(IntegrationError::UnsupportedOperation),
+            Client::Futures(client) => client
+                .query_history_async(params(query))
+                .await
+                .map_err(map_spot_error)?,
+            Client::Options(client) => client
+                .request_async("/eapi/v1/historyOrders", params(query), OptionsMethod::Get)
+                .await
+                .map_err(map_spot_error)?,
         };
         normalize_many(&payload).map_err(IntegrationError::InvalidPayload)
     }
@@ -159,7 +185,14 @@ impl BinanceOrderQueryConnection {
                 .query_detail_async(values)
                 .await
                 .map_err(map_spot_error)?,
-            _ => return Err(IntegrationError::UnsupportedOperation),
+            Client::Futures(client) => client
+                .query_detail_async(values)
+                .await
+                .map_err(map_spot_error)?,
+            Client::Options(client) => client
+                .request_async("/eapi/v1/order", values, OptionsMethod::Get)
+                .await
+                .map_err(map_spot_error)?,
         };
         if value.is_null() {
             Ok(None)
@@ -201,7 +234,7 @@ impl OrderQueryConnection for BinanceOrderQueryConnection {
     }
 }
 
-fn params(query: &ExternalOrderQuery) -> BTreeMap<String, String> {
+pub(super) fn params(query: &ExternalOrderQuery) -> BTreeMap<String, String> {
     let mut result = BTreeMap::new();
     if let Some(symbol) = &query.symbol {
         result.insert("symbol".into(), symbol.to_ascii_uppercase());
@@ -215,14 +248,14 @@ fn params(query: &ExternalOrderQuery) -> BTreeMap<String, String> {
     result
 }
 
-fn normalize_many(value: &Value) -> Result<Vec<ExternalOrder>, String> {
+pub(super) fn normalize_many(value: &Value) -> Result<Vec<ExternalOrder>, String> {
     let rows = value
         .as_array()
         .ok_or_else(|| "Binance order query returned a non-array payload".to_string())?;
     rows.iter().map(normalize_one).collect()
 }
 
-fn normalize_one(value: &Value) -> Result<ExternalOrder, String> {
+pub(super) fn normalize_one(value: &Value) -> Result<ExternalOrder, String> {
     let row = value
         .as_object()
         .ok_or_else(|| "Binance order row is not an object".to_string())?;

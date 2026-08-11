@@ -937,9 +937,7 @@ pub enum OrderStatus {
     Unknown,
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize,
-)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceStatus {
     Active,
@@ -948,6 +946,15 @@ pub enum ReferenceStatus {
     Inactive,
     #[default]
     Unknown,
+}
+
+impl<'de> Deserialize<'de> for ReferenceStatus {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        String::deserialize(deserializer).map(Self::from)
+    }
 }
 
 impl ReferenceStatus {
@@ -968,7 +975,7 @@ impl From<&str> for ReferenceStatus {
             "active" => Self::Active,
             "trading" => Self::Trading,
             "delisted" => Self::Delisted,
-            "inactive" => Self::Inactive,
+            "inactive" | "break" => Self::Inactive,
             _ => Self::Unknown,
         }
     }
@@ -1027,5 +1034,22 @@ mod more_tests {
         assert_eq!(quantity.mantissa(), price.mantissa());
         assert_eq!(price_delta.to_string(), "0.00");
         assert!(Quantity::positive(0, 0).is_err());
+    }
+
+    #[test]
+    fn reference_status_reads_legacy_provider_break_as_inactive() {
+        assert_eq!(ReferenceStatus::from("break"), ReferenceStatus::Inactive);
+        assert_eq!(
+            serde_json::from_str::<ReferenceStatus>("\"break\"").unwrap(),
+            ReferenceStatus::Inactive
+        );
+        assert_eq!(
+            serde_json::to_string(&ReferenceStatus::Inactive).unwrap(),
+            "\"inactive\""
+        );
+        assert_eq!(
+            serde_json::from_str::<ReferenceStatus>("\"halted\"").unwrap(),
+            ReferenceStatus::Unknown
+        );
     }
 }

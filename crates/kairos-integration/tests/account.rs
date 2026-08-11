@@ -156,7 +156,13 @@ impl AccountEventStreamConnection for ReconnectingAccountStream {
                     fill_id: kairos_domain_types::FillId::new("account-recovered-fill").unwrap(),
                     order_id: kairos_domain_types::OrderId::new("local-order-1").unwrap(),
                     segment_key: kairos_domain_types::SegmentKey::new("spot").unwrap(),
-                    instrument_id: kairos_domain_types::InstrumentId::new("BTCUSDT").unwrap(),
+                    provider_instrument:
+                        kairos_integration::application::ProviderInstrumentRef::new(
+                            ParticipantRef::new(ParticipantKind::Exchange, "fixture").unwrap(),
+                            None,
+                            "BTCUSDT",
+                        )
+                        .unwrap(),
                     side: "buy".into(),
                     quantity: ExternalDecimal {
                         mantissa: 1,
@@ -244,20 +250,29 @@ fn integration_exposes_binance_spot_as_a_provider_native_connection() {
 }
 
 #[test]
-fn integration_composes_binance_equity_order_entry_without_network_access() {
-    binance::blocking::equity_order_entry("equity-key", "equity-secret", "http://127.0.0.1:1")
-        .unwrap();
-}
-
-#[test]
-fn integration_composes_binance_futures_order_entry_without_network_access() {
-    binance::blocking::futures_order_entry(
-        ConnectionDomain::UsdMFutures,
-        "binance-key",
-        "binance-secret",
-        "http://127.0.0.1:1",
-    )
+fn integration_projects_binance_usdm_futures_async_entry_without_network_access() {
+    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+        environment: "testnet".into(),
+        rest_base_url: "http://127.0.0.1:1".into(),
+        quota: BinanceQuotaAllocation {
+            request_weight_per_minute: 1_000,
+            cancel_reserve_weight: 50,
+        },
+        shared_quota: None,
+    })
     .unwrap();
+    let principal = provider
+        .principal_connection(BinancePrincipalConfig {
+            binding_id: "execution.binance.usdm.fixture".into(),
+            principal_id: Some("fixture".into()),
+            api_key: "api-key".into(),
+            secret: "secret".into(),
+            principal_quota: None,
+        })
+        .unwrap();
+    let futures = principal.usd_m_futures_connection().unwrap();
+    fn binance_async_capability<T: AsyncOrderEntryConnection>(_: &T) {}
+    binance_async_capability(&futures.order_entry());
 
     fn async_capability<T: AsyncOrderEntryConnection>(_: &T) {}
     fn blocking_capability<T: OrderEntryConnection>(_: &T) {}
@@ -274,17 +289,41 @@ fn integration_composes_binance_futures_order_entry_without_network_access() {
 
 #[test]
 fn integration_composes_remote_order_queries_for_native_private_products() {
-    for product in [ConnectionDomain::UsdMFutures, ConnectionDomain::Options] {
+    fn async_capability<T: AsyncOrderQueryConnection>(_: &T) {}
+    fn blocking_capability<T: OrderQueryConnection>(_: &T) {}
+    let provider = BinanceConnection::connect(BinanceConnectionConfig {
+        environment: "test".into(),
+        rest_base_url: "http://127.0.0.1:1".into(),
+        quota: BinanceQuotaAllocation {
+            request_weight_per_minute: 1_000,
+            cancel_reserve_weight: 50,
+        },
+        shared_quota: None,
+    })
+    .unwrap();
+    let binance_principal = provider
+        .principal_connection(BinancePrincipalConfig {
+            binding_id: "execution.binance.options.test".into(),
+            principal_id: Some("test".into()),
+            api_key: "binance-key".into(),
+            secret: "binance-secret".into(),
+            principal_quota: None,
+        })
+        .unwrap();
+    let options_query = binance_principal
+        .options_connection()
+        .unwrap()
+        .order_query();
+    async_capability(&options_query);
+    assert!(matches!(
         binance::blocking::order_query(
-            product,
+            ConnectionDomain::Options,
             "binance-key",
             "binance-secret",
             "http://127.0.0.1:1",
-        )
-        .unwrap();
-    }
-    fn async_capability<T: AsyncOrderQueryConnection>(_: &T) {}
-    fn blocking_capability<T: OrderQueryConnection>(_: &T) {}
+        ),
+        Err(IntegrationError::UnsupportedOperation)
+    ));
     let principal = okx_principal();
     let query = principal.trading_order_query(OkxInstrumentType::Spot);
     let blocking = principal.blocking_trading_order_query(OkxInstrumentType::Spot);
@@ -293,28 +332,24 @@ fn integration_composes_remote_order_queries_for_native_private_products() {
 }
 
 #[test]
-fn integration_composes_ibkr_equity_account_order_and_stream_without_network_access() {
+fn integration_composes_ibkr_equity_account_and_async_execution_without_network_access() {
     let config = ibkr::IbkrConnectionConfig {
         host: "127.0.0.1".into(),
         port: 4002,
         client_id: 0,
     };
     ibkr::blocking::account(&config).unwrap();
-    ibkr::blocking::order_entry(&config).unwrap();
     ibkr::blocking::account_stream(&config, "DU123", "equity").unwrap();
-}
-
-#[test]
-fn integration_composes_ibkr_execution_stream_without_network_access() {
-    let config = ibkr::IbkrConnectionConfig {
-        host: "127.0.0.1".into(),
-        port: 4002,
-        client_id: 0,
-    };
-    let connection =
-        ibkr::blocking::execution_stream(&config, "DU123", Some("AAPL".into())).unwrap();
+    let connection = ibkr::IbkrConnection::connect(config, "ibkr.principal.test", "DU123").unwrap();
+    fn async_entry<T: AsyncOrderEntryConnection>(_: &T) {}
+    fn async_query<T: AsyncOrderQueryConnection>(_: &T) {}
+    fn async_events<T: kairos_integration::application::AsyncOrderEventSource>(_: &T) {}
+    async_entry(&connection.order_entry());
+    async_query(&connection.order_query());
+    let events = connection.order_events(Some("AAPL".into()));
+    async_events(&events);
     assert_eq!(
-        connection.channel_health().lifecycle,
+        kairos_integration::application::AsyncOrderEventSource::channel_health(&events).lifecycle,
         kairos_integration::application::ConnectionLifecycle::Created
     );
 }

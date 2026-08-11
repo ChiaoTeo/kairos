@@ -1813,8 +1813,97 @@ fn now_unix_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::DependencyCircuit;
+    use super::{DependencyCircuit, DependencyProjection, SocketExecutionPreflight};
+    use kairos_protocol::InstanceIdentity;
+    use kairos_reference_contract::model::Market;
+    use kairos_reference_contract::transport::{
+        ReferenceMmapSnapshotConfig, ReferenceMmapSnapshotWriter,
+    };
+    use kairos_reference_contract::ReferenceCatalog;
+    use std::collections::BTreeMap;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn reference_snapshot_set_builds_execution_projection_and_watermark() {
+        let root = tempfile::tempdir().unwrap();
+        let path = |name: &str| root.path().join(name);
+        let mut writer = ReferenceMmapSnapshotWriter::create(ReferenceMmapSnapshotConfig {
+            catalog_path: path("catalog.snapshot"),
+            entities_path: path("entities.snapshot"),
+            assets_path: path("assets.snapshot"),
+            instruments_path: path("instruments.snapshot"),
+            listings_path: path("listings.snapshot"),
+            markets_path: path("markets.snapshot"),
+            financial_products_path: path("financial-products.snapshot"),
+            execution_accesses_path: path("execution-accesses.snapshot"),
+            slot_size: 64 * 1024,
+            actor_id: "reference".into(),
+            event_stream_id: "reference.lifecycle".into(),
+            identity: InstanceIdentity::new("workspace", "reference", "global"),
+        })
+        .unwrap();
+        let market = Market {
+            market_id: "market:binance:spot:BTCUSDT".into(),
+            instrument_id: "instrument:spot:BTC".into(),
+            listing_id: "listing:binance:spot:BTC:USDT".into(),
+            exchange_id: "exchange:binance".into(),
+            market_type: "spot".into(),
+            source_symbol: "BTCUSDT".into(),
+            status: "active".into(),
+            price_tick: Some("0.01".into()),
+            quantity_tick: Some("0.001".into()),
+            minimum_quantity: Some("0.001".into()),
+            minimum_notional: Some("10".into()),
+            ..Market::default()
+        };
+        let mut catalog = ReferenceCatalog {
+            generation: 7,
+            event_sequence: 11,
+            ..ReferenceCatalog::default()
+        };
+        catalog.markets.insert(market.market_id.clone(), market);
+        writer.publish(&catalog).unwrap();
+
+        let projection = Arc::new(RwLock::new(DependencyProjection::default()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let workers = SocketExecutionPreflight::start_projection_workers(
+            BTreeMap::new(),
+            None,
+            Some(root.path().to_path_buf()),
+            None,
+            Arc::clone(&projection),
+            Arc::clone(&stop),
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if projection.read().unwrap().reference.is_some() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Execution did not project the Reference snapshot"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        stop.store(true, Ordering::Release);
+        for worker in workers {
+            worker.join().unwrap();
+        }
+
+        let state = projection.read().unwrap();
+        let reference = state.reference.as_ref().unwrap();
+        assert_eq!(reference.health.generation, 7);
+        assert_eq!(reference.health.event_sequence, 11);
+        assert_eq!(reference.markets.len(), 1);
+        assert_eq!(
+            reference.markets[0].market_id,
+            "market:binance:spot:BTCUSDT"
+        );
+    }
 
     #[test]
     fn dependency_circuit_opens_after_repeated_transport_failures() {

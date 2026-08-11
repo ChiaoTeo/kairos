@@ -7,7 +7,7 @@ use kairos_execution::composition::{
 };
 use kairos_execution::credentials::load_workspace_credential;
 use kairos_execution::{ExecutionProcess, SqlxExecutionAudit};
-use kairos_workspace::workspace::Workspace;
+use kairos_workspace::workspace::{Workspace, WorkspaceProcessLock};
 use serde::Deserialize;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
@@ -32,6 +32,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     instance.prepare()?;
     let _process_lock = instance.process_lock("execution")?;
     let route_options = args.connection_options_list(&workspace)?;
+    let _provider_process_locks =
+        acquire_exclusive_provider_process_locks(&workspace, &route_options)?;
     let state = instance.state(&["execution", "execution-state.sqlite"])?;
     let audit = instance.state(&["execution", "execution-audit.sqlite"])?;
     let execution_snapshot = instance.service_snapshot("execution")?;
@@ -54,7 +56,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let async_execution_streams = connections.async_execution_streams;
     let application = ExecutionApplication::with_dependencies_and_query_and_stream(
         "execution",
-        Some(connections.order_entry),
+        connections.order_entry,
         connections.order_query,
         connections.execution_stream,
         Some(Box::new(SqlxExecutionStore::new(state)?)),
@@ -79,7 +81,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         ExecutionProcess::with_audit(application, socket, SqlxExecutionAudit::new(audit)?)
             .with_async_order_entry(async_order_entry)
             .with_async_order_query(async_order_query)
-            .with_async_execution_streams(async_execution_streams);
+            .with_async_execution_routes(async_execution_streams);
     let process = if simulated {
         process.with_simulator(ExecutionSimulator::new(SimulationConfig::default())?)
     } else {
@@ -100,6 +102,38 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .await
 }
 
+fn acquire_exclusive_provider_process_locks(
+    workspace: &Workspace,
+    routes: &[ExecutionConnectionOptions],
+) -> Result<Vec<WorkspaceProcessLock>, Box<dyn std::error::Error>> {
+    let identities = routes
+        .iter()
+        .filter(|route| route.provider.trim().eq_ignore_ascii_case("ibkr"))
+        .map(|route| {
+            format!(
+                "ibkr|{}|{}|client-id:{}",
+                route.host.trim().to_ascii_lowercase(),
+                route.port,
+                route.client_id
+            )
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    identities
+        .into_iter()
+        .map(|identity| {
+            workspace
+                .exclusive_process_lock("ibkr-client", &identity)
+                .map_err(|error| {
+                    std::io::Error::new(
+                        error.kind(),
+                        format!("IBKR client identity is already allocated ({identity}): {error}"),
+                    )
+                    .into()
+                })
+        })
+        .collect()
+}
+
 #[derive(Debug, Parser)]
 #[command(name = "kairos-execution", about = "Run the Execution actor process")]
 struct Args {
@@ -113,6 +147,8 @@ struct Args {
     instance_id: String,
     #[arg(long, default_value = "default")]
     route_id: String,
+    #[arg(long, default_value_t = true)]
+    route_required: bool,
     /// Non-secret JSON array of execution routes. Credentials are referenced
     /// by `credential_id` and loaded inside this process.
     #[arg(long)]
@@ -133,10 +169,14 @@ struct Args {
     credential_id: Option<String>,
     #[arg(long, env = "OKX_PASSPHRASE", default_value = "")]
     passphrase: String,
-    #[arg(long, default_value = "https://api.binance.com")]
+    /// REST endpoint override; defaults from provider and product.
+    #[arg(long, default_value = "")]
     base_url: String,
-    #[arg(long, default_value = "wss://ws-api.binance.com:443/ws-api/v3")]
+    /// Private WebSocket endpoint override; defaults from provider and product.
+    #[arg(long, default_value = "")]
     websocket_url: String,
+    #[arg(long)]
+    isolated_symbol: Option<String>,
     #[arg(long, default_value_t = 1_000)]
     request_weight_per_minute: u32,
     #[arg(long, default_value_t = 50)]
@@ -165,6 +205,8 @@ struct Args {
 #[serde(deny_unknown_fields)]
 struct ExecutionRouteConfig {
     route_id: String,
+    #[serde(default = "default_true")]
+    required: bool,
     #[serde(default)]
     account_id: Option<String>,
     #[serde(default)]
@@ -177,6 +219,8 @@ struct ExecutionRouteConfig {
     base_url: Option<String>,
     #[serde(default)]
     websocket_url: Option<String>,
+    #[serde(default)]
+    isolated_symbol: Option<String>,
     #[serde(default)]
     request_weight_per_minute: Option<u32>,
     #[serde(default)]
@@ -197,6 +241,10 @@ struct ExecutionRouteConfig {
     port: Option<u16>,
     #[serde(default)]
     client_id: Option<i32>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Args {
@@ -230,9 +278,11 @@ impl Args {
         }
         let stored =
             load_workspace_credential(workspace, &route.provider, route.credential_id.as_deref())?;
-        let (default_base_url, default_websocket_url) = provider_endpoints(&route.provider);
+        let (default_base_url, default_websocket_url) =
+            provider_endpoints(&route.provider, &route.product);
         Ok(ExecutionConnectionOptions {
             route_id: route.route_id.clone(),
+            required: route.required,
             account_id: route.account_id.unwrap_or_else(|| self.account_id.clone()),
             segment_key: route
                 .segment_key
@@ -258,6 +308,9 @@ impl Args {
             websocket_url: route
                 .websocket_url
                 .unwrap_or_else(|| default_websocket_url.into()),
+            isolated_symbol: route
+                .isolated_symbol
+                .or_else(|| self.isolated_symbol.clone()),
             request_weight_per_minute: route
                 .request_weight_per_minute
                 .unwrap_or(self.request_weight_per_minute),
@@ -299,8 +352,11 @@ impl Args {
                 load_workspace_credential(workspace, &self.provider, Some(credential_id))
             },
         )?;
+        let (default_base_url, default_websocket_url) =
+            provider_endpoints(&self.provider, &self.product);
         Ok(ExecutionConnectionOptions {
             route_id: self.route_id.clone(),
+            required: self.route_required,
             account_id: self.account_id.clone(),
             segment_key: self.segment_key.clone(),
             provider: self.provider.clone(),
@@ -332,8 +388,17 @@ impl Args {
                 self.passphrase.clone()
             }
             .into(),
-            base_url: self.base_url.clone(),
-            websocket_url: self.websocket_url.clone(),
+            base_url: if self.base_url.trim().is_empty() {
+                default_base_url.into()
+            } else {
+                self.base_url.clone()
+            },
+            websocket_url: if self.websocket_url.trim().is_empty() {
+                default_websocket_url.into()
+            } else {
+                self.websocket_url.clone()
+            },
+            isolated_symbol: self.isolated_symbol.clone(),
             request_weight_per_minute: self.request_weight_per_minute,
             cancel_reserve_weight: self.cancel_reserve_weight,
             order_event_queue_capacity: self.order_event_queue_capacity,
@@ -354,9 +419,25 @@ impl Args {
     }
 }
 
-fn provider_endpoints(provider: &str) -> (&'static str, &'static str) {
-    match provider.trim().to_ascii_lowercase().as_str() {
-        "okx" | "okex" => ("https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/private"),
+fn provider_endpoints(provider: &str, product: &str) -> (&'static str, &'static str) {
+    match (
+        provider.trim().to_ascii_lowercase().as_str(),
+        product.trim().to_ascii_lowercase().as_str(),
+    ) {
+        ("binance", "usd-m-futures" | "swap") => {
+            ("https://fapi.binance.com", "wss://fstream.binance.com")
+        }
+        ("binance", "coin-m-futures" | "futures") => {
+            ("https://dapi.binance.com", "wss://dstream.binance.com")
+        }
+        ("binance", "options" | "option") => (
+            "https://eapi.binance.com",
+            "wss://nbstream.binance.com/eoptions/private/stream",
+        ),
+        ("binance", "cross-margin" | "margin" | "isolated-margin") => {
+            ("https://api.binance.com", "wss://stream.binance.com:9443")
+        }
+        ("okx" | "okex", _) => ("https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/private"),
         _ => (
             "https://api.binance.com",
             "wss://ws-api.binance.com:443/ws-api/v3",
@@ -366,7 +447,12 @@ fn provider_endpoints(provider: &str) -> (&'static str, &'static str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{provider_endpoints, ExecutionRouteConfig};
+    use super::{
+        acquire_exclusive_provider_process_locks, provider_endpoints, ExecutionRouteConfig,
+    };
+    use kairos_execution::composition::ExecutionConnectionOptions;
+    use kairos_workspace::workspace::Workspace;
+    use secrecy::SecretString;
 
     #[test]
     fn route_json_accepts_credential_references_and_rejects_inline_secrets() {
@@ -382,9 +468,54 @@ mod tests {
     }
 
     #[test]
+    fn ibkr_client_identity_is_exclusive_before_provider_composition() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(root.path().join("workspace"), "test").unwrap();
+        let route = ExecutionConnectionOptions {
+            route_id: "ibkr-main".into(),
+            required: true,
+            account_id: "DU123".into(),
+            segment_key: "equity".into(),
+            provider: "ibkr".into(),
+            product: "equity".into(),
+            api_key: SecretString::from(String::new()),
+            secret: SecretString::from(String::new()),
+            passphrase: SecretString::from(String::new()),
+            base_url: String::new(),
+            websocket_url: String::new(),
+            isolated_symbol: None,
+            request_weight_per_minute: 1,
+            cancel_reserve_weight: 0,
+            order_event_queue_capacity: 16,
+            shared_quota_ledger_path: None,
+            egress_scope_id: "unused".into(),
+            principal_scope_id: "ibkr-client-7".into(),
+            orders_per_10_seconds: 1,
+            orders_per_day: 1,
+            host: "127.0.0.1".into(),
+            port: 4002,
+            client_id: 7,
+        };
+        let first = acquire_exclusive_provider_process_locks(&workspace, &[route.clone()]).unwrap();
+        let error = acquire_exclusive_provider_process_locks(&workspace, &[route])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("already allocated"));
+        drop(first);
+    }
+
+    #[test]
     fn participant_defaults_select_native_private_endpoints() {
-        assert_eq!(provider_endpoints("okx").0, "https://www.okx.com");
-        assert!(provider_endpoints("okx").1.contains("/ws/v5/private"));
-        assert_eq!(provider_endpoints("binance").0, "https://api.binance.com");
+        assert_eq!(provider_endpoints("okx", "spot").0, "https://www.okx.com");
+        assert!(provider_endpoints("okx", "spot")
+            .1
+            .contains("/ws/v5/private"));
+        assert_eq!(
+            provider_endpoints("binance", "options"),
+            (
+                "https://eapi.binance.com",
+                "wss://nbstream.binance.com/eoptions/private/stream"
+            )
+        );
     }
 }

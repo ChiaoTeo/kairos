@@ -192,6 +192,7 @@ impl OrderEntryConnection for FailingOrderEntry {
 fn application(path: &std::path::Path) -> ExecutionApplication {
     let connection = compose_order_entry(&ExecutionConnectionOptions {
         route_id: "test".into(),
+        required: true,
         account_id: "main".into(),
         segment_key: "spot".into(),
         provider: "simulated".into(),
@@ -201,6 +202,7 @@ fn application(path: &std::path::Path) -> ExecutionApplication {
         passphrase: String::new().into(),
         base_url: "https://api.binance.com".into(),
         websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
+        isolated_symbol: None,
         request_weight_per_minute: 1_000,
         cancel_reserve_weight: 50,
         order_event_queue_capacity: 1_024,
@@ -233,6 +235,7 @@ fn queued_preflight_keeps_cross_process_commands_off_the_state_caller() {
         Some(
             compose_order_entry(&ExecutionConnectionOptions {
                 route_id: "test".into(),
+                required: true,
                 account_id: "main".into(),
                 segment_key: "spot".into(),
                 provider: "simulated".into(),
@@ -242,6 +245,7 @@ fn queued_preflight_keeps_cross_process_commands_off_the_state_caller() {
                 passphrase: String::new().into(),
                 base_url: "https://api.binance.com".into(),
                 websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
+                isolated_symbol: None,
                 request_weight_per_minute: 1_000,
                 cancel_reserve_weight: 50,
                 order_event_queue_capacity: 1_024,
@@ -442,6 +446,7 @@ impl OrderEventSource for OneExecutionEvent {
         &mut self,
     ) -> Result<Option<ExternalEventEnvelope<ExternalExecutionEvent>>, IntegrationError> {
         Ok(self.event.take().map(|event| ExternalEventEnvelope {
+            participant: self.state.identity.participant.clone(),
             binding_id: self.state.identity.binding_id.clone(),
             channel_id: "execution.fixture.stream.orders".into(),
             channel_epoch: 1,
@@ -531,6 +536,7 @@ fn execution_stream_consumption_reconciles_a_remote_fill() {
     let state = directory.path().join("execution.json");
     let connection = compose_order_entry(&ExecutionConnectionOptions {
         route_id: "test".into(),
+        required: true,
         account_id: "main".into(),
         segment_key: "spot".into(),
         provider: "simulated".into(),
@@ -540,6 +546,7 @@ fn execution_stream_consumption_reconciles_a_remote_fill() {
         passphrase: String::new().into(),
         base_url: "https://api.binance.com".into(),
         websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
+        isolated_symbol: None,
         request_weight_per_minute: 1_000,
         cancel_reserve_weight: 50,
         order_event_queue_capacity: 1_024,
@@ -642,6 +649,7 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
     };
     let connection = compose_order_entry(&ExecutionConnectionOptions {
         route_id: "test".into(),
+        required: true,
         account_id: "main".into(),
         segment_key: "spot".into(),
         provider: "simulated".into(),
@@ -651,6 +659,7 @@ fn remote_query_reconciliation_recovers_a_missed_cumulative_fill() {
         passphrase: String::new().into(),
         base_url: "https://api.binance.com".into(),
         websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
+        isolated_symbol: None,
         request_weight_per_minute: 1_000,
         cancel_reserve_weight: 50,
         order_event_queue_capacity: 1_024,
@@ -961,6 +970,7 @@ fn sqlite_execution_store_reloads_the_latest_checkpoint() {
     let path = directory.path().join("execution-state.sqlite");
     let connection = compose_order_entry(&ExecutionConnectionOptions {
         route_id: "test".into(),
+        required: true,
         account_id: "main".into(),
         segment_key: "spot".into(),
         provider: "simulated".into(),
@@ -970,6 +980,7 @@ fn sqlite_execution_store_reloads_the_latest_checkpoint() {
         passphrase: String::new().into(),
         base_url: "https://api.binance.com".into(),
         websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
+        isolated_symbol: None,
         request_weight_per_minute: 1_000,
         cancel_reserve_weight: 50,
         order_event_queue_capacity: 1_024,
@@ -1018,6 +1029,7 @@ fn sqlite_execution_store_retains_outbox_until_acknowledged() {
     let path = directory.path().join("execution-state.sqlite");
     let connection = compose_order_entry(&ExecutionConnectionOptions {
         route_id: "test".into(),
+        required: true,
         account_id: "main".into(),
         segment_key: "spot".into(),
         provider: "simulated".into(),
@@ -1027,6 +1039,7 @@ fn sqlite_execution_store_retains_outbox_until_acknowledged() {
         passphrase: String::new().into(),
         base_url: "https://api.binance.com".into(),
         websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
+        isolated_symbol: None,
         request_weight_per_minute: 1_000,
         cancel_reserve_weight: 50,
         order_event_queue_capacity: 1_024,
@@ -1587,6 +1600,7 @@ fn already_satisfied_intent_is_terminal_without_child_orders() {
     let path = directory.path().join("execution.json");
     let connection = compose_order_entry(&ExecutionConnectionOptions {
         route_id: "test".into(),
+        required: true,
         account_id: "main".into(),
         segment_key: "spot".into(),
         provider: "simulated".into(),
@@ -1596,6 +1610,7 @@ fn already_satisfied_intent_is_terminal_without_child_orders() {
         passphrase: String::new().into(),
         base_url: "https://api.binance.com".into(),
         websocket_url: "wss://ws-api.binance.com:443/ws-api/v3".into(),
+        isolated_symbol: None,
         request_weight_per_minute: 1_000,
         cancel_reserve_weight: 50,
         order_event_queue_capacity: 1_024,

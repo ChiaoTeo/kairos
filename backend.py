@@ -68,6 +68,11 @@ def _platform_tag() -> str:
 
 
 def _build_binaries(output: Path) -> None:
+    print(
+        "kairospy: building Rust binaries for the wheel...",
+        file=sys.stderr,
+        flush=True,
+    )
     subprocess.run(
         [os.environ.get("PYTHON", sys.executable), str(ROOT / "scripts" / "build_rust_binaries.py"), "--output", str(output)],
         cwd=ROOT,

@@ -4,7 +4,9 @@ use kairos_domain_types::ProviderSymbol;
 
 use super::ParticipantRef;
 
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(
+    Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize,
+)]
 pub struct ParticipantInstrumentTypeRef {
     code: String,
 }
@@ -23,7 +25,7 @@ impl ParticipantInstrumentTypeRef {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ProviderInstrumentRef {
     pub participant: ParticipantRef,
     pub instrument_type: Option<ParticipantInstrumentTypeRef>,

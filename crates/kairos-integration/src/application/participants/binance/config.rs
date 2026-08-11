@@ -40,6 +40,29 @@ pub struct BinanceSpotChannelConfig {
     pub event_queue_capacity: usize,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BinanceFuturesChannelConfig {
+    pub websocket_stream_url: String,
+    pub event_queue_capacity: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BinanceMarginChannelConfig {
+    pub websocket_stream_url: String,
+    /// Required for isolated margin because Binance issues one listen key per
+    /// symbol; absent for cross margin.
+    pub isolated_symbol: Option<String>,
+    pub event_queue_capacity: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BinanceOptionsChannelConfig {
+    /// Base private-stream endpoint. The listen key is appended as the final
+    /// path segment (for example `wss://nbstream.binance.com/eoptions/private/stream`).
+    pub websocket_stream_url: String,
+    pub event_queue_capacity: usize,
+}
+
 #[derive(Clone)]
 pub struct BinancePrincipalConfig {
     pub binding_id: String,

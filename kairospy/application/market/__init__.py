@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -135,10 +136,12 @@ def materialize_replay_file(
         source = (
             source_value if source_value.is_absolute() else source.parent / source_value
         )
-    if source.suffix.lower() != ".parquet":
-        return source
-    events = _read_events(source)
     target.parent.mkdir(parents=True, exist_ok=True)
+    if source.suffix.lower() != ".parquet":
+        if source != target.resolve():
+            shutil.copyfile(source, target)
+        return target
+    events = _read_events(source)
     target.write_text(
         "".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events),
         encoding="utf-8",

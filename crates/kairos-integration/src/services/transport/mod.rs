@@ -5,5 +5,3 @@
 
 pub(crate) mod http;
 pub(crate) mod websocket;
-
-pub(crate) use http::polling::{RestPollingMarketStream, RestSnapshotReader};

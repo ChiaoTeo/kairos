@@ -290,7 +290,7 @@ def _run_subscription_command(arguments: Sequence[str], workspace: Path | None) 
             {
                 "schema_version": 1,
                 "command_id": command_id,
-                "idempotency_key": parsed.subscription_id,
+                "idempotency_key": f"unsubscribe:{parsed.subscription_id}",
                 "operation": "market.unsubscribe",
                 "strategy_id": "cli",
                 "instance_id": "cli",

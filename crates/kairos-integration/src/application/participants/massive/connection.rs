@@ -8,7 +8,6 @@ use crate::services::transport::http::ExchangeError;
 use super::config::{MassiveChannelConfig, MassiveConnectionConfig};
 use super::market_data::{
     MassiveAsyncHistoricalMarket, MassiveAsyncLiveMarket, MassiveHistoricalMarket,
-    MassiveLiveMarket,
 };
 use super::reference::{blocking, MassiveInstrumentCatalog};
 use super::types::{InstrumentQuery, InstrumentType, MarketType};
@@ -69,20 +68,6 @@ impl MassiveConnection {
                     market_type.service_type(),
                     channel.event_queue_capacity,
                 )?,
-        })
-    }
-
-    pub fn blocking_live_market(
-        &self,
-        market_type: MarketType,
-        websocket_endpoint: impl Into<String>,
-    ) -> Result<MassiveLiveMarket, IntegrationError> {
-        Ok(MassiveLiveMarket {
-            inner: crate::services::participants::massive::market_data::MassiveMarketStream::new(
-                self.config.api_key.expose_secret(),
-                websocket_endpoint,
-                market_type.service_type(),
-            )?,
         })
     }
 

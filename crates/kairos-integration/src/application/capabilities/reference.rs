@@ -8,6 +8,12 @@ use std::future::Future;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExternalInstrumentKind {
     Equity,
+    /// A perpetual derivative whose economic underlying is an equity rather
+    /// than a crypto asset. The provider-specific product spelling remains
+    /// inside Integration; Reference uses this semantic distinction to build
+    /// the correct canonical underlying and to avoid crypto/equity identity
+    /// collisions.
+    EquityPerpetual,
     Spot,
     Margin,
     Perpetual,

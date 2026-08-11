@@ -10,7 +10,9 @@ use crate::application::IntegrationError;
 use crate::services::transport::websocket::{AsyncSocketEvent, AsyncTokioSocket};
 
 use super::account::BinanceSpotAccountClient;
-use super::order_events::{map_exchange_error, parse_subscription_response};
+use super::order_events::{
+    map_exchange_error, parse_subscription_response, provider_safe_request_id,
+};
 
 pub(crate) struct BinanceSpotAsyncUserDataChannel {
     binding_id: String,
@@ -70,6 +72,14 @@ impl BinanceSpotAsyncUserDataChannel {
             authenticated: self.lifecycle == ConnectionLifecycle::Ready && self.socket.is_some(),
             last_error: self.last_error.clone(),
         }
+    }
+
+    pub(crate) fn binding_id(&self) -> &str {
+        &self.binding_id
+    }
+
+    pub(crate) fn channel_epoch(&self) -> u64 {
+        self.channel_epoch
     }
 
     pub(crate) async fn connect(&mut self) -> Result<(), IntegrationError> {
@@ -184,11 +194,8 @@ impl BinanceSpotAsyncUserDataChannel {
         &self,
         socket: &mut AsyncTokioSocket,
     ) -> Result<(u64, u64), IntegrationError> {
-        let request_id = format!(
-            "{}:{}",
-            self.binding_id,
-            self.channel_epoch.saturating_add(1)
-        );
+        let request_id =
+            provider_safe_request_id(&self.binding_id, self.channel_epoch.saturating_add(1));
         let (request, auth_generation) = self
             .client
             .user_data_subscription_request_async(&request_id)

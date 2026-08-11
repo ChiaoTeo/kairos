@@ -15,10 +15,12 @@ axum = "0.8"
 kairos-domain-types = { path = "../../../kairos-domain-types" }
 clap = { version = "4", features = ["derive", "env"] }
 flatbuffers = "25.12.19"
+futures-util = { version = "0.3", features = ["alloc"] }
 kairos-integration = { path = "../../../kairos-integration" }
 kairos-workspace = { path = "../../../kairos-workspace", features = ["otel"] }
 kairos-protocol = { path = "../../../kairos-protocol" }
 kairos-account-contract = { path = "../contract" }
+kairos-reference-contract = { path = "../../reference/contract" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 secrecy = { workspace = true }

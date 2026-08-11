@@ -32,31 +32,241 @@ impl Default for WorkspaceCliConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceMassiveConfig {
-    pub rest_base_url: Option<String>,
-    pub websocket_base_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct WorkspaceMarketConfig {
-    /// Named market-data connections. The map key is a stable source id and
-    /// is deliberately independent from exchange and provider names.
+    /// Provider-native source bindings. The map key is a stable Market
+    /// SourceId and is deliberately independent from provider vocabulary.
     #[serde(default)]
-    pub sources: BTreeMap<String, WorkspaceMarketSourceConfig>,
+    pub sources: BTreeMap<String, WorkspaceMarketSourceBinding>,
+    /// Named runtime policies select source ids; they never repeat provider
+    /// connection details.
     #[serde(default)]
-    pub massive: WorkspaceMassiveConfig,
+    pub profiles: BTreeMap<String, WorkspaceMarketRuntimeProfile>,
+    pub default_profile: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
-pub struct WorkspaceMarketSourceConfig {
-    pub enabled: Option<bool>,
-    pub provider: String,
-    pub exchange: String,
-    pub market_type: String,
-    pub asset_type: Option<String>,
-    pub transport: Option<String>,
-    pub credential_id: Option<String>,
-    pub endpoint: Option<String>,
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum WorkspaceMarketSourceBinding {
+    BinanceSpot {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        #[serde(default)]
+        transport: WorkspaceBinanceSpotTransport,
+        endpoint: Option<String>,
+        #[serde(default = "default_market_source_snapshot_interval_ms")]
+        snapshot_interval_ms: u64,
+    },
+    BinanceDerivatives {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        product: WorkspaceBinanceDerivativeProduct,
+        #[serde(default)]
+        transport: WorkspaceBinanceDerivativeTransport,
+        endpoint: Option<String>,
+        #[serde(default = "default_market_source_snapshot_interval_ms")]
+        snapshot_interval_ms: u64,
+    },
+    Massive {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        product: WorkspaceMassiveMarketProduct,
+        exchange: String,
+        credential_id: String,
+        endpoint: Option<String>,
+    },
+    Okx {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        instrument_type: WorkspaceOkxInstrumentType,
+        #[serde(default)]
+        transport: WorkspacePublicMarketTransport,
+        endpoint: Option<String>,
+        #[serde(default = "default_market_source_snapshot_interval_ms")]
+        snapshot_interval_ms: u64,
+    },
+    Hyperliquid {
+        #[serde(default = "enabled_by_default")]
+        enabled: bool,
+        market_type: WorkspaceHyperliquidMarketType,
+        #[serde(default)]
+        transport: WorkspacePublicMarketTransport,
+        endpoint: Option<String>,
+        #[serde(default = "default_market_source_snapshot_interval_ms")]
+        snapshot_interval_ms: u64,
+    },
+}
+
+impl WorkspaceMarketSourceBinding {
+    pub fn enabled(&self) -> bool {
+        match self {
+            Self::BinanceSpot { enabled, .. }
+            | Self::BinanceDerivatives { enabled, .. }
+            | Self::Massive { enabled, .. }
+            | Self::Okx { enabled, .. }
+            | Self::Hyperliquid { enabled, .. } => *enabled,
+        }
+    }
+}
+
+fn enabled_by_default() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceBinanceSpotTransport {
+    Rest,
+    #[default]
+    Websocket,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceBinanceDerivativeProduct {
+    UsdMFutures,
+    CoinMFutures,
+    Options,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceBinanceDerivativeTransport {
+    #[default]
+    Rest,
+    Websocket,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceMassiveMarketProduct {
+    Equity,
+    Options,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceOkxInstrumentType {
+    Spot,
+    Swap,
+    Futures,
+    Options,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceHyperliquidMarketType {
+    Spot,
+    Perpetual,
+}
+
+/// Public market delivery mode. Live WebSocket is the production default;
+/// REST snapshots remain available for diagnostics and constrained venues.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspacePublicMarketTransport {
+    Rest,
+    #[default]
+    Websocket,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceMarketRuntimeScope {
+    Shared,
+    Instance,
+    Replay,
+    Diagnostic,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceMarketReplayClock {
+    #[default]
+    Maximum,
+    EventTime,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceMarketReplayConfig {
+    #[serde(default)]
+    pub start_unix_nanos: Option<u64>,
+    #[serde(default)]
+    pub end_unix_nanos: Option<u64>,
+    #[serde(default)]
+    pub clock: WorkspaceMarketReplayClock,
+    #[serde(default = "default_market_replay_speed_multiplier")]
+    pub speed_multiplier: u32,
+    #[serde(default)]
+    pub start_paused: bool,
+}
+
+impl Default for WorkspaceMarketReplayConfig {
+    fn default() -> Self {
+        Self {
+            start_unix_nanos: None,
+            end_unix_nanos: None,
+            clock: WorkspaceMarketReplayClock::Maximum,
+            speed_multiplier: default_market_replay_speed_multiplier(),
+            start_paused: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct WorkspaceMarketRuntimeProfile {
+    pub scope: WorkspaceMarketRuntimeScope,
+    #[serde(default = "default_market_source_input_capacity")]
+    pub source_input_capacity: usize,
+    #[serde(default = "default_market_publication_queue_capacity")]
+    pub publication_queue_capacity: usize,
+    #[serde(default = "default_market_snapshot_interval_ms")]
+    pub snapshot_interval_ms: u64,
+    #[serde(default = "default_market_freshness_check_interval_ms")]
+    pub freshness_check_interval_ms: u64,
+    #[serde(default = "default_market_freshness_max_age_ms")]
+    pub freshness_max_age_ms: u64,
+    #[serde(default = "default_market_reference_recovery_interval_ms")]
+    pub reference_recovery_interval_ms: u64,
+    #[serde(default = "default_market_shutdown_timeout_ms")]
+    pub shutdown_timeout_ms: u64,
+    #[serde(default)]
+    pub replay: Option<WorkspaceMarketReplayConfig>,
+}
+
+fn default_market_replay_speed_multiplier() -> u32 {
+    1
+}
+
+fn default_market_source_input_capacity() -> usize {
+    10_000
+}
+
+fn default_market_publication_queue_capacity() -> usize {
+    256
+}
+
+fn default_market_snapshot_interval_ms() -> u64 {
+    1_000
+}
+
+fn default_market_source_snapshot_interval_ms() -> u64 {
+    1_000
+}
+
+fn default_market_freshness_check_interval_ms() -> u64 {
+    250
+}
+
+fn default_market_freshness_max_age_ms() -> u64 {
+    5_000
+}
+
+fn default_market_reference_recovery_interval_ms() -> u64 {
+    500
+}
+
+fn default_market_shutdown_timeout_ms() -> u64 {
+    5_000
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -323,6 +533,38 @@ impl InstanceWorkspace {
 }
 
 impl Workspace {
+    /// Acquires a workspace-wide lease for an external resource that permits
+    /// only one owning process. The provider identity is hashed so endpoints
+    /// and account-like identifiers are not exposed in lock filenames.
+    pub fn exclusive_process_lock(
+        &self,
+        namespace: &str,
+        provider_identity: &str,
+    ) -> io::Result<WorkspaceProcessLock> {
+        if namespace.trim().is_empty()
+            || !namespace
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "exclusive process lock namespace is invalid",
+            ));
+        }
+        if provider_identity.trim().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "exclusive process lock identity is required",
+            ));
+        }
+        let digest = Sha256::digest(provider_identity.as_bytes());
+        let short = digest[..10]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        self.process_lock(&format!("exclusive-{namespace}-{short}"))
+    }
+
     pub fn init_project(
         project_root: impl Into<PathBuf>,
         workspace_id: impl Into<String>,
@@ -655,6 +897,68 @@ mod tests {
         );
         drop(first);
         assert!(workspace.process_lock("reference").is_ok());
+    }
+
+    #[test]
+    fn exclusive_process_lock_hashes_provider_identity_and_rejects_second_owner() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = Workspace::init(root.path().join("workspace"), "demo").unwrap();
+        let identity = "ibkr|127.0.0.1|4002|client-id:7";
+        let first = workspace
+            .exclusive_process_lock("ibkr-client", identity)
+            .unwrap();
+        let filename = first.path().to_string_lossy();
+        assert!(filename.contains("exclusive-ibkr-client-"));
+        assert!(!filename.contains("127.0.0.1"));
+        assert_eq!(
+            workspace
+                .exclusive_process_lock("ibkr-client", identity)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::AlreadyExists
+        );
+        drop(first);
+        assert!(workspace
+            .exclusive_process_lock("ibkr-client", identity)
+            .is_ok());
+    }
+
+    #[test]
+    fn exclusive_process_lock_is_enforced_across_processes() {
+        const CHILD_ROOT: &str = "KAIROS_EXCLUSIVE_LOCK_CHILD_ROOT";
+        const IDENTITY: &str = "ibkr|127.0.0.1|4002|client-id:7";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let workspace = Workspace::open(root).unwrap();
+            assert_eq!(
+                workspace
+                    .exclusive_process_lock("ibkr-client", IDENTITY)
+                    .unwrap_err()
+                    .kind(),
+                std::io::ErrorKind::AlreadyExists
+            );
+            return;
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let workspace_root = directory.path().join("workspace");
+        let workspace = Workspace::init(&workspace_root, "demo").unwrap();
+        let first = workspace
+            .exclusive_process_lock("ibkr-client", IDENTITY)
+            .unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "workspace::tests::exclusive_process_lock_is_enforced_across_processes",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, &workspace_root)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        drop(first);
+        assert!(workspace
+            .exclusive_process_lock("ibkr-client", IDENTITY)
+            .is_ok());
     }
 
     #[test]

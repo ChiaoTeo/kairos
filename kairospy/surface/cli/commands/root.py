@@ -1066,15 +1066,12 @@ def system_restart(
         )
     owner = WorkspaceApplication().open(workspace)
     process = ComponentProcessApplication(owner)
-    try:
-        process.stop(component)
-    except (OSError, RuntimeError, ValueError):
-        pass
-    control = process.ensure_running(
+    text_output = effective_output(output) is OutputFormat.TEXT
+    control = process.restart(
         component,
         account_id=account_id,
-        stream_startup_logs=component == "reference"
-        and effective_output(output) is OutputFormat.TEXT,
+        stream_startup_logs=component == "reference" and text_output,
+        progress=typer.echo if text_output else None,
     )
     supervisor = SystemRuntimeSupervisor(process)
     supervisor.register(component, {"account_id": account_id} if account_id else {})

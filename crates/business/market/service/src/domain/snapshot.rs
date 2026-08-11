@@ -6,7 +6,11 @@ use super::freshness::{FeedStatus, MarketFreshness};
 use super::market::{MarketDescriptor, MarketSelectionQuery};
 use super::observations::MarketObservation;
 use super::orderbook::OrderBook;
-use super::subscriptions::{SubscriptionId, SubscriptionMode};
+use super::source::{MarketReadiness, SourceId, SourceState};
+use super::subscriptions::{
+    SubscriptionId, SubscriptionMemberRequirement, SubscriptionMemberStatus, SubscriptionMode,
+    SubscriptionStatus,
+};
 use kairos_domain_types::{ActorId, Generation, Sequence};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -18,6 +22,12 @@ pub struct SubscriptionState {
     #[serde(default)]
     pub selectors: Vec<String>,
     pub members: BTreeMap<String, MarketDescriptor>,
+    #[serde(default)]
+    pub member_requirements: BTreeMap<String, SubscriptionMemberRequirement>,
+    #[serde(default)]
+    pub member_status: BTreeMap<String, SubscriptionMemberStatus>,
+    #[serde(default)]
+    pub status: SubscriptionStatus,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -31,6 +41,10 @@ pub struct MarketSnapshot {
     pub order_books: BTreeMap<String, OrderBook>,
     pub freshness: BTreeMap<String, MarketFreshness>,
     pub subscriptions: Vec<SubscriptionState>,
+    #[serde(default)]
+    pub sources: BTreeMap<SourceId, SourceState>,
+    #[serde(default)]
+    pub readiness: MarketReadiness,
     pub feed_status: FeedStatus,
 }
 
@@ -45,6 +59,8 @@ impl Default for MarketSnapshot {
             order_books: BTreeMap::new(),
             freshness: BTreeMap::new(),
             subscriptions: Vec::new(),
+            sources: BTreeMap::new(),
+            readiness: MarketReadiness::Starting,
             feed_status: FeedStatus::default(),
         }
     }

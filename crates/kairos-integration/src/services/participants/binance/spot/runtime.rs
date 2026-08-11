@@ -29,6 +29,10 @@ struct QuotaWindow {
 }
 
 const CLOCK_SYNC_TTL: Duration = Duration::from_secs(15 * 60);
+// Binance produces `/api/v3/time` near response serialization. Anchor the
+// returned value to receive time and stay slightly behind the provider:
+// recvWindow tolerates lag, while a timestamp >1s ahead is rejected (-1021).
+const CLOCK_SAFETY_LAG_MILLIS: u64 = 250;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ClockSnapshot {
@@ -209,8 +213,7 @@ impl BinanceSpotProviderRuntime {
                     "Binance server-time response is missing serverTime".into(),
                 )
             })?;
-        let midpoint = sent_at.saturating_add(received_at.saturating_sub(sent_at) / 2);
-        clock.offset_millis = signed_difference(server_time, midpoint);
+        clock.offset_millis = calibrated_clock_offset(server_time, received_at);
         clock.round_trip_millis = received_at.saturating_sub(sent_at);
         clock.generation = clock.generation.saturating_add(1);
         clock.synchronized_at = Some(Instant::now());
@@ -249,12 +252,11 @@ impl BinanceSpotProviderRuntime {
                     "Binance server-time response is missing serverTime".into(),
                 )
             })?;
-        let midpoint = sent_at.saturating_add(received_at.saturating_sub(sent_at) / 2);
         let mut clock = self
             .clock
             .lock()
             .map_err(|_| ExchangeError::Connection("Binance clock lock is poisoned".into()))?;
-        clock.offset_millis = signed_difference(server_time, midpoint);
+        clock.offset_millis = calibrated_clock_offset(server_time, received_at);
         clock.round_trip_millis = received_at.saturating_sub(sent_at);
         clock.generation = clock.generation.saturating_add(1);
         clock.synchronized_at = Some(Instant::now());
@@ -270,6 +272,15 @@ impl BinanceSpotProviderRuntime {
             .synchronized_at
             .is_some_and(|instant| instant.elapsed() < CLOCK_SYNC_TTL)
             .then(|| snapshot(&clock)))
+    }
+
+    pub(crate) fn invalidate_clock(&self) -> Result<(), ExchangeError> {
+        let mut clock = self
+            .clock
+            .lock()
+            .map_err(|_| ExchangeError::Connection("Binance clock lock is poisoned".into()))?;
+        clock.synchronized_at = None;
+        Ok(())
     }
 
     fn acquire_at(
@@ -367,6 +378,13 @@ fn signed_difference(left: u64, right: u64) -> i64 {
     }
 }
 
+fn calibrated_clock_offset(server_time: u64, received_at: u64) -> i64 {
+    signed_difference(
+        server_time.saturating_sub(CLOCK_SAFETY_LAG_MILLIS),
+        received_at,
+    )
+}
+
 fn apply_offset(value: u64, offset: i64) -> u64 {
     if offset >= 0 {
         value.saturating_add(offset as u64)
@@ -386,8 +404,8 @@ fn snapshot(clock: &ServerClock) -> ClockSnapshot {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_offset, signed_difference, BinanceSpotProviderRuntime, PrincipalOrderQuota,
-        QuotaAllocation, RequestPriority,
+        apply_offset, calibrated_clock_offset, signed_difference, BinanceSpotProviderRuntime,
+        PrincipalOrderQuota, QuotaAllocation, RequestPriority,
     };
     use crate::services::quota::SharedFixedWindowQuota;
     use crate::services::transport::http::{ExchangeError, PublicHttpClient};
@@ -443,6 +461,7 @@ mod tests {
         assert_eq!(signed_difference(750, 1_000), -250);
         assert_eq!(apply_offset(1_000, 250), 1_250);
         assert_eq!(apply_offset(1_000, -250), 750);
+        assert_eq!(calibrated_clock_offset(10_000, 10_000), -250);
     }
 
     #[test]

@@ -12,7 +12,7 @@ pub fn resolve_market(
     let matches: Vec<_> = markets
         .iter()
         .filter(|market| {
-            market.exchange_id == exchange_id
+            exchange_matches(market.exchange_id.as_str(), exchange_id)
                 && market.market_type == market_type
                 && asset_type.is_none_or(|value| market.asset_type.as_deref() == Some(value))
                 && market.source_symbol.eq_ignore_ascii_case(source_symbol)
@@ -58,11 +58,40 @@ pub fn resolve_option_markets(
         .iter()
         .filter(|market| {
             market.market_type == "options"
-                && market.exchange_id == exchange_id
+                && exchange_matches(market.exchange_id.as_str(), exchange_id)
                 && asset_type.is_none_or(|value| market.asset_type.as_deref() == Some(value))
                 && market.underlying_instrument_id.as_deref() == Some(underlying_id)
                 && market.is_active()
         })
         .cloned()
         .collect::<Vec<_>>())
+}
+
+fn exchange_matches(left: &str, right: &str) -> bool {
+    left.strip_prefix("exchange:")
+        .unwrap_or(left)
+        .eq_ignore_ascii_case(right.strip_prefix("exchange:").unwrap_or(right))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_market;
+    use crate::domain::market::MarketDescriptor;
+
+    #[test]
+    fn resolves_canonical_reference_exchange_from_business_exchange_selector() {
+        let market = MarketDescriptor::new(
+            "market:binance:spot:BTCUSDT",
+            "instrument:binance:spot:BTCUSDT",
+            "exchange:binance",
+            "spot",
+            "BTCUSDT",
+        )
+        .unwrap();
+
+        let resolved = resolve_market(&[market], "binance", "spot", None, "btcusdt")
+            .expect("namespaced Reference exchange must match the business selector");
+
+        assert_eq!(resolved.exchange_id.as_str(), "exchange:binance");
+    }
 }

@@ -13,7 +13,6 @@ use kairos_integration::application::{
     ExternalOrder, ExternalOrderQuery, IntegrationError,
 };
 use kairos_integration::application::{OrderEntryEvent, OrderEntryRequest};
-use kairos_integration::blocking::{OrderEntryConnection, OrderQueryConnection};
 
 /// One business route bound to one concrete Integration capability.
 pub(crate) struct ExecutionRoute<C> {
@@ -120,58 +119,6 @@ pub(crate) struct RoutedAsyncOrderEntry<C> {
     routes: Vec<ExecutionRoute<C>>,
 }
 
-pub(crate) struct RoutedOrderEntry<C> {
-    routes: Vec<ExecutionRoute<C>>,
-}
-
-impl<C> RoutedOrderEntry<C> {
-    pub(crate) fn new(routes: Vec<ExecutionRoute<C>>) -> Result<Self, String> {
-        validate_routes(&routes)?;
-        Ok(Self { routes })
-    }
-
-    fn select_mut(
-        &mut self,
-        request: &OrderEntryRequest,
-    ) -> Result<&mut ExecutionRoute<C>, IntegrationError> {
-        let mut matches = self
-            .routes
-            .iter_mut()
-            .filter(|route| route.matches_order(request));
-        let route = matches.next().ok_or_else(|| {
-            IntegrationError::InvalidRequest(format!(
-                "no Execution route for account={}, segment={}, participant={}",
-                request.account_id, request.segment_key, request.provider_instrument.participant.id
-            ))
-        })?;
-        debug_assert!(matches.next().is_none());
-        Ok(route)
-    }
-}
-
-impl<C> OrderEntryConnection for RoutedOrderEntry<C>
-where
-    C: OrderEntryConnection,
-{
-    fn submit_order(
-        &mut self,
-        request: &OrderEntryRequest,
-    ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
-        self.select_mut(request)?.connection.submit_order(request)
-    }
-
-    fn cancel_order(
-        &mut self,
-        request: &OrderEntryRequest,
-        remote_order_id: &str,
-        at_unix_nanos: u64,
-    ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
-        self.select_mut(request)?
-            .connection
-            .cancel_order(request, remote_order_id, at_unix_nanos)
-    }
-}
-
 impl<C> RoutedAsyncOrderEntry<C> {
     pub(crate) fn new(routes: Vec<ExecutionRoute<C>>) -> Result<Self, String> {
         validate_routes(&routes)?;
@@ -238,91 +185,6 @@ where
 /// every route. Results are stamped so provider order IDs remain scoped.
 pub(crate) struct RoutedAsyncOrderQuery<C> {
     routes: Vec<ExecutionRoute<C>>,
-}
-
-pub(crate) struct RoutedOrderQuery<C> {
-    routes: Vec<ExecutionRoute<C>>,
-}
-
-impl<C> RoutedOrderQuery<C> {
-    pub(crate) fn new(routes: Vec<ExecutionRoute<C>>) -> Result<Self, String> {
-        validate_routes(&routes)?;
-        Ok(Self { routes })
-    }
-
-    fn selected_indices(&self, query: &ExternalOrderQuery) -> Result<Vec<usize>, IntegrationError> {
-        if let Some(binding_id) = query.binding_id.as_deref() {
-            let index = self
-                .routes
-                .iter()
-                .position(|route| route.descriptor.binding_id == binding_id)
-                .ok_or_else(|| {
-                    IntegrationError::InvalidRequest(format!(
-                        "Execution query binding is not configured: {binding_id}"
-                    ))
-                })?;
-            Ok(vec![index])
-        } else {
-            Ok((0..self.routes.len()).collect())
-        }
-    }
-}
-
-impl<C> OrderQueryConnection for RoutedOrderQuery<C>
-where
-    C: OrderQueryConnection,
-{
-    fn open_orders(
-        &mut self,
-        query: &ExternalOrderQuery,
-    ) -> Result<Vec<ExternalOrder>, IntegrationError> {
-        let indices = self.selected_indices(query)?;
-        let mut result = Vec::new();
-        for index in indices {
-            let route = &mut self.routes[index];
-            let orders = route.connection.open_orders(query)?;
-            result.extend(stamp_orders(&route.descriptor.binding_id, orders)?);
-        }
-        Ok(result)
-    }
-
-    fn order_history(
-        &mut self,
-        query: &ExternalOrderQuery,
-    ) -> Result<Vec<ExternalOrder>, IntegrationError> {
-        let indices = self.selected_indices(query)?;
-        let mut result = Vec::new();
-        for index in indices {
-            let route = &mut self.routes[index];
-            let orders = route.connection.order_history(query)?;
-            result.extend(stamp_orders(&route.descriptor.binding_id, orders)?);
-        }
-        Ok(result)
-    }
-
-    fn order_detail(
-        &mut self,
-        query: &ExternalOrderQuery,
-    ) -> Result<Option<ExternalOrder>, IntegrationError> {
-        let indices = self.selected_indices(query)?;
-        let mut found: Option<ExternalOrder> = None;
-        for index in indices {
-            let route = &mut self.routes[index];
-            let Some(order) = route.connection.order_detail(query)? else {
-                continue;
-            };
-            let mut stamped = stamp_orders(&route.descriptor.binding_id, vec![order])?;
-            let order = stamped.pop().expect("one stamped order");
-            if let Some(previous) = &found {
-                return Err(IntegrationError::InvalidPayload(format!(
-                    "order detail is ambiguous across bindings {} and {}; specify binding_id",
-                    previous.binding_id, order.binding_id
-                )));
-            }
-            found = Some(order);
-        }
-        Ok(found)
-    }
 }
 
 impl<C> RoutedAsyncOrderQuery<C> {

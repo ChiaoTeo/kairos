@@ -2,33 +2,32 @@ use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use kairos_domain_types::{InstrumentId, MarketId};
-use kairos_integration::application::HistoricalMarketRequest;
-use kairos_integration::application::MarketEventKind;
-use kairos_integration::blocking::HistoricalMarketDataConnection;
+use kairos_integration::application::{
+    AsyncHistoricalMarketDataConnection, HistoricalMarketRequest, MarketEventKind,
+};
 use kairos_integration::participants::binance;
 use kairos_integration::participants::massive::{
     MarketType as MassiveMarketType, MassiveConnection, MassiveConnectionConfig,
 };
 use kairos_market::composition::{
-    binance_derivatives_rest_feed, binance_spot_rest_feed, binance_spot_websocket_feed,
-    default_endpoint, replay_market_feed, MarketProduct,
+    attach_binance_derivatives_source, attach_binance_spot_rest_source, attach_binance_spot_source,
+    attach_replay_source, default_endpoint, MarketProduct,
 };
-use kairos_market::{
-    load_replay_events_many, MarketApplication, MarketDescriptor, MarketRuntime, SubscriptionId,
-};
+use kairos_market::{load_replay_events_many, MarketApplication, MarketDescriptor, SubscriptionId};
 use kairos_workspace::cli::{render, OutputFormat};
 use kairos_workspace::Workspace;
 use serde_json::{json, Value};
 use std::str::FromStr;
 
-fn main() {
-    if let Err(error) = run() {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    if let Err(error) = run().await {
         eprintln!("kairos-market-cli: {error}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let output = match args.output {
         Some(output) => output,
@@ -46,45 +45,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     let value = match args.command {
         Command::Validate(command) => validate(command)?,
-        Command::Once(command) => once(command)?,
-        Command::Replay(command) => replay(command)?,
-        Command::Download(command) => download(command, args.workspace.as_ref())?,
+        Command::Once(command) => once(command).await?,
+        Command::Replay(command) => replay(command).await?,
+        Command::Download(command) => download(command, args.workspace.as_ref()).await?,
     };
     println!("{}", render(&value, output));
     Ok(())
 }
 
-fn download(
+async fn download(
     command: DownloadCommand,
     workspace_root: Option<&PathBuf>,
 ) -> Result<Value, Box<dyn std::error::Error>> {
-    let provider = command.provider.to_ascii_lowercase();
-    if !matches!(provider.as_str(), "massive" | "binance") {
-        return Err(format!("unsupported historical provider: {provider}").into());
-    }
-    let endpoint = command.endpoint.unwrap_or_else(|| {
-        if provider == "massive" {
-            "https://api.massive.com".into()
-        } else {
-            "https://data-api.binance.vision".into()
-        }
+    let provider = command.provider;
+    let endpoint = command.endpoint.unwrap_or_else(|| match provider {
+        HistoricalProvider::Massive => "https://api.massive.com".into(),
+        HistoricalProvider::Binance => "https://data-api.binance.vision".into(),
     });
-    let mut connection: Box<dyn HistoricalMarketDataConnection> = if provider == "massive" {
-        let provider = MassiveConnection::connect(MassiveConnectionConfig {
-            environment: "public".into(),
-            rest_base_url: endpoint,
-            api_key: secrecy::SecretString::new(
-                command
-                    .api_key
-                    .clone()
-                    .ok_or("Massive --api-key is required")?
-                    .into(),
-            ),
-        })?;
-        Box::new(provider.blocking_historical_market(MassiveMarketType::Equity)?)
-    } else {
-        binance::blocking::spot_historical_market(endpoint)?
-    };
     let start_time_unix_nanos = millis_to_nanos(command.start)?;
     let end_time_unix_nanos = millis_to_nanos(command.end)?;
     let request = HistoricalMarketRequest {
@@ -96,21 +73,38 @@ fn download(
         interval: Some(command.interval.clone()),
         adjusted: Some(false),
     };
-    let events = connection.fetch(&request)?;
+    let events = match provider {
+        HistoricalProvider::Massive => {
+            let provider = MassiveConnection::connect(MassiveConnectionConfig {
+                environment: "public".into(),
+                rest_base_url: endpoint,
+                api_key: secrecy::SecretString::new(
+                    command
+                        .api_key
+                        .clone()
+                        .ok_or("Massive --api-key is required")?
+                        .into(),
+                ),
+            })?;
+            provider
+                .historical_market(MassiveMarketType::Equity)?
+                .fetch(&request)
+                .await?
+        }
+        HistoricalProvider::Binance => {
+            binance::spot_historical_market(endpoint)?
+                .fetch(&request)
+                .await?
+        }
+    };
     let symbol = command.symbol.to_ascii_uppercase();
-    let market_id = command.market_id.unwrap_or_else(|| {
-        if provider == "massive" {
-            format!("market:massive:equity:{symbol}")
-        } else {
-            format!("market:binance:spot:{symbol}")
-        }
+    let market_id = command.market_id.unwrap_or_else(|| match provider {
+        HistoricalProvider::Massive => format!("market:massive:equity:{symbol}"),
+        HistoricalProvider::Binance => format!("market:binance:spot:{symbol}"),
     });
-    let instrument_id = command.instrument_id.unwrap_or_else(|| {
-        if provider == "massive" {
-            format!("instrument:equity:US:{symbol}:common")
-        } else {
-            format!("instrument:spot:{symbol}")
-        }
+    let instrument_id = command.instrument_id.unwrap_or_else(|| match provider {
+        HistoricalProvider::Massive => format!("instrument:equity:US:{symbol}:common"),
+        HistoricalProvider::Binance => format!("instrument:spot:{symbol}"),
     });
     let output = command.file;
     if let Some(parent) = output
@@ -136,7 +130,7 @@ fn download(
             close: bar.close,
             volume: bar.volume,
             observed_at_unix_nanos: event.observed_at_unix_nanos,
-            source_id: provider.clone(),
+            source_id: provider.as_str().into(),
             derivation: bar.derivation,
         });
         body.push_str(&serde_json::to_string(&observation)?);
@@ -146,7 +140,7 @@ fn download(
     std::fs::write(&output, body)?;
     let manifest = serde_json::json!({
         "dataset_id": command.dataset_id,
-        "source": provider,
+        "source": provider.as_str(),
         "symbol": command.symbol,
         "market_id": market_id,
         "instrument_id": instrument_id,
@@ -241,7 +235,7 @@ fn validate(command: ValidateCommand) -> Result<Value, Box<dyn std::error::Error
     }))
 }
 
-fn once(command: OnceCommand) -> Result<Value, Box<dyn std::error::Error>> {
+async fn once(command: OnceCommand) -> Result<Value, Box<dyn std::error::Error>> {
     let market = descriptor_from_values(
         command.market.market_id,
         command.market.instrument_id,
@@ -253,23 +247,24 @@ fn once(command: OnceCommand) -> Result<Value, Box<dyn std::error::Error>> {
     let endpoint = command
         .endpoint
         .unwrap_or_else(|| default_endpoint(command.provider.as_str()).to_string());
-    let feed = match command.provider {
-        Provider::BinanceSpotRest => binance_spot_rest_feed(endpoint)?,
-        Provider::BinanceSpotWebsocket => binance_spot_websocket_feed(endpoint)?,
-        Provider::BinanceOptionsRest => {
-            binance_derivatives_rest_feed(MarketProduct::Options, endpoint, "/eapi/v1/ticker")?
-        }
-    };
-    let application = MarketApplication::new(actor_id, 10_000)?;
-    let mut runtime = MarketRuntime::with_feed(application, feed);
-    runtime.start_feed()?;
+    let mut runtime = MarketApplication::new(actor_id, 10_000)?;
+    match command.provider {
+        Provider::BinanceSpotRest => attach_binance_spot_rest_source(&mut runtime, endpoint)?,
+        Provider::BinanceSpotWebsocket => attach_binance_spot_source(&mut runtime, endpoint)?,
+        Provider::BinanceOptionsRest => attach_binance_derivatives_source(
+            &mut runtime,
+            MarketProduct::Options,
+            endpoint,
+            "/eapi/v1/ticker",
+        )?,
+    }
     runtime.subscribe_static(SubscriptionId::new("cli-once")?, "cli", market)?;
-    runtime.reconcile_feed()?;
-    runtime.poll_feed()?;
+    runtime.sync_source_subscriptions().await?;
+    while runtime.drive_next_source_input().await? == 0 {}
     Ok(serde_json::to_value(runtime.snapshot())?)
 }
 
-fn replay(command: ReplayCommand) -> Result<Value, Box<dyn std::error::Error>> {
+async fn replay(command: ReplayCommand) -> Result<Value, Box<dyn std::error::Error>> {
     let events = load_replay_events_many(command.files)?;
     let market = descriptor_from_values(
         command.market.market_id,
@@ -278,12 +273,14 @@ fn replay(command: ReplayCommand) -> Result<Value, Box<dyn std::error::Error>> {
         command.market.market_type,
         command.market.source_symbol,
     )?;
-    let application = MarketApplication::new(command.actor_id, 10_000)?;
-    let mut runtime = MarketRuntime::with_feed(application, replay_market_feed(events));
-    runtime.start_feed()?;
+    let mut runtime = MarketApplication::new(command.actor_id, 10_000)?;
+    attach_replay_source(&mut runtime, events)?;
     runtime.subscribe_static(SubscriptionId::new("cli-replay")?, "cli", market)?;
-    runtime.reconcile_feed()?;
-    let count = runtime.poll_feed()?;
+    runtime.sync_source_subscriptions().await?;
+    let mut count = 0;
+    while !runtime.sources_complete() {
+        count += runtime.drive_next_source_input().await?;
+    }
     Ok(json!({"events_applied": count, "snapshot": runtime.snapshot()}))
 }
 
@@ -377,7 +374,7 @@ struct ReplayCommand {
 #[derive(Debug, Args)]
 struct DownloadCommand {
     #[arg(long, default_value = "binance")]
-    provider: String,
+    provider: HistoricalProvider,
     #[arg(long)]
     api_key: Option<String>,
     #[arg(long)]
@@ -398,6 +395,21 @@ struct DownloadCommand {
     dataset_id: String,
     #[arg(long)]
     file: PathBuf,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum HistoricalProvider {
+    Binance,
+    Massive,
+}
+
+impl HistoricalProvider {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Binance => "binance",
+            Self::Massive => "massive",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]

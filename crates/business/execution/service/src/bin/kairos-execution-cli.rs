@@ -7,7 +7,9 @@ use kairos_execution::{
         BacktestApplication, BacktestRequest, CancelOrder, ExecutionAuditQuery,
         ExecutionFillReport, ExecutionOrderOptions, RemoteOrderQuery, ReplaceOrder, SubmitOrder,
     },
-    composition::{compose_execution_connections, ExecutionConnectionOptions, SqlxExecutionStore},
+    composition::{
+        compose_direct_execution_connections, ExecutionConnectionOptions, SqlxExecutionStore,
+    },
     credentials::load_workspace_credential,
     domain::{OrderSide, OrderType},
     ExecutionApplication,
@@ -72,14 +74,12 @@ struct ConnectionArgs {
     credential_id: Option<String>,
     #[arg(long, global = true, env = "OKX_PASSPHRASE", default_value = "")]
     passphrase: String,
-    #[arg(long, global = true, default_value = "https://api.binance.com")]
+    #[arg(long, global = true, default_value = "")]
     base_url: String,
-    #[arg(
-        long,
-        global = true,
-        default_value = "wss://ws-api.binance.com:443/ws-api/v3"
-    )]
+    #[arg(long, global = true, default_value = "")]
     websocket_url: String,
+    #[arg(long, global = true)]
+    isolated_symbol: Option<String>,
     #[arg(long, global = true, default_value_t = 1_000)]
     request_weight_per_minute: u32,
     #[arg(long, global = true, default_value_t = 50)]
@@ -109,8 +109,11 @@ impl ConnectionArgs {
     ) -> Result<ExecutionConnectionOptions, Box<dyn std::error::Error>> {
         let stored =
             load_workspace_credential(workspace, &self.provider, self.credential_id.as_deref())?;
+        let (default_base_url, default_websocket_url) =
+            provider_endpoints(&self.provider, &self.product);
         Ok(ExecutionConnectionOptions {
             route_id: self.route_id.clone(),
+            required: true,
             account_id: self.account_id.clone(),
             segment_key: self.segment_key.clone(),
             provider: self.provider.clone(),
@@ -142,8 +145,17 @@ impl ConnectionArgs {
                 self.passphrase.clone()
             }
             .into(),
-            base_url: self.base_url.clone(),
-            websocket_url: self.websocket_url.clone(),
+            base_url: if self.base_url.trim().is_empty() {
+                default_base_url.into()
+            } else {
+                self.base_url.clone()
+            },
+            websocket_url: if self.websocket_url.trim().is_empty() {
+                default_websocket_url.into()
+            } else {
+                self.websocket_url.clone()
+            },
+            isolated_symbol: self.isolated_symbol.clone(),
             request_weight_per_minute: self.request_weight_per_minute,
             cancel_reserve_weight: self.cancel_reserve_weight,
             order_event_queue_capacity: self.order_event_queue_capacity,
@@ -161,6 +173,32 @@ impl ConnectionArgs {
             port: self.port,
             client_id: self.client_id,
         })
+    }
+}
+
+fn provider_endpoints(provider: &str, product: &str) -> (&'static str, &'static str) {
+    match (
+        provider.trim().to_ascii_lowercase().as_str(),
+        product.trim().to_ascii_lowercase().as_str(),
+    ) {
+        ("binance", "usd-m-futures" | "swap") => {
+            ("https://fapi.binance.com", "wss://fstream.binance.com")
+        }
+        ("binance", "coin-m-futures" | "futures") => {
+            ("https://dapi.binance.com", "wss://dstream.binance.com")
+        }
+        ("binance", "options" | "option") => (
+            "https://eapi.binance.com",
+            "wss://nbstream.binance.com/eoptions/private/stream",
+        ),
+        ("binance", "cross-margin" | "margin" | "isolated-margin") => {
+            ("https://api.binance.com", "wss://stream.binance.com:9443")
+        }
+        ("okx" | "okex", _) => ("https://www.okx.com", "wss://ws.okx.com:8443/ws/v5/private"),
+        _ => (
+            "https://api.binance.com",
+            "wss://ws-api.binance.com:443/ws-api/v3",
+        ),
     }
 }
 
@@ -342,12 +380,13 @@ fn run_direct_with_options(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let options = options.expect("direct execution options");
     let path = workspace.child(&["state", "execution", "execution-state.sqlite"])?;
-    let connections = compose_execution_connections(&options)?;
+    let connections = compose_direct_execution_connections(&options)?;
+    let (order_entry, order_query, execution_stream, _runtime) = connections.into_parts();
     let mut application = ExecutionApplication::with_dependencies_and_query_and_stream(
         "execution",
-        Some(connections.order_entry),
-        connections.order_query,
-        connections.execution_stream,
+        order_entry,
+        order_query,
+        execution_stream,
         Some(Box::new(SqlxExecutionStore::new(path)?)),
     )?;
     application.configure_live_trading(

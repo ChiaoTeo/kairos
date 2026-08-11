@@ -13,7 +13,7 @@ pub use reference::MassiveInstrumentCatalog;
 pub use types::{InstrumentQuery, InstrumentType, MarketType};
 
 pub mod blocking {
-    pub use super::market_data::{MassiveHistoricalMarket, MassiveLiveMarket};
+    pub use super::market_data::MassiveHistoricalMarket;
     pub use super::reference::blocking::MassiveInstrumentCatalog;
 }
 
@@ -35,7 +35,7 @@ mod tests {
     use crate::application::{
         AsyncHistoricalMarketDataConnection, AsyncMarketEventSource,
         HistoricalMarketDataConnection, HistoricalMarketRequest, MarketDataKind,
-        MarketStreamConnection, MarketSubscription,
+        MarketSubscription,
     };
 
     fn assert_async_catalog<T: AsyncInstrumentCatalogConnection>(_value: &T) {}
@@ -103,10 +103,6 @@ mod tests {
             HistoricalMarketDataConnection::fetch(&mut historical, &request),
             Err(crate::application::IntegrationError::InvalidRequest(_))
         ));
-        let mut live = provider
-            .blocking_live_market(MarketType::Equity, "ws://127.0.0.1:1")
-            .unwrap();
-        assert!(MarketStreamConnection::connect_channel(&mut live).is_err());
     }
 
     #[tokio::test(flavor = "current_thread")]

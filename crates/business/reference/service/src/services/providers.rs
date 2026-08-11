@@ -1,16 +1,17 @@
 //! Provider sources and in-memory implementations for the Reference actor.
 
-use std::collections::BTreeMap;
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use async_trait::async_trait;
+use futures_util::future::join_all;
 use kairos_integration::application::capabilities::reference::{
-    ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind,
+    AsyncInstrumentCatalogConnection, ExternalInstrument, ExternalInstrumentCatalog,
+    ExternalInstrumentKind,
 };
-use kairos_integration::blocking::InstrumentCatalogConnection;
 use kairos_integration::participants::binance::{
-    BinanceConnection, BinanceConnectionConfig, BinancePrincipalConfig, BinanceQuotaAllocation,
-    InstrumentType as BinanceInstrumentType,
+    BinanceConnection, BinanceConnectionConfig, BinanceEquityInstrumentCatalog,
+    BinanceQuotaAllocation, InstrumentType as BinanceInstrumentType,
 };
 use kairos_integration::participants::hyperliquid::{
     HyperliquidConnection, HyperliquidConnectionConfig,
@@ -30,16 +31,49 @@ use crate::domain::{
 
 /// Internal provider seam. Provider selection belongs to composition and is
 /// not part of the public application contract.
+#[async_trait]
 pub(crate) trait ReferenceSource: Send {
     fn source_id(&self) -> &str;
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog>;
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog>;
 
-    fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
+    async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
         Ok(ProviderUpdate {
-            catalog: self.fetch_catalog()?,
+            catalog: self.fetch_catalog().await?,
             complete: true,
             page_count: 1,
         })
+    }
+
+    /// Advance one source without querying its peers. A completed source
+    /// returns the merged last-known-good fan-in; an incomplete page returns
+    /// `None` and remains operational progress only.
+    async fn advance_source(
+        &mut self,
+        source_id: &str,
+    ) -> ReferenceResult<Option<ProviderCatalog>> {
+        Err(ReferenceError::Invalid(format!(
+            "reference source does not support targeted refresh: {source_id}"
+        )))
+    }
+
+    async fn set_source_paused(&mut self, source_id: &str, _paused: bool) -> ReferenceResult<()> {
+        Err(ReferenceError::Invalid(format!(
+            "reference source does not support runtime control: {source_id}"
+        )))
+    }
+
+    async fn set_option_underlying(
+        &mut self,
+        underlying: &str,
+        _enabled: bool,
+    ) -> ReferenceResult<()> {
+        Err(ReferenceError::Invalid(format!(
+            "reference source does not support option coverage: {underlying}"
+        )))
+    }
+
+    fn option_underlyings(&self) -> Vec<String> {
+        Vec::new()
     }
 
     fn provider_health(&self) -> Vec<ProviderHealth> {
@@ -66,24 +100,48 @@ impl ParticipantAugmentedSource {
     }
 }
 
+#[async_trait]
 impl ReferenceSource for ParticipantAugmentedSource {
     fn source_id(&self) -> &str {
         self.inner.source_id()
     }
 
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let mut catalog = self.inner.fetch_catalog()?;
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        let mut catalog = self.inner.fetch_catalog().await?;
         catalog.entities.extend(self.participants.iter().cloned());
         Ok(catalog)
     }
 
-    fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
-        let mut update = self.inner.fetch_catalog_step()?;
+    async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
+        let mut update = self.inner.fetch_catalog_step().await?;
         update
             .catalog
             .entities
             .extend(self.participants.iter().cloned());
         Ok(update)
+    }
+
+    async fn advance_source(
+        &mut self,
+        source_id: &str,
+    ) -> ReferenceResult<Option<ProviderCatalog>> {
+        self.inner.advance_source(source_id).await
+    }
+
+    async fn set_source_paused(&mut self, source_id: &str, paused: bool) -> ReferenceResult<()> {
+        self.inner.set_source_paused(source_id, paused).await
+    }
+
+    async fn set_option_underlying(
+        &mut self,
+        underlying: &str,
+        enabled: bool,
+    ) -> ReferenceResult<()> {
+        self.inner.set_option_underlying(underlying, enabled).await
+    }
+
+    fn option_underlyings(&self) -> Vec<String> {
+        self.inner.option_underlyings()
     }
 
     fn provider_health(&self) -> Vec<ProviderHealth> {
@@ -103,44 +161,60 @@ pub(crate) struct ProviderUpdate {
 /// source only maps the neutral integration payload into Reference-owned
 /// domain records.
 pub struct BinanceSpotSource {
-    connection: kairos_integration::blocking::BinanceInstrumentCatalog,
+    connection: kairos_integration::participants::binance::BinanceInstrumentCatalog,
 }
 
 pub struct BinanceOptionsSource {
-    connection: kairos_integration::blocking::BinanceInstrumentCatalog,
+    connection: kairos_integration::participants::binance::BinanceInstrumentCatalog,
 }
 
 pub struct BinanceDerivativesSource {
     id: &'static str,
     instrument_type: BinanceInstrumentType,
-    connection: kairos_integration::blocking::BinanceInstrumentCatalog,
+    connection: kairos_integration::participants::binance::BinanceInstrumentCatalog,
 }
 
 pub struct BinanceEquitySource {
-    connection: kairos_integration::blocking::BinanceEquityInstrumentCatalog,
+    connection: BinanceEquityInstrumentCatalog,
 }
 
-pub struct MassiveSource {
-    connection: kairos_integration::blocking::MassiveInstrumentCatalog,
+/// Massive stock-options discovery limited to explicitly managed underlyings.
+///
+/// The provider has a very large global option universe. Reference therefore
+/// treats coverage as operational input and only promotes contracts belonging
+/// to enabled underlyings. Market-data WebSocket observations may later add a
+/// single underlying/contract to this input, but they never make a global
+/// catalog scan authoritative.
+pub struct MassiveOptionsCoverageSource {
+    api_key: String,
+    base_url: String,
+    scopes: BTreeMap<String, ScopedMassiveOptions>,
+    last_good: BTreeMap<String, ProviderCatalog>,
+    sync_store: Box<dyn ProviderSyncStore>,
+    next_scope: usize,
+    coverage_dirty: bool,
+}
+
+struct ScopedMassiveOptions {
+    connection: kairos_integration::participants::massive::MassiveInstrumentCatalog,
     cursor: Option<String>,
-    accumulated: Option<ProviderCatalog>,
-    sync_store: Option<Box<dyn ProviderSyncStore>>,
+    legacy_accumulated: Option<ProviderCatalog>,
 }
 
 pub struct MassiveEquitySource {
-    connection: kairos_integration::blocking::MassiveInstrumentCatalog,
+    connection: kairos_integration::participants::massive::MassiveInstrumentCatalog,
     cursor: Option<String>,
     accumulated: Option<ProviderCatalog>,
     sync_store: Option<Box<dyn ProviderSyncStore>>,
 }
 
 pub struct HyperliquidSource {
-    connection: kairos_integration::blocking::HyperliquidInstrumentCatalog,
+    connection: kairos_integration::participants::hyperliquid::HyperliquidInstrumentCatalog,
 }
 
 pub struct OkxSource {
     id: String,
-    connection: kairos_integration::blocking::OkxInstrumentCatalog,
+    connection: kairos_integration::participants::okx::OkxInstrumentCatalog,
 }
 
 /// Reference-owned fan-in for the global catalog. Each provider remains an
@@ -151,31 +225,33 @@ pub struct CompositeSource {
     last_good: BTreeMap<String, ProviderCatalog>,
     health: BTreeMap<String, ProviderHealth>,
     sync_store: Option<Box<dyn ProviderSyncStore>>,
+    paused: BTreeSet<String>,
 }
 
 struct ProviderWorker {
     source_id: String,
-    requests: SyncSender<ProviderRequest>,
+    source: Box<dyn ReferenceSource>,
     retry_after: Option<Instant>,
-}
-
-struct ProviderRequest {
-    response: SyncSender<ReferenceResult<ProviderUpdate>>,
 }
 
 // Each provider refresh advances a bounded page batch. Large providers persist
 // their cursor and candidate catalog between refreshes, while only completed
 // candidates are promoted to last-known-good.
 const PROVIDER_FETCH_TIMEOUT: Duration = Duration::from_secs(150);
-const MASSIVE_PAGES_PER_REFRESH: usize = 8;
+// Persist one large-provider page per refresh. Rebuilding and serializing the
+// complete accumulated candidate after every page makes an eight-page step
+// quadratic in real Massive option catalogs and causes multi-gigabyte peaks.
+// The persisted cursor makes one-page steps cheap, restartable, and schedulable.
+const MASSIVE_PAGES_PER_REFRESH: usize = 1;
+const MASSIVE_PAGE_TIMEOUT: Duration = Duration::from_secs(20);
 
 impl CompositeSource {
     #[cfg(test)]
-    pub fn new(sources: Vec<Box<dyn ReferenceSource>>) -> ReferenceResult<Self> {
-        Self::new_with_sync_store(sources, None)
+    pub async fn new(sources: Vec<Box<dyn ReferenceSource>>) -> ReferenceResult<Self> {
+        Self::new_with_sync_store(sources, None).await
     }
 
-    pub fn new_with_sync_store(
+    pub async fn new_with_sync_store(
         sources: Vec<Box<dyn ReferenceSource>>,
         mut sync_store: Option<Box<dyn ProviderSyncStore>>,
     ) -> ReferenceResult<Self> {
@@ -185,53 +261,58 @@ impl CompositeSource {
             ));
         }
         let mut last_good = BTreeMap::new();
+        let mut paused = BTreeSet::new();
         for source in &sources {
             if let Some(store) = sync_store.as_mut() {
-                if let Some(catalog) = store.load_last_good(source.source_id())? {
-                    last_good.insert(source.source_id().to_owned(), catalog);
+                if let Some(catalog) = store.load_last_good(source.source_id()).await? {
+                    if provider_catalog_uses_current_canonical_shape(&catalog) {
+                        last_good.insert(source.source_id().to_owned(), catalog);
+                    } else {
+                        tracing::warn!(
+                            event = "reference_provider_snapshot_schema_mismatch",
+                            component = "reference",
+                            provider = source.source_id(),
+                            "persisted provider snapshot uses an obsolete canonical shape and will be refreshed before reuse"
+                        );
+                    }
                 }
             }
         }
+        if let Some(store) = sync_store.as_mut() {
+            paused.extend(store.paused_sources().await?);
+        }
         let workers = sources
             .into_iter()
-            .map(|mut source| {
+            .map(|source| {
                 let source_id = source.source_id().to_owned();
-                let (requests, receiver): (SyncSender<ProviderRequest>, Receiver<ProviderRequest>) =
-                    mpsc::sync_channel(1);
-                let worker_id = source_id.clone();
-                std::thread::Builder::new()
-                    .name(format!("reference-provider-{worker_id}"))
-                    .spawn(move || {
-                        while let Ok(request) = receiver.recv() {
-                            // A provider step is deliberately bounded. Sources with a large
-                            // catalog persist their cursor and accumulated candidate, then make
-                            // progress on the next refresh instead of holding the coordinator
-                            // until the entire universe has been downloaded.
-                            let result = source.fetch_catalog_step();
-                            let _ = request.response.send(result);
-                        }
-                    })
-                    .map_err(|error| {
-                        ReferenceError::Provider(format!(
-                            "start provider worker {source_id}: {error}"
-                        ))
-                    })?;
-                Ok(ProviderWorker {
+                ProviderWorker {
                     source_id,
-                    requests,
+                    source,
                     retry_after: None,
-                })
+                }
             })
-            .collect::<ReferenceResult<Vec<_>>>()?;
+            .collect();
         Ok(Self {
             workers,
             last_good,
             health: BTreeMap::new(),
             sync_store,
+            paused,
         })
+    }
+
+    /// Build a catalog from already committed provider snapshots. This is used
+    /// after one independently scheduled source finishes so the completion
+    /// never triggers network work for Binance, OKX, or another peer.
+    fn last_good_catalog(&self) -> ReferenceResult<Option<ProviderCatalog>> {
+        if self.last_good.is_empty() {
+            return Ok(None);
+        }
+        merge_provider_catalog_views(self.last_good.values()).map(Some)
     }
 }
 
+#[async_trait]
 impl ReferenceSource for CompositeSource {
     fn source_id(&self) -> &str {
         if self.workers.len() == 1 {
@@ -241,20 +322,28 @@ impl ReferenceSource for CompositeSource {
         }
     }
 
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        // Provider REST calls are independent persistent workers. Send all
-        // requests first, then collect them against one common deadline. A
-        // slow provider cannot hold the coordinator forever.
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        // Provider queries are polled concurrently by the caller's runtime.
+        // Each query has the same bounded deadline, so one slow provider does
+        // not serialize or indefinitely hold the fan-in.
         let started = Instant::now();
         let mut failures = Vec::new();
-        let mut failed_workers = Vec::new();
+        let mut unavailable_without_last_good = Vec::new();
         let mut requests = Vec::new();
-        for worker in &self.workers {
+        let mut paused_sources = Vec::new();
+        for worker in &mut self.workers {
+            if self.paused.contains(&worker.source_id) {
+                paused_sources.push(worker.source_id.clone());
+                continue;
+            }
             if worker
                 .retry_after
                 .is_some_and(|until| until > Instant::now())
             {
                 failures.push(format!("{}: provider circuit is open", worker.source_id));
+                if !self.last_good.contains_key(&worker.source_id) {
+                    unavailable_without_last_good.push(worker.source_id.clone());
+                }
                 continue;
             }
             let health = self
@@ -269,24 +358,25 @@ impl ReferenceSource for CompositeSource {
                     stale: false,
                 });
             health.last_attempt_unix_nanos = Some(unix_nanos().into());
-            let (response, receiver) = mpsc::sync_channel(1);
-            match worker.requests.try_send(ProviderRequest { response }) {
-                Ok(()) => requests.push((worker.source_id.clone(), receiver, Instant::now())),
-                Err(TrySendError::Full(_)) => {
-                    failures.push(format!("{}: provider worker is busy", worker.source_id));
-                    failed_workers.push((worker.source_id.clone(), "busy"));
-                }
-                Err(TrySendError::Disconnected(_)) => {
-                    failures.push(format!(
-                        "{}: provider worker is unavailable",
-                        worker.source_id
-                    ));
-                    failed_workers.push((worker.source_id.clone(), "failed"));
-                }
-            }
+            let source_id = worker.source_id.clone();
+            let source = &mut worker.source;
+            requests.push(async move {
+                let provider_started = Instant::now();
+                let result =
+                    match tokio::time::timeout(PROVIDER_FETCH_TIMEOUT, source.fetch_catalog_step())
+                        .await
+                    {
+                        Ok(result) => result,
+                        Err(error) => Err(ReferenceError::Provider(format!(
+                            "provider fetch timed out: {error}"
+                        ))),
+                    };
+                (source_id, result, provider_started)
+            });
         }
-        for (source_id, status) in failed_workers {
-            self.mark_failure(&source_id, status);
+        let requests = join_all(requests).await;
+        for source_id in paused_sources {
+            self.mark_paused(&source_id);
         }
         let mut entities = BTreeMap::new();
         let mut assets = BTreeMap::new();
@@ -295,17 +385,10 @@ impl ReferenceSource for CompositeSource {
         let mut markets = BTreeMap::new();
         let mut financial_products = BTreeMap::new();
         let mut execution_accesses = BTreeMap::new();
-        let mut conflicts = 0usize;
+        let mut conflicts = Vec::new();
+        let mut reconciled_instruments = 0usize;
         let mut successful_sources = 0usize;
-        let mut unavailable_without_last_good = Vec::new();
-        for (source_id, receiver, provider_started) in requests {
-            let remaining = PROVIDER_FETCH_TIMEOUT.saturating_sub(started.elapsed());
-            let result = match receiver.recv_timeout(remaining) {
-                Ok(result) => result,
-                Err(error) => Err(ReferenceError::Provider(format!(
-                    "provider fetch timed out: {error}"
-                ))),
-            };
+        for (source_id, result, provider_started) in requests {
             tracing::info!(
                 event = "reference_provider_fetch_completed",
                 component = "reference",
@@ -340,12 +423,14 @@ impl ReferenceSource for CompositeSource {
                         tag_catalog_source(&mut catalog, &source_id);
                         self.last_good.insert(source_id.clone(), catalog);
                         if let Some(store) = self.sync_store.as_mut() {
-                            store.save_last_good(
-                                &source_id,
-                                self.last_good
-                                    .get(&source_id)
-                                    .expect("inserted provider snapshot"),
-                            )?;
+                            store
+                                .save_last_good(
+                                    &source_id,
+                                    self.last_good
+                                        .get(&source_id)
+                                        .expect("inserted provider snapshot"),
+                                )
+                                .await?;
                         }
                         self.last_good
                             .get(&source_id)
@@ -367,7 +452,7 @@ impl ReferenceSource for CompositeSource {
                     .insert(value.entity_id.clone(), value.clone())
                     .is_some_and(|previous| previous != *value)
                 {
-                    conflicts += 1;
+                    conflicts.push(format!("entity:{}", value.entity_id));
                 }
             }
             for value in &catalog.assets {
@@ -375,15 +460,22 @@ impl ReferenceSource for CompositeSource {
                     .insert(value.asset_id.clone(), value.clone())
                     .is_some_and(|previous| previous != *value)
                 {
-                    conflicts += 1;
+                    conflicts.push(format!("asset:{}", value.asset_id));
                 }
             }
             for value in &catalog.instruments {
-                if instruments
-                    .insert(value.instrument_id.clone(), value.clone())
-                    .is_some_and(|previous| previous != *value)
-                {
-                    conflicts += 1;
+                if let Some(previous) = instruments.get_mut(&value.instrument_id) {
+                    if previous != value {
+                        merge_canonical_instrument(previous, value).map_err(|error| {
+                            ReferenceError::Provider(format!(
+                                "canonical instrument conflict for {}: {error}",
+                                value.instrument_id
+                            ))
+                        })?;
+                        reconciled_instruments += 1;
+                    }
+                } else {
+                    instruments.insert(value.instrument_id.clone(), value.clone());
                 }
             }
             for value in &catalog.listings {
@@ -391,7 +483,7 @@ impl ReferenceSource for CompositeSource {
                     .insert(value.listing_id.clone(), value.clone())
                     .is_some_and(|previous| previous != *value)
                 {
-                    conflicts += 1;
+                    conflicts.push(format!("listing:{}", value.listing_id));
                 }
             }
             for value in &catalog.markets {
@@ -399,7 +491,7 @@ impl ReferenceSource for CompositeSource {
                     .insert(value.market_id.clone(), value.clone())
                     .is_some_and(|previous| previous != *value)
                 {
-                    conflicts += 1;
+                    conflicts.push(format!("market:{}", value.market_id));
                 }
             }
             for value in &catalog.financial_products {
@@ -407,7 +499,7 @@ impl ReferenceSource for CompositeSource {
                     .insert(value.product_id.clone(), value.clone())
                     .is_some_and(|previous| previous != *value)
                 {
-                    conflicts += 1;
+                    conflicts.push(format!("financial_product:{}", value.product_id));
                 }
             }
             for value in &catalog.execution_accesses {
@@ -415,14 +507,15 @@ impl ReferenceSource for CompositeSource {
                     .insert(value.access_id.clone(), value.clone())
                     .is_some_and(|previous| previous != *value)
                 {
-                    conflicts += 1;
+                    conflicts.push(format!("execution_access:{}", value.access_id));
                 }
             }
         }
         if !unavailable_without_last_good.is_empty() {
             return Err(ReferenceError::Provider(format!(
-                "reference providers unavailable without a last-known-good snapshot: {}",
-                unavailable_without_last_good.join(", ")
+                "reference providers unavailable without a last-known-good snapshot: {}; failures: {}",
+                unavailable_without_last_good.join(", "),
+                failures.join("; ")
             )));
         }
         if successful_sources == 0 && self.last_good.is_empty() {
@@ -439,12 +532,20 @@ impl ReferenceSource for CompositeSource {
                 "reference refresh used last-known-good provider snapshots"
             );
         }
-        if conflicts > 0 {
-            tracing::warn!(
-                event = "reference_provider_conflicts",
+        if !conflicts.is_empty() {
+            let sample = conflicts.iter().take(8).cloned().collect::<Vec<_>>();
+            return Err(ReferenceError::Provider(format!(
+                "providers returned {} irreconcilable canonical record conflicts (sample: {})",
+                conflicts.len(),
+                sample.join(", ")
+            )));
+        }
+        if reconciled_instruments > 0 {
+            tracing::info!(
+                event = "reference_canonical_instruments_reconciled",
                 component = "reference",
-                conflict_count = conflicts,
-                "reference providers returned conflicting records; deterministic source order was used"
+                instrument_count = reconciled_instruments,
+                "shared canonical instruments were reconciled across provider listings"
             );
         }
         tracing::info!(
@@ -455,15 +556,154 @@ impl ReferenceSource for CompositeSource {
             duration_ms = started.elapsed().as_millis() as u64,
             "reference provider fan-in completed"
         );
-        Ok(ProviderCatalog {
-            entities: entities.into_values().collect(),
-            assets: assets.into_values().collect(),
-            instruments: instruments.into_values().collect(),
-            listings: listings.into_values().collect(),
-            markets: markets.into_values().collect(),
-            financial_products: financial_products.into_values().collect(),
-            execution_accesses: execution_accesses.into_values().collect(),
-        })
+        // Include paused and circuit-open providers through their durable
+        // snapshots without cloning them into a synthetic request result.
+        // This also makes the returned fan-in independent from which workers
+        // happened to be scheduled in this refresh cycle.
+        merge_provider_catalog_views(self.last_good.values())
+    }
+
+    async fn advance_source(
+        &mut self,
+        source_id: &str,
+    ) -> ReferenceResult<Option<ProviderCatalog>> {
+        let Some(index) = self
+            .workers
+            .iter()
+            .position(|worker| worker.source_id == source_id)
+        else {
+            return Err(ReferenceError::Invalid(format!(
+                "unknown reference source: {source_id}"
+            )));
+        };
+        if self.paused.contains(source_id) {
+            self.mark_paused(source_id);
+            return Ok(None);
+        }
+        if self.workers[index]
+            .retry_after
+            .is_some_and(|until| until > Instant::now())
+        {
+            return Err(ReferenceError::Provider(format!(
+                "{source_id}: provider circuit is open"
+            )));
+        }
+        let health = self
+            .health
+            .entry(source_id.to_owned())
+            .or_insert_with(|| ProviderHealth {
+                source_id: source_id.to_owned(),
+                status: "unknown".into(),
+                last_attempt_unix_nanos: None,
+                last_success_unix_nanos: None,
+                consecutive_failures: 0,
+                stale: false,
+            });
+        health.last_attempt_unix_nanos = Some(unix_nanos().into());
+        let started = Instant::now();
+        let result = {
+            let source = &mut self.workers[index].source;
+            match tokio::time::timeout(PROVIDER_FETCH_TIMEOUT, source.fetch_catalog_step()).await {
+                Ok(result) => result,
+                Err(error) => Err(ReferenceError::Provider(format!(
+                    "provider fetch timed out: {error}"
+                ))),
+            }
+        };
+        tracing::info!(
+            event = "reference_provider_targeted_fetch_completed",
+            component = "reference",
+            provider = source_id,
+            duration_ms = started.elapsed().as_millis() as u64,
+            success = result.is_ok(),
+            complete = result
+                .as_ref()
+                .map(|update| update.complete)
+                .unwrap_or(false),
+            page_count = result.as_ref().map(|update| update.page_count).unwrap_or(0),
+            "targeted reference provider fetch completed"
+        );
+        match result {
+            Ok(update) if !update.complete => {
+                self.mark_syncing(source_id);
+                Ok(None)
+            }
+            Ok(mut update) => {
+                tag_catalog_source(&mut update.catalog, source_id);
+                self.last_good.insert(source_id.to_owned(), update.catalog);
+                if let Some(store) = self.sync_store.as_mut() {
+                    store
+                        .save_last_good(
+                            source_id,
+                            self.last_good
+                                .get(source_id)
+                                .expect("inserted provider snapshot"),
+                        )
+                        .await?;
+                }
+                self.mark_success(source_id);
+                self.last_good_catalog()
+            }
+            Err(error) => {
+                self.mark_failure(source_id, "failed");
+                Err(error)
+            }
+        }
+    }
+
+    async fn set_source_paused(&mut self, source_id: &str, paused: bool) -> ReferenceResult<()> {
+        if !self
+            .workers
+            .iter()
+            .any(|worker| worker.source_id == source_id)
+        {
+            return Err(ReferenceError::Invalid(format!(
+                "unknown reference source: {source_id}"
+            )));
+        }
+        let store = self.sync_store.as_mut().ok_or_else(|| {
+            ReferenceError::Persistence("reference source control store is unavailable".into())
+        })?;
+        store.set_source_paused(source_id, paused).await?;
+        if paused {
+            self.paused.insert(source_id.to_owned());
+            self.mark_paused(source_id);
+        } else {
+            self.paused.remove(source_id);
+            if let Some(health) = self.health.get_mut(source_id) {
+                health.status = "unknown".into();
+                health.stale = false;
+            }
+        }
+        Ok(())
+    }
+
+    async fn set_option_underlying(
+        &mut self,
+        underlying: &str,
+        enabled: bool,
+    ) -> ReferenceResult<()> {
+        let Some(worker) = self
+            .workers
+            .iter_mut()
+            .find(|worker| worker.source_id == "massive-options")
+        else {
+            return Err(ReferenceError::Invalid(
+                "Massive options source is not configured".into(),
+            ));
+        };
+        worker
+            .source
+            .set_option_underlying(underlying, enabled)
+            .await
+    }
+
+    fn option_underlyings(&self) -> Vec<String> {
+        self.workers
+            .iter()
+            .find(|worker| worker.source_id == "massive-options")
+            .map(|worker| worker.source.option_underlyings())
+            .unwrap_or_default()
     }
 
     fn provider_health(&self) -> Vec<ProviderHealth> {
@@ -488,15 +728,11 @@ impl ReferenceSource for CompositeSource {
 
 fn tag_catalog_source(catalog: &mut ProviderCatalog, source_id: &str) {
     let source_id = source_id.to_owned();
-    for value in &mut catalog.entities {
-        value.source_id = Some(source_id.clone());
-    }
-    for value in &mut catalog.assets {
-        value.source_id = Some(source_id.clone());
-    }
-    for value in &mut catalog.instruments {
-        value.source_id = Some(source_id.clone());
-    }
+    // Entity, Asset, and Instrument are canonical records and may be observed
+    // by several providers. A single provider ID on those records is both
+    // lossy and order-dependent. Provider provenance belongs on the concrete
+    // Listing/Market/access projections until the domain supports a provenance
+    // set explicitly.
     for value in &mut catalog.listings {
         value.source_id = Some(source_id.clone());
     }
@@ -509,6 +745,244 @@ fn tag_catalog_source(catalog: &mut ProviderCatalog, source_id: &str) {
     for value in &mut catalog.execution_accesses {
         value.source_id = Some(source_id.clone());
     }
+}
+
+fn reconcile_canonical_instruments(values: &mut Vec<Instrument>) -> ReferenceResult<()> {
+    let mut reconciled = BTreeMap::new();
+    for value in std::mem::take(values) {
+        if let Some(previous) = reconciled.get_mut(&value.instrument_id) {
+            merge_canonical_instrument(previous, &value).map_err(|error| {
+                ReferenceError::Provider(format!(
+                    "provider produced conflicting canonical instrument {}: {error}",
+                    value.instrument_id
+                ))
+            })?;
+        } else {
+            reconciled.insert(value.instrument_id.clone(), value);
+        }
+    }
+    *values = reconciled.into_values().collect();
+    Ok(())
+}
+
+fn merge_provider_catalog_views<'a>(
+    catalogs: impl IntoIterator<Item = &'a ProviderCatalog>,
+) -> ReferenceResult<ProviderCatalog> {
+    let mut entities = BTreeMap::new();
+    let mut assets = BTreeMap::new();
+    let mut instruments = BTreeMap::new();
+    let mut listings = BTreeMap::new();
+    let mut markets = BTreeMap::new();
+    let mut financial_products = BTreeMap::new();
+    let mut execution_accesses = BTreeMap::new();
+    let mut conflicts = Vec::new();
+    let mut reconciled_instruments = 0usize;
+
+    for catalog in catalogs {
+        for value in &catalog.entities {
+            if entities
+                .insert(value.entity_id.clone(), value.clone())
+                .is_some_and(|previous| previous != *value)
+            {
+                conflicts.push(format!("entity:{}", value.entity_id));
+            }
+        }
+        for value in &catalog.assets {
+            if assets
+                .insert(value.asset_id.clone(), value.clone())
+                .is_some_and(|previous| previous != *value)
+            {
+                conflicts.push(format!("asset:{}", value.asset_id));
+            }
+        }
+        for value in &catalog.instruments {
+            if let Some(previous) = instruments.get_mut(&value.instrument_id) {
+                if previous != value {
+                    merge_canonical_instrument(previous, value).map_err(|error| {
+                        ReferenceError::Provider(format!(
+                            "canonical instrument conflict for {}: {error}",
+                            value.instrument_id
+                        ))
+                    })?;
+                    reconciled_instruments += 1;
+                }
+            } else {
+                instruments.insert(value.instrument_id.clone(), value.clone());
+            }
+        }
+        for value in &catalog.listings {
+            if listings
+                .insert(value.listing_id.clone(), value.clone())
+                .is_some_and(|previous| previous != *value)
+            {
+                conflicts.push(format!("listing:{}", value.listing_id));
+            }
+        }
+        for value in &catalog.markets {
+            if markets
+                .insert(value.market_id.clone(), value.clone())
+                .is_some_and(|previous| previous != *value)
+            {
+                conflicts.push(format!("market:{}", value.market_id));
+            }
+        }
+        for value in &catalog.financial_products {
+            if financial_products
+                .insert(value.product_id.clone(), value.clone())
+                .is_some_and(|previous| previous != *value)
+            {
+                conflicts.push(format!("financial_product:{}", value.product_id));
+            }
+        }
+        for value in &catalog.execution_accesses {
+            if execution_accesses
+                .insert(value.access_id.clone(), value.clone())
+                .is_some_and(|previous| previous != *value)
+            {
+                conflicts.push(format!("execution_access:{}", value.access_id));
+            }
+        }
+    }
+    if !conflicts.is_empty() {
+        let sample = conflicts.iter().take(8).cloned().collect::<Vec<_>>();
+        return Err(ReferenceError::Provider(format!(
+            "providers returned {} irreconcilable canonical record conflicts (sample: {})",
+            conflicts.len(),
+            sample.join(", ")
+        )));
+    }
+    if reconciled_instruments > 0 {
+        tracing::info!(
+            event = "reference_canonical_instruments_reconciled",
+            component = "reference",
+            instrument_count = reconciled_instruments,
+            "shared canonical instruments were reconciled across provider listings"
+        );
+    }
+    Ok(ProviderCatalog {
+        entities: entities.into_values().collect(),
+        assets: assets.into_values().collect(),
+        instruments: instruments.into_values().collect(),
+        listings: listings.into_values().collect(),
+        markets: markets.into_values().collect(),
+        financial_products: financial_products.into_values().collect(),
+        execution_accesses: execution_accesses.into_values().collect(),
+    })
+}
+
+fn merge_canonical_instrument(
+    previous: &mut Instrument,
+    incoming: &Instrument,
+) -> Result<(), String> {
+    let status = canonical_instrument_status(previous.status, incoming.status);
+    let mut left = previous.clone();
+    let mut right = incoming.clone();
+    left.source_id = None;
+    right.source_id = None;
+    left.status = status;
+    right.status = status;
+    if left != right {
+        let mut fields = Vec::new();
+        if left.symbol != right.symbol {
+            fields.push("symbol");
+        }
+        if left.instrument_type != right.instrument_type {
+            fields.push("instrument_type");
+        }
+        if left.product_family != right.product_family {
+            fields.push("product_family");
+        }
+        if left.primary_currency_asset_id != right.primary_currency_asset_id {
+            fields.push("primary_currency_asset_id");
+        }
+        if left.underlying_instrument_id != right.underlying_instrument_id {
+            fields.push("underlying_instrument_id");
+        }
+        if left.expiry_unix_nanos != right.expiry_unix_nanos {
+            fields.push("expiry_unix_nanos");
+        }
+        if left.strike != right.strike {
+            fields.push("strike");
+        }
+        if left.option_right != right.option_right {
+            fields.push("option_right");
+        }
+        if fields.is_empty() {
+            fields.push("canonical attributes");
+        }
+        return Err(format!("different {}", fields.join(", ")));
+    }
+    *previous = left;
+    Ok(())
+}
+
+fn canonical_instrument_status(
+    left: kairos_domain_types::ReferenceStatus,
+    right: kairos_domain_types::ReferenceStatus,
+) -> kairos_domain_types::ReferenceStatus {
+    use kairos_domain_types::ReferenceStatus;
+    if matches!(left, ReferenceStatus::Active | ReferenceStatus::Trading)
+        || matches!(right, ReferenceStatus::Active | ReferenceStatus::Trading)
+    {
+        ReferenceStatus::Active
+    } else if left == right {
+        left
+    } else if left == ReferenceStatus::Unknown {
+        right
+    } else if right == ReferenceStatus::Unknown {
+        left
+    } else {
+        ReferenceStatus::Inactive
+    }
+}
+
+fn provider_catalog_uses_current_canonical_shape(catalog: &ProviderCatalog) -> bool {
+    if catalog
+        .entities
+        .iter()
+        .any(|value| value.source_id.is_some())
+        || catalog.assets.iter().any(|value| value.source_id.is_some())
+        || catalog
+            .instruments
+            .iter()
+            .any(|value| value.source_id.is_some())
+    {
+        return false;
+    }
+    catalog.instruments.iter().all(|value| {
+        let id = value.instrument_id.as_str();
+        if let Some(base) = id.strip_prefix("instrument:spot:") {
+            return value.instrument_type == "spot"
+                && value.product_family.as_deref() == Some("spot")
+                && value.symbol.as_str() == base
+                && value
+                    .primary_currency_asset_id
+                    .as_ref()
+                    .is_some_and(|asset| asset.as_str() == format!("asset:crypto:{base}"));
+        }
+        let expected = if id.starts_with("instrument:perpetual:") {
+            Some(("perpetual", "instrument:perpetual:"))
+        } else if id.starts_with("instrument:future:") {
+            Some(("future", "instrument:future:"))
+        } else if id.starts_with("instrument:option:") {
+            Some(("option", "instrument:option:"))
+        } else {
+            None
+        };
+        let Some((family, prefix)) = expected else {
+            return true;
+        };
+        let canonical_tail = id.strip_prefix(prefix).expect("prefix checked");
+        let symbol = canonical_tail.replace(':', "-");
+        let expiry_is_compact = family == "perpetual"
+            || canonical_tail.split(':').nth(1).is_some_and(|expiry| {
+                expiry.len() == 8 && expiry.chars().all(|ch| ch.is_ascii_digit())
+            });
+        value.instrument_type == family
+            && value.product_family.as_deref() == Some(family)
+            && value.symbol.as_str() == symbol
+            && expiry_is_compact
+    })
 }
 
 impl CompositeSource {
@@ -581,8 +1055,12 @@ impl CompositeSource {
                 consecutive_failures: 0,
                 stale: false,
             });
-        health.status = "syncing".into();
-        health.stale = has_last_good;
+        // A replacement snapshot being assembled does not invalidate the
+        // completed snapshot currently being served. Only a provider without
+        // any last-known-good catalog is unavailable while its first full
+        // scan is in progress.
+        health.status = if has_last_good { "ready" } else { "syncing" }.into();
+        health.stale = false;
         if let Some(worker) = self
             .workers
             .iter_mut()
@@ -591,6 +1069,22 @@ impl CompositeSource {
             worker.retry_after = None;
         }
     }
+
+    fn mark_paused(&mut self, source_id: &str) {
+        let health = self
+            .health
+            .entry(source_id.to_owned())
+            .or_insert_with(|| ProviderHealth {
+                source_id: source_id.to_owned(),
+                status: "unknown".into(),
+                last_attempt_unix_nanos: None,
+                last_success_unix_nanos: None,
+                consecutive_failures: 0,
+                stale: false,
+            });
+        health.status = "paused".into();
+        health.stale = false;
+    }
 }
 
 fn unix_nanos() -> u64 {
@@ -598,6 +1092,21 @@ fn unix_nanos() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64
+}
+
+fn normalize_option_underlying(value: &str) -> ReferenceResult<String> {
+    let value = value.trim().to_ascii_uppercase();
+    if value.is_empty()
+        || value.len() > 32
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'.' || byte == b'-'
+        })
+    {
+        return Err(ReferenceError::Invalid(format!(
+            "invalid option underlying: {value:?}"
+        )));
+    }
+    Ok(value)
 }
 
 impl OkxSource {
@@ -614,20 +1123,22 @@ impl OkxSource {
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         Ok(Self {
             id: id.into(),
-            connection: provider.blocking_instrument_catalog(instrument_type),
+            connection: provider.instrument_catalog(instrument_type),
         })
     }
 }
 
+#[async_trait]
 impl ReferenceSource for OkxSource {
     fn source_id(&self) -> &str {
         &self.id
     }
 
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
         let facts = self
             .connection
             .fetch_instruments()
+            .await
             .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         okx_provider_catalog(facts)
     }
@@ -637,7 +1148,7 @@ impl BinanceSpotSource {
     pub fn new(endpoint: impl Into<String>) -> ReferenceResult<Self> {
         Ok(Self {
             connection: binance_public_connection(endpoint)?
-                .blocking_instrument_catalog(BinanceInstrumentType::Spot),
+                .instrument_catalog(BinanceInstrumentType::Spot),
         })
     }
 }
@@ -646,7 +1157,19 @@ impl BinanceOptionsSource {
     pub fn new(endpoint: impl Into<String>) -> ReferenceResult<Self> {
         Ok(Self {
             connection: binance_public_connection(endpoint)?
-                .blocking_instrument_catalog(BinanceInstrumentType::Option),
+                .instrument_catalog(BinanceInstrumentType::Option),
+        })
+    }
+}
+
+impl BinanceEquitySource {
+    pub fn new(
+        endpoint: impl Into<String>,
+        api_key: secrecy::SecretString,
+    ) -> ReferenceResult<Self> {
+        let provider = binance_public_connection(endpoint)?;
+        Ok(Self {
+            connection: provider.equity_instrument_catalog(api_key),
         })
     }
 }
@@ -668,8 +1191,7 @@ impl BinanceDerivativesSource {
         Ok(Self {
             id,
             instrument_type,
-            connection: binance_public_connection(endpoint)?
-                .blocking_instrument_catalog(instrument_type),
+            connection: binance_public_connection(endpoint)?.instrument_catalog(instrument_type),
         })
     }
 }
@@ -696,74 +1218,153 @@ fn binance_public_connection(endpoint: impl Into<String>) -> ReferenceResult<Bin
     .map_err(|error| ReferenceError::Provider(error.to_string()))
 }
 
-impl BinanceEquitySource {
-    pub fn new(api_key: impl Into<String>, secret: impl Into<String>) -> ReferenceResult<Self> {
-        let provider = BinanceConnection::connect(BinanceConnectionConfig {
-            environment: "live".into(),
-            rest_base_url: "https://api.binance.com".into(),
-            quota: BinanceQuotaAllocation {
-                request_weight_per_minute: 1_200,
-                cancel_reserve_weight: 0,
-            },
-            shared_quota: None,
-        })
-        .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-        let principal = provider
-            .principal_connection(BinancePrincipalConfig {
-                binding_id: "reference.binance.equity".into(),
-                principal_id: None,
-                api_key: api_key.into().into(),
-                secret: secret.into().into(),
-                principal_quota: None,
-            })
-            .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-        let connection = principal.blocking_equity_instrument_catalog();
-        Ok(Self { connection })
-    }
-}
-
-impl MassiveSource {
-    pub fn new(api_key: impl Into<String>, base_url: impl Into<String>) -> ReferenceResult<Self> {
-        Self::new_with_underlying(api_key, base_url, None)
-    }
-
-    pub fn new_with_underlying(
+impl MassiveOptionsCoverageSource {
+    pub async fn new(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
-        underlying: Option<String>,
+        sync_store: Box<dyn ProviderSyncStore>,
     ) -> ReferenceResult<Self> {
-        let connection = massive_public_connection(api_key, base_url)?
-            .blocking_instrument_catalog(MassiveInstrumentQuery::options(underlying))
-            .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-        Ok(Self {
+        let api_key = api_key.into();
+        let base_url = base_url.into();
+        let mut source = Self {
+            api_key,
+            base_url,
+            scopes: BTreeMap::new(),
+            last_good: BTreeMap::new(),
+            sync_store,
+            next_scope: 0,
+            coverage_dirty: false,
+        };
+        for underlying in source
+            .sync_store
+            .option_underlyings("massive-options")
+            .await?
+        {
+            source.load_scope(&underlying).await?;
+        }
+        Ok(source)
+    }
+
+    fn scope_key(underlying: &str) -> String {
+        format!("massive-options:{underlying}")
+    }
+
+    fn make_scope(&self, underlying: &str) -> ReferenceResult<ScopedMassiveOptions> {
+        let connection = massive_public_connection(self.api_key.clone(), self.base_url.clone())?
+            .instrument_catalog(MassiveInstrumentQuery::options(Some(underlying.into())));
+        Ok(ScopedMassiveOptions {
             connection,
             cursor: None,
-            accumulated: None,
-            sync_store: None,
+            legacy_accumulated: None,
         })
     }
 
-    pub fn new_with_sync_store(
-        api_key: impl Into<String>,
-        base_url: impl Into<String>,
-        mut sync_store: Box<dyn ProviderSyncStore>,
-    ) -> ReferenceResult<Self> {
-        let mut source = Self::new(api_key, base_url)?;
-        let (cursor, accumulated) = sync_store
-            .load_state("massive-options")?
+    async fn load_scope(&mut self, underlying: &str) -> ReferenceResult<()> {
+        let underlying = normalize_option_underlying(underlying)?;
+        if self.scopes.contains_key(&underlying) {
+            return Ok(());
+        }
+        let key = Self::scope_key(&underlying);
+        let (cursor, accumulated) = self
+            .sync_store
+            .load_state(&key)
+            .await?
             .unwrap_or((None, None));
-        source.cursor = cursor;
-        source.accumulated = accumulated;
-        source.sync_store = Some(sync_store);
-        Ok(source)
+        if let Some(catalog) = self.sync_store.load_last_good(&key).await? {
+            self.last_good.insert(underlying.clone(), catalog);
+        }
+        let mut scope = self.make_scope(&underlying)?;
+        scope.cursor = cursor;
+        scope.legacy_accumulated = accumulated;
+        self.scopes.insert(underlying, scope);
+        Ok(())
+    }
+
+    fn merged_last_good(&self) -> ReferenceResult<ProviderCatalog> {
+        merge_provider_catalog_views(self.last_good.values())
+    }
+
+    async fn advance_one_scope(
+        &mut self,
+        underlying: &str,
+    ) -> ReferenceResult<Option<ProviderCatalog>> {
+        let key = Self::scope_key(underlying);
+        let (legacy, cursor) = {
+            let scope = self
+                .scopes
+                .get_mut(underlying)
+                .expect("enabled coverage scope is present");
+            (scope.legacy_accumulated.take(), scope.cursor.clone())
+        };
+        if let Some(legacy) = legacy {
+            self.sync_store
+                .append_staged_page(&key, cursor.as_deref(), &legacy)
+                .await?;
+        }
+        let page = {
+            let scope = self
+                .scopes
+                .get_mut(underlying)
+                .expect("enabled coverage scope is present");
+            tokio::time::timeout(
+                MASSIVE_PAGE_TIMEOUT,
+                scope
+                    .connection
+                    .fetch_instruments_page(cursor.as_deref(), 1000),
+            )
+            .await
+            .map_err(|error| {
+                ReferenceError::Provider(format!("Massive {underlying} page timed out: {error}"))
+            })?
+            .map_err(|error| ReferenceError::Provider(error.to_string()))?
+        };
+        // The REST endpoint's `expired=false` filter excludes expired
+        // contracts, while provider `active` is the remaining tradability
+        // fact. Coverage snapshots intentionally contain only currently
+        // tradable contracts; a later completed scope reconcile removes a
+        // contract that has become inactive.
+        let mut facts = page.catalog;
+        facts.instruments.retain(|instrument| instrument.active);
+        let page_catalog = massive_provider_catalog(facts)?;
+        let next_cursor = if page.complete {
+            None
+        } else {
+            page.next_cursor
+        };
+        self.sync_store
+            .append_staged_page(&key, next_cursor.as_deref(), &page_catalog)
+            .await?;
+        self.scopes
+            .get_mut(underlying)
+            .expect("enabled coverage scope is present")
+            .cursor = next_cursor;
+        if !page.complete {
+            return Ok(None);
+        }
+        let catalog = self
+            .sync_store
+            .staged_pages(&key)
+            .await?
+            .into_iter()
+            .fold(None, |merged, page| {
+                Some(merge_provider_catalog(merged, page))
+            })
+            .unwrap_or_default();
+        self.sync_store.clear_staged_pages(&key).await?;
+        self.scopes
+            .get_mut(underlying)
+            .expect("enabled coverage scope is present")
+            .cursor = None;
+        self.sync_store.save_last_good(&key, &catalog).await?;
+        self.last_good.insert(underlying.into(), catalog);
+        Ok(Some(self.merged_last_good()?))
     }
 }
 
 impl MassiveEquitySource {
     pub fn new(api_key: impl Into<String>, base_url: impl Into<String>) -> ReferenceResult<Self> {
         let connection = massive_public_connection(api_key, base_url)?
-            .blocking_instrument_catalog(MassiveInstrumentQuery::equities())
-            .map_err(|error| ReferenceError::Provider(error.to_string()))?;
+            .instrument_catalog(MassiveInstrumentQuery::equities());
         Ok(Self {
             connection,
             cursor: None,
@@ -772,14 +1373,15 @@ impl MassiveEquitySource {
         })
     }
 
-    pub fn new_with_sync_store(
+    pub async fn new_with_sync_store(
         api_key: impl Into<String>,
         base_url: impl Into<String>,
         mut sync_store: Box<dyn ProviderSyncStore>,
     ) -> ReferenceResult<Self> {
         let mut source = Self::new(api_key, base_url)?;
         let (cursor, accumulated) = sync_store
-            .load_state("massive-equity")?
+            .load_state("massive-equity")
+            .await?
             .unwrap_or((None, None));
         source.cursor = cursor;
         source.accumulated = accumulated;
@@ -807,186 +1409,272 @@ impl HyperliquidSource {
             info_endpoint: endpoint.into(),
         })
         .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-        let connection = provider
-            .blocking_instrument_catalog()
-            .map_err(|error| ReferenceError::Provider(error.to_string()))?;
+        let connection = provider.instrument_catalog();
         Ok(Self { connection })
     }
 }
 
+#[async_trait]
 impl ReferenceSource for BinanceSpotSource {
     fn source_id(&self) -> &str {
         "binance-spot"
     }
 
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
         let facts = self
             .connection
             .fetch_instruments()
+            .await
             .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_provider_catalog(facts, BinanceInstrumentType::Spot)
     }
 }
 
+#[async_trait]
 impl ReferenceSource for BinanceOptionsSource {
     fn source_id(&self) -> &str {
         "binance-options"
     }
 
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
         let facts = self
             .connection
             .fetch_instruments()
+            .await
             .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_provider_catalog(facts, BinanceInstrumentType::Option)
     }
 }
 
+#[async_trait]
 impl ReferenceSource for BinanceDerivativesSource {
     fn source_id(&self) -> &str {
         self.id
     }
 
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
         let facts = self
             .connection
             .fetch_instruments()
+            .await
             .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_provider_catalog(facts, self.instrument_type)
     }
 }
 
+#[async_trait]
 impl ReferenceSource for BinanceEquitySource {
     fn source_id(&self) -> &str {
         "binance-equity"
     }
 
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
         let facts = self
             .connection
             .fetch_instruments()
+            .await
             .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         binance_equity_provider_catalog(facts)
     }
 }
 
-impl ReferenceSource for MassiveSource {
+#[async_trait]
+impl ReferenceSource for MassiveOptionsCoverageSource {
     fn source_id(&self) -> &str {
         "massive-options"
     }
 
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
-        let facts = self
-            .connection
-            .fetch_instruments()
-            .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-        massive_provider_catalog(facts)
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        Ok(self.fetch_catalog_step().await?.catalog)
     }
 
-    fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
-        let mut cursor = self.cursor.take();
-        let mut catalog = self.accumulated.take();
-        let mut complete = false;
-        let mut page_count = 0;
-        for _ in 0..MASSIVE_PAGES_PER_REFRESH {
-            page_count += 1;
-            let page = self
-                .connection
-                .fetch_instruments_page(cursor.as_deref(), 1000)
-                .map_err(|error| ReferenceError::Provider(error.to_string()))?;
-            cursor = page.next_cursor;
-            let page_catalog = massive_provider_catalog(page.catalog)?;
-            catalog = Some(merge_provider_catalog(catalog.as_ref(), page_catalog));
-            complete = page.complete;
-            if complete {
-                break;
-            }
+    async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
+        if self.coverage_dirty {
+            self.coverage_dirty = false;
+            return Ok(ProviderUpdate {
+                catalog: self.merged_last_good()?,
+                complete: true,
+                page_count: 0,
+            });
         }
-        let catalog = catalog.unwrap_or_default();
-        self.cursor = if complete { None } else { cursor };
-        self.accumulated = if complete {
-            None
+        if self.scopes.is_empty() {
+            return Ok(ProviderUpdate {
+                catalog: ProviderCatalog::default(),
+                complete: true,
+                page_count: 0,
+            });
+        }
+        let scope_count = self.scopes.len();
+        let index = self.next_scope % scope_count;
+        self.next_scope = (self.next_scope + 1) % scope_count;
+        let underlying = self
+            .scopes
+            .keys()
+            .nth(index)
+            .cloned()
+            .expect("scope count was non-zero");
+        match self.advance_one_scope(&underlying).await? {
+            Some(catalog) => Ok(ProviderUpdate {
+                catalog,
+                complete: true,
+                page_count: 1,
+            }),
+            None if self.last_good.is_empty() => Ok(ProviderUpdate {
+                catalog: ProviderCatalog::default(),
+                complete: false,
+                page_count: 1,
+            }),
+            None => Ok(ProviderUpdate {
+                // A replacement scope is still paging, but a completed
+                // scoped snapshot exists. Keep it authoritative until that
+                // one underlying finishes rather than degrading the entire
+                // Massive provider.
+                catalog: self.merged_last_good()?,
+                complete: true,
+                page_count: 1,
+            }),
+        }
+    }
+
+    async fn set_option_underlying(
+        &mut self,
+        underlying: &str,
+        enabled: bool,
+    ) -> ReferenceResult<()> {
+        let underlying = normalize_option_underlying(underlying)?;
+        self.sync_store
+            .set_option_underlying("massive-options", &underlying, enabled)
+            .await?;
+        if enabled {
+            self.load_scope(&underlying).await?;
         } else {
-            Some(catalog.clone())
-        };
-        if let Some(store) = self.sync_store.as_mut() {
-            store.save_state(
-                "massive-options",
-                self.cursor.as_deref(),
-                self.accumulated.as_ref(),
-            )?;
+            self.scopes.remove(&underlying);
+            self.last_good.remove(&underlying);
+            self.next_scope = 0;
+            self.coverage_dirty = true;
         }
-        Ok(ProviderUpdate {
-            catalog,
-            complete,
-            page_count,
-        })
+        Ok(())
+    }
+
+    fn option_underlyings(&self) -> Vec<String> {
+        self.scopes.keys().cloned().collect()
     }
 }
 
+#[async_trait]
 impl ReferenceSource for MassiveEquitySource {
     fn source_id(&self) -> &str {
         "massive-equity"
     }
 
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
         let facts = self
             .connection
             .fetch_instruments()
+            .await
             .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         massive_provider_catalog(facts)
     }
 
-    fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
-        let mut cursor = self.cursor.take();
-        let mut catalog = self.accumulated.take();
+    async fn fetch_catalog_step(&mut self) -> ReferenceResult<ProviderUpdate> {
+        if self.accumulated.is_none() {
+            if let Some(store) = self.sync_store.as_mut() {
+                if let Some((cursor, accumulated)) = store.load_state("massive-equity").await? {
+                    self.cursor = cursor;
+                    self.accumulated = accumulated;
+                }
+            }
+        }
+        if let (Some(store), Some(legacy_catalog)) =
+            (self.sync_store.as_mut(), self.accumulated.take())
+        {
+            store
+                .append_staged_page("massive-equity", self.cursor.as_deref(), &legacy_catalog)
+                .await?;
+        }
+        let mut cursor = self.cursor.clone();
+        let mut catalog = None;
         let mut complete = false;
         let mut page_count = 0;
         for _ in 0..MASSIVE_PAGES_PER_REFRESH {
+            let page = match tokio::time::timeout(
+                MASSIVE_PAGE_TIMEOUT,
+                self.connection
+                    .fetch_instruments_page(cursor.as_deref(), 1000),
+            )
+            .await
+            {
+                Ok(result) => {
+                    result.map_err(|error| ReferenceError::Provider(error.to_string()))?
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        event = "reference_massive_page_timeout",
+                        component = "reference",
+                        provider = "massive-equity",
+                        page_count,
+                        "Massive page budget expired; persisted cursor will resume on the next refresh"
+                    );
+                    break;
+                }
+            };
             page_count += 1;
-            let page = self
-                .connection
-                .fetch_instruments_page(cursor.as_deref(), 1000)
-                .map_err(|error| ReferenceError::Provider(error.to_string()))?;
             cursor = page.next_cursor;
             let page_catalog = massive_provider_catalog(page.catalog)?;
-            catalog = Some(merge_provider_catalog(catalog.as_ref(), page_catalog));
             complete = page.complete;
+            let next_cursor = if complete { None } else { cursor.clone() };
+            if let Some(store) = self.sync_store.as_mut() {
+                store
+                    .append_staged_page("massive-equity", next_cursor.as_deref(), &page_catalog)
+                    .await?;
+            } else {
+                catalog = Some(merge_provider_catalog(catalog.take(), page_catalog));
+            }
+            self.cursor = next_cursor;
             if complete {
                 break;
             }
         }
-        let catalog = catalog.unwrap_or_default();
-        self.cursor = if complete { None } else { cursor };
-        self.accumulated = if complete {
-            None
+        let result_catalog = if complete {
+            self.cursor = None;
+            if let Some(store) = self.sync_store.as_mut() {
+                let catalog = store
+                    .staged_pages("massive-equity")
+                    .await?
+                    .into_iter()
+                    .fold(None, |merged, page| {
+                        Some(merge_provider_catalog(merged, page))
+                    })
+                    .unwrap_or_default();
+                store.clear_staged_pages("massive-equity").await?;
+                catalog
+            } else {
+                catalog.unwrap_or_default()
+            }
         } else {
-            Some(catalog.clone())
+            self.cursor = cursor;
+            self.accumulated = catalog;
+            ProviderCatalog::default()
         };
-        if let Some(store) = self.sync_store.as_mut() {
-            store.save_state(
-                "massive-equity",
-                self.cursor.as_deref(),
-                self.accumulated.as_ref(),
-            )?;
-        }
         Ok(ProviderUpdate {
-            catalog,
+            catalog: result_catalog,
             complete,
             page_count,
         })
     }
 }
 
+#[async_trait]
 impl ReferenceSource for HyperliquidSource {
     fn source_id(&self) -> &str {
         "hyperliquid"
     }
 
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
         let facts = self
             .connection
             .fetch_instruments()
+            .await
             .map_err(|error| ReferenceError::Provider(error.to_string()))?;
         hyperliquid_provider_catalog(facts)
     }
@@ -1050,7 +1738,7 @@ fn hyperliquid_provider_catalog(
             if value.active { "active" } else { "inactive" }.into();
         catalog.instruments.push(Instrument {
             instrument_id: instrument_id.clone(),
-            symbol: kairos_domain_types::Symbol::new(source_symbol.clone())?,
+            symbol: kairos_domain_types::Symbol::new(format!("{base}-{quote}"))?,
             instrument_type: "perpetual".into(),
             product_family: Some("perpetual".into()),
             primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(format!(
@@ -1139,12 +1827,7 @@ fn massive_provider_catalog(facts: ExternalInstrumentCatalog) -> ReferenceResult
     catalog
         .assets
         .dedup_by(|left, right| left.asset_id == right.asset_id);
-    catalog
-        .instruments
-        .sort_by(|left, right| left.instrument_id.cmp(&right.instrument_id));
-    catalog
-        .instruments
-        .dedup_by(|left, right| left.instrument_id == right.instrument_id);
+    reconcile_canonical_instruments(&mut catalog.instruments)?;
     catalog
         .listings
         .sort_by(|left, right| left.listing_id.cmp(&right.listing_id));
@@ -1181,11 +1864,12 @@ fn append_massive_instrument(
         .unwrap_or_else(|| "USD".into());
     let status: kairos_domain_types::ReferenceStatus =
         if value.active { "active" } else { "inactive" }.into();
-    let (family, instrument_id, symbol, underlying_id) = match value.kind {
+    let (family, canonical_family, instrument_id, symbol, underlying_id) = match value.kind {
         ExternalInstrumentKind::Equity => {
             let ticker = source_symbol.clone();
             ensure_massive_underlying(catalog, &ticker, &quote, &exchange_id, status)?;
             (
+                "equity",
                 "equity",
                 format!("instrument:equity:US:{ticker}:common"),
                 ticker,
@@ -1222,8 +1906,9 @@ fn append_massive_instrument(
             };
             (
                 "options",
+                "option",
                 format!("instrument:option:{underlying}:{expiry}:{strike}:{right}"),
-                source_symbol.clone(),
+                format!("{underlying}-{expiry}-{strike}-{right}"),
                 Some(kairos_domain_types::InstrumentId::new(format!(
                     "instrument:equity:US:{underlying}:common"
                 ))?),
@@ -1250,13 +1935,8 @@ fn append_massive_instrument(
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
         symbol: kairos_domain_types::Symbol::new(symbol)?,
-        instrument_type: if family == "options" {
-            "option"
-        } else {
-            "equity"
-        }
-        .into(),
-        product_family: Some(family.into()),
+        instrument_type: canonical_family.into(),
+        product_family: Some(canonical_family.into()),
         issuer_id: (family == "equity").then(|| {
             kairos_domain_types::IssuerId::new(format!("issuer:US:{source_symbol}"))
                 .expect("validated Massive issuer")
@@ -1266,7 +1946,12 @@ fn append_massive_instrument(
             "asset:fiat:{quote}"
         ))?),
         underlying_instrument_id: underlying_id,
-        expiry_unix_nanos: value.expiry_unix_nanos,
+        expiry_unix_nanos: matches!(
+            value.kind,
+            ExternalInstrumentKind::Future | ExternalInstrumentKind::Option
+        )
+        .then_some(value.expiry_unix_nanos)
+        .flatten(),
         strike: value.strike.clone(),
         option_right: value.option_right.clone(),
         status,
@@ -1279,6 +1964,7 @@ fn append_massive_instrument(
         exchange_symbol: kairos_domain_types::Symbol::new(source_symbol.clone())?,
         status,
         effective_from_unix_nanos: 0.into(),
+        effective_to_unix_nanos: value.expiry_unix_nanos,
         ..Listing::default()
     });
     catalog.markets.push(Market {
@@ -1423,6 +2109,111 @@ fn massive_exchange_name(exchange_id: &str) -> &str {
     }
 }
 
+fn binance_equity_provider_catalog(
+    facts: ExternalInstrumentCatalog,
+) -> ReferenceResult<ProviderCatalog> {
+    if facts.participant.id.as_str() != "binance"
+        || facts.participant.kind
+            != kairos_integration::application::capabilities::ParticipantKind::Broker
+    {
+        return Err(ReferenceError::Provider(
+            "Binance Equity source requires the Binance broker participant".into(),
+        ));
+    }
+    let exchange_id = kairos_domain_types::Exchange::new("exchange:binance")?;
+    let mut catalog = ProviderCatalog {
+        entities: vec![Entity {
+            entity_id: exchange_id.to_string(),
+            entity_type: "exchange".into(),
+            name: "Binance".into(),
+            status: "active".into(),
+            source_id: None,
+        }],
+        ..Default::default()
+    };
+    for value in facts.instruments {
+        if value.kind != ExternalInstrumentKind::Equity {
+            return Err(ReferenceError::Provider(format!(
+                "Binance Equity catalog contained incompatible instrument kind: {:?}",
+                value.kind
+            )));
+        }
+        let symbol = value.source_symbol.as_str().trim().to_ascii_uppercase();
+        let status: kairos_domain_types::ReferenceStatus =
+            if value.active { "active" } else { "inactive" }.into();
+        let equity_asset = kairos_domain_types::AssetId::new(format!("asset:equity:{symbol}"))?;
+        let instrument_id = kairos_domain_types::InstrumentId::new(format!(
+            "instrument:equity:US:{symbol}:common"
+        ))?;
+        let listing_id =
+            kairos_domain_types::ListingId::new(format!("listing:binance:equity:{symbol}"))?;
+        let market_id =
+            kairos_domain_types::MarketId::new(format!("market:binance:equity:{symbol}"))?;
+        catalog.assets.push(Asset {
+            asset_id: equity_asset.clone(),
+            code: symbol.clone(),
+            asset_class: "equity".into(),
+            status,
+            ..Asset::default()
+        });
+        catalog.instruments.push(Instrument {
+            instrument_id: instrument_id.clone(),
+            symbol: kairos_domain_types::Symbol::new(symbol.clone())?,
+            instrument_type: "equity".into(),
+            product_family: Some("equity".into()),
+            issuer_id: Some(kairos_domain_types::IssuerId::new(format!(
+                "issuer:US:{symbol}"
+            ))?),
+            share_class: Some("common".into()),
+            status,
+            ..Instrument::default()
+        });
+        catalog.listings.push(Listing {
+            listing_id: listing_id.clone(),
+            instrument_id: instrument_id.clone(),
+            exchange_id: exchange_id.clone(),
+            exchange_symbol: kairos_domain_types::Symbol::new(symbol.clone())?,
+            status,
+            effective_from_unix_nanos: 0.into(),
+            ..Listing::default()
+        });
+        catalog.markets.push(Market {
+            market_id: market_id.clone(),
+            market_key: format!("binance.equity.{symbol}"),
+            instrument_id,
+            listing_id,
+            exchange_id: exchange_id.clone(),
+            market_type: "equity".into(),
+            asset_type: Some("equity".into()),
+            source_symbol: kairos_domain_types::Symbol::new(symbol.clone())?,
+            base_asset_id: Some(equity_asset),
+            status,
+            quantity_tick: value.quantity_tick,
+            quantity_precision: value.quantity_precision.unwrap_or_default() as i32,
+            minimum_quantity: value.minimum_quantity,
+            minimum_notional: value.minimum_notional,
+            effective_from_unix_nanos: 0.into(),
+            ..Market::default()
+        });
+        catalog.execution_accesses.push(ExecutionAccess {
+            access_id: kairos_domain_types::ExecutionAccessId::new(format!(
+                "execution-access:binance:equity:{symbol}"
+            ))?,
+            market_id,
+            provider_id: "binance".into(),
+            product_family: "equity".into(),
+            provider_symbol: value.source_symbol,
+            settlement_asset_id: None,
+            status,
+            effective_from_unix_nanos: 0.into(),
+            effective_to_unix_nanos: None,
+            source_id: None,
+        });
+    }
+    catalog.validate()?;
+    Ok(catalog)
+}
+
 fn binance_provider_catalog(
     facts: ExternalInstrumentCatalog,
     instrument_type: BinanceInstrumentType,
@@ -1452,12 +2243,7 @@ fn binance_provider_catalog(
     catalog
         .assets
         .dedup_by(|left, right| left.asset_id == right.asset_id);
-    catalog
-        .instruments
-        .sort_by(|left, right| left.instrument_id.cmp(&right.instrument_id));
-    catalog
-        .instruments
-        .dedup_by(|left, right| left.instrument_id == right.instrument_id);
+    reconcile_canonical_instruments(&mut catalog.instruments)?;
     catalog.validate()?;
     Ok(catalog)
 }
@@ -1478,102 +2264,162 @@ fn append_binance_instrument(
         .as_ref()
         .map(|value| value.as_str().to_ascii_uppercase())
         .ok_or_else(|| ReferenceError::Provider("Binance quote currency is missing".into()))?;
-    for code in [&base, &quote] {
+    for (code, asset_class) in [
+        (
+            &base,
+            if value.kind == ExternalInstrumentKind::EquityPerpetual {
+                "equity"
+            } else {
+                "crypto"
+            },
+        ),
+        (&quote, "crypto"),
+    ] {
         catalog.assets.push(Asset {
-            asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))?,
+            asset_id: kairos_domain_types::AssetId::new(format!("asset:{asset_class}:{code}"))?,
             code: code.clone(),
-            asset_class: "crypto".into(),
+            asset_class: asset_class.into(),
             status: "active".into(),
             ..Asset::default()
         });
     }
-    let (family, instrument_id, underlying_instrument_id) = match value.kind {
-        ExternalInstrumentKind::Spot if instrument_type == BinanceInstrumentType::Spot => {
-            ("spot", format!("instrument:spot:{base}"), None)
-        }
-        ExternalInstrumentKind::Perpetual
-            if matches!(
-                instrument_type,
-                BinanceInstrumentType::UsdMFutures | BinanceInstrumentType::CoinMFutures
-            ) =>
-        {
-            (
-                match instrument_type {
-                    BinanceInstrumentType::UsdMFutures => "usd-m-futures",
-                    BinanceInstrumentType::CoinMFutures => "coin-m-futures",
-                    _ => unreachable!("guarded futures type"),
-                },
-                format!("instrument:perpetual:{base}-{quote}"),
+    let (family, canonical_family, instrument_id, canonical_symbol, underlying_instrument_id) =
+        match value.kind {
+            ExternalInstrumentKind::Spot if instrument_type == BinanceInstrumentType::Spot => (
+                "spot",
+                "spot",
+                format!("instrument:spot:{base}"),
+                base.clone(),
                 None,
-            )
-        }
-        ExternalInstrumentKind::Future
-            if matches!(
-                instrument_type,
-                BinanceInstrumentType::UsdMFutures | BinanceInstrumentType::CoinMFutures
-            ) =>
-        {
-            let expiry = canonical_expiry(value.expiry_unix_nanos)?;
-            (
-                match instrument_type {
-                    BinanceInstrumentType::UsdMFutures => "usd-m-futures",
-                    BinanceInstrumentType::CoinMFutures => "coin-m-futures",
-                    _ => unreachable!("guarded futures type"),
-                },
-                format!("instrument:future:{base}-{quote}:{expiry}"),
-                None,
-            )
-        }
-        ExternalInstrumentKind::Option if instrument_type == BinanceInstrumentType::Option => {
-            let expiry = canonical_expiry(value.expiry_unix_nanos)?;
-            let strike = value.strike.as_deref().ok_or_else(|| {
-                ReferenceError::Provider("Binance option strike is missing".into())
-            })?;
-            let right = value.option_right.as_deref().ok_or_else(|| {
-                ReferenceError::Provider("Binance option right is missing".into())
-            })?;
-            let underlying =
-                kairos_domain_types::InstrumentId::new(format!("instrument:spot:{base}"))?;
-            if !catalog
-                .instruments
-                .iter()
-                .any(|value| value.instrument_id == underlying)
+            ),
+            ExternalInstrumentKind::Perpetual
+                if matches!(
+                    instrument_type,
+                    BinanceInstrumentType::UsdMFutures | BinanceInstrumentType::CoinMFutures
+                ) =>
             {
-                catalog.instruments.push(Instrument {
-                    instrument_id: underlying.clone(),
-                    symbol: kairos_domain_types::Symbol::new(base.clone())?,
-                    instrument_type: "spot".into(),
-                    product_family: Some("spot".into()),
-                    primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(format!(
-                        "asset:crypto:{quote}"
-                    ))?),
-                    status: "active".into(),
-                    ..Instrument::default()
-                });
+                (
+                    match instrument_type {
+                        BinanceInstrumentType::UsdMFutures => "usd-m-futures",
+                        BinanceInstrumentType::CoinMFutures => "coin-m-futures",
+                        _ => unreachable!("guarded futures type"),
+                    },
+                    "perpetual",
+                    format!("instrument:perpetual:{base}-{quote}"),
+                    format!("{base}-{quote}"),
+                    None,
+                )
             }
-            (
-                "options",
-                format!(
-                    "instrument:option:{base}-{quote}:{expiry}:{strike}:{}",
-                    match right.to_ascii_lowercase().as_str() {
-                        "call" | "c" => "C",
-                        "put" | "p" => "P",
-                        _ => {
-                            return Err(ReferenceError::Provider(format!(
-                                "unsupported Binance option right: {right}"
-                            )));
+            ExternalInstrumentKind::EquityPerpetual
+                if instrument_type == BinanceInstrumentType::UsdMFutures =>
+            {
+                let underlying = kairos_domain_types::InstrumentId::new(format!(
+                    "instrument:equity:US:{base}:common"
+                ))?;
+                if !catalog
+                    .instruments
+                    .iter()
+                    .any(|value| value.instrument_id == underlying)
+                {
+                    catalog.instruments.push(Instrument {
+                        instrument_id: underlying.clone(),
+                        symbol: kairos_domain_types::Symbol::new(base.clone())?,
+                        instrument_type: "equity".into(),
+                        product_family: Some("equity".into()),
+                        issuer_id: Some(kairos_domain_types::IssuerId::new(format!(
+                            "issuer:US:{base}"
+                        ))?),
+                        share_class: Some("common".into()),
+                        status: "active".into(),
+                        ..Instrument::default()
+                    });
+                }
+                (
+                    "usd-m-futures",
+                    "perpetual",
+                    format!("instrument:perpetual:equity:US:{base}:{quote}"),
+                    format!("{base}-{quote}"),
+                    Some(underlying),
+                )
+            }
+            ExternalInstrumentKind::Future
+                if matches!(
+                    instrument_type,
+                    BinanceInstrumentType::UsdMFutures | BinanceInstrumentType::CoinMFutures
+                ) =>
+            {
+                let expiry = canonical_expiry(value.expiry_unix_nanos)?;
+                (
+                    match instrument_type {
+                        BinanceInstrumentType::UsdMFutures => "usd-m-futures",
+                        BinanceInstrumentType::CoinMFutures => "coin-m-futures",
+                        _ => unreachable!("guarded futures type"),
+                    },
+                    "future",
+                    format!("instrument:future:{base}-{quote}:{expiry}"),
+                    format!("{base}-{quote}-{expiry}"),
+                    None,
+                )
+            }
+            ExternalInstrumentKind::Option if instrument_type == BinanceInstrumentType::Option => {
+                let expiry = canonical_expiry(value.expiry_unix_nanos)?;
+                let strike = value.strike.as_deref().ok_or_else(|| {
+                    ReferenceError::Provider("Binance option strike is missing".into())
+                })?;
+                let right = value.option_right.as_deref().ok_or_else(|| {
+                    ReferenceError::Provider("Binance option right is missing".into())
+                })?;
+                let underlying =
+                    kairos_domain_types::InstrumentId::new(format!("instrument:spot:{base}"))?;
+                if !catalog
+                    .instruments
+                    .iter()
+                    .any(|value| value.instrument_id == underlying)
+                {
+                    catalog.instruments.push(Instrument {
+                        instrument_id: underlying.clone(),
+                        symbol: kairos_domain_types::Symbol::new(base.clone())?,
+                        instrument_type: "spot".into(),
+                        product_family: Some("spot".into()),
+                        primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(
+                            format!("asset:crypto:{base}"),
+                        )?),
+                        status: "active".into(),
+                        ..Instrument::default()
+                    });
+                }
+                (
+                    "options",
+                    "option",
+                    format!(
+                        "instrument:option:{base}-{quote}:{expiry}:{strike}:{}",
+                        match right.to_ascii_lowercase().as_str() {
+                            "call" | "c" => "C",
+                            "put" | "p" => "P",
+                            _ => {
+                                return Err(ReferenceError::Provider(format!(
+                                    "unsupported Binance option right: {right}"
+                                )));
+                            }
                         }
-                    }
-                ),
-                Some(underlying),
-            )
-        }
-        other => {
-            return Err(ReferenceError::Provider(format!(
+                    ),
+                    format!(
+                        "{base}-{quote}-{expiry}-{strike}-{}",
+                        match right.to_ascii_lowercase().as_str() {
+                            "call" | "c" => "C",
+                            "put" | "p" => "P",
+                            _ => unreachable!("option right validated above"),
+                        }
+                    ),
+                    Some(underlying),
+                )
+            }
+            other => {
+                return Err(ReferenceError::Provider(format!(
             "Binance {instrument_type:?} catalog contained incompatible instrument kind: {other:?}"
         )))
-        }
-    };
+            }
+        };
     let instrument_id = kairos_domain_types::InstrumentId::new(instrument_id)?;
     let listing_id = kairos_domain_types::ListingId::new(if family == "spot" {
         format!("listing:binance:spot:{base}:{quote}")
@@ -1587,24 +2433,24 @@ fn append_binance_instrument(
         if value.active { "active" } else { "inactive" }.into();
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
-        symbol: kairos_domain_types::Symbol::new(if family == "spot" {
-            base.clone()
-        } else {
-            source_symbol.clone()
-        })?,
-        instrument_type: match value.kind {
-            ExternalInstrumentKind::Perpetual => "perpetual",
-            ExternalInstrumentKind::Future => "future",
-            ExternalInstrumentKind::Option => "option",
-            _ => family,
-        }
-        .into(),
-        product_family: Some(family.into()),
+        symbol: kairos_domain_types::Symbol::new(canonical_symbol)?,
+        instrument_type: canonical_family.into(),
+        product_family: Some(canonical_family.into()),
         primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(format!(
-            "asset:crypto:{quote}"
+            "asset:crypto:{}",
+            if canonical_family == "spot" {
+                &base
+            } else {
+                &quote
+            }
         ))?),
-        underlying_instrument_id,
-        expiry_unix_nanos: value.expiry_unix_nanos,
+        underlying_instrument_id: underlying_instrument_id.clone(),
+        expiry_unix_nanos: matches!(
+            value.kind,
+            ExternalInstrumentKind::Future | ExternalInstrumentKind::Option
+        )
+        .then_some(value.expiry_unix_nanos)
+        .flatten(),
         strike: value.strike.clone(),
         option_right: value.option_right.clone(),
         status,
@@ -1617,6 +2463,7 @@ fn append_binance_instrument(
         exchange_symbol: kairos_domain_types::Symbol::new(source_symbol.clone())?,
         status,
         effective_from_unix_nanos: 0.into(),
+        effective_to_unix_nanos: value.expiry_unix_nanos,
         ..Listing::default()
     });
     catalog.markets.push(Market {
@@ -1626,10 +2473,22 @@ fn append_binance_instrument(
         listing_id,
         exchange_id,
         market_type: family.into(),
-        asset_type: Some("crypto".into()),
+        asset_type: Some(
+            if value.kind == ExternalInstrumentKind::EquityPerpetual {
+                "equity"
+            } else {
+                "crypto"
+            }
+            .into(),
+        ),
         source_symbol: kairos_domain_types::Symbol::new(source_symbol)?,
         base_asset_id: Some(kairos_domain_types::AssetId::new(format!(
-            "asset:crypto:{base}"
+            "asset:{}:{base}",
+            if value.kind == ExternalInstrumentKind::EquityPerpetual {
+                "equity"
+            } else {
+                "crypto"
+            }
         ))?),
         quote_asset_id: Some(kairos_domain_types::AssetId::new(format!(
             "asset:crypto:{quote}"
@@ -1642,6 +2501,7 @@ fn append_binance_instrument(
         minimum_quantity: value.minimum_quantity,
         minimum_notional: value.minimum_notional,
         contract_size: value.contract_value,
+        underlying_instrument_id,
         effective_from_unix_nanos: 0.into(),
         effective_to_unix_nanos: value.expiry_unix_nanos,
         ..Market::default()
@@ -1675,12 +2535,7 @@ fn okx_provider_catalog(facts: ExternalInstrumentCatalog) -> ReferenceResult<Pro
     catalog
         .assets
         .dedup_by(|left, right| left.asset_id == right.asset_id);
-    catalog
-        .instruments
-        .sort_by(|left, right| left.instrument_id.cmp(&right.instrument_id));
-    catalog
-        .instruments
-        .dedup_by(|left, right| left.instrument_id == right.instrument_id);
+    reconcile_canonical_instruments(&mut catalog.instruments)?;
     catalog.validate()?;
     Ok(catalog)
 }
@@ -1691,43 +2546,84 @@ fn append_okx_instrument(
 ) -> ReferenceResult<()> {
     let source_symbol = value.source_symbol.as_str().to_ascii_uppercase();
     let (base, quote) = okx_base_quote(&value)?;
-    let (family, instrument_id) = match value.kind {
-        ExternalInstrumentKind::Equity => {
-            return Err(ReferenceError::Provider(
-                "OKX catalog cannot contain equity instruments".into(),
-            ))
-        }
-        ExternalInstrumentKind::Spot => ("spot", format!("instrument:spot:{base}")),
-        ExternalInstrumentKind::Margin => ("margin", format!("instrument:margin:{base}-{quote}")),
-        ExternalInstrumentKind::Perpetual => {
-            ("swap", format!("instrument:perpetual:{base}-{quote}"))
-        }
-        ExternalInstrumentKind::Future => {
-            let expiry = canonical_expiry(value.expiry_unix_nanos)?;
-            (
-                "futures",
-                format!("instrument:future:{base}-{quote}:{expiry}"),
-            )
-        }
-        ExternalInstrumentKind::Option => {
-            let expiry = canonical_expiry(value.expiry_unix_nanos)?;
-            let strike = value
-                .strike
-                .as_deref()
-                .ok_or_else(|| ReferenceError::Provider("OKX option strike is missing".into()))?;
-            let right = value
-                .option_right
-                .as_deref()
-                .ok_or_else(|| ReferenceError::Provider("OKX option right is missing".into()))?;
-            (
-                "options",
-                format!(
-                    "instrument:option:{base}-{quote}:{expiry}:{strike}:{}",
-                    right.to_ascii_uppercase()
-                ),
-            )
-        }
-    };
+    let (family, canonical_family, instrument_id, canonical_symbol, underlying_instrument_id) =
+        match value.kind {
+            ExternalInstrumentKind::Equity | ExternalInstrumentKind::EquityPerpetual => {
+                return Err(ReferenceError::Provider(
+                    "OKX catalog cannot contain Binance equity instrument kinds".into(),
+                ))
+            }
+            ExternalInstrumentKind::Spot => (
+                "spot",
+                "spot",
+                format!("instrument:spot:{base}"),
+                base.clone(),
+                None,
+            ),
+            ExternalInstrumentKind::Margin => (
+                "margin",
+                "margin",
+                format!("instrument:margin:{base}-{quote}"),
+                format!("{base}-{quote}"),
+                None,
+            ),
+            ExternalInstrumentKind::Perpetual => (
+                "swap",
+                "perpetual",
+                format!("instrument:perpetual:{base}-{quote}"),
+                format!("{base}-{quote}"),
+                None,
+            ),
+            ExternalInstrumentKind::Future => {
+                let expiry = canonical_expiry(value.expiry_unix_nanos)?;
+                (
+                    "futures",
+                    "future",
+                    format!("instrument:future:{base}-{quote}:{expiry}"),
+                    format!("{base}-{quote}-{expiry}"),
+                    None,
+                )
+            }
+            ExternalInstrumentKind::Option => {
+                let expiry = canonical_expiry(value.expiry_unix_nanos)?;
+                let strike = value.strike.as_deref().ok_or_else(|| {
+                    ReferenceError::Provider("OKX option strike is missing".into())
+                })?;
+                let right = value.option_right.as_deref().ok_or_else(|| {
+                    ReferenceError::Provider("OKX option right is missing".into())
+                })?;
+                let canonical_right = right.to_ascii_uppercase();
+                let underlying =
+                    kairos_domain_types::InstrumentId::new(format!("instrument:spot:{base}"))?;
+                if !catalog
+                    .instruments
+                    .iter()
+                    .any(|value| value.instrument_id == underlying)
+                {
+                    catalog.instruments.push(Instrument {
+                        instrument_id: underlying.clone(),
+                        symbol: kairos_domain_types::Symbol::new(base.clone())?,
+                        instrument_type: "spot".into(),
+                        product_family: Some("spot".into()),
+                        primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(
+                            format!("asset:crypto:{base}"),
+                        )?),
+                        status: "active".into(),
+                        ..Instrument::default()
+                    });
+                }
+                (
+                    "options",
+                    "option",
+                    format!(
+                        "instrument:option:{base}-{quote}:{expiry}:{strike}:{}",
+                        canonical_right
+                    ),
+                    format!("{base}-{quote}-{expiry}-{strike}-{canonical_right}"),
+                    Some(underlying),
+                )
+            }
+        };
     for code in [&base, &quote] {
         catalog.assets.push(Asset {
             asset_id: kairos_domain_types::AssetId::new(format!("asset:crypto:{code}"))?,
@@ -1750,13 +2646,24 @@ fn append_okx_instrument(
         if value.active { "active" } else { "inactive" }.into();
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id.clone(),
-        symbol: kairos_domain_types::Symbol::new(source_symbol.clone())?,
-        instrument_type: family.into(),
-        product_family: Some(family.into()),
+        symbol: kairos_domain_types::Symbol::new(canonical_symbol)?,
+        instrument_type: canonical_family.into(),
+        product_family: Some(canonical_family.into()),
         primary_currency_asset_id: Some(kairos_domain_types::AssetId::new(format!(
-            "asset:crypto:{quote}"
+            "asset:crypto:{}",
+            if canonical_family == "spot" {
+                &base
+            } else {
+                &quote
+            }
         ))?),
-        expiry_unix_nanos: value.expiry_unix_nanos,
+        underlying_instrument_id,
+        expiry_unix_nanos: matches!(
+            value.kind,
+            ExternalInstrumentKind::Future | ExternalInstrumentKind::Option
+        )
+        .then_some(value.expiry_unix_nanos)
+        .flatten(),
         strike: value.strike.clone(),
         option_right: value.option_right.clone(),
         status,
@@ -1769,6 +2676,7 @@ fn append_okx_instrument(
         exchange_symbol: kairos_domain_types::Symbol::new(source_symbol.clone())?,
         status,
         effective_from_unix_nanos: 0.into(),
+        effective_to_unix_nanos: value.expiry_unix_nanos,
         ..Listing::default()
     });
     catalog.markets.push(Market {
@@ -1795,7 +2703,7 @@ fn append_okx_instrument(
         price_precision: value.price_precision.unwrap_or_default() as i32,
         quantity_precision: value.quantity_precision.unwrap_or_default() as i32,
         effective_from_unix_nanos: 0.into(),
-        effective_to_unix_nanos: None,
+        effective_to_unix_nanos: value.expiry_unix_nanos,
         ..Market::default()
     });
     Ok(())
@@ -1846,240 +2754,83 @@ fn canonical_expiry(value: Option<kairos_domain_types::UnixNanos>) -> ReferenceR
         .map_err(|_| ReferenceError::Provider("instrument expiry is out of range".into()))?;
     let date = chrono::DateTime::from_timestamp(seconds, 0)
         .ok_or_else(|| ReferenceError::Provider("instrument expiry is invalid".into()))?;
-    Ok(date.format("%Y-%m-%d").to_string())
-}
-
-fn binance_equity_provider_catalog(
-    facts: ExternalInstrumentCatalog,
-) -> ReferenceResult<ProviderCatalog> {
-    if facts.participant.id.as_str() != "binance" {
-        return Err(ReferenceError::Provider(format!(
-            "Binance Equity source received catalog for {}",
-            facts.participant.id
-        )));
-    }
-    let mut catalog = ProviderCatalog {
-        entities: vec![Entity {
-            entity_id: "exchange:binance".into(),
-            entity_type: "exchange".into(),
-            name: "Binance".into(),
-            status: "active".into(),
-            source_id: None,
-        }],
-        ..Default::default()
-    };
-
-    for value in facts.instruments {
-        if value.kind != ExternalInstrumentKind::Equity {
-            return Err(ReferenceError::Provider(format!(
-                "Binance Equity catalog contained incompatible instrument kind: {:?}",
-                value.kind
-            )));
-        }
-        let symbol = value.source_symbol.as_str().to_ascii_uppercase();
-        let quote = value
-            .quote_currency
-            .as_ref()
-            .map(|value| value.as_str().to_ascii_uppercase())
-            .unwrap_or_else(|| "USD".into());
-        let settlement = value
-            .settlement_currency
-            .as_ref()
-            .map(|value| value.as_str().to_ascii_uppercase())
-            .unwrap_or_else(|| "USDC".into());
-        let status: kairos_domain_types::ReferenceStatus =
-            if value.active { "active" } else { "inactive" }.into();
-        let equity_asset = kairos_domain_types::AssetId::new(format!("asset:equity:{symbol}"))?;
-        let quote_asset = kairos_domain_types::AssetId::new(format!("asset:fiat:{quote}"))?;
-        let settlement_asset =
-            kairos_domain_types::AssetId::new(format!("asset:crypto:{settlement}"))?;
-        for asset in [
-            Asset {
-                asset_id: equity_asset.clone(),
-                code: symbol.clone(),
-                asset_class: "equity".into(),
-                status,
-                ..Asset::default()
-            },
-            Asset {
-                asset_id: quote_asset.clone(),
-                code: quote.clone(),
-                asset_class: "fiat".into(),
-                status: "active".into(),
-                ..Asset::default()
-            },
-            Asset {
-                asset_id: settlement_asset.clone(),
-                code: settlement,
-                asset_class: "crypto".into(),
-                status: "active".into(),
-                ..Asset::default()
-            },
-        ] {
-            if !catalog
-                .assets
-                .iter()
-                .any(|existing| existing.asset_id == asset.asset_id)
-            {
-                catalog.assets.push(asset);
-            }
-        }
-
-        let instrument_id = kairos_domain_types::InstrumentId::new(format!(
-            "instrument:equity:US:{symbol}:common"
-        ))?;
-        let listing_id = kairos_domain_types::ListingId::new(format!(
-            "listing:binance:equity:{symbol}:{quote}"
-        ))?;
-        let market_id =
-            kairos_domain_types::MarketId::new(format!("market:binance:equity:{symbol}"))?;
-        let exchange_id = kairos_domain_types::Exchange::new("exchange:binance")?;
-        catalog.instruments.push(Instrument {
-            instrument_id: instrument_id.clone(),
-            symbol: kairos_domain_types::Symbol::new(symbol.clone())?,
-            instrument_type: "equity".into(),
-            product_family: Some("equity".into()),
-            issuer_id: Some(kairos_domain_types::IssuerId::new(format!(
-                "issuer:US:{symbol}"
-            ))?),
-            share_class: Some("common".into()),
-            primary_currency_asset_id: Some(quote_asset.clone()),
-            status,
-            ..Instrument::default()
-        });
-        catalog.listings.push(Listing {
-            listing_id: listing_id.clone(),
-            instrument_id: instrument_id.clone(),
-            exchange_id: exchange_id.clone(),
-            exchange_symbol: kairos_domain_types::Symbol::new(symbol.clone())?,
-            status,
-            effective_from_unix_nanos: 0.into(),
-            ..Listing::default()
-        });
-        catalog.markets.push(Market {
-            market_id: market_id.clone(),
-            market_key: format!("binance.equity.{symbol}"),
-            instrument_id,
-            listing_id,
-            exchange_id,
-            market_type: "equity".into(),
-            asset_type: Some("equity".into()),
-            source_symbol: kairos_domain_types::Symbol::new(symbol.clone())?,
-            base_asset_id: Some(equity_asset),
-            quote_asset_id: Some(quote_asset),
-            status,
-            price_tick: value.price_tick,
-            quantity_tick: value.quantity_tick,
-            price_precision: value.price_precision.unwrap_or_default() as i32,
-            quantity_precision: value.quantity_precision.unwrap_or_default() as i32,
-            minimum_quantity: value.minimum_quantity,
-            minimum_notional: value.minimum_notional,
-            effective_from_unix_nanos: 0.into(),
-            ..Market::default()
-        });
-        catalog.execution_accesses.push(ExecutionAccess {
-            access_id: kairos_domain_types::ExecutionAccessId::new(format!(
-                "access:binance:equity:{symbol}"
-            ))?,
-            market_id,
-            provider_id: "binance".into(),
-            product_family: "equity".into(),
-            provider_symbol: value.source_symbol,
-            settlement_asset_id: Some(settlement_asset),
-            status,
-            effective_from_unix_nanos: 0.into(),
-            ..ExecutionAccess::default()
-        });
-    }
-
-    catalog.validate()?;
-    Ok(catalog)
+    Ok(date.format("%Y%m%d").to_string())
 }
 
 fn merge_provider_catalog(
-    previous: Option<&ProviderCatalog>,
+    previous: Option<ProviderCatalog>,
     incoming: ProviderCatalog,
 ) -> ProviderCatalog {
-    let mut merged = previous.cloned().unwrap_or_default();
-    for value in incoming.entities {
-        upsert_vec(&mut merged.entities, value.entity_id.clone(), value, |v| {
-            v.entity_id.clone()
-        });
+    let previous = previous.unwrap_or_default();
+    ProviderCatalog {
+        entities: merge_records(previous.entities, incoming.entities, |value| {
+            value.entity_id.clone()
+        }),
+        assets: merge_records(previous.assets, incoming.assets, |value| {
+            value.asset_id.clone()
+        }),
+        instruments: merge_records(previous.instruments, incoming.instruments, |value| {
+            value.instrument_id.clone()
+        }),
+        listings: merge_records(previous.listings, incoming.listings, |value| {
+            value.listing_id.clone()
+        }),
+        markets: merge_records(previous.markets, incoming.markets, |value| {
+            value.market_id.clone()
+        }),
+        financial_products: merge_records(
+            previous.financial_products,
+            incoming.financial_products,
+            |value| value.product_id.clone(),
+        ),
+        execution_accesses: merge_records(
+            previous.execution_accesses,
+            incoming.execution_accesses,
+            |value| value.access_id.clone(),
+        ),
     }
-    for value in incoming.assets {
-        upsert_vec(&mut merged.assets, value.asset_id.to_string(), value, |v| {
-            v.asset_id.to_string()
-        });
-    }
-    for value in incoming.instruments {
-        upsert_vec(
-            &mut merged.instruments,
-            value.instrument_id.to_string(),
-            value,
-            |v| v.instrument_id.to_string(),
-        );
-    }
-    for value in incoming.listings {
-        upsert_vec(
-            &mut merged.listings,
-            value.listing_id.to_string(),
-            value,
-            |v| v.listing_id.to_string(),
-        );
-    }
-    for value in incoming.markets {
-        upsert_vec(
-            &mut merged.markets,
-            value.market_id.to_string(),
-            value,
-            |v| v.market_id.to_string(),
-        );
-    }
-    for value in incoming.financial_products {
-        upsert_vec(
-            &mut merged.financial_products,
-            value.product_id.clone(),
-            value,
-            |v| v.product_id.clone(),
-        );
-    }
-    for value in incoming.execution_accesses {
-        upsert_vec(
-            &mut merged.execution_accesses,
-            value.access_id.to_string(),
-            value,
-            |v| v.access_id.to_string(),
-        );
-    }
-    merged
 }
 
-fn upsert_vec<T>(values: &mut Vec<T>, id: String, value: T, key: impl Fn(&T) -> String) {
-    if let Some(existing) = values.iter_mut().find(|existing| key(existing) == id) {
-        *existing = value;
-    } else {
-        values.push(value);
+fn merge_records<T, K>(previous: Vec<T>, incoming: Vec<T>, key: impl Fn(&T) -> K) -> Vec<T>
+where
+    K: Ord,
+{
+    let mut merged = BTreeMap::new();
+    for value in previous {
+        merged.insert(key(&value), value);
     }
+    for value in incoming {
+        merged.insert(key(&value), value);
+    }
+    merged.into_values().collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         binance_equity_provider_catalog, binance_provider_catalog, hyperliquid_provider_catalog,
-        massive_provider_catalog, okx_provider_catalog, CompositeSource, ReferenceSource,
+        massive_provider_catalog, okx_provider_catalog,
+        provider_catalog_uses_current_canonical_shape, BinanceSpotSource, CompositeSource,
+        HyperliquidSource, MassiveEquitySource, MassiveOptionsCoverageSource, OkxSource,
+        ReferenceSource,
     };
-    use crate::domain::{Market, ProviderCatalog, ReferenceResult};
+    use crate::domain::{Instrument, Market, ProviderCatalog, ReferenceResult};
     use crate::services::sqlx_storage::SqlxProviderSyncStore;
-    use kairos_domain_types::{Currency, MarketId, ProviderSymbol};
+    use crate::services::store::ProviderSyncStore;
+    use async_trait::async_trait;
+    use kairos_domain_types::{Currency, InstrumentId, MarketId, ProviderSymbol, Symbol};
     use kairos_integration::application::capabilities::reference::{
         ExternalInstrument, ExternalInstrumentCatalog, ExternalInstrumentKind,
     };
     use kairos_integration::application::{ParticipantKind, ParticipantRef};
     use kairos_integration::participants::binance::InstrumentType as BinanceInstrumentType;
+    use kairos_integration::participants::okx::InstrumentType as OkxInstrumentType;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     };
+    use std::time::Duration;
+    use std::{io::Read, io::Write, net::TcpListener};
 
     fn typed_market_id(value: &str) -> MarketId {
         MarketId::new(value).unwrap()
@@ -2104,12 +2855,24 @@ mod tests {
         catalog: ProviderCatalog,
     }
 
+    struct CountingSource {
+        id: &'static str,
+        catalog: ProviderCatalog,
+        calls: Arc<AtomicUsize>,
+    }
+
+    struct BarrierSource {
+        id: &'static str,
+        barrier: Arc<tokio::sync::Barrier>,
+    }
+
+    #[async_trait]
     impl ReferenceSource for FlakySource {
         fn source_id(&self) -> &str {
             "test-flaky"
         }
 
-        fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
             if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 Ok(ProviderCatalog {
                     markets: vec![Market {
@@ -2127,16 +2890,17 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl ReferenceSource for PagedSource {
         fn source_id(&self) -> &str {
             "test-paged"
         }
 
-        fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
             Ok(ProviderCatalog::default())
         }
 
-        fn fetch_catalog_step(&mut self) -> ReferenceResult<super::ProviderUpdate> {
+        async fn fetch_catalog_step(&mut self) -> ReferenceResult<super::ProviderUpdate> {
             self.calls += 1;
             let mut markets = vec![Market {
                 market_id: typed_market_id("market:page-1"),
@@ -2161,16 +2925,17 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl ReferenceSource for RefreshingPagedSource {
         fn source_id(&self) -> &str {
             "test-refreshing-paged"
         }
 
-        fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
             Ok(ProviderCatalog::default())
         }
 
-        fn fetch_catalog_step(&mut self) -> ReferenceResult<super::ProviderUpdate> {
+        async fn fetch_catalog_step(&mut self) -> ReferenceResult<super::ProviderUpdate> {
             self.calls += 1;
             let market_id = if self.calls == 1 {
                 "market:complete-old"
@@ -2192,25 +2957,51 @@ mod tests {
         }
     }
 
+    #[async_trait]
     impl ReferenceSource for AlwaysFailSource {
         fn source_id(&self) -> &str {
             "test-flaky"
         }
 
-        fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
             Err(crate::domain::ReferenceError::Provider(
                 "test provider unavailable after restart".into(),
             ))
         }
     }
 
+    #[async_trait]
     impl ReferenceSource for FixedSource {
         fn source_id(&self) -> &str {
             self.id
         }
 
-        fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+        async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
             Ok(self.catalog.clone())
+        }
+    }
+
+    #[async_trait]
+    impl ReferenceSource for CountingSource {
+        fn source_id(&self) -> &str {
+            self.id
+        }
+
+        async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.catalog.clone())
+        }
+    }
+
+    #[async_trait]
+    impl ReferenceSource for BarrierSource {
+        fn source_id(&self) -> &str {
+            self.id
+        }
+
+        async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+            self.barrier.wait().await;
+            Ok(ProviderCatalog::default())
         }
     }
 
@@ -2282,6 +3073,57 @@ mod tests {
     }
 
     #[test]
+    fn spot_listing_expiry_does_not_split_or_mutate_the_canonical_instrument() {
+        let first_expiry = kairos_domain_types::UnixNanos::new(1_786_694_400_000_000_000);
+        let second_expiry = kairos_domain_types::UnixNanos::new(1_786_953_600_000_000_000);
+        let spot = |symbol: &str, quote: &str, expiry| ExternalInstrument {
+            source_symbol: ProviderSymbol::new(symbol).unwrap(),
+            source_venue: None,
+            kind: ExternalInstrumentKind::Spot,
+            base_currency: Some(Currency::new("DUCK").unwrap()),
+            quote_currency: Some(Currency::new(quote).unwrap()),
+            settlement_currency: None,
+            underlying: None,
+            expiry_unix_nanos: Some(expiry),
+            strike: None,
+            option_right: None,
+            active: true,
+            price_tick: Some("0.0001".into()),
+            quantity_tick: Some("1".into()),
+            minimum_quantity: Some("1".into()),
+            minimum_notional: None,
+            contract_value: None,
+            price_precision: Some(4),
+            quantity_precision: Some(0),
+        };
+        let catalog = okx_provider_catalog(ExternalInstrumentCatalog {
+            participant: ParticipantRef::new(ParticipantKind::Exchange, "okx").unwrap(),
+            instruments: vec![
+                spot("DUCK-USD", "USD", first_expiry),
+                spot("DUCK-USDT", "USDT", second_expiry),
+            ],
+        })
+        .unwrap();
+
+        let instruments = catalog
+            .instruments
+            .iter()
+            .filter(|value| value.instrument_id == "instrument:spot:DUCK")
+            .collect::<Vec<_>>();
+        assert_eq!(instruments.len(), 1);
+        assert_eq!(instruments[0].symbol.as_str(), "DUCK");
+        assert_eq!(instruments[0].expiry_unix_nanos, None);
+        assert_eq!(
+            catalog
+                .listings
+                .iter()
+                .map(|value| value.effective_to_unix_nanos)
+                .collect::<Vec<_>>(),
+            vec![Some(first_expiry), Some(second_expiry)]
+        );
+    }
+
+    #[test]
     fn binance_provider_facts_receive_canonical_identity_only_in_reference() {
         let mut facts = ExternalInstrumentCatalog {
             participant: ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
@@ -2345,7 +3187,7 @@ mod tests {
             .iter()
             .any(|value| value.instrument_id == "instrument:spot:BTC"));
         assert!(option_catalog.instruments.iter().any(|value| {
-            value.instrument_id == "instrument:option:BTC-USDT:2026-05-28:50000:C"
+            value.instrument_id == "instrument:option:BTC-USDT:20260528:50000:C"
                 && value.underlying_instrument_id.as_deref() == Some("instrument:spot:BTC")
         }));
         assert!(spot_catalog.markets.iter().any(|value| {
@@ -2386,7 +3228,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             catalog.instruments[0].instrument_id,
-            "instrument:future:BTC-USDT:2026-06-26"
+            "instrument:future:BTC-USDT:20260626"
         );
         assert_eq!(
             catalog.markets[0].market_id,
@@ -2396,41 +3238,92 @@ mod tests {
     }
 
     #[test]
-    fn binance_equity_provider_facts_receive_canonical_identity_only_in_reference() {
+    fn binance_equity_perpetual_has_no_expiry_and_links_canonical_equity() {
+        let catalog = binance_provider_catalog(
+            ExternalInstrumentCatalog {
+                participant: ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
+                instruments: vec![ExternalInstrument {
+                    source_symbol: ProviderSymbol::new("AAPLUSDT").unwrap(),
+                    source_venue: None,
+                    kind: ExternalInstrumentKind::EquityPerpetual,
+                    base_currency: Some(Currency::new("AAPL").unwrap()),
+                    quote_currency: Some(Currency::new("USDT").unwrap()),
+                    settlement_currency: Some(Currency::new("USDT").unwrap()),
+                    underlying: Some(ProviderSymbol::new("AAPL").unwrap()),
+                    expiry_unix_nanos: None,
+                    strike: None,
+                    option_right: None,
+                    active: true,
+                    price_tick: Some("0.01".into()),
+                    quantity_tick: Some("0.01".into()),
+                    minimum_quantity: Some("0.01".into()),
+                    minimum_notional: None,
+                    contract_value: None,
+                    price_precision: Some(2),
+                    quantity_precision: Some(2),
+                }],
+            },
+            BinanceInstrumentType::UsdMFutures,
+        )
+        .unwrap();
+        let market = &catalog.markets[0];
+        assert_eq!(market.market_id, "market:binance:usd-m-futures:AAPLUSDT");
+        assert_eq!(market.asset_type.as_deref(), Some("equity"));
+        assert_eq!(
+            market.underlying_instrument_id.as_deref(),
+            Some("instrument:equity:US:AAPL:common")
+        );
+        assert_eq!(market.effective_to_unix_nanos, None);
+        let derivative = catalog
+            .instruments
+            .iter()
+            .find(|value| value.instrument_type == "perpetual")
+            .unwrap();
+        assert_eq!(
+            derivative.instrument_id,
+            "instrument:perpetual:equity:US:AAPL:USDT"
+        );
+        assert_eq!(
+            derivative.underlying_instrument_id.as_deref(),
+            Some("instrument:equity:US:AAPL:common")
+        );
+        assert_eq!(derivative.expiry_unix_nanos, None);
+    }
+
+    #[test]
+    fn binance_equity_catalog_builds_broker_execution_access() {
         let catalog = binance_equity_provider_catalog(ExternalInstrumentCatalog {
-            participant: ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
+            participant: ParticipantRef::new(ParticipantKind::Broker, "binance").unwrap(),
             instruments: vec![ExternalInstrument {
                 source_symbol: ProviderSymbol::new("AAPL").unwrap(),
-                source_venue: Some("XNAS".into()),
+                source_venue: None,
                 kind: ExternalInstrumentKind::Equity,
                 base_currency: None,
-                quote_currency: Some(Currency::new("USD").unwrap()),
-                settlement_currency: Some(Currency::new("USDC").unwrap()),
+                quote_currency: None,
+                settlement_currency: None,
                 underlying: None,
                 expiry_unix_nanos: None,
                 strike: None,
                 option_right: None,
                 active: true,
-                price_tick: Some("0.01".into()),
-                quantity_tick: Some("1".into()),
-                minimum_quantity: Some("1".into()),
-                minimum_notional: None,
+                price_tick: None,
+                quantity_tick: Some("0.000000001".into()),
+                minimum_quantity: None,
+                minimum_notional: Some("5.00000000".into()),
                 contract_value: None,
-                price_precision: Some(2),
-                quantity_precision: Some(0),
+                price_precision: None,
+                quantity_precision: Some(9),
             }],
         })
         .unwrap();
-
         assert_eq!(
             catalog.instruments[0].instrument_id,
             "instrument:equity:US:AAPL:common"
         );
         assert_eq!(catalog.markets[0].market_id, "market:binance:equity:AAPL");
-        assert_eq!(
-            catalog.execution_accesses[0].settlement_asset_id.as_deref(),
-            Some("asset:crypto:USDC")
-        );
+        assert_eq!(catalog.markets[0].asset_type.as_deref(), Some("equity"));
+        assert_eq!(catalog.execution_accesses[0].provider_id, "binance");
+        assert_eq!(catalog.execution_accesses[0].provider_symbol, "AAPL");
     }
 
     #[test]
@@ -2469,7 +3362,7 @@ mod tests {
             .iter()
             .any(|value| { value.instrument_id == "instrument:equity:US:SPY:common" }));
         assert!(catalog.instruments.iter().any(|value| {
-            value.instrument_id == "instrument:option:SPY:2027-01-15:500:C"
+            value.instrument_id == "instrument:option:SPY:20270115:500:C"
                 && value.underlying_instrument_id.as_deref()
                     == Some("instrument:equity:US:SPY:common")
         }));
@@ -2524,15 +3417,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn provider_failure_keeps_last_known_good_snapshot() {
+    #[tokio::test]
+    async fn provider_failure_keeps_last_known_good_snapshot() {
         let calls = Arc::new(AtomicUsize::new(0));
         let mut source = CompositeSource::new(vec![Box::new(FlakySource {
             calls: Arc::clone(&calls),
         })])
+        .await
         .unwrap();
-        let first = source.fetch_catalog().unwrap();
-        let second = source.fetch_catalog().unwrap();
+        let first = source.fetch_catalog().await.unwrap();
+        let second = source.fetch_catalog().await.unwrap();
         assert_eq!(first.markets, second.markets);
         assert_eq!(first.markets[0].source_id.as_deref(), Some("test-flaky"));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
@@ -2540,12 +3434,106 @@ mod tests {
         assert!(source.provider_health()[0].stale);
     }
 
-    #[test]
-    fn provider_last_known_good_survives_composite_restart() {
+    #[tokio::test]
+    async fn targeted_refresh_does_not_poll_unrelated_provider() {
+        let peer_calls = Arc::new(AtomicUsize::new(0));
+        let mut source = CompositeSource::new(vec![
+            Box::new(PagedSource { calls: 0 }),
+            Box::new(CountingSource {
+                id: "test-peer",
+                catalog: ProviderCatalog {
+                    markets: vec![Market {
+                        market_id: typed_market_id("market:peer"),
+                        status: "active".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                calls: Arc::clone(&peer_calls),
+            }),
+        ])
+        .await
+        .unwrap();
+
+        assert!(source.advance_source("test-paged").await.unwrap().is_none());
+        let catalog = source
+            .advance_source("test-paged")
+            .await
+            .unwrap()
+            .expect("completed provider has a last-known-good catalog");
+
+        assert_eq!(peer_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(catalog.markets.len(), 2);
+        assert!(catalog
+            .markets
+            .iter()
+            .any(|market| market.market_id == "market:page-2"));
+    }
+
+    #[tokio::test]
+    async fn paused_provider_keeps_its_snapshot_without_polling_peer() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let paused_calls = Arc::new(AtomicUsize::new(0));
+        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let mut source = CompositeSource::new_with_sync_store(
+            vec![
+                Box::new(FixedSource {
+                    id: "binance-spot",
+                    catalog: ProviderCatalog {
+                        markets: vec![Market {
+                            market_id: typed_market_id("market:binance"),
+                            status: "active".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                }),
+                Box::new(CountingSource {
+                    id: "massive-options",
+                    catalog: ProviderCatalog {
+                        markets: vec![Market {
+                            market_id: typed_market_id("market:massive"),
+                            status: "active".into(),
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    calls: Arc::clone(&paused_calls),
+                }),
+            ],
+            Some(Box::new(store)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(source.fetch_catalog().await.unwrap().markets.len(), 2);
+        assert_eq!(paused_calls.load(Ordering::SeqCst), 1);
+        source
+            .set_source_paused("massive-options", true)
+            .await
+            .unwrap();
+        let catalog = source.fetch_catalog().await.unwrap();
+
+        assert_eq!(paused_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(catalog.markets.len(), 2);
+        assert_eq!(
+            source
+                .provider_health()
+                .into_iter()
+                .find(|health| health.source_id == "massive-options")
+                .unwrap()
+                .status,
+            "paused"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_last_known_good_survives_composite_restart() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("reference.sqlite");
         {
-            let store = SqlxProviderSyncStore::open(&path).unwrap();
+            let store = SqlxProviderSyncStore::open(&path).await.unwrap();
             let calls = Arc::new(AtomicUsize::new(0));
             let mut source = CompositeSource::new_with_sync_store(
                 vec![Box::new(FlakySource {
@@ -2553,39 +3541,45 @@ mod tests {
                 })],
                 Some(Box::new(store)),
             )
+            .await
             .unwrap();
-            assert_eq!(source.fetch_catalog().unwrap().markets.len(), 1);
+            assert_eq!(source.fetch_catalog().await.unwrap().markets.len(), 1);
         }
-        let store = SqlxProviderSyncStore::open(&path).unwrap();
+        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
         let mut restarted = CompositeSource::new_with_sync_store(
             vec![Box::new(AlwaysFailSource)],
             Some(Box::new(store)),
         )
+        .await
         .unwrap();
-        let catalog = restarted.fetch_catalog().unwrap();
+        let catalog = restarted.fetch_catalog().await.unwrap();
         assert_eq!(catalog.markets.len(), 1);
         assert_eq!(restarted.provider_health()[0].status, "stale");
     }
 
-    #[test]
-    fn provider_without_last_known_good_rejects_partial_refresh() {
-        let mut source = CompositeSource::new(vec![Box::new(AlwaysFailSource)]).unwrap();
-        let error = source.fetch_catalog().unwrap_err().to_string();
+    #[tokio::test]
+    async fn provider_without_last_known_good_rejects_partial_refresh() {
+        let mut source = CompositeSource::new(vec![Box::new(AlwaysFailSource)])
+            .await
+            .unwrap();
+        let error = source.fetch_catalog().await.unwrap_err().to_string();
         assert!(error.contains("without a last-known-good snapshot"));
     }
 
-    #[test]
-    fn provider_failure_opens_circuit_and_applies_backoff() {
-        let mut source = CompositeSource::new(vec![Box::new(AlwaysFailSource)]).unwrap();
-        let _ = source.fetch_catalog();
+    #[tokio::test]
+    async fn provider_failure_opens_circuit_and_applies_backoff() {
+        let mut source = CompositeSource::new(vec![Box::new(AlwaysFailSource)])
+            .await
+            .unwrap();
+        let _ = source.fetch_catalog().await;
         assert_eq!(source.provider_health()[0].consecutive_failures, 1);
-        let error = source.fetch_catalog().unwrap_err().to_string();
+        let error = source.fetch_catalog().await.unwrap_err().to_string();
         assert!(error.contains("provider circuit is open"));
         assert_eq!(source.provider_health()[0].consecutive_failures, 1);
     }
 
-    #[test]
-    fn conflicting_sources_use_deterministic_order_and_retain_source_identity() {
+    #[tokio::test]
+    async fn irreconcilable_provider_record_collision_rejects_the_refresh() {
         let first = FixedSource {
             id: "provider-a",
             catalog: ProviderCatalog {
@@ -2608,19 +3602,415 @@ mod tests {
                 ..Default::default()
             },
         };
-        let mut source = CompositeSource::new(vec![Box::new(first), Box::new(second)]).unwrap();
-        let catalog = source.fetch_catalog().unwrap();
-        assert_eq!(catalog.markets[0].status, "inactive".into());
-        assert_eq!(catalog.markets[0].source_id.as_deref(), Some("provider-b"));
+        let mut source = CompositeSource::new(vec![Box::new(first), Box::new(second)])
+            .await
+            .unwrap();
+        let error = source.fetch_catalog().await.unwrap_err().to_string();
+        assert!(error.contains("irreconcilable canonical record conflicts"));
+        assert!(error.contains("market:market:shared"));
+    }
+
+    #[tokio::test]
+    async fn shared_canonical_instrument_aggregates_listing_availability() {
+        let instrument = |status| Instrument {
+            instrument_id: InstrumentId::new("instrument:spot:BTC").unwrap(),
+            symbol: Symbol::new("BTC").unwrap(),
+            instrument_type: "spot".into(),
+            product_family: Some("spot".into()),
+            primary_currency_asset_id: Some(
+                kairos_domain_types::AssetId::new("asset:crypto:BTC").unwrap(),
+            ),
+            status,
+            ..Instrument::default()
+        };
+        let mut source = CompositeSource::new(vec![
+            Box::new(FixedSource {
+                id: "provider-a",
+                catalog: ProviderCatalog {
+                    instruments: vec![instrument("active".into())],
+                    ..ProviderCatalog::default()
+                },
+            }),
+            Box::new(FixedSource {
+                id: "provider-b",
+                catalog: ProviderCatalog {
+                    instruments: vec![instrument("inactive".into())],
+                    ..ProviderCatalog::default()
+                },
+            }),
+        ])
+        .await
+        .unwrap();
+
+        let catalog = source.fetch_catalog().await.unwrap();
+        assert_eq!(catalog.instruments.len(), 1);
+        assert_eq!(catalog.instruments[0].status, "active".into());
+        assert_eq!(catalog.instruments[0].source_id, None);
     }
 
     #[test]
-    fn partial_provider_pages_do_not_drop_previous_page() {
-        let mut source = CompositeSource::new(vec![Box::new(PagedSource { calls: 0 })]).unwrap();
-        let first_error = source.fetch_catalog().unwrap_err().to_string();
+    fn obsolete_provider_snapshot_shape_is_not_eligible_for_fallback() {
+        let canonical = Instrument {
+            instrument_id: InstrumentId::new("instrument:spot:BTC").unwrap(),
+            symbol: Symbol::new("BTC").unwrap(),
+            instrument_type: "spot".into(),
+            product_family: Some("spot".into()),
+            primary_currency_asset_id: Some(
+                kairos_domain_types::AssetId::new("asset:crypto:BTC").unwrap(),
+            ),
+            status: "active".into(),
+            ..Instrument::default()
+        };
+        assert!(provider_catalog_uses_current_canonical_shape(
+            &ProviderCatalog {
+                instruments: vec![canonical.clone()],
+                ..ProviderCatalog::default()
+            }
+        ));
+
+        let mut legacy_quote_owned = canonical.clone();
+        legacy_quote_owned.primary_currency_asset_id =
+            Some(kairos_domain_types::AssetId::new("asset:crypto:USDT").unwrap());
+        assert!(!provider_catalog_uses_current_canonical_shape(
+            &ProviderCatalog {
+                instruments: vec![legacy_quote_owned],
+                ..ProviderCatalog::default()
+            }
+        ));
+
+        let mut provider_owned = canonical;
+        provider_owned.source_id = Some("binance-spot".into());
+        assert!(!provider_catalog_uses_current_canonical_shape(
+            &ProviderCatalog {
+                instruments: vec![provider_owned],
+                ..ProviderCatalog::default()
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn provider_fan_in_polls_sources_concurrently_on_caller_runtime() {
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let mut source = CompositeSource::new(vec![
+            Box::new(BarrierSource {
+                id: "provider-a",
+                barrier: Arc::clone(&barrier),
+            }),
+            Box::new(BarrierSource {
+                id: "provider-b",
+                barrier,
+            }),
+        ])
+        .await
+        .unwrap();
+
+        tokio::time::timeout(Duration::from_secs(1), source.fetch_catalog())
+            .await
+            .expect("provider futures must be polled concurrently")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn hyperliquid_async_capability_maps_through_reference_end_to_end() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).unwrap();
+            assert!(String::from_utf8_lossy(&request[..length]).contains("metaAndAssetCtxs"));
+            let body = r#"[{"universe":[{"name":"BTC","szDecimals":5}]},[{"markPx":"50000"}]]"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let mut source =
+            HyperliquidSource::new(format!("http://{address}/info")).expect("build source");
+
+        let catalog = source.fetch_catalog().await.unwrap();
+        server.join().unwrap();
+
+        assert_eq!(
+            catalog.instruments[0].instrument_id,
+            "instrument:perpetual:BTC-USDC"
+        );
+        assert_eq!(
+            catalog.markets[0].market_id,
+            "market:hyperliquid:perpetual:BTC"
+        );
+    }
+
+    #[tokio::test]
+    async fn binance_async_capability_maps_through_reference_end_to_end() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).unwrap();
+            assert!(String::from_utf8_lossy(&request[..length])
+                .starts_with("GET /api/v3/exchangeInfo "));
+            let body = r#"{"symbols":[{"symbol":"BTCUSDT","baseAsset":"BTC","quoteAsset":"USDT","status":"TRADING","baseAssetPrecision":6,"quoteAssetPrecision":2,"filters":[{"filterType":"PRICE_FILTER","tickSize":"0.01"},{"filterType":"LOT_SIZE","stepSize":"0.00001","minQty":"0.00001"},{"filterType":"MIN_NOTIONAL","minNotional":"10"}]}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let mut source =
+            BinanceSpotSource::new(format!("http://{address}")).expect("build Binance source");
+
+        let catalog = source.fetch_catalog().await.unwrap();
+        server.join().unwrap();
+
+        assert_eq!(catalog.markets.len(), 1);
+        assert_eq!(catalog.markets[0].market_id, "market:binance:spot:BTCUSDT");
+        assert_eq!(catalog.markets[0].price_tick.as_deref(), Some("0.01"));
+        assert_eq!(catalog.markets[0].minimum_notional.as_deref(), Some("10"));
+    }
+
+    #[tokio::test]
+    async fn okx_async_capability_maps_through_reference_end_to_end() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).unwrap();
+            assert!(String::from_utf8_lossy(&request[..length])
+                .starts_with("GET /api/v5/public/instruments?instType=SWAP "));
+            let body = r#"{"code":"0","data":[{"instId":"BTC-USDT-SWAP","uly":"BTC-USDT","settleCcy":"USDT","state":"live","tickSz":"0.1","lotSz":"0.01","minSz":"0.01","ctVal":"0.01"}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let mut source = OkxSource::new(
+            "okx-swap",
+            OkxInstrumentType::Swap,
+            format!("http://{address}"),
+        )
+        .expect("build OKX source");
+
+        let catalog = source.fetch_catalog().await.unwrap();
+        server.join().unwrap();
+
+        assert_eq!(catalog.markets.len(), 1);
+        assert_eq!(
+            catalog.markets[0].market_id,
+            "market:okx:swap:BTC-USDT-SWAP"
+        );
+        assert_eq!(catalog.markets[0].price_tick.as_deref(), Some("0.1"));
+        assert_eq!(catalog.markets[0].contract_size.as_deref(), Some("0.01"));
+    }
+
+    #[tokio::test]
+    async fn massive_persists_each_successful_page_before_a_later_page_fails() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for page in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 4096];
+                let _ = stream.read(&mut request).unwrap();
+                let body = if page == 0 {
+                    format!(
+                        r#"{{"results":[{{"ticker":"AAPL","primary_exchange":"XNAS","active":true}}],"next_url":"http://{address}/v3/reference/tickers?cursor=page-2"}}"#
+                    )
+                } else {
+                    r#"{"status":"OK"}"#.to_owned()
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let mut source = MassiveEquitySource::new_with_sync_store(
+            "test-key",
+            format!("http://{address}"),
+            Box::new(store),
+        )
+        .await
+        .unwrap();
+
+        let first = source.fetch_catalog_step().await.unwrap();
+        assert!(!first.complete);
+        assert_eq!(first.page_count, 1);
+        assert!(source.fetch_catalog_step().await.is_err());
+        server.join().unwrap();
+
+        let mut reopened = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let (cursor, accumulated) = reopened
+            .load_state("massive-equity")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(cursor.as_deref(), Some("page-2"));
+        assert!(accumulated.is_none());
+        assert!(reopened
+            .staged_pages("massive-equity")
+            .await
+            .unwrap()
+            .into_iter()
+            .flat_map(|catalog| catalog.markets)
+            .any(|market| market.source_symbol == "AAPL"));
+    }
+
+    #[tokio::test]
+    async fn massive_options_coverage_is_explicit_and_scoped_to_one_underlying() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..length]);
+            assert!(request.contains("underlying_ticker=SPY"));
+            assert!(request.contains("expired=false"));
+            let body = r#"{"results":[{"ticker":"O:SPY260821C00500000","underlying_ticker":"SPY","primary_exchange":"OPRA","expiration_date":"2026-08-21","strike_price":500,"contract_type":"call","active":true},{"ticker":"O:SPY260821P00400000","underlying_ticker":"SPY","primary_exchange":"OPRA","expiration_date":"2026-08-21","strike_price":400,"contract_type":"put","active":false}]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let mut source = MassiveOptionsCoverageSource::new(
+            "test-key",
+            format!("http://{address}"),
+            Box::new(store),
+        )
+        .await
+        .unwrap();
+
+        assert!(source.option_underlyings().is_empty());
+        source.set_option_underlying("spy", true).await.unwrap();
+        assert_eq!(source.option_underlyings(), vec!["SPY"]);
+        let completed = source.fetch_catalog_step().await.unwrap();
+        server.join().unwrap();
+        assert!(completed.complete);
+        assert!(completed
+            .catalog
+            .markets
+            .iter()
+            .any(|market| market.source_symbol == "O:SPY260821C00500000"));
+        assert!(!completed
+            .catalog
+            .markets
+            .iter()
+            .any(|market| market.source_symbol == "O:SPY260821P00400000"));
+
+        source.set_option_underlying("SPY", false).await.unwrap();
+        let removed = source.fetch_catalog_step().await.unwrap();
+        assert!(removed.complete);
+        assert!(removed.catalog.markets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn massive_full_catalog_resumes_from_persisted_incremental_cursor() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for page in 0..9 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0_u8; 4096];
+                let length = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..length]);
+                if page > 0 {
+                    assert!(request.contains(&format!("cursor=page-{page}")));
+                }
+                let next = if page < 8 {
+                    format!(
+                        r#", "next_url":"http://{address}/v3/reference/tickers?cursor=page-{}""#,
+                        page + 1
+                    )
+                } else {
+                    String::new()
+                };
+                let body = format!(
+                    r#"{{"results":[{{"ticker":"TEST{page}","primary_exchange":"XNAS","active":true}}]{next}}}"#
+                );
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("reference.sqlite");
+        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let mut first = MassiveEquitySource::new_with_sync_store(
+            "test-key",
+            format!("http://{address}"),
+            Box::new(store),
+        )
+        .await
+        .unwrap();
+
+        let partial = first.fetch_catalog_step().await.unwrap();
+        assert!(!partial.complete);
+        assert_eq!(partial.page_count, 1);
+        assert!(partial.catalog.markets.is_empty());
+        drop(first);
+
+        let store = SqlxProviderSyncStore::open(&path).await.unwrap();
+        let mut resumed = MassiveEquitySource::new_with_sync_store(
+            "test-key",
+            format!("http://{address}"),
+            Box::new(store),
+        )
+        .await
+        .unwrap();
+        for _ in 1..8 {
+            let partial = resumed.fetch_catalog_step().await.unwrap();
+            assert!(!partial.complete);
+            assert_eq!(partial.page_count, 1);
+            assert!(partial.catalog.markets.is_empty());
+        }
+        let complete = resumed.fetch_catalog_step().await.unwrap();
+        server.join().unwrap();
+
+        assert!(complete.complete);
+        assert_eq!(complete.page_count, 1);
+        assert_eq!(complete.catalog.markets.len(), 9);
+        assert!(complete
+            .catalog
+            .markets
+            .iter()
+            .any(|market| market.source_symbol == "TEST0"));
+        assert!(complete
+            .catalog
+            .markets
+            .iter()
+            .any(|market| market.source_symbol == "TEST8"));
+    }
+
+    #[tokio::test]
+    async fn partial_provider_pages_do_not_drop_previous_page() {
+        let mut source = CompositeSource::new(vec![Box::new(PagedSource { calls: 0 })])
+            .await
+            .unwrap();
+        let first_error = source.fetch_catalog().await.unwrap_err().to_string();
         assert!(first_error.contains("without a last-known-good snapshot"));
         assert_eq!(source.provider_health()[0].status, "syncing");
-        let second = source.fetch_catalog().unwrap();
+        let second = source.fetch_catalog().await.unwrap();
         assert_eq!(second.markets.len(), 2);
         assert!(second
             .markets
@@ -2628,16 +4018,18 @@ mod tests {
             .any(|market| market.market_id == "market:page-1"));
     }
 
-    #[test]
-    fn incomplete_provider_sync_does_not_replace_last_good_snapshot() {
-        let mut source =
-            CompositeSource::new(vec![Box::new(RefreshingPagedSource { calls: 0 })]).unwrap();
-        let first = source.fetch_catalog().unwrap();
+    #[tokio::test]
+    async fn incomplete_provider_sync_does_not_replace_last_good_snapshot() {
+        let mut source = CompositeSource::new(vec![Box::new(RefreshingPagedSource { calls: 0 })])
+            .await
+            .unwrap();
+        let first = source.fetch_catalog().await.unwrap();
         assert_eq!(first.markets[0].market_id, "market:complete-old");
-        let second = source.fetch_catalog().unwrap();
+        let second = source.fetch_catalog().await.unwrap();
         assert_eq!(second.markets[0].market_id, "market:complete-old");
-        assert_eq!(source.provider_health()[0].status, "syncing");
-        let third = source.fetch_catalog().unwrap();
+        assert_eq!(source.provider_health()[0].status, "ready");
+        assert!(!source.provider_health()[0].stale);
+        let third = source.fetch_catalog().await.unwrap();
         assert_eq!(third.markets[0].market_id, "market:complete-new");
         assert_eq!(source.provider_health()[0].status, "ready");
     }

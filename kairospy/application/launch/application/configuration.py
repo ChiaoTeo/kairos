@@ -45,6 +45,7 @@ class LaunchPlan:
     execution: Mapping[str, Any]
     mode_config: Mapping[str, Any]
     market_scope: str
+    market_profile: str | None
     backtest_market: Mapping[str, Any] | None = None
     backtest_data_root: Path | None = None
     backtest_storage_format: str | None = None
@@ -68,6 +69,7 @@ class LaunchPlan:
                     "execution": dict(self.execution),
                     self.mode: dict(self.mode_config),
                     "market_scope": self.market_scope,
+                    "market_profile": self.market_profile,
                     "backtest_market": self.backtest_market,
                     "backtest_data_root": self.backtest_data_root,
                     "backtest_storage_format": self.backtest_storage_format,
@@ -169,6 +171,12 @@ class LaunchConfig:
         market_scope = str(
             market_config.get("scope", "shared" if mode == "live" else "instance")
         )
+        raw_market_profile = market_config.get("profile")
+        market_profile = (
+            None
+            if raw_market_profile is None
+            else _text(raw_market_profile, f"{mode}.market.profile")
+        )
         execution = dict(self.execution)
         if mode in {"backtest", "paper"}:
             execution.setdefault("dry_run", True)
@@ -222,6 +230,7 @@ class LaunchConfig:
             execution=execution,
             mode_config=mode_config,
             market_scope=market_scope,
+            market_profile=market_profile,
             backtest_market=backtest_market,
             backtest_data_root=backtest_data_root,
             backtest_storage_format=backtest_storage_format,
@@ -392,10 +401,16 @@ class LaunchConfig:
                     "scope", "shared" if mode == "live" else "instance"
                 ) not in {"shared", "instance"}:
                     issues.append(f"{mode}.market.scope must be shared or instance")
-                if market.get("connection") is not None and not isinstance(
-                    market.get("connection"), str
+                if market.get("profile") is not None and (
+                    not isinstance(market.get("profile"), str)
+                    or not str(market.get("profile")).strip()
                 ):
-                    issues.append(f"{mode}.market.connection must be a string")
+                    issues.append(f"{mode}.market.profile must be a non-empty string")
+                for legacy in ("provider", "credential_id", "connection"):
+                    if legacy in market:
+                        issues.append(
+                            f"{mode}.market.{legacy} is obsolete; select a runtime profile"
+                        )
         if mode == "backtest" and isinstance(mode_config, Mapping):
             market = mode_config.get("market")
             if (
@@ -460,6 +475,11 @@ class LaunchEnvironment:
             "KAIROS_LAUNCH_GROUP_DIRECTORY": str(self.group_directory),
             "KAIROS_LAUNCH_NORMALIZED_CONFIG": str(self.normalized_config_path),
             "KAIROS_MARKET_SCOPE": plan.market_scope,
+            **(
+                {"KAIROS_MARKET_RUNTIME_PROFILE": plan.market_profile}
+                if plan.market_profile is not None
+                else {}
+            ),
             "KAIROS_EXECUTION_DRY_RUN": str(
                 bool(plan.execution.get("dry_run", False))
             ).lower(),

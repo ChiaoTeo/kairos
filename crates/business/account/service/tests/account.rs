@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use kairos_account::composition::account::{
-    compose_account_application, compose_account_application_for_segments,
+    compose_blocking_account_application, compose_blocking_account_application_for_segments,
     compose_in_memory_account_application, AccountOptions,
 };
 use kairos_account::composition::{empty_snapshot, FlatbuffersAccountPublisher};
@@ -201,9 +201,12 @@ fn paper_account_composition_is_local_and_does_not_require_credentials() {
         host: "127.0.0.1".into(),
         port: 4002,
         client_id: 0,
+        isolated_margin_symbol: None,
+        reference_snapshot_root: None,
     };
     let mut composition =
-        compose_account_application(&options, Some(directory.path().join("account.json"))).unwrap();
+        compose_blocking_account_application(&options, Some(directory.path().join("account.json")))
+            .unwrap();
     assert_eq!(composition.provider, "paper");
     assert_eq!(
         composition
@@ -240,8 +243,10 @@ fn paper_account_composition_restores_multiple_configured_segments() {
         host: "127.0.0.1".into(),
         port: 4002,
         client_id: 0,
+        isolated_margin_symbol: None,
+        reference_snapshot_root: None,
     };
-    let mut composition = compose_account_application_for_segments(
+    let mut composition = compose_blocking_account_application_for_segments(
         &options,
         &["spot".into(), "margin".into()],
         Some(directory.path().join("account.json")),
@@ -275,8 +280,10 @@ fn account_application_exposes_capabilities_and_fee_queries() {
         host: "127.0.0.1".into(),
         port: 4002,
         client_id: 0,
+        isolated_margin_symbol: None,
+        reference_snapshot_root: None,
     };
-    let composition = compose_account_application_for_segments(
+    let composition = compose_blocking_account_application_for_segments(
         &options,
         &["spot".into(), "margin".into()],
         Some(directory.path().join("account.json")),
@@ -321,8 +328,10 @@ fn ibkr_account_composition_selects_native_equity_connection() {
         host: "127.0.0.1".into(),
         port: 4002,
         client_id: 0,
+        isolated_margin_symbol: None,
+        reference_snapshot_root: None,
     };
-    let composition = compose_account_application(&options, None).unwrap();
+    let composition = compose_blocking_account_application(&options, None).unwrap();
     assert_eq!(composition.provider, "ibkr");
 }
 

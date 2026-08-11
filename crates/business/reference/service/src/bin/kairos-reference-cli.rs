@@ -15,7 +15,8 @@ use kairos_workspace::workspace::Workspace;
 use serde_json::{json, Value};
 use std::str::FromStr;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Cli::parse();
     let workspace = Workspace::open(&args.workspace)?;
     let database = workspace.child(&["reference", "reference.sqlite"])?;
@@ -28,12 +29,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         reference_changes_stream: args.reference_changes_stream,
     };
 
-    let mut composition = build_application(&config, args.command.requires_publication())?;
+    let mut composition = build_application(&config, args.command.requires_publication()).await?;
     let value = execute(
         &mut composition.application,
         composition.event_writer.as_mut(),
         args.command,
-    )?;
+    )
+    .await?;
     let output = args.output.unwrap_or_else(|| {
         workspace
             .cli_format()
@@ -44,7 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn execute(
+async fn execute(
     application: &mut kairos_reference::ReferenceApplication,
     writer: Option<&mut ReferenceEventWriter>,
     command: Command,
@@ -71,8 +73,8 @@ fn execute(
             "catalog": application.catalog(),
         }),
         Command::Refresh | Command::Sync => {
-            let result = application.refresh()?;
-            publish_pending(writer, application)?;
+            let result = application.refresh().await?;
+            publish_pending(writer, application).await?;
             json!({
                 "generation": result.generation,
                 "event_sequence": result.event_sequence,
@@ -80,52 +82,56 @@ fn execute(
             })
         }
         Command::Publish => {
-            publish_pending(writer, application)?;
+            publish_pending(writer, application).await?;
             json!({ "generation": application.catalog().generation })
         }
         Command::Assets { command } => {
             let publishes = matches!(&command, AssetCommand::Add(_));
-            let value = assets(application, command)?;
+            let value = assets(application, command).await?;
             if publishes {
-                publish_pending(writer, application)?;
+                publish_pending(writer, application).await?;
             }
             value
         }
         Command::Instruments { command } => match command {
             InstrumentCommand::Add(args) => {
-                let generation = application.upsert_instrument(Instrument {
-                    instrument_id: InstrumentId::try_from(args.instrument_id)?,
-                    symbol: Symbol::try_from(args.symbol)?,
-                    name: args.name,
-                    instrument_type: args.instrument_type,
-                    product_family: args.product_family,
-                    underlying_instrument_id: args
-                        .underlying_instrument_id
-                        .map(InstrumentId::try_from)
-                        .transpose()?,
-                    expiry_unix_nanos: args.expiry_unix_nanos.map(UnixNanos::from),
-                    strike: args.strike,
-                    option_right: args.option_right,
-                    status: args.status.into(),
-                    ..Default::default()
-                })?;
-                publish_pending(writer, application)?;
+                let generation = application
+                    .upsert_instrument(Instrument {
+                        instrument_id: InstrumentId::try_from(args.instrument_id)?,
+                        symbol: Symbol::try_from(args.symbol)?,
+                        name: args.name,
+                        instrument_type: args.instrument_type,
+                        product_family: args.product_family,
+                        underlying_instrument_id: args
+                            .underlying_instrument_id
+                            .map(InstrumentId::try_from)
+                            .transpose()?,
+                        expiry_unix_nanos: args.expiry_unix_nanos.map(UnixNanos::from),
+                        strike: args.strike,
+                        option_right: args.option_right,
+                        status: args.status.into(),
+                        ..Default::default()
+                    })
+                    .await?;
+                publish_pending(writer, application).await?;
                 json!({"generation": generation})
             }
         },
         Command::Listings { command } => match command {
             ListingCommand::Add(args) => {
-                let generation = application.upsert_listing(Listing {
-                    source_id: None,
-                    listing_id: ListingId::try_from(args.listing_id)?,
-                    instrument_id: InstrumentId::try_from(args.instrument_id)?,
-                    exchange_id: Exchange::new(args.exchange_id).expect("valid exchange id"),
-                    exchange_symbol: Symbol::new(args.exchange_symbol)?,
-                    status: args.status.into(),
-                    effective_from_unix_nanos: args.effective_from_unix_nanos.into(),
-                    effective_to_unix_nanos: args.effective_to_unix_nanos.map(UnixNanos::from),
-                })?;
-                publish_pending(writer, application)?;
+                let generation = application
+                    .upsert_listing(Listing {
+                        source_id: None,
+                        listing_id: ListingId::try_from(args.listing_id)?,
+                        instrument_id: InstrumentId::try_from(args.instrument_id)?,
+                        exchange_id: Exchange::new(args.exchange_id).expect("valid exchange id"),
+                        exchange_symbol: Symbol::new(args.exchange_symbol)?,
+                        status: args.status.into(),
+                        effective_from_unix_nanos: args.effective_from_unix_nanos.into(),
+                        effective_to_unix_nanos: args.effective_to_unix_nanos.map(UnixNanos::from),
+                    })
+                    .await?;
+                publish_pending(writer, application).await?;
                 json!({"generation": generation})
             }
         },
@@ -133,8 +139,8 @@ fn execute(
         Command::Markets { command } => markets(application, command)?,
         Command::Events(args) => match args.action {
             Some(EventAction::Sync(sync)) => {
-                let result = application.refresh()?;
-                publish_pending(writer, application)?;
+                let result = application.refresh().await?;
+                publish_pending(writer, application).await?;
                 let ticker = sync.ticker.to_ascii_lowercase();
                 let events = result
                     .events
@@ -198,34 +204,41 @@ fn publish(
     Ok(())
 }
 
-fn publish_pending(
-    writer: Option<&mut ReferenceEventWriter>,
+async fn publish_pending(
+    mut writer: Option<&mut ReferenceEventWriter>,
     application: &mut kairos_reference::ReferenceApplication,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let events = application.pending_events(256)?;
-    publish(writer, application, &events)?;
-    let event_ids = events
-        .iter()
-        .map(|event| event.event_id.clone())
-        .collect::<Vec<_>>();
-    application.acknowledge_published_events(&event_ids)?;
+    loop {
+        let events = application.pending_events(256).await?;
+        if events.is_empty() {
+            break;
+        }
+        publish(writer.as_deref_mut(), application, &events)?;
+        let event_ids = events
+            .iter()
+            .map(|event| event.event_id.clone())
+            .collect::<Vec<_>>();
+        application.acknowledge_published_events(&event_ids).await?;
+    }
     Ok(())
 }
 
-fn assets(
+async fn assets(
     application: &mut kairos_reference::ReferenceApplication,
     command: AssetCommand,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     match command {
         AssetCommand::Add(args) => {
-            let generation = application.upsert_asset(Asset {
-                asset_id: AssetId::try_from(args.asset_id)?,
-                code: args.code,
-                name: args.name,
-                asset_class: args.asset_class,
-                status: args.status.into(),
-                ..Default::default()
-            })?;
+            let generation = application
+                .upsert_asset(Asset {
+                    asset_id: AssetId::try_from(args.asset_id)?,
+                    code: args.code,
+                    name: args.name,
+                    asset_class: args.asset_class,
+                    status: args.status.into(),
+                    ..Default::default()
+                })
+                .await?;
             Ok(json!({ "generation": generation }))
         }
         AssetCommand::List(args) => {

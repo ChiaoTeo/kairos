@@ -1,4 +1,3 @@
-use crate::services::participants::binance::ConnectionDomain;
 use std::collections::BTreeMap;
 
 use serde_json::Value;
@@ -7,7 +6,7 @@ use crate::application::capabilities::{
     DecimalValue, OrderEntryEvent, OrderEntryRequest, OrderEntryStatus, OrderSide, OrderType,
     TimeInForce,
 };
-use crate::application::{CommandOutcome, IntegrationError, OrderEntryConnection};
+use crate::application::{CommandOutcome, IndeterminateCommand, IntegrationError};
 use crate::services::transport::http::command_error_outcome;
 
 use super::account::BinanceFuturesAccountClient;
@@ -17,96 +16,138 @@ pub struct BinanceFuturesOrderConnection {
 }
 
 impl BinanceFuturesOrderConnection {
-    pub fn new(
-        product: ConnectionDomain,
-        api_key: impl Into<String>,
-        secret: impl Into<String>,
-        base_url: impl Into<String>,
-    ) -> Result<Self, String> {
-        let client = BinanceFuturesAccountClient::new(product, api_key, secret, base_url)
-            .map_err(|error| error.to_string())?;
-        Ok(Self { client })
+    pub(crate) fn from_client(client: BinanceFuturesAccountClient) -> Self {
+        Self { client }
     }
-}
 
-impl OrderEntryConnection for BinanceFuturesOrderConnection {
-    fn submit_order(
+    pub(crate) async fn submit_order_async(
         &mut self,
         request: &OrderEntryRequest,
     ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
-        if request.options.post_only == Some(true) && request.order_type != OrderType::Limit {
-            return Err(IntegrationError::InvalidRequest(
-                "Binance Futures post-only orders require a limit order".into(),
-            ));
-        }
-        let mut params = BTreeMap::from([
-            (
-                "symbol".into(),
-                symbol(request).map_err(IntegrationError::InvalidRequest)?,
-            ),
-            ("side".into(), side(request.side).into()),
-            ("type".into(), order_type(request).into()),
-            ("quantity".into(), format_decimal(request.quantity)),
-            ("newClientOrderId".into(), request.order_id.to_string()),
-        ]);
-        if let (OrderType::Limit, Some(price)) = (request.order_type, request.limit_price) {
-            params.insert("price".into(), format_decimal(price));
-            params.insert("timeInForce".into(), time_in_force(request).into());
-        }
-        if let Some(value) = request.options.reduce_only {
-            params.insert("reduceOnly".into(), value.to_string());
-        }
-        if let Some(value) = &request.options.position_side {
-            params.insert("positionSide".into(), value.clone());
-        }
-        let payload = match self.client.submit_order(params) {
-            Ok(payload) => payload,
-            Err(error) => return command_error_outcome(error),
+        let params = submit_params(request)?;
+        let payload = match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.client.submit_order_async(params),
+        )
+        .await
+        {
+            Ok(Ok(payload)) => payload,
+            Ok(Err(error)) => return command_error_outcome(error),
+            Err(_) => {
+                return Ok(CommandOutcome::Indeterminate(
+                    IndeterminateCommand::may_have_been_sent("Binance Futures submit timed out"),
+                ))
+            }
         };
         normalize_order_event(request, &payload)
             .map(CommandOutcome::Confirmed)
             .map_err(IntegrationError::InvalidPayload)
     }
 
-    fn cancel_order(
+    pub(crate) async fn cancel_order_async(
         &mut self,
         request: &OrderEntryRequest,
         remote_order_id: &str,
         at_unix_nanos: u64,
     ) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
-        let params = BTreeMap::from([
-            (
-                "symbol".into(),
-                symbol(request).map_err(IntegrationError::InvalidRequest)?,
-            ),
-            ("orderId".into(), remote_order_id.into()),
-        ]);
-        let payload = match self.client.cancel_order(params) {
-            Ok(payload) => payload,
-            Err(error) => return command_error_outcome(error),
+        let params = cancel_params(request, remote_order_id)?;
+        let payload = match tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.client.cancel_order_async(params),
+        )
+        .await
+        {
+            Ok(Ok(payload)) => payload,
+            Ok(Err(error)) => return command_error_outcome(error),
+            Err(_) => {
+                return Ok(CommandOutcome::Indeterminate(
+                    IndeterminateCommand::may_have_been_sent("Binance Futures cancel timed out"),
+                ))
+            }
         };
-        let event = OrderEntryEvent {
-            order_id: request.order_id.clone(),
-            status: OrderEntryStatus::Canceled,
-            remote_order_id: payload
-                .get("orderId")
-                .map(value_as_string)
-                .and_then(|value| kairos_domain_types::RemoteOrderId::new(value).ok())
-                .or_else(|| kairos_domain_types::RemoteOrderId::new(remote_order_id).ok()),
-            filled_quantity: payload
-                .get("executedQty")
-                .and_then(Value::as_str)
-                .map(decimal_from_str)
-                .transpose()
-                .map_err(IntegrationError::InvalidPayload)?
-                .map(|v| rescale(v, request.quantity.scale))
-                .transpose()
-                .map_err(IntegrationError::InvalidPayload)?,
-            occurred_at_unix_nanos: at_unix_nanos.into(),
-            reason: String::new(),
-        };
-        Ok(CommandOutcome::Confirmed(event))
+        normalize_cancel_event(request, remote_order_id, at_unix_nanos, &payload)
     }
+}
+
+fn submit_params(
+    request: &OrderEntryRequest,
+) -> Result<BTreeMap<String, String>, IntegrationError> {
+    if matches!(request.order_type, OrderType::Stop | OrderType::StopLimit) {
+        return Err(IntegrationError::UnsupportedOperation);
+    }
+    if request.options.post_only == Some(true) && request.order_type != OrderType::Limit {
+        return Err(IntegrationError::InvalidRequest(
+            "Binance Futures post-only orders require a limit order".into(),
+        ));
+    }
+    let mut params = BTreeMap::from([
+        (
+            "symbol".into(),
+            symbol(request).map_err(IntegrationError::InvalidRequest)?,
+        ),
+        ("side".into(), side(request.side).into()),
+        ("type".into(), order_type(request).into()),
+        ("quantity".into(), format_decimal(request.quantity)),
+        ("newClientOrderId".into(), request.order_id.to_string()),
+        ("newOrderRespType".into(), "RESULT".into()),
+    ]);
+    if let (OrderType::Limit, Some(price)) = (request.order_type, request.limit_price) {
+        params.insert("price".into(), format_decimal(price));
+        params.insert("timeInForce".into(), time_in_force(request).into());
+    }
+    if let Some(value) = request.options.reduce_only {
+        params.insert("reduceOnly".into(), value.to_string());
+    }
+    if let Some(value) = &request.options.position_side {
+        params.insert("positionSide".into(), value.clone());
+    }
+    Ok(params)
+}
+
+fn cancel_params(
+    request: &OrderEntryRequest,
+    remote_order_id: &str,
+) -> Result<BTreeMap<String, String>, IntegrationError> {
+    if remote_order_id.trim().is_empty() {
+        return Err(IntegrationError::InvalidRequest(
+            "exchange order id is required for cancellation".into(),
+        ));
+    }
+    Ok(BTreeMap::from([
+        (
+            "symbol".into(),
+            symbol(request).map_err(IntegrationError::InvalidRequest)?,
+        ),
+        ("orderId".into(), remote_order_id.into()),
+    ]))
+}
+
+fn normalize_cancel_event(
+    request: &OrderEntryRequest,
+    remote_order_id: &str,
+    at_unix_nanos: u64,
+    payload: &Value,
+) -> Result<CommandOutcome<OrderEntryEvent>, IntegrationError> {
+    Ok(CommandOutcome::Confirmed(OrderEntryEvent {
+        order_id: request.order_id.clone(),
+        status: OrderEntryStatus::Canceled,
+        remote_order_id: payload
+            .get("orderId")
+            .map(value_as_string)
+            .and_then(|value| kairos_domain_types::RemoteOrderId::new(value).ok())
+            .or_else(|| kairos_domain_types::RemoteOrderId::new(remote_order_id).ok()),
+        filled_quantity: payload
+            .get("executedQty")
+            .and_then(Value::as_str)
+            .map(decimal_from_str)
+            .transpose()
+            .map_err(IntegrationError::InvalidPayload)?
+            .map(|value| rescale(value, request.quantity.scale))
+            .transpose()
+            .map_err(IntegrationError::InvalidPayload)?,
+        occurred_at_unix_nanos: at_unix_nanos.into(),
+        reason: String::new(),
+    }))
 }
 
 fn normalize_order_event(
@@ -147,14 +188,13 @@ fn normalize_order_event(
 }
 
 fn symbol(request: &OrderEntryRequest) -> Result<String, String> {
-    let value = request.market_id.as_deref().ok_or_else(|| {
-        "Binance futures order requires a market_id resolved by Reference".to_string()
-    })?;
-    let value = value.rsplit(':').next().unwrap_or(value).trim();
-    if value.is_empty() {
-        return Err("Binance futures order symbol is empty".into());
+    if request.provider_instrument.participant.id != "binance" {
+        return Err(format!(
+            "Binance futures order requires a Binance provider instrument, got {}",
+            request.provider_instrument.participant.id
+        ));
     }
-    Ok(value.replace(['/', '-'], "").to_ascii_uppercase())
+    Ok(request.provider_instrument.source_symbol.to_string())
 }
 
 fn side(value: OrderSide) -> &'static str {
@@ -168,8 +208,9 @@ fn order_type(request: &OrderEntryRequest) -> &'static str {
     match value {
         OrderType::Market => "MARKET",
         OrderType::Limit => "LIMIT",
-        OrderType::Stop => "MARKET",
-        OrderType::StopLimit => "LIMIT",
+        OrderType::Stop | OrderType::StopLimit => {
+            unreachable!("stop orders are rejected until OrderEntryRequest carries trigger price")
+        }
     }
 }
 

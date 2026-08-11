@@ -1,7 +1,9 @@
 //! Async Binance Spot account/balance/order/fill event capability.
 
-use crate::application::capabilities::account_facts::ExternalAccountEvent;
-use crate::application::{AsyncAccountEventSource, IntegrationError};
+use crate::application::capabilities::account_facts::{
+    ExternalAccountEvent, ExternalAccountEventEnvelope,
+};
+use crate::application::{AsyncAccountEventSource, ExternalEventEnvelope, IntegrationError};
 use crate::domain::ConnectionHealth;
 
 use super::account::BinanceSpotAccountClient;
@@ -58,7 +60,9 @@ impl AsyncAccountEventSource for BinanceSpotAsyncAccountEventSource {
         self.channel.health()
     }
 
-    async fn next_account_event(&mut self) -> Result<ExternalAccountEvent, IntegrationError> {
+    async fn next_account_event(
+        &mut self,
+    ) -> Result<ExternalAccountEventEnvelope, IntegrationError> {
         loop {
             let text = self.channel.next_text().await?;
             let outer: serde_json::Value = serde_json::from_str(&text)
@@ -77,13 +81,107 @@ impl AsyncAccountEventSource for BinanceSpotAsyncAccountEventSource {
                 }
                 _ => {}
             }
-            if let Some(event) = parse_user_event_value(&self.segment_key, self.product, event)
+            if let Some(payload) = parse_user_event_value(&self.segment_key, self.product, event)
                 .map_err(IntegrationError::InvalidPayload)?
             {
-                return Ok(event);
+                let observed_at_unix_nanos = account_event_time(&payload);
+                return Ok(ExternalEventEnvelope {
+                    participant: crate::domain::ParticipantRef::new(
+                        crate::domain::ParticipantKind::Exchange,
+                        "binance",
+                    )
+                    .expect("static Binance participant is valid"),
+                    binding_id: self.channel.binding_id().to_owned(),
+                    channel_id: "binance-spot-user-data".into(),
+                    channel_epoch: self.channel.channel_epoch(),
+                    provider_event_id: provider_event_id(&payload),
+                    provider_sequence: None,
+                    observed_at_unix_nanos,
+                    received_at_unix_nanos: now_unix_nanos(),
+                    payload,
+                });
             }
         }
     }
+}
+
+fn account_event_time(event: &ExternalAccountEvent) -> kairos_domain_types::UnixNanos {
+    match event {
+        ExternalAccountEvent::Snapshot(snapshot) => snapshot.observed_at_unix_nanos,
+        ExternalAccountEvent::Order(order) => order.occurred_at_unix_nanos,
+        ExternalAccountEvent::Fill(fill) => fill.occurred_at_unix_nanos,
+        ExternalAccountEvent::Batch(events) => events
+            .iter()
+            .map(account_event_time)
+            .max()
+            .unwrap_or_else(|| kairos_domain_types::UnixNanos::new(0)),
+    }
+}
+
+fn provider_event_id(event: &ExternalAccountEvent) -> Option<String> {
+    match event {
+        ExternalAccountEvent::Fill(fill) => Some(format!("binance:fill:{}", fill.fill_id)),
+        ExternalAccountEvent::Order(order) => Some(format!(
+            "binance:order:{}:{}",
+            order.order_id,
+            order.occurred_at_unix_nanos.get()
+        )),
+        ExternalAccountEvent::Snapshot(_) | ExternalAccountEvent::Batch(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod live_tests {
+    use crate::application::AsyncAccountEventSource;
+
+    use super::{BinanceSpotAccountClient, BinanceSpotAsyncAccountEventSource};
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires explicit Binance credentials and live network access"]
+    async fn live_hmac_user_data_subscription_connects() {
+        let api_key = std::env::var("BINANCE_API_KEY").expect("BINANCE_API_KEY is required");
+        let secret = std::env::var("BINANCE_API_SECRET").expect("BINANCE_API_SECRET is required");
+        let client = BinanceSpotAccountClient::new(api_key, secret, "https://api.binance.com")
+            .expect("live Binance client should be valid");
+        let signed_timestamp = client
+            .test_signed_timestamp_async()
+            .await
+            .expect("live Binance clock synchronization should succeed");
+        let local_timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("local clock should be after Unix epoch")
+            .as_millis() as u64;
+        let signed_clock_delta = signed_timestamp as i128 - local_timestamp as i128;
+        eprintln!("Binance signed clock delta from local time: {signed_clock_delta} ms");
+        assert!(signed_clock_delta.abs() < 5_000);
+        let mut source = BinanceSpotAsyncAccountEventSource::from_client_with_capacity(
+            "account.binance.live-contract",
+            "spot",
+            client,
+            "wss://ws-api.binance.com:443/ws-api/v3",
+            16,
+        )
+        .expect("live Binance account event source should be valid");
+
+        source
+            .connect_channel()
+            .await
+            .expect("live Binance user-data subscription should connect");
+        assert!(source.channel_health().authenticated);
+        source
+            .disconnect_channel()
+            .await
+            .expect("live Binance user-data subscription should disconnect");
+    }
+}
+
+fn now_unix_nanos() -> kairos_domain_types::UnixNanos {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .min(u64::MAX as u128) as u64;
+    kairos_domain_types::UnixNanos::new(nanos)
 }
 
 #[cfg(test)]
@@ -172,7 +270,11 @@ mod tests {
         .unwrap();
 
         let event = source.next_account_event().await.unwrap();
-        let ExternalAccountEvent::Snapshot(snapshot) = event else {
+        assert_eq!(event.binding_id, "account.binance.spot");
+        assert_eq!(event.channel_id, "binance-spot-user-data");
+        assert_eq!(event.channel_epoch, 1);
+        assert!(event.received_at_unix_nanos >= event.observed_at_unix_nanos);
+        let ExternalAccountEvent::Snapshot(snapshot) = event.payload else {
             panic!("expected normalized account snapshot event");
         };
         assert_eq!(snapshot.balances.len(), 1);

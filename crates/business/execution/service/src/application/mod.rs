@@ -4,7 +4,9 @@ mod process;
 mod service;
 
 pub use preflight::ExecutionPreflight;
-pub use process::{ExecutionProcess, ExecutionSnapshotPublisher, IntentSnapshotPublisher};
+pub use process::{
+    ExecutionAsyncRoute, ExecutionProcess, ExecutionSnapshotPublisher, IntentSnapshotPublisher,
+};
 pub(crate) use service::remote_status;
 pub use service::{
     CancelIntent, CancelOrder, DependencyWatermarks, ExecuteStrategyIntent, ExecutionApplication,

@@ -1,13 +1,8 @@
 use crate::application::capabilities::{ConnectionHealth, MarketStreamCapabilities};
 use crate::application::{
     AsyncHistoricalMarketDataConnection, AsyncMarketEventSource, HistoricalMarketDataConnection,
-    HistoricalMarketRequest, IntegrationError, MarketEvent, MarketStreamConnection,
-    MarketSubscription, SubscriptionId,
+    HistoricalMarketRequest, IntegrationError, MarketEvent, MarketSubscription, SubscriptionId,
 };
-
-pub struct MassiveLiveMarket {
-    pub(super) inner: crate::services::participants::massive::market_data::MassiveMarketStream,
-}
 
 pub struct MassiveAsyncLiveMarket {
     pub(super) inner: crate::services::participants::massive::market_data::MassiveAsyncMarketStream,
@@ -62,53 +57,6 @@ impl AsyncHistoricalMarketDataConnection for MassiveAsyncHistoricalMarket {
         request: &HistoricalMarketRequest,
     ) -> Result<Vec<MarketEvent>, IntegrationError> {
         self.inner.fetch(request).await
-    }
-}
-
-impl MarketStreamConnection for MassiveLiveMarket {
-    fn descriptor(&self) -> &crate::domain::ConnectionDescriptor {
-        self.inner.descriptor()
-    }
-
-    fn connect_channel(&mut self) -> Result<(), IntegrationError> {
-        reject_blocking_runtime()?;
-        self.inner.connect_channel()
-    }
-
-    fn disconnect_channel(&mut self) -> Result<(), IntegrationError> {
-        reject_blocking_runtime()?;
-        self.inner.disconnect_channel()
-    }
-
-    fn reconnect_channel(&mut self) -> Result<(), IntegrationError> {
-        reject_blocking_runtime()?;
-        self.inner.reconnect_channel()
-    }
-
-    fn channel_health(&self) -> crate::domain::ConnectionHealth {
-        self.inner.channel_health()
-    }
-
-    fn capabilities(&self) -> MarketStreamCapabilities {
-        self.inner.capabilities()
-    }
-
-    fn subscribe(
-        &mut self,
-        request: MarketSubscription,
-    ) -> Result<SubscriptionId, IntegrationError> {
-        reject_blocking_runtime()?;
-        self.inner.subscribe(request)
-    }
-
-    fn unsubscribe(&mut self, subscription: SubscriptionId) -> Result<(), IntegrationError> {
-        reject_blocking_runtime()?;
-        self.inner.unsubscribe(subscription)
-    }
-
-    fn next_event(&mut self) -> Result<Option<MarketEvent>, IntegrationError> {
-        reject_blocking_runtime()?;
-        self.inner.next_event()
     }
 }
 

@@ -1,6 +1,7 @@
 //! Account process. It owns lifecycle and control transport, not
 //! account business state; the latter remains inside AccountActor.
 
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::time::Instant;
@@ -24,9 +25,12 @@ use crate::application::{
     RefreshAccount,
 };
 use crate::domain::{AccountFill, AccountOrderObservation};
-use crate::services::integration::AccountAsyncEventSource;
+use crate::services::integration::{
+    AccountAsyncEventSource, AccountAsyncSnapshotGateway, AccountInstrumentResolver,
+};
+use crate::services::refresh::RefreshFetch;
 use kairos_domain_types::AccountId;
-use kairos_integration::application::IntegrationError;
+use kairos_integration::application::{ConnectionHealth, ConnectionLifecycle, IntegrationError};
 use kairos_workspace::runtime::{HEALTH_PATH, SNAPSHOT_PATH, STOP_PATH};
 use tracing::{debug, error, info, warn, Instrument};
 
@@ -40,13 +44,24 @@ pub struct AccountProcess {
     stop_requested: bool,
     last_error: Option<String>,
     last_refresh: Option<AccountRefreshReport>,
-    stream_enabled: bool,
     lease_file: Option<PathBuf>,
     lease_instance_id: Option<String>,
     snapshot_dirty: bool,
     refresh_started: Option<Instant>,
     async_account_streams: Vec<AccountAsyncEventSource>,
-    async_provider_tasks: Vec<tokio::task::JoinHandle<()>>,
+    instrument_resolver: AccountInstrumentResolver,
+    async_snapshot_source: Option<AccountAsyncSnapshotGateway>,
+    async_refresh_pending: bool,
+    async_refresh_task: Option<tokio::task::JoinHandle<()>>,
+    initial_refresh_complete: bool,
+    async_stream_health: BTreeMap<String, ConnectionHealth>,
+    stream_resync_required: BTreeSet<String>,
+    external_event_watermarks: BTreeMap<(String, String), (u64, Option<u64>)>,
+    external_event_ids: BTreeSet<(String, String, String)>,
+    external_event_id_order: VecDeque<(String, String, String)>,
+    recovery_events: VecDeque<kairos_integration::application::ExternalAccountEventEnvelope>,
+    recovery_overflowed: bool,
+    async_event_queue_depth: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Application-owned publication capability. Concrete transport publishers
@@ -61,9 +76,20 @@ struct AccountHttpRequest {
     response: oneshot::Sender<Result<(u16, Value), String>>,
 }
 
+struct AsyncRefreshCompletion {
+    source: AccountAsyncSnapshotGateway,
+    account_id: String,
+    fetches: Vec<RefreshFetch>,
+}
+
+struct AsyncStreamHealthUpdate {
+    binding_id: String,
+    health: ConnectionHealth,
+}
+
 impl AccountProcess {
     pub fn new(
-        application: AccountApplication,
+        mut application: AccountApplication,
         account_id: impl Into<String>,
         socket_path: impl Into<PathBuf>,
         refresh_interval: Duration,
@@ -77,7 +103,7 @@ impl AccountProcess {
         if refresh_interval.is_zero() {
             return Err("account refresh interval must be positive".into());
         }
-        let stream_enabled = application.has_stream();
+        let async_snapshot_source = application.take_async_snapshot_source();
         Ok(Self {
             application,
             account_id,
@@ -88,13 +114,24 @@ impl AccountProcess {
             stop_requested: false,
             last_error: None,
             last_refresh: None,
-            stream_enabled,
             lease_file: None,
             lease_instance_id: None,
             snapshot_dirty: true,
             refresh_started: None,
             async_account_streams: Vec::new(),
-            async_provider_tasks: Vec::new(),
+            instrument_resolver: AccountInstrumentResolver::default(),
+            async_snapshot_source,
+            async_refresh_pending: false,
+            async_refresh_task: None,
+            initial_refresh_complete: false,
+            async_stream_health: BTreeMap::new(),
+            stream_resync_required: BTreeSet::new(),
+            external_event_watermarks: BTreeMap::new(),
+            external_event_ids: BTreeSet::new(),
+            external_event_id_order: VecDeque::new(),
+            recovery_events: VecDeque::new(),
+            recovery_overflowed: false,
+            async_event_queue_depth: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         })
     }
 }
@@ -104,12 +141,26 @@ impl AccountProcess {
         mut self,
         streams: Vec<AccountAsyncEventSource>,
     ) -> Self {
+        self.async_stream_health = streams
+            .iter()
+            .map(|stream| {
+                (
+                    stream.binding_id().to_owned(),
+                    ConnectionHealth {
+                        lifecycle: ConnectionLifecycle::Created,
+                        healthy: false,
+                        authenticated: false,
+                        last_error: None,
+                    },
+                )
+            })
+            .collect();
         self.async_account_streams = streams;
         self
     }
 
-    pub fn with_async_provider_tasks(mut self, tasks: Vec<tokio::task::JoinHandle<()>>) -> Self {
-        self.async_provider_tasks = tasks;
+    pub(crate) fn with_instrument_resolver(mut self, resolver: AccountInstrumentResolver) -> Self {
+        self.instrument_resolver = resolver;
         self
     }
 
@@ -128,101 +179,68 @@ impl AccountProcess {
     }
 
     pub async fn run(mut self) -> Result<(), Box<dyn std::error::Error>> {
-        info!(event = "process_starting", component = "account", account_id = %self.account_id, socket = %self.socket_path.display(), refresh_interval_ms = self.refresh_interval.as_millis(), stream_enabled = self.stream_enabled, "account process starting");
+        info!(event = "process_starting", component = "account", account_id = %self.account_id, socket = %self.socket_path.display(), refresh_interval_ms = self.refresh_interval.as_millis(), "account process starting");
         remove_socket(&self.socket_path)?;
         if let Some(parent) = self.socket_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
         let listener = UnixListener::bind(&self.socket_path)?;
         const CONTROL_QUEUE_CAPACITY: usize = 256;
-        const STREAM_BATCH_SIZE: usize = 64;
         const REFRESH_RESULT_POLL_MS: u64 = 10;
         let (sender, mut receiver) = mpsc::channel(CONTROL_QUEUE_CAPACITY);
         let router = Router::new()
             .fallback(account_http_handler)
             .with_state(sender);
         let server = tokio::spawn(async move { axum::serve(listener, router).await });
-        kairos_workspace::logging::record_gauge("kairos.process.ready", 1);
-        info!(event = "process_ready", component = "account", socket = %self.socket_path.display(), "account control socket ready");
+        kairos_workspace::logging::record_gauge("kairos.process.ready", 0);
+        info!(event = "process_control_listening", component = "account", socket = %self.socket_path.display(), "account control socket listening");
         let mut interval = time::interval(self.refresh_interval);
         interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut refresh_result_poll = time::interval(Duration::from_millis(REFRESH_RESULT_POLL_MS));
         refresh_result_poll.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        let stream_wakeup = self.application.stream_wakeup();
         let (async_stream_shutdown, async_stream_shutdown_rx) = tokio::sync::watch::channel(false);
         let async_stream_overflow = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let async_stream_overflow_wakeup = std::sync::Arc::new(tokio::sync::Notify::new());
         let (async_event_sender, mut async_event_receiver) = mpsc::channel(256);
+        let (async_stream_health_sender, mut async_stream_health_receiver) = mpsc::channel(64);
+        let (async_refresh_sender, mut async_refresh_receiver) = mpsc::channel(1);
         let async_stream_tasks = self.start_async_stream_consumers(
             async_event_sender,
             async_stream_shutdown_rx,
             std::sync::Arc::clone(&async_stream_overflow),
             std::sync::Arc::clone(&async_stream_overflow_wakeup),
+            async_stream_health_sender,
+            std::sync::Arc::clone(&self.async_event_queue_depth),
         );
         let async_stream_enabled = !async_stream_tasks.is_empty();
+        let legacy_refresh_enabled = self.application.has_refresh_worker();
         interval.tick().await;
-        self.schedule_refresh();
+        self.schedule_refresh(&async_refresh_sender);
         if let Err(error) = self.publish_snapshot_if_dirty() {
             self.last_error = Some(error);
         }
-        let _ = self
-            .write_health(if self.lease_valid() {
-                "ready"
-            } else {
-                "unavailable"
-            })
-            .await;
+        let _ = self.write_health(self.business_status()).await;
         while !self.stop_requested {
             tokio::select! {
                 Some(request) = receiver.recv() => {
-                    let response = self.handle_request(&request.target, &String::from_utf8_lossy(&request.body));
+                    let response = self.handle_request(
+                        &request.target,
+                        &String::from_utf8_lossy(&request.body),
+                        &async_refresh_sender,
+                    );
                     let _ = request.response.send(response.map_err(|error| error.to_string()));
                 }
-                _ = stream_wakeup.notified(), if self.stream_enabled => {
-                    if let Some(error) = self.application.take_persistence_error() {
-                        warn!(event = "account_persistence_failed", component = "account", error = %error, "account persistence worker reported an error");
-                        self.last_error = Some(error);
-                    }
-                    let started = Instant::now();
-                    match self.application.poll_stream_batch(STREAM_BATCH_SIZE) {
-                        Ok(applied) if applied > 0 => {
-                            info!(
-                                event = "account_stream_batch_applied",
-                                component = "account",
-                                applied,
-                                queue_depth = self.application.stream_queue_depth(),
-                                duration_ms = started.elapsed().as_millis(),
-                                "account stream batch applied"
-                            );
-                            self.snapshot_dirty = true;
-                            if self.application.stream_queue_depth() > 0 {
-                                // `Notify` intentionally coalesces permits. A
-                                // full batch schedules one more drain so an
-                                // already-buffered tail cannot wait for a new
-                                // provider event.
-                                stream_wakeup.notify_one();
-                            }
-                            if let Err(error) = self.publish_snapshot_if_dirty() {
-                                error!(event = "snapshot_publish_failed", component = "account", error = %error, "account snapshot publication failed");
-                                self.last_error = Some(error);
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            warn!(event = "stream_poll_failed", component = "account", error = %error, "account stream poll failed");
-                            self.last_error = Some(error.to_string());
-                            // Stream continuity is no longer trustworthy. A
-                            // snapshot refresh, not continued delta guessing,
-                            // is the recovery boundary.
-                            self.schedule_refresh();
-                        }
-                    }
-                }
                 Some(result) = async_event_receiver.recv(), if async_stream_enabled => {
+                    self.async_event_queue_depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     match result {
-                        Ok(event) => match crate::services::integration::map_event(event)
-                            .and_then(|event| self.application.apply_event(event).map_err(|error| error.to_string()))
-                        {
+                        Ok(event) if self.refresh_pending() || !self.initial_refresh_complete => {
+                            if !self.buffer_recovery_event(event) {
+                                self.last_error = Some(
+                                    "account recovery event buffer overflowed; another snapshot resynchronization is required".into(),
+                                );
+                            }
+                        }
+                        Ok(event) => match self.apply_external_event(event) {
                             Ok(applied) if applied > 0 => {
                                 self.snapshot_dirty = true;
                                 if let Err(error) = self.publish_snapshot_if_dirty() {
@@ -233,23 +251,37 @@ impl AccountProcess {
                             Err(error) => {
                                 warn!(event = "async_account_event_apply_failed", component = "account", error = %error, "async account event could not be applied");
                                 self.last_error = Some(error);
-                                self.schedule_refresh();
+                                self.schedule_refresh(&async_refresh_sender);
                             }
                         },
                         Err(error) => {
                             warn!(event = "async_account_stream_failed", component = "account", error = %error, "async account stream reported a continuity failure");
                             self.last_error = Some(error.to_string());
-                            self.schedule_refresh();
+                            self.schedule_refresh(&async_refresh_sender);
                         }
                     }
+                }
+                Some(update) = async_stream_health_receiver.recv(), if async_stream_enabled => {
+                    self.apply_stream_health_update(update);
+                    let _ = self.write_health(self.business_status()).await;
                 }
                 _ = async_stream_overflow_wakeup.notified(), if async_stream_enabled => {
                     if async_stream_overflow.swap(false, std::sync::atomic::Ordering::AcqRel) {
                         let error = "async account event queue overflowed; snapshot resynchronization is required".to_string();
                         warn!(event = "async_account_stream_overflow", component = "account", error = %error, "async account stream continuity was lost");
                         self.last_error = Some(error);
-                        self.schedule_refresh();
+                        self.schedule_refresh(&async_refresh_sender);
                     }
+                }
+                Some(completion) = async_refresh_receiver.recv(), if self.async_refresh_pending => {
+                    let resync_required = self.finish_async_refresh(completion);
+                    if resync_required {
+                        self.schedule_refresh(&async_refresh_sender);
+                    }
+                    if let Err(error) = self.publish_snapshot_if_dirty() {
+                        self.last_error = Some(error);
+                    }
+                    let _ = self.write_health(self.business_status()).await;
                 }
                 _ = interval.tick() => {
                     if let Some(error) = self.application.take_persistence_error() {
@@ -257,21 +289,21 @@ impl AccountProcess {
                         self.last_error = Some(error);
                     }
                     self.drain_refresh();
-                    self.schedule_refresh();
+                    self.schedule_refresh(&async_refresh_sender);
                     if let Err(error) = self.publish_snapshot_if_dirty() {
                         error!(event = "snapshot_publish_failed", component = "account", error = %error, "account snapshot publication failed");
                         self.last_error = Some(error);
                     }
-                    let _ = self.write_health(if self.last_error.is_some() || !self.lease_valid() { "degraded" } else { "ready" }).await;
+                    let _ = self.write_health(self.business_status()).await;
                 }
-                _ = refresh_result_poll.tick() => {
+                _ = refresh_result_poll.tick(), if legacy_refresh_enabled => {
                     let refresh_changed = self.drain_refresh();
                     if let Err(error) = self.publish_snapshot_if_dirty() {
                         error!(event = "snapshot_publish_failed", component = "account", error = %error, "account snapshot publication failed");
                         self.last_error = Some(error);
                     }
                     if refresh_changed {
-                        let _ = self.write_health(if self.last_error.is_some() || !self.lease_valid() { "degraded" } else { "ready" }).await;
+                        let _ = self.write_health(self.business_status()).await;
                     }
                 }
             }
@@ -282,7 +314,7 @@ impl AccountProcess {
                 warn!(event = "async_account_stream_task_failed", component = "account", error = %error, "async account stream task failed");
             }
         }
-        for task in self.async_provider_tasks.drain(..) {
+        if let Some(task) = self.async_refresh_task.take() {
             task.abort();
             let _ = task.await;
         }
@@ -296,14 +328,13 @@ impl AccountProcess {
     fn start_async_stream_consumers(
         &mut self,
         sender: mpsc::Sender<
-            Result<
-                kairos_integration::application::capabilities::account_facts::ExternalAccountEvent,
-                IntegrationError,
-            >,
+            Result<kairos_integration::application::ExternalAccountEventEnvelope, IntegrationError>,
         >,
         shutdown: tokio::sync::watch::Receiver<bool>,
         overflowed: std::sync::Arc<std::sync::atomic::AtomicBool>,
         overflow_wakeup: std::sync::Arc<tokio::sync::Notify>,
+        health_sender: mpsc::Sender<AsyncStreamHealthUpdate>,
+        queue_depth: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     ) -> Vec<tokio::task::JoinHandle<()>> {
         std::mem::take(&mut self.async_account_streams)
             .into_iter()
@@ -312,7 +343,22 @@ impl AccountProcess {
                 let mut shutdown = shutdown.clone();
                 let overflowed = std::sync::Arc::clone(&overflowed);
                 let overflow_wakeup = std::sync::Arc::clone(&overflow_wakeup);
+                let health_sender = health_sender.clone();
+                let queue_depth = std::sync::Arc::clone(&queue_depth);
                 tokio::spawn(async move {
+                    let binding_id = stream.binding_id().to_owned();
+                    if let Err(error) = stream.connect_channel().await {
+                        queue_depth.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if sender.try_send(Err(error)).is_err() {
+                            queue_depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
+                    let _ = health_sender
+                        .send(AsyncStreamHealthUpdate {
+                            binding_id: binding_id.clone(),
+                            health: stream.channel_health(),
+                        })
+                        .await;
                     loop {
                         let result = tokio::select! {
                             biased;
@@ -325,13 +371,49 @@ impl AccountProcess {
                             result = stream.next_account_event() => result,
                         };
                         let should_reconnect = result.is_err();
+                        queue_depth.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         match sender.try_send(result) {
                             Ok(()) => {}
-                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => break,
+                            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                queue_depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                                break;
+                            }
                             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                queue_depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                                 overflowed.store(true, std::sync::atomic::Ordering::Release);
                                 overflow_wakeup.notify_one();
-                                break;
+                                let _ = health_sender.try_send(AsyncStreamHealthUpdate {
+                                    binding_id: binding_id.clone(),
+                                    health: ConnectionHealth {
+                                        lifecycle: ConnectionLifecycle::Degraded,
+                                        healthy: false,
+                                        authenticated: stream.channel_health().authenticated,
+                                        last_error: Some(
+                                            "Account consumer queue overflowed; resync required"
+                                                .into(),
+                                        ),
+                                    },
+                                });
+                                tokio::select! {
+                                    permit = sender.reserve() => {
+                                        if permit.is_err() {
+                                            break;
+                                        }
+                                    }
+                                    changed = shutdown.changed() => {
+                                        if changed.is_err() || *shutdown.borrow() {
+                                            break;
+                                        }
+                                    }
+                                }
+                                let _ = stream.reconnect_channel().await;
+                                let _ = health_sender
+                                    .send(AsyncStreamHealthUpdate {
+                                        binding_id: binding_id.clone(),
+                                        health: stream.channel_health(),
+                                    })
+                                    .await;
+                                continue;
                             }
                         }
                         if should_reconnect {
@@ -346,6 +428,12 @@ impl AccountProcess {
                                     }
                                 }
                             }
+                            let _ = health_sender
+                                .send(AsyncStreamHealthUpdate {
+                                    binding_id: binding_id.clone(),
+                                    health: stream.channel_health(),
+                                })
+                                .await;
                         }
                     }
                     let _ = stream.disconnect_channel().await;
@@ -354,11 +442,11 @@ impl AccountProcess {
             .collect()
     }
 
-    fn schedule_refresh(&mut self) {
-        if self.application.refresh_pending() {
+    fn schedule_refresh(&mut self, async_sender: &mpsc::Sender<AsyncRefreshCompletion>) {
+        if self.refresh_pending() {
             return;
         }
-        if let Err(error) = self.application.start_refresh(RefreshAccount {
+        let request = RefreshAccount {
             account_id: match AccountId::new(self.account_id.clone()) {
                 Ok(value) => value,
                 Err(error) => {
@@ -367,7 +455,39 @@ impl AccountProcess {
                 }
             },
             segments: Vec::new(),
-        }) {
+        };
+        if let Some(mut source) = self.async_snapshot_source.take() {
+            let segments = match self.application.selected_refresh_segments(&request) {
+                Ok(segments) => segments,
+                Err(error) => {
+                    self.async_snapshot_source = Some(source);
+                    self.last_error = Some(error.to_string());
+                    return;
+                }
+            };
+            let sender = async_sender.clone();
+            let account_id = self.account_id.clone();
+            self.async_refresh_pending = true;
+            self.refresh_started = Some(Instant::now());
+            self.async_refresh_task = Some(tokio::spawn(async move {
+                let fetches = source.fetch(segments).await;
+                let _ = sender
+                    .send(AsyncRefreshCompletion {
+                        source,
+                        account_id,
+                        fetches,
+                    })
+                    .await;
+            }));
+            info!(
+                event = "account_async_refresh_started",
+                component = "account",
+                account_id = %self.account_id,
+                "account async refresh started"
+            );
+            return;
+        }
+        if let Err(error) = self.application.start_refresh(request) {
             self.last_error = Some(error.to_string());
         } else {
             self.refresh_started = Some(Instant::now());
@@ -380,6 +500,227 @@ impl AccountProcess {
         }
     }
 
+    fn finish_async_refresh(&mut self, completion: AsyncRefreshCompletion) -> bool {
+        self.async_refresh_task.take();
+        self.async_snapshot_source = Some(completion.source);
+        self.async_refresh_pending = false;
+        let generation_before = self.application.generation();
+        let duration_ms = self
+            .refresh_started
+            .take()
+            .map(|started| started.elapsed().as_millis())
+            .unwrap_or_default();
+        match self
+            .application
+            .apply_refresh_fetches(&completion.account_id, completion.fetches)
+        {
+            Ok(report) => {
+                self.initial_refresh_complete |= report.issues.is_empty();
+                if report.issues.is_empty() {
+                    self.external_event_watermarks.clear();
+                }
+                self.last_error = report.issues.first().map(|issue| issue.error.clone());
+                info!(
+                    event = "account_async_refresh_completed",
+                    component = "account",
+                    account_id = %report.account_id,
+                    refreshed_segments = report.refreshed_segments.len(),
+                    issues = report.issues.len(),
+                    duration_ms,
+                    "account async refresh completed"
+                );
+                self.last_refresh = Some(report);
+                self.snapshot_dirty |= self.application.generation() != generation_before;
+                if self
+                    .last_refresh
+                    .as_ref()
+                    .is_some_and(|report| report.issues.is_empty())
+                {
+                    if self.recovery_overflowed {
+                        self.recovery_events.clear();
+                        self.recovery_overflowed = false;
+                        self.last_error = Some(
+                            "account recovery event buffer overflowed; snapshot must be repeated"
+                                .into(),
+                        );
+                        return true;
+                    }
+                    if let Err(error) = self.replay_recovery_events() {
+                        self.last_error = Some(error);
+                        return true;
+                    }
+                    self.complete_stream_resyncs();
+                }
+            }
+            Err(error) => {
+                self.last_error = Some(error.to_string());
+                kairos_workspace::logging::record_counter("kairos.operation.failed", 1);
+            }
+        }
+        false
+    }
+
+    fn buffer_recovery_event(
+        &mut self,
+        event: kairos_integration::application::ExternalAccountEventEnvelope,
+    ) -> bool {
+        const RECOVERY_EVENT_CAPACITY: usize = 4_096;
+        if self.recovery_events.len() >= RECOVERY_EVENT_CAPACITY {
+            self.recovery_overflowed = true;
+            return false;
+        }
+        self.recovery_events.push_back(event);
+        true
+    }
+
+    fn apply_stream_health_update(&mut self, update: AsyncStreamHealthUpdate) {
+        let binding_id = update.binding_id;
+        let mut health = update.health;
+        if health.lifecycle == ConnectionLifecycle::Degraded
+            && health
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("resync required"))
+        {
+            self.stream_resync_required.insert(binding_id.clone());
+        }
+        if health.lifecycle == ConnectionLifecycle::Ready
+            && self.stream_resync_required.contains(&binding_id)
+        {
+            health.lifecycle = ConnectionLifecycle::Degraded;
+            health.healthy = false;
+            health.last_error = Some("channel reconnected; awaiting snapshot resync".into());
+        }
+        self.async_stream_health.insert(binding_id, health);
+    }
+
+    fn complete_stream_resyncs(&mut self) {
+        for binding_id in std::mem::take(&mut self.stream_resync_required) {
+            let Some(health) = self.async_stream_health.get_mut(&binding_id) else {
+                continue;
+            };
+            if health.last_error.as_deref() == Some("channel reconnected; awaiting snapshot resync")
+                && health.authenticated
+            {
+                health.lifecycle = ConnectionLifecycle::Ready;
+                health.healthy = true;
+                health.last_error = None;
+            } else if !health.healthy {
+                self.stream_resync_required.insert(binding_id);
+            }
+        }
+    }
+
+    fn replay_recovery_events(&mut self) -> Result<(), String> {
+        while let Some(event) = self.recovery_events.pop_front() {
+            match self.apply_external_event(event) {
+                Ok(applied) => self.snapshot_dirty |= applied > 0,
+                Err(error) => {
+                    self.recovery_events.clear();
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_external_event(
+        &mut self,
+        envelope: kairos_integration::application::ExternalAccountEventEnvelope,
+    ) -> Result<usize, String> {
+        let telemetry_binding_id = envelope.binding_id.clone();
+        let telemetry_channel_id = envelope.channel_id.clone();
+        let telemetry_channel_epoch = envelope.channel_epoch;
+        let telemetry_provider_sequence = envelope.provider_sequence;
+        let telemetry_event_id_present = envelope.provider_event_id.is_some();
+        let telemetry_event_kind = external_account_event_kind(&envelope.payload);
+        let generation_before = self.application.generation();
+        let event_sequence_before = self.application.event_sequence();
+        let channel_key = (envelope.binding_id.clone(), envelope.channel_id.clone());
+        if envelope.provider_event_id.as_ref().is_some_and(|event_id| {
+            self.external_event_ids.contains(&(
+                envelope.binding_id.clone(),
+                envelope.channel_id.clone(),
+                event_id.clone(),
+            ))
+        }) {
+            return Ok(0);
+        }
+
+        if let Some((current_epoch, current_sequence)) =
+            self.external_event_watermarks.get(&channel_key).copied()
+        {
+            if envelope.channel_epoch < current_epoch {
+                return Ok(0);
+            }
+            if envelope.channel_epoch == current_epoch {
+                if let (Some(previous), Some(sequence)) =
+                    (current_sequence, envelope.provider_sequence)
+                {
+                    if sequence <= previous {
+                        return Ok(0);
+                    }
+                    if sequence > previous.saturating_add(1) {
+                        return Err(format!(
+                            "account stream sequence gap on {}/{}: expected {}, received {}",
+                            envelope.binding_id,
+                            envelope.channel_id,
+                            previous.saturating_add(1),
+                            sequence
+                        ));
+                    }
+                }
+            }
+        }
+
+        let event =
+            crate::services::integration::map_event(envelope.payload, &self.instrument_resolver)?;
+        let applied = self
+            .application
+            .apply_event(event)
+            .map_err(|error| error.to_string())?;
+        self.external_event_watermarks.insert(
+            channel_key,
+            (envelope.channel_epoch, envelope.provider_sequence),
+        );
+        if let Some(event_id) = envelope.provider_event_id {
+            const RETAINED_EVENT_IDS: usize = 4_096;
+            let key = (envelope.binding_id, envelope.channel_id, event_id);
+            if self.external_event_ids.insert(key.clone()) {
+                self.external_event_id_order.push_back(key);
+                if self.external_event_id_order.len() > RETAINED_EVENT_IDS {
+                    if let Some(expired) = self.external_event_id_order.pop_front() {
+                        self.external_event_ids.remove(&expired);
+                    }
+                }
+            }
+        }
+        if applied > 0 {
+            info!(
+                event = "async_account_event_applied",
+                component = "account",
+                source = "private_stream",
+                binding_id = %telemetry_binding_id,
+                channel_id = %telemetry_channel_id,
+                channel_epoch = telemetry_channel_epoch,
+                provider_sequence = ?telemetry_provider_sequence,
+                provider_event_id_present = telemetry_event_id_present,
+                event_kind = telemetry_event_kind,
+                applied_events = applied,
+                generation_before,
+                generation_after = self.application.generation(),
+                event_sequence_before,
+                event_sequence_after = self.application.event_sequence(),
+                "async account event applied"
+            );
+        }
+        Ok(applied)
+    }
+
+    fn refresh_pending(&self) -> bool {
+        self.async_refresh_pending || self.application.refresh_pending()
+    }
+
     fn drain_refresh(&mut self) -> bool {
         let generation_before = self.application.generation();
         match self.application.poll_refresh() {
@@ -389,6 +730,10 @@ impl AccountProcess {
                     .take()
                     .map(|started| started.elapsed().as_millis())
                     .unwrap_or_default();
+                self.initial_refresh_complete |= report.issues.is_empty();
+                if report.issues.is_empty() {
+                    self.external_event_watermarks.clear();
+                }
                 self.last_error = report.issues.first().map(|issue| issue.error.clone());
                 info!(
                     event = "account_refresh_worker_completed",
@@ -417,6 +762,7 @@ impl AccountProcess {
         &mut self,
         target: &str,
         body: &str,
+        async_refresh_sender: &mpsc::Sender<AsyncRefreshCompletion>,
     ) -> Result<(u16, Value), Box<dyn std::error::Error>> {
         let started = Instant::now();
         let generation_before = self.application.generation();
@@ -543,13 +889,9 @@ impl AccountProcess {
                 ),
             },
             "/v1/refresh" => {
-                self.schedule_refresh();
+                self.schedule_refresh(async_refresh_sender);
                 (
-                    if self.application.refresh_pending() {
-                        202
-                    } else {
-                        503
-                    },
+                    if self.refresh_pending() { 202 } else { 503 },
                     json!({
                         "health": self.health_json(),
                         "refresh": self.last_refresh,
@@ -627,7 +969,42 @@ impl AccountProcess {
     }
 
     fn health_json(&self) -> Value {
-        json!({"status": if self.last_error.is_some() { "degraded" } else if !self.lease_valid() { "unavailable" } else { "ready" }, "pid": std::process::id(), "account_id": self.account_id, "actor_id": self.application.actor_id(), "generation": self.application.generation(), "event_sequence": self.application.event_sequence(), "stream_queue_depth": self.application.stream_queue_depth(), "persistence_queue_depth": self.application.persistence_queue_depth(), "refresh_pending": self.application.refresh_pending(), "last_error": self.last_error, "last_refresh": self.last_refresh, "lease_valid": self.lease_valid()})
+        let provider_channels = self
+            .async_stream_health
+            .iter()
+            .map(|(binding_id, health)| {
+                json!({
+                    "binding_id": binding_id,
+                    "lifecycle": connection_lifecycle_name(health.lifecycle),
+                    "healthy": health.healthy,
+                    "authenticated": health.authenticated,
+                    "last_error": health.last_error,
+                    "required": true,
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({"status": self.business_status(), "pid": std::process::id(), "account_id": self.account_id, "actor_id": self.application.actor_id(), "generation": self.application.generation(), "event_sequence": self.application.event_sequence(), "stream_queue_depth": self.async_event_queue_depth.load(std::sync::atomic::Ordering::Relaxed) + self.recovery_events.len(), "persistence_queue_depth": self.application.persistence_queue_depth(), "refresh_pending": self.refresh_pending(), "initial_refresh_complete": self.initial_refresh_complete, "provider_channels": provider_channels, "last_error": self.last_error, "last_refresh": self.last_refresh, "lease_valid": self.lease_valid()})
+    }
+
+    fn business_status(&self) -> &'static str {
+        if !self.lease_valid() {
+            return "unavailable";
+        }
+        if !self.initial_refresh_complete {
+            return "starting";
+        }
+        if self
+            .async_stream_health
+            .values()
+            .any(|health| !health.healthy || !health.authenticated)
+        {
+            return "unavailable";
+        }
+        if self.last_error.is_some() {
+            "degraded"
+        } else {
+            "ready"
+        }
     }
 
     fn lease_valid(&self) -> bool {
@@ -653,6 +1030,10 @@ impl AccountProcess {
     }
 
     async fn write_health(&self, status: &str) -> Result<(), std::io::Error> {
+        kairos_workspace::logging::record_gauge(
+            "kairos.process.ready",
+            u64::from(status == "ready"),
+        );
         let Some(path) = &self.health_file else {
             return Ok(());
         };
@@ -660,9 +1041,32 @@ impl AccountProcess {
             tokio::fs::create_dir_all(parent).await?;
         }
         let temporary = path.with_extension("tmp");
-        let payload = serde_json::to_vec(&json!({"status":status,"account_id":self.account_id,"actor_id":self.application.actor_id(),"generation":self.application.generation(),"event_sequence":self.application.event_sequence(),"last_error":self.last_error})).map_err(std::io::Error::other)?;
+        let payload = serde_json::to_vec(&self.health_json()).map_err(std::io::Error::other)?;
         tokio::fs::write(&temporary, payload).await?;
         tokio::fs::rename(temporary, path).await
+    }
+}
+
+fn external_account_event_kind(
+    event: &kairos_integration::application::ExternalAccountEvent,
+) -> &'static str {
+    match event {
+        kairos_integration::application::ExternalAccountEvent::Snapshot(_) => "snapshot",
+        kairos_integration::application::ExternalAccountEvent::Order(_) => "order",
+        kairos_integration::application::ExternalAccountEvent::Fill(_) => "fill",
+        kairos_integration::application::ExternalAccountEvent::Batch(_) => "batch",
+    }
+}
+
+fn connection_lifecycle_name(value: ConnectionLifecycle) -> &'static str {
+    match value {
+        ConnectionLifecycle::Created => "created",
+        ConnectionLifecycle::Starting => "starting",
+        ConnectionLifecycle::Ready => "ready",
+        ConnectionLifecycle::Degraded => "degraded",
+        ConnectionLifecycle::Stopping => "stopping",
+        ConnectionLifecycle::Stopped => "stopped",
+        ConnectionLifecycle::Failed => "failed",
     }
 }
 
@@ -775,6 +1179,147 @@ async fn account_http_handler_inner(
             Json(json!({"error":"account process did not respond"})),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::composition::account::compose_in_memory_account_application;
+    use crate::composition::empty_snapshot;
+    use crate::domain::{AccountSegment, ExternalAccountIdentity, SegmentKey};
+    use kairos_integration::application::{
+        ExternalAccountEvent, ExternalAccountSnapshot, ExternalAccountStatus, ExternalEventEnvelope,
+    };
+
+    fn process() -> AccountProcess {
+        let segment = AccountSegment {
+            identity: ExternalAccountIdentity::new("test", "main").unwrap(),
+            segment_key: SegmentKey::new("spot").unwrap(),
+            environment: "test".into(),
+            account_model: Some("no_margin".into()),
+        };
+        let application = compose_in_memory_account_application(
+            vec![segment],
+            BTreeMap::from([("spot".into(), empty_snapshot("spot"))]),
+            None,
+        )
+        .unwrap();
+        AccountProcess::new(
+            application,
+            "main",
+            "/tmp/kairos-account-process-test.sock",
+            Duration::from_secs(1),
+            None,
+            None,
+        )
+        .unwrap()
+    }
+
+    fn envelope(sequence: u64, event_id: &str) -> ExternalEventEnvelope<ExternalAccountEvent> {
+        ExternalEventEnvelope {
+            participant: kairos_integration::application::ParticipantRef::new(
+                kairos_integration::application::ParticipantKind::Exchange,
+                "test",
+            )
+            .unwrap(),
+            binding_id: "account.test".into(),
+            channel_id: "private".into(),
+            channel_epoch: 1,
+            provider_event_id: Some(event_id.into()),
+            provider_sequence: Some(sequence),
+            observed_at_unix_nanos: sequence.into(),
+            received_at_unix_nanos: sequence.into(),
+            payload: ExternalAccountEvent::Snapshot(ExternalAccountSnapshot {
+                segment_key: kairos_domain_types::SegmentKey::new("spot").unwrap(),
+                balances: Vec::new(),
+                collateral: Vec::new(),
+                positions: Vec::new(),
+                open_orders: Vec::new(),
+                status: ExternalAccountStatus::Ready,
+                observed_at_unix_nanos: sequence.into(),
+                equity: None,
+                initial_equity: None,
+                net_profit: None,
+                account_model: None,
+                margin_mode: None,
+                position_mode: None,
+                partial: false,
+            }),
+        }
+    }
+
+    #[test]
+    fn readiness_requires_initial_refresh() {
+        let mut process = process();
+        assert_eq!(process.business_status(), "starting");
+        process.initial_refresh_complete = true;
+        assert_eq!(process.business_status(), "ready");
+    }
+
+    #[test]
+    fn external_event_envelope_deduplicates_and_detects_sequence_gaps() {
+        let mut process = process();
+        assert_eq!(process.apply_external_event(envelope(1, "one")).unwrap(), 1);
+        assert_eq!(process.apply_external_event(envelope(1, "one")).unwrap(), 0);
+        let error = process
+            .apply_external_event(envelope(3, "three"))
+            .unwrap_err();
+        assert!(error.contains("sequence gap"));
+    }
+
+    #[test]
+    fn snapshot_recovery_barrier_replays_buffered_events_in_sequence() {
+        let mut process = process();
+        assert!(process.buffer_recovery_event(envelope(1, "one")));
+        assert!(process.buffer_recovery_event(envelope(2, "two")));
+        assert_eq!(process.application.event_sequence(), 0);
+
+        process.replay_recovery_events().unwrap();
+
+        assert_eq!(process.application.event_sequence(), 2);
+        assert!(process.recovery_events.is_empty());
+        assert_eq!(
+            process
+                .external_event_watermarks
+                .get(&("account.test".into(), "private".into())),
+            Some(&(1, Some(2)))
+        );
+    }
+
+    #[test]
+    fn reconnected_stream_waits_for_snapshot_before_returning_ready() {
+        let mut process = process();
+        process.apply_stream_health_update(AsyncStreamHealthUpdate {
+            binding_id: "account.test".into(),
+            health: ConnectionHealth {
+                lifecycle: ConnectionLifecycle::Degraded,
+                healthy: false,
+                authenticated: true,
+                last_error: Some("consumer overflow; resync required".into()),
+            },
+        });
+        process.apply_stream_health_update(AsyncStreamHealthUpdate {
+            binding_id: "account.test".into(),
+            health: ConnectionHealth {
+                lifecycle: ConnectionLifecycle::Ready,
+                healthy: true,
+                authenticated: true,
+                last_error: None,
+            },
+        });
+        assert_eq!(
+            process.async_stream_health["account.test"].lifecycle,
+            ConnectionLifecycle::Degraded
+        );
+
+        process.complete_stream_resyncs();
+
+        assert_eq!(
+            process.async_stream_health["account.test"].lifecycle,
+            ConnectionLifecycle::Ready
+        );
+        assert!(process.stream_resync_required.is_empty());
     }
 }
 

@@ -5,99 +5,27 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::{ParticipantKind, ParticipantRef, ProviderInstrumentRef};
 use kairos_domain_types::{
-    AccountId, AssetId, Currency, InstrumentId, MarketId, OrderId, RemoteOrderId, SegmentKey,
-    UnixNanos,
+    AccountId, AssetId, Currency, OrderId, RemoteOrderId, SegmentKey, UnixNanos,
 };
 
-/// Convert a provider symbol into a canonical identity only when the product
-/// grammar supplies enough economic information. Provider symbols themselves
-/// never become Instrument IDs.
-pub fn canonical_account_identity(
-    product: &str,
-    provider_symbol: &str,
-) -> Result<(InstrumentId, MarketId), String> {
-    let symbol = provider_symbol.trim().to_ascii_uppercase();
-    if symbol.is_empty() {
-        return Err("provider symbol is empty".into());
-    }
-    match product {
-        "binance-spot" => {
-            let (base, _quote) = split_pair(&symbol)?;
-            Ok((
-                InstrumentId::spot(base.clone()).map_err(|e| e.to_string())?,
-                MarketId::spot(
-                    &kairos_domain_types::Exchange::new("exchange:binance")
-                        .map_err(|e| e.to_string())?,
-                    &symbol,
-                )
-                .map_err(|e| e.to_string())?,
-            ))
-        }
-        "binance-futures" => {
-            let (base, quote) = split_pair(&symbol)?;
-            Ok((
-                InstrumentId::new(format!("instrument:perpetual:{base}-{quote}"))
-                    .map_err(|e| e.to_string())?,
-                MarketId::new(format!("market:binance:perpetual:{symbol}"))
-                    .map_err(|e| e.to_string())?,
-            ))
-        }
-        "binance-options" => {
-            let parts: Vec<_> = symbol.split('-').collect();
-            if parts.len() != 4 || !matches!(parts[3], "C" | "P") {
-                return Err(format!("unsupported Binance option symbol: {symbol}"));
-            }
-            let expiry = parts[1];
-            if expiry.len() != 6 || !expiry.chars().all(|c| c.is_ascii_digit()) {
-                return Err(format!("option symbol has invalid expiry: {symbol}"));
-            }
-            let instrument = InstrumentId::new(format!(
-                "instrument:option:{}-USDT:20{}:{}:{}",
-                parts[0], expiry, parts[2], parts[3]
-            ))
-            .map_err(|e| e.to_string())?;
-            let market = MarketId::new(format!("market:binance:options:{symbol}"))
-                .map_err(|e| e.to_string())?;
-            Ok((instrument, market))
-        }
-        "okx" => {
-            let parts: Vec<_> = symbol.split('-').collect();
-            match parts.as_slice() {
-                [base, _quote] => Ok((
-                    InstrumentId::spot(base).map_err(|e| e.to_string())?,
-                    MarketId::new(format!("market:okx:spot:{symbol}"))
-                        .map_err(|e| e.to_string())?,
-                )),
-                [base, quote, "SWAP"] => Ok((
-                    InstrumentId::new(format!("instrument:perpetual:{base}-{quote}"))
-                        .map_err(|e| e.to_string())?,
-                    MarketId::new(format!("market:okx:swap:{symbol}"))
-                        .map_err(|e| e.to_string())?,
-                )),
-                _ => Err(format!("unsupported OKX symbol: {symbol}")),
-            }
-        }
-        "ibkr-equity" => Ok((
-            InstrumentId::new(format!("instrument:equity:US:{symbol}:common"))
-                .map_err(|e| e.to_string())?,
-            MarketId::new(format!("market:ibkr:equity:{symbol}")).map_err(|e| e.to_string())?,
-        )),
-        _ => Err(format!("no canonical account symbol mapping for {product}")),
-    }
-}
-
-fn split_pair(symbol: &str) -> Result<(String, String), String> {
-    const QUOTES: [&str; 8] = ["USDT", "USDC", "BUSD", "FDUSD", "USD", "BTC", "ETH", "BNB"];
-    let quote = QUOTES
-        .iter()
-        .find(|quote| symbol.ends_with(**quote))
-        .ok_or_else(|| format!("cannot resolve quote asset in provider symbol: {symbol}"))?;
-    let base = symbol
-        .strip_suffix(quote)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("cannot resolve base asset in provider symbol: {symbol}"))?;
-    Ok((base.to_owned(), (*quote).to_owned()))
+/// Preserve the provider-owned identity exactly as observed. Canonical
+/// instrument and market identity is resolved by Reference in business
+/// composition, never synthesized by Integration.
+pub fn external_instrument_ref(
+    kind: ParticipantKind,
+    participant: &str,
+    instrument_type: &str,
+    source_symbol: &str,
+) -> Result<ProviderInstrumentRef, String> {
+    ProviderInstrumentRef::new(
+        ParticipantRef::new(kind, participant)?,
+        Some(crate::domain::ParticipantInstrumentTypeRef::new(
+            instrument_type,
+        )?),
+        source_symbol,
+    )
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -202,8 +130,7 @@ impl Default for ExternalBalance {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExternalPosition {
-    pub instrument_id: InstrumentId,
-    pub market_id: Option<MarketId>,
+    pub provider_instrument: ProviderInstrumentRef,
     pub quantity: ExternalDecimal,
     pub average_price: Option<ExternalDecimal>,
     pub mark_price: Option<ExternalDecimal>,
@@ -215,9 +142,13 @@ pub struct ExternalPosition {
 impl Default for ExternalPosition {
     fn default() -> Self {
         Self {
-            instrument_id: InstrumentId::new("instrument:unknown")
-                .expect("static instrument identity is valid"),
-            market_id: None,
+            provider_instrument: ProviderInstrumentRef::new(
+                ParticipantRef::new(ParticipantKind::DataProvider, "unknown")
+                    .expect("static participant identity"),
+                None,
+                "UNKNOWN",
+            )
+            .expect("static provider instrument"),
             quantity: ExternalDecimal::default(),
             average_price: None,
             mark_price: None,
@@ -267,7 +198,7 @@ pub struct ExternalAccountSnapshot {
 pub struct ExternalOpenOrder {
     pub order_id: OrderId,
     pub remote_order_id: Option<RemoteOrderId>,
-    pub instrument_id: InstrumentId,
+    pub provider_instrument: ProviderInstrumentRef,
     pub side: kairos_domain_types::OrderSide,
     pub quantity: ExternalDecimal,
     pub filled_quantity: ExternalDecimal,
@@ -301,7 +232,7 @@ pub struct ExternalFillEvent {
     pub fill_id: kairos_domain_types::FillId,
     pub order_id: OrderId,
     pub segment_key: SegmentKey,
-    pub instrument_id: InstrumentId,
+    pub provider_instrument: ProviderInstrumentRef,
     pub side: String,
     pub quantity: ExternalDecimal,
     pub price: ExternalDecimal,
@@ -319,3 +250,6 @@ pub enum ExternalAccountEvent {
     Fill(ExternalFillEvent),
     Batch(Vec<ExternalAccountEvent>),
 }
+
+pub type ExternalAccountEventEnvelope =
+    crate::application::ExternalEventEnvelope<ExternalAccountEvent>;

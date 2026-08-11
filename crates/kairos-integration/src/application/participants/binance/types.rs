@@ -4,7 +4,6 @@ use crate::application::ConnectionDomainRef;
 /// a financial product taxonomy and does not classify canonical instruments.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum ConnectionDomain {
-    Equity,
     Spot,
     CrossMargin,
     IsolatedMargin,
@@ -17,7 +16,6 @@ pub enum ConnectionDomain {
 impl ConnectionDomain {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Equity => "equity",
             Self::Spot => "spot",
             Self::CrossMargin => "cross-margin",
             Self::IsolatedMargin => "isolated-margin",

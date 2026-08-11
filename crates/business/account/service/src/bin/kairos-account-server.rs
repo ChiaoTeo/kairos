@@ -5,9 +5,9 @@ use std::time::Duration;
 use clap::Parser;
 
 use kairos_account::composition::account::{
-    attach_account_stream, compose_account_application_for_segments,
-    compose_binance_async_account_application, compose_blocking_account_stream,
-    compose_okx_async_account_application, AccountOptions,
+    compose_binance_async_account_application, compose_ibkr_async_account_application,
+    compose_local_account_application_for_segments, compose_okx_async_account_application,
+    AccountOptions,
 };
 use kairos_account::composition::MmapAccountPublisher;
 use kairos_protocol::InstanceIdentity;
@@ -93,7 +93,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         args.passphrase.clone()
     };
-    let options = args.options(record.as_ref(), api_key, secret, passphrase);
+    let mut options = args.options(record.as_ref(), api_key, secret, passphrase);
+    options.reference_snapshot_root = Some(workspace.child(&["snapshots", "reference"])?);
     let shared_quota_ledger = workspace
         .state_root()
         .join("integration")
@@ -101,14 +102,45 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let native_binance_account = options.provider.eq_ignore_ascii_case("binance")
         && segments.iter().all(|segment| {
             matches!(
-                segment.trim().to_ascii_lowercase().as_str(),
-                "spot" | "funding"
+                segment
+                    .trim()
+                    .to_ascii_lowercase()
+                    .replace('_', "-")
+                    .as_str(),
+                "spot"
+                    | "funding"
+                    | "cross-margin"
+                    | "isolated-margin"
+                    | "usd-m-futures"
+                    | "coin-m-futures"
+                    | "swap"
+                    | "futures"
+                    | "options"
             )
         });
     let native_okx_account = matches!(
         options.provider.trim().to_ascii_lowercase().as_str(),
         "okx" | "okex"
     );
+    let native_ibkr_account = options.provider.trim().eq_ignore_ascii_case("ibkr");
+    let _provider_process_lock = native_ibkr_account
+        .then(|| {
+            let identity = format!(
+                "ibkr|{}|{}|client-id:{}",
+                options.host.trim().to_ascii_lowercase(),
+                options.port,
+                options.client_id
+            );
+            workspace
+                .exclusive_process_lock("ibkr-client", &identity)
+                .map_err(|error| {
+                    std::io::Error::new(
+                        error.kind(),
+                        format!("IBKR client identity is already allocated ({identity}): {error}"),
+                    )
+                })
+        })
+        .transpose()?;
     let mut composition = if native_binance_account {
         compose_binance_async_account_application(
             &options,
@@ -129,62 +161,45 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             Some(shared_quota_ledger.clone()),
             &args.egress_scope_id,
         )?
+    } else if native_ibkr_account {
+        compose_ibkr_async_account_application(&options, &segments, Some(state))?
+    } else if matches!(
+        options.provider.trim().to_ascii_lowercase().as_str(),
+        "paper" | "simulated"
+    ) {
+        compose_local_account_application_for_segments(&options, &segments, Some(state))?
     } else {
-        compose_account_application_for_segments(&options, &segments, Some(state))?
+        return Err(format!(
+            "production Account requires a provider-native async source; provider={} segments={} are not migrated",
+            options.provider,
+            segments.join(",")
+        )
+        .into());
     };
-    composition
-        .application
-        .set_trade_enabled(record.as_ref().is_none_or(|value| {
-            value.permissions.contains_key("trade")
-                || value
-                    .credential_role
-                    .as_deref()
-                    .is_some_and(|role| !role.eq_ignore_ascii_case("readonly"))
-        }));
-    if args.account_stream_endpoint.is_some() {
-        for segment in &segments {
-            if native_binance_account || native_okx_account {
-                continue;
-            }
-            let mut stream_options = options.clone();
-            stream_options.product = segment.clone();
-            if composition.try_add_async_account_stream(
-                &stream_options,
-                args.account_stream_endpoint
-                    .as_deref()
-                    .expect("checked account stream endpoint"),
-                segment,
-                Some(shared_quota_ledger.clone()),
-                &args.egress_scope_id,
-            )? {
-                continue;
-            }
-            let stream_connection = compose_blocking_account_stream(
-                &stream_options,
-                args.account_stream_endpoint.as_deref(),
-                segment,
-            )?;
-            attach_account_stream(
-                &mut composition.application,
-                kairos_integration::blocking::IntegrationAccountStream::new(stream_connection)
-                    .buffered(),
-            );
-        }
-    }
-    let lease_file = record.as_ref().map(|value| {
-        workspace
-            .child(&[
-                "state",
-                "account-locks",
-                &format!(
-                    "{}.{}",
-                    lease_component(&value.provider),
-                    lease_component(&args.account_id)
-                ),
-                "owner.json",
-            ])
-            .expect("validated account lease path")
+    let trade_enabled = record.as_ref().is_none_or(|value| {
+        trade_access_enabled(
+            value.permissions.contains_key("trade"),
+            value.credential_role.as_deref(),
+        )
     });
+    composition.application.set_trade_enabled(trade_enabled);
+    let lease_file = trade_enabled
+        .then(|| record.as_ref())
+        .flatten()
+        .map(|value| {
+            workspace
+                .child(&[
+                    "state",
+                    "account-locks",
+                    &format!(
+                        "{}.{}",
+                        lease_component(&value.provider),
+                        lease_component(&args.account_id)
+                    ),
+                    "owner.json",
+                ])
+                .expect("validated account lease path")
+        });
     let process = composition.into_process(
         args.account_id,
         socket.to_string_lossy().into_owned(),
@@ -267,6 +282,11 @@ fn lease_component(value: &str) -> String {
         .join("_")
 }
 
+fn trade_access_enabled(has_trade_permission: bool, credential_role: Option<&str>) -> bool {
+    has_trade_permission
+        && credential_role.is_none_or(|role| !role.eq_ignore_ascii_case("readonly"))
+}
+
 impl Args {
     fn options(
         &self,
@@ -303,6 +323,28 @@ impl Args {
             host: self.host.clone(),
             port: self.port,
             client_id: self.client_id,
+            isolated_margin_symbol: record
+                .and_then(|value| value.values.get("isolated_margin_symbol").cloned()),
+            reference_snapshot_root: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trade_access_enabled;
+
+    #[test]
+    fn readonly_credential_never_enables_trade_access() {
+        assert!(!trade_access_enabled(true, Some("readonly")));
+        assert!(!trade_access_enabled(false, Some("readonly")));
+    }
+
+    #[test]
+    fn writable_role_still_requires_discovered_trade_permission() {
+        assert!(trade_access_enabled(true, Some("trading")));
+        assert!(trade_access_enabled(true, None));
+        assert!(!trade_access_enabled(false, Some("trading")));
+        assert!(!trade_access_enabled(false, None));
     }
 }

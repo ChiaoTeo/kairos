@@ -26,10 +26,9 @@ use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot, RwLock};
 use tracing::Instrument as TracingInstrument;
 
-// Reference providers currently use blocking HTTP clients. Keep the control
-// server asynchronous, but give provider refreshes a blocking section on a
-// multi-thread Tokio runtime so reqwest::blocking never runs inside a
-// current-thread runtime context.
+// Provider refreshes and SQL persistence run on the caller's Tokio runtime.
+// The separate bounded Aeron publication worker below isolates the transport
+// client without turning provider acquisition back into blocking work.
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() {
     kairos_workspace::logging::init("reference");
@@ -94,7 +93,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         aeron_channel: aeron_channel.clone(),
         reference_changes_stream,
     };
-    let composition = build_application(&config, true)?;
+    let composition = build_application(&config, true).await?;
     let mut application = composition.application;
     let mut event_writer = composition.event_writer;
 
@@ -125,16 +124,24 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     if args.run_mode == "once" {
-        tokio::task::block_in_place(|| application.refresh())?;
+        application.refresh().await?;
         mmap_writer.publish(application.catalog())?;
         if let Some(writer) = event_writer.as_mut() {
-            let events = application.pending_events(EVENT_BATCH_LIMIT)?;
-            writer.publish(application.catalog(), &events)?;
-            let event_ids = events
-                .iter()
-                .map(|event| event.event_id.clone())
-                .collect::<Vec<_>>();
-            application.acknowledge_published_events(&event_ids)?;
+            loop {
+                let events = application.pending_events(EVENT_BATCH_LIMIT).await?;
+                if events.is_empty() {
+                    break;
+                }
+                // Aeron is a best-effort notification stream. A successful
+                // publish also includes the normal no-subscriber drop case;
+                // the snapshot is the recovery source for late consumers.
+                writer.publish(application.catalog(), &events)?;
+                let event_ids = events
+                    .iter()
+                    .map(|event| event.event_id.clone())
+                    .collect::<Vec<_>>();
+                application.acknowledge_published_events(&event_ids).await?;
+            }
         }
         tracing::info!(
             event = "initial_refresh_complete",
@@ -201,8 +208,8 @@ async fn run_process(
     let listener = UnixListener::bind(&socket)?;
     let (sender, mut receiver) = mpsc::channel(CONTROL_QUEUE_CAPACITY);
     let control_queue_depth = Arc::new(AtomicUsize::new(0));
-    let mut in_flight_publications = Vec::new();
-    let read_model = Arc::new(RwLock::new(application.read_model()));
+    let initial_read_model = application.read_model().await;
+    let read_model = Arc::new(RwLock::new(initial_read_model));
     let health_status = Arc::new(RwLock::new(String::from("ready")));
     let router = Router::new()
         .fallback(reference_http_handler)
@@ -224,14 +231,13 @@ async fn run_process(
     // provider rate limit must not make the process appear dead.
     if initial_refresh {
         let refresh_started = Instant::now();
-        let status = match tokio::task::block_in_place(|| {
-            refresh_cycle(
-                &mut application,
-                event_publisher.as_ref(),
-                &mut mmap_writer,
-                &mut in_flight_publications,
-            )
-        }) {
+        let status = match refresh_cycle(
+            &mut application,
+            event_publisher.as_ref(),
+            &mut mmap_writer,
+        )
+        .await
+        {
             Ok(()) => reference_status(&application),
             Err(error) => {
                 let provider_health = application.provider_health();
@@ -256,32 +262,41 @@ async fn run_process(
                 "degraded"
             }
         };
-        *read_model.write().await = application.read_model();
+        *read_model.write().await = application.read_model().await;
         *health_status.write().await = status.to_owned();
         write_health(&health_file, &application, status).await?;
     }
-    let mut interval = tokio::time::interval(refresh_interval);
+    let mut interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + refresh_interval,
+        refresh_interval,
+    );
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut publication_interval = tokio::time::interval(Duration::from_millis(50));
+    publication_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut publication_retry_after = tokio::time::Instant::now();
     let mut stopping = false;
     while !stopping {
         tokio::select! {
             Some(request) = receiver.recv() => {
                 control_queue_depth.fetch_sub(1, Ordering::Relaxed);
-                let _ = drain_publication_completions(&mut application, &mut in_flight_publications);
-                let response = tokio::task::block_in_place(|| handle_request(&mut application, event_publisher.as_ref(), &mut mmap_writer, &in_flight_publications, &request.target, &String::from_utf8_lossy(&request.body)));
+                let response = handle_request(&mut application, event_publisher.as_ref(), &mut mmap_writer, &request.target, &String::from_utf8_lossy(&request.body)).await;
                 if let Ok((should_stop, status, payload)) = &response {
                     stopping = *should_stop;
                     let _ = request.response.send(Ok((*should_stop, *status, payload.clone())));
+                    let path = request.target.split_once('?').map_or(request.target.as_str(), |(path, _)| path);
+                    if matches!(path, control::REFRESH | control::PUBLISH | control::ASSETS | control::INSTRUMENTS | control::LISTINGS | control::SOURCE_PAUSE | control::SOURCE_RESUME | control::OPTIONS_COVERAGE_ADD | control::OPTIONS_COVERAGE_REMOVE) {
+                        let status = if *status < 400 { reference_status(&application) } else { "degraded" };
+                        *health_status.write().await = status.to_owned();
+                        let _ = write_health(&health_file, &application, status).await;
+                    }
                 } else {
                     let _ = request.response.send(response.map_err(|error| error.to_string()));
                 }
-                *read_model.write().await = application.read_model();
+                *read_model.write().await = application.read_model().await;
             }
             _ = interval.tick() => {
                 let refresh_started = Instant::now();
-                let status = match tokio::task::block_in_place(|| {
-                    refresh_cycle(&mut application, event_publisher.as_ref(), &mut mmap_writer, &mut in_flight_publications)
-                }) {
+                let status = match refresh_cycle(&mut application, event_publisher.as_ref(), &mut mmap_writer).await {
                     Ok(()) => reference_status(&application),
                     Err(error) => {
                         let provider_health = application.provider_health();
@@ -306,9 +321,22 @@ async fn run_process(
                         "degraded"
                     }
                 };
-                *read_model.write().await = application.read_model();
+                *read_model.write().await = application.read_model().await;
                 *health_status.write().await = status.to_owned();
                 write_health(&health_file, &application, status).await?;
+            }
+            _ = publication_interval.tick(), if event_publisher.is_some() => {
+                if tokio::time::Instant::now() >= publication_retry_after {
+                    if let Err(error) = publish_pending_batch(event_publisher.as_ref(), &mut application).await {
+                        publication_retry_after = tokio::time::Instant::now() + Duration::from_secs(1);
+                        tracing::debug!(
+                            event = "reference_pending_publication_deferred",
+                            component = "reference",
+                            error = %error,
+                            "reference pending publication remains durable for a later retry"
+                        );
+                    }
+                }
             }
         }
     }
@@ -330,14 +358,10 @@ struct ReferenceHttpRequest {
 }
 
 struct PublishRequest {
-    catalog: kairos_reference::domain::ReferenceCatalog,
+    generation: kairos_domain_types::Generation,
+    event_sequence: kairos_domain_types::Sequence,
     events: Vec<kairos_reference::domain::LifecycleEvent>,
     response: SyncSender<Result<(), String>>,
-}
-
-struct PendingPublication {
-    event_ids: Vec<String>,
-    response: std_mpsc::Receiver<Result<(), String>>,
 }
 
 struct EventPublisherRuntime {
@@ -354,8 +378,13 @@ impl EventPublisherRuntime {
                 let mut writer = ReferenceEventWriter::connect(&config)
                     .expect("connect reference event publisher worker");
                 while let Ok(request) = receiver.recv() {
+                    let catalog = kairos_reference::domain::ReferenceCatalog {
+                        generation: request.generation,
+                        event_sequence: request.event_sequence,
+                        ..Default::default()
+                    };
                     let result = writer
-                        .publish(&request.catalog, &request.events)
+                        .publish(&catalog, &request.events)
                         .map_err(|error| error.to_string());
                     let _ = request.response.send(result);
                 }
@@ -385,7 +414,8 @@ impl EventPublisherRuntime {
     ) -> kairos_reference::domain::ReferenceResult<std_mpsc::Receiver<Result<(), String>>> {
         let (response, receiver) = std_mpsc::sync_channel(1);
         match self.requests.try_send(PublishRequest {
-            catalog: catalog.clone(),
+            generation: catalog.generation,
+            event_sequence: catalog.event_sequence,
             events: events.to_vec(),
             response,
         }) {
@@ -540,11 +570,10 @@ async fn reference_http_handler_inner(state: ReferenceServerState, request: Requ
     }
 }
 
-fn handle_request(
+async fn handle_request(
     application: &mut ReferenceApplication,
     writer: Option<&EventPublisherRuntime>,
     mmap_writer: &mut ReferenceMmapSnapshotWriter,
-    in_flight: &[PendingPublication],
     target: &str,
     body: &str,
 ) -> Result<(bool, u16, Value), Box<dyn std::error::Error>> {
@@ -558,25 +587,69 @@ fn handle_request(
             json!({
                 "mode": application.source_id(),
                 "source_id": application.source_id(),
+                "providers": application.provider_health(),
             }),
             false,
         ),
-        control::REFRESH => match application.refresh() {
+        control::EVENTS => {
+            let sequence_from = query_u64(target, "sequence_from")?;
+            let sequence_to = query_u64(target, "sequence_to")?;
+            let limit = query_u64(target, "limit")?.unwrap_or(256).clamp(1, 4096) as usize;
+            match application
+                .lifecycle_events_page(sequence_from, sequence_to, limit)
+                .await
+            {
+                Ok(events) => (
+                    200,
+                    json!({
+                        "generation": application.catalog().generation.get(),
+                        "event_sequence": application.catalog().event_sequence.get(),
+                        "events": events,
+                    }),
+                    false,
+                ),
+                Err(error) => (503, json!({"error": error.to_string()}), false),
+            }
+        }
+        control::REFRESH => match match query_value(target, "source") {
+            Some(source_id) => application.refresh_source(source_id).await,
+            None => application.refresh().await,
+        } {
             Ok(result) => {
-                let publication = publish_pending(writer, application, in_flight);
+                let publication = publish_pending(writer, application).await;
                 let snapshot = publish_snapshot(mmap_writer, application);
-                match publication.and_then(|events| snapshot.map(|_| events)) {
-                    Ok(events) => (
-                        200,
-                        json!({"generation": result.generation, "event_sequence": result.event_sequence, "events": events}),
-                        false,
-                    ),
+                match snapshot {
+                    Ok(()) => {
+                        let (events, publication_pending, publication_error) = match publication {
+                            Ok(events) => (events, false, None),
+                            Err(error) => {
+                                tracing::debug!(
+                                    event = "reference_publication_deferred",
+                                    component = "reference",
+                                    error = %error,
+                                    "reference snapshot committed while durable events await a subscriber"
+                                );
+                                (0, true, Some(error.to_string()))
+                            }
+                        };
+                        (
+                            200,
+                            json!({
+                                "generation": result.generation,
+                                "event_sequence": result.event_sequence,
+                                "events": events,
+                                "publication_pending": publication_pending,
+                                "publication_error": publication_error,
+                            }),
+                            false,
+                        )
+                    }
                     Err(error) => (503, json!({"error": error.to_string()}), false),
                 }
             }
             Err(error) => (503, json!({"error": error.to_string()}), false),
         },
-        control::PUBLISH => match publish_pending(writer, application, in_flight) {
+        control::PUBLISH => match publish_pending(writer, application).await {
             Ok(events) => (
                 200,
                 json!({"generation": application.catalog().generation.get(), "events": events}),
@@ -584,16 +657,58 @@ fn handle_request(
             ),
             Err(error) => (503, json!({"error": error.to_string()}), false),
         },
+        control::SOURCE_PAUSE | control::SOURCE_RESUME => {
+            let Some(source_id) = query_value(target, "source") else {
+                return Err("source is required".into());
+            };
+            let paused = path == control::SOURCE_PAUSE;
+            match application.set_source_paused(source_id, paused).await {
+                Ok(()) => (
+                    200,
+                    json!({"source_id": source_id, "status": if paused { "paused" } else { "resumed" }}),
+                    false,
+                ),
+                Err(error) => (400, json!({"error": error.to_string()}), false),
+            }
+        }
+        control::OPTIONS_COVERAGE => (
+            200,
+            json!({"source_id": "massive-options", "underlyings": application.option_underlyings()}),
+            false,
+        ),
+        control::OPTIONS_COVERAGE_ADD | control::OPTIONS_COVERAGE_REMOVE => {
+            let Some(underlying) = query_value(target, "underlying") else {
+                return Err("underlying is required".into());
+            };
+            let enabled = path == control::OPTIONS_COVERAGE_ADD;
+            match application.set_option_underlying(underlying, enabled).await {
+                Ok(result) => (
+                    200,
+                    json!({
+                        "source_id": "massive-options",
+                        "underlying": underlying,
+                        "enabled": enabled,
+                        "underlyings": application.option_underlyings(),
+                        "generation": result.generation,
+                        "event_sequence": result.event_sequence,
+                        "changed": result.changed,
+                    }),
+                    false,
+                ),
+                Err(error) => (400, json!({"error": error.to_string()}), false),
+            }
+        }
         control::ASSETS => match serde_json::from_str::<Asset>(body) {
-            Ok(asset) => match application.upsert_asset(asset) {
-                Ok(generation) => match publish_snapshot(mmap_writer, application)
-                    .and_then(|_| publish_pending(writer, application, in_flight))
-                {
-                    Ok(events) => (
-                        200,
-                        json!({"generation": generation, "events": events}),
-                        false,
-                    ),
+            Ok(asset) => match application.upsert_asset(asset).await {
+                Ok(generation) => match publish_snapshot(mmap_writer, application) {
+                    Ok(()) => match publish_pending(writer, application).await {
+                        Ok(events) => (
+                            200,
+                            json!({"generation": generation, "events": events}),
+                            false,
+                        ),
+                        Err(error) => (503, json!({"error": error.to_string()}), false),
+                    },
                     Err(error) => (503, json!({"error": error.to_string()}), false),
                 },
                 Err(error) => (400, json!({"error": error.to_string()}), false),
@@ -605,15 +720,16 @@ fn handle_request(
             ),
         },
         control::INSTRUMENTS => match serde_json::from_str::<Instrument>(body) {
-            Ok(instrument) => match application.upsert_instrument(instrument) {
-                Ok(generation) => match publish_snapshot(mmap_writer, application)
-                    .and_then(|_| publish_pending(writer, application, in_flight))
-                {
-                    Ok(events) => (
-                        200,
-                        json!({"generation": generation, "events": events}),
-                        false,
-                    ),
+            Ok(instrument) => match application.upsert_instrument(instrument).await {
+                Ok(generation) => match publish_snapshot(mmap_writer, application) {
+                    Ok(()) => match publish_pending(writer, application).await {
+                        Ok(events) => (
+                            200,
+                            json!({"generation": generation, "events": events}),
+                            false,
+                        ),
+                        Err(error) => (503, json!({"error": error.to_string()}), false),
+                    },
                     Err(error) => (503, json!({"error": error.to_string()}), false),
                 },
                 Err(error) => (400, json!({"error": error.to_string()}), false),
@@ -625,15 +741,16 @@ fn handle_request(
             ),
         },
         control::LISTINGS => match serde_json::from_str::<Listing>(body) {
-            Ok(listing) => match application.upsert_listing(listing) {
-                Ok(generation) => match publish_snapshot(mmap_writer, application)
-                    .and_then(|_| publish_pending(writer, application, in_flight))
-                {
-                    Ok(events) => (
-                        200,
-                        json!({"generation": generation, "events": events}),
-                        false,
-                    ),
+            Ok(listing) => match application.upsert_listing(listing).await {
+                Ok(generation) => match publish_snapshot(mmap_writer, application) {
+                    Ok(()) => match publish_pending(writer, application).await {
+                        Ok(events) => (
+                            200,
+                            json!({"generation": generation, "events": events}),
+                            false,
+                        ),
+                        Err(error) => (503, json!({"error": error.to_string()}), false),
+                    },
                     Err(error) => (503, json!({"error": error.to_string()}), false),
                 },
                 Err(error) => (400, json!({"error": error.to_string()}), false),
@@ -653,6 +770,26 @@ fn handle_request(
     };
     tracing::info!(event = "control_response", component = "reference", path = %path, status, duration_ms = started.elapsed().as_millis(), "reference control response sent");
     Ok((stopping, status, body))
+}
+
+fn query_u64(target: &str, name: &str) -> Result<Option<u64>, Box<dyn std::error::Error>> {
+    let Some(value) = query_value(target, name) else {
+        return Ok(None);
+    };
+    value
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|error| format!("invalid {name}: {error}").into())
+}
+
+fn query_value<'a>(target: &'a str, name: &str) -> Option<&'a str> {
+    let Some((_, query)) = target.split_once('?') else {
+        return None;
+    };
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == name).then_some(value)
+    })
 }
 
 fn publish(
@@ -685,27 +822,11 @@ fn publish_events(
     writer.publish(catalog, events)
 }
 
-fn publish_pending(
+async fn publish_pending(
     writer: Option<&EventPublisherRuntime>,
     application: &mut ReferenceApplication,
-    in_flight: &[PendingPublication],
 ) -> kairos_reference::domain::ReferenceResult<usize> {
-    let events = application
-        .pending_events(EVENT_BATCH_LIMIT)?
-        .into_iter()
-        .filter(|event| {
-            !in_flight
-                .iter()
-                .any(|pending| pending.event_ids.iter().any(|id| id == &event.event_id))
-        })
-        .collect::<Vec<_>>();
-    let count = events.len();
-    publish(writer, application, &events)?;
-    let event_ids = events
-        .iter()
-        .map(|event| event.event_id.clone())
-        .collect::<Vec<_>>();
-    application.acknowledge_published_events(&event_ids)?;
+    let count = publish_pending_batch(writer, application).await?;
     tracing::info!(
         event = "reference_pending_events_published",
         component = "reference",
@@ -713,6 +834,23 @@ fn publish_pending(
         "reference pending events published"
     );
     Ok(count)
+}
+
+async fn publish_pending_batch(
+    writer: Option<&EventPublisherRuntime>,
+    application: &mut ReferenceApplication,
+) -> kairos_reference::domain::ReferenceResult<usize> {
+    let events = application.pending_events(EVENT_BATCH_LIMIT).await?;
+    if events.is_empty() {
+        return Ok(0);
+    }
+    publish(writer, application, &events)?;
+    let event_ids = events
+        .iter()
+        .map(|event| event.event_id.clone())
+        .collect::<Vec<_>>();
+    application.acknowledge_published_events(&event_ids).await?;
+    Ok(events.len())
 }
 
 fn publish_snapshot(
@@ -728,86 +866,29 @@ fn publish_snapshot(
         .map_err(|error| kairos_reference::domain::ReferenceError::Publication(error.to_string()))
 }
 
-fn refresh_cycle(
+async fn refresh_cycle(
     application: &mut ReferenceApplication,
     publisher: Option<&EventPublisherRuntime>,
     mmap_writer: &mut ReferenceMmapSnapshotWriter,
-    in_flight: &mut Vec<PendingPublication>,
 ) -> kairos_reference::domain::ReferenceResult<()> {
-    drain_publication_completions(application, in_flight)?;
-    application.refresh()?;
-    let publication = enqueue_pending_publication(publisher, application, in_flight);
-    let snapshot = mmap_writer
+    application.refresh().await?;
+    mmap_writer
         .publish(application.catalog())
-        .map_err(|error| kairos_reference::domain::ReferenceError::Publication(error.to_string()));
-    publication.and(snapshot)
-}
-
-fn enqueue_pending_publication(
-    publisher: Option<&EventPublisherRuntime>,
-    application: &mut ReferenceApplication,
-    in_flight: &mut Vec<PendingPublication>,
-) -> kairos_reference::domain::ReferenceResult<()> {
-    let Some(publisher) = publisher else {
-        return Ok(());
-    };
-    let events = application
-        .pending_events(EVENT_BATCH_LIMIT)?
-        .into_iter()
-        .filter(|event| {
-            !in_flight
-                .iter()
-                .any(|pending| pending.event_ids.iter().any(|id| id == &event.event_id))
-        })
-        .collect::<Vec<_>>();
-    if events.is_empty() {
-        return Ok(());
+        .map_err(|error| {
+            kairos_reference::domain::ReferenceError::Publication(error.to_string())
+        })?;
+    if let Err(error) = publish_pending(publisher, application).await {
+        tracing::debug!(
+            event = "reference_publication_deferred",
+            component = "reference",
+            error = %error,
+            "reference snapshot committed while durable events await a subscriber"
+        );
     }
-    let event_ids = events
-        .iter()
-        .map(|event| event.event_id.clone())
-        .collect::<Vec<_>>();
-    let response = publisher.enqueue(application.catalog(), &events)?;
-    in_flight.push(PendingPublication {
-        event_ids,
-        response,
-    });
-    tracing::info!(
-        event = "reference_publication_enqueued",
-        component = "reference",
-        event_count = events.len(),
-        "reference publication was enqueued without blocking refresh"
-    );
     Ok(())
 }
 
-fn drain_publication_completions(
-    application: &mut ReferenceApplication,
-    in_flight: &mut Vec<PendingPublication>,
-) -> kairos_reference::domain::ReferenceResult<()> {
-    let mut remaining = Vec::with_capacity(in_flight.len());
-    for pending in in_flight.drain(..) {
-        match pending.response.try_recv() {
-            Ok(Ok(())) => application.acknowledge_published_events(&pending.event_ids)?,
-            Ok(Err(error)) => tracing::warn!(
-                event = "reference_publication_failed",
-                component = "reference",
-                error = %error,
-                "reference publication remains pending in outbox"
-            ),
-            Err(std_mpsc::TryRecvError::Empty) => remaining.push(pending),
-            Err(std_mpsc::TryRecvError::Disconnected) => tracing::warn!(
-                event = "reference_publication_worker_disconnected",
-                component = "reference",
-                "reference publication remains pending in outbox"
-            ),
-        }
-    }
-    *in_flight = remaining;
-    Ok(())
-}
-
-const EVENT_BATCH_LIMIT: usize = 256;
+const EVENT_BATCH_LIMIT: usize = 1024;
 const CONTROL_QUEUE_CAPACITY: usize = 64;
 const EVENT_PUBLISH_QUEUE_CAPACITY: usize = 8;
 
@@ -938,7 +1019,7 @@ struct Args {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_refresh_interval, Args};
+    use super::{parse_refresh_interval, query_u64, Args};
     use clap::Parser;
     use std::time::Duration;
 
@@ -957,6 +1038,16 @@ mod tests {
             Duration::from_secs(30)
         );
         assert!(parse_refresh_interval("0s").is_err());
+    }
+
+    #[test]
+    fn lifecycle_query_reads_stable_sequence_bounds() {
+        let target = "/v1/events?sequence_from=41&sequence_to=50&limit=9";
+        assert_eq!(query_u64(target, "sequence_from").unwrap(), Some(41));
+        assert_eq!(query_u64(target, "sequence_to").unwrap(), Some(50));
+        assert_eq!(query_u64(target, "limit").unwrap(), Some(9));
+        assert_eq!(query_u64(target, "missing").unwrap(), None);
+        assert!(query_u64("/v1/events?limit=invalid", "limit").is_err());
     }
 
     #[test]

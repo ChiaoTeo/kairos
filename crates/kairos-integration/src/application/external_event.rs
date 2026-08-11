@@ -2,8 +2,11 @@
 
 use kairos_domain_types::UnixNanos;
 
+use crate::domain::ParticipantRef;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExternalEventEnvelope<T> {
+    pub participant: ParticipantRef,
     pub binding_id: String,
     pub channel_id: String,
     pub channel_epoch: u64,

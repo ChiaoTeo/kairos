@@ -1,0 +1,197 @@
+use std::fmt;
+
+use kairos_protocol::InstanceIdentity;
+use kairos_workspace::Workspace;
+
+use crate::application::{load_replay_events, MarketProcessSettings};
+use crate::services::sources::load_actor_checkpoint;
+use crate::{MarketApplication, MarketProcess};
+
+use super::{
+    attach_replay_source_with_policy, MarketProcessRequest, MarketRuntimeProfile,
+    MarketRuntimeScope, MmapMarketSnapshotPublisher, WorkspaceMarketSourceActivator,
+};
+
+const SNAPSHOT_SLOT_SIZE: usize = 4_194_304;
+const MAX_DYNAMIC_MEMBERS: usize = 10_000;
+
+#[derive(Debug)]
+pub struct MarketStartupError(String);
+
+impl MarketStartupError {
+    fn new(error: impl fmt::Display) -> Self {
+        Self(error.to_string())
+    }
+}
+
+impl fmt::Display for MarketStartupError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for MarketStartupError {}
+
+/// Resolve identity, runtime profile, resources, concrete sources and wire
+/// implementations into one complete process. The server binary deliberately
+/// has no provider, endpoint, credential or transport construction branches.
+pub async fn build_market_process(
+    request: MarketProcessRequest,
+) -> Result<MarketProcess, MarketStartupError> {
+    let workspace = Workspace::open(&request.workspace).map_err(MarketStartupError::new)?;
+    let instance = request
+        .launch_id
+        .as_deref()
+        .map(|launch_id| workspace.instance(&request.launch_mode, launch_id, &request.instance_id))
+        .transpose()
+        .map_err(MarketStartupError::new)?;
+    if let Some(instance) = &instance {
+        instance.prepare().map_err(MarketStartupError::new)?;
+    }
+    let profile = MarketRuntimeProfile::resolve(
+        &workspace,
+        request.runtime_profile.as_deref(),
+        instance.is_some(),
+    )
+    .map_err(MarketStartupError::new)?;
+    let process_lock = if let Some(instance) = &instance {
+        instance
+            .process_lock("market")
+            .map_err(MarketStartupError::new)?
+    } else {
+        workspace
+            .process_lock("market")
+            .map_err(MarketStartupError::new)?
+    };
+    let identity = instance
+        .as_ref()
+        .map(|value| InstanceIdentity::new(workspace.id(), value.launch_id(), value.instance_id()))
+        .unwrap_or_default();
+    let snapshot_path = instance
+        .as_ref()
+        .map(|value| value.service_snapshot("market"))
+        .transpose()
+        .map_err(MarketStartupError::new)?
+        .unwrap_or(
+            workspace
+                .service_snapshot("market")
+                .map_err(MarketStartupError::new)?,
+        );
+    let socket_path = instance
+        .as_ref()
+        .map(|value| value.socket("market"))
+        .transpose()
+        .map_err(MarketStartupError::new)?
+        .unwrap_or(
+            workspace
+                .process_socket("market")
+                .map_err(MarketStartupError::new)?,
+        );
+    let event_socket_path = instance
+        .as_ref()
+        .map(|value| value.socket("market-events"))
+        .transpose()
+        .map_err(MarketStartupError::new)?
+        .unwrap_or(
+            workspace
+                .process_socket("market-events")
+                .map_err(MarketStartupError::new)?,
+        );
+    let reference_snapshot = workspace
+        .child(&["snapshots", "reference", "markets.snapshot"])
+        .map_err(MarketStartupError::new)?;
+
+    if let Some(parent) = snapshot_path.parent() {
+        std::fs::create_dir_all(parent).map_err(MarketStartupError::new)?;
+    }
+    let replay_checkpoint_path = (profile.scope == MarketRuntimeScope::Replay)
+        .then(|| {
+            instance
+                .as_ref()
+                .map(|value| value.root().join("checkpoints/market-replay.json"))
+        })
+        .flatten();
+    let restored_snapshot = replay_checkpoint_path
+        .as_deref()
+        .map(load_actor_checkpoint)
+        .transpose()
+        .map_err(MarketStartupError::new)?
+        .flatten();
+    let actor_id = format!("market:{}", profile.name);
+    let mut application = match restored_snapshot {
+        Some(snapshot) => MarketApplication::restore_with_source_capacity(
+            snapshot,
+            MAX_DYNAMIC_MEMBERS,
+            profile.source_input_capacity,
+        ),
+        None => MarketApplication::new_with_source_capacity(
+            actor_id,
+            MAX_DYNAMIC_MEMBERS,
+            profile.source_input_capacity,
+        ),
+    }
+    .map_err(MarketStartupError::new)?;
+    match profile.scope {
+        MarketRuntimeScope::Replay => {
+            let instance = instance.as_ref().ok_or_else(|| {
+                MarketStartupError::new("Market replay requires instance resources")
+            })?;
+            let data_path = instance
+                .state(&["market", "replay.jsonl"])
+                .map_err(MarketStartupError::new)?;
+            let checkpoint_path =
+                replay_checkpoint_path.expect("replay checkpoint path resolved above");
+            let events = load_replay_events(&data_path).map_err(MarketStartupError::new)?;
+            let replay = profile.replay.as_ref().ok_or_else(|| {
+                MarketStartupError::new("Market replay profile has no replay policy")
+            })?;
+            attach_replay_source_with_policy(
+                &mut application,
+                events,
+                replay.start_unix_nanos,
+                replay.end_unix_nanos,
+                checkpoint_path,
+                replay.clock,
+                replay.speed_multiplier,
+                replay.start_paused,
+            )
+            .map_err(MarketStartupError::new)?;
+        }
+        MarketRuntimeScope::Shared
+        | MarketRuntimeScope::Instance
+        | MarketRuntimeScope::Diagnostic => {}
+    }
+
+    let publisher = MmapMarketSnapshotPublisher::create_with_identity(
+        &snapshot_path,
+        SNAPSHOT_SLOT_SIZE,
+        format!("market:{}", profile.name),
+        "market.events",
+        identity.clone(),
+    )
+    .map_err(MarketStartupError::new)?;
+    let settings = MarketProcessSettings {
+        snapshot_interval: profile.snapshot_interval,
+        freshness_check_interval: profile.freshness_check_interval,
+        freshness_max_age: profile.freshness_max_age,
+        reference_recovery_interval: profile.reference_recovery_interval,
+        shutdown_timeout: profile.shutdown_timeout,
+        publication_queue_capacity: profile.publication_queue_capacity,
+    };
+    MarketProcess::new_configured_with_activator(
+        application,
+        publisher,
+        socket_path,
+        event_socket_path,
+        identity,
+        settings,
+        (profile.scope != MarketRuntimeScope::Replay)
+            .then(|| Box::new(WorkspaceMarketSourceActivator::new(workspace.clone())) as Box<_>),
+    )
+    .map(|process| {
+        process
+            .with_reference_snapshot(reference_snapshot)
+            .with_lifecycle_guard(process_lock)
+    })
+    .map_err(MarketStartupError::new)
+}

@@ -71,6 +71,45 @@ enabled = false
 enabled = false
 ```
 
+Binance Stocks Trading reference discovery is API-key protected and opt-in:
+
+```toml
+[reference.products.binance.equity]
+enabled = true
+credential_id = "binance-equity-readonly"
+endpoint = "https://api.binance.com"
+```
+
+This enables only the verified Equity catalog endpoint. It does not enable or imply Binance Equity
+quote or order APIs.
+
+After the Reference process is running, the three Binance stock-related shapes
+can be inspected independently:
+
+```text
+# Tokenized stock traded on Crypto Spot
+uv run kairospy reference markets --exchange binance --symbol AAPLBUSDT --workspace . --format json
+
+# Equity-underlying USD-M perpetual; the canonical instrument is perpetual and has no expiry
+uv run kairospy reference markets --exchange binance --symbol AAPLUSDT --workspace . --format json
+
+# Real US equity exposed through Binance Stocks Trading
+uv run kairospy reference markets --exchange binance --symbol AAPL --workspace . --format json
+uv run kairospy reference execution-accesses --provider binance --product-family equity \
+  --provider-symbol AAPL --active-only --workspace . --format json
+```
+
+The Stocks Trading endpoint does not return the primary listing venue. Reference
+therefore identifies the canonical instrument as a US equity and records Binance
+as the execution provider without asserting that every returned symbol is listed
+on Nasdaq.
+
+If no Aeron consumer is running, refresh still commits and publishes the mmap
+snapshot, and reports `publication_pending=true`; durable lifecycle events remain
+in the outbox. Use `reference validate --allow-pending-publication` for a
+snapshot-only deployment, or run the configured lifecycle consumer when event
+delivery is required.
+
 Normal process control does not require a provider flag. The default registry
 skips credential files with no resolved API key, includes credentialed sources
 when their namespaced or conventional environment secret is available, and

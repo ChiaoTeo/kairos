@@ -1,0 +1,49 @@
+//! Provider-native Market source composition.
+//!
+//! This layer translates typed Workspace bindings into concrete Integration
+//! capabilities. Provider selection ends here and never enters the Actor or
+//! server binary.
+
+mod binance;
+mod hyperliquid;
+mod massive;
+mod okx;
+
+use std::path::Path;
+
+use kairos_workspace::WorkspaceMarketSourceBinding;
+
+use crate::MarketApplication;
+
+pub(super) fn attach_configured(
+    application: &mut MarketApplication,
+    credentials_root: &Path,
+    source_id: &str,
+    binding: &WorkspaceMarketSourceBinding,
+) -> Result<(), String> {
+    match binding {
+        WorkspaceMarketSourceBinding::BinanceSpot { .. }
+        | WorkspaceMarketSourceBinding::BinanceDerivatives { .. } => {
+            binance::attach(application, credentials_root, source_id, binding)
+        }
+        WorkspaceMarketSourceBinding::Massive { .. } => {
+            massive::attach(application, credentials_root, source_id, binding)
+        }
+        WorkspaceMarketSourceBinding::Okx { .. } => okx::attach(application, source_id, binding),
+        WorkspaceMarketSourceBinding::Hyperliquid { .. } => {
+            hyperliquid::attach(application, source_id, binding)
+        }
+    }
+}
+
+pub(super) fn positive_interval(
+    source_id: &str,
+    milliseconds: u64,
+) -> Result<std::time::Duration, String> {
+    if milliseconds == 0 {
+        return Err(format!(
+            "Market source {source_id} snapshot_interval_ms must be positive"
+        ));
+    }
+    Ok(std::time::Duration::from_millis(milliseconds))
+}

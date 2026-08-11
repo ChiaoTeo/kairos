@@ -1,16 +1,14 @@
 use flatbuffers::FlatBufferBuilder;
 use kairos_market::application::wire::decode_reference_changed;
-use kairos_market::composition::MarketFeed;
 use kairos_market::{
-    MarketApplication, MarketDescriptor, MarketObservation, MarketRuntime, MarketSelectionQuery,
-    Quote, Rate, ReferenceChanged, SubscriptionId,
+    MarketApplication, MarketDescriptor, MarketObservation, MarketSelectionQuery, Quote, Rate,
+    ReferenceChanged, SubscriptionId,
 };
 use kairos_protocol::generated::kairos::common::v_1::{MessageHeader, MessageHeaderArgs};
 use kairos_protocol::generated::kairos::reference::v_1::{
     finish_reference_changed_buffer, LifecycleEvent, LifecycleEventArgs,
     ReferenceChanged as ReferenceChangedMessage, ReferenceChangedArgs,
 };
-use std::collections::VecDeque;
 
 fn market(id: &str, symbol: &str) -> MarketDescriptor {
     MarketDescriptor::new(id, format!("instrument:{id}"), "binance", "spot", symbol).unwrap()
@@ -69,7 +67,7 @@ fn actor_owns_sequence_and_latest_observation() {
     });
     assert_eq!(actor.ingest(value).unwrap(), 1);
     assert_eq!(actor.snapshot().event_sequence, 1.into());
-    assert!(actor.snapshot().latest.contains_key("market:btc"));
+    assert!(actor.snapshot().latest.contains_key("test:market:btc"));
 }
 
 #[test]
@@ -263,59 +261,6 @@ fn stale_reference_changes_are_ignored_by_watermark() {
     assert!(ignored.is_empty());
     let state = actor.snapshot().subscriptions.remove(0);
     assert!(state.members.contains_key(second.market_id.as_str()));
-}
-
-struct FakeFeed {
-    events: VecDeque<MarketObservation>,
-    subscriptions: usize,
-}
-
-impl MarketFeed for FakeFeed {
-    fn subscribe(&mut self, _market: &MarketDescriptor) -> Result<SubscriptionId, String> {
-        self.subscriptions += 1;
-        SubscriptionId::new(format!("provider:{}", self.subscriptions))
-    }
-
-    fn unsubscribe(&mut self, _subscription: &SubscriptionId) -> Result<(), String> {
-        Ok(())
-    }
-
-    fn poll(&mut self) -> Result<Vec<MarketObservation>, String> {
-        Ok(self.events.drain(..).collect())
-    }
-}
-
-#[test]
-fn application_coordinates_provider_feed_and_actor_ingestion() {
-    let descriptor = market("market:one", "ONE");
-    let event = MarketObservation::Quote(Quote {
-        market_id: descriptor.market_id.clone(),
-        instrument_id: descriptor.instrument_id.clone(),
-        bid_price: Some("100".parse().unwrap()),
-        bid_quantity: None,
-        ask_price: None,
-        ask_quantity: None,
-        observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(1),
-        source_id: "fake".into(),
-    });
-    let application = MarketApplication::new("market-1", 10).unwrap();
-    let mut application = MarketRuntime::with_feed(
-        application,
-        Box::new(FakeFeed {
-            events: VecDeque::from([event]),
-            subscriptions: 0,
-        }),
-    );
-    application
-        .subscribe_static(
-            SubscriptionId::new("static-1").unwrap(),
-            "strategy",
-            descriptor,
-        )
-        .unwrap();
-    application.reconcile_feed().unwrap();
-    assert_eq!(application.poll_feed().unwrap(), 1);
-    assert_eq!(application.snapshot().event_sequence, 1.into());
 }
 
 #[test]

@@ -9,7 +9,7 @@ pub(crate) mod stream;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::application::capabilities::account_facts::{
-    canonical_account_identity, ExternalAccountModel as AccountModel,
+    external_instrument_ref, ExternalAccountModel as AccountModel,
     ExternalAccountSegment as AccountSegment, ExternalAccountSnapshot as AccountSnapshot,
     ExternalAccountStatus as AccountStatus, ExternalBalance as Balance,
     ExternalDecimal as DecimalValue, ExternalOpenOrder as OpenOrder, ExternalPosition as Position,
@@ -636,10 +636,17 @@ pub(crate) fn normalize_account(
             if quantity.mantissa == 0 {
                 return None;
             }
-            let (instrument_id, market_id) = canonical_account_identity("okx", symbol).ok()?;
+            let provider_instrument = external_instrument_ref(
+                crate::domain::ParticipantKind::Exchange,
+                "okx",
+                item.get("instType")
+                    .and_then(Value::as_str)
+                    .unwrap_or("okx"),
+                symbol,
+            )
+            .ok()?;
             Some(Position {
-                instrument_id,
-                market_id: Some(market_id),
+                provider_instrument,
                 quantity,
                 average_price: decimal_field(item, "avgPx").ok(),
                 mark_price: decimal_field(item, "markPx").ok(),
@@ -710,7 +717,15 @@ fn normalize_open_order(value: &Value) -> Result<OpenOrder, String> {
         .get("instId")
         .and_then(Value::as_str)
         .ok_or_else(|| "OKX pending order instrument is missing".to_string())?;
-    let (instrument_id, _) = canonical_account_identity("okx", symbol)?;
+    let provider_instrument = external_instrument_ref(
+        crate::domain::ParticipantKind::Exchange,
+        "okx",
+        value
+            .get("instType")
+            .and_then(Value::as_str)
+            .unwrap_or("okx"),
+        symbol,
+    )?;
     let local_order_id = value
         .get("clOrdId")
         .and_then(Value::as_str)
@@ -719,7 +734,7 @@ fn normalize_open_order(value: &Value) -> Result<OpenOrder, String> {
     Ok(OpenOrder {
         order_id: kairos_domain_types::OrderId::new(local_order_id)?,
         remote_order_id: Some(kairos_domain_types::RemoteOrderId::new(remote_order_id)?),
-        instrument_id,
+        provider_instrument,
         side: crate::application::capabilities::execution_facts::normalize_order_side(
             value
                 .get("side")

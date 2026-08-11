@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::sync::{
     mpsc::{self, Sender},
-    Arc,
+    Arc, Mutex,
 };
 use std::time::Duration;
 
@@ -137,7 +137,8 @@ pub struct PublicHttpClient {
     /// The blocking client and all blocking I/O live on this dedicated
     /// worker. Callers may be synchronous today, but async Tokio handlers
     /// never construct, use, or drop reqwest's private runtime directly.
-    worker: Arc<Sender<HttpJob>>,
+    worker: Arc<Mutex<Option<Sender<HttpJob>>>>,
+    user_agent: Arc<str>,
 }
 
 /// Default async HTTP client. It creates no runtime or worker thread; request
@@ -204,6 +205,22 @@ impl AsyncPublicHttpClient {
     ) -> Result<HttpJsonResponse, ExchangeError> {
         self.request_json_response(
             Method::POST,
+            endpoint,
+            query,
+            headers,
+            HttpRequestSemantics::Query,
+        )
+        .await
+    }
+
+    pub async fn put_query_json_response_with_headers_and_query(
+        &self,
+        endpoint: &str,
+        query: &[(&str, String)],
+        headers: &[(&str, String)],
+    ) -> Result<HttpJsonResponse, ExchangeError> {
+        self.request_json_response(
+            Method::PUT,
             endpoint,
             query,
             headers,
@@ -329,7 +346,26 @@ impl AsyncPublicHttpClient {
 
 impl PublicHttpClient {
     pub fn new(user_agent: &str) -> Result<Self, ExchangeError> {
-        let user_agent = user_agent.to_owned();
+        if user_agent.trim().is_empty() {
+            return Err(ExchangeError::InvalidRequest(
+                "HTTP user agent is required".into(),
+            ));
+        }
+        Ok(Self {
+            worker: Arc::new(Mutex::new(None)),
+            user_agent: Arc::from(user_agent),
+        })
+    }
+
+    fn worker(&self) -> Result<Sender<HttpJob>, ExchangeError> {
+        let mut worker = self
+            .worker
+            .lock()
+            .map_err(|_| ExchangeError::Connection("HTTP worker lock is poisoned".into()))?;
+        if let Some(sender) = worker.as_ref() {
+            return Ok(sender.clone());
+        }
+        let user_agent = self.user_agent.to_string();
         let (sender, receiver) = mpsc::channel::<HttpJob>();
         let (ready_sender, ready_receiver) = mpsc::sync_channel(1);
         std::thread::Builder::new()
@@ -360,14 +396,21 @@ impl PublicHttpClient {
             .recv()
             .map_err(|error| ExchangeError::Connection(error.to_string()))?
             .map_err(ExchangeError::Connection)?;
-        Ok(Self {
-            worker: Arc::new(sender),
-        })
+        *worker = Some(sender.clone());
+        Ok(sender)
     }
 
     #[cfg(test)]
     pub(crate) fn shares_worker_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.worker, &other.worker)
+    }
+
+    #[cfg(test)]
+    fn worker_started(&self) -> bool {
+        self.worker
+            .lock()
+            .map(|worker| worker.is_some())
+            .unwrap_or(false)
     }
 
     pub fn get_json(&self, endpoint: &str) -> Result<Value, ExchangeError> {
@@ -550,7 +593,7 @@ impl PublicHttpClient {
         F: FnOnce(&Client) -> Result<T, ExchangeError> + Send + 'static,
     {
         let (sender, receiver) = mpsc::sync_channel(1);
-        self.worker
+        self.worker()?
             .send(Box::new(move |client| {
                 let result = operation(client);
                 let _ = sender.send(result);
@@ -728,6 +771,14 @@ mod tests {
         (format!("http://{address}"), count, handle)
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn constructing_blocking_projection_does_not_start_a_hidden_worker() {
+        let client = PublicHttpClient::new("kairos-lazy-blocking-http-test").unwrap();
+        assert!(!client.worker_started());
+        tokio::task::yield_now().await;
+        assert!(!client.worker_started());
+    }
+
     fn dropped_response_server() -> (String, Arc<AtomicUsize>, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("test server binds");
         let address = listener.local_addr().expect("test server address");
@@ -900,4 +951,3 @@ mod tests {
         assert!(matches!(result, Err(IntegrationError::Unavailable(_))));
     }
 }
-pub(crate) mod polling;

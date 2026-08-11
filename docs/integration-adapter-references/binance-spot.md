@@ -10,7 +10,10 @@ provider-native connection migration described in
 - Adapter path: `crates/adapters/binance`
 - Branch: record the exact branch/tag/commit used for each migration change
 - License: LGPL-3.0; preserve notices when source is reused
-- Kairos implementation: `crates/kairos-integration/src/application/providers/binance.rs`
+- Kairos implementation:
+  `crates/kairos-integration/src/application/participants/binance/connection.rs`,
+  `connection/{account,execution,funding,reference,blocking}.rs`, and
+  `crates/kairos-integration/src/services/participants/binance/spot/`
 
 ## Provider behavior to review
 
@@ -27,8 +30,8 @@ provider-native connection migration described in
 
 | Provider behavior | Kairos owner |
 |---|---|
-| REST client, clock, signer, endpoint set | `BinanceSpotProviderConnection` / services gateway |
-| Credential and account context | `BinanceSpotPrivateConnection` |
+| REST client, clock, signer, endpoint set | `BinanceConnection` / `BinanceSpotProviderRuntime` |
+| Credential and account context | `BinancePrincipalConnection` |
 | Submit/cancel | `BinanceSpotOrderEntry` and `CommandOutcome` |
 | Open/history/detail queries | `BinanceSpotOrderQuery` |
 | Private order events | `BinanceSpotOrderEvents` |
@@ -72,3 +75,45 @@ Update this section whenever upstream source or tests are actually reused:
 - old Binance Spot registry and generic connection construction paths are
   deleted for the completed slice;
 - the integration migration ledger is updated.
+
+## Market source status (2026-08-11)
+
+- Market no longer imports a blocking Binance connection and no longer runs a feed worker.
+- Binance facts enter the Actor through the common async stream Source Driver.
+- Spot WebSocket now uses `AsyncTokioSocket` plus `AsyncPublicHttpClient` directly on the caller's
+  Tokio runtime. Subscription performs the provider snapshot barrier before deltas are accepted;
+  WebSocket queue overflow is returned as explicit Integration backpressure.
+- The native current-thread test uses local WebSocket and HTTP servers and proves that subscription
+  yields the REST depth snapshot without a blocking bridge.
+- Spot REST and the non-Spot Binance market projections still use the compatibility bridge. This
+  slice remains open until those query capabilities become provider-native async snapshots and the
+  corresponding blocking market constructors leave production composition.
+
+## Account source status (2026-08-11)
+
+- Spot snapshot/profile and private account events are projected from one
+  `BinancePrincipalConnection` and run on the Account process Tokio runtime.
+- Funding snapshot shares the same principal/runtime and does not invent a funding private stream.
+- Account private envelopes record participant, binding, channel, epoch, provider event ID,
+  sequence, observed time, and received time.
+- Account production composition no longer falls back to blocking Binance adapters. Margin,
+  futures, and options remain unavailable in the production Account server until their own native
+  async vertical slices satisfy the same exit criteria; the explicit blocking projection remains
+  available to CLI/offline callers.
+- Live production acceptance found two provider/network facts that local protocol tests did not
+  expose:
+  - `/api/v3/time` can arrive through a high-latency network path. Signed queries calibrate a
+    conservative provider clock, and only semantically safe queries retry once after Binance
+    `-1021`; submit/cancel commands are never transparently retried.
+  - although the Binance WebSocket API documentation describes request `id` as arbitrary, the
+    production gateway used in acceptance disconnected signed user-data subscriptions whose IDs
+    contained `.` or `:`. Adapter-generated subscription IDs therefore use a bounded ASCII
+    alphanumeric/hyphen subset. The same credential and payload returned `status=200` and a
+    `subscriptionId` after this normalization.
+- The ignored `live_hmac_user_data_subscription_connects` contract test exercises the real HMAC
+  user-data subscription only when credentials are supplied explicitly. It performs no order
+  command.
+- A `.kairos` diagnostic Account instance reached `ready` with an authenticated, healthy required
+  Binance Spot channel and a completed initial snapshot. A credential binding declared
+  `role=readonly` remains non-trading even if remote credential inspection reports trade
+  permission, and such an observer does not require a trade lease.

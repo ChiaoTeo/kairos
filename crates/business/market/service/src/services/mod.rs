@@ -1,8 +1,8 @@
 pub mod actor;
-pub mod composite;
-pub(crate) mod connection;
-pub mod feed;
-pub mod integration;
+pub(crate) mod control;
+pub(crate) mod event_publication;
+pub(crate) mod event_wire;
+pub(crate) mod messages;
 pub mod reference;
-pub mod replay;
-pub mod worker;
+pub(crate) mod reference_projection;
+pub(crate) mod sources;

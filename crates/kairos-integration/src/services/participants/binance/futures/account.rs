@@ -1,9 +1,10 @@
 use crate::services::participants::binance::ConnectionDomain;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::application::capabilities::account_facts::{
-    canonical_account_identity, ExternalAccountEvent as AccountEvent,
+    external_instrument_ref, ExternalAccountEvent as AccountEvent,
     ExternalAccountModel as AccountModel, ExternalAccountSegment as AccountSegment,
     ExternalAccountSnapshot as AccountSnapshot, ExternalAccountStatus as AccountStatus,
     ExternalBalance as Balance, ExternalDecimal as DecimalValue, ExternalFillEvent as FillEvent,
@@ -15,7 +16,10 @@ use crate::application::{
     AccountReadConnection, ExternalAccountCredentialProfile, IntegrationError,
 };
 use crate::services::participants::binance::signing::signed_query;
-use crate::services::transport::http::{ExchangeError, PublicHttpClient};
+use crate::services::participants::binance::spot::runtime::{
+    BinanceSpotProviderRuntime, QuotaAllocation, RequestPriority,
+};
+use crate::services::transport::http::{AsyncPublicHttpClient, ExchangeError, PublicHttpClient};
 use crate::services::transport::websocket::{SocketEvent, TokioSocket};
 use serde_json::Value;
 
@@ -94,12 +98,16 @@ impl AccountCredentialInspectionConnection for BinanceFuturesAccountConnection {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct BinanceFuturesAccountClient {
     http: PublicHttpClient,
+    async_http: AsyncPublicHttpClient,
     product: ConnectionDomain,
     api_key: String,
     secret: String,
     base_url: String,
+    clock_offset_millis: Arc<tokio::sync::Mutex<Option<i64>>>,
+    runtime: BinanceSpotProviderRuntime,
 }
 
 impl BinanceFuturesAccountClient {
@@ -122,31 +130,72 @@ impl BinanceFuturesAccountClient {
                 "Binance futures base URL is required".into(),
             ));
         }
+        let http = PublicHttpClient::new("kairos-integration/binance-futures-account")?;
+        let runtime = BinanceSpotProviderRuntime::new(
+            http.clone(),
+            QuotaAllocation {
+                request_weight_per_minute: 6_000,
+                cancel_reserve_weight: 100,
+            },
+        )?;
+        Self::from_runtime(runtime, product, api_key, secret, base_url)
+    }
+
+    pub(crate) fn from_runtime(
+        runtime: BinanceSpotProviderRuntime,
+        product: ConnectionDomain,
+        api_key: impl Into<String>,
+        secret: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Result<Self, ExchangeError> {
+        let api_key = api_key.into();
+        let secret = secret.into();
+        let base_url = base_url.into().trim_end_matches('/').to_string();
+        if api_key.trim().is_empty() || secret.trim().is_empty() {
+            return Err(ExchangeError::Authentication(
+                "Binance futures credentials are required".into(),
+            ));
+        }
+        if base_url.is_empty() {
+            return Err(ExchangeError::InvalidRequest(
+                "Binance futures base URL is required".into(),
+            ));
+        }
         Ok(Self {
-            http: PublicHttpClient::new("kairos-integration/binance-futures-account")?,
+            http: runtime.http(),
+            async_http: runtime.async_http(),
             product,
             api_key,
             secret,
             base_url,
+            clock_offset_millis: Arc::new(tokio::sync::Mutex::new(None)),
+            runtime,
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_runtime_with(&self, runtime: &BinanceSpotProviderRuntime) -> bool {
+        self.runtime.shares_http_worker_with(runtime)
     }
 
     fn signed_get(&self, path: &str) -> Result<Value, ExchangeError> {
         self.signed_request(path, BTreeMap::new(), RequestMethod::Get)
     }
 
-    pub(super) fn submit_order(
+    pub(super) async fn submit_order_async(
         &self,
         params: BTreeMap<String, String>,
     ) -> Result<Value, ExchangeError> {
-        self.signed_request(self.order_path(), params, RequestMethod::Post)
+        self.signed_request_async(self.order_path(), params, RequestMethod::Post)
+            .await
     }
 
-    pub(super) fn cancel_order(
+    pub(super) async fn cancel_order_async(
         &self,
         params: BTreeMap<String, String>,
     ) -> Result<Value, ExchangeError> {
-        self.signed_request(self.order_path(), params, RequestMethod::Delete)
+        self.signed_request_async(self.order_path(), params, RequestMethod::Delete)
+            .await
     }
 
     pub(super) fn listen_key(&self) -> Result<String, ExchangeError> {
@@ -168,6 +217,51 @@ impl BinanceFuturesAccountClient {
             .ok_or_else(|| {
                 ExchangeError::InvalidRequest("Binance futures listen key is missing".into())
             })
+    }
+
+    pub(super) async fn listen_key_async(&self) -> Result<String, ExchangeError> {
+        self.runtime.acquire(1, RequestPriority::Background)?;
+        let path = match self.product {
+            ConnectionDomain::UsdMFutures => "/fapi/v1/listenKey",
+            ConnectionDomain::CoinMFutures => "/dapi/v1/listenKey",
+            _ => unreachable!(),
+        };
+        let endpoint = format!("{}{path}", self.base_url);
+        self.async_http
+            .post_json_response_with_headers_and_query(
+                &endpoint,
+                &[],
+                &[("X-MBX-APIKEY", self.api_key.clone())],
+            )
+            .await?
+            .body
+            .get("listenKey")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                ExchangeError::InvalidRequest("Binance futures listen key is missing".into())
+            })
+    }
+
+    pub(super) async fn keepalive_listen_key_async(
+        &self,
+        listen_key: &str,
+    ) -> Result<(), ExchangeError> {
+        self.runtime.acquire(1, RequestPriority::Background)?;
+        let path = match self.product {
+            ConnectionDomain::UsdMFutures => "/fapi/v1/listenKey",
+            ConnectionDomain::CoinMFutures => "/dapi/v1/listenKey",
+            _ => unreachable!(),
+        };
+        let endpoint = format!("{}{path}", self.base_url);
+        self.async_http
+            .put_query_json_response_with_headers_and_query(
+                &endpoint,
+                &[("listenKey", listen_key.to_owned())],
+                &[("X-MBX-APIKEY", self.api_key.clone())],
+            )
+            .await
+            .map(|_| ())
     }
 
     fn order_path(&self) -> &'static str {
@@ -210,6 +304,102 @@ impl BinanceFuturesAccountClient {
         }
     }
 
+    async fn signed_request_async(
+        &self,
+        path: &str,
+        params: BTreeMap<String, String>,
+        method: RequestMethod,
+    ) -> Result<Value, ExchangeError> {
+        for attempt in 0..2 {
+            self.runtime.acquire(
+                1,
+                match method {
+                    RequestMethod::Get => RequestPriority::Reconciliation,
+                    RequestMethod::Post => RequestPriority::NewOrder,
+                    RequestMethod::Delete => RequestPriority::Cancel,
+                },
+            )?;
+            let mut signed_params = params.clone();
+            signed_params.insert(
+                "timestamp".into(),
+                self.signed_timestamp_async().await?.to_string(),
+            );
+            signed_params.insert("recvWindow".into(), "5000".into());
+            let signed = signed_query(&self.secret, signed_params)?;
+            let endpoint = format!("{}{path}", self.base_url);
+            let mut query = url::form_urlencoded::parse(signed.query.as_bytes())
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect::<Vec<_>>();
+            query.push(("signature".into(), signed.signature));
+            let refs = query
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.clone()))
+                .collect::<Vec<_>>();
+            let headers = [("X-MBX-APIKEY", self.api_key.clone())];
+            let result = match method {
+                RequestMethod::Get => self
+                    .async_http
+                    .get_json_response_with_headers_and_query(&endpoint, &refs, &headers)
+                    .await
+                    .map(|response| response.body),
+                RequestMethod::Post => self
+                    .async_http
+                    .post_json_response_with_headers_and_query(&endpoint, &refs, &headers)
+                    .await
+                    .map(|response| response.body),
+                RequestMethod::Delete => self
+                    .async_http
+                    .delete_json_response_with_headers_and_query(&endpoint, &refs, &headers)
+                    .await
+                    .map(|response| response.body),
+            };
+            match result {
+                Ok(value) => return Ok(value),
+                Err(error)
+                    if attempt == 0
+                        && matches!(method, RequestMethod::Get)
+                        && is_timestamp_rejection(&error) =>
+                {
+                    *self.clock_offset_millis.lock().await = None;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("bounded Binance Futures timestamp retry loop")
+    }
+
+    async fn signed_timestamp_async(&self) -> Result<u64, ExchangeError> {
+        let mut offset = self.clock_offset_millis.lock().await;
+        if let Some(offset) = *offset {
+            return apply_clock_offset(now_millis(), offset);
+        }
+        let started = now_millis();
+        self.runtime.acquire(1, RequestPriority::Background)?;
+        let path = match self.product {
+            ConnectionDomain::UsdMFutures => "/fapi/v1/time",
+            ConnectionDomain::CoinMFutures => "/dapi/v1/time",
+            _ => unreachable!(),
+        };
+        let payload = self
+            .async_http
+            .get_json(&format!("{}{path}", self.base_url))
+            .await
+            .map_err(|error| ExchangeError::Preflight(error.to_string()))?;
+        let completed = now_millis();
+        let server_time = payload
+            .get("serverTime")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                ExchangeError::Preflight("Binance Futures serverTime is missing".into())
+            })?;
+        let midpoint = started.saturating_add(completed.saturating_sub(started) / 2);
+        let calibrated = i64::try_from(server_time)
+            .unwrap_or(i64::MAX)
+            .saturating_sub(i64::try_from(midpoint).unwrap_or(i64::MAX));
+        *offset = Some(calibrated);
+        apply_clock_offset(now_millis(), calibrated)
+    }
+
     fn account(&self) -> Result<Value, ExchangeError> {
         self.signed_get(match self.product {
             ConnectionDomain::UsdMFutures => "/fapi/v2/account",
@@ -218,12 +408,38 @@ impl BinanceFuturesAccountClient {
         })
     }
 
+    pub(crate) async fn account_async(&self) -> Result<Value, ExchangeError> {
+        self.signed_request_async(
+            match self.product {
+                ConnectionDomain::UsdMFutures => "/fapi/v2/account",
+                ConnectionDomain::CoinMFutures => "/dapi/v1/account",
+                _ => unreachable!(),
+            },
+            BTreeMap::new(),
+            RequestMethod::Get,
+        )
+        .await
+    }
+
     fn positions(&self) -> Result<Value, ExchangeError> {
         self.signed_get(match self.product {
             ConnectionDomain::UsdMFutures => "/fapi/v2/positionRisk",
             ConnectionDomain::CoinMFutures => "/dapi/v1/positionRisk",
             _ => unreachable!(),
         })
+    }
+
+    pub(crate) async fn positions_async(&self) -> Result<Value, ExchangeError> {
+        self.signed_request_async(
+            match self.product {
+                ConnectionDomain::UsdMFutures => "/fapi/v2/positionRisk",
+                ConnectionDomain::CoinMFutures => "/dapi/v1/positionRisk",
+                _ => unreachable!(),
+            },
+            BTreeMap::new(),
+            RequestMethod::Get,
+        )
+        .await
     }
 
     fn open_orders(&self) -> Result<Value, ExchangeError> {
@@ -236,6 +452,10 @@ impl BinanceFuturesAccountClient {
             BTreeMap::new(),
             RequestMethod::Get,
         )
+    }
+
+    pub(crate) async fn open_orders_async(&self) -> Result<Value, ExchangeError> {
+        self.query_open_orders_async(BTreeMap::new()).await
     }
 
     pub(crate) fn query_open_orders(
@@ -252,6 +472,21 @@ impl BinanceFuturesAccountClient {
             RequestMethod::Get,
         )
     }
+    pub(crate) async fn query_open_orders_async(
+        &self,
+        params: BTreeMap<String, String>,
+    ) -> Result<Value, ExchangeError> {
+        self.signed_request_async(
+            match self.product {
+                ConnectionDomain::UsdMFutures => "/fapi/v1/openOrders",
+                ConnectionDomain::CoinMFutures => "/dapi/v1/openOrders",
+                _ => unreachable!(),
+            },
+            params,
+            RequestMethod::Get,
+        )
+        .await
+    }
     pub(crate) fn query_history(
         &self,
         params: BTreeMap<String, String>,
@@ -266,11 +501,33 @@ impl BinanceFuturesAccountClient {
             RequestMethod::Get,
         )
     }
+    pub(crate) async fn query_history_async(
+        &self,
+        params: BTreeMap<String, String>,
+    ) -> Result<Value, ExchangeError> {
+        self.signed_request_async(
+            match self.product {
+                ConnectionDomain::UsdMFutures => "/fapi/v1/allOrders",
+                ConnectionDomain::CoinMFutures => "/dapi/v1/allOrders",
+                _ => unreachable!(),
+            },
+            params,
+            RequestMethod::Get,
+        )
+        .await
+    }
     pub(crate) fn query_detail(
         &self,
         params: BTreeMap<String, String>,
     ) -> Result<Value, ExchangeError> {
         self.signed_request(self.order_path(), params, RequestMethod::Get)
+    }
+    pub(crate) async fn query_detail_async(
+        &self,
+        params: BTreeMap<String, String>,
+    ) -> Result<Value, ExchangeError> {
+        self.signed_request_async(self.order_path(), params, RequestMethod::Get)
+            .await
     }
 }
 
@@ -280,7 +537,29 @@ pub(super) enum RequestMethod {
     Delete,
 }
 
-fn normalize_account(
+fn apply_clock_offset(local_millis: u64, offset_millis: i64) -> Result<u64, ExchangeError> {
+    if offset_millis >= 0 {
+        Ok(local_millis.saturating_add(offset_millis as u64))
+    } else {
+        local_millis
+            .checked_sub(offset_millis.unsigned_abs())
+            .ok_or_else(|| ExchangeError::Preflight("invalid provider clock offset".into()))
+    }
+}
+
+fn is_timestamp_rejection(error: &ExchangeError) -> bool {
+    match error {
+        ExchangeError::Http { body, .. } => {
+            serde_json::from_str::<Value>(body)
+                .ok()
+                .and_then(|value| value.get("code").and_then(Value::as_i64))
+                == Some(-1021)
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn normalize_account(
     segment: &AccountSegment,
     account: &Value,
     positions: &Value,
@@ -320,11 +599,15 @@ fn normalize_account(
             if quantity.mantissa == 0 {
                 return None;
             }
-            let (instrument_id, market_id) =
-                canonical_account_identity("binance-futures", symbol).ok()?;
+            let provider_instrument = external_instrument_ref(
+                crate::domain::ParticipantKind::Exchange,
+                "binance",
+                "binance-futures",
+                symbol,
+            )
+            .ok()?;
             Some(Ok(Position {
-                instrument_id,
-                market_id: Some(market_id),
+                provider_instrument,
                 quantity,
                 average_price: required_decimal_field(item, "entryPrice").ok(),
                 mark_price: required_decimal_field(item, "markPrice").ok(),
@@ -367,7 +650,12 @@ fn normalize_open_order(value: &Value, product: &str) -> Result<OpenOrder, Strin
         .get("symbol")
         .and_then(Value::as_str)
         .ok_or_else(|| "Binance futures open order symbol is missing".to_string())?;
-    let (instrument_id, _) = canonical_account_identity(product, symbol)?;
+    let provider_instrument = external_instrument_ref(
+        crate::domain::ParticipantKind::Exchange,
+        "binance",
+        product,
+        symbol,
+    )?;
     let local_order_id = value
         .get("clientOrderId")
         .and_then(Value::as_str)
@@ -376,7 +664,7 @@ fn normalize_open_order(value: &Value, product: &str) -> Result<OpenOrder, Strin
     Ok(OpenOrder {
         order_id: kairos_domain_types::OrderId::new(local_order_id)?,
         remote_order_id: Some(kairos_domain_types::RemoteOrderId::new(remote_order_id)?),
-        instrument_id,
+        provider_instrument,
         side: crate::application::capabilities::execution_facts::normalize_order_side(
             value
                 .get("side")
@@ -442,7 +730,6 @@ pub struct BinanceFuturesAccountStreamConnection {
     client: BinanceFuturesAccountClient,
     endpoint: String,
     socket: Option<TokioSocket>,
-    product: ConnectionDomain,
     segment_key: String,
 }
 
@@ -481,7 +768,6 @@ impl BinanceFuturesAccountStreamConnection {
             client,
             endpoint,
             socket: None,
-            product,
             segment_key,
         })
     }
@@ -568,16 +854,15 @@ impl AccountEventStreamConnection for BinanceFuturesAccountStreamConnection {
                 ))
             }
         };
-        Ok(parse_user_event(&self.segment_key, self.product, &text)
+        Ok(parse_user_event(&self.segment_key, &text)
             .map_err(IntegrationError::InvalidPayload)?
             .map(AccountEventReceive::Event)
             .unwrap_or(AccountEventReceive::Idle))
     }
 }
 
-fn parse_user_event(
+pub(super) fn parse_user_event(
     segment_key: &str,
-    _product: ConnectionDomain,
     text: &str,
 ) -> Result<Option<AccountEvent>, String> {
     let value: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
@@ -634,7 +919,12 @@ fn parse_user_event(
                     .get("L")
                     .and_then(Value::as_str)
                     .ok_or_else(|| "Binance futures fill price is missing".to_string())?;
-                let (instrument_id, _) = canonical_account_identity("binance-futures", symbol)?;
+                let provider_instrument = external_instrument_ref(
+                    crate::domain::ParticipantKind::Exchange,
+                    "binance",
+                    "binance-futures",
+                    symbol,
+                )?;
                 events.push(AccountEvent::Fill(FillEvent {
                     fill_id: kairos_domain_types::FillId::new(
                         row.get("t")
@@ -644,7 +934,7 @@ fn parse_user_event(
                     )?,
                     order_id: kairos_domain_types::OrderId::new(order_id)?,
                     segment_key: kairos_domain_types::SegmentKey::new(segment_key)?,
-                    instrument_id,
+                    provider_instrument,
                     side: row.get("S").and_then(Value::as_str).unwrap_or("BUY").into(),
                     quantity: decimal(quantity)?,
                     price: decimal(price)?,
@@ -696,11 +986,15 @@ fn parse_user_event(
                     let symbol = row.get("s").and_then(Value::as_str)?;
                     let quantity =
                         decimal(row.get("pa").and_then(Value::as_str).unwrap_or("0")).ok()?;
-                    let (instrument_id, market_id) =
-                        canonical_account_identity("binance-futures", symbol).ok()?;
+                    let provider_instrument = external_instrument_ref(
+                        crate::domain::ParticipantKind::Exchange,
+                        "binance",
+                        "binance-futures",
+                        symbol,
+                    )
+                    .ok()?;
                     Some(Position {
-                        instrument_id,
-                        market_id: Some(market_id),
+                        provider_instrument,
                         quantity,
                         average_price: stream_decimal_field(row, "ep"),
                         unrealized_pnl: stream_decimal_field(row, "up"),

@@ -12,24 +12,22 @@ pub use crate::application::capabilities::account::{
 pub use crate::application::capabilities::execution::{
     OrderEntryConnection, OrderEventSource, OrderQueryConnection,
 };
-pub use crate::application::capabilities::market::{
-    HistoricalMarketDataConnection, MarketSnapshotConnection, MarketStreamConnection,
-};
+pub use crate::application::capabilities::market::HistoricalMarketDataConnection;
 pub use crate::application::capabilities::reference::InstrumentCatalogConnection;
 
 pub use crate::application::participants::binance::blocking::{
-    BinanceEquityInstrumentCatalog, BinanceFundingAccountRead, BinanceFundingCredentialInspection,
-    BinanceInstrumentCatalog, BinanceSimpleEarn, BinanceSpotOrderEntry, BinanceSpotOrderEvents,
-    BinanceSpotOrderQuery, BinanceTransfer,
+    BinanceFundingAccountRead, BinanceFundingCredentialInspection, BinanceInstrumentCatalog,
+    BinanceSimpleEarn, BinanceSpotOrderEntry, BinanceSpotOrderEvents, BinanceSpotOrderQuery,
+    BinanceTransfer,
 };
 pub use crate::application::participants::hyperliquid::blocking::HyperliquidInstrumentCatalog;
 pub use crate::application::participants::massive::blocking::{
-    MassiveHistoricalMarket, MassiveInstrumentCatalog, MassiveLiveMarket,
+    MassiveHistoricalMarket, MassiveInstrumentCatalog,
 };
 pub use crate::application::participants::okx::blocking::{
-    OkxInstrumentCatalog, OkxMarketSnapshot, OkxTradingAccountEvents,
-    OkxTradingAccountMarketProfile, OkxTradingAccountRead, OkxTradingCredentialInspection,
-    OkxTradingOrderEntry, OkxTradingOrderQuery,
+    OkxInstrumentCatalog, OkxTradingAccountEvents, OkxTradingAccountMarketProfile,
+    OkxTradingAccountRead, OkxTradingCredentialInspection, OkxTradingOrderEntry,
+    OkxTradingOrderQuery,
 };
 
 pub use crate::application::participants::binance::blocking as binance;

@@ -83,16 +83,16 @@ mod tests {
     fn loads_workspace_credential_by_id_from_toml_only() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(
-            directory.path().join("binance-equity-readonly.toml"),
+            directory.path().join("binance-spot-readonly.toml"),
             r#"[credential]
-id = "binance-equity-readonly"
+id = "binance-spot-readonly"
 provider = "binance"
 api_key = "stored-key"
 "#,
         )
         .unwrap();
         let credential =
-            load_workspace_credential(directory.path(), "binance", Some("binance-equity-readonly"))
+            load_workspace_credential(directory.path(), "binance", Some("binance-spot-readonly"))
                 .unwrap()
                 .unwrap();
 

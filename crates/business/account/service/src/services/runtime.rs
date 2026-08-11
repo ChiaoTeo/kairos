@@ -7,7 +7,6 @@ use crate::domain::{
     SegmentKey, SignedQuantity, SnapshotKind,
 };
 use crate::services::actor::AccountActor;
-use crate::services::integration::AccountEventStream;
 use crate::services::persistence::JsonAccountStore;
 use crate::services::persistence_worker::AccountPersistenceWorker;
 use crate::services::refresh::{try_receive, AccountRefreshWorker, RefreshFetch};
@@ -21,19 +20,16 @@ use tracing::info;
 pub(crate) struct AccountRuntime {
     actor: AccountActor,
     cached_snapshot: Arc<AccountsSnapshot>,
-    refresh_worker: AccountRefreshWorker,
+    refresh_worker: Option<AccountRefreshWorker>,
     pending_refresh: Option<(String, Receiver<Vec<RefreshFetch>>)>,
     persistence: Option<AccountPersistenceWorker>,
-    streams: Vec<AccountEventStream>,
-    stream_wakeup: Arc<tokio::sync::Notify>,
-    next_stream_index: usize,
     journal_events_since_checkpoint: usize,
 }
 
 impl AccountRuntime {
     pub(crate) fn new(
         segments: Vec<AccountSegment>,
-        source: crate::services::integration::AccountSnapshotGateway,
+        source: Option<crate::services::integration::AccountSnapshotGateway>,
         mut store: Option<JsonAccountStore>,
     ) -> Result<Self, String> {
         let restored = match store.as_mut() {
@@ -75,88 +71,15 @@ impl AccountRuntime {
         Ok(Self {
             actor,
             cached_snapshot: Arc::new(cached_snapshot),
-            refresh_worker: AccountRefreshWorker::new(source),
+            refresh_worker: source.map(AccountRefreshWorker::new),
             pending_refresh: None,
             persistence: store.map(AccountPersistenceWorker::new),
-            streams: Vec::new(),
-            stream_wakeup: Arc::new(tokio::sync::Notify::new()),
-            next_stream_index: 0,
             journal_events_since_checkpoint,
         })
     }
 
-    pub(crate) fn attach_stream(&mut self, mut stream: AccountEventStream) {
-        stream.register_wakeup(Arc::clone(&self.stream_wakeup));
-        self.streams.push(stream);
-    }
-
-    pub(crate) fn stream_wakeup(&self) -> Arc<tokio::sync::Notify> {
-        Arc::clone(&self.stream_wakeup)
-    }
-
-    pub(crate) fn has_stream(&self) -> bool {
-        !self.streams.is_empty()
-    }
-
-    pub(crate) fn stream_queue_depth(&self) -> usize {
-        self.streams
-            .iter()
-            .map(AccountEventStream::pending_events)
-            .sum()
-    }
-
-    pub(crate) fn poll_stream_once(&mut self) -> Result<bool, String> {
-        Ok(self.poll_stream_batch(1)? > 0)
-    }
-
-    /// Drain a bounded number of events and persist the resulting state once.
-    ///
-    /// The actor remains the only mutable state owner.  Batching here reduces
-    /// full-state cloning and checkpoint writes when a provider stream is
-    /// ahead of the process scheduler.
-    pub(crate) fn poll_stream_batch(&mut self, max_events: usize) -> Result<usize, String> {
-        if max_events == 0 {
-            return Ok(0);
-        }
-        if self.streams.is_empty() {
-            return Err("account stream is not configured".into());
-        }
-
-        let mut events = Vec::new();
-        let mut applied = 0;
-        for _ in 0..max_events {
-            let mut event = None;
-            let stream_count = self.streams.len();
-            for offset in 0..stream_count {
-                let index = (self.next_stream_index + offset) % stream_count;
-                if let Some(value) = self.streams[index].next_event()? {
-                    event = Some(value);
-                    self.next_stream_index = (index + 1) % stream_count;
-                    break;
-                }
-            }
-
-            let Some(event) = event else { break };
-            events.push(event);
-        }
-        let undo = self.actor.undo_for_events(&events);
-        for event in events.iter().cloned() {
-            match self.actor.apply_events(event) {
-                Ok(value) => applied += value as usize,
-                Err(error) => {
-                    self.actor.restore_undo(undo);
-                    return Err(error);
-                }
-            }
-        }
-        if applied > 0 {
-            if let Err(error) = self.persist_events(&events) {
-                self.actor.restore_undo(undo);
-                return Err(error);
-            }
-            self.cached_snapshot = Arc::new(self.actor.snapshot());
-        }
-        Ok(applied)
+    pub(crate) fn has_refresh_worker(&self) -> bool {
+        self.refresh_worker.is_some()
     }
 
     pub(crate) fn apply_simulated_fill(
@@ -303,7 +226,11 @@ impl AccountRuntime {
             return Err("account refresh is already pending".into());
         }
         let selected = self.actor.selected_segments(account_id, segments)?;
-        let receiver = self.refresh_worker.submit(selected)?;
+        let receiver = self
+            .refresh_worker
+            .as_ref()
+            .ok_or_else(|| "synchronous account refresh source is not configured".to_string())?
+            .submit(selected)?;
         let fetches = receiver
             .recv()
             .map_err(|_| "account refresh worker stopped".to_string())?;
@@ -319,7 +246,11 @@ impl AccountRuntime {
             return Ok(());
         }
         let selected = self.actor.selected_segments(account_id, segments)?;
-        let receiver = self.refresh_worker.submit(selected)?;
+        let receiver = self
+            .refresh_worker
+            .as_ref()
+            .ok_or_else(|| "synchronous account refresh source is not configured".to_string())?
+            .submit(selected)?;
         self.pending_refresh = Some((account_id.to_string(), receiver));
         Ok(())
     }
@@ -340,7 +271,15 @@ impl AccountRuntime {
         self.pending_refresh.is_some()
     }
 
-    fn apply_refresh_fetches(
+    pub(crate) fn selected_segments(
+        &self,
+        account_id: &str,
+        segments: &[String],
+    ) -> Result<Vec<AccountSegment>, String> {
+        self.actor.selected_segments(account_id, segments)
+    }
+
+    pub(crate) fn apply_refresh_fetches(
         &mut self,
         account_id: &str,
         fetches: Vec<RefreshFetch>,

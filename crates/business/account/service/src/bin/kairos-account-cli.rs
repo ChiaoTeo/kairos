@@ -5,8 +5,9 @@ use clap::{Args, Parser, Subcommand};
 use kairos_account::application::AccountDataQuery;
 use kairos_account::application::{AccountMarketProfileRequest, ReconcileAccount, RefreshAccount};
 use kairos_account::composition::account::{
-    compose_account_application_for_segments, compose_binance_async_account_application,
-    compose_okx_async_account_application, inspect_account_credential, AccountOptions,
+    compose_binance_async_account_application, compose_blocking_account_application_for_segments,
+    compose_ibkr_async_account_application, compose_okx_async_account_application,
+    inspect_account_credential, AccountOptions,
 };
 use kairos_account::domain::{AccountFill, AccountId, AccountModel, SegmentKey};
 use kairos_domain_types::{MarketId, Price, Quantity, SignedQuantity, Symbol};
@@ -931,6 +932,10 @@ async fn run_direct(
         host: args.connection.host.clone(),
         port: args.connection.port,
         client_id: args.connection.client_id,
+        isolated_margin_symbol: account_record
+            .as_ref()
+            .and_then(|value| value.values.get("isolated_margin_symbol").cloned()),
+        reference_snapshot_root: Some(workspace.child(&["snapshots", "reference"])?),
     };
     let state = workspace.child(&["state", "account", "account-state.json"])?;
     let configured_segments = registry
@@ -943,14 +948,39 @@ async fn run_direct(
     let native_binance_account = options.provider.eq_ignore_ascii_case("binance")
         && configured_segments.iter().all(|segment| {
             matches!(
-                segment.trim().to_ascii_lowercase().as_str(),
-                "spot" | "funding"
+                segment
+                    .trim()
+                    .to_ascii_lowercase()
+                    .replace('_', "-")
+                    .as_str(),
+                "spot"
+                    | "funding"
+                    | "cross-margin"
+                    | "isolated-margin"
+                    | "usd-m-futures"
+                    | "coin-m-futures"
+                    | "swap"
+                    | "futures"
+                    | "options"
             )
         });
     let native_okx_account = matches!(
         options.provider.trim().to_ascii_lowercase().as_str(),
         "okx" | "okex"
     );
+    let native_ibkr_account = options.provider.trim().eq_ignore_ascii_case("ibkr");
+    let _provider_process_lock = native_ibkr_account
+        .then(|| {
+            let identity = format!(
+                "ibkr|{}|{}|client-id:{}",
+                options.host.trim().to_ascii_lowercase(),
+                options.port,
+                options.client_id
+            );
+            workspace.exclusive_process_lock("ibkr-client", &identity)
+        })
+        .transpose()
+        .map_err(|error| error.to_string())?;
     let shared_quota_ledger = workspace
         .state_root()
         .join("integration")
@@ -973,8 +1003,14 @@ async fn run_direct(
             Some(shared_quota_ledger),
             &args.connection.egress_scope_id,
         )?
+    } else if native_ibkr_account {
+        compose_ibkr_async_account_application(&options, &configured_segments, Some(state))?
     } else {
-        compose_account_application_for_segments(&options, &configured_segments, Some(state))?
+        compose_blocking_account_application_for_segments(
+            &options,
+            &configured_segments,
+            Some(state),
+        )?
     };
     let trade_enabled = account_record.as_ref().map_or_else(
         || credential.is_none_or(|value| !value.role.eq_ignore_ascii_case("readonly")),
@@ -993,15 +1029,20 @@ async fn run_direct(
         source_symbol,
     } = &command
     {
-        let profile =
+        let request = AccountMarketProfileRequest {
+            account_id: account_id_type.clone(),
+            segment_key: selected_segment_type.clone(),
+            market_id: MarketId::new(market_id.clone())?,
+            source_symbol: Symbol::new(source_symbol.clone())?,
+        };
+        let profile = if native_binance_account || native_okx_account {
             composition
                 .application
-                .refresh_market_profile(AccountMarketProfileRequest {
-                    account_id: account_id_type.clone(),
-                    segment_key: selected_segment_type.clone(),
-                    market_id: MarketId::new(market_id.clone())?,
-                    source_symbol: Symbol::new(source_symbol.clone())?,
-                })?;
+                .refresh_market_profile_async(request)
+                .await?
+        } else {
+            composition.application.refresh_market_profile(request)?
+        };
         print_json(serde_json::to_value(profile)?);
         return Ok(());
     }
@@ -1012,10 +1053,18 @@ async fn run_direct(
             segments: Vec::new(),
         })?
     } else {
-        composition.application.refresh_report(RefreshAccount {
+        let request = RefreshAccount {
             account_id: account_id_type.clone(),
             segments: Vec::new(),
-        })?
+        };
+        if native_binance_account || native_okx_account {
+            composition
+                .application
+                .refresh_report_async(request)
+                .await?
+        } else {
+            composition.application.refresh_report(request)?
+        }
     };
     if matches!(&command, Command::Refresh | Command::Reconcile) {
         print_json(serde_json::to_value(refresh_report)?);
@@ -1316,6 +1365,8 @@ fn credential_probe_options(
         host: args.connection.host.clone(),
         port: args.connection.port,
         client_id: args.connection.client_id,
+        isolated_margin_symbol: account.values.get("isolated_margin_symbol").cloned(),
+        reference_snapshot_root: None,
     })
 }
 

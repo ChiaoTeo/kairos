@@ -17,7 +17,8 @@ mod state {
     use std::time::Duration;
 
     use crate::application::capabilities::account_facts::{
-        ExternalAccountEvent, ExternalAccountSegment, ExternalAccountSnapshot,
+        ExternalAccountEvent, ExternalAccountEventEnvelope, ExternalAccountSegment,
+        ExternalAccountSnapshot,
     };
     use crate::application::IntegrationError;
     use kairos_domain_types::{AccountId, Currency, MarketId, SegmentKey, Symbol, UnixNanos};
@@ -99,7 +100,7 @@ mod state {
         fn channel_health(&self) -> crate::domain::ConnectionHealth;
         fn next_account_event(
             &mut self,
-        ) -> impl Future<Output = Result<ExternalAccountEvent, IntegrationError>> + Send;
+        ) -> impl Future<Output = Result<ExternalAccountEventEnvelope, IntegrationError>> + Send;
     }
 
     #[derive(Clone, Debug, Eq, PartialEq)]

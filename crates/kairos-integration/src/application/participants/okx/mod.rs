@@ -9,7 +9,7 @@ pub use config::{
     OkxPrincipalQuotaAllocation, OkxPrivateChannelConfig, OkxSharedQuotaConfig,
 };
 pub use connection::{
-    OkxConnection, OkxInstrumentCatalog, OkxMarketSnapshot, OkxPrincipalConnection,
+    OkxConnection, OkxInstrumentCatalog, OkxLiveMarket, OkxMarketSnapshot, OkxPrincipalConnection,
     OkxTradingAccountEvents, OkxTradingAccountMarketProfile, OkxTradingAccountRead,
     OkxTradingCredentialInspection, OkxTradingOrderEntry, OkxTradingOrderEvents,
     OkxTradingOrderQuery,

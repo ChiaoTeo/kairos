@@ -12,8 +12,12 @@ pub use runtime::{
     STOPPING_STATUS, STOP_PATH,
 };
 pub use workspace::{
-    InstanceWorkspace, Workspace, WorkspaceManifest, WorkspaceMarketConfig,
-    WorkspaceMarketSourceConfig, WorkspaceMassiveConfig, WorkspaceProcessLock,
+    InstanceWorkspace, Workspace, WorkspaceBinanceDerivativeProduct,
+    WorkspaceBinanceDerivativeTransport, WorkspaceBinanceSpotTransport,
+    WorkspaceHyperliquidMarketType, WorkspaceManifest, WorkspaceMarketConfig,
+    WorkspaceMarketReplayClock, WorkspaceMarketReplayConfig, WorkspaceMarketRuntimeProfile,
+    WorkspaceMarketRuntimeScope, WorkspaceMarketSourceBinding, WorkspaceMassiveMarketProduct,
+    WorkspaceOkxInstrumentType, WorkspaceProcessLock, WorkspacePublicMarketTransport,
     WorkspaceReferenceConfig, WorkspaceReferenceParticipantConfig, WorkspaceReferenceProductConfig,
     WorkspaceReferenceProviderConfig,
 };

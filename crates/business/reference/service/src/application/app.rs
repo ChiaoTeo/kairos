@@ -43,13 +43,13 @@ pub struct ReferenceRefreshResult {
 }
 
 impl ReferenceApplication {
-    pub(crate) fn new(
+    pub(crate) async fn new(
         actor_id: impl Into<String>,
         source: Box<dyn ReferenceSource>,
         store: Box<dyn CatalogStore>,
     ) -> ReferenceResult<Self> {
         Ok(Self {
-            actor: ReferenceActor::new(actor_id, source, store)?,
+            actor: ReferenceActor::new(actor_id, source, store).await?,
         })
     }
 
@@ -57,13 +57,13 @@ impl ReferenceApplication {
         &self.actor.actor_id
     }
 
-    pub fn read_model(&mut self) -> ReferenceReadModel {
+    pub async fn read_model(&mut self) -> ReferenceReadModel {
         ReferenceReadModel {
             actor_id: self.actor_id().to_owned(),
             source_id: self.source_id().to_owned(),
             catalog: self.actor.catalog.clone(),
             provider_health: self.provider_health(),
-            outbox_depth: self.actor.pending_event_count().unwrap_or(0),
+            outbox_depth: self.actor.pending_event_count().await.unwrap_or(0),
         }
     }
 
@@ -75,11 +75,67 @@ impl ReferenceApplication {
         self.actor.provider_health()
     }
 
+    pub async fn set_source_paused(
+        &mut self,
+        source_id: &str,
+        paused: bool,
+    ) -> ReferenceResult<()> {
+        self.actor.set_source_paused(source_id, paused).await
+    }
+
+    pub fn option_underlyings(&self) -> Vec<String> {
+        self.actor.option_underlyings()
+    }
+
+    pub async fn set_option_underlying(
+        &mut self,
+        underlying: &str,
+        enabled: bool,
+    ) -> ReferenceResult<ReferenceRefreshResult> {
+        let result = self
+            .actor
+            .set_option_underlying(underlying, enabled)
+            .await?;
+        Ok(ReferenceRefreshResult {
+            generation: result.generation,
+            event_sequence: result.event_sequence,
+            changed: result.changed,
+            events: result.events,
+        })
+    }
+
     /// Refresh provider data, reconcile lifecycle changes, persist and publish.
-    pub fn refresh(&mut self) -> ReferenceResult<ReferenceRefreshResult> {
+    pub async fn refresh(&mut self) -> ReferenceResult<ReferenceRefreshResult> {
+        self.refresh_inner(None).await
+    }
+
+    /// Advance one configured provider without re-querying unrelated sources.
+    /// A completed provider candidate is reconciled through the normal global
+    /// refresh path before it becomes visible.
+    pub async fn refresh_source(
+        &mut self,
+        source_id: &str,
+    ) -> ReferenceResult<ReferenceRefreshResult> {
+        self.refresh_inner(Some(source_id)).await
+    }
+
+    async fn refresh_inner(
+        &mut self,
+        source_id: Option<&str>,
+    ) -> ReferenceResult<ReferenceRefreshResult> {
         let started = std::time::Instant::now();
-        info!(event = "reference_refresh_started", component = "reference", source = %self.source_id(), "reference refresh started");
-        let result = match self.actor.refresh() {
+        let requested_source = source_id.unwrap_or_else(|| self.source_id());
+        info!(
+            event = "reference_refresh_started",
+            component = "reference",
+            source = requested_source,
+            "reference refresh started"
+        );
+        let result = match source_id {
+            Some(source_id) => self.actor.refresh_source(source_id).await,
+            None => self.actor.refresh().await,
+        };
+        let result = match result {
             Ok(result) => result,
             Err(error) => {
                 let provider_health = self.provider_health();
@@ -122,9 +178,9 @@ impl ReferenceApplication {
         })
     }
 
-    pub fn upsert_asset(&mut self, asset: Asset) -> ReferenceResult<Generation> {
+    pub async fn upsert_asset(&mut self, asset: Asset) -> ReferenceResult<Generation> {
         info!(event = "reference_asset_upsert_started", component = "reference", asset_id = %asset.asset_id, "reference asset upsert started");
-        self.actor.upsert_asset(asset)?;
+        self.actor.upsert_asset(asset).await?;
         let generation = self.actor.catalog.generation;
         info!(
             event = "reference_asset_upsert_completed",
@@ -135,24 +191,27 @@ impl ReferenceApplication {
         Ok(generation)
     }
 
-    pub fn upsert_instrument(&mut self, instrument: Instrument) -> ReferenceResult<Generation> {
-        self.actor.upsert_instrument(instrument)?;
+    pub async fn upsert_instrument(
+        &mut self,
+        instrument: Instrument,
+    ) -> ReferenceResult<Generation> {
+        self.actor.upsert_instrument(instrument).await?;
         Ok(self.actor.catalog.generation)
     }
 
-    pub fn upsert_listing(&mut self, listing: Listing) -> ReferenceResult<Generation> {
-        self.actor.upsert_listing(listing)?;
+    pub async fn upsert_listing(&mut self, listing: Listing) -> ReferenceResult<Generation> {
+        self.actor.upsert_listing(listing).await?;
         Ok(self.actor.catalog.generation)
     }
 
-    pub fn pending_events(&mut self, limit: usize) -> ReferenceResult<Vec<LifecycleEvent>> {
-        self.actor.pending_events(limit)
+    pub async fn pending_events(&mut self, limit: usize) -> ReferenceResult<Vec<LifecycleEvent>> {
+        self.actor.pending_events(limit).await
     }
 
     /// Read a bounded lifecycle page from the durable event history. This is
     /// intentionally separate from the immutable current-state read model so
     /// event history cannot force every reader to clone the complete archive.
-    pub fn lifecycle_events_page(
+    pub async fn lifecycle_events_page(
         &mut self,
         sequence_from: Option<u64>,
         sequence_to: Option<u64>,
@@ -160,20 +219,24 @@ impl ReferenceApplication {
     ) -> ReferenceResult<Vec<LifecycleEvent>> {
         self.actor
             .lifecycle_events(sequence_from, sequence_to, limit)
+            .await
     }
 
-    pub fn query_lifecycle_events(
+    pub async fn query_lifecycle_events(
         &mut self,
         query: &ReferenceQuery,
     ) -> ReferenceResult<Vec<ReferenceRecord>> {
         let limit = query.limit.unwrap_or(256).clamp(1, 4096);
-        let events = self.actor.lifecycle_events_filtered(
-            query.sequence_from.map(Into::into),
-            query.sequence_to.map(Into::into),
-            query.event_time_from_unix_nanos.map(Into::into),
-            query.event_time_to_unix_nanos.map(Into::into),
-            limit,
-        )?;
+        let events = self
+            .actor
+            .lifecycle_events_filtered(
+                query.sequence_from.map(Into::into),
+                query.sequence_to.map(Into::into),
+                query.event_time_from_unix_nanos.map(Into::into),
+                query.event_time_to_unix_nanos.map(Into::into),
+                limit,
+            )
+            .await?;
         Ok(events
             .into_iter()
             .filter(|value| {
@@ -211,16 +274,19 @@ impl ReferenceApplication {
     }
 
     /// Read the append-only lifecycle history by stable sequence and time.
-    pub fn lifecycle_events(
+    pub async fn lifecycle_events(
         &mut self,
         query: &LifecycleQuery,
     ) -> ReferenceResult<Vec<LifecycleEvent>> {
         let limit = query.limit.unwrap_or(4096).clamp(1, 1_000_000);
-        let events = self.actor.lifecycle_events(
-            query.sequence_from.map(Into::into),
-            query.sequence_to.map(Into::into),
-            limit,
-        )?;
+        let events = self
+            .actor
+            .lifecycle_events(
+                query.sequence_from.map(Into::into),
+                query.sequence_to.map(Into::into),
+                limit,
+            )
+            .await?;
         Ok(events
             .into_iter()
             .filter(|event| query.matches(event_sequence(event).into(), event))
@@ -229,7 +295,7 @@ impl ReferenceApplication {
     }
 
     /// Replay lifecycle events in their persisted sequence order.
-    pub fn replay_lifecycle_events(
+    pub async fn replay_lifecycle_events(
         &mut self,
         sequence_from: Option<kairos_domain_types::Sequence>,
         sequence_to: Option<kairos_domain_types::Sequence>,
@@ -239,10 +305,14 @@ impl ReferenceApplication {
             sequence_to,
             ..LifecycleQuery::default()
         })
+        .await
     }
 
-    pub fn acknowledge_published_events(&mut self, event_ids: &[String]) -> ReferenceResult<()> {
-        let result = self.actor.acknowledge_pending_events(event_ids);
+    pub async fn acknowledge_published_events(
+        &mut self,
+        event_ids: &[String],
+    ) -> ReferenceResult<()> {
+        let result = self.actor.acknowledge_pending_events(event_ids).await;
         match &result {
             Ok(()) => info!(
                 event = "reference_events_acknowledged",

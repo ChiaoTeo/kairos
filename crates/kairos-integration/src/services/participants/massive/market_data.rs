@@ -11,11 +11,10 @@ use crate::application::capabilities::{
 };
 use crate::application::{
     AsyncHistoricalMarketDataConnection, AsyncMarketEventSource, HistoricalMarketDataConnection,
-    HistoricalMarketRequest, IntegrationError, MarketEvent, MarketEventKind,
-    MarketStreamConnection, MarketSubscription, SubscriptionId,
+    HistoricalMarketRequest, IntegrationError, MarketEvent, MarketEventKind, MarketSubscription,
+    SubscriptionId,
 };
 use crate::services::transport::websocket::{AsyncSocketEvent, AsyncTokioSocket};
-use crate::services::transport::websocket::{SocketEvent, TokioSocket};
 
 use crate::services::participants::massive::{MassiveAsyncRestClient, MassiveStocksRestClient};
 
@@ -25,16 +24,6 @@ use crate::services::participants::massive::{MassiveAsyncRestClient, MassiveStoc
 pub(crate) enum MarketType {
     Equity,
     Option,
-}
-
-pub(crate) struct MassiveMarketStream {
-    identity: ConnectionDescriptor,
-    state: ConnectionState,
-    api_key: String,
-    endpoint: String,
-    socket: Option<TokioSocket>,
-    subscriptions: BTreeMap<SubscriptionId, Vec<String>>,
-    next_subscription_id: u64,
 }
 
 pub(crate) struct MassiveHistoricalMarketData {
@@ -325,6 +314,18 @@ impl AsyncMarketEventSource for MassiveAsyncMarketStream {
         );
         self.send(json!({"action":"auth","params":self.api_key}))
             .await?;
+        // A reconnect creates a new provider session. Keep the capability's
+        // subscription projection across transport disconnects and restore it
+        // only after the new socket has authenticated.
+        for symbols in self.subscriptions.values() {
+            let params = symbols
+                .iter()
+                .map(|symbol| format!("Q.{}", symbol.to_ascii_uppercase()))
+                .collect::<Vec<_>>()
+                .join(",");
+            self.send(json!({"action":"subscribe","params":params}))
+                .await?;
+        }
         self.state.lifecycle = ConnectionLifecycle::Ready;
         self.state.authenticated = true;
         self.state.connected_at_unix_nanos = Some(now_unix_nanos().into());
@@ -335,7 +336,6 @@ impl AsyncMarketEventSource for MassiveAsyncMarketStream {
         if let Some(mut socket) = self.socket.take() {
             socket.close().await;
         }
-        self.subscriptions.clear();
         self.state.lifecycle = ConnectionLifecycle::Stopped;
         self.state.authenticated = false;
         Ok(())
@@ -451,191 +451,6 @@ fn websocket_endpoint(endpoint: String) -> Result<String, IntegrationError> {
     }
 }
 
-impl MassiveMarketStream {
-    pub(crate) fn new(
-        api_key: impl Into<String>,
-        endpoint: impl Into<String>,
-        market_type: MarketType,
-    ) -> Result<Self, IntegrationError> {
-        let endpoint = endpoint.into();
-        // The private HTTP endpoint redirects to HTTPS. Use secure WebSocket
-        // directly so tungstenite does not receive an unsupported `https://`
-        // redirect location from the proxy.
-        let endpoint = websocket_endpoint(endpoint)?;
-        let name = match market_type {
-            MarketType::Equity => "equity",
-            MarketType::Option => "options",
-        };
-        let identity = ConnectionDescriptor::new(
-            format!("market.massive.{name}.websocket"),
-            crate::domain::ParticipantRef::new(
-                crate::domain::ParticipantKind::DataProvider,
-                "massive",
-            )
-            .expect("static Massive participant"),
-            "market-data",
-        )
-        .map_err(IntegrationError::InvalidRequest)?;
-        Ok(Self {
-            state: ConnectionState::new(identity.clone()),
-            identity,
-            api_key: api_key.into(),
-            endpoint,
-            socket: None,
-            subscriptions: BTreeMap::new(),
-            next_subscription_id: 1,
-        })
-    }
-
-    fn send(&mut self, value: Value) -> Result<(), String> {
-        self.socket
-            .as_mut()
-            .ok_or_else(|| "Massive market socket is not connected".to_string())?
-            .send_text(value.to_string())
-    }
-}
-
-impl MarketStreamConnection for MassiveMarketStream {
-    fn descriptor(&self) -> &ConnectionDescriptor {
-        &self.identity
-    }
-
-    fn connect_channel(&mut self) -> Result<(), IntegrationError> {
-        if self.state.lifecycle == ConnectionLifecycle::Ready {
-            return Ok(());
-        }
-        if self.api_key.trim().is_empty() {
-            return Err(IntegrationError::Authentication(
-                "Massive market stream API key is required".into(),
-            ));
-        }
-        self.state.lifecycle = ConnectionLifecycle::Starting;
-        self.socket =
-            Some(TokioSocket::connect(self.endpoint.clone()).map_err(IntegrationError::Transport)?);
-        self.send(json!({"action":"auth","params":self.api_key}))
-            .map_err(IntegrationError::Transport)?;
-        self.state.lifecycle = ConnectionLifecycle::Ready;
-        self.state.authenticated = true;
-        self.state.connected_at_unix_nanos = Some(now_unix_nanos().into());
-        self.state.last_error = None;
-        Ok(())
-    }
-
-    fn disconnect_channel(&mut self) -> Result<(), IntegrationError> {
-        self.socket.take();
-        self.subscriptions.clear();
-        self.state.lifecycle = ConnectionLifecycle::Stopped;
-        self.state.authenticated = false;
-        Ok(())
-    }
-
-    fn reconnect_channel(&mut self) -> Result<(), IntegrationError> {
-        self.socket.take();
-        self.state.reconnect_count = self.state.reconnect_count.saturating_add(1);
-        self.connect_channel()
-    }
-
-    fn channel_health(&self) -> ConnectionHealth {
-        ConnectionHealth {
-            lifecycle: self.state.lifecycle,
-            healthy: self.state.lifecycle == ConnectionLifecycle::Ready,
-            authenticated: self.state.authenticated,
-            last_error: self.state.last_error.clone(),
-        }
-    }
-
-    fn capabilities(&self) -> MarketStreamCapabilities {
-        MarketStreamCapabilities {
-            realtime: [MarketDataKind::Quote, MarketDataKind::Trade]
-                .into_iter()
-                .collect(),
-            ..Default::default()
-        }
-    }
-
-    fn subscribe(
-        &mut self,
-        request: MarketSubscription,
-    ) -> Result<SubscriptionId, IntegrationError> {
-        if self.state.lifecycle != ConnectionLifecycle::Ready {
-            return Err(IntegrationError::NotReady);
-        }
-        let channel = "Q";
-        let params = request
-            .symbols
-            .iter()
-            .map(|symbol| format!("{channel}.{}", symbol.to_ascii_uppercase()))
-            .collect::<Vec<_>>()
-            .join(",");
-        self.send(json!({"action":"subscribe","params":params}))
-            .map_err(IntegrationError::Transport)?;
-        let id = SubscriptionId(self.next_subscription_id);
-        self.next_subscription_id += 1;
-        self.subscriptions.insert(id, request.symbols);
-        Ok(id)
-    }
-    fn unsubscribe(&mut self, subscription: SubscriptionId) -> Result<(), IntegrationError> {
-        let symbols = self.subscriptions.remove(&subscription).ok_or_else(|| {
-            IntegrationError::InvalidRequest("unknown Massive market subscription".into())
-        })?;
-        let params = symbols
-            .iter()
-            .map(|symbol| format!("Q.{}", symbol.to_ascii_uppercase()))
-            .collect::<Vec<_>>()
-            .join(",");
-        self.send(json!({"action":"unsubscribe","params":params}))
-            .map_err(IntegrationError::Transport)
-    }
-    fn next_event(&mut self) -> Result<Option<MarketEvent>, IntegrationError> {
-        if self.state.lifecycle != ConnectionLifecycle::Ready {
-            return Err(IntegrationError::NotReady);
-        }
-        loop {
-            let event = self
-                .socket
-                .as_ref()
-                .ok_or(IntegrationError::NotReady)?
-                .try_recv()
-                .map_err(IntegrationError::Transport)?;
-            let Some(event) = event else { return Ok(None) };
-            let message = match event {
-                SocketEvent::Message(message) => message,
-                SocketEvent::Error(error) => return Err(IntegrationError::Transport(error)),
-                SocketEvent::Backpressure => {
-                    return Err(IntegrationError::Backpressure(
-                        "Massive market event queue overflowed".into(),
-                    ))
-                }
-            };
-            let text = match message {
-                Message::Text(text) => text,
-                Message::Ping(payload) => {
-                    self.socket
-                        .as_ref()
-                        .unwrap()
-                        .send_pong(payload.to_vec())
-                        .map_err(IntegrationError::Transport)?;
-                    continue;
-                }
-                Message::Close(_) => {
-                    return Err(IntegrationError::Transport(
-                        "Massive market WebSocket closed".into(),
-                    ))
-                }
-                _ => continue,
-            };
-            let values: Value = serde_json::from_str(text.as_ref())
-                .map_err(|error| IntegrationError::InvalidPayload(error.to_string()))?;
-            let rows = values.as_array().cloned().unwrap_or_else(|| vec![values]);
-            for row in rows {
-                if let Some(event) = normalize(&row)? {
-                    return Ok(Some(event));
-                }
-            }
-        }
-    }
-}
-
 fn normalize(value: &Value) -> Result<Option<MarketEvent>, IntegrationError> {
     let event = value.get("ev").and_then(Value::as_str).unwrap_or_default();
     if event == "status" || event == "status_update" {
@@ -734,68 +549,27 @@ fn now_unix_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{MarketType, MassiveMarketStream};
-    use crate::application::{MarketEventKind, MarketStreamConnection, MarketSubscription};
-    use futures_util::{SinkExt, StreamExt};
-    use tokio::net::TcpListener;
-    use tokio_tungstenite::{accept_async, tungstenite::Message};
+    use super::{MarketType, MassiveAsyncMarketStream};
+    use crate::application::{AsyncMarketEventSource, SubscriptionId};
 
-    #[test]
-    fn massive_market_stream_handles_provider_ping_and_sequence() {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            runtime.block_on(async move {
-                let listener = TcpListener::from_std(listener).unwrap();
-                let (stream, _) = listener.accept().await.unwrap();
-                let mut socket = accept_async(stream).await.unwrap();
-                let _auth = socket.next().await.unwrap().unwrap();
-                socket.send(Message::Ping(vec![7, 8].into())).await.unwrap();
-                loop {
-                    match socket.next().await.unwrap().unwrap() {
-                        Message::Pong(payload) => {
-                            assert_eq!(payload.as_ref(), &[7, 8]);
-                            break;
-                        }
-                        Message::Text(_) => continue,
-                        other => panic!("unexpected provider message: {other:?}"),
-                    }
-                }
-                socket
-                    .send(Message::Text(
-                        r#"{"ev":"Q","sym":"AAPL","bp":"100.0","bs":"2","ap":"101.0","as":"3","q":42,"t":1700000000000}"#.into(),
-                    ))
-                    .await
-                    .unwrap();
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            });
-        });
-
-        let mut stream =
-            MassiveMarketStream::new("test-key", format!("ws://{address}"), MarketType::Equity)
-                .unwrap();
-        stream.connect_channel().unwrap();
+    #[tokio::test]
+    async fn transport_disconnect_preserves_desired_subscriptions_for_reconnect() {
+        let mut stream = MassiveAsyncMarketStream::new(
+            "credential",
+            "wss://example.invalid/stocks",
+            MarketType::Equity,
+            8,
+        )
+        .unwrap();
         stream
-            .subscribe(MarketSubscription {
-                symbols: vec!["AAPL".into()],
-            })
-            .unwrap();
-        let event = (0..100)
-            .find_map(|_| {
-                let event = stream.next_event().unwrap();
-                if event.is_none() {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-                event
-            })
-            .expect("provider quote should arrive");
-        assert_eq!(event.kind, MarketEventKind::Quote);
-        assert_eq!(event.sequence.map(|value| value.get()), Some(42));
-        server.join().unwrap();
+            .subscriptions
+            .insert(SubscriptionId(7), vec!["AAPL".into()]);
+
+        stream.disconnect_channel().await.unwrap();
+
+        assert_eq!(
+            stream.subscriptions.get(&SubscriptionId(7)).unwrap(),
+            &["AAPL"]
+        );
     }
 }

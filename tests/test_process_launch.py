@@ -32,7 +32,7 @@ def test_component_process_application_starts_bin_and_waits_for_health(
         textwrap.dedent(
             f"""
             #!{sys.executable}
-            import argparse, json, os, socket
+            import argparse, fcntl, json, os, socket, time
             from pathlib import Path
             parser = argparse.ArgumentParser()
             parser.add_argument('--workspace', required=True)
@@ -40,6 +40,11 @@ def test_component_process_application_starts_bin_and_waits_for_health(
             path = Path(args.workspace) / 'run' / 'execution' / 'execution.sock'
             path.parent.mkdir(parents=True, exist_ok=True)
             path.unlink(missing_ok=True)
+            lock_path = path.with_suffix('.lock')
+            lock = lock_path.open('w')
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            lock.write(str(os.getpid()))
+            lock.flush()
             server = socket.socket(socket.AF_UNIX)
             server.bind(str(path))
             server.listen(4)
@@ -51,9 +56,11 @@ def test_component_process_application_starts_bin_and_waits_for_health(
                 client.sendall(b'HTTP/1.1 202 Accepted\\r\\nContent-Length: ' + str(len(body)).encode() + b'\\r\\n\\r\\n' + body)
                 client.close()
                 if stopping:
+                    time.sleep(0.2)
                     break
             server.close()
             path.unlink(missing_ok=True)
+            lock.close()
             """
         ).lstrip(),
         encoding="utf-8",
@@ -65,8 +72,19 @@ def test_component_process_application_starts_bin_and_waits_for_health(
     )
     control = application.ensure_running("execution")
     assert control.status()["status"] == "ready"
+    started = time.monotonic()
+    progress: list[str] = []
+    control = application.restart("execution", progress=progress.append)
+    assert time.monotonic() - started >= 0.15
+    assert control.status()["status"] == "ready"
+    assert progress == [
+        "Stopping execution...",
+        "Waiting for execution to release its process lock (timeout: 15s)...",
+        "execution stopped; starting replacement...",
+        "execution restarted.",
+    ]
     assert application.stop("execution")["status"] == "stopping"
-    time.sleep(0.05)
+    application._wait_stopped("execution")
     import shutil
 
     shutil.rmtree(short_root, ignore_errors=True)
@@ -102,6 +120,43 @@ def test_component_start_reports_early_exit_and_log_detail(tmp_path: Path) -> No
     assert "exited during startup with code 23" in message
     assert "database migration failed" in message
     assert "kairos system logs execution" in message
+
+
+def test_component_restart_times_out_while_process_lock_is_held(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    workspace = WorkspaceApplication().init(
+        tmp_path / "workspace", workspace_id="stop-timeout"
+    )
+    lock_path = workspace.paths.process_lock("reference")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import fcntl,os,sys,time; "
+                "f=open(sys.argv[1], 'w'); "
+                "fcntl.flock(f.fileno(), fcntl.LOCK_EX); "
+                "f.write(str(os.getpid())); f.flush(); time.sleep(5)"
+            ),
+            str(lock_path),
+        ]
+    )
+    try:
+        for _ in range(50):
+            if lock_path.exists() and lock_path.read_text(encoding="utf-8"):
+                break
+            time.sleep(0.02)
+
+        application = ComponentProcessApplication(workspace, stop_timeout=0.05)
+        with pytest.raises(TimeoutError, match="did not stop within 0.05s"):
+            application._wait_stopped("reference")
+    finally:
+        holder.terminate()
+        holder.wait()
 
 
 def test_component_status_does_not_start_a_missing_process(tmp_path: Path) -> None:
@@ -269,7 +324,7 @@ def test_runtime_supervisor_persists_and_removes_desired_components(
     )
     supervisor = SystemRuntimeSupervisor(ComponentProcessApplication(workspace))
 
-    supervisor.register("market", {"market_provider": "workspace"})
+    supervisor.register("market", {"market_runtime_profile": "primary-live"})
     assert "market" in supervisor.desired_path.read_text(encoding="utf-8")
     supervisor.unregister("market")
     assert supervisor.desired_path.read_text(encoding="utf-8") == "{}"
@@ -284,19 +339,17 @@ def test_component_command_uses_instance_workspace_namespace(tmp_path: Path) -> 
         workspace, binaries={"market": "market-bin"}
     )._command("market", account_id=None, instance_workspace=instance)
 
-    assert command[-8:] == [
+    assert command[-6:] == [
         "--launch-mode",
         "backtest",
         "--launch-id",
         "btc-sma",
         "--instance-id",
         "run-001",
-        "--provider",
-        "workspace",
     ]
 
 
-def test_market_command_passes_credential_reference_only(tmp_path: Path) -> None:
+def test_market_command_passes_only_runtime_profile_selection(tmp_path: Path) -> None:
     workspace = WorkspaceApplication().init(
         tmp_path / "workspace", workspace_id="credential"
     )
@@ -305,12 +358,12 @@ def test_market_command_passes_credential_reference_only(tmp_path: Path) -> None
     )._command(
         "market",
         account_id=None,
-        market_provider="binance-equity-rest",
-        market_credential_id="binance-equity-readonly",
+        market_runtime_profile="primary-live",
     )
 
-    assert "--credential-id" in command
-    assert command[command.index("--credential-id") + 1] == "binance-equity-readonly"
+    assert command[-2:] == ["--runtime-profile", "primary-live"]
+    assert "--provider" not in command
+    assert "--credential-id" not in command
     assert "--api-key" not in command
     assert "--secret" not in command
 

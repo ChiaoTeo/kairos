@@ -21,7 +21,10 @@ from kairospy.surface.cli.commands.launch import (
     _requires_reference_runtime,
     _stop_component_safely,
 )
-from kairospy.application.system import ComponentProcessApplication
+from kairospy.application.system import (
+    ComponentProcessApplication,
+    SystemRuntimeSupervisor,
+)
 from kairospy.application.account import AccountAdminApplication
 from kairospy.application.strategy import StrategyProcessApplication
 from kairospy.surface.cli.options import OutputFormat, render
@@ -212,8 +215,9 @@ def test_generated_backtest_start_assembles_only_offline_runtime_components(
     names = [name for name, _options in started_components]
     assert names == ["market", "account", "risk", "execution"]
     market_options = started_components[0][1]
-    assert market_options["market_provider"] == "replay"
-    assert Path(market_options["market_replay_file"]).is_file()
+    assert market_options["market_runtime_profile"] == "replay"
+    instance = market_options["instance_workspace"]
+    assert instance.market_state("replay.jsonl").is_file()
     assert "reference" not in names
     assert json.loads(output.getvalue())["next_action"] == (
         "kairos launch wait demo-backtest"
@@ -314,9 +318,9 @@ def test_launch_start_does_not_expose_internal_instance_or_strategy_root_options
 
 
 def test_static_backtest_replay_does_not_require_reference_runtime() -> None:
-    assert _requires_reference_runtime("backtest", "replay") is False
-    assert _requires_reference_runtime("backtest", "workspace") is True
-    assert _requires_reference_runtime("paper", "replay") is True
+    assert _requires_reference_runtime("backtest", True) is False
+    assert _requires_reference_runtime("backtest", False) is True
+    assert _requires_reference_runtime("paper", True) is True
 
 
 def test_launch_status_omits_explicitly_optional_reference(
@@ -461,6 +465,66 @@ def test_cli_exposes_canonical_business_command_surfaces() -> None:
         text = output.getvalue()
         for command in expected:
             assert command in text
+
+
+def test_system_restart_progress_is_text_only(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "demo"
+    WorkspaceApplication().init_project(project, workspace_id="demo")
+
+    class Control:
+        @staticmethod
+        def status() -> dict[str, str]:
+            return {"status": "ready"}
+
+    def restart(_self, component, **options):
+        progress = options.get("progress")
+        if progress is not None:
+            progress(f"Waiting for {component} to stop...")
+        return Control()
+
+    monkeypatch.setattr(ComponentProcessApplication, "restart", restart)
+    monkeypatch.setattr(SystemRuntimeSupervisor, "register", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        SystemRuntimeSupervisor, "start_background", lambda *_a, **_k: None
+    )
+
+    text_output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "system",
+                "restart",
+                "--component",
+                "reference",
+                "--workspace",
+                str(project),
+                "--format",
+                "text",
+            ],
+            text_output,
+        )
+        == 0
+    )
+    assert "Waiting for reference to stop..." in text_output.getvalue()
+
+    json_output = StringIO()
+    assert (
+        execute_argv(
+            [
+                "system",
+                "restart",
+                "--component",
+                "reference",
+                "--workspace",
+                str(project),
+                "--format",
+                "json",
+            ],
+            json_output,
+        )
+        == 0
+    )
+    assert json.loads(json_output.getvalue()) == {"status": "ready"}
 
 
 def test_system_list_renders_a_prettytable_when_requested(tmp_path) -> None:

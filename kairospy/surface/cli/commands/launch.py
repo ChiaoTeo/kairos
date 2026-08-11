@@ -251,7 +251,7 @@ def _emit(value: object, output: OutputFormat) -> None:
     typer.echo(render(value, output))
 
 
-def _requires_reference_runtime(mode: str, market_provider: str | None) -> bool:
+def _requires_reference_runtime(mode: str, has_static_replay: bool) -> bool:
     """Return whether this launch needs the shared Reference process.
 
     A deterministic static replay can construct its Market descriptor from the
@@ -259,7 +259,7 @@ def _requires_reference_runtime(mode: str, market_provider: str | None) -> bool:
     networked catalog and Aeron driver to an otherwise offline backtest.
     """
 
-    return not (mode == "backtest" and market_provider == "replay")
+    return not (mode == "backtest" and has_static_replay)
 
 
 def _launch_config_path(owner, target: str | Path) -> Path:
@@ -536,31 +536,20 @@ def start(
         launch_plan = (
             launch_environment.config.plan() if launch_environment is not None else None
         )
-        market_provider = None
-        market_credential_id = None
+        market_runtime_profile = None
         market_replay_file = None
         if launch_plan is not None:
+            market_runtime_profile = launch_plan.market_profile
             if launch_plan.paper_events is not None:
-                market_provider, market_replay_file = "replay", launch_plan.paper_events
+                market_replay_file = launch_plan.paper_events
             elif launch_plan.backtest_replay_file is not None:
-                market_provider, market_replay_file = (
-                    "replay",
-                    launch_plan.backtest_replay_file,
-                )
+                market_replay_file = launch_plan.backtest_replay_file
             if market_replay_file is not None:
-                market_replay_file = materialize_replay_file(
+                materialize_replay_file(
                     market_replay_file,
-                    instance_workspace.state("backtest", "replay.jsonl"),
+                    instance_workspace.market_state("replay.jsonl"),
                     catalog_root=owner.paths.state / "market",
                 )
-            elif isinstance(launch_plan.mode_config.get("market"), dict):
-                market_config = launch_plan.mode_config["market"]
-                # Market owns the built-in provider catalog and discovers
-                # credentialed products from the Workspace automatically.
-                market_provider = market_config.get("provider") or "workspace"
-                market_credential_id = market_config.get("credential_id")
-            if market_provider is None and mode in {"paper", "live"}:
-                market_provider = "workspace"
         execution_config = (
             dict(launch_plan.execution) if launch_plan is not None else {}
         )
@@ -601,16 +590,16 @@ def start(
         )
         # Reference is a Workspace-global catalog runtime. Its source registry
         # is built into Reference; it must not depend on Market configuration.
-        reference_required = _requires_reference_runtime(mode, market_provider)
+        reference_required = _requires_reference_runtime(
+            mode, market_replay_file is not None
+        )
         if reference_required:
             ComponentProcessApplication(owner).ensure_running(
                 "reference", reference_config=ReferenceProcessConfig(owner)
             )
         ComponentProcessApplication(owner).ensure_running(
             "market",
-            market_provider=market_provider,
-            market_replay_file=market_replay_file,
-            market_credential_id=market_credential_id,
+            market_runtime_profile=market_runtime_profile,
             instance_workspace=market_instance_workspace,
         )
         components = ComponentProcessApplication(owner)

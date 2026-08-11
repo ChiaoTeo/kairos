@@ -2,10 +2,12 @@
 
 mod config;
 mod connection;
+mod market;
 mod reference;
 
 pub use config::HyperliquidConnectionConfig;
 pub use connection::HyperliquidConnection;
+pub use market::{HyperliquidLiveMarket, HyperliquidMarketSnapshot};
 pub use reference::HyperliquidInstrumentCatalog;
 
 pub mod blocking {
@@ -21,6 +23,8 @@ mod tests {
     use crate::application::capabilities::reference::{
         AsyncInstrumentCatalogConnection, InstrumentCatalogConnection,
     };
+    use crate::application::AsyncMarketSnapshotConnection;
+    use kairos_domain_types::ProviderSymbol;
 
     #[tokio::test(flavor = "current_thread")]
     async fn catalog_uses_caller_runtime_and_trait_proves_capability() {
@@ -62,5 +66,32 @@ mod tests {
         .unwrap();
         let mut catalog = provider.blocking_instrument_catalog().unwrap();
         assert!(catalog.fetch_instruments().is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn market_snapshot_normalizes_all_mids() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let length = stream.read(&mut request).unwrap();
+            assert!(String::from_utf8_lossy(&request[..length]).contains("allMids"));
+            let body = r#"{"BTC":"50000.5","ETH":"3000"}"#;
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        });
+        let provider = HyperliquidConnection::connect(HyperliquidConnectionConfig {
+            environment: "test".into(),
+            info_endpoint: format!("http://{address}/info"),
+        })
+        .unwrap();
+        let mut snapshot = provider.market_snapshot();
+        let events = snapshot
+            .fetch_snapshot(&[ProviderSymbol::new("BTC").unwrap()])
+            .await
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].price.unwrap().to_string(), "50000.5");
     }
 }

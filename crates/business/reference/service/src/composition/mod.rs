@@ -5,8 +5,8 @@ use std::path::Path;
 use crate::domain::ReferenceResult;
 use crate::services::providers::{
     BinanceDerivativesSource, BinanceEquitySource, BinanceOptionsSource, BinanceSpotSource,
-    CompositeSource, HyperliquidSource, MassiveEquitySource, MassiveSource, OkxSource,
-    ParticipantAugmentedSource, ReferenceSource,
+    CompositeSource, HyperliquidSource, MassiveEquitySource, MassiveOptionsCoverageSource,
+    OkxSource, ParticipantAugmentedSource, ReferenceSource,
 };
 use crate::services::sqlx_storage::{SqlxCatalogStore, SqlxProviderSyncStore};
 use crate::ReferenceApplication;
@@ -102,6 +102,7 @@ pub fn default_endpoint(provider: &str) -> &'static str {
     match provider {
         "hyperliquid" => "https://api.hyperliquid.xyz/info",
         "binance-spot" | "binance-spot-rest" => "https://api.binance.com",
+        "binance-equity" | "binance-equity-rest" => "https://api.binance.com",
         "binance-options" | "binance-options-rest" => "https://eapi.binance.com",
         "binance-usdm-futures" | "binance-usdm-futures-rest" => {
             "https://fapi.binance.com/fapi/v1/exchangeInfo"
@@ -128,7 +129,7 @@ pub fn default_endpoint(provider: &str) -> &'static str {
 /// OKX, and Hyperliquid products are built in; credentialed providers such as
 /// Massive are added only when explicitly enabled in
 /// `[reference.providers.*]`. Every provider can be explicitly disabled there.
-fn build_default_source(
+async fn build_default_source(
     config: &ReferenceCompositionConfig,
 ) -> ReferenceResult<Box<dyn ReferenceSource>> {
     let workspace = config
@@ -211,28 +212,35 @@ fn build_default_source(
         }
         let endpoint = provider_endpoint(reference, "massive", default_endpoint("massive"));
         if product_enabled_or_default(reference, "massive", "equity", true) {
-            let equity_sync_store = SqlxProviderSyncStore::open(&config.database)?;
-            sources.push(Box::new(MassiveEquitySource::new_with_sync_store(
-                credential.api_key.clone(),
-                endpoint.clone(),
-                Box::new(equity_sync_store),
-            )?));
+            let equity_sync_store = SqlxProviderSyncStore::open(&config.database).await?;
+            sources.push(Box::new(
+                MassiveEquitySource::new_with_sync_store(
+                    credential.api_key.clone(),
+                    endpoint.clone(),
+                    Box::new(equity_sync_store),
+                )
+                .await?,
+            ));
         }
         if product_enabled_or_default(reference, "massive", "options", true) {
-            // Reference owns the complete provider catalog. Underlying filtering
-            // belongs to the Market subscription query, not to catalog refresh.
-            let sync_store = SqlxProviderSyncStore::open(&config.database)?;
-            sources.push(Box::new(MassiveSource::new_with_sync_store(
-                credential.api_key,
-                endpoint,
-                Box::new(sync_store),
-            )?));
+            // Stock-options coverage is explicit and mutable at runtime. Do
+            // not make a global options reference scan the default just
+            // because Massive can enumerate it.
+            let sync_store = SqlxProviderSyncStore::open(&config.database).await?;
+            sources.push(Box::new(
+                MassiveOptionsCoverageSource::new(
+                    credential.api_key,
+                    endpoint,
+                    Box::new(sync_store),
+                )
+                .await?,
+            ));
         }
     }
 
     if product_enabled(reference, "binance", "equity") {
-        let credential_id = product_config(reference, "binance", "equity")
-            .and_then(|value| value.credential_id.as_deref());
+        let product = product_config(reference, "binance", "equity");
+        let credential_id = product.and_then(|value| value.credential_id.as_deref());
         let credential = credentials_root
             .as_deref()
             .and_then(|root| {
@@ -246,18 +254,24 @@ fn build_default_source(
                         .into(),
                 )
             })?;
-        let api_secret = credential.secret_value().to_owned();
+        if credential.api_key.trim().is_empty() {
+            return Err(crate::domain::ReferenceError::Provider(
+                "Reference Binance equity source is enabled but its API key is missing".into(),
+            ));
+        }
+        let endpoint = product
+            .and_then(|value| value.endpoint.clone())
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| default_endpoint("binance-equity").to_owned());
         sources.push(Box::new(BinanceEquitySource::new(
-            credential.api_key,
-            api_secret,
+            endpoint,
+            secrecy::SecretString::new(credential.api_key.into()),
         )?));
     }
 
-    let sync_store = SqlxProviderSyncStore::open(&config.database)?;
-    let source: Box<dyn ReferenceSource> = Box::new(CompositeSource::new_with_sync_store(
-        sources,
-        Some(Box::new(sync_store)),
-    )?);
+    let sync_store = SqlxProviderSyncStore::open(&config.database).await?;
+    let source: Box<dyn ReferenceSource> =
+        Box::new(CompositeSource::new_with_sync_store(sources, Some(Box::new(sync_store))).await?);
     let mut participants = vec![
         configured_provider("binance", "Binance"),
         configured_provider("hyperliquid", "Hyperliquid"),
@@ -340,16 +354,6 @@ fn product_config<'a>(
         .and_then(|value| value.get(product))
 }
 
-fn product_enabled(
-    reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
-    provider: &str,
-    product: &str,
-) -> bool {
-    product_config(reference, provider, product)
-        .and_then(|value| value.enabled)
-        .unwrap_or(false)
-}
-
 fn product_enabled_or_default(
     reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
     provider: &str,
@@ -359,6 +363,16 @@ fn product_enabled_or_default(
     product_config(reference, provider, product)
         .and_then(|value| value.enabled)
         .unwrap_or(default)
+}
+
+fn product_enabled(
+    reference: Option<&kairos_workspace::workspace::WorkspaceReferenceConfig>,
+    provider: &str,
+    product: &str,
+) -> bool {
+    product_config(reference, provider, product)
+        .and_then(|value| value.enabled)
+        .unwrap_or(false)
 }
 
 impl ReferenceEventWriter {
@@ -379,13 +393,27 @@ impl ReferenceEventWriter {
         catalog: &crate::domain::ReferenceCatalog,
         events: &[crate::domain::LifecycleEvent],
     ) -> ReferenceResult<()> {
+        // Change encoding needs only the catalog watermarks. Converting the
+        // complete catalog for every outbox batch is prohibitively expensive
+        // for large reference universes. The batch sequence is its own high
+        // watermark, not the latest catalog sequence repeated for old events.
+        let event_sequence = events
+            .last()
+            .and_then(|event| event.event_id.rsplit(':').next())
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or_else(|| catalog.event_sequence.get());
+        let contract_catalog = kairos_reference_contract::ReferenceCatalog {
+            generation: catalog.generation.get(),
+            event_sequence,
+            ..Default::default()
+        };
         self.inner
-            .publish(&to_contract_catalog(catalog)?, &to_contract_events(events)?)?;
+            .publish(&contract_catalog, &to_contract_events(events)?)?;
         Ok(())
     }
 }
 
-pub fn build_application(
+pub async fn build_application(
     config: &ReferenceCompositionConfig,
     publish: bool,
 ) -> ReferenceResult<ReferenceComposition> {
@@ -395,8 +423,8 @@ pub fn build_application(
             kairos_transport::stream_ids::REFERENCE_CHANGES
         )));
     }
-    let source = build_default_source(config)?;
-    let store = SqlxCatalogStore::open(&config.database)?;
+    let source = build_default_source(config).await?;
+    let store = SqlxCatalogStore::open(&config.database).await?;
     let event_writer = if publish {
         Some(ReferenceEventWriter::connect(
             &ReferenceEventWriterConfig {
@@ -409,7 +437,7 @@ pub fn build_application(
         None
     };
     Ok(ReferenceComposition {
-        application: ReferenceApplication::new("reference-actor", source, Box::new(store))?,
+        application: ReferenceApplication::new("reference-actor", source, Box::new(store)).await?,
         event_writer,
     })
 }

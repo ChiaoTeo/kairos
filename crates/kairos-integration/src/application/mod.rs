@@ -25,10 +25,10 @@ pub use capabilities::account::{
     ExternalMarketProfile, ExternalMarketProfileRequest,
 };
 pub use capabilities::account_facts::{
-    ExternalAccountEvent, ExternalAccountModel, ExternalAccountSegment, ExternalAccountSnapshot,
-    ExternalAccountStatus, ExternalBalance, ExternalDecimal, ExternalFillEvent, ExternalMarginMode,
-    ExternalOpenOrder, ExternalOrderEvent, ExternalOrderStatus, ExternalPosition,
-    ExternalPositionMode,
+    ExternalAccountEvent, ExternalAccountEventEnvelope, ExternalAccountModel,
+    ExternalAccountSegment, ExternalAccountSnapshot, ExternalAccountStatus, ExternalBalance,
+    ExternalDecimal, ExternalFillEvent, ExternalMarginMode, ExternalOpenOrder, ExternalOrderEvent,
+    ExternalOrderStatus, ExternalPosition, ExternalPositionMode,
 };
 pub use capabilities::execution::{
     AsyncOrderEntryConnection, AsyncOrderEventSource, AsyncOrderQueryConnection,
@@ -65,6 +65,4 @@ pub(crate) use capabilities::account::{
 pub(crate) use capabilities::execution::{
     OrderEntryConnection, OrderEventSource, OrderQueryConnection,
 };
-pub(crate) use capabilities::market::{
-    HistoricalMarketDataConnection, MarketSnapshotConnection, MarketStreamConnection,
-};
+pub(crate) use capabilities::market::HistoricalMarketDataConnection;

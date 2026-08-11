@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Mapping, cast
+from typing import Any, Callable, Mapping, cast
 
 from .supervisor import ProcessSpec, ProcessState, ProcessSupervisor, UnixRestClient
 from .clients import (
@@ -134,6 +134,7 @@ class ComponentProcessApplication:
     # rather than waiting for a full-universe download.
     ready_timeout: float = 60.0
     control_timeout: float = 3.0
+    stop_timeout: float = 15.0
 
     def ensure_running(
         self,
@@ -142,9 +143,7 @@ class ComponentProcessApplication:
         account_id: str | None = None,
         socket_name: str | None = None,
         reference_config: ReferenceProcessConfig | None = None,
-        market_provider: str | None = None,
-        market_credential_id: str | None = None,
-        market_replay_file: Path | None = None,
+        market_runtime_profile: str | None = None,
         provider: str | None = None,
         product: str | None = None,
         execution_routes: list[Mapping[str, Any]] | None = None,
@@ -152,9 +151,7 @@ class ComponentProcessApplication:
         instance_workspace: Any | None = None,
         stream_startup_logs: bool = False,
     ) -> SystemRestClient:
-        if component == "reference" or (
-            component == "market" and market_provider in {None, "workspace"}
-        ):
+        if component in {"reference", "market"}:
             self._ensure_aeron_driver()
         runtime = instance_workspace
         runtime_name = socket_name or component
@@ -205,9 +202,7 @@ class ComponentProcessApplication:
             account_id=account_id,
             socket_name=socket_name,
             reference_config=reference_config,
-            market_provider=market_provider,
-            market_credential_id=market_credential_id,
-            market_replay_file=market_replay_file,
+            market_runtime_profile=market_runtime_profile,
             provider=provider,
             product=product,
             execution_routes=execution_routes,
@@ -338,6 +333,86 @@ class ComponentProcessApplication:
         return self.client(
             "account" if component == "account" else component, socket
         ).stop()
+
+    def restart(
+        self,
+        component: str,
+        *,
+        account_id: str | None = None,
+        stream_startup_logs: bool = False,
+        progress: Callable[[str], None] | None = None,
+    ) -> SystemRestClient:
+        """Stop a workspace component completely before starting its replacement."""
+        report = progress or (lambda _message: None)
+        report(f"Stopping {component}...")
+        stop_error: Exception | None = None
+        try:
+            self.stop(component)
+        except (OSError, RuntimeError, ValueError) as error:
+            # A component can exit between socket discovery and the stop
+            # request. Waiting on its process ownership distinguishes that
+            # harmless race from a component which is still running.
+            stop_error = error
+        report(
+            f"Waiting for {component} to release its process lock "
+            f"(timeout: {self.stop_timeout:g}s)..."
+        )
+        try:
+            self._wait_stopped(component, progress=progress)
+        except TimeoutError as error:
+            if stop_error is not None:
+                raise TimeoutError(
+                    f"{component} stop request failed and the process did not "
+                    f"exit within {self.stop_timeout:g}s: {stop_error}"
+                ) from stop_error
+            raise
+        report(f"{component} stopped; starting replacement...")
+        control = self.ensure_running(
+            component,
+            account_id=account_id,
+            stream_startup_logs=stream_startup_logs,
+        )
+        report(f"{component} restarted.")
+        return control
+
+    def _wait_stopped(
+        self,
+        component: str,
+        *,
+        progress: Callable[[str], None] | None = None,
+    ) -> None:
+        """Wait until no live process can still own the component runtime."""
+        lock = self.workspace.paths.process_lock(component)
+        health_file = self.workspace.paths.health_file(component)
+        started = time.monotonic()
+        deadline = started + self.stop_timeout
+        next_progress = started + 1.0
+        while True:
+            health_pid: object = None
+            try:
+                value = json.loads(health_file.read_text(encoding="utf-8"))
+                if isinstance(value, Mapping):
+                    health_pid = value.get("pid")
+            except (OSError, ValueError, json.JSONDecodeError):
+                pass
+
+            lock_held = _lock_is_held(lock)
+            pid_alive_without_lock = not lock.exists() and _pid_is_alive(health_pid)
+            if not lock_held and not pid_alive_without_lock:
+                return
+            if time.monotonic() >= deadline:
+                details = _process_details(health_pid)
+                raise TimeoutError(
+                    f"{component} did not stop within {self.stop_timeout:g}s; "
+                    f"pid={health_pid}, pid_alive={details['alive']}, "
+                    f"lock_held={lock_held}, lock={lock}"
+                )
+            now = time.monotonic()
+            if progress is not None and now >= next_progress:
+                elapsed = int(now - started)
+                progress(f"Still waiting for {component} to stop... {elapsed}s")
+                next_progress = now + 1.0
+            time.sleep(0.05)
 
     def status(
         self,
@@ -501,9 +576,7 @@ class ComponentProcessApplication:
         account_id: str | None,
         socket_name: str | None = None,
         reference_config: ReferenceProcessConfig | None = None,
-        market_provider: str | None = None,
-        market_credential_id: str | None = None,
-        market_replay_file: Path | None = None,
+        market_runtime_profile: str | None = None,
         provider: str | None = None,
         product: str | None = None,
         execution_routes: list[Mapping[str, Any]] | None = None,
@@ -566,11 +639,8 @@ class ComponentProcessApplication:
                 }
             )
         if component == "market":
-            command.extend(("--provider", market_provider or "workspace"))
-            if market_credential_id is not None:
-                command.extend(("--credential-id", market_credential_id))
-            if market_replay_file is not None:
-                command.extend(("--replay-file", str(market_replay_file)))
+            if market_runtime_profile is not None:
+                command.extend(("--runtime-profile", market_runtime_profile))
         if component == "execution":
             if execution_routes:
                 command.extend(

@@ -10,12 +10,11 @@ pub mod domain;
 mod services;
 
 pub use application::{
-    load_replay_events, load_replay_events_many, ExecutionEstimate, MarketApplication,
-    MarketDataKey, MarketError, MarketFeed, MarketFeedRoute, MarketOrderBookUpdate, MarketProcess,
-    MarketRuntime, MarketSnapshot, MarketSnapshotPublisher, OrderBookSide, ReconcileResult,
+    load_replay_events, load_replay_events_many, ExecutionEstimate, MarketApplication, MarketError,
+    MarketProcess, MarketSnapshot, MarketSnapshotPublisher, OrderBookSide, ReconcileResult,
     ReferenceChangeSource, ReferenceEvent, SubscriptionState,
 };
-pub use composition::{binance_spot_rest_feed, binance_spot_websocket_feed};
+pub use domain::events::MarketEvent;
 pub use domain::freshness::FeedStatus;
 pub use domain::freshness::{DataFreshnessStatus, MarketFreshness};
 pub use domain::market::{MarketDescriptor, MarketSelectionQuery};
@@ -25,5 +24,12 @@ pub use domain::observations::{
 };
 pub use domain::orderbook::{OrderBook, OrderBookDelta, PriceLevel};
 pub use domain::reference::ReferenceChanged;
-pub use domain::subscriptions::{SubscriptionId, SubscriptionMode};
+pub use domain::source::{
+    MarketReadiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceRouteKey,
+    SourceState, SourceStatus,
+};
+pub use domain::subscriptions::{
+    SubscriptionId, SubscriptionMemberRequirement, SubscriptionMemberStatus, SubscriptionMode,
+    SubscriptionStatus,
+};
 pub use domain::view::MarketViewKey;

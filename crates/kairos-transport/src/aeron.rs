@@ -8,7 +8,10 @@
 //! one dependency avoids the silent layout mismatch of the old `aeron 0.2`
 //! Rust port.
 
-use rusteron_client::{Aeron, AeronContext, AeronPublication, AeronSubscription};
+use rusteron_client::{
+    Aeron, AeronContext, AeronFragmentClosureAssembler, AeronHeader, AeronPublication,
+    AeronSubscription,
+};
 use std::collections::VecDeque;
 use std::ffi::CString;
 use std::sync::{Arc, Mutex};
@@ -79,9 +82,11 @@ impl AeronBytePublisher {
                 self.buffer_capacity
             ));
         }
-        // Reference can start before Market (or another consumer) has opened
-        // its subscriptions. Keep the catalog durable in Reference's store;
-        // the next refresh will publish it once a subscriber is connected.
+        // Aeron publications are best-effort streams.  Having no subscriber
+        // is a normal lifecycle state (for example while a consumer is
+        // restarting), so there is nothing to offer and nothing to retry.
+        // Durable business facts must be recovered from their snapshot/store,
+        // not from an Aeron publisher backlog.
         if !self
             .publication
             .lock()
@@ -98,6 +103,9 @@ impl AeronBytePublisher {
                 .offer(bytes);
             match result {
                 Ok(_) => return Ok(()),
+                // The subscriber may disappear between is_connected() and
+                // offer().  Treat that race exactly like the preflight case:
+                // the realtime notification is intentionally dropped.
                 Err(rusteron_client::AeronOfferError::NotConnected) => return Ok(()),
                 Err(error) if error.is_retryable() => std::thread::yield_now(),
                 Err(error) => return Err(format!("Aeron publication offer: {error:?}")),
@@ -105,11 +113,24 @@ impl AeronBytePublisher {
         }
         Err("Aeron publication remained back-pressured".into())
     }
+
+    /// Whether the publication currently has at least one subscriber.
+    ///
+    /// Callers may use this as a best-effort readiness signal when delivery
+    /// is optional. A successful `true` does not replace handling a later
+    /// publish failure because the subscriber can disconnect at any time.
+    pub fn has_subscriber(&self) -> Result<bool, String> {
+        self.publication
+            .lock()
+            .map_err(|_| "Aeron publication mutex poisoned".to_string())
+            .map(|publication| publication.is_connected())
+    }
 }
 
 pub struct AeronByteSubscription {
     _aeron: Aeron,
     subscription: Arc<Mutex<AeronSubscription>>,
+    assembler: AeronFragmentClosureAssembler,
     queue: VecDeque<Vec<u8>>,
 }
 
@@ -129,6 +150,8 @@ impl AeronByteSubscription {
         Ok(Self {
             _aeron: aeron,
             subscription: Arc::new(Mutex::new(subscription)),
+            assembler: AeronFragmentClosureAssembler::new()
+                .map_err(|error| format!("create Aeron fragment assembler: {error:?}"))?,
             queue: VecDeque::new(),
         })
     }
@@ -143,18 +166,26 @@ impl AeronByteSubscription {
             return Err("Aeron fragment limit must be positive".into());
         }
         let mut frames = Vec::new();
-        let count = self
+        let subscription = self
             .subscription
             .lock()
-            .map_err(|_| "Aeron subscription mutex poisoned".to_string())?
-            .poll_fn(
-                |buffer, _header| frames.push(buffer.to_vec()),
+            .map_err(|_| "Aeron subscription mutex poisoned".to_string())?;
+        let count = self
+            .assembler
+            .poll(
+                &*subscription,
+                &mut frames,
+                collect_reassembled_frame,
                 fragment_limit as usize,
             )
             .map_err(|error| format!("poll Aeron subscription: {error:?}"))?;
         self.queue.extend(frames);
         Ok(count as usize)
     }
+}
+
+fn collect_reassembled_frame(frames: &mut Vec<Vec<u8>>, buffer: &[u8], _header: AeronHeader) {
+    frames.push(buffer.to_vec());
 }
 
 fn connect_client(aeron_dir: Option<&str>) -> Result<Aeron, String> {

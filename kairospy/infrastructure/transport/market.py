@@ -61,6 +61,28 @@ class TradeView:
 
 
 @dataclass(frozen=True, slots=True)
+class PriceLevelView:
+    price: DecimalValue
+    quantity: DecimalValue
+
+
+@dataclass(frozen=True, slots=True)
+class OrderBookView:
+    market_id: str
+    instrument_id: str
+    source_id: str | None
+    sequence: int
+    first_sequence: int
+    last_sequence: int
+    event_time_unix_nanos: int
+    synchronized: bool
+    depth_policy: str | None
+    checksum: str | None
+    bids: tuple[PriceLevelView, ...]
+    asks: tuple[PriceLevelView, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class BarView:
     instrument_id: str
     market_id: str | None
@@ -321,6 +343,8 @@ class UnixMarketEventStream:
 
 
 def _decode_market_event(payload: bytes) -> EventEnvelope:
+    if payload[4:8] == b"MOB1":
+        return _decode_orderbook_event(payload)
     if payload[4:8] == b"MTR1":
         return _decode_trade_event(payload)
     if payload[4:8] == b"MBA1":
@@ -328,6 +352,60 @@ def _decode_market_event(payload: bytes) -> EventEnvelope:
     if payload[4:8] == b"MGR1":
         return _decode_greeks_event(payload)
     return _decode_quote_event(payload)
+
+
+def _decode_orderbook_event(payload: bytes) -> EventEnvelope:
+    from kairospy.infrastructure.transport.generated.kairos.market.v1.OrderBookMessage import (
+        OrderBookMessage,
+    )
+
+    root = OrderBookMessage.GetRootAs(payload, 0)
+    header = cast(Any, root.Header())
+    book = cast(Any, root.Payload())
+    if header is None or book is None:
+        raise ValueError("order-book message is missing header or payload")
+
+    def text(raw: bytes | None) -> str | None:
+        return None if raw is None else raw.decode()
+
+    def level(side: str, index: int) -> PriceLevelView:
+        value = cast(Any, getattr(book, side)(index))
+        if value is None:
+            raise ValueError("order-book message contains an empty level")
+        price = cast(Any, value.Price())
+        quantity = cast(Any, value.Quantity())
+        return PriceLevelView(
+            DecimalValue(price.Mantissa(), price.Scale()),
+            DecimalValue(quantity.Mantissa(), quantity.Scale()),
+        )
+
+    event_time = header.EventTimeUnixNanos()
+    occurred_at = (
+        None
+        if not event_time
+        else datetime.fromtimestamp(event_time / 1_000_000_000, tz=timezone.utc)
+    )
+    return EventEnvelope(
+        stream_id=header.StreamId().decode(),
+        sequence=header.Sequence(),
+        domain="data",
+        kind="orderbook",
+        payload=OrderBookView(
+            market_id=text(book.MarketId()) or "",
+            instrument_id=text(book.InstrumentId()) or "",
+            source_id=text(book.SourceId()),
+            sequence=book.Sequence(),
+            first_sequence=book.FirstSequence(),
+            last_sequence=book.LastSequence(),
+            event_time_unix_nanos=book.EventTimeUnixNanos(),
+            synchronized=book.Synchronized(),
+            depth_policy=text(book.DepthPolicy()),
+            checksum=text(book.Checksum()),
+            bids=tuple(level("Bids", index) for index in range(book.BidsLength())),
+            asks=tuple(level("Asks", index) for index in range(book.AsksLength())),
+        ),
+        occurred_at=occurred_at,
+    )
 
 
 def _decode_quote_event(payload: bytes) -> EventEnvelope:

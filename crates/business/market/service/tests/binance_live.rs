@@ -28,7 +28,17 @@ impl MarketServer {
             .expect("create smoke-test workspace");
         std::fs::write(
             workspace.path().join("kairos.toml"),
-            "version = 1\nworkspace_id = \"market-smoke\"\n",
+            concat!(
+                "version = 1\n",
+                "workspace_id = \"market-smoke\"\n",
+                "[market]\n",
+                "default_profile = \"live\"\n",
+                "[market.sources.binance-spot]\n",
+                "type = \"binance-spot\"\n",
+                "transport = \"websocket\"\n",
+                "[market.profiles.live]\n",
+                "scope = \"shared\"\n",
+            ),
         )
         .expect("write smoke-test workspace manifest");
 
@@ -40,8 +50,6 @@ impl MarketServer {
             .args([
                 "--workspace",
                 workspace.path().to_str().expect("workspace path is utf-8"),
-                "--provider",
-                "binance-spot-websocket",
             ])
             .spawn()
             .expect("start kairos-market-server");

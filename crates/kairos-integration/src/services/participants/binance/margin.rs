@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::application::capabilities::account_facts::{
-    canonical_account_identity, ExternalAccountSegment as AccountSegment,
+    external_instrument_ref, ExternalAccountSegment as AccountSegment,
     ExternalAccountSnapshot as AccountSnapshot, ExternalAccountStatus as AccountStatus,
     ExternalBalance as Balance, ExternalDecimal as DecimalValue, ExternalOpenOrder as OpenOrder,
 };
@@ -107,7 +107,7 @@ impl AccountCredentialInspectionConnection for BinanceMarginAccountConnection {
     }
 }
 
-fn normalize(
+pub(crate) fn normalize(
     segment: &AccountSegment,
     payload: &Value,
     orders: &Value,
@@ -169,7 +169,13 @@ fn normalize(
         .iter()
         .filter_map(|row| {
             let symbol = row.get("symbol")?.as_str()?;
-            let (instrument_id, _) = canonical_account_identity("binance-spot", symbol).ok()?;
+            let provider_instrument = external_instrument_ref(
+                crate::domain::ParticipantKind::Exchange,
+                "binance",
+                "binance-spot",
+                symbol,
+            )
+            .ok()?;
             Some(OpenOrder {
                 order_id: kairos_domain_types::OrderId::new(row.get("clientOrderId")?.as_str()?)
                     .ok()?,
@@ -177,7 +183,7 @@ fn normalize(
                     .get("orderId")
                     .and_then(Value::as_i64)
                     .and_then(|v| kairos_domain_types::RemoteOrderId::new(v.to_string()).ok()),
-                instrument_id,
+                provider_instrument,
                 side: crate::application::capabilities::execution_facts::normalize_order_side(
                     row.get("side")?.as_str()?,
                 ),

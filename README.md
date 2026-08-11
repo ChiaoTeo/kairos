@@ -253,16 +253,23 @@ uv run kairospy launch timeline export --latest binance-spot-btc-sma-backtest
 
 Reference 验证 CLI
 
-Reference CLI 是一次性命令，所有结构化结果写入 stdout；它不会启动或连接长驻
-Reference server：
+Reference CLI 是一次性控制/读取客户端，所有结构化结果写入 stdout。查询和刷新连接
+Workspace 中正在运行的 Reference server；snapshot/catalog 命令读取其发布的 mmap
+projection：
 
 ```bash
 uv run kairospy reference health --workspace my-project --format json
+uv run kairospy reference validate --workspace my-project --format json
 uv run kairospy reference refresh --workspace my-project --format json
+uv run kairospy reference events --sequence-from 1 --limit 100 --workspace my-project --format json
 uv run kairospy reference markets --exchange binance --active-only --workspace my-project
 uv run kairospy reference markets --symbol BTCUSDT --workspace my-project --format json
 uv run kairospy reference catalog --workspace my-project --format json
 ```
+
+需要同时验收 Massive 时使用 `reference validate --require-massive`；缺失或不健康的
+Massive source 会让命令返回非零。实时 Aeron 推送可在另一个终端用
+`kairospy reference stream [--aeron-dir <dir>]` 观察，再触发 `reference refresh`。
 
 原生 binary 也可以直接调用：`kairos-reference-cli --workspace <workspace> query`。
 长驻 server 则由 `kairos-reference-server` 运行，两者共享同一个 Reference application

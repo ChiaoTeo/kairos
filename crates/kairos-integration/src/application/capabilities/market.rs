@@ -10,16 +10,6 @@ mod snapshot {
     pub use super::super::market_facts::{MarketEvent, MarketEventKind};
     use crate::application::IntegrationError;
 
-    /// A stateless provider snapshot operation. Subscription ownership and polling
-    /// policy remain in the Market business; this capability only fetches the
-    /// requested provider symbols.
-    pub trait MarketSnapshotConnection: Send {
-        fn fetch_snapshot(
-            &mut self,
-            symbols: &[ProviderSymbol],
-        ) -> Result<Vec<MarketEvent>, IntegrationError>;
-    }
-
     /// Async-first snapshot operation, polled by the caller's runtime.
     pub trait AsyncMarketSnapshotConnection: Send {
         fn fetch_snapshot(
@@ -35,11 +25,10 @@ mod live {
     //! Provider-neutral market-stream interaction protocol.
     //!
     //! The protocol models the interaction pattern, not an exchange API.  A
-    //! Binance websocket, an IBKR stream, a replay source, and a REST polling
-    //! adapter may all implement it without pretending that their provider APIs
-    //! are otherwise identical.
+    //! Binance websocket, an IBKR stream, and another provider-native live
+    //! channel may implement it without pretending their APIs are identical.
 
-    use super::super::market_facts::{MarketEvent, MarketStreamCapabilities};
+    use super::super::market_facts::MarketEvent;
     use std::future::Future;
 
     use crate::application::IntegrationError;
@@ -72,30 +61,6 @@ mod live {
 
     #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
     pub struct SubscriptionId(pub u64);
-
-    pub trait MarketStreamConnection: Send {
-        fn descriptor(&self) -> &crate::domain::ConnectionDescriptor;
-        fn connect_channel(&mut self) -> Result<(), IntegrationError>;
-        fn disconnect_channel(&mut self) -> Result<(), IntegrationError>;
-        fn reconnect_channel(&mut self) -> Result<(), IntegrationError> {
-            self.disconnect_channel()?;
-            self.connect_channel()
-        }
-        fn channel_health(&self) -> crate::domain::ConnectionHealth;
-
-        fn capabilities(&self) -> MarketStreamCapabilities {
-            MarketStreamCapabilities::default()
-        }
-
-        fn subscribe(
-            &mut self,
-            request: MarketSubscription,
-        ) -> Result<SubscriptionId, IntegrationError>;
-
-        fn unsubscribe(&mut self, subscription: SubscriptionId) -> Result<(), IntegrationError>;
-
-        fn next_event(&mut self) -> Result<Option<MarketEvent>, IntegrationError>;
-    }
 
     /// Async-first live market channel. The caller runtime owns polling and task
     /// scheduling; absence is not modeled as `Option`, preventing busy polling.
@@ -132,7 +97,7 @@ pub use live::*;
 mod historical {
     //! Provider-neutral historical market-data access.
     //!
-    //! Historical downloads are deliberately separate from `MarketStreamConnection`:
+    //! Historical downloads are deliberately separate from live market channels:
     //! a REST backfill has a bounded time window and must be resumable, while a
     //! stream is an open-ended live capability.
 

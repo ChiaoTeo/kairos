@@ -3,6 +3,7 @@ use crate::application::{ConnectionDescriptor, ConnectionDomainRef, IntegrationE
 use crate::services::transport::http::{AsyncPublicHttpClient, ExchangeError, PublicHttpClient};
 
 use super::config::HyperliquidConnectionConfig;
+use super::market::{HyperliquidLiveMarket, HyperliquidMarketSnapshot};
 use super::reference::{blocking, HyperliquidInstrumentCatalog};
 
 pub struct HyperliquidConnection {
@@ -28,6 +29,21 @@ impl HyperliquidConnection {
             endpoint: self.config.info_endpoint.clone(),
             client: self.client.clone(),
         }
+    }
+
+    pub fn market_snapshot(&self) -> HyperliquidMarketSnapshot {
+        HyperliquidMarketSnapshot {
+            descriptor: self.descriptor(),
+            endpoint: self.config.info_endpoint.clone(),
+            client: self.client.clone(),
+        }
+    }
+
+    pub fn live_market(
+        &self,
+        websocket_url: impl Into<String>,
+    ) -> Result<HyperliquidLiveMarket, IntegrationError> {
+        HyperliquidLiveMarket::new(self.descriptor(), websocket_url.into())
     }
 
     pub fn blocking_instrument_catalog(

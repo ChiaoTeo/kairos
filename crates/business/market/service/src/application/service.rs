@@ -1,49 +1,61 @@
+use crate::domain::events::MarketEvent;
 use crate::domain::market::{MarketDescriptor, MarketSelectionQuery};
 use crate::domain::observations::MarketObservation;
 use crate::domain::orderbook::{OrderBook, OrderBookDelta};
 use crate::domain::reference::ReferenceChanged;
 use crate::domain::snapshot::{MarketSnapshot, ReconcileResult};
-use crate::domain::subscriptions::SubscriptionId;
-use crate::services::actor::MarketActor;
+use crate::domain::subscriptions::{SubscriptionId, SubscriptionMemberRequirement};
 use tracing::{debug, info, warn};
 
+use super::facade::MarketApplication;
 use super::query::MarketQueryResult;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MarketError {
     Invalid(String),
+    InvalidSubscription(String),
     NotFound(String),
+    SourceUnavailable(String),
+    Authentication(String),
+    Unsupported(String),
+    QueueOverflow(String),
+    SequenceGap(String),
+    Recovery(String),
+    StaleEpoch(String),
+    ShutdownIncomplete(String),
 }
 
 impl std::fmt::Display for MarketError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Invalid(value) => write!(formatter, "invalid market request: {value}"),
+            Self::InvalidSubscription(value) => {
+                write!(formatter, "invalid market subscription: {value}")
+            }
             Self::NotFound(value) => write!(formatter, "market not found: {value}"),
+            Self::SourceUnavailable(value) => {
+                write!(formatter, "market source unavailable: {value}")
+            }
+            Self::Authentication(value) => {
+                write!(formatter, "market source authentication failed: {value}")
+            }
+            Self::Unsupported(value) => {
+                write!(formatter, "market capability is unsupported: {value}")
+            }
+            Self::QueueOverflow(value) => write!(formatter, "market queue overflow: {value}"),
+            Self::SequenceGap(value) => write!(formatter, "market sequence gap: {value}"),
+            Self::Recovery(value) => write!(formatter, "market recovery failed: {value}"),
+            Self::StaleEpoch(value) => write!(formatter, "stale market source epoch: {value}"),
+            Self::ShutdownIncomplete(value) => {
+                write!(formatter, "market shutdown incomplete: {value}")
+            }
         }
     }
 }
 
 impl std::error::Error for MarketError {}
 
-/// Public Market business facade.
-///
-/// Provider connection lifecycle belongs to `MarketRuntime`; this type only
-/// owns business subscription state and normalized market state.
-pub struct MarketApplication {
-    pub(crate) actor: MarketActor,
-}
-
 impl MarketApplication {
-    pub fn new(
-        actor_id: impl Into<String>,
-        max_dynamic_members: usize,
-    ) -> Result<Self, MarketError> {
-        let actor =
-            MarketActor::new(actor_id, max_dynamic_members).map_err(MarketError::Invalid)?;
-        Ok(Self { actor })
-    }
-
     pub fn subscribe_static(
         &mut self,
         id: SubscriptionId,
@@ -65,11 +77,11 @@ impl MarketApplication {
         let result = if selectors.is_empty() {
             self.actor
                 .subscribe_static(id, owner_id, market)
-                .map_err(MarketError::Invalid)
+                .map_err(MarketError::InvalidSubscription)
         } else {
             self.actor
                 .subscribe_static_with_selectors(id, owner_id, market, selectors)
-                .map_err(MarketError::Invalid)
+                .map_err(MarketError::InvalidSubscription)
         };
         match &result {
             Ok(()) => {
@@ -106,11 +118,11 @@ impl MarketApplication {
         let result = if selectors.is_empty() {
             self.actor
                 .subscribe_dynamic(id, owner_id, query, markets)
-                .map_err(MarketError::Invalid)
+                .map_err(MarketError::InvalidSubscription)
         } else {
             self.actor
                 .subscribe_dynamic_with_selectors(id, owner_id, query, markets, selectors)
-                .map_err(MarketError::Invalid)
+                .map_err(MarketError::InvalidSubscription)
         };
         match &result {
             Ok(reconcile) => {
@@ -147,6 +159,17 @@ impl MarketApplication {
         removed
     }
 
+    pub fn set_subscription_member_requirement(
+        &mut self,
+        subscription_id: &SubscriptionId,
+        member_id: impl Into<String>,
+        requirement: SubscriptionMemberRequirement,
+    ) -> Result<(), MarketError> {
+        self.actor
+            .set_member_requirement(subscription_id, member_id, requirement)
+            .map_err(MarketError::InvalidSubscription)
+    }
+
     pub fn ingest(&mut self, observation: MarketObservation) -> Result<u64, MarketError> {
         let result = self
             .actor
@@ -180,11 +203,23 @@ impl MarketApplication {
         self.actor.snapshot()
     }
 
+    pub fn subscription_status(
+        &self,
+        id: &SubscriptionId,
+    ) -> Option<crate::domain::subscriptions::SubscriptionStatus> {
+        self.actor
+            .snapshot()
+            .subscriptions
+            .into_iter()
+            .find(|subscription| subscription.id == *id)
+            .map(|subscription| subscription.status)
+    }
+
     pub fn query(&self) -> MarketQueryResult {
         MarketQueryResult::new(self.actor.snapshot())
     }
 
-    pub fn drain_events(&mut self) -> Vec<(u64, MarketObservation)> {
+    pub fn drain_events(&mut self) -> Vec<(u64, MarketEvent)> {
         self.actor
             .drain_events()
             .into_iter()
@@ -192,7 +227,7 @@ impl MarketApplication {
             .collect()
     }
 
-    pub fn drain_events_limited(&mut self, limit: usize) -> Vec<(u64, MarketObservation)> {
+    pub fn drain_events_limited(&mut self, limit: usize) -> Vec<(u64, MarketEvent)> {
         self.actor
             .drain_events_limited(limit)
             .into_iter()

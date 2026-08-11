@@ -5,7 +5,9 @@
 //! with another public protocol hierarchy.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::application::{AccountMarketProfile, AccountMarketProfileRequest};
 use crate::domain::{
@@ -15,41 +17,430 @@ use crate::domain::{
 };
 use kairos_integration::application::{
     AsyncAccountEventSource, AsyncAccountMarketProfileConnection, AsyncAccountReadConnection,
-    ConnectionDescriptor, ExternalMarketProfile, ExternalMarketProfileRequest, IntegrationError,
+    ExternalMarketProfile, ExternalMarketProfileRequest, IntegrationError,
 };
-use kairos_integration::blocking::{
-    AccountMarketProfileConnection, AccountReadConnection, BufferedIntegrationAccountStream,
-};
+use kairos_integration::blocking::{AccountMarketProfileConnection, AccountReadConnection};
+
+use futures_util::{stream::FuturesUnordered, StreamExt};
+
+use crate::services::refresh::RefreshFetch;
+
+const ASYNC_ACCOUNT_QUERY_TIMEOUT: Duration = Duration::from_secs(30);
+const ASYNC_ACCOUNT_CIRCUIT_FAILURE_THRESHOLD: u32 = 3;
+const ASYNC_ACCOUNT_CIRCUIT_COOLDOWN: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Default)]
+pub(crate) struct AccountInstrumentResolver {
+    markets: Arc<Vec<kairos_reference_contract::model::Market>>,
+    instruments: Arc<Vec<kairos_reference_contract::model::Instrument>>,
+}
+
+impl AccountInstrumentResolver {
+    pub(crate) fn from_reference_snapshot(root: impl AsRef<Path>) -> Result<Self, String> {
+        let snapshot = kairos_reference_contract::ReferenceMmapSnapshotSetReader::open(root)
+            .map_err(|error| error.to_string())?
+            .read()
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            markets: Arc::new(snapshot.markets),
+            instruments: Arc::new(snapshot.instruments),
+        })
+    }
+
+    fn resolve(
+        &self,
+        provider: &kairos_integration::application::ProviderInstrumentRef,
+    ) -> Result<(InstrumentId, Option<kairos_domain_types::MarketId>), String> {
+        let symbol = provider.source_symbol.as_str();
+        if provider.participant.id.eq_ignore_ascii_case("ibkr") {
+            let matches = self
+                .instruments
+                .iter()
+                .filter(|value| {
+                    value.symbol.eq_ignore_ascii_case(symbol)
+                        && value.instrument_type.eq_ignore_ascii_case("equity")
+                        && matches!(value.status.as_str(), "active" | "trading")
+                })
+                .collect::<Vec<_>>();
+            let [instrument] = matches.as_slice() else {
+                return Err(identity_resolution_error(provider, matches.len()));
+            };
+            return Ok((
+                InstrumentId::new(instrument.instrument_id.clone())
+                    .map_err(|error| error.to_string())?,
+                None,
+            ));
+        }
+
+        let domain = provider
+            .instrument_type
+            .as_ref()
+            .map(|value| value.as_str())
+            .unwrap_or_default();
+        let exchange = format!("exchange:{}", provider.participant.id.to_ascii_lowercase());
+        let matches = self
+            .markets
+            .iter()
+            .filter(|value| {
+                value.exchange_id.eq_ignore_ascii_case(&exchange)
+                    && value.source_symbol.eq_ignore_ascii_case(symbol)
+                    && matches!(value.status.as_str(), "active" | "trading")
+                    && provider_domain_matches_market(domain, &value.market_type)
+            })
+            .collect::<Vec<_>>();
+        let [market] = matches.as_slice() else {
+            return Err(identity_resolution_error(provider, matches.len()));
+        };
+        Ok((
+            InstrumentId::new(market.instrument_id.clone()).map_err(|error| error.to_string())?,
+            Some(kairos_domain_types::MarketId::new(
+                market.market_id.clone(),
+            )?),
+        ))
+    }
+}
+
+fn provider_domain_matches_market(domain: &str, market_type: &str) -> bool {
+    let domain = domain.to_ascii_lowercase();
+    let market_type = market_type.to_ascii_lowercase();
+    if domain.contains("spot") || domain.contains("margin") {
+        return market_type == "spot";
+    }
+    if domain.contains("option") {
+        return matches!(market_type.as_str(), "option" | "options");
+    }
+    if domain.contains("future") || domain.contains("swap") {
+        return matches!(
+            market_type.as_str(),
+            "future" | "futures" | "perpetual" | "swap"
+        );
+    }
+    true
+}
+
+fn identity_resolution_error(
+    provider: &kairos_integration::application::ProviderInstrumentRef,
+    matches: usize,
+) -> String {
+    format!(
+        "Reference identity resolution expected one match for {}/{}/{}, found {matches}",
+        provider.participant.id,
+        provider
+            .instrument_type
+            .as_ref()
+            .map(|value| value.as_str())
+            .unwrap_or("unspecified"),
+        provider.source_symbol
+    )
+}
 
 /// Account-owned heterogeneous holder for concrete Integration event sources.
 /// It is a dispatch container, not another implementation of Integration's
 /// provider capability trait.
 pub(crate) enum AccountAsyncEventSource {
-    BinanceSpot(kairos_integration::participants::binance::BinanceSpotAccountEvents),
-    OkxTrading(kairos_integration::participants::okx::OkxTradingAccountEvents),
+    BinanceSpot {
+        binding_id: String,
+        source: kairos_integration::participants::binance::BinanceSpotAccountEvents,
+    },
+    BinanceFutures {
+        binding_id: String,
+        source: kairos_integration::participants::binance::BinanceFuturesAccountEvents,
+    },
+    BinanceOptions {
+        binding_id: String,
+        source: kairos_integration::participants::binance::BinanceOptionsAccountEvents,
+    },
+    BinanceMargin {
+        binding_id: String,
+        source: kairos_integration::participants::binance::BinanceMarginAccountEvents,
+    },
+    Ibkr {
+        binding_id: String,
+        source: kairos_integration::participants::ibkr::IbkrAccountEvents,
+    },
+    OkxTrading {
+        binding_id: String,
+        source: kairos_integration::participants::okx::OkxTradingAccountEvents,
+    },
+}
+
+/// Concrete async account-read capabilities selected by Account composition.
+/// This enum is deliberately private: it keeps heterogeneous provider handles
+/// without publishing a second Account-owned provider protocol.
+pub(crate) enum AccountAsyncSnapshotConnection {
+    BinanceSpot(kairos_integration::participants::binance::BinanceSpotAccountRead),
+    BinanceFunding(kairos_integration::participants::binance::BinanceFundingAccountRead),
+    BinanceMargin(kairos_integration::participants::binance::BinanceMarginAccountRead),
+    BinanceFutures(kairos_integration::participants::binance::BinanceFuturesAccountRead),
+    BinanceOptions(kairos_integration::participants::binance::BinanceOptionsAccountRead),
+    Ibkr(kairos_integration::participants::ibkr::IbkrAccountRead),
+    OkxTrading(kairos_integration::participants::okx::OkxTradingAccountRead),
+}
+
+impl AccountAsyncSnapshotConnection {
+    async fn fetch_account(
+        &mut self,
+        segment: &ExternalAccountSegment,
+    ) -> Result<
+        kairos_integration::application::capabilities::account_facts::ExternalAccountSnapshot,
+        IntegrationError,
+    > {
+        match self {
+            Self::BinanceSpot(connection) => connection.fetch_account(segment).await,
+            Self::BinanceFunding(connection) => connection.fetch_account(segment).await,
+            Self::BinanceMargin(connection) => connection.fetch_account(segment).await,
+            Self::BinanceFutures(connection) => connection.fetch_account(segment).await,
+            Self::BinanceOptions(connection) => connection.fetch_account(segment).await,
+            Self::Ibkr(connection) => connection.fetch_account(segment).await,
+            Self::OkxTrading(connection) => connection.fetch_account(segment).await,
+        }
+    }
+}
+
+struct AsyncSnapshotSlot {
+    connection: AccountAsyncSnapshotConnection,
+    consecutive_failures: u32,
+    circuit_open_until: Option<Instant>,
+}
+
+/// Account-owned async snapshot bindings. Network futures run directly on the
+/// caller's Tokio runtime and unrelated segments are fetched concurrently.
+pub(crate) struct AccountAsyncSnapshotGateway {
+    connections: BTreeMap<String, AsyncSnapshotSlot>,
+    resolver: AccountInstrumentResolver,
+}
+
+impl AccountAsyncSnapshotGateway {
+    pub(crate) fn new(
+        connections: BTreeMap<String, AccountAsyncSnapshotConnection>,
+        resolver: AccountInstrumentResolver,
+    ) -> Self {
+        Self {
+            connections: connections
+                .into_iter()
+                .map(|(key, connection)| {
+                    (
+                        key,
+                        AsyncSnapshotSlot {
+                            connection,
+                            consecutive_failures: 0,
+                            circuit_open_until: None,
+                        },
+                    )
+                })
+                .collect(),
+            resolver,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.connections.len()
+    }
+
+    pub(crate) async fn fetch(&mut self, segments: Vec<AccountSegment>) -> Vec<RefreshFetch> {
+        let mut selected = segments
+            .into_iter()
+            .map(|segment| (segment.segment_key.to_string(), segment))
+            .collect::<BTreeMap<_, _>>();
+        let mut futures = FuturesUnordered::new();
+        let resolver = self.resolver.clone();
+
+        for (key, slot) in &mut self.connections {
+            let Some(segment) = selected.remove(key) else {
+                continue;
+            };
+            let resolver = resolver.clone();
+            futures.push(async move {
+                let started = Instant::now();
+                if slot
+                    .circuit_open_until
+                    .is_some_and(|until| Instant::now() < until)
+                {
+                    return RefreshFetch {
+                        segment,
+                        result: Err("account refresh circuit is open".into()),
+                        elapsed_ms: 0,
+                    };
+                }
+                slot.circuit_open_until = None;
+                let external = external_segment(&segment);
+                let result = match tokio::time::timeout(
+                    ASYNC_ACCOUNT_QUERY_TIMEOUT,
+                    slot.connection.fetch_account(&external),
+                )
+                .await
+                {
+                    Ok(result) => result
+                        .map_err(|error| error.to_string())
+                        .and_then(|value| map_snapshot(value, &resolver)),
+                    Err(_) => Err(format!(
+                        "account segment refresh timed out after {}ms",
+                        ASYNC_ACCOUNT_QUERY_TIMEOUT.as_millis()
+                    )),
+                };
+                if result.is_err() {
+                    slot.consecutive_failures = slot.consecutive_failures.saturating_add(1);
+                    if slot.consecutive_failures >= ASYNC_ACCOUNT_CIRCUIT_FAILURE_THRESHOLD {
+                        slot.circuit_open_until =
+                            Some(Instant::now() + ASYNC_ACCOUNT_CIRCUIT_COOLDOWN);
+                    }
+                } else {
+                    slot.consecutive_failures = 0;
+                }
+                RefreshFetch {
+                    segment,
+                    result,
+                    elapsed_ms: started.elapsed().as_millis() as u64,
+                }
+            });
+        }
+
+        let mut fetches = Vec::new();
+        while let Some(fetch) = futures.next().await {
+            fetches.push(fetch);
+        }
+        fetches.extend(selected.into_values().map(|segment| RefreshFetch {
+            result: Err(format!(
+                "account segment is not configured: {}",
+                segment.segment_key
+            )),
+            segment,
+            elapsed_ms: 0,
+        }));
+        fetches
+    }
+}
+
+pub(crate) enum AccountAsyncMarketProfileConnection {
+    BinanceSpot(kairos_integration::participants::binance::BinanceSpotAccountMarketProfile),
+    OkxTrading(kairos_integration::participants::okx::OkxTradingAccountMarketProfile),
+}
+
+impl AccountAsyncMarketProfileConnection {
+    async fn fetch_market_profile(
+        &mut self,
+        request: &ExternalMarketProfileRequest,
+    ) -> Result<ExternalMarketProfile, IntegrationError> {
+        match self {
+            Self::BinanceSpot(connection) => connection.fetch_market_profile(request).await,
+            Self::OkxTrading(connection) => connection.fetch_market_profile(request).await,
+        }
+    }
+}
+
+pub(crate) struct AccountAsyncMarketProfileGateway {
+    connections: BTreeMap<String, AccountAsyncMarketProfileConnection>,
+}
+
+impl AccountAsyncMarketProfileGateway {
+    pub(crate) fn new(connections: BTreeMap<String, AccountAsyncMarketProfileConnection>) -> Self {
+        Self { connections }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.connections.len()
+    }
+
+    pub(crate) async fn fetch(
+        &mut self,
+        request: &AccountMarketProfileRequest,
+    ) -> Result<AccountMarketProfile, String> {
+        let connection = self
+            .connections
+            .get_mut(request.segment_key.as_str())
+            .ok_or_else(|| format!("account segment is not configured: {}", request.segment_key))?;
+        let external_request = ExternalMarketProfileRequest {
+            account_id: request.account_id.clone(),
+            segment_key: kairos_domain_types::SegmentKey::new(request.segment_key.to_string())
+                .map_err(|error| error.to_string())?,
+            market_id: request.market_id.clone(),
+            source_symbol: request.source_symbol.clone(),
+        };
+        tokio::time::timeout(
+            ASYNC_ACCOUNT_QUERY_TIMEOUT,
+            connection.fetch_market_profile(&external_request),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "account market-profile query timed out after {}ms",
+                ASYNC_ACCOUNT_QUERY_TIMEOUT.as_millis()
+            )
+        })?
+        .map_err(|error| error.to_string())
+        .and_then(map_profile)
+    }
 }
 
 impl AccountAsyncEventSource {
+    pub(crate) fn binding_id(&self) -> &str {
+        match self {
+            Self::BinanceSpot { binding_id, .. }
+            | Self::BinanceFutures { binding_id, .. }
+            | Self::BinanceOptions { binding_id, .. }
+            | Self::BinanceMargin { binding_id, .. }
+            | Self::Ibkr { binding_id, .. }
+            | Self::OkxTrading { binding_id, .. } => binding_id,
+        }
+    }
+
+    pub(crate) async fn connect_channel(&mut self) -> Result<(), IntegrationError> {
+        match self {
+            Self::BinanceSpot { source, .. } => source.connect_channel().await,
+            Self::BinanceFutures { source, .. } => source.connect_channel().await,
+            Self::BinanceOptions { source, .. } => source.connect_channel().await,
+            Self::BinanceMargin { source, .. } => source.connect_channel().await,
+            Self::Ibkr { source, .. } => source.connect_channel().await,
+            Self::OkxTrading { source, .. } => source.connect_channel().await,
+        }
+    }
+
+    pub(crate) fn channel_health(&self) -> kairos_integration::application::ConnectionHealth {
+        match self {
+            Self::BinanceSpot { source, .. } => source.channel_health(),
+            Self::BinanceFutures { source, .. } => source.channel_health(),
+            Self::BinanceOptions { source, .. } => source.channel_health(),
+            Self::BinanceMargin { source, .. } => source.channel_health(),
+            Self::Ibkr { source, .. } => source.channel_health(),
+            Self::OkxTrading { source, .. } => source.channel_health(),
+        }
+    }
+
     pub(crate) async fn disconnect_channel(&mut self) -> Result<(), IntegrationError> {
         match self {
-            Self::BinanceSpot(source) => source.disconnect_channel().await,
-            Self::OkxTrading(source) => source.disconnect_channel().await,
+            Self::BinanceSpot { source, .. } => source.disconnect_channel().await,
+            Self::BinanceFutures { source, .. } => source.disconnect_channel().await,
+            Self::BinanceOptions { source, .. } => source.disconnect_channel().await,
+            Self::BinanceMargin { source, .. } => source.disconnect_channel().await,
+            Self::Ibkr { source, .. } => source.disconnect_channel().await,
+            Self::OkxTrading { source, .. } => source.disconnect_channel().await,
         }
     }
 
     pub(crate) async fn reconnect_channel(&mut self) -> Result<(), IntegrationError> {
         match self {
-            Self::BinanceSpot(source) => source.reconnect_channel().await,
-            Self::OkxTrading(source) => source.reconnect_channel().await,
+            Self::BinanceSpot { source, .. } => source.reconnect_channel().await,
+            Self::BinanceFutures { source, .. } => source.reconnect_channel().await,
+            Self::BinanceOptions { source, .. } => source.reconnect_channel().await,
+            Self::BinanceMargin { source, .. } => source.reconnect_channel().await,
+            Self::Ibkr { source, .. } => source.reconnect_channel().await,
+            Self::OkxTrading { source, .. } => source.reconnect_channel().await,
         }
     }
 
     pub(crate) async fn next_account_event(
         &mut self,
-    ) -> Result<ExternalAccountEvent, IntegrationError> {
+    ) -> Result<kairos_integration::application::ExternalAccountEventEnvelope, IntegrationError>
+    {
         match self {
-            Self::BinanceSpot(source) => source.next_account_event().await,
-            Self::OkxTrading(source) => source.next_account_event().await,
+            Self::BinanceSpot { source, .. } => source.next_account_event().await,
+            Self::BinanceFutures { source, .. } => source.next_account_event().await,
+            Self::BinanceOptions { source, .. } => source.next_account_event().await,
+            Self::BinanceMargin { source, .. } => source.next_account_event().await,
+            Self::Ibkr { source, .. } => source.next_account_event().await,
+            Self::OkxTrading { source, .. } => source.next_account_event().await,
         }
     }
 }
@@ -61,129 +452,10 @@ use kairos_integration::application::{
 
 pub(crate) enum AccountSnapshotGateway {
     Memory(BTreeMap<String, AccountSnapshot>),
-    Integration(BTreeMap<String, Box<dyn AccountReadConnection + Send>>),
-}
-
-struct AsyncAccountReadRequest {
-    segment: ExternalAccountSegment,
-    reply: std::sync::mpsc::SyncSender<
-        Result<
-            kairos_integration::application::capabilities::account_facts::ExternalAccountSnapshot,
-            IntegrationError,
-        >,
-    >,
-}
-
-/// Transitional adapter between Account's synchronous refresh worker and an
-/// Integration async capability. The network Future stays on Account's Tokio
-/// runtime; only the dedicated refresh thread waits synchronously.
-pub(crate) struct AsyncAccountReadProxy {
-    sender: tokio::sync::mpsc::Sender<AsyncAccountReadRequest>,
-}
-
-pub(crate) fn async_account_read_channel<C>(
-    descriptor: ConnectionDescriptor,
-    connection: C,
-) -> Result<(AsyncAccountReadProxy, tokio::task::JoinHandle<()>), String>
-where
-    C: AsyncAccountReadConnection + 'static,
-{
-    descriptor.validate()?;
-    let (sender, mut receiver) = tokio::sync::mpsc::channel::<AsyncAccountReadRequest>(2);
-    let worker = tokio::spawn(async move {
-        let mut connection = connection;
-        while let Some(request) = receiver.recv().await {
-            let result = connection.fetch_account(&request.segment).await;
-            let _ = request.reply.send(result);
-        }
-    });
-    Ok((AsyncAccountReadProxy { sender }, worker))
-}
-
-impl AccountReadConnection for AsyncAccountReadProxy {
-    fn fetch_account(
-        &mut self,
-        segment: &ExternalAccountSegment,
-    ) -> Result<
-        kairos_integration::application::capabilities::account_facts::ExternalAccountSnapshot,
-        IntegrationError,
-    > {
-        if tokio::runtime::Handle::try_current().is_ok() {
-            return Err(IntegrationError::InvalidRequest(
-                "Account async-read proxy must be called by its dedicated refresh worker".into(),
-            ));
-        }
-        let (reply, receiver) = std::sync::mpsc::sync_channel(1);
-        self.sender
-            .blocking_send(AsyncAccountReadRequest {
-                segment: segment.clone(),
-                reply,
-            })
-            .map_err(|_| {
-                IntegrationError::Unavailable("Account async-read worker is stopped".into())
-            })?;
-        receiver.recv().map_err(|_| {
-            IntegrationError::Unavailable("Account async-read worker did not respond".into())
-        })?
-    }
-}
-
-struct AsyncAccountMarketProfileRequest {
-    request: ExternalMarketProfileRequest,
-    reply: std::sync::mpsc::SyncSender<Result<ExternalMarketProfile, IntegrationError>>,
-}
-
-pub(crate) struct AsyncAccountMarketProfileProxy {
-    sender: tokio::sync::mpsc::Sender<AsyncAccountMarketProfileRequest>,
-}
-
-pub(crate) fn async_account_market_profile_channel<C>(
-    descriptor: ConnectionDescriptor,
-    connection: C,
-) -> Result<(AsyncAccountMarketProfileProxy, tokio::task::JoinHandle<()>), String>
-where
-    C: AsyncAccountMarketProfileConnection + 'static,
-{
-    descriptor.validate()?;
-    let (sender, mut receiver) = tokio::sync::mpsc::channel::<AsyncAccountMarketProfileRequest>(2);
-    let worker = tokio::spawn(async move {
-        let mut connection = connection;
-        while let Some(request) = receiver.recv().await {
-            let result = connection.fetch_market_profile(&request.request).await;
-            let _ = request.reply.send(result);
-        }
-    });
-    Ok((AsyncAccountMarketProfileProxy { sender }, worker))
-}
-
-impl AccountMarketProfileConnection for AsyncAccountMarketProfileProxy {
-    fn fetch_market_profile(
-        &mut self,
-        request: &ExternalMarketProfileRequest,
-    ) -> Result<ExternalMarketProfile, IntegrationError> {
-        if tokio::runtime::Handle::try_current().is_ok() {
-            return Err(IntegrationError::InvalidRequest(
-                "Account async-market-profile proxy must be called by its dedicated refresh worker"
-                    .into(),
-            ));
-        }
-        let (reply, receiver) = std::sync::mpsc::sync_channel(1);
-        self.sender
-            .blocking_send(AsyncAccountMarketProfileRequest {
-                request: request.clone(),
-                reply,
-            })
-            .map_err(|_| {
-                IntegrationError::Unavailable(
-                    "Account async-market-profile worker is stopped".into(),
-                )
-            })?;
-        receiver.recv().map_err(|_| {
-            IntegrationError::Unavailable(
-                "Account async-market-profile worker did not respond".into(),
-            )
-        })?
-    }
+    Integration {
+        connections: BTreeMap<String, Box<dyn AccountReadConnection + Send>>,
+        resolver: AccountInstrumentResolver,
+    },
 }
 
 impl AccountSnapshotGateway {
@@ -193,8 +465,12 @@ impl AccountSnapshotGateway {
 
     pub(crate) fn integration(
         connections: BTreeMap<String, Box<dyn AccountReadConnection + Send>>,
+        resolver: AccountInstrumentResolver,
     ) -> Self {
-        Self::Integration(connections)
+        Self::Integration {
+            connections,
+            resolver,
+        }
     }
 
     pub(crate) fn split(self) -> BTreeMap<String, Self> {
@@ -205,12 +481,18 @@ impl AccountSnapshotGateway {
                     (key.clone(), Self::Memory(BTreeMap::from([(key, snapshot)])))
                 })
                 .collect(),
-            Self::Integration(connections) => connections
+            Self::Integration {
+                connections,
+                resolver,
+            } => connections
                 .into_iter()
                 .map(|(key, connection)| {
                     (
                         key.clone(),
-                        Self::Integration(BTreeMap::from([(key, connection)])),
+                        Self::Integration {
+                            connections: BTreeMap::from([(key, connection)]),
+                            resolver: resolver.clone(),
+                        },
                     )
                 })
                 .collect(),
@@ -223,7 +505,10 @@ impl AccountSnapshotGateway {
                 .get(segment.segment_key.as_str())
                 .cloned()
                 .ok_or_else(|| format!("missing snapshot for segment: {}", segment.segment_key)),
-            Self::Integration(connections) => {
+            Self::Integration {
+                connections,
+                resolver,
+            } => {
                 let connection = connections
                     .get_mut(segment.segment_key.as_str())
                     .ok_or_else(|| {
@@ -232,7 +517,7 @@ impl AccountSnapshotGateway {
                 connection
                     .fetch_account(&external_segment(segment))
                     .map_err(|error| error.to_string())
-                    .and_then(map_snapshot)
+                    .and_then(|value| map_snapshot(value, resolver))
             }
         }
     }
@@ -267,28 +552,6 @@ impl AccountMarketProfileGateway {
             })
             .map_err(|error| error.to_string())
             .and_then(map_profile)
-    }
-}
-
-pub(crate) struct AccountEventStream {
-    stream: BufferedIntegrationAccountStream,
-}
-
-impl AccountEventStream {
-    pub(crate) fn new(stream: BufferedIntegrationAccountStream) -> Self {
-        Self { stream }
-    }
-
-    pub(crate) fn next_event(&mut self) -> Result<Option<AccountEvent>, String> {
-        self.stream.next_event()?.map(map_event).transpose()
-    }
-
-    pub(crate) fn pending_events(&self) -> usize {
-        self.stream.pending_events()
-    }
-
-    pub(crate) fn register_wakeup(&mut self, wakeup: Arc<tokio::sync::Notify>) {
-        self.stream.register_wakeup(wakeup);
     }
 }
 
@@ -341,11 +604,12 @@ fn map_balance(value: ExternalBalance) -> Result<Balance, String> {
 
 fn map_position(
     value: kairos_integration::application::ExternalPosition,
+    resolver: &AccountInstrumentResolver,
 ) -> Result<Position, String> {
+    let (instrument_id, market_id) = resolver.resolve(&value.provider_instrument)?;
     Ok(Position {
-        instrument_id: InstrumentId::new(value.instrument_id.to_string())
-            .map_err(|error| error.to_string())?,
-        market_id: value.market_id,
+        instrument_id,
+        market_id,
         quantity: signed_quantity(value.quantity),
         average_price: value.average_price.map(price).transpose()?,
         mark_price: value.mark_price.map(price).transpose()?,
@@ -357,6 +621,7 @@ fn map_position(
 
 fn map_snapshot(
     value: kairos_integration::application::ExternalAccountSnapshot,
+    resolver: &AccountInstrumentResolver,
 ) -> Result<AccountSnapshot, String> {
     Ok(AccountSnapshot {
         segment_key: SegmentKey::new(value.segment_key.to_string())
@@ -374,12 +639,12 @@ fn map_snapshot(
         positions: value
             .positions
             .into_iter()
-            .map(map_position)
+            .map(|value| map_position(value, resolver))
             .collect::<Result<_, _>>()?,
         open_orders: value
             .open_orders
             .into_iter()
-            .map(map_open_order)
+            .map(|value| map_open_order(value, resolver))
             .collect::<Result<_, _>>()?,
         status: map_status(value.status),
         observed_at_unix_nanos: value.observed_at_unix_nanos,
@@ -399,12 +664,13 @@ fn map_snapshot(
 
 fn map_open_order(
     value: kairos_integration::application::ExternalOpenOrder,
+    resolver: &AccountInstrumentResolver,
 ) -> Result<OpenOrder, String> {
+    let (instrument_id, _) = resolver.resolve(&value.provider_instrument)?;
     Ok(OpenOrder {
         order_id: value.order_id,
         remote_order_id: value.remote_order_id,
-        instrument_id: InstrumentId::new(value.instrument_id.to_string())
-            .expect("provider instrument id"),
+        instrument_id,
         side: value.side,
         quantity: quantity(value.quantity)?,
         filled_quantity: quantity(value.filled_quantity)?,
@@ -460,15 +726,20 @@ fn map_order_status(value: ExternalOrderStatus) -> (&'static str, bool) {
     }
 }
 
-pub(crate) fn map_event(value: ExternalAccountEvent) -> Result<AccountEvent, String> {
+pub(crate) fn map_event(
+    value: ExternalAccountEvent,
+    resolver: &AccountInstrumentResolver,
+) -> Result<AccountEvent, String> {
     Ok(match value {
         ExternalAccountEvent::Batch(values) => AccountEvent::Batch(
             values
                 .into_iter()
-                .map(map_event)
+                .map(|value| map_event(value, resolver))
                 .collect::<Result<_, _>>()?,
         ),
-        ExternalAccountEvent::Snapshot(value) => AccountEvent::Snapshot(map_snapshot(value)?),
+        ExternalAccountEvent::Snapshot(value) => {
+            AccountEvent::Snapshot(map_snapshot(value, resolver)?)
+        }
         ExternalAccountEvent::Order(value) => {
             let (status, active) = map_order_status(value.status);
             AccountEvent::OrderObserved(AccountOrderObservation {
@@ -488,23 +759,25 @@ pub(crate) fn map_event(value: ExternalAccountEvent) -> Result<AccountEvent, Str
                 observed_at_unix_nanos: value.occurred_at_unix_nanos,
             })
         }
-        ExternalAccountEvent::Fill(value) => AccountEvent::ObservedFill(AccountObservedFill {
-            fill_id: FillId::new(value.fill_id.to_string()).expect("validated fill id"),
-            order_id: Some(value.order_id),
-            remote_order_id: None,
-            segment_key: SegmentKey::new(value.segment_key.to_string())
-                .expect("validated account segment key"),
-            instrument_id: InstrumentId::new(value.instrument_id.to_string())
-                .map_err(|error| error.to_string())?,
-            quantity: quantity(value.quantity)?,
-            price: price(value.price)?,
-            side: if value.side.eq_ignore_ascii_case("sell") {
-                crate::domain::FillSide::Sell
-            } else {
-                crate::domain::FillSide::Buy
-            },
-            occurred_at_unix_nanos: value.occurred_at_unix_nanos,
-        }),
+        ExternalAccountEvent::Fill(value) => {
+            let (instrument_id, _) = resolver.resolve(&value.provider_instrument)?;
+            AccountEvent::ObservedFill(AccountObservedFill {
+                fill_id: FillId::new(value.fill_id.to_string()).expect("validated fill id"),
+                order_id: Some(value.order_id),
+                remote_order_id: None,
+                segment_key: SegmentKey::new(value.segment_key.to_string())
+                    .expect("validated account segment key"),
+                instrument_id,
+                quantity: quantity(value.quantity)?,
+                price: price(value.price)?,
+                side: if value.side.eq_ignore_ascii_case("sell") {
+                    crate::domain::FillSide::Sell
+                } else {
+                    crate::domain::FillSide::Buy
+                },
+                occurred_at_unix_nanos: value.occurred_at_unix_nanos,
+            })
+        }
     })
 }
 
@@ -538,75 +811,76 @@ fn map_profile(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use kairos_integration::application::capabilities::account_facts::{
-        ExternalAccountIdentity, ExternalAccountSnapshot, ExternalAccountStatus,
+mod identity_tests {
+    use super::AccountInstrumentResolver;
+    use kairos_integration::application::{
+        ParticipantInstrumentTypeRef, ParticipantKind, ParticipantRef, ProviderInstrumentRef,
     };
-    use kairos_integration::application::AsyncAccountReadConnection;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
-    struct RuntimeCheckingRead(std::sync::Arc<AtomicBool>);
-
-    impl AsyncAccountReadConnection for RuntimeCheckingRead {
-        async fn fetch_account(
-            &mut self,
-            segment: &ExternalAccountSegment,
-        ) -> Result<ExternalAccountSnapshot, IntegrationError> {
-            self.0.store(
-                tokio::runtime::Handle::try_current().is_ok(),
-                Ordering::Release,
-            );
-            Ok(ExternalAccountSnapshot {
-                segment_key: segment.segment_key.clone(),
-                balances: Vec::new(),
-                collateral: Vec::new(),
-                positions: Vec::new(),
-                open_orders: Vec::new(),
-                status: ExternalAccountStatus::Ready,
-                observed_at_unix_nanos: 1.into(),
-                equity: None,
-                initial_equity: None,
-                net_profit: None,
-                account_model: None,
-                margin_mode: None,
-                position_mode: None,
-                partial: false,
-            })
-        }
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn refresh_thread_proxy_polls_provider_future_on_account_runtime() {
-        let used_runtime = std::sync::Arc::new(AtomicBool::new(false));
-        let (mut proxy, worker) = async_account_read_channel(
-            ConnectionDescriptor {
-                binding_id: "account.binance.spot.test".into(),
-                participant: kairos_integration::application::ParticipantRef::new(
-                    kairos_integration::application::ParticipantKind::Exchange,
-                    "binance",
-                )
-                .unwrap(),
-                environment: "test".into(),
-                principal_id: Some("main".into()),
-                domain: kairos_integration::application::ConnectionDomainRef::new("spot").unwrap(),
-            },
-            RuntimeCheckingRead(std::sync::Arc::clone(&used_runtime)),
+    #[test]
+    fn resolves_exchange_symbol_only_through_reference_market() {
+        let resolver = AccountInstrumentResolver {
+            markets: Arc::new(vec![kairos_reference_contract::model::Market {
+                market_id: "market:binance:spot:BTCUSDT".into(),
+                instrument_id: "instrument:spot:BTC".into(),
+                exchange_id: "exchange:binance".into(),
+                market_type: "spot".into(),
+                source_symbol: "BTCUSDT".into(),
+                status: "active".into(),
+                ..Default::default()
+            }]),
+            instruments: Arc::default(),
+        };
+        let provider = ProviderInstrumentRef::new(
+            ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
+            Some(ParticipantInstrumentTypeRef::new("binance-spot").unwrap()),
+            "BTCUSDT",
         )
         .unwrap();
-        let segment = ExternalAccountSegment {
-            identity: ExternalAccountIdentity::new("binance", "main").unwrap(),
-            segment_key: kairos_domain_types::SegmentKey::new("spot").unwrap(),
-            environment: "test".into(),
-            account_model: Some("no_margin".into()),
+
+        let (instrument, market) = resolver.resolve(&provider).unwrap();
+        assert_eq!(instrument.as_str(), "instrument:spot:BTC");
+        assert_eq!(
+            market.as_ref().map(kairos_domain_types::MarketId::as_str),
+            Some("market:binance:spot:BTCUSDT")
+        );
+    }
+
+    #[test]
+    fn resolves_ibkr_equity_to_reference_instrument_without_fabricating_market() {
+        let resolver = AccountInstrumentResolver {
+            markets: Arc::default(),
+            instruments: Arc::new(vec![kairos_reference_contract::model::Instrument {
+                instrument_id: "instrument:equity:US:AAPL:common".into(),
+                symbol: "AAPL".into(),
+                instrument_type: "equity".into(),
+                status: "active".into(),
+                ..Default::default()
+            }]),
         };
-        let (result_sender, result_receiver) = tokio::sync::oneshot::channel();
-        std::thread::spawn(move || {
-            let _ = result_sender.send(proxy.fetch_account(&segment));
-        });
-        let result = result_receiver.await.unwrap().unwrap();
-        assert_eq!(result.segment_key.as_str(), "spot");
-        assert!(used_runtime.load(Ordering::Acquire));
-        worker.await.unwrap();
+        let provider = ProviderInstrumentRef::new(
+            ParticipantRef::new(ParticipantKind::Broker, "ibkr").unwrap(),
+            Some(ParticipantInstrumentTypeRef::new("equity").unwrap()),
+            "AAPL",
+        )
+        .unwrap();
+
+        let (instrument, market) = resolver.resolve(&provider).unwrap();
+        assert_eq!(instrument.as_str(), "instrument:equity:US:AAPL:common");
+        assert!(market.is_none());
+    }
+
+    #[test]
+    fn refuses_missing_or_ambiguous_reference_identity() {
+        let resolver = AccountInstrumentResolver::default();
+        let provider = ProviderInstrumentRef::new(
+            ParticipantRef::new(ParticipantKind::Exchange, "binance").unwrap(),
+            Some(ParticipantInstrumentTypeRef::new("binance-spot").unwrap()),
+            "BTCUSDT",
+        )
+        .unwrap();
+
+        assert!(resolver.resolve(&provider).is_err());
     }
 }

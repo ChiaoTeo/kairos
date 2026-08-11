@@ -1,8 +1,9 @@
+use async_trait::async_trait;
 use kairos_domain_types::{AssetId, Exchange, InstrumentId, ListingId, MarketId, Symbol};
 use kairos_reference::composition::{build_application, ReferenceCompositionConfig};
 use kairos_reference::domain::{
     Asset, Entity, FinancialProduct, Instrument, Listing, Market, ProviderCatalog,
-    ReferenceCatalog, ReferenceResult,
+    ReferenceCatalog, ReferenceError, ReferenceResult,
 };
 use kairos_reference::services::providers::ReferenceSource;
 use kairos_reference::services::store::CatalogStore;
@@ -40,12 +41,13 @@ fn symbol(value: &str) -> Symbol {
     Symbol::new(value).unwrap()
 }
 
+#[async_trait]
 impl ReferenceSource for SequenceSource {
     fn source_id(&self) -> &str {
         "sequence-test"
     }
 
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
         let catalog = self
             .catalogs
             .get(self.index.min(self.catalogs.len().saturating_sub(1)))
@@ -56,12 +58,13 @@ impl ReferenceSource for SequenceSource {
     }
 }
 
+#[async_trait]
 impl ReferenceSource for TestSource {
     fn source_id(&self) -> &str {
         "test"
     }
 
-    fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
+    async fn fetch_catalog(&mut self) -> ReferenceResult<ProviderCatalog> {
         Ok(self.catalog.clone())
     }
 }
@@ -69,18 +72,40 @@ impl ReferenceSource for TestSource {
 #[derive(Default)]
 struct TestStore(Option<ReferenceCatalog>);
 
+struct FailingStore(Option<ReferenceCatalog>);
+
+#[async_trait]
 impl CatalogStore for TestStore {
-    fn load(&mut self) -> ReferenceResult<Option<ReferenceCatalog>> {
+    async fn load(&mut self) -> ReferenceResult<Option<ReferenceCatalog>> {
         Ok(self.0.clone())
     }
 
-    fn save(&mut self, catalog: &ReferenceCatalog) -> ReferenceResult<()> {
+    async fn save_refresh(
+        &mut self,
+        catalog: &ReferenceCatalog,
+        _events: &[kairos_reference::domain::LifecycleEvent],
+    ) -> ReferenceResult<()> {
         self.0 = Some(catalog.clone());
         Ok(())
     }
 }
 
-fn application() -> ReferenceApplication {
+#[async_trait]
+impl CatalogStore for FailingStore {
+    async fn load(&mut self) -> ReferenceResult<Option<ReferenceCatalog>> {
+        Ok(self.0.clone())
+    }
+
+    async fn save_refresh(
+        &mut self,
+        _catalog: &ReferenceCatalog,
+        _events: &[kairos_reference::domain::LifecycleEvent],
+    ) -> ReferenceResult<()> {
+        Err(ReferenceError::Persistence("injected failure".into()))
+    }
+}
+
+async fn application() -> ReferenceApplication {
     ReferenceApplication::new(
         "reference-test",
         Box::new(TestSource {
@@ -88,6 +113,7 @@ fn application() -> ReferenceApplication {
         }),
         Box::new(TestStore::default()),
     )
+    .await
     .unwrap()
 }
 
@@ -167,19 +193,19 @@ fn provider_catalog() -> ProviderCatalog {
     }
 }
 
-#[test]
-fn application_reconciles_reference_catalog() {
-    let mut application = application();
-    let result = application.refresh().unwrap();
+#[tokio::test]
+async fn application_reconciles_reference_catalog() {
+    let mut application = application().await;
+    let result = application.refresh().await.unwrap();
     assert_eq!(result.events.len(), 7);
     assert_eq!(result.generation, 1.into());
     assert_eq!(application.catalog().markets.len(), 1);
 }
 
-#[test]
-fn application_exposes_read_only_market_queries() {
-    let mut application = application();
-    application.refresh().unwrap();
+#[tokio::test]
+async fn application_exposes_read_only_market_queries() {
+    let mut application = application().await;
+    application.refresh().await.unwrap();
 
     let query = MarketQuery {
         exchange_id: Some(Exchange::new("exchange:binance").unwrap()),
@@ -196,8 +222,8 @@ fn application_exposes_read_only_market_queries() {
     );
 }
 
-#[test]
-fn default_reference_registry_composes_without_market_configuration() {
+#[tokio::test]
+async fn default_reference_registry_composes_without_market_configuration() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
     std::fs::write(
@@ -215,23 +241,73 @@ fn default_reference_registry_composes_without_market_configuration() {
         },
         false,
     )
+    .await
     .unwrap();
     assert_eq!(composition.application.source_id(), "reference-default");
 }
 
-#[test]
-fn application_does_not_emit_duplicate_events_for_same_catalog() {
-    let mut application = application();
-    assert_eq!(application.refresh().unwrap().events.len(), 7);
-    let second = application.refresh().unwrap();
+#[tokio::test]
+async fn application_does_not_emit_duplicate_events_for_same_catalog() {
+    let mut application = application().await;
+    assert_eq!(application.refresh().await.unwrap().events.len(), 7);
+    let second = application.refresh().await.unwrap();
     assert!(second.events.is_empty());
     assert_eq!(second.event_sequence, 7.into());
 }
 
-#[test]
-fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() {
-    let mut application = application();
-    application.refresh().unwrap();
+#[tokio::test]
+async fn failed_refresh_does_not_advance_in_memory_catalog() {
+    let mut application = ReferenceApplication::new(
+        "reference-test",
+        Box::new(TestSource {
+            catalog: provider_catalog(),
+        }),
+        Box::new(FailingStore(None)),
+    )
+    .await
+    .unwrap();
+    let before = application.catalog().clone();
+
+    let error = application.refresh().await.unwrap_err();
+
+    assert!(matches!(error, ReferenceError::Persistence(_)));
+    assert_eq!(application.catalog(), &before);
+}
+
+#[tokio::test]
+async fn failed_administrative_commit_does_not_advance_in_memory_catalog() {
+    let mut persisted = ReferenceCatalog::default();
+    persisted.apply(provider_catalog(), 1.into());
+    let mut application = ReferenceApplication::new(
+        "reference-test",
+        Box::new(TestSource {
+            catalog: provider_catalog(),
+        }),
+        Box::new(FailingStore(Some(persisted))),
+    )
+    .await
+    .unwrap();
+    let before = application.catalog().clone();
+
+    let error = application
+        .upsert_asset(Asset {
+            asset_id: asset_id("asset:SOL"),
+            code: "SOL".into(),
+            asset_class: "crypto".into(),
+            status: "active".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, ReferenceError::Persistence(_)));
+    assert_eq!(application.catalog(), &before);
+}
+
+#[tokio::test]
+async fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() {
+    let mut application = application().await;
+    application.refresh().await.unwrap();
     let generation = application
         .upsert_asset(Asset {
             asset_id: asset_id("asset:sol"),
@@ -240,6 +316,7 @@ fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() {
             status: "active".into(),
             ..Default::default()
         })
+        .await
         .unwrap();
     assert_eq!(generation, 2.into());
     let event = application
@@ -253,10 +330,10 @@ fn administrative_asset_upsert_is_versioned_and_emits_a_reference_event() {
     assert_eq!(application.catalog().event_sequence, 8.into());
 }
 
-#[test]
-fn administrative_instrument_and_listing_upserts_share_commit_path() {
-    let mut application = application();
-    application.refresh().unwrap();
+#[tokio::test]
+async fn administrative_instrument_and_listing_upserts_share_commit_path() {
+    let mut application = application().await;
+    application.refresh().await.unwrap();
     let generation = application
         .upsert_instrument(Instrument {
             instrument_id: instrument_id("instrument:spot:ETH"),
@@ -265,6 +342,7 @@ fn administrative_instrument_and_listing_upserts_share_commit_path() {
             status: "active".into(),
             ..Default::default()
         })
+        .await
         .unwrap();
     assert_eq!(generation, 2.into());
     let generation = application
@@ -277,6 +355,7 @@ fn administrative_instrument_and_listing_upserts_share_commit_path() {
             effective_from_unix_nanos: 1.into(),
             ..Default::default()
         })
+        .await
         .unwrap();
     assert_eq!(generation, 3.into());
     let events = application
@@ -291,10 +370,10 @@ fn administrative_instrument_and_listing_upserts_share_commit_path() {
     assert_eq!(application.catalog().lifecycle_events.len(), 9);
 }
 
-#[test]
-fn application_query_covers_each_reference_record_kind() {
-    let mut application = application();
-    application.refresh().unwrap();
+#[tokio::test]
+async fn application_query_covers_each_reference_record_kind() {
+    let mut application = application().await;
+    application.refresh().await.unwrap();
 
     let markets = application.query(&ReferenceQuery {
         kind: ReferenceKind::Market,
@@ -323,8 +402,8 @@ fn application_query_covers_each_reference_record_kind() {
     assert!(application.record("market:binance:spot:BTCUSDT").is_ok());
 }
 
-#[test]
-fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
+#[tokio::test]
+async fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
     let mut catalog = provider_catalog();
     catalog.instruments.push(Instrument {
         instrument_id: instrument_id("instrument:equity:SPY"),
@@ -339,8 +418,9 @@ fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
         Box::new(TestSource { catalog }),
         Box::new(TestStore::default()),
     )
+    .await
     .unwrap();
-    application.refresh().unwrap();
+    application.refresh().await.unwrap();
 
     let records = application.query(&ReferenceQuery {
         kind: ReferenceKind::Instrument,
@@ -351,8 +431,8 @@ fn instrument_underlying_is_a_query_filter_not_a_sync_scope() {
     assert!(matches!(records[0], ReferenceRecord::Instrument(_)));
 }
 
-#[test]
-fn lifecycle_history_can_be_replayed_by_stable_sequence() {
+#[tokio::test]
+async fn lifecycle_history_can_be_replayed_by_stable_sequence() {
     let mut application = ReferenceApplication::new(
         "reference-test",
         Box::new(SequenceSource {
@@ -361,12 +441,14 @@ fn lifecycle_history_can_be_replayed_by_stable_sequence() {
         }),
         Box::new(TestStore::default()),
     )
+    .await
     .unwrap();
-    application.refresh().unwrap();
-    application.refresh().unwrap();
+    application.refresh().await.unwrap();
+    application.refresh().await.unwrap();
 
     let events = application
         .replay_lifecycle_events(Some(1.into()), Some(14.into()))
+        .await
         .unwrap();
     assert_eq!(events.len(), 14);
     assert!(events.iter().any(
@@ -383,16 +465,17 @@ fn lifecycle_history_can_be_replayed_by_stable_sequence() {
             sequence_from: Some(1.into()),
             ..LifecycleQuery::default()
         })
+        .await
         .unwrap();
     assert_eq!(delisted.len(), 1);
     assert_eq!(delisted[0].event_type, "delisted");
     assert_eq!(delisted[0].record_kind.as_deref(), Some("market"));
 }
 
-#[test]
-fn immutable_read_model_matches_application_query_results() {
-    let mut application = application();
-    application.refresh().unwrap();
+#[tokio::test]
+async fn immutable_read_model_matches_application_query_results() {
+    let mut application = application().await;
+    application.refresh().await.unwrap();
     let query = ReferenceQuery {
         kind: ReferenceKind::Market,
         text: Some("BTCUSDT".into()),
@@ -400,12 +483,13 @@ fn immutable_read_model_matches_application_query_results() {
     };
     assert_eq!(
         serde_json::to_value(application.query(&query)).unwrap(),
-        serde_json::to_value(application.read_model().query(&query)).unwrap()
+        serde_json::to_value(application.read_model().await.query(&query)).unwrap()
     );
     assert_eq!(
         application.markets(&MarketQuery::by_symbol("BTCUSDT")),
         application
             .read_model()
+            .await
             .markets(&MarketQuery::by_symbol("BTCUSDT"))
     );
 }

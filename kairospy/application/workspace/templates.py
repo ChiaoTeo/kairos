@@ -72,6 +72,19 @@ def install_project_template(
     launch.write_text(_BACKTEST_LAUNCH, encoding="utf-8")
 
     guide.write_text(_BACKTEST_GUIDE, encoding="utf-8")
+    manifest = workspace.paths.root / "kairos.toml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8")
+        + "\n[market]\n"
+        + 'default_profile = "replay"\n\n'
+        + "[market.profiles.replay]\n"
+        + 'scope = "replay"\n'
+        + "\n[market.profiles.replay.replay]\n"
+        + 'clock = "maximum"\n'
+        + "speed_multiplier = 1\n"
+        + "start_paused = false\n",
+        encoding="utf-8",
+    )
     return (strategy_package / "strategy.py", account, events, launch, guide)
 
 
@@ -173,6 +186,7 @@ start = "2024-01-01T00:00:00Z"
 end = "2024-01-02T00:00:00Z"
 events = "data/examples/demo-market.jsonl"
 scope = "instance"
+profile = "replay"
 """
 
 _BACKTEST_GUIDE = """# Kairos backtest quickstart

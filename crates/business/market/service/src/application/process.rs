@@ -1,59 +1,30 @@
 //! Market process runtime and strategy command boundary.
 
-use crate::application::MarketRuntime;
-use crate::domain::observations::MarketObservation;
+use crate::application::MarketApplication;
 use crate::domain::snapshot::MarketSnapshot;
+use crate::services::control::{
+    spawn_server as spawn_control_server, EngineCommand, MarketHttpResponse,
+};
+use crate::services::event_publication::{EventFanout, EventPublication};
 use crate::services::reference::{resolve_market, resolve_option_markets};
+use crate::services::reference_projection::ReferenceProjection;
+use crate::services::sources::SourceActivator;
 use crate::{MarketDescriptor, SubscriptionId};
-use axum::{
-    body::to_bytes,
-    extract::{Request, State},
-    http::{Method, StatusCode},
-    response::{IntoResponse, Response},
-    routing::any,
-    Json, Router,
-};
-use flatbuffers::FlatBufferBuilder;
 use kairos_domain_types::Sequence;
-use kairos_protocol::generated::kairos::common::v_1::{
-    Decimal64, MessageHeader, MessageHeaderArgs,
-};
-use kairos_protocol::generated::kairos::market::v_1::{
-    finish_bar_message_buffer, finish_funding_rate_message_buffer, finish_greeks_message_buffer,
-    finish_index_price_message_buffer, finish_instrument_status_message_buffer,
-    finish_mark_price_message_buffer, finish_open_interest_message_buffer,
-    finish_quote_message_buffer, finish_rate_message_buffer, finish_ticker_24h_message_buffer,
-    finish_trade_message_buffer, Bar as FbBar, BarArgs as FbBarArgs, BarMessage, BarMessageArgs,
-    FundingRate as FbFundingRate, FundingRateArgs as FbFundingRateArgs, FundingRateMessage,
-    FundingRateMessageArgs, Greeks as FbGreeks, GreeksArgs as FbGreeksArgs, GreeksMessage,
-    GreeksMessageArgs, IndexPrice as FbIndexPrice, IndexPriceArgs as FbIndexPriceArgs,
-    IndexPriceMessage, IndexPriceMessageArgs, InstrumentStatus as FbInstrumentStatus,
-    InstrumentStatusArgs as FbInstrumentStatusArgs, InstrumentStatusMessage,
-    InstrumentStatusMessageArgs, MarkPrice as FbMarkPrice, MarkPriceArgs as FbMarkPriceArgs,
-    MarkPriceMessage, MarkPriceMessageArgs, OpenInterest as FbOpenInterest,
-    OpenInterestArgs as FbOpenInterestArgs, OpenInterestMessage, OpenInterestMessageArgs,
-    Quote as FbQuote, QuoteArgs as FbQuoteArgs, QuoteMessage, QuoteMessageArgs, Rate as FbRate,
-    RateArgs as FbRateArgs, RateMessage, RateMessageArgs, Ticker24h as FbTicker24h,
-    Ticker24hArgs as FbTicker24hArgs, Ticker24hMessage, Ticker24hMessageArgs, Trade as FbTrade,
-    TradeArgs as FbTradeArgs, TradeMessage, TradeMessageArgs,
-};
 use kairos_protocol::InstanceIdentity;
 use kairos_workspace::runtime::{HEALTH_PATH, SNAPSHOT_PATH, STOP_PATH};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::io::AsyncWriteExt;
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixListener;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
-use tracing::{error, info, warn, Instrument};
+use tracing::{error, info, warn};
 
-const MAX_PENDING_ENCODED_EVENTS: usize = 8_192;
 const MAX_COMMAND_RESULTS: usize = 4_096;
 
 #[derive(Debug, Deserialize)]
@@ -110,23 +81,23 @@ pub trait ReferenceChangeSource {
 }
 
 pub struct MarketProcess {
-    engine: MarketEngine,
+    actor_task: MarketActorTask,
     socket_path: PathBuf,
     event_socket_path: PathBuf,
     reference_events: Option<Box<dyn ReferenceChangeSource>>,
     reference_event_sequence: Option<Sequence>,
+    reference_poll_interval: Duration,
+    publication_queue_capacity: usize,
+    lifecycle_guard: Option<Box<dyn Send>>,
 }
 
-struct MarketHttpRequest {
-    method: Method,
-    path: String,
-    body: Vec<u8>,
-    response: oneshot::Sender<MarketHttpResponse>,
-}
-
-struct MarketHttpResponse {
-    status: StatusCode,
-    payload: Value,
+pub(crate) struct MarketProcessSettings {
+    pub(crate) snapshot_interval: Duration,
+    pub(crate) freshness_check_interval: Duration,
+    pub(crate) freshness_max_age: Duration,
+    pub(crate) reference_recovery_interval: Duration,
+    pub(crate) shutdown_timeout: Duration,
+    pub(crate) publication_queue_capacity: usize,
 }
 
 /// Application-owned publication capability. Concrete storage and wire
@@ -135,24 +106,23 @@ pub trait MarketSnapshotPublisher: Send {
     fn publish(&mut self, snapshot: &MarketSnapshot) -> Result<(), String>;
 }
 
-enum EngineCommand {
-    Http(MarketHttpRequest),
-    ReferenceChanged { sequence: Sequence, gap: bool },
-}
-
-struct MarketEngine {
-    application: MarketRuntime,
+/// The sole asynchronous task which serializes every MarketActor mutation.
+/// This is task/mailbox mechanics around the Actor, not a second business
+/// runtime or state owner.
+struct MarketActorTask {
+    application: MarketApplication,
     publisher: Box<dyn MarketSnapshotPublisher>,
     event_actor_id: String,
     event_identity: InstanceIdentity,
-    interval: Duration,
-    feed_enabled: bool,
+    snapshot_interval: Duration,
+    freshness_check_interval: Duration,
+    freshness_max_age: Duration,
+    reference_recovery_interval: Duration,
+    shutdown_timeout: Duration,
     stop_requested: bool,
-    reference_snapshot_path: Option<PathBuf>,
-    reference_markets: Option<Vec<MarketDescriptor>>,
-    reference_event_sequence: Option<Sequence>,
-    reference_recovery_needed: bool,
+    reference: ReferenceProjection,
     command_results: BTreeMap<String, CachedCommandResult>,
+    source_activator: Option<Box<dyn SourceActivator>>,
 }
 
 #[derive(Clone)]
@@ -164,12 +134,11 @@ struct CachedCommandResult {
 
 impl MarketProcess {
     pub fn new<P: MarketSnapshotPublisher + 'static>(
-        application: MarketRuntime,
+        application: MarketApplication,
         publisher: P,
         socket_path: impl Into<PathBuf>,
         event_socket_path: impl Into<PathBuf>,
         interval: Duration,
-        feed_enabled: bool,
     ) -> Result<Self, String> {
         Self::new_with_identity(
             application,
@@ -177,66 +146,138 @@ impl MarketProcess {
             socket_path,
             event_socket_path,
             interval,
-            feed_enabled,
             InstanceIdentity::default(),
         )
     }
 
     pub fn new_with_identity<P: MarketSnapshotPublisher + 'static>(
-        application: MarketRuntime,
+        application: MarketApplication,
         publisher: P,
         socket_path: impl Into<PathBuf>,
         event_socket_path: impl Into<PathBuf>,
         interval: Duration,
-        feed_enabled: bool,
         identity: InstanceIdentity,
     ) -> Result<Self, String> {
-        if interval.is_zero() {
-            return Err("market process interval must be positive".into());
+        Self::new_configured(
+            application,
+            publisher,
+            socket_path,
+            event_socket_path,
+            identity,
+            MarketProcessSettings {
+                snapshot_interval: interval,
+                freshness_check_interval: interval,
+                freshness_max_age: Duration::from_secs(5),
+                reference_recovery_interval: interval,
+                shutdown_timeout: Duration::from_secs(5),
+                publication_queue_capacity: 256,
+            },
+        )
+    }
+
+    pub(crate) fn new_configured<P: MarketSnapshotPublisher + 'static>(
+        application: MarketApplication,
+        publisher: P,
+        socket_path: impl Into<PathBuf>,
+        event_socket_path: impl Into<PathBuf>,
+        identity: InstanceIdentity,
+        settings: MarketProcessSettings,
+    ) -> Result<Self, String> {
+        Self::new_configured_with_activator(
+            application,
+            publisher,
+            socket_path,
+            event_socket_path,
+            identity,
+            settings,
+            None,
+        )
+    }
+
+    pub(crate) fn new_configured_with_activator<P: MarketSnapshotPublisher + 'static>(
+        application: MarketApplication,
+        publisher: P,
+        socket_path: impl Into<PathBuf>,
+        event_socket_path: impl Into<PathBuf>,
+        identity: InstanceIdentity,
+        settings: MarketProcessSettings,
+        source_activator: Option<Box<dyn SourceActivator>>,
+    ) -> Result<Self, String> {
+        for (name, value) in [
+            ("snapshot interval", settings.snapshot_interval),
+            (
+                "freshness check interval",
+                settings.freshness_check_interval,
+            ),
+            ("freshness max age", settings.freshness_max_age),
+            (
+                "reference recovery interval",
+                settings.reference_recovery_interval,
+            ),
+            ("shutdown timeout", settings.shutdown_timeout),
+        ] {
+            if value.is_zero() {
+                return Err(format!("market process {name} must be positive"));
+            }
+        }
+        if settings.publication_queue_capacity == 0 {
+            return Err("market publication queue capacity must be positive".into());
         }
         let event_actor_id = application.snapshot().actor_id;
         Ok(Self {
-            engine: MarketEngine {
+            actor_task: MarketActorTask {
                 application,
                 publisher: Box::new(publisher),
                 event_actor_id: event_actor_id.to_string(),
                 event_identity: identity,
-                interval,
-                feed_enabled,
+                snapshot_interval: settings.snapshot_interval,
+                freshness_check_interval: settings.freshness_check_interval,
+                freshness_max_age: settings.freshness_max_age,
+                reference_recovery_interval: settings.reference_recovery_interval,
+                shutdown_timeout: settings.shutdown_timeout,
                 stop_requested: false,
-                reference_snapshot_path: None,
-                reference_markets: None,
-                reference_event_sequence: None,
-                reference_recovery_needed: false,
+                reference: ReferenceProjection::new(),
                 command_results: BTreeMap::new(),
+                source_activator,
             },
             socket_path: socket_path.into(),
             event_socket_path: event_socket_path.into(),
             reference_events: None,
             reference_event_sequence: None,
+            reference_poll_interval: settings.reference_recovery_interval,
+            publication_queue_capacity: settings.publication_queue_capacity,
+            lifecycle_guard: None,
         })
     }
 
+    pub(crate) fn with_lifecycle_guard<T: Send + 'static>(mut self, guard: T) -> Self {
+        self.lifecycle_guard = Some(Box::new(guard));
+        self
+    }
+
     pub fn with_reference_snapshot(mut self, path: impl Into<PathBuf>) -> Self {
-        self.engine.reference_snapshot_path = Some(path.into());
-        self.engine.reference_recovery_needed = true;
+        self.actor_task.reference.configure(path);
         self
     }
 
     pub fn with_reference_events<S: ReferenceChangeSource + 'static>(mut self, source: S) -> Self {
         self.reference_events = Some(Box::new(source));
-        self.engine.reference_recovery_needed = true;
+        self.actor_task.reference.require_recovery(None);
         self
     }
 
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         let MarketProcess {
-            engine,
+            actor_task,
             socket_path,
             event_socket_path,
             mut reference_events,
             mut reference_event_sequence,
+            reference_poll_interval,
+            publication_queue_capacity,
+            lifecycle_guard,
         } = self;
+        let _lifecycle_guard = lifecycle_guard;
         remove_socket(&socket_path)?;
         remove_socket(&event_socket_path)?;
         if let Some(parent) = socket_path.parent() {
@@ -247,70 +288,46 @@ impl MarketProcess {
         }
         let listener = UnixListener::bind(&socket_path)?;
         let event_listener = UnixListener::bind(&event_socket_path)?;
-        let feed_enabled = engine.feed_enabled;
-        let interval = engine.interval;
+        let snapshot_interval = actor_task.snapshot_interval;
+        let publication_shutdown_timeout = actor_task.shutdown_timeout;
         let (http_sender, control_receiver) = mpsc::channel(1_024);
-        let (event_sender, mut event_receiver) = mpsc::channel(4_096);
-        let engine_sender = http_sender.clone();
-        let router = Router::new()
-            .route(HEALTH_PATH, any(market_http_handler))
-            .route(SNAPSHOT_PATH, any(market_http_handler))
-            .route(STOP_PATH, any(market_http_handler))
-            .route("/v1/subscribe", any(market_http_handler))
-            .route("/v1/unsubscribe", any(market_http_handler))
-            .route("/v1/recover", any(market_http_handler))
-            .with_state(http_sender);
-        let http_server = tokio::spawn(async move {
-            axum::serve(listener, router)
+        let (event_sender, mut event_receiver) = mpsc::channel(publication_queue_capacity);
+        let actor_sender = http_sender.clone();
+        let http_server = spawn_control_server(listener, http_sender);
+        let mut actor_task = tokio::spawn(async move {
+            actor_task
+                .run_actor_loop(control_receiver, event_sender)
                 .await
-                .map_err(std::io::Error::other)
         });
-        let mut engine =
-            tokio::spawn(async move { engine.run_engine(control_receiver, event_sender).await });
         kairos_workspace::logging::record_gauge("kairos.process.ready", 1);
-        info!(event = "process_starting", component = "market", socket = %socket_path.display(), event_socket = %event_socket_path.display(), feed_enabled, interval_ms = interval.as_millis(), "market process starting");
+        info!(event = "process_starting", component = "market", socket = %socket_path.display(), event_socket = %event_socket_path.display(), snapshot_interval_ms = snapshot_interval.as_millis(), "market process starting");
         log_event(
             "info",
             "market process ready",
             json!({
                 "socket": socket_path,
                 "event_socket": event_socket_path,
-                "feed_enabled": feed_enabled,
-                "poll_interval_ms": interval.as_millis(),
+                "snapshot_interval_ms": snapshot_interval.as_millis(),
             }),
         );
         info!(event = "process_ready", component = "market", socket = %socket_path.display(), "market control socket ready");
-        let mut event_clients: Vec<Sender<Vec<u8>>> = Vec::new();
+        let mut event_fanout = EventFanout::new(publication_queue_capacity);
         let mut pending_reference_command = None;
-        let mut reference_ticks = time::interval(interval);
+        let mut reference_ticks = time::interval(reference_poll_interval);
         reference_ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let engine_result = loop {
+        let actor_result = loop {
             tokio::select! {
                 accepted = event_listener.accept() => {
                     let (stream, _) = accepted?;
-                    let (sender, receiver) = mpsc::channel(256);
-                    tokio::spawn(event_client_writer(stream, receiver));
-                    event_clients.push(sender);
+                    event_fanout.add_client(stream);
                 }
                 Some(payload) = event_receiver.recv() => {
-                    // Client writes happen in independent tasks. A slow
-                    // client is removed when its bounded queue is full and
-                    // cannot delay control, ingest, or other clients.
-                    event_clients.retain(|client| match client.try_send(payload.clone()) {
-                        Ok(()) => true,
-                        Err(TrySendError::Full(_)) | Err(TrySendError::Closed(_)) => {
-                            kairos_workspace::logging::record_counter(
-                                "kairos.queue.rejected",
-                                1,
-                            );
-                            false
-                        }
-                    });
+                    event_fanout.publish(payload);
                 }
                 _ = reference_ticks.tick(), if reference_events.is_some() => {
                     if let Err(error) = forward_reference_events(
                         &mut reference_events,
-                        &engine_sender,
+                        &actor_sender,
                         &mut reference_event_sequence,
                         &mut pending_reference_command,
                     ) {
@@ -318,11 +335,15 @@ impl MarketProcess {
                         log_event("warn", "reference event forwarding deferred", json!({"error": error}));
                     }
                 }
-                result = &mut engine => {
+                result = &mut actor_task => {
                     break result;
                 }
             }
         };
+        while let Ok(payload) = event_receiver.try_recv() {
+            event_fanout.publish(payload);
+        }
+        event_fanout.shutdown(publication_shutdown_timeout).await;
         remove_socket(&socket_path)?;
         remove_socket(&event_socket_path)?;
         info!(
@@ -332,104 +353,171 @@ impl MarketProcess {
         );
         http_server.abort();
         let _ = http_server.await;
-        engine_result
+        actor_result
             .map_err(|error| std::io::Error::other(error.to_string()))?
             .map_err(std::io::Error::other)?;
         Ok(())
     }
 }
 
-impl MarketEngine {
-    async fn run_engine(
+impl MarketActorTask {
+    async fn run_actor_loop(
         mut self,
         mut control_receiver: Receiver<EngineCommand>,
         event_sender: Sender<Vec<u8>>,
     ) -> Result<(), String> {
         info!(
-            event = "engine_starting",
+            event = "actor_task_starting",
             component = "market",
-            "market application engine starting"
+            "market actor task starting"
         );
-        self.recover_reference_projection()?;
+        if let Err(error) = self.recover_reference_projection() {
+            kairos_workspace::logging::record_counter("kairos.retry", 1);
+            log_event(
+                "warn",
+                "initial Reference projection recovery deferred",
+                json!({"error": error}),
+            );
+        }
         self.publish_snapshot()?;
-        let mut pending_encoded_events = VecDeque::new();
-        let mut ticks = time::interval(self.interval);
-        ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut event_publication = EventPublication::new(
+            self.event_actor_id.clone(),
+            self.event_identity.clone(),
+            event_sender,
+        );
+        let mut snapshot_ticks = time::interval(self.snapshot_interval);
+        snapshot_ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut freshness_ticks = time::interval(self.freshness_check_interval);
+        freshness_ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut reference_recovery_ticks = time::interval(self.reference_recovery_interval);
+        reference_recovery_ticks.set_missed_tick_behavior(MissedTickBehavior::Delay);
         while !self.stop_requested {
+            let sources_enabled = self.application.has_sources();
             tokio::select! {
                 Some(command) = control_receiver.recv() => {
                     match command {
                         EngineCommand::Http(request) => {
                             let body = String::from_utf8_lossy(&request.body);
-                            let response = self.handle_request(&request.method, &request.path, &body);
+                            let mut response = self.handle_request(&request.method, &request.path, &body).await;
+                            if matches!(request.path.as_str(), "/v1/subscribe" | "/v1/unsubscribe")
+                                && (200..300).contains(&response.status)
+                            {
+                                if let Some(activator) = self.source_activator.as_deref_mut() {
+                                    if let Err(error) = self.application.activate_sources_for_subscriptions(activator).await {
+                                        rollback_subscribe_intent(&mut self.application, &body);
+                                        response = MarketHttpResponse {
+                                            status: 422,
+                                            payload: json!({"error":{"code":"market.source_unavailable","message":error.to_string(),"retryable":true}}),
+                                        };
+                                    }
+                                }
+                                if let Err(error) = self.application.sync_source_subscriptions().await {
+                                    if response.status < 300 && request.path == "/v1/subscribe" {
+                                        rollback_subscribe_intent(&mut self.application, &body);
+                                        response = MarketHttpResponse {
+                                            status: 422,
+                                            payload: json!({"error":{"code":"market.subscription_unavailable","message":error.to_string(),"retryable":true}}),
+                                        };
+                                    }
+                                    log_event(
+                                        "warn",
+                                        "market source reconciliation deferred",
+                                        json!({"error": error.to_string()}),
+                                    );
+                                }
+                                self.refresh_subscription_status(&mut response);
+                            }
+                            // Activation/reconciliation happens after the base request
+                            // handler. Keep the idempotency cache aligned with the
+                            // final response (including a 422 rollback).
+                            self.refresh_command_result(&body, &response);
                             let _ = request.response.send(response);
                         }
                         EngineCommand::ReferenceChanged { sequence, gap } => {
                             if gap {
                                 kairos_workspace::logging::record_counter("kairos.event.gap", 1);
-                                self.reference_recovery_needed = true;
                             }
-                            self.reference_event_sequence = Some(
-                                self.reference_event_sequence
-                                    .unwrap_or_default()
-                                    .max(sequence),
-                            );
-                            self.reference_recovery_needed = true;
+                            self.reference.require_recovery(Some(sequence));
                         }
                     }
                 }
-                _ = ticks.tick() => {
-                    let tick_started = Instant::now();
-                    if let Err(error) = self.recover_reference_projection() {
-                        log_event("error", "reference projection recovery failed", json!({"error": error}));
+                input = self.application.next_source_input(), if sources_enabled => {
+                    let Some(input) = input else {
+                        return Err("market source input channel closed".into());
+                    };
+                    self.application
+                        .apply_source_input(input)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    // Status/epoch and subscription acknowledgements can make
+                    // new commands eligible. Reconcile on the wake-up that
+                    // changed state instead of waiting for a maintenance tick.
+                    if let Err(error) = self.application.sync_source_subscriptions().await {
+                        log_event(
+                            "warn",
+                            "market source reconciliation deferred",
+                            json!({"error": error.to_string()}),
+                        );
                     }
-                    if self.feed_enabled {
-                        if let Err(error) = self.application.reconcile_feed() {
-                            kairos_workspace::logging::record_counter("kairos.retry", 1);
-                            log_event(
-                                "warn",
-                                "market feed reconciliation deferred",
-                                json!({"error": error.to_string()}),
-                            );
-                        }
-                    }
-                    if self.feed_enabled && !self.application.snapshot().subscriptions.is_empty() {
-                        let poll_started = Instant::now();
-                        let result = self.application.poll_feed().map_err(|error| error.to_string());
-                        match result {
-                            Ok(observation_count) => log_event(
-                                "info",
-                                "market feed poll completed",
-                                json!({
-                                    "observations": observation_count,
-                                    "duration_ms": poll_started.elapsed().as_millis(),
-                                    "feed_status": self.application.snapshot().feed_status,
-                                }),
-                            ),
-                            Err(error) => {
-                                log_event("error", "market feed poll failed", json!({"error": error}));
+                    event_publication.publish(self.application.drain_events_limited(1_024))?;
+                }
+                _ = snapshot_ticks.tick() => {
+                    self.publish_snapshot()?;
+                }
+                _ = freshness_ticks.tick() => {
+                    let now_nanos = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos()
+                        .min(u128::from(u64::MAX)) as u64;
+                    let max_age_nanos = self
+                        .freshness_max_age
+                        .as_nanos()
+                        .min(u128::from(u64::MAX)) as u64;
+                    self.application.evaluate_freshness(now_nanos, max_age_nanos);
+                }
+                _ = reference_recovery_ticks.tick(), if self.reference.recovery_needed() => {
+                    match self.recover_reference_projection() {
+                        Ok(()) => {
+                            if let Some(activator) = self.source_activator.as_deref_mut() {
+                                self.application
+                                    .activate_sources_for_subscriptions(activator)
+                                    .await
+                                    .map_err(|error| error.to_string())?;
+                            }
+                            if let Err(error) = self.application.sync_source_subscriptions().await {
+                                log_event(
+                                    "warn",
+                                    "market source reconciliation after Reference recovery deferred",
+                                    json!({"error": error.to_string()}),
+                                );
                             }
                         }
-                    }
-                    self.publish_pending_events(&mut pending_encoded_events, &event_sender)?;
-                    self.publish_snapshot()?;
-                    if self.application.feed_complete() && pending_encoded_events.is_empty() {
-                        self.stop_requested = true;
-                    }
-                    let elapsed = tick_started.elapsed();
-                    if elapsed > self.interval {
-                        log_event("warn", "market tick exceeded interval", json!({
-                            "duration_ms": elapsed.as_millis(),
-                            "interval_ms": self.interval.as_millis(),
-                        }));
+                        Err(error) => {
+                            kairos_workspace::logging::record_counter("kairos.retry", 1);
+                            log_event("error", "reference projection recovery failed", json!({"error": error}));
+                        }
                     }
                 }
             }
+            // Retry a bounded publication queue whenever any engine input or
+            // maintenance wake-up occurs. Finite replay must not wait forever
+            // merely because its final event first encountered a full queue.
+            event_publication.flush()?;
+            if self.application.sources_complete() && event_publication.is_empty() {
+                self.stop_requested = true;
+            }
         }
+        self.application
+            .shutdown_sources(self.shutdown_timeout)
+            .await?;
+        event_publication.publish(self.application.drain_events_limited(1_024))?;
+        event_publication.drain(self.shutdown_timeout).await?;
+        self.publish_snapshot()?;
         info!(
-            event = "engine_stopped",
+            event = "actor_task_stopped",
             component = "market",
-            "market application engine stopped"
+            "market actor task stopped"
         );
         Ok(())
     }
@@ -458,94 +546,22 @@ impl MarketEngine {
     }
 
     fn recover_reference_projection(&mut self) -> Result<(), String> {
-        if !self.reference_recovery_needed {
+        if !self.reference.recovery_needed() {
             return Ok(());
         }
-        let path = self
-            .reference_snapshot_path
-            .as_ref()
-            .ok_or_else(|| "Reference snapshot is not configured".to_string())?;
-        // A live provider can serve explicit static subscriptions without a
-        // Reference process. Treat the absent optional projection as an empty
-        // reference view; dynamic subscriptions still require a snapshot or
-        // a later Reference change to populate it.
-        if !path.exists() {
-            self.reference_markets = Some(Vec::new());
-            self.reference_recovery_needed = false;
-            return Ok(());
-        }
-        let snapshot = kairos_reference_contract::ReferenceMmapMarketsReader::open(
-            path,
-            "reference",
-            "reference.lifecycle",
-        )
-        .map_err(|error| error.to_string())?
-        .read()
-        .map_err(|error| error.to_string())?;
-        let markets = snapshot
-            .markets
-            .into_iter()
-            .filter(|market| matches!(market.status.as_str(), "active" | "trading"))
-            .map(|market| {
-                let mut descriptor = MarketDescriptor::new(
-                    market.market_id,
-                    market.instrument_id,
-                    market.exchange_id,
-                    market.market_type,
-                    market.source_symbol,
-                )?;
-                descriptor.asset_type = market.asset_type;
-                descriptor.underlying_instrument_id = market.underlying_instrument_id;
-                Ok(descriptor)
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        self.reference_markets = Some(markets.clone());
+        let markets = self.reference.recover()?;
         self.application
             .reconcile_reference(markets)
             .map_err(|error| error.to_string())?;
-        self.reference_recovery_needed = false;
         Ok(())
     }
 
-    fn publish_pending_events(
-        &mut self,
-        pending_encoded_events: &mut VecDeque<Vec<u8>>,
-        event_sender: &Sender<Vec<u8>>,
-    ) -> Result<(), String> {
-        if pending_encoded_events.len() >= MAX_PENDING_ENCODED_EVENTS {
-            return Err(format!(
-                "market encoded event backlog exceeded limit: {MAX_PENDING_ENCODED_EVENTS}"
-            ));
-        }
-        for (sequence, observation) in self.application.drain_events_limited(1_024) {
-            pending_encoded_events.push_back(encode_event(
-                &self.event_actor_id,
-                &self.event_identity,
-                sequence,
-                &observation,
-            )?);
-        }
-        while let Some(payload) = pending_encoded_events.pop_front() {
-            match event_sender.try_send(payload) {
-                Ok(()) => {}
-                Err(TrySendError::Full(payload)) => {
-                    pending_encoded_events.push_front(payload);
-                    break;
-                }
-                Err(TrySendError::Closed(_)) => {
-                    return Err("market event endpoint is closed".to_string());
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn handle_request(&mut self, method: &Method, path: &str, body: &str) -> MarketHttpResponse {
+    async fn handle_request(&mut self, method: &str, path: &str, body: &str) -> MarketHttpResponse {
         let started = Instant::now();
         log_event(
             "info",
             "market control request",
-            json!({"method": method.as_str(), "path": path}),
+            json!({"method": method, "path": path}),
         );
         let command_key = if matches!(path, "/v1/subscribe" | "/v1/unsubscribe") {
             serde_json::from_str::<Value>(body)
@@ -564,13 +580,12 @@ impl MarketEngine {
             if let Some(cached) = self.command_results.get(key).cloned() {
                 if cached.request_body == body {
                     return MarketHttpResponse {
-                        status: StatusCode::from_u16(cached.status)
-                            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                        status: cached.status,
                         payload: cached.payload,
                     };
                 }
                 return MarketHttpResponse {
-                    status: StatusCode::CONFLICT,
+                    status: 409,
                     payload: json!({
                         "error": {
                             "code": "command.idempotency_conflict",
@@ -589,8 +604,16 @@ impl MarketEngine {
             },
             "/v1/subscribe" => self.subscribe(body),
             "/v1/unsubscribe" => self.unsubscribe(body),
-            "/v1/recover" => match self.application.recover_feed() {
+            "/v1/recover" => match self.application.recover_sources().await {
                 Ok(()) => (202, json!({"status":"recovering"})),
+                Err(error) => (422, json!({"error": error.to_string()})),
+            },
+            "/v1/replay/pause" => match self.application.set_replay_paused(true).await {
+                Ok(()) => (202, json!({"status":"paused"})),
+                Err(error) => (422, json!({"error": error.to_string()})),
+            },
+            "/v1/replay/resume" => match self.application.set_replay_paused(false).await {
+                Ok(()) => (202, json!({"status":"running"})),
                 Err(error) => (422, json!({"error": error.to_string()})),
             },
             STOP_PATH => {
@@ -616,9 +639,51 @@ impl MarketEngine {
             }
         }
         info!(event = "control_response", component = "market", method = %method, path = %path, status, duration_ms = started.elapsed().as_millis(), "market control response sent");
-        MarketHttpResponse {
-            status: StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            payload,
+        MarketHttpResponse { status, payload }
+    }
+
+    fn refresh_command_result(&mut self, body: &str, response: &MarketHttpResponse) {
+        let Some(key) = serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("idempotency_key")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return;
+        };
+        self.command_results.insert(
+            key,
+            CachedCommandResult {
+                request_body: body.to_owned(),
+                status: response.status,
+                payload: response.payload.clone(),
+            },
+        );
+        while self.command_results.len() > MAX_COMMAND_RESULTS {
+            let Some(oldest_key) = self.command_results.keys().next().cloned() else {
+                break;
+            };
+            self.command_results.remove(&oldest_key);
+        }
+    }
+
+    fn refresh_subscription_status(&self, response: &mut MarketHttpResponse) {
+        let Some(object) = response.payload.as_object_mut() else {
+            return;
+        };
+        let Some(subscription_id) = object
+            .get("subscription_id")
+            .and_then(Value::as_str)
+            .and_then(|value| SubscriptionId::new(value).ok())
+        else {
+            return;
+        };
+        if let Some(status) = self.application.subscription_status(&subscription_id) {
+            object.insert("subscription_status".into(), json!(status));
         }
     }
 
@@ -639,6 +704,12 @@ impl MarketEngine {
             "generation": snapshot.generation,
             "event_sequence": snapshot.event_sequence,
             "subscription_count": snapshot.subscriptions.len(),
+            "subscriptions": snapshot.subscriptions.iter().map(|subscription| json!({
+                "id": subscription.id,
+                "status": subscription.status,
+                "member_status": subscription.member_status,
+            })).collect::<Vec<_>>(),
+            "source_count": snapshot.sources.len(),
             "feed_status": snapshot.feed_status,
         })
     }
@@ -711,7 +782,7 @@ impl MarketEngine {
                     )
                 }
             };
-            let Some(reference_markets) = self.reference_markets.as_deref() else {
+            let Some(reference_markets) = self.reference.markets() else {
                 return (422, json!({"error":"Reference snapshot is not ready"}));
             };
             if market_type != "options" {
@@ -785,6 +856,7 @@ impl MarketEngine {
                             "request_id": request.request_id,
                             "instance_id": request.instance_id,
                             "status": "accepted",
+                            "subscription_status": self.application.subscription_status(&subscription_id),
                             "mode": "chain",
                             "subscription_id": subscription_id.0,
                             "added": diff.added,
@@ -802,7 +874,7 @@ impl MarketEngine {
                 json!({"error":"dynamic subscriptions require params.mode=chain"}),
             );
         }
-        let descriptor_result = match self.reference_markets.as_deref() {
+        let descriptor_result = match self.reference.markets() {
             Some(reference_markets) if !reference_markets.is_empty() => resolve_market(
                 reference_markets,
                 &exchange,
@@ -861,6 +933,7 @@ impl MarketEngine {
                     "request_id": request.request_id,
                     "instance_id": request.instance_id,
                     "status": "accepted",
+                    "subscription_status": self.application.subscription_status(&SubscriptionId::new(request.request_id.clone()).expect("validated subscription id")),
                     "result": {
                         "subscription_id": request.request_id.clone(),
                         "selectors": selectors.clone(),
@@ -912,506 +985,6 @@ impl MarketEngine {
     }
 }
 
-macro_rules! finish_market_event {
-    ($builder:expr, $header:expr, $payload:expr, $message:ident, $args:ident, $finish:ident) => {{
-        let root = $message::create(
-            $builder,
-            &$args {
-                header: Some($header),
-                payload: Some($payload),
-            },
-        );
-        $finish($builder, root);
-        Ok($builder.finished_data().to_vec())
-    }};
-}
-
-fn encode_event(
-    actor_id: &str,
-    identity: &InstanceIdentity,
-    sequence: u64,
-    observation: &MarketObservation,
-) -> Result<Vec<u8>, String> {
-    let stream_id = "market.events";
-    match observation {
-        MarketObservation::Quote(value) => {
-            let mut builder = FlatBufferBuilder::new();
-            let header = event_header(
-                &mut builder,
-                actor_id,
-                identity,
-                stream_id,
-                sequence,
-                value.observed_at_unix_nanos.get(),
-            );
-            let instrument_id = builder.create_string(&value.instrument_id);
-            let market_id = builder.create_string(&value.market_id);
-            let source_id = builder.create_string(&value.source_id);
-            let bid_price = value.bid_price.map(decimal64_price);
-            let bid_quantity = value.bid_quantity.map(decimal64_quantity);
-            let ask_price = value.ask_price.map(decimal64_price);
-            let ask_quantity = value.ask_quantity.map(decimal64_quantity);
-            let quote = FbQuote::create(
-                &mut builder,
-                &FbQuoteArgs {
-                    instrument_id: Some(instrument_id),
-                    market_id: Some(market_id),
-                    bid_price: bid_price.as_ref(),
-                    bid_quantity: bid_quantity.as_ref(),
-                    ask_price: ask_price.as_ref(),
-                    ask_quantity: ask_quantity.as_ref(),
-                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
-                    source_id: Some(source_id),
-                    ..Default::default()
-                },
-            );
-            let root = QuoteMessage::create(
-                &mut builder,
-                &QuoteMessageArgs {
-                    header: Some(header),
-                    payload: Some(quote),
-                },
-            );
-            finish_quote_message_buffer(&mut builder, root);
-            Ok(builder.finished_data().to_vec())
-        }
-        MarketObservation::Trade(value) => {
-            let mut builder = FlatBufferBuilder::new();
-            let header = event_header(
-                &mut builder,
-                actor_id,
-                identity,
-                stream_id,
-                sequence,
-                value.observed_at_unix_nanos.get(),
-            );
-            let instrument_id = builder.create_string(&value.instrument_id);
-            let market_id = builder.create_string(&value.market_id);
-            let source_id = builder.create_string(&value.source_id);
-            let price = decimal64_price(value.price);
-            let quantity = decimal64_quantity(value.quantity);
-            let cost = value.cost.map(decimal64_money);
-            let trade_id = value.trade_id.as_ref().map(|id| builder.create_string(id));
-            let trade = FbTrade::create(
-                &mut builder,
-                &FbTradeArgs {
-                    trade_id,
-                    instrument_id: Some(instrument_id),
-                    market_id: Some(market_id),
-                    price: Some(&price),
-                    quantity: Some(&quantity),
-                    cost: cost.as_ref(),
-                    aggressor_side: aggressor_side(value.aggressor_side.as_deref()),
-                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
-                    source_id: Some(source_id),
-                },
-            );
-            let root = TradeMessage::create(
-                &mut builder,
-                &TradeMessageArgs {
-                    header: Some(header),
-                    payload: Some(trade),
-                },
-            );
-            finish_trade_message_buffer(&mut builder, root);
-            Ok(builder.finished_data().to_vec())
-        }
-        MarketObservation::Bar(value) => {
-            let mut builder = FlatBufferBuilder::new();
-            let header = event_header(
-                &mut builder,
-                actor_id,
-                identity,
-                stream_id,
-                sequence,
-                value.observed_at_unix_nanos.get(),
-            );
-            let market_id = builder.create_string(&value.market_id);
-            let instrument_id = builder.create_string(&value.instrument_id);
-            let timeframe = builder.create_string(&value.timeframe);
-            let source_id = builder.create_string(&value.source_id);
-            let derivation = builder.create_string(&value.derivation);
-            let bar_kind = builder.create_string(if value.derivation.starts_with("trade:") {
-                "trade_bar"
-            } else if value.derivation.starts_with("quote:") {
-                "quote_bar"
-            } else {
-                "bar"
-            });
-            let open = decimal64_price(value.open);
-            let high = decimal64_price(value.high);
-            let low = decimal64_price(value.low);
-            let close = decimal64_price(value.close);
-            let volume = value.volume.map(decimal64_quantity);
-            let bar = FbBar::create(
-                &mut builder,
-                &FbBarArgs {
-                    market_id: Some(market_id),
-                    instrument_id: Some(instrument_id),
-                    timeframe: Some(timeframe),
-                    open: Some(&open),
-                    high: Some(&high),
-                    low: Some(&low),
-                    close: Some(&close),
-                    volume: volume.as_ref(),
-                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
-                    source_id: Some(source_id),
-                    derivation: Some(derivation),
-                    bar_kind: Some(bar_kind),
-                },
-            );
-            let root = BarMessage::create(
-                &mut builder,
-                &BarMessageArgs {
-                    header: Some(header),
-                    payload: Some(bar),
-                },
-            );
-            finish_bar_message_buffer(&mut builder, root);
-            Ok(builder.finished_data().to_vec())
-        }
-        MarketObservation::TradeBar(value) => {
-            let mut bar = value.bar.clone();
-            bar.derivation = if bar.derivation.is_empty() {
-                "trade".into()
-            } else {
-                format!("trade:{}", bar.derivation)
-            };
-            encode_event(actor_id, identity, sequence, &MarketObservation::Bar(bar))
-        }
-        MarketObservation::QuoteBar(value) => {
-            let mut bar = value.bar.clone();
-            bar.derivation = if bar.derivation.is_empty() {
-                "quote".into()
-            } else {
-                format!("quote:{}", bar.derivation)
-            };
-            encode_event(actor_id, identity, sequence, &MarketObservation::Bar(bar))
-        }
-        MarketObservation::OptionGreeks(value) => {
-            let mut builder = FlatBufferBuilder::new();
-            let header = event_header(
-                &mut builder,
-                actor_id,
-                identity,
-                stream_id,
-                sequence,
-                value.observed_at_unix_nanos.get(),
-            );
-            let market_id = builder.create_string(&value.market_id);
-            let instrument_id = builder.create_string(&value.instrument_id);
-            let source_id = builder.create_string(&value.source_id);
-            let derivation = builder.create_string(&value.derivation);
-            let strike = value.strike.map(decimal64_price);
-            let delta = value.delta.map(decimal64_rate);
-            let gamma = value.gamma.map(decimal64_rate);
-            let vega = value.vega.map(decimal64_rate);
-            let theta = value.theta.map(decimal64_rate);
-            let implied_volatility = value.implied_volatility.map(decimal64_rate);
-            let greeks = FbGreeks::create(
-                &mut builder,
-                &FbGreeksArgs {
-                    market_id: Some(market_id),
-                    instrument_id: Some(instrument_id),
-                    expiry_unix_nanos: value.expiry_unix_nanos.map_or(0, Into::into),
-                    strike: strike.as_ref(),
-                    delta: delta.as_ref(),
-                    gamma: gamma.as_ref(),
-                    vega: vega.as_ref(),
-                    theta: theta.as_ref(),
-                    implied_volatility: implied_volatility.as_ref(),
-                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
-                    source_id: Some(source_id),
-                    derivation: Some(derivation),
-                },
-            );
-            let root = GreeksMessage::create(
-                &mut builder,
-                &GreeksMessageArgs {
-                    header: Some(header),
-                    payload: Some(greeks),
-                },
-            );
-            finish_greeks_message_buffer(&mut builder, root);
-            Ok(builder.finished_data().to_vec())
-        }
-        MarketObservation::Rate(value) => {
-            let mut builder = FlatBufferBuilder::new();
-            let header = event_header(
-                &mut builder,
-                actor_id,
-                identity,
-                stream_id,
-                sequence,
-                value.observed_at_unix_nanos.get(),
-            );
-            let rate_id = builder.create_string(&value.rate_id);
-            let market_id = builder.create_string(&value.market_id);
-            let instrument_id = builder.create_string(&value.instrument_id);
-            let basis = builder.create_string(&value.basis);
-            let source_id = builder.create_string(&value.source_id);
-            let rate_value = decimal64_rate(value.value);
-            let mark_price = value.mark_price.map(decimal64_price);
-            let rate = FbRate::create(
-                &mut builder,
-                &FbRateArgs {
-                    rate_id: Some(rate_id),
-                    market_id: Some(market_id),
-                    instrument_id: Some(instrument_id),
-                    basis: Some(basis),
-                    value: Some(&rate_value),
-                    mark_price: mark_price.as_ref(),
-                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
-                    source_id: Some(source_id),
-                },
-            );
-            let root = RateMessage::create(
-                &mut builder,
-                &RateMessageArgs {
-                    header: Some(header),
-                    payload: Some(rate),
-                },
-            );
-            finish_rate_message_buffer(&mut builder, root);
-            Ok(builder.finished_data().to_vec())
-        }
-        MarketObservation::Ticker24h(value) => {
-            let mut builder = FlatBufferBuilder::new();
-            let header = event_header(
-                &mut builder,
-                actor_id,
-                identity,
-                stream_id,
-                sequence,
-                value.observed_at_unix_nanos.get(),
-            );
-            let market_id = builder.create_string(&value.market_id);
-            let instrument_id = builder.create_string(&value.instrument_id);
-            let source_id = builder.create_string(&value.source_id);
-            let payload = FbTicker24h::create(
-                &mut builder,
-                &FbTicker24hArgs {
-                    market_id: Some(market_id),
-                    instrument_id: Some(instrument_id),
-                    last_price: value.last_price.map(decimal64_price).as_ref(),
-                    bid_price: value.bid_price.map(decimal64_price).as_ref(),
-                    bid_quantity: value.bid_quantity.map(decimal64_quantity).as_ref(),
-                    ask_price: value.ask_price.map(decimal64_price).as_ref(),
-                    ask_quantity: value.ask_quantity.map(decimal64_quantity).as_ref(),
-                    open_price: value.open_price.map(decimal64_price).as_ref(),
-                    high_price: value.high_price.map(decimal64_price).as_ref(),
-                    low_price: value.low_price.map(decimal64_price).as_ref(),
-                    volume_base: value.volume_base.map(decimal64_quantity).as_ref(),
-                    volume_quote: value.volume_quote.map(decimal64_money).as_ref(),
-                    price_change_abs: value.price_change_abs.map(decimal64_money).as_ref(),
-                    price_change_pct: value.price_change_pct.map(decimal64_rate).as_ref(),
-                    vwap: value.vwap.map(decimal64_price).as_ref(),
-                    mark_price: value.mark_price.map(decimal64_price).as_ref(),
-                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
-                    source_id: Some(source_id),
-                },
-            );
-            finish_market_event!(
-                &mut builder,
-                header,
-                payload,
-                Ticker24hMessage,
-                Ticker24hMessageArgs,
-                finish_ticker_24h_message_buffer
-            )
-        }
-        MarketObservation::MarkPrice(value) => {
-            let mut builder = FlatBufferBuilder::new();
-            let header = event_header(
-                &mut builder,
-                actor_id,
-                identity,
-                stream_id,
-                sequence,
-                value.observed_at_unix_nanos.get(),
-            );
-            let market_id = builder.create_string(&value.market_id);
-            let instrument_id = builder.create_string(&value.instrument_id);
-            let source_id = builder.create_string(&value.source_id);
-            let mark_price = decimal64_price(value.mark_price);
-            let index_price = value.index_price.map(decimal64_price);
-            let settlement = value.estimated_settlement_price.map(decimal64_price);
-            let funding = value.funding_rate.map(decimal64_rate);
-            let payload = FbMarkPrice::create(
-                &mut builder,
-                &FbMarkPriceArgs {
-                    market_id: Some(market_id),
-                    instrument_id: Some(instrument_id),
-                    mark_price: Some(&mark_price),
-                    index_price: index_price.as_ref(),
-                    estimated_settlement_price: settlement.as_ref(),
-                    funding_rate: funding.as_ref(),
-                    next_funding_time_unix_nanos: value
-                        .next_funding_time_unix_nanos
-                        .map_or(0, Into::into),
-                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
-                    source_id: Some(source_id),
-                },
-            );
-            finish_market_event!(
-                &mut builder,
-                header,
-                payload,
-                MarkPriceMessage,
-                MarkPriceMessageArgs,
-                finish_mark_price_message_buffer
-            )
-        }
-        MarketObservation::IndexPrice(value) => {
-            let mut builder = FlatBufferBuilder::new();
-            let header = event_header(
-                &mut builder,
-                actor_id,
-                identity,
-                stream_id,
-                sequence,
-                value.observed_at_unix_nanos.get(),
-            );
-            let market_id = builder.create_string(&value.market_id);
-            let instrument_id = builder.create_string(&value.instrument_id);
-            let source_id = builder.create_string(&value.source_id);
-            let payload = FbIndexPrice::create(
-                &mut builder,
-                &FbIndexPriceArgs {
-                    market_id: Some(market_id),
-                    instrument_id: Some(instrument_id),
-                    spot_index_price: value.spot_index_price.map(decimal64_price).as_ref(),
-                    contract_index_price: value.contract_index_price.map(decimal64_price).as_ref(),
-                    index_price: value.index_price.map(decimal64_price).as_ref(),
-                    funding_rate: value.funding_rate.map(decimal64_rate).as_ref(),
-                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
-                    source_id: Some(source_id),
-                },
-            );
-            finish_market_event!(
-                &mut builder,
-                header,
-                payload,
-                IndexPriceMessage,
-                IndexPriceMessageArgs,
-                finish_index_price_message_buffer
-            )
-        }
-        MarketObservation::FundingRate(value) => {
-            let mut builder = FlatBufferBuilder::new();
-            let header = event_header(
-                &mut builder,
-                actor_id,
-                identity,
-                stream_id,
-                sequence,
-                value.observed_at_unix_nanos.get(),
-            );
-            let market_id = builder.create_string(&value.market_id);
-            let instrument_id = builder.create_string(&value.instrument_id);
-            let source_id = builder.create_string(&value.source_id);
-            let rate = decimal64_rate(value.funding_rate);
-            let payload = FbFundingRate::create(
-                &mut builder,
-                &FbFundingRateArgs {
-                    market_id: Some(market_id),
-                    instrument_id: Some(instrument_id),
-                    funding_rate: Some(&rate),
-                    funding_period_seconds: value.funding_period_seconds.unwrap_or_default(),
-                    next_funding_time_unix_nanos: value
-                        .next_funding_time_unix_nanos
-                        .map_or(0, Into::into),
-                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
-                    source_id: Some(source_id),
-                },
-            );
-            finish_market_event!(
-                &mut builder,
-                header,
-                payload,
-                FundingRateMessage,
-                FundingRateMessageArgs,
-                finish_funding_rate_message_buffer
-            )
-        }
-        MarketObservation::OpenInterest(value) => {
-            let mut builder = FlatBufferBuilder::new();
-            let header = event_header(
-                &mut builder,
-                actor_id,
-                identity,
-                stream_id,
-                sequence,
-                value.observed_at_unix_nanos.get(),
-            );
-            let market_id = builder.create_string(&value.market_id);
-            let instrument_id = builder.create_string(&value.instrument_id);
-            let source_id = builder.create_string(&value.source_id);
-            let contracts = decimal64_quantity(value.contracts);
-            let payload = FbOpenInterest::create(
-                &mut builder,
-                &FbOpenInterestArgs {
-                    market_id: Some(market_id),
-                    instrument_id: Some(instrument_id),
-                    contracts: Some(&contracts),
-                    quote_value: value.quote_value.map(decimal64_money).as_ref(),
-                    change_24h: value.change_24h.map(decimal64_money).as_ref(),
-                    change_pct_24h: value.change_pct_24h.map(decimal64_rate).as_ref(),
-                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
-                    source_id: Some(source_id),
-                },
-            );
-            finish_market_event!(
-                &mut builder,
-                header,
-                payload,
-                OpenInterestMessage,
-                OpenInterestMessageArgs,
-                finish_open_interest_message_buffer
-            )
-        }
-        MarketObservation::InstrumentStatus(value) => {
-            let mut builder = FlatBufferBuilder::new();
-            let header = event_header(
-                &mut builder,
-                actor_id,
-                identity,
-                stream_id,
-                sequence,
-                value.observed_at_unix_nanos.get(),
-            );
-            let market_id = builder.create_string(&value.market_id);
-            let instrument_id = builder.create_string(&value.instrument_id);
-            let status = builder.create_string(value.status.as_str());
-            let reason = value
-                .reason
-                .as_ref()
-                .map(|value| builder.create_string(value));
-            let source_id = builder.create_string(&value.source_id);
-            let payload = FbInstrumentStatus::create(
-                &mut builder,
-                &FbInstrumentStatusArgs {
-                    market_id: Some(market_id),
-                    instrument_id: Some(instrument_id),
-                    status: Some(status),
-                    reason,
-                    effective_at_unix_nanos: value.effective_at_unix_nanos.map_or(0, Into::into),
-                    event_time_unix_nanos: value.observed_at_unix_nanos.get(),
-                    source_id: Some(source_id),
-                },
-            );
-            finish_market_event!(
-                &mut builder,
-                header,
-                payload,
-                InstrumentStatusMessage,
-                InstrumentStatusMessageArgs,
-                finish_instrument_status_message_buffer
-            )
-        }
-    }
-}
-
 fn log_event(level: &str, message: &str, fields: Value) {
     match level {
         "error" => error!(component = "market", event = "runtime", fields = %fields, "{message}"),
@@ -1423,24 +996,21 @@ fn log_event(level: &str, message: &str, fields: Value) {
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod tests {
-    use super::{
-        encode_event, forward_reference_events, EngineCommand, MarketProcess,
-        MarketSnapshotPublisher,
-    };
-    use crate::composition::MmapMarketSnapshotPublisher;
-    use crate::domain::freshness::FeedStatus;
-    use crate::domain::market::MarketDescriptor;
+    use super::{forward_reference_events, MarketProcess, MarketSnapshotPublisher};
     use crate::domain::observations::{
         Bar, FundingRate, IndexPrice, MarkPrice, MarketObservation, OpenInterest, OptionGreeks,
         Ticker24h,
     };
-    use crate::services::composite::{CompositeMarketFeed, MarketFeedFactory, MarketRoute};
-    use crate::services::feed::{MarketFeed, MarketOrderBookUpdate};
-    use crate::{MarketApplication, MarketRuntime, SubscriptionId};
-    use axum::http::Method;
+    use crate::services::control::EngineCommand;
+    use crate::services::event_wire::{encode_event, encode_observation_event};
+    use crate::{MarketApplication, MarketEvent, OrderBook, PriceLevel};
     use kairos_protocol::InstanceIdentity;
+    use kairos_reference_contract::model::Market as ReferenceMarket;
+    use kairos_reference_contract::transport::{
+        ReferenceMmapSnapshotConfig, ReferenceMmapSnapshotWriter,
+    };
+    use kairos_reference_contract::ReferenceCatalog;
     use serde_json::json;
-    use std::collections::BTreeMap;
     use std::collections::VecDeque;
     use std::time::Duration;
 
@@ -1486,13 +1056,44 @@ mod tests {
             derivation: "direct".into(),
         });
         assert_eq!(
-            &encode_event("actor", &identity, 1, &bar).unwrap()[4..8],
+            &encode_observation_event("actor", &identity, 1, &bar).unwrap()[4..8],
             b"MBA1"
         );
         assert_eq!(
-            &encode_event("actor", &identity, 2, &greeks).unwrap()[4..8],
+            &encode_observation_event("actor", &identity, 2, &greeks).unwrap()[4..8],
             b"MGR1"
         );
+    }
+
+    #[test]
+    fn orderbook_mutation_has_a_sequence_preserving_event_wire_message() {
+        let identity = InstanceIdentity::new("workspace", "launch", "instance");
+        let book = OrderBook::snapshot_with_source(
+            "binance-spot",
+            "market:binance:spot:BTCUSDT",
+            "instrument:spot:BTC",
+            42,
+            100,
+            vec![PriceLevel {
+                price: "64000".parse().unwrap(),
+                quantity: "1.25".parse().unwrap(),
+            }],
+            vec![PriceLevel {
+                price: "64001".parse().unwrap(),
+                quantity: "2.5".parse().unwrap(),
+            }],
+        )
+        .unwrap();
+
+        let encoded = encode_event("actor", &identity, 7, &MarketEvent::OrderBook(book)).unwrap();
+
+        assert_eq!(&encoded[4..8], b"MOB1");
+        let decoded =
+            kairos_protocol::generated::kairos::market::v_1::root_as_order_book_message(&encoded)
+                .unwrap();
+        assert_eq!(decoded.header().sequence(), 7);
+        assert_eq!(decoded.payload().sequence(), 42);
+        assert!(decoded.payload().synchronized());
     }
 
     #[test]
@@ -1571,23 +1172,22 @@ mod tests {
             (5, open_interest, b"MOI1"),
         ] {
             assert_eq!(
-                &encode_event("actor", &identity, sequence, &observation).unwrap()[4..8],
+                &encode_observation_event("actor", &identity, sequence, &observation).unwrap()
+                    [4..8],
                 identifier
             );
         }
     }
 
-    #[test]
-    fn command_idempotency_replays_same_result_and_rejects_payload_reuse() {
+    #[tokio::test]
+    async fn command_idempotency_replays_same_result_and_rejects_payload_reuse() {
         let root = tempfile::tempdir().unwrap();
-        let application = MarketApplication::new("test-market", 10).unwrap();
         let mut process = MarketProcess::new(
-            MarketRuntime::new(application),
+            MarketApplication::new("test-market", 10).unwrap(),
             NullPublisher,
             root.path().join("market.sock"),
             root.path().join("market.events.sock"),
             Duration::from_millis(10),
-            false,
         )
         .unwrap();
         let body = serde_json::to_string(&json!({
@@ -1609,136 +1209,136 @@ mod tests {
         }))
         .unwrap();
         let first = process
-            .engine
-            .handle_request(&Method::POST, "/v1/subscribe", &body);
+            .actor_task
+            .handle_request("POST", "/v1/subscribe", &body)
+            .await;
         let second = process
-            .engine
-            .handle_request(&Method::POST, "/v1/subscribe", &body);
+            .actor_task
+            .handle_request("POST", "/v1/subscribe", &body)
+            .await;
         assert_eq!(first.status, second.status);
         assert_eq!(first.payload, second.payload);
         let conflict = body.replace("BTCUSDT", "ETHUSDT");
         let response = process
-            .engine
-            .handle_request(&Method::POST, "/v1/subscribe", &conflict);
-        assert_eq!(response.status, axum::http::StatusCode::CONFLICT);
+            .actor_task
+            .handle_request("POST", "/v1/subscribe", &conflict)
+            .await;
+        assert_eq!(response.status, 409);
     }
 
-    struct FakeFeed {
-        next: u64,
-    }
-
-    impl MarketFeed for FakeFeed {
-        fn subscribe(&mut self, _market: &MarketDescriptor) -> Result<SubscriptionId, String> {
-            let id = SubscriptionId::new(format!("fake:{}", self.next))?;
-            self.next += 1;
-            Ok(id)
-        }
-
-        fn unsubscribe(&mut self, _subscription: &SubscriptionId) -> Result<(), String> {
-            Ok(())
-        }
-
-        fn poll(&mut self) -> Result<Vec<MarketObservation>, String> {
-            Ok(Vec::new())
-        }
-
-        fn poll_orderbooks(&mut self) -> Result<Vec<MarketOrderBookUpdate>, String> {
-            Ok(Vec::new())
-        }
-
-        fn status(&self) -> FeedStatus {
-            FeedStatus::Ready
-        }
-    }
-
-    #[test]
-    fn command_endpoint_accepts_all_required_product_routes_in_one_process() {
-        let routes = [
-            ("massive", "equity", "equity"),
-            ("massive", "options", "equity"),
-            ("binance", "spot", "crypto"),
-            ("binance", "usd-m-futures", "crypto"),
-            ("binance", "coin-m-futures", "crypto"),
-            ("binance", "options", "crypto"),
-            ("binance", "equity", "equity"),
-            ("okx", "spot", "crypto"),
-            ("okx", "spot", "equity"),
-            ("okx", "swap", "crypto"),
-            ("okx", "futures", "crypto"),
-            ("okx", "options", "crypto"),
-        ];
-        let mut factories: BTreeMap<MarketRoute, MarketFeedFactory> = BTreeMap::new();
-        for (exchange, market_type, asset_type) in routes {
-            factories.insert(
-                MarketRoute::with_asset_type(exchange, market_type, asset_type),
-                Box::new(|| Ok(Box::new(FakeFeed { next: 1 }) as Box<dyn MarketFeed>)),
-            );
-        }
-        let application = MarketApplication::new("test-market", 100).unwrap();
-        let application = MarketRuntime::with_feed(
-            application,
-            Box::new(CompositeMarketFeed::new(factories).unwrap()),
-        );
-        let directory = tempfile::tempdir().unwrap();
-        let publisher = MmapMarketSnapshotPublisher::create(
-            directory.path().join("market.snapshot"),
-            4096,
-            "test-market",
-            "market.events",
+    #[tokio::test]
+    async fn replay_pause_resume_controls_the_source_without_a_polling_path() {
+        let root = tempfile::tempdir().unwrap();
+        let mut application = MarketApplication::new("replay-market", 10).unwrap();
+        crate::composition::attach_replay_source_with_policy(
+            &mut application,
+            [MarketObservation::Bar(crate::Bar {
+                market_id: kairos_domain_types::MarketId::new("market:test:spot:TEST").unwrap(),
+                instrument_id: kairos_domain_types::InstrumentId::new("instrument:test:spot:TEST")
+                    .unwrap(),
+                timeframe: "1m".into(),
+                open: "1".parse().unwrap(),
+                high: "1".parse().unwrap(),
+                low: "1".parse().unwrap(),
+                close: "1".parse().unwrap(),
+                volume: None,
+                observed_at_unix_nanos: kairos_domain_types::UnixNanos::new(1),
+                source_id: "replay".into(),
+                derivation: "acceptance".into(),
+            })],
+            None,
+            None,
+            root.path().join("checkpoint.json"),
+            crate::composition::MarketReplayClock::Maximum,
+            1,
+            true,
         )
         .unwrap();
         let mut process = MarketProcess::new(
             application,
-            publisher,
-            directory.path().join("market.sock"),
-            directory.path().join("market-events.sock"),
-            Duration::from_secs(1),
-            true,
+            NullPublisher,
+            root.path().join("market.sock"),
+            root.path().join("market.events.sock"),
+            Duration::from_millis(10),
         )
         .unwrap();
-        process.engine.reference_markets = Some(
-            routes
-                .iter()
-                .enumerate()
-                .map(|(index, (exchange, market_type, asset_type))| {
-                    MarketDescriptor::new_with_asset_type(
-                        format!("market-{index}"),
-                        format!("instrument-{index}"),
-                        *exchange,
-                        *market_type,
-                        *asset_type,
-                        format!("SYMBOL{index}"),
-                    )
-                    .unwrap()
-                })
-                .collect(),
+        process
+            .actor_task
+            .application
+            .drive_next_source_input()
+            .await
+            .unwrap();
+        assert_eq!(
+            process
+                .actor_task
+                .application
+                .snapshot()
+                .sources
+                .values()
+                .next()
+                .unwrap()
+                .status,
+            crate::SourceStatus::Paused
         );
 
-        for (index, (exchange, market_type, asset_type)) in routes.into_iter().enumerate() {
-            let body = json!({
-                "schema_version": 1,
-                "command_id": format!("command-{index}"),
-                "idempotency_key": format!("command-{index}"),
-                "operation": "market.subscribe",
-                "strategy_id": "all-products",
-                "instance_id": "instance-1",
-                "payload": {
-                    "subject": format!("market.SYMBOL{index}"),
-                    "selectors": ["quote"],
-                    "exchange": exchange,
-                    "market_type": market_type,
-                    "asset_type": asset_type,
-                    "identity": null,
-                    "dynamic": false,
-                }
-            })
-            .to_string();
-            let (status, _) = process.engine.subscribe(&body);
-            assert_eq!(status, 202, "route {exchange}/{market_type}/{asset_type}");
-        }
+        let subscribe = json!({
+            "schema_version":1,"command_id":"replay-sub","idempotency_key":"replay-sub",
+            "operation":"market.subscribe","strategy_id":"acceptance","instance_id":"instance",
+            "payload":{"subject":"market.TEST","selectors":["bar"],"exchange":"test",
+            "market_type":"spot","asset_type":"crypto","params":{},"dynamic":false}
+        })
+        .to_string();
         assert_eq!(
-            process.engine.application.snapshot().subscriptions.len(),
-            routes.len()
+            process
+                .actor_task
+                .handle_request("POST", "/v1/subscribe", &subscribe)
+                .await
+                .status,
+            202
+        );
+        process
+            .actor_task
+            .application
+            .drive_next_source_input()
+            .await
+            .unwrap();
+        assert_eq!(
+            process
+                .actor_task
+                .application
+                .snapshot()
+                .event_sequence
+                .get(),
+            0
+        );
+        assert_eq!(
+            process
+                .actor_task
+                .handle_request("POST", "/v1/replay/resume", "")
+                .await
+                .status,
+            202
+        );
+        process
+            .actor_task
+            .application
+            .drive_next_source_input()
+            .await
+            .unwrap();
+        process
+            .actor_task
+            .application
+            .drive_next_source_input()
+            .await
+            .unwrap();
+        assert_eq!(
+            process
+                .actor_task
+                .application
+                .snapshot()
+                .event_sequence
+                .get(),
+            1
         );
     }
 
@@ -1783,164 +1383,106 @@ mod tests {
             _ => panic!("reference recovery command was not preserved"),
         }
     }
-}
 
-fn event_header<'a, A: flatbuffers::Allocator + 'a>(
-    builder: &mut FlatBufferBuilder<'a, A>,
-    actor_id: &str,
-    identity: &InstanceIdentity,
-    stream_id: &str,
-    sequence: u64,
-    event_time: u64,
-) -> flatbuffers::WIPOffset<MessageHeader<'a>> {
-    let message_id = builder.create_string(&format!("market:{sequence}"));
-    let stream = builder.create_string(stream_id);
-    let actor = builder.create_string(actor_id);
-    let workspace_id = non_empty_string(builder, &identity.workspace_id);
-    let launch_id = non_empty_string(builder, &identity.launch_id);
-    let instance_id = non_empty_string(builder, &identity.instance_id);
-    MessageHeader::create(
-        builder,
-        &MessageHeaderArgs {
-            message_id: Some(message_id),
-            stream_id: Some(stream),
-            producer_id: Some(actor),
-            workspace_id,
-            launch_id,
-            instance_id,
-            sequence,
-            event_time_unix_nanos: event_time,
-            publish_time_unix_nanos: event_time,
-        },
-    )
-}
-
-fn decimal64_price(value: kairos_domain_types::Price) -> Decimal64 {
-    Decimal64::new(value.mantissa(), value.scale())
-}
-
-fn decimal64_quantity(value: kairos_domain_types::Quantity) -> Decimal64 {
-    Decimal64::new(value.mantissa(), value.scale())
-}
-
-fn decimal64_money(value: kairos_domain_types::Money) -> Decimal64 {
-    Decimal64::new(value.mantissa(), value.scale())
-}
-
-fn decimal64_rate(value: kairos_domain_types::Rate) -> Decimal64 {
-    Decimal64::new(value.mantissa(), value.scale())
-}
-
-fn aggressor_side(value: Option<&str>) -> kairos_protocol::generated::kairos::common::v_1::Side {
-    use kairos_protocol::generated::kairos::common::v_1::Side;
-    match value.map(|value| value.to_ascii_lowercase()).as_deref() {
-        Some("buy") => Side::BUY,
-        Some("sell") => Side::SELL,
-        _ => Side::UNSPECIFIED,
-    }
-}
-
-fn non_empty_string<'a, 'b, A: flatbuffers::Allocator + 'a>(
-    builder: &'b mut FlatBufferBuilder<'a, A>,
-    value: &str,
-) -> Option<flatbuffers::WIPOffset<&'a str>> {
-    (!value.is_empty()).then(|| builder.create_string(value))
-}
-
-async fn market_http_handler(
-    State(sender): State<Sender<EngineCommand>>,
-    request: Request,
-) -> Response {
-    let started = Instant::now();
-    let method = request.method().clone();
-    let path = request.uri().path().to_owned();
-    let span = tracing::info_span!(
-        "market.control_request",
-        component = "market",
-        method = %method,
-        path = %path,
-        status = tracing::field::Empty,
-        duration_ms = tracing::field::Empty,
-        result = tracing::field::Empty,
-        error_code = tracing::field::Empty,
-        retryable = tracing::field::Empty,
-        trace_id = tracing::field::Empty,
-        span_id = tracing::field::Empty
-    );
-    kairos_workspace::logging::record_counter("kairos.control.request", 1);
-    kairos_workspace::logging::record_counter("kairos.operation", 1);
-    let queue_depth = sender.max_capacity() - sender.capacity();
-    kairos_workspace::logging::set_remote_parent(&span, request.headers());
-    let response = market_http_handler_inner(sender, request)
-        .instrument(span.clone())
-        .await;
-    let duration_ms = started.elapsed().as_secs_f64() * 1_000.0;
-    span.record("status", response.status().as_u16());
-    span.record("duration_ms", duration_ms);
-    span.record(
-        "result",
-        if response.status().is_success() {
-            "accepted"
-        } else {
-            "rejected"
-        },
-    );
-    kairos_workspace::logging::record_duration_ms("kairos.control.request.duration", duration_ms);
-    kairos_workspace::logging::record_duration_ms("kairos.operation.duration", duration_ms);
-    kairos_workspace::logging::record_gauge("kairos.queue.depth", queue_depth as u64);
-    if response.status().is_server_error() {
-        kairos_workspace::logging::mark_span_error(&span, "control.internal_error", true);
-        kairos_workspace::logging::record_counter("kairos.control.request.failed", 1);
-        kairos_workspace::logging::record_counter("kairos.operation.failed", 1);
-    } else if !response.status().is_success() {
-        span.record("error_code", "control.request_rejected");
-        span.record("retryable", false);
-    }
-    tracing::info!(parent: &span, event = "control_request_completed", component = "market", duration_ms, result = if response.status().is_success() { "accepted" } else { "rejected" }, "market control request completed");
-    response
-}
-
-async fn market_http_handler_inner(sender: Sender<EngineCommand>, request: Request) -> Response {
-    let method = request.method().clone();
-    let path = request.uri().path().to_owned();
-    let body = match to_bytes(
-        request.into_body(),
-        kairos_workspace::control::MAX_HTTP_BODY_BYTES,
-    )
-    .await
-    {
-        Ok(body) => body.to_vec(),
-        Err(_) => {
-            return (
-                StatusCode::PAYLOAD_TOO_LARGE,
-                Json(json!({"error":"request body too large"})),
-            )
-                .into_response()
-        }
-    };
-    let (response_sender, response_receiver) = oneshot::channel();
-    if sender
-        .try_send(EngineCommand::Http(MarketHttpRequest {
-            method,
-            path,
-            body,
-            response: response_sender,
-        }))
-        .is_err()
-    {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error":"market control queue is full or process is stopping"})),
+    #[test]
+    fn configured_missing_reference_snapshot_keeps_projection_in_error() {
+        let root = tempfile::tempdir().unwrap();
+        let mut process = MarketProcess::new(
+            MarketApplication::new("test-market", 10).unwrap(),
+            NullPublisher,
+            root.path().join("market.sock"),
+            root.path().join("market.events.sock"),
+            Duration::from_millis(10),
         )
-            .into_response();
+        .unwrap()
+        .with_reference_snapshot(root.path().join("missing-markets.snapshot"));
+
+        assert!(process.actor_task.recover_reference_projection().is_err());
+        assert!(process.actor_task.reference.recovery_needed());
+        assert!(process.actor_task.reference.markets().is_none());
     }
-    match response_receiver.await {
-        Ok(response) => (response.status, Json(response.payload)).into_response(),
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error":"market process did not respond"})),
+
+    #[test]
+    fn reference_snapshot_builds_market_projection_and_clears_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let path = |name: &str| root.path().join(name);
+        let markets_path = path("markets.snapshot");
+        let mut writer = ReferenceMmapSnapshotWriter::create(ReferenceMmapSnapshotConfig {
+            catalog_path: path("catalog.snapshot"),
+            entities_path: path("entities.snapshot"),
+            assets_path: path("assets.snapshot"),
+            instruments_path: path("instruments.snapshot"),
+            listings_path: path("listings.snapshot"),
+            markets_path: markets_path.clone(),
+            financial_products_path: path("financial-products.snapshot"),
+            execution_accesses_path: path("execution-accesses.snapshot"),
+            slot_size: 64 * 1024,
+            actor_id: "reference".into(),
+            event_stream_id: "reference.lifecycle".into(),
+            identity: InstanceIdentity::new("workspace", "reference", "global"),
+        })
+        .unwrap();
+        let market = ReferenceMarket {
+            market_id: "market:binance:spot:BTCUSDT".into(),
+            instrument_id: "instrument:spot:BTC".into(),
+            listing_id: "listing:binance:spot:BTC:USDT".into(),
+            exchange_id: "exchange:binance".into(),
+            market_type: "spot".into(),
+            asset_type: Some("crypto".into()),
+            source_symbol: "BTCUSDT".into(),
+            status: "active".into(),
+            ..ReferenceMarket::default()
+        };
+        let mut catalog = ReferenceCatalog {
+            generation: 1,
+            event_sequence: 1,
+            ..ReferenceCatalog::default()
+        };
+        catalog.markets.insert(market.market_id.clone(), market);
+        writer.publish(&catalog).unwrap();
+        let mut process = MarketProcess::new(
+            MarketApplication::new("test-market", 10).unwrap(),
+            NullPublisher,
+            root.path().join("market.sock"),
+            root.path().join("market.events.sock"),
+            Duration::from_millis(10),
         )
-            .into_response(),
+        .unwrap()
+        .with_reference_snapshot(markets_path);
+
+        process.actor_task.recover_reference_projection().unwrap();
+
+        assert!(!process.actor_task.reference.recovery_needed());
+        assert_eq!(process.actor_task.reference.markets().unwrap().len(), 1);
+        assert_eq!(
+            process.actor_task.reference.markets().unwrap()[0].market_id,
+            "market:binance:spot:BTCUSDT"
+        );
+        assert_eq!(
+            process.actor_task.reference.event_sequence(),
+            Some(1.into())
+        );
+
+        process
+            .actor_task
+            .reference
+            .require_recovery(Some(2.into()));
+        let error = process
+            .actor_task
+            .recover_reference_projection()
+            .unwrap_err();
+        assert!(error.contains("behind required sequence 2"));
+        assert!(process.actor_task.reference.recovery_needed());
+
+        catalog.generation = 2;
+        catalog.event_sequence = 2;
+        writer.publish(&catalog).unwrap();
+        process.actor_task.recover_reference_projection().unwrap();
+        assert_eq!(
+            process.actor_task.reference.event_sequence(),
+            Some(2.into())
+        );
+        assert!(!process.actor_task.reference.recovery_needed());
     }
 }
 
@@ -1992,12 +1534,17 @@ fn forward_reference_events(
     Ok(())
 }
 
-async fn event_client_writer(mut stream: UnixStream, mut receiver: Receiver<Vec<u8>>) {
-    while let Some(payload) = receiver.recv().await {
-        let frame = (payload.len() as u32).to_be_bytes();
-        if stream.write_all(&frame).await.is_err() || stream.write_all(&payload).await.is_err() {
-            break;
-        }
+fn rollback_subscribe_intent(application: &mut MarketApplication, body: &str) {
+    let Some(command_id) = serde_json::from_str::<Value>(body).ok().and_then(|value| {
+        value
+            .get("command_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    }) else {
+        return;
+    };
+    if let Ok(subscription_id) = SubscriptionId::new(command_id) {
+        application.unsubscribe(&subscription_id);
     }
 }
 

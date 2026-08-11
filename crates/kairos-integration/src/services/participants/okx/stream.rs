@@ -3,7 +3,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::application::capabilities::account_facts::{
-    canonical_account_identity, ExternalAccountEvent as AccountEvent,
+    external_instrument_ref, ExternalAccountEvent as AccountEvent,
     ExternalAccountSnapshot as AccountSnapshot, ExternalAccountStatus as AccountStatus,
     ExternalBalance as Balance, ExternalDecimal as DecimalValue, ExternalFillEvent as FillEvent,
     ExternalOrderEvent as OrderEvent, ExternalOrderStatus as OrderStatus,
@@ -99,6 +99,11 @@ pub(crate) fn parse_execution_events(
                 .filter(|value| value.mantissa != 0)
                 .map(|value| ExecutionDecimal::new(value.mantissa.saturating_abs(), value.scale));
             Ok(ExternalEventEnvelope {
+                participant: crate::domain::ParticipantRef::new(
+                    crate::domain::ParticipantKind::Exchange,
+                    "okx",
+                )
+                .expect("static OKX participant is valid"),
                 binding_id: binding_id.into(),
                 channel_id: channel_id.into(),
                 channel_epoch,
@@ -288,7 +293,12 @@ fn parse_order_event(segment_key: &str, value: &Value) -> Result<Option<AccountE
             fill_id: kairos_domain_types::FillId::new(fill_id)?,
             order_id: kairos_domain_types::OrderId::new(order_id)?,
             segment_key: kairos_domain_types::SegmentKey::new(segment_key)?,
-            instrument_id: canonical_account_identity("okx", instrument_id)?.0,
+            provider_instrument: external_instrument_ref(
+                crate::domain::ParticipantKind::Exchange,
+                "okx",
+                row.get("instType").and_then(Value::as_str).unwrap_or("okx"),
+                instrument_id,
+            )?,
             side: row
                 .get("side")
                 .and_then(Value::as_str)

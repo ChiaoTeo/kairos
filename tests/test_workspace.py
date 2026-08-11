@@ -223,15 +223,15 @@ def test_workspace_resolves_market_connection_from_manifest(tmp_path: Path) -> N
     workspace = WorkspaceApplication().init(tmp_path / "demo", workspace_id="demo")
     workspace.paths.manifest.write_text(
         'version = 1\nworkspace_id = "demo"\n\n'
-        "[market.connections.binance-equity]\n"
-        'provider = "binance-equity-rest"\n'
-        'credential_id = "binance-equity-readonly"\n',
+        "[market.connections.massive-equity]\n"
+        'provider = "massive-rest"\n'
+        'credential_id = "massive-readonly"\n',
         encoding="utf-8",
     )
 
-    assert WorkspaceApplication().market_connection(workspace, "binance-equity") == {
-        "provider": "binance-equity-rest",
-        "credential_id": "binance-equity-readonly",
+    assert WorkspaceApplication().market_connection(workspace, "massive-equity") == {
+        "provider": "massive-rest",
+        "credential_id": "massive-readonly",
     }
 
 

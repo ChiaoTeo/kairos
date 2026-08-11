@@ -1,7 +1,7 @@
 //! Binance Spot private user stream.
 
 use crate::application::capabilities::account_facts::{
-    canonical_account_identity, ExternalAccountEvent as AccountEvent,
+    external_instrument_ref, ExternalAccountEvent as AccountEvent,
     ExternalAccountSnapshot as AccountSnapshot, ExternalAccountStatus as AccountStatus,
     ExternalBalance as Balance, ExternalDecimal as DecimalValue, ExternalFillEvent as FillEvent,
     ExternalOrderEvent as OrderEvent, ExternalOrderStatus as OrderStatus,
@@ -238,11 +238,14 @@ pub(crate) fn parse_user_event_value(
                     .into(),
             };
             let mut events = vec![AccountEvent::Order(event)];
-            if let Some(quantity) = value
+            let fill_quantity = value
                 .get("l")
                 .and_then(Value::as_str)
-                .filter(|value| *value != "0" && !value.is_empty())
-            {
+                .filter(|value| !value.is_empty())
+                .map(decimal)
+                .transpose()?
+                .filter(|quantity| quantity.mantissa > 0);
+            if let Some(quantity) = fill_quantity {
                 let symbol = value
                     .get("s")
                     .and_then(Value::as_str)
@@ -251,7 +254,12 @@ pub(crate) fn parse_user_event_value(
                     .get("L")
                     .and_then(Value::as_str)
                     .ok_or_else(|| "Binance execution report fill price is missing".to_string())?;
-                let (instrument_id, _) = canonical_account_identity(product, symbol)?;
+                let provider_instrument = external_instrument_ref(
+                    crate::domain::ParticipantKind::Exchange,
+                    "binance",
+                    product,
+                    symbol,
+                )?;
                 let occurred_at_unix_nanos =
                     value.get("E").and_then(Value::as_u64).unwrap_or_default() * 1_000_000;
                 let fill_id = value
@@ -263,13 +271,13 @@ pub(crate) fn parse_user_event_value(
                     fill_id: kairos_domain_types::FillId::new(fill_id)?,
                     order_id: kairos_domain_types::OrderId::new(local_order_id)?,
                     segment_key: kairos_domain_types::SegmentKey::new(segment_key)?,
-                    instrument_id,
+                    provider_instrument,
                     side: value
                         .get("S")
                         .and_then(Value::as_str)
                         .unwrap_or("BUY")
                         .into(),
-                    quantity: decimal(quantity)?,
+                    quantity,
                     price: decimal(price)?,
                     fee_asset: value
                         .get("N")
@@ -416,6 +424,26 @@ mod tests {
         assert_eq!(fill.price.mantissa, 1005);
         assert_eq!(fill.fee_asset.as_deref(), Some("USDT"));
         assert_eq!(fill.fee_amount.unwrap().mantissa, 1);
+    }
+
+    #[test]
+    fn canceled_execution_report_with_decimal_zero_does_not_create_fill() {
+        let event = parse_user_event(
+            "spot",
+            "binance-spot",
+            r#"{"e":"executionReport","E":1000,"c":"order-1","i":42,"t":-1,"s":"USDCUSDT","S":"BUY","X":"CANCELED","z":"0.00000000","l":"0.00000000","L":"0.00000000","n":"0.00000000","N":null,"r":"NONE"}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let AccountEvent::Batch(events) = event else {
+            panic!("expected event batch")
+        };
+        assert_eq!(events.len(), 1);
+        let AccountEvent::Order(order) = &events[0] else {
+            panic!("expected canceled order event")
+        };
+        assert_eq!(order.status, OrderStatus::Canceled);
+        assert_eq!(order.filled_quantity.unwrap().mantissa, 0);
     }
 
     #[test]

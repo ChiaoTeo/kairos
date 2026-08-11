@@ -134,10 +134,18 @@ pub(crate) fn normalize_derivatives(
         .iter()
         .map(|row| {
             let contract_type = text(row, "contractType").unwrap_or("PERPETUAL");
-            let kind = if contract_type == "PERPETUAL" {
-                ExternalInstrumentKind::Perpetual
-            } else {
-                ExternalInstrumentKind::Future
+            let kind = match contract_type {
+                "PERPETUAL" => ExternalInstrumentKind::Perpetual,
+                "TRADIFI_PERPETUAL" => ExternalInstrumentKind::EquityPerpetual,
+                "CURRENT_QUARTER"
+                | "NEXT_QUARTER"
+                | "CURRENT_QUARTER_DELIVERING"
+                | "NEXT_QUARTER_DELIVERING" => ExternalInstrumentKind::Future,
+                other => {
+                    return Err(IntegrationError::InvalidPayload(format!(
+                        "unsupported Binance derivatives contractType: {other}"
+                    )))
+                }
             };
             let expiry_unix_nanos = if kind == ExternalInstrumentKind::Future {
                 let expiry_millis = unsigned_64(row, "deliveryDate").ok_or_else(|| {
@@ -164,7 +172,11 @@ pub(crate) fn normalize_derivatives(
                 base_currency: Some(currency(required(row, "baseAsset")?)?),
                 quote_currency: Some(currency(required(row, "quoteAsset")?)?),
                 settlement_currency: text(row, "marginAsset").map(currency).transpose()?,
-                underlying: text(row, "pair").map(provider_symbol).transpose()?,
+                underlying: if kind == ExternalInstrumentKind::EquityPerpetual {
+                    text(row, "baseAsset").map(provider_symbol).transpose()?
+                } else {
+                    text(row, "pair").map(provider_symbol).transpose()?
+                },
                 expiry_unix_nanos,
                 strike: None,
                 option_right: None,
@@ -299,6 +311,46 @@ mod tests {
         assert_eq!(instrument.source_symbol.as_str(), "BTCUSDT_260626");
         assert_eq!(instrument.price_tick.as_deref(), Some("0.1"));
         assert_eq!(instrument.quantity_precision, Some(3));
+    }
+
+    #[test]
+    fn tradifi_perpetual_is_not_misclassified_as_a_dated_future() {
+        let facts = normalize_derivatives(&serde_json::json!({
+            "symbols": [{
+                "symbol": "AAPLUSDT",
+                "pair": "AAPLUSDT",
+                "contractType": "TRADIFI_PERPETUAL",
+                "deliveryDate": 4133404800000_u64,
+                "status": "TRADING",
+                "baseAsset": "AAPL",
+                "quoteAsset": "USDT",
+                "marginAsset": "USDT",
+                "underlyingType": "EQUITY",
+                "underlyingSubType": ["TradFi"],
+                "pricePrecision": 5,
+                "quantityPrecision": 2,
+                "filters": []
+            }]
+        }))
+        .unwrap();
+        let instrument = &facts.instruments[0];
+        assert_eq!(instrument.kind, ExternalInstrumentKind::EquityPerpetual);
+        assert_eq!(instrument.underlying.as_deref(), Some("AAPL"));
+        assert_eq!(instrument.expiry_unix_nanos, None);
+    }
+
+    #[test]
+    fn unknown_derivative_contract_type_is_rejected() {
+        assert!(normalize_derivatives(&serde_json::json!({
+            "symbols": [{
+                "symbol": "MYSTERYUSDT",
+                "contractType": "MYSTERY",
+                "status": "TRADING",
+                "baseAsset": "MYSTERY",
+                "quoteAsset": "USDT"
+            }]
+        }))
+        .is_err());
     }
 
     #[test]

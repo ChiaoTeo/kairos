@@ -5,13 +5,14 @@ use super::{
 };
 use crate::domain::{AccountEvent, AccountObservedFill, AccountSegment};
 use crate::services::integration::{
-    AccountEventStream, AccountMarketProfileGateway, AccountSnapshotGateway,
+    AccountAsyncMarketProfileGateway, AccountAsyncSnapshotGateway, AccountMarketProfileGateway,
+    AccountSnapshotGateway,
 };
 use crate::services::persistence::JsonAccountStore;
 use crate::services::runtime::AccountRuntime;
 use std::sync::Arc;
 use std::time::Instant;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 type BalanceRows = Vec<(String, String, Vec<crate::domain::Balance>)>;
 
@@ -20,6 +21,8 @@ pub struct AccountApplication {
     market_profiles:
         std::collections::BTreeMap<(crate::domain::SegmentKey, String), AccountMarketProfile>,
     profile_source: Option<AccountMarketProfileGateway>,
+    async_snapshot_source: Option<AccountAsyncSnapshotGateway>,
+    async_profile_source: Option<AccountAsyncMarketProfileGateway>,
     trade_enabled: bool,
 }
 
@@ -29,67 +32,22 @@ impl AccountApplication {
             runtime,
             market_profiles: std::collections::BTreeMap::new(),
             profile_source: None,
+            async_snapshot_source: None,
+            async_profile_source: None,
             trade_enabled: true,
         }
-    }
-
-    pub fn has_stream(&self) -> bool {
-        self.runtime.has_stream()
-    }
-
-    pub(crate) fn attach_stream(&mut self, stream: AccountEventStream) {
-        self.runtime.attach_stream(stream);
-    }
-
-    pub fn poll_stream_once(&mut self) -> Result<bool, AccountError> {
-        match self
-            .runtime
-            .poll_stream_once()
-            .map_err(AccountError::Source)
-        {
-            Ok(changed) => {
-                if changed {
-                    info!(
-                        event = "account_stream_event_applied",
-                        component = "account",
-                        "account stream event applied"
-                    );
-                } else {
-                    debug!(
-                        event = "account_stream_idle",
-                        component = "account",
-                        "account stream had no event"
-                    );
-                }
-                Ok(changed)
-            }
-            Err(error) => {
-                warn!(event = "account_stream_event_failed", component = "account", error = %error, "account stream event failed");
-                Err(error)
-            }
-        }
-    }
-
-    pub fn poll_stream_batch(&mut self, max_events: usize) -> Result<usize, AccountError> {
-        self.runtime
-            .poll_stream_batch(max_events)
-            .map_err(AccountError::Source)
     }
 
     pub fn generation(&self) -> u64 {
         self.runtime.generation()
     }
 
-    pub fn stream_queue_depth(&self) -> usize {
-        self.runtime.stream_queue_depth()
-    }
-
-    pub(crate) fn stream_wakeup(&self) -> Arc<tokio::sync::Notify> {
-        self.runtime.stream_wakeup()
-    }
-
     pub(crate) fn take_persistence_error(&self) -> Option<String> {
         self.runtime.take_persistence_error()
+    }
+
+    pub(crate) fn has_refresh_worker(&self) -> bool {
+        self.runtime.has_refresh_worker()
     }
 
     pub(crate) fn persistence_queue_depth(&self) -> usize {
@@ -609,6 +567,20 @@ impl AccountApplication {
         Ok(profile)
     }
 
+    pub async fn refresh_market_profile_async(
+        &mut self,
+        request: AccountMarketProfileRequest,
+    ) -> Result<AccountMarketProfile, AccountError> {
+        let Some(source) = self.async_profile_source.as_mut() else {
+            return Err(AccountError::Source(
+                "async market profile source is not configured".into(),
+            ));
+        };
+        let profile = source.fetch(&request).await.map_err(AccountError::Source)?;
+        self.set_market_profile(profile.clone());
+        Ok(profile)
+    }
+
     pub fn market_profile(
         &self,
         request: &AccountMarketProfileRequest,
@@ -686,9 +658,87 @@ impl AccountApplication {
         source: AccountSnapshotGateway,
         store: Option<JsonAccountStore>,
     ) -> Result<Self, AccountError> {
-        AccountRuntime::new(segments, source, store)
+        AccountRuntime::new(segments, Some(source), store)
             .map(Self::new)
             .map_err(AccountError::Invalid)
+    }
+
+    pub(crate) fn with_async_dependencies(
+        segments: Vec<AccountSegment>,
+        store: Option<JsonAccountStore>,
+    ) -> Result<Self, AccountError> {
+        AccountRuntime::new(segments, None, store)
+            .map(Self::new)
+            .map_err(AccountError::Invalid)
+    }
+
+    pub(crate) fn attach_async_sources(
+        &mut self,
+        snapshot: AccountAsyncSnapshotGateway,
+        profile: Option<AccountAsyncMarketProfileGateway>,
+    ) {
+        self.async_snapshot_source = Some(snapshot);
+        self.async_profile_source = profile;
+    }
+
+    pub async fn refresh_report_async(
+        &mut self,
+        request: RefreshAccount,
+    ) -> Result<AccountRefreshReport, AccountError> {
+        if self.async_snapshot_source.is_none() {
+            return Err(AccountError::Source(
+                "async account snapshot source is not configured".into(),
+            ));
+        }
+        let account_id = request.account_id.to_string();
+        let segments = self.selected_refresh_segments(&request)?;
+        let fetches = self
+            .async_snapshot_source
+            .as_mut()
+            .expect("async snapshot source checked")
+            .fetch(segments)
+            .await;
+        self.apply_refresh_fetches(&account_id, fetches)
+    }
+
+    pub(crate) fn take_async_snapshot_source(&mut self) -> Option<AccountAsyncSnapshotGateway> {
+        self.async_snapshot_source.take()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn async_source_counts(&self) -> (usize, usize) {
+        (
+            self.async_snapshot_source
+                .as_ref()
+                .map_or(0, |source| source.len()),
+            self.async_profile_source
+                .as_ref()
+                .map_or(0, |source| source.len()),
+        )
+    }
+
+    pub(crate) fn selected_refresh_segments(
+        &self,
+        request: &RefreshAccount,
+    ) -> Result<Vec<AccountSegment>, AccountError> {
+        let segments = request
+            .segments
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        self.runtime
+            .selected_segments(request.account_id.as_str(), &segments)
+            .map_err(AccountError::Source)
+    }
+
+    pub(crate) fn apply_refresh_fetches(
+        &mut self,
+        account_id: &str,
+        fetches: Vec<crate::services::refresh::RefreshFetch>,
+    ) -> Result<AccountRefreshReport, AccountError> {
+        self.runtime
+            .apply_refresh_fetches(account_id, fetches)
+            .map_err(AccountError::Source)
     }
 }
 

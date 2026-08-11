@@ -98,7 +98,6 @@ impl MassiveAsyncRestClient {
                     ("limit", limit.clamp(1, 1000).to_string()),
                     ("sort", "expiration_date".into()),
                     ("order", "asc".into()),
-                    ("apiKey", self.api_key.clone()),
                 ],
             )
         } else {
@@ -108,7 +107,6 @@ impl MassiveAsyncRestClient {
                     ("market", "stocks".into()),
                     ("active", "true".into()),
                     ("limit", limit.clamp(1, 1000).to_string()),
-                    ("apiKey", self.api_key.clone()),
                 ],
             )
         };
@@ -122,7 +120,11 @@ impl MassiveAsyncRestClient {
         }
         let payload = self
             .http
-            .get_json_response_with_headers_and_query(&endpoint, &query, &[])
+            .get_json_response_with_headers_and_query(
+                &endpoint,
+                &query,
+                &[("Authorization", format!("Bearer {}", self.api_key))],
+            )
             .await?
             .body;
         let rows = if self.options {
@@ -173,18 +175,21 @@ impl MassiveAsyncRestClient {
                 return Ok(result);
             };
             let query = if url.contains('?') {
-                vec![("apiKey", self.api_key.clone())]
+                Vec::new()
             } else {
                 vec![
                     ("adjusted", "false".into()),
                     ("sort", "asc".into()),
                     ("limit", "50000".into()),
-                    ("apiKey", self.api_key.clone()),
                 ]
             };
             let payload = self
                 .http
-                .get_json_response_with_headers_and_query(&url, &query, &[])
+                .get_json_response_with_headers_and_query(
+                    &url,
+                    &query,
+                    &[("Authorization", format!("Bearer {}", self.api_key))],
+                )
                 .await?
                 .body;
             append_historical_rows(&mut result, &payload);
@@ -264,18 +269,21 @@ impl MassiveStocksRestClient {
                 return Err("Massive historical pagination exceeded safety limit".into());
             }
             let query = if url.contains('?') {
-                vec![("apiKey", self.api_key.clone())]
+                Vec::new()
             } else {
                 vec![
                     ("adjusted", "false".into()),
                     ("sort", "asc".into()),
                     ("limit", "50000".into()),
-                    ("apiKey", self.api_key.clone()),
                 ]
             };
             let payload = self
                 .http
-                .get_json_with_query(&url, &query)
+                .get_json_with_headers_and_query(
+                    &url,
+                    &query,
+                    &[("Authorization", format!("Bearer {}", self.api_key))],
+                )
                 .map_err(|error| error.to_string())?;
             let rows = payload
                 .get("results")
@@ -326,14 +334,13 @@ impl MassiveStocksRestClient {
                 return Err("Massive options pagination exceeded safety limit".into());
             }
             let query = if url.contains('?') {
-                vec![("apiKey", self.api_key.clone())]
+                Vec::new()
             } else {
                 let mut query = vec![
                     ("expired", "false".into()),
                     ("limit", "1000".into()),
                     ("sort", "expiration_date".into()),
                     ("order", "asc".into()),
-                    ("apiKey", self.api_key.clone()),
                 ];
                 if let Some(underlying) = &self.option_underlying {
                     query.push(("underlying_ticker", underlying.clone()));
@@ -342,7 +349,11 @@ impl MassiveStocksRestClient {
             };
             let payload = self
                 .http
-                .get_json_with_query(&url, &query)
+                .get_json_with_headers_and_query(
+                    &url,
+                    &query,
+                    &[("Authorization", format!("Bearer {}", self.api_key))],
+                )
                 .map_err(|error| error.to_string())?;
             rows.extend(rows_from_payload(&payload)?);
             next_url = payload
@@ -365,7 +376,6 @@ impl MassiveStocksRestClient {
             ("limit", limit.to_string()),
             ("sort", "expiration_date".into()),
             ("order", "asc".into()),
-            ("apiKey", self.api_key.clone()),
         ];
         if let Some(cursor) = cursor {
             query.push(("cursor", cursor.to_owned()));
@@ -375,7 +385,11 @@ impl MassiveStocksRestClient {
         }
         let payload = self
             .http
-            .get_json_with_query(&endpoint, &query)
+            .get_json_with_headers_and_query(
+                &endpoint,
+                &query,
+                &[("Authorization", format!("Bearer {}", self.api_key))],
+            )
             .map_err(|error| error.to_string())?;
         let rows = rows_from_payload(&payload)?;
         let next_cursor = payload
@@ -425,14 +439,17 @@ impl MassiveStocksRestClient {
             ("market", "stocks".into()),
             ("active", "true".into()),
             ("limit", limit.clamp(1, 1000).to_string()),
-            ("apiKey", self.api_key.clone()),
         ];
         if let Some(cursor) = cursor {
             query.push(("cursor", cursor.to_owned()));
         }
         let payload = self
             .http
-            .get_json_with_query(&endpoint, &query)
+            .get_json_with_headers_and_query(
+                &endpoint,
+                &query,
+                &[("Authorization", format!("Bearer {}", self.api_key))],
+            )
             .map_err(|error| error.to_string())?;
         let rows = equity_rows_from_payload(payload.clone())?;
         let next_cursor = payload
@@ -459,11 +476,23 @@ impl MassiveStocksRestClient {
 /// public api.massive.com host. Keep pagination inside the configured proxy;
 /// the proxy is the endpoint that recognizes the workspace credential.
 fn private_next_url(next_url: &str, base_url: &str) -> String {
-    let Some((_, rest)) = next_url.split_once("://") else {
+    let Ok(parsed) = url::Url::parse(next_url) else {
         return next_url.to_owned();
     };
-    let path = rest.find('/').map(|index| &rest[index..]).unwrap_or("/");
-    format!("{}{}", base_url.trim_end_matches('/'), path)
+    let query = parsed
+        .query_pairs()
+        .filter(|(key, _)| !key.eq_ignore_ascii_case("apikey"))
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    let mut target = format!("{}{}", base_url.trim_end_matches('/'), parsed.path());
+    if !query.is_empty() {
+        let encoded = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(query)
+            .finish();
+        target.push('?');
+        target.push_str(&encoded);
+    }
+    target
 }
 
 fn next_cursor(payload: &Value) -> Option<String> {
@@ -656,17 +685,58 @@ fn date_to_unix_nanos(value: &str) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{equity_rows_from_payload, private_next_url, rows_from_payload};
+    use super::{
+        equity_rows_from_payload, private_next_url, rows_from_payload, MassiveAsyncRestClient,
+    };
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
 
     #[test]
     fn pagination_stays_on_private_massive_proxy() {
         assert_eq!(
             private_next_url(
-                "https://api.massive.com/v3/reference/options/contracts?cursor=abc",
+                "https://api.massive.com/v3/reference/options/contracts?cursor=abc&apiKey=secret",
                 "http://api.massiveprivateserver.site",
             ),
             "http://api.massiveprivateserver.site/v3/reference/options/contracts?cursor=abc"
         );
+    }
+
+    #[tokio::test]
+    async fn async_massive_authentication_uses_a_header_not_the_request_url() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 8192];
+            let size = stream.read(&mut buffer).unwrap();
+            let request = String::from_utf8_lossy(&buffer[..size]);
+            let request_lower = request.to_ascii_lowercase();
+            assert!(!request
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .contains("apiKey"));
+            assert!(request_lower.contains("authorization: bearer test-secret\r\n"));
+            let body = r#"{"results":[]}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+
+        let page = MassiveAsyncRestClient::with_base_url("test-secret", endpoint)
+            .unwrap()
+            .for_equity()
+            .load_markets_page(None, 1)
+            .await
+            .unwrap();
+
+        assert!(page.complete);
+        assert!(page.rows.is_empty());
+        server.join().unwrap();
     }
 
     #[test]

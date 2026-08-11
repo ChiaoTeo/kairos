@@ -1,16 +1,61 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::domain::events::MarketEvent;
 use crate::domain::freshness::{DataFreshnessStatus, FeedStatus, MarketFreshness};
 use crate::domain::market::{MarketDescriptor, MarketSelectionQuery};
 use crate::domain::observations::MarketObservation;
 use crate::domain::orderbook::{OrderBook, OrderBookDelta};
 use crate::domain::reference::ReferenceChanged;
 use crate::domain::snapshot::{MarketSnapshot, ReconcileResult, SubscriptionState};
+use crate::domain::source::{
+    derive_readiness, SourceDescriptor, SourceEpoch, SourceFailureKind, SourceId, SourceState,
+    SourceStatus,
+};
 use crate::domain::subscriptions::{
-    selector_matches_observation, selector_matches_orderbook, validate_selectors, SubscriptionId,
+    derive_subscription_status, selector_matches_observation, selector_matches_orderbook,
+    validate_selectors, SubscriptionId, SubscriptionMemberRequirement, SubscriptionMemberStatus,
     SubscriptionMode,
 };
+use crate::services::messages::{
+    ProviderSubscriptionId, SourceCommand, SourceInput, SourceRequestId,
+};
 use kairos_domain_types::{ActorId, Generation, Sequence};
+use tokio::sync::mpsc;
+
+pub(crate) type BusinessSubscriptionKey = (SubscriptionId, String);
+
+pub(crate) struct AttachedSource {
+    pub(crate) descriptor: SourceDescriptor,
+    pub(crate) commands: mpsc::Sender<SourceCommand>,
+    pub(crate) inputs: mpsc::Receiver<SourceInput>,
+    pub(crate) task: Option<tokio::task::JoinHandle<()>>,
+    pub(crate) confirmed: BTreeMap<BusinessSubscriptionKey, ProviderSubscriptionId>,
+}
+
+pub(crate) enum PendingSourceRequest {
+    Subscribe {
+        source_id: SourceId,
+        key: BusinessSubscriptionKey,
+    },
+    Unsubscribe {
+        source_id: SourceId,
+        key: BusinessSubscriptionKey,
+    },
+    ResyncOrderBook {
+        source_id: SourceId,
+        market_id: kairos_domain_types::MarketId,
+    },
+}
+
+impl PendingSourceRequest {
+    pub(crate) fn source_id(&self) -> &SourceId {
+        match self {
+            Self::Subscribe { source_id, .. }
+            | Self::Unsubscribe { source_id, .. }
+            | Self::ResyncOrderBook { source_id, .. } => source_id,
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct DynamicIntent {
@@ -19,6 +64,7 @@ struct DynamicIntent {
     selectors: Vec<String>,
     max_members: usize,
     members: BTreeMap<String, MarketDescriptor>,
+    member_requirements: BTreeMap<String, SubscriptionMemberRequirement>,
 }
 
 pub struct MarketActor {
@@ -32,15 +78,28 @@ pub struct MarketActor {
     static_subscriptions: BTreeMap<SubscriptionId, SubscriptionState>,
     dynamic_intents: BTreeMap<SubscriptionId, DynamicIntent>,
     max_dynamic_members: usize,
-    pending_events: Vec<(Sequence, MarketObservation)>,
+    pending_events: Vec<(Sequence, MarketEvent)>,
     reference_generation: Generation,
     reference_event_sequence: Sequence,
     feed_status: FeedStatus,
+    sources: BTreeMap<SourceId, SourceState>,
+    /// Operational source state is owned by the same Actor as subscription
+    /// intent and market state. The public application remains a facade and
+    /// cannot become a second runtime/state owner.
+    pub(crate) attached_sources: BTreeMap<SourceId, AttachedSource>,
+    pub(crate) source_input_capacity: usize,
+    pub(crate) next_source_input_index: usize,
+    pub(crate) pending_source_requests: BTreeMap<SourceRequestId, PendingSourceRequest>,
+    pub(crate) next_source_request_id: u64,
 }
 
 impl MarketActor {
     const MAX_PENDING_EVENTS: usize = 65_536;
-    pub fn new(actor_id: impl Into<String>, max_dynamic_members: usize) -> Result<Self, String> {
+    pub fn new(
+        actor_id: impl Into<String>,
+        max_dynamic_members: usize,
+        source_input_capacity: usize,
+    ) -> Result<Self, String> {
         let actor_id = actor_id.into();
         if actor_id.trim().is_empty() {
             return Err("market actor id is required".into());
@@ -62,12 +121,217 @@ impl MarketActor {
             reference_generation: 0.into(),
             reference_event_sequence: 0.into(),
             feed_status: FeedStatus::Disconnected,
+            sources: BTreeMap::new(),
             pending_events: Vec::new(),
+            attached_sources: BTreeMap::new(),
+            source_input_capacity,
+            next_source_input_index: 0,
+            pending_source_requests: BTreeMap::new(),
+            next_source_request_id: 1,
         })
     }
 
-    pub(crate) fn set_feed_status(&mut self, status: FeedStatus) {
-        self.feed_status = status;
+    pub(crate) fn restore(
+        snapshot: MarketSnapshot,
+        max_dynamic_members: usize,
+        source_input_capacity: usize,
+    ) -> Result<Self, String> {
+        if max_dynamic_members == 0 {
+            return Err("max dynamic members must be positive".into());
+        }
+        let mut static_subscriptions = BTreeMap::new();
+        let mut dynamic_intents = BTreeMap::new();
+        for subscription in snapshot.subscriptions {
+            if subscription.mode == SubscriptionMode::Dynamic {
+                let query = subscription
+                    .query
+                    .clone()
+                    .ok_or("dynamic subscription has no query")?;
+                dynamic_intents.insert(
+                    subscription.id.clone(),
+                    DynamicIntent {
+                        owner_id: subscription.owner_id,
+                        query,
+                        selectors: subscription.selectors,
+                        max_members: max_dynamic_members,
+                        members: subscription.members,
+                        member_requirements: subscription.member_requirements,
+                    },
+                );
+            } else {
+                static_subscriptions.insert(subscription.id.clone(), subscription);
+            }
+        }
+        Ok(Self {
+            actor_id: snapshot.actor_id.to_string(),
+            generation: snapshot.generation,
+            event_sequence: snapshot.event_sequence,
+            latest: snapshot.latest,
+            latest_views: snapshot.views,
+            order_books: snapshot.order_books,
+            freshness: snapshot.freshness,
+            static_subscriptions,
+            dynamic_intents,
+            max_dynamic_members,
+            pending_events: Vec::new(),
+            reference_generation: 0.into(),
+            reference_event_sequence: 0.into(),
+            feed_status: FeedStatus::Disconnected,
+            sources: BTreeMap::new(),
+            attached_sources: BTreeMap::new(),
+            source_input_capacity,
+            next_source_input_index: 0,
+            pending_source_requests: BTreeMap::new(),
+            next_source_request_id: 1,
+        })
+    }
+
+    pub(crate) fn register_source(&mut self, descriptor: SourceDescriptor) -> Result<(), String> {
+        if self.sources.contains_key(&descriptor.id) {
+            return Err(format!("market source already exists: {}", descriptor.id));
+        }
+        self.sources
+            .insert(descriptor.id.clone(), SourceState::starting(descriptor));
+        self.refresh_feed_status();
+        Ok(())
+    }
+
+    pub(crate) fn take_source_handle(
+        &mut self,
+        source_id: &SourceId,
+    ) -> Result<crate::services::sources::SourceHandle, String> {
+        let mut attached = self
+            .attached_sources
+            .remove(source_id)
+            .ok_or_else(|| format!("market source is not attached: {source_id}"))?;
+        self.sources.remove(source_id);
+        self.refresh_feed_status();
+        Ok(crate::services::sources::SourceHandle {
+            descriptor: attached.descriptor,
+            commands: attached.commands,
+            inputs: attached.inputs,
+            task: attached
+                .task
+                .take()
+                .ok_or_else(|| format!("market source task is missing: {source_id}"))?,
+        })
+    }
+
+    pub(crate) fn source_is_stopped(&self, source_id: &SourceId) -> bool {
+        self.sources
+            .get(source_id)
+            .is_some_and(|source| source.status == SourceStatus::Stopped)
+    }
+
+    pub(crate) fn source_command_closed(&self, source_id: &SourceId) -> bool {
+        self.attached_sources
+            .get(source_id)
+            .is_some_and(|source| source.commands.is_closed())
+    }
+
+    pub(crate) fn apply_source_status(
+        &mut self,
+        source_id: &SourceId,
+        epoch: SourceEpoch,
+        status: SourceStatus,
+        error: Option<String>,
+    ) -> Result<bool, String> {
+        let source = self
+            .sources
+            .get_mut(source_id)
+            .ok_or_else(|| format!("unknown market source: {source_id}"))?;
+        let changed = source.change_status(epoch, status, error);
+        if changed {
+            self.refresh_feed_status();
+        }
+        Ok(changed)
+    }
+
+    pub(crate) fn apply_source_failure(
+        &mut self,
+        source_id: &SourceId,
+        epoch: SourceEpoch,
+        kind: SourceFailureKind,
+        error: String,
+    ) -> Result<bool, String> {
+        let source = self
+            .sources
+            .get_mut(source_id)
+            .ok_or_else(|| format!("unknown market source: {source_id}"))?;
+        let changed = source.fail(epoch, kind, error);
+        if changed {
+            self.refresh_feed_status();
+        }
+        Ok(changed)
+    }
+
+    pub(crate) fn begin_orderbook_resync(
+        &mut self,
+        source_id: &SourceId,
+        epoch: SourceEpoch,
+        market_id: &kairos_domain_types::MarketId,
+        reason: String,
+    ) -> Result<bool, String> {
+        let source = self
+            .sources
+            .get_mut(source_id)
+            .ok_or_else(|| format!("unknown market source: {source_id}"))?;
+        if epoch != source.epoch {
+            return Ok(false);
+        }
+        if !source.resyncing_markets.contains(market_id) {
+            source.resyncing_markets.push(market_id.clone());
+        }
+        source.status = SourceStatus::WarmingUp;
+        source.last_error = Some(reason);
+        if let Some(book) = self
+            .order_books
+            .get_mut(&format!("{source_id}:{market_id}"))
+        {
+            book.synchronized = false;
+        }
+        for freshness in self.freshness.values_mut().filter(|freshness| {
+            freshness.source_id.eq_ignore_ascii_case(source_id.as_str())
+                && freshness.market_id == *market_id
+                && freshness.data_kind == "order_book"
+        }) {
+            freshness.status = DataFreshnessStatus::Stale;
+        }
+        self.refresh_feed_status();
+        Ok(true)
+    }
+
+    pub(crate) fn complete_orderbook_resync(
+        &mut self,
+        source_id: &SourceId,
+        epoch: SourceEpoch,
+        market_id: &kairos_domain_types::MarketId,
+    ) -> Result<bool, String> {
+        let source = self
+            .sources
+            .get_mut(source_id)
+            .ok_or_else(|| format!("unknown market source: {source_id}"))?;
+        if epoch != source.epoch {
+            return Ok(false);
+        }
+        source
+            .resyncing_markets
+            .retain(|current| current != market_id);
+        if source.resyncing_markets.is_empty() {
+            source.status = SourceStatus::Ready;
+            source.last_error = None;
+        }
+        self.refresh_feed_status();
+        Ok(true)
+    }
+
+    fn refresh_feed_status(&mut self) {
+        self.feed_status = match derive_readiness(self.sources.values()) {
+            crate::domain::source::MarketReadiness::Ready => FeedStatus::Ready,
+            crate::domain::source::MarketReadiness::Degraded => FeedStatus::Degraded,
+            crate::domain::source::MarketReadiness::Stopped => FeedStatus::Disconnected,
+            crate::domain::source::MarketReadiness::Starting => FeedStatus::WarmingUp,
+        };
     }
 
     pub fn subscribe_static(
@@ -96,7 +360,8 @@ impl MarketActor {
             return Err("subscription owner is required".into());
         }
         let mut members = BTreeMap::new();
-        members.insert(market.market_id.to_string(), market);
+        let market_id = market.market_id.to_string();
+        members.insert(market_id.clone(), market);
         self.static_subscriptions.insert(
             id.clone(),
             SubscriptionState {
@@ -106,6 +371,11 @@ impl MarketActor {
                 query: None,
                 selectors,
                 members,
+                member_requirements: [(market_id, SubscriptionMemberRequirement::Required)]
+                    .into_iter()
+                    .collect(),
+                member_status: BTreeMap::new(),
+                status: Default::default(),
             },
         );
         self.generation += 1;
@@ -159,6 +429,10 @@ impl MarketActor {
                 selectors,
                 max_members: self.max_dynamic_members,
                 members: selected.clone(),
+                member_requirements: selected
+                    .keys()
+                    .map(|key| (key.clone(), SubscriptionMemberRequirement::Required))
+                    .collect(),
             },
         );
         self.generation += 1;
@@ -172,6 +446,34 @@ impl MarketActor {
             self.generation += 1;
         }
         removed
+    }
+
+    pub fn set_member_requirement(
+        &mut self,
+        subscription_id: &SubscriptionId,
+        member_id: impl Into<String>,
+        requirement: SubscriptionMemberRequirement,
+    ) -> Result<(), String> {
+        let member_id = member_id.into();
+        if let Some(subscription) = self.static_subscriptions.get_mut(subscription_id) {
+            if !subscription.members.contains_key(&member_id) {
+                return Err(format!("subscription member is not present: {member_id}"));
+            }
+            subscription
+                .member_requirements
+                .insert(member_id, requirement);
+            self.generation += 1;
+            return Ok(());
+        }
+        if let Some(intent) = self.dynamic_intents.get_mut(subscription_id) {
+            if !intent.members.contains_key(&member_id) {
+                return Err(format!("subscription member is not present: {member_id}"));
+            }
+            intent.member_requirements.insert(member_id, requirement);
+            self.generation += 1;
+            return Ok(());
+        }
+        Err(format!("subscription not found: {}", subscription_id.0))
     }
 
     pub fn reconcile_reference(
@@ -203,6 +505,15 @@ impl MarketActor {
             }
             let previous = intent.members.clone();
             intent.members = selected.clone();
+            intent
+                .member_requirements
+                .retain(|member, _| selected.contains_key(member));
+            for member in selected.keys() {
+                intent
+                    .member_requirements
+                    .entry(member.clone())
+                    .or_insert(SubscriptionMemberRequirement::Required);
+            }
             let diff = diff_members(&previous, &selected);
             if diff.added.len() + diff.removed.len() + diff.changed.len() > 0 {
                 self.generation += 1;
@@ -282,15 +593,32 @@ impl MarketActor {
             self.feed_status = FeedStatus::Ready;
         }
         self.event_sequence += 1;
-        self.pending_events.push((self.event_sequence, observation));
+        self.pending_events
+            .push((self.event_sequence, MarketEvent::Observation(observation)));
         Ok(self.event_sequence.get())
     }
 
-    pub fn drain_events(&mut self) -> Vec<(Sequence, MarketObservation)> {
+    pub(crate) fn drain_events(&mut self) -> Vec<(Sequence, MarketEvent)> {
         std::mem::take(&mut self.pending_events)
     }
 
-    pub fn drain_events_limited(&mut self, limit: usize) -> Vec<(Sequence, MarketObservation)> {
+    /// Re-evaluate receive-time freshness without performing external I/O.
+    /// This is deliberately timer driven while live ingest remains wake
+    /// driven by SourceInput.
+    pub fn evaluate_freshness(&mut self, now_unix_nanos: u64, max_age_nanos: u64) {
+        for freshness in self.freshness.values_mut() {
+            freshness.status = if now_unix_nanos
+                .saturating_sub(freshness.last_received_time_unix_nanos.get())
+                > max_age_nanos
+            {
+                DataFreshnessStatus::Stale
+            } else {
+                DataFreshnessStatus::Current
+            };
+        }
+    }
+
+    pub(crate) fn drain_events_limited(&mut self, limit: usize) -> Vec<(Sequence, MarketEvent)> {
         if limit == 0 {
             return Vec::new();
         }
@@ -301,6 +629,12 @@ impl MarketActor {
     pub fn apply_orderbook_snapshot(&mut self, book: OrderBook) -> Result<u64, String> {
         if !self.orderbook_is_selected(&book.market_id) {
             return Ok(self.event_sequence.get());
+        }
+        if self.pending_events.len() >= Self::MAX_PENDING_EVENTS {
+            return Err(format!(
+                "market event backlog exceeded limit {}",
+                Self::MAX_PENDING_EVENTS
+            ));
         }
         let book_key = book.key();
         if let Some(current) = self.order_books.get(&book_key) {
@@ -317,17 +651,18 @@ impl MarketActor {
         let source_id = book.source_id.clone();
         let market_id = book.market_id.clone();
         let event_time = book.event_time_unix_nanos;
-        let sequence = book.sequence;
         let synchronized = book.synchronized;
-        self.order_books.insert(book_key, book);
+        self.order_books.insert(book_key, book.clone());
         self.event_sequence += 1;
         self.record_orderbook_freshness(
             &source_id,
             &market_id,
             event_time.get(),
-            sequence.get(),
+            self.event_sequence.get(),
             synchronized,
         );
+        self.pending_events
+            .push((self.event_sequence, MarketEvent::OrderBook(book)));
         Ok(self.event_sequence.get())
     }
 
@@ -335,10 +670,19 @@ impl MarketActor {
         if !self.orderbook_is_selected(&delta.market_id) {
             return Ok(self.event_sequence.get());
         }
+        if self.pending_events.len() >= Self::MAX_PENDING_EVENTS {
+            return Err(format!(
+                "market event backlog exceeded limit {}",
+                Self::MAX_PENDING_EVENTS
+            ));
+        }
         let book = self
             .order_books
             .get_mut(&format!("{}:{}", delta.source_id, delta.market_id))
             .ok_or_else(|| "order book snapshot is required before delta".to_string())?;
+        if delta.last_sequence <= book.sequence {
+            return Ok(self.event_sequence.get());
+        }
         book.apply_delta(delta)?;
         let freshness = (
             book.source_id.clone(),
@@ -346,14 +690,17 @@ impl MarketActor {
             book.event_time_unix_nanos,
             book.sequence,
         );
+        let event = book.clone();
         self.event_sequence += 1;
         self.record_orderbook_freshness(
             &freshness.0,
             &freshness.1,
             freshness.2.get(),
-            freshness.3.get(),
+            self.event_sequence.get(),
             true,
         );
+        self.pending_events
+            .push((self.event_sequence, MarketEvent::OrderBook(event)));
         Ok(self.event_sequence.get())
     }
 
@@ -361,20 +708,23 @@ impl MarketActor {
         let mut subscriptions = self
             .static_subscriptions
             .values()
-            .cloned()
+            .map(|subscription| self.with_subscription_status(subscription))
             .collect::<Vec<_>>();
-        subscriptions.extend(
-            self.dynamic_intents
-                .iter()
-                .map(|(id, intent)| SubscriptionState {
-                    id: id.clone(),
-                    owner_id: intent.owner_id.clone(),
-                    mode: SubscriptionMode::Dynamic,
-                    query: Some(intent.query.clone()),
-                    selectors: intent.selectors.clone(),
-                    members: intent.members.clone(),
-                }),
-        );
+        subscriptions.extend(self.dynamic_intents.iter().map(|(id, intent)| {
+            let member_status =
+                self.subscription_member_status(id, &intent.members, &intent.member_requirements);
+            SubscriptionState {
+                id: id.clone(),
+                owner_id: intent.owner_id.clone(),
+                mode: SubscriptionMode::Dynamic,
+                query: Some(intent.query.clone()),
+                selectors: intent.selectors.clone(),
+                members: intent.members.clone(),
+                member_requirements: intent.member_requirements.clone(),
+                status: derive_subscription_status(&intent.member_requirements, &member_status),
+                member_status,
+            }
+        }));
         subscriptions.sort_by(|left, right| left.id.cmp(&right.id));
         MarketSnapshot {
             actor_id: ActorId::new(self.actor_id.clone()).expect("validated actor ID"),
@@ -385,8 +735,94 @@ impl MarketActor {
             order_books: self.order_books.clone(),
             freshness: self.freshness.clone(),
             subscriptions,
+            sources: self.sources.clone(),
+            readiness: derive_readiness(self.sources.values()),
             feed_status: self.feed_status,
         }
+    }
+
+    fn with_subscription_status(&self, subscription: &SubscriptionState) -> SubscriptionState {
+        let member_status = self.subscription_member_status(
+            &subscription.id,
+            &subscription.members,
+            &subscription.member_requirements,
+        );
+        SubscriptionState {
+            member_status: member_status.clone(),
+            status: derive_subscription_status(&subscription.member_requirements, &member_status),
+            ..subscription.clone()
+        }
+    }
+
+    fn subscription_member_status(
+        &self,
+        subscription_id: &SubscriptionId,
+        members: &BTreeMap<String, MarketDescriptor>,
+        _requirements: &BTreeMap<String, SubscriptionMemberRequirement>,
+    ) -> BTreeMap<String, SubscriptionMemberStatus> {
+        members
+            .iter()
+            .map(|(market_id, market)| {
+                let matches = self
+                    .attached_sources
+                    .iter()
+                    .filter(|(_, source)| {
+                        crate::application::source_accepts(&source.descriptor, market)
+                    })
+                    .collect::<Vec<_>>();
+                let status = match matches.as_slice() {
+                    [] => SubscriptionMemberStatus::Unavailable,
+                    [(_, source)] => {
+                        let confirmed = source
+                            .confirmed
+                            .contains_key(&(subscription_id.clone(), market_id.clone()));
+                        let pending =
+                            self.pending_for_subscription_market(subscription_id, market_id);
+                        let source_status = self
+                            .sources
+                            .get(&source.descriptor.id)
+                            .map(|state| state.status);
+                        if confirmed {
+                            match source_status {
+                                Some(SourceStatus::Degraded | SourceStatus::Reconnecting) => {
+                                    SubscriptionMemberStatus::Degraded
+                                }
+                                Some(SourceStatus::Stopped) => {
+                                    SubscriptionMemberStatus::Unavailable
+                                }
+                                _ => SubscriptionMemberStatus::Ready,
+                            }
+                        } else if pending
+                            || matches!(
+                                source_status,
+                                Some(SourceStatus::Starting | SourceStatus::WarmingUp)
+                            )
+                        {
+                            SubscriptionMemberStatus::Pending
+                        } else if matches!(
+                            source_status,
+                            Some(SourceStatus::Degraded | SourceStatus::Reconnecting)
+                        ) {
+                            SubscriptionMemberStatus::Degraded
+                        } else {
+                            SubscriptionMemberStatus::Unavailable
+                        }
+                    }
+                    _ => SubscriptionMemberStatus::Rejected,
+                };
+                (market_id.clone(), status)
+            })
+            .collect()
+    }
+
+    fn pending_for_subscription_market(
+        &self,
+        subscription_id: &SubscriptionId,
+        market_id: &str,
+    ) -> bool {
+        self.pending_source_requests.values().any(|pending| {
+            matches!(pending, PendingSourceRequest::Subscribe { key, .. } if key.0 == *subscription_id && key.1 == market_id)
+        })
     }
 
     fn valid_members(

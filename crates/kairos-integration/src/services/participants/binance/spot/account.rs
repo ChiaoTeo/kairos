@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::application::capabilities::account_facts::{
-    canonical_account_identity, ExternalAccountModel as AccountModel,
+    external_instrument_ref, ExternalAccountModel as AccountModel,
     ExternalAccountSegment as AccountSegment, ExternalAccountSnapshot as AccountSnapshot,
     ExternalAccountStatus as AccountStatus, ExternalBalance as Balance,
     ExternalDecimal as DecimalValue, ExternalOpenOrder as OpenOrder,
@@ -103,39 +103,46 @@ impl AccountReadConnection for BinanceSpotAccountConnection {
 impl AccountCredentialInspectionConnection for BinanceSpotAccountConnection {
     fn inspect_credential(&mut self) -> Result<ExternalAccountCredentialProfile, String> {
         let payload = self.client.account().map_err(|error| error.to_string())?;
-        let mut permissions: Vec<String> = payload
-            .get("permissions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect();
-        if !permissions.iter().any(|value| value == "read") {
-            permissions.push("read".into());
-        }
-        if payload
-            .get("canTrade")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            permissions.push("trade".into());
-        }
-        let account_type = payload
-            .get("accountType")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let mut attributes = std::collections::BTreeMap::new();
-        if let Some(value) = account_type.clone() {
-            attributes.insert("account_type".into(), value);
-        }
-        Ok(ExternalAccountCredentialProfile {
-            remote_identity: None,
-            account_type,
-            permissions,
-            segments: vec!["spot".into()],
-            attributes,
-        })
+        Ok(normalize_credential_profile(&payload))
+    }
+}
+
+pub(crate) fn normalize_credential_profile(payload: &Value) -> ExternalAccountCredentialProfile {
+    let mut permissions: Vec<String> = payload
+        .get("permissions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    if !permissions
+        .iter()
+        .any(|value| value.eq_ignore_ascii_case("read"))
+    {
+        permissions.push("read".into());
+    }
+    if payload
+        .get("canTrade")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        permissions.push("trade".into());
+    }
+    let account_type = payload
+        .get("accountType")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let mut attributes = std::collections::BTreeMap::new();
+    if let Some(value) = account_type.clone() {
+        attributes.insert("account_type".into(), value);
+    }
+    ExternalAccountCredentialProfile {
+        remote_identity: None,
+        account_type,
+        permissions,
+        segments: vec!["spot".into()],
+        attributes,
     }
 }
 
@@ -268,9 +275,20 @@ impl BinanceSpotAccountClient {
     async fn signed_context_async(&self) -> Result<(u64, u64, String, String), ExchangeError> {
         self.runtime
             .ensure_clock_synchronized_async(&self.base_url)
-            .await?;
+            .await
+            .map_err(|error| match error {
+                ExchangeError::LocalRateLimit { .. } => error,
+                other => ExchangeError::Preflight(other.to_string()),
+            })?;
         let (generation, api_key, secret) = self.credential_snapshot()?;
         Ok((self.runtime.now_millis()?, generation, api_key, secret))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn test_signed_timestamp_async(&self) -> Result<u64, ExchangeError> {
+        self.signed_context_async()
+            .await
+            .map(|(timestamp, _, _, _)| timestamp)
     }
 
     pub(crate) fn account(&self) -> Result<Value, ExchangeError> {
@@ -507,13 +525,14 @@ impl BinanceSpotAccountClient {
             .await
     }
 
-    pub(crate) fn signed_delete(
+    pub(crate) async fn signed_delete_async(
         &self,
         path: &str,
         params: BTreeMap<String, String>,
     ) -> Result<Value, ExchangeError> {
         self.runtime.acquire(1, RequestPriority::Cancel)?;
-        self.signed_request(path, params, RequestMethod::Delete)
+        self.signed_request_async(path, params, RequestMethod::Delete)
+            .await
     }
 
     pub(crate) fn margin_listen_key(
@@ -541,6 +560,63 @@ impl BinanceSpotAccountClient {
             .ok_or_else(|| {
                 ExchangeError::InvalidRequest("Binance margin listen key is missing".into())
             })
+    }
+
+    pub(crate) async fn margin_listen_key_async(
+        &self,
+        isolated_symbol: Option<&str>,
+    ) -> Result<String, ExchangeError> {
+        let (_, api_key, _) = self.credential_snapshot()?;
+        let endpoint = if let Some(symbol) = isolated_symbol {
+            let query = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("symbol", &symbol.to_ascii_uppercase())
+                .finish();
+            format!("{}/sapi/v1/userDataStream/isolated?{query}", self.base_url)
+        } else {
+            format!("{}/sapi/v1/userDataStream", self.base_url)
+        };
+        self.runtime
+            .async_http()
+            .post_json_command_with_headers(
+                &endpoint,
+                &[("X-MBX-APIKEY", api_key)],
+                &Value::Object(Default::default()),
+            )
+            .await?
+            .body
+            .get("listenKey")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| {
+                ExchangeError::InvalidRequest("Binance margin listen key is missing".into())
+            })
+    }
+
+    pub(crate) async fn keepalive_margin_listen_key_async(
+        &self,
+        listen_key: &str,
+        isolated_symbol: Option<&str>,
+    ) -> Result<(), ExchangeError> {
+        let (_, api_key, _) = self.credential_snapshot()?;
+        let path = if isolated_symbol.is_some() {
+            "/sapi/v1/userDataStream/isolated"
+        } else {
+            "/sapi/v1/userDataStream"
+        };
+        let endpoint = format!("{}{path}", self.base_url);
+        let mut query = vec![("listenKey", listen_key.to_owned())];
+        if let Some(symbol) = isolated_symbol {
+            query.push(("symbol", symbol.to_ascii_uppercase()));
+        }
+        self.runtime
+            .async_http()
+            .put_query_json_response_with_headers_and_query(
+                &endpoint,
+                &query,
+                &[("X-MBX-APIKEY", api_key)],
+            )
+            .await
+            .map(|_| ())
     }
 
     pub(crate) fn signed_get(
@@ -604,52 +680,84 @@ impl BinanceSpotAccountClient {
     async fn signed_request_async(
         &self,
         path: &str,
-        mut params: BTreeMap<String, String>,
+        params: BTreeMap<String, String>,
         method: RequestMethod,
     ) -> Result<Value, ExchangeError> {
-        let (timestamp, _, api_key, secret) = self.signed_context_async().await?;
-        params.insert("timestamp".into(), timestamp.to_string());
-        params.insert("recvWindow".into(), "5000".into());
-        let signed = signed_query(&secret, params)?;
-        let endpoint = format!("{}{}", self.base_url, path);
-        let mut query = url::form_urlencoded::parse(signed.query.as_bytes())
-            .map(|(key, value)| (key.into_owned(), value.into_owned()))
-            .collect::<Vec<_>>();
-        query.push(("signature".into(), signed.signature));
-        let refs = query
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.clone()))
-            .collect::<Vec<_>>();
-        let headers = [("X-MBX-APIKEY", api_key)];
-        let http = self.runtime.async_http();
-        let response = match method {
-            RequestMethod::Get => {
-                http.get_json_response_with_headers_and_query(&endpoint, &refs, &headers)
-                    .await
+        for attempt in 0..2 {
+            let (timestamp, _, api_key, secret) = self.signed_context_async().await?;
+            let mut signed_params = params.clone();
+            signed_params.insert("timestamp".into(), timestamp.to_string());
+            signed_params.insert("recvWindow".into(), "5000".into());
+            let signed = signed_query(&secret, signed_params)?;
+            let endpoint = format!("{}{}", self.base_url, path);
+            let mut query = url::form_urlencoded::parse(signed.query.as_bytes())
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect::<Vec<_>>();
+            query.push(("signature".into(), signed.signature));
+            let refs = query
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.clone()))
+                .collect::<Vec<_>>();
+            let headers = [("X-MBX-APIKEY", api_key)];
+            let http = self.runtime.async_http();
+            let response = match method {
+                RequestMethod::Get => {
+                    http.get_json_response_with_headers_and_query(&endpoint, &refs, &headers)
+                        .await
+                }
+                RequestMethod::Post => {
+                    http.post_json_response_with_headers_and_query(&endpoint, &refs, &headers)
+                        .await
+                }
+                RequestMethod::PostQuery => {
+                    http.post_query_json_response_with_headers_and_query(&endpoint, &refs, &headers)
+                        .await
+                }
+                RequestMethod::Delete => {
+                    http.delete_json_response_with_headers_and_query(&endpoint, &refs, &headers)
+                        .await
+                }
+            };
+            match response {
+                Ok(response) => {
+                    self.runtime.observe_response(&response);
+                    return Ok(response.body);
+                }
+                Err(error)
+                    if attempt == 0 && method.is_query() && is_timestamp_rejection(&error) =>
+                {
+                    self.runtime.invalidate_clock()?;
+                    self.runtime.acquire(1, RequestPriority::Background)?;
+                }
+                Err(error) => return Err(error),
             }
-            RequestMethod::Post => {
-                http.post_json_response_with_headers_and_query(&endpoint, &refs, &headers)
-                    .await
-            }
-            RequestMethod::PostQuery => {
-                http.post_query_json_response_with_headers_and_query(&endpoint, &refs, &headers)
-                    .await
-            }
-            RequestMethod::Delete => {
-                http.delete_json_response_with_headers_and_query(&endpoint, &refs, &headers)
-                    .await
-            }
-        }?;
-        self.runtime.observe_response(&response);
-        Ok(response.body)
+        }
+        unreachable!("bounded Binance timestamp retry loop")
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum RequestMethod {
     Get,
     Post,
     PostQuery,
     Delete,
+}
+
+impl RequestMethod {
+    fn is_query(self) -> bool {
+        matches!(self, Self::Get | Self::PostQuery)
+    }
+}
+
+fn is_timestamp_rejection(error: &ExchangeError) -> bool {
+    let ExchangeError::Http { body, .. } = error else {
+        return false;
+    };
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|payload| payload.get("code").and_then(Value::as_i64))
+        == Some(-1021)
 }
 
 pub(crate) fn normalize_account(
@@ -777,7 +885,12 @@ fn normalize_open_order(value: &Value, product: &str) -> Result<OpenOrder, Strin
         .get("symbol")
         .and_then(Value::as_str)
         .ok_or_else(|| "Binance open order symbol is missing".to_string())?;
-    let (instrument_id, _) = canonical_account_identity(product, symbol)?;
+    let provider_instrument = external_instrument_ref(
+        crate::domain::ParticipantKind::Exchange,
+        "binance",
+        product,
+        symbol,
+    )?;
     let local_order_id = value
         .get("clientOrderId")
         .and_then(Value::as_str)
@@ -786,7 +899,7 @@ fn normalize_open_order(value: &Value, product: &str) -> Result<OpenOrder, Strin
     Ok(OpenOrder {
         order_id: kairos_domain_types::OrderId::new(local_order_id)?,
         remote_order_id: Some(kairos_domain_types::RemoteOrderId::new(remote_order_id)?),
-        instrument_id,
+        provider_instrument,
         side: crate::application::capabilities::execution_facts::normalize_order_side(
             value
                 .get("side")
@@ -923,7 +1036,8 @@ mod tests {
         let clone = client.clone();
         let (first_timestamp, first_generation, first_key, _) = client.signed_context().unwrap();
         let (second_timestamp, second_generation, second_key, _) = clone.signed_context().unwrap();
-        assert!(first_timestamp >= server_time.saturating_sub(100));
+        assert!(first_timestamp >= server_time.saturating_sub(350));
+        assert!(first_timestamp <= server_time.saturating_add(100));
         assert_eq!(first_generation, 1);
         assert_eq!(second_generation, 1);
         assert_eq!(first_key, "old-key");

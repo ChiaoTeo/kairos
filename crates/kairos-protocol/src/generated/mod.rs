@@ -114,6 +114,8 @@ pub mod kairos {
             pub use market_history_snapshot_generated::*;
             mod order_book_generated;
             pub use order_book_generated::*;
+            mod order_book_message_generated;
+            pub use order_book_message_generated::*;
             mod order_book_level_generated;
             pub use order_book_level_generated::*;
             mod order_book_snapshot_generated;

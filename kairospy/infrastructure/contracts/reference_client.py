@@ -88,7 +88,9 @@ class ReferenceSnapshotClient:
                 target,
                 timeout=self.timeout if timeout is None else timeout,
             )
-        except (OSError, ValueError) as error:
+        except OSError as error:
+            raise RuntimeError(f"Reference request failed: {error}") from error
+        except ValueError as error:
             raise RuntimeError("Reference returned an invalid JSON response") from error
         if status >= 400:
             message = (
@@ -105,11 +107,59 @@ class ReferenceSnapshotClient:
     def providers(self) -> dict[str, Any]:
         return self.request("/v1/providers")
 
-    def refresh(self) -> dict[str, Any]:
+    def events(
+        self,
+        *,
+        sequence_from: int | None = None,
+        sequence_to: int | None = None,
+        limit: int = 256,
+    ) -> dict[str, Any]:
+        if sequence_from is not None and sequence_from < 0:
+            raise ValueError("sequence_from must be non-negative")
+        if sequence_to is not None and sequence_to < 0:
+            raise ValueError("sequence_to must be non-negative")
+        if not 1 <= limit <= 4096:
+            raise ValueError("limit must be between 1 and 4096")
+        return self.request(
+            "/v1/events",
+            timeout=max(self.timeout, 120.0),
+            sequence_from=sequence_from,
+            sequence_to=sequence_to,
+            limit=limit,
+        )
+
+    def refresh(self, *, source: str | None = None) -> dict[str, Any]:
         # One incremental provider page is allowed to spend the provider
         # fetch budget; query/status calls should remain short-lived.
         return self.request(
-            "/v1/refresh", method="POST", timeout=max(self.timeout, 120.0)
+            "/v1/refresh",
+            method="POST",
+            timeout=max(self.timeout, 120.0),
+            source=source,
+        )
+
+    def set_source_paused(self, source: str, paused: bool) -> dict[str, Any]:
+        if not source.strip():
+            raise ValueError("source is required")
+        return self.request(
+            "/v1/sources/pause" if paused else "/v1/sources/resume",
+            method="POST",
+            source=source,
+        )
+
+    def option_coverage(self) -> dict[str, Any]:
+        return self.request("/v1/options/coverage")
+
+    def set_option_underlying(self, underlying: str, enabled: bool) -> dict[str, Any]:
+        if not underlying.strip():
+            raise ValueError("underlying is required")
+        return self.request(
+            "/v1/options/coverage/add"
+            if enabled
+            else "/v1/options/coverage/remove",
+            method="POST",
+            timeout=max(self.timeout, 120.0),
+            underlying=underlying,
         )
 
     def snapshot(self) -> dict[str, Any]:
@@ -173,6 +223,8 @@ class ReferenceSnapshotClient:
     ) -> list[dict[str, Any]]:
         if self.markets_snapshot_path is None:
             raise RuntimeError("Reference markets snapshot path is not configured")
+        if exchange_id is not None and not exchange_id.startswith("exchange:"):
+            exchange_id = f"exchange:{exchange_id}"
         payload, _ = self._read_payload(self.markets_snapshot_path)
         from kairospy.infrastructure.transport.generated.kairos.reference.v1.MarketsSnapshot import (
             MarketsSnapshot,
@@ -221,6 +273,39 @@ class ReferenceSnapshotClient:
             if status is not None and value["status"] != status:
                 continue
             if active_only and value["status"] != "active":
+                continue
+            result.append(value)
+            if limit is not None and len(result) >= limit:
+                break
+        return result
+
+    def execution_accesses(
+        self,
+        *,
+        provider_id: str | None = None,
+        product_family: str | None = None,
+        provider_symbol: str | None = None,
+        active_only: bool = False,
+        status: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for value in self.collection("execution-accesses"):
+            if provider_id is not None and value.get("providerId") != provider_id:
+                continue
+            if (
+                product_family is not None
+                and value.get("productFamily") != product_family
+            ):
+                continue
+            if (
+                provider_symbol is not None
+                and value.get("providerSymbol") != provider_symbol
+            ):
+                continue
+            if status is not None and value.get("status") != status:
+                continue
+            if active_only and value.get("status") != "active":
                 continue
             result.append(value)
             if limit is not None and len(result) >= limit:

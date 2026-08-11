@@ -11,6 +11,7 @@ name = "kairos_market"
 path = "src/lib.rs"
 
 [dependencies]
+async-trait.workspace = true
 axum = "0.8"
 kairos-domain-types = { path = "../../../kairos-domain-types" }
 kairos-workspace = { path = "../../../kairos-workspace", features = ["otel"] }
@@ -27,7 +28,7 @@ secrecy.workspace = true
 rust_decimal = { version = "1.42", default-features = false }
 toml = "0.8"
 tracing = "0.1"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
 criterion = { workspace = true }

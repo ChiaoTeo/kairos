@@ -118,11 +118,8 @@ impl BinanceSpotOrderEventSource {
     }
 
     fn subscribe(&mut self, socket: &TokioSocket) -> Result<(u64, u64), IntegrationError> {
-        let request_id = format!(
-            "{}:{}",
-            self.binding_id,
-            self.channel_epoch.saturating_add(1)
-        );
+        let request_id =
+            provider_safe_request_id(&self.binding_id, self.channel_epoch.saturating_add(1));
         let (request, auth_generation) = self
             .client
             .user_data_subscription_request(&request_id)
@@ -260,7 +257,7 @@ impl OrderEventSource for BinanceSpotOrderEventSource {
     }
 }
 
-pub(super) fn parse_execution_report(
+pub(in crate::services::participants::binance) fn parse_execution_report(
     binding_id: &str,
     channel_id: &str,
     channel_epoch: u64,
@@ -318,6 +315,11 @@ pub(super) fn parse_execution_report(
             .map(Currency::new)
             .transpose()?;
         Ok(Some(ExternalEventEnvelope {
+            participant: crate::domain::ParticipantRef::new(
+                crate::domain::ParticipantKind::Exchange,
+                "binance",
+            )
+            .expect("static Binance participant is valid"),
             binding_id: binding_id.into(),
             channel_id: channel_id.into(),
             channel_epoch,
@@ -400,6 +402,37 @@ pub(super) fn parse_subscription_response(
     }
 }
 
+/// Binance documents WebSocket request IDs as arbitrary, but its production
+/// gateway closes signed user-data subscriptions when IDs contain punctuation
+/// such as `.` or `:`. Keep adapter-generated IDs inside the provider-safe
+/// alphanumeric/hyphen subset observed in live acceptance.
+pub(super) fn provider_safe_request_id(binding_id: &str, channel_epoch: u64) -> String {
+    let mut normalized = String::with_capacity(binding_id.len().min(48));
+    let mut previous_was_separator = false;
+    for character in binding_id.chars() {
+        let character = if character.is_ascii_alphanumeric() {
+            previous_was_separator = false;
+            character
+        } else if previous_was_separator {
+            continue;
+        } else {
+            previous_was_separator = true;
+            '-'
+        };
+        normalized.push(character);
+        if normalized.len() == 48 {
+            break;
+        }
+    }
+    let normalized = normalized.trim_matches('-');
+    let normalized = if normalized.is_empty() {
+        "kairos"
+    } else {
+        normalized
+    };
+    format!("{normalized}-{channel_epoch}")
+}
+
 fn normalize_order_type(value: &str) -> Option<OrderType> {
     match value {
         "MARKET" => Some(OrderType::Market),
@@ -439,7 +472,9 @@ fn value_as_string(value: &Value) -> String {
         .unwrap_or_else(|| value.to_string())
 }
 
-pub(super) fn map_exchange_error(error: ExchangeError) -> IntegrationError {
+pub(in crate::services::participants::binance) fn map_exchange_error(
+    error: ExchangeError,
+) -> IntegrationError {
     match error {
         ExchangeError::Authentication(message) => IntegrationError::Authentication(message),
         ExchangeError::InvalidRequest(message) => IntegrationError::InvalidRequest(message),
@@ -458,7 +493,10 @@ fn now_unix_nanos() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_execution_report, parse_subscription_response, BinanceSpotOrderEventSource};
+    use super::{
+        parse_execution_report, parse_subscription_response, provider_safe_request_id,
+        BinanceSpotOrderEventSource,
+    };
     use crate::application::capabilities::{OrderSide, OrderType};
     use crate::application::OrderEventSource;
     use crate::services::participants::binance::spot::account::BinanceSpotAccountClient;
@@ -524,6 +562,16 @@ mod tests {
             .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn generates_provider_safe_subscription_request_id() {
+        let request_id = provider_safe_request_id("account.binance.spot:primary", 7);
+        assert_eq!(request_id, "account-binance-spot-primary-7");
+        assert!(request_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-'));
+        assert_eq!(provider_safe_request_id("...", 1), "kairos-1");
     }
 
     #[test]

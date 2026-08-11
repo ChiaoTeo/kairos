@@ -5,19 +5,33 @@ mod config;
 mod connection;
 mod execution;
 mod market_data;
+mod market_snapshot;
 pub(crate) mod types;
 
 pub use config::{
-    BinanceConnectionConfig, BinancePrincipalConfig, BinancePrincipalOrderQuotaAllocation,
+    BinanceConnectionConfig, BinanceFuturesChannelConfig, BinanceMarginChannelConfig,
+    BinanceOptionsChannelConfig, BinancePrincipalConfig, BinancePrincipalOrderQuotaAllocation,
     BinanceQuotaAllocation, BinanceSharedQuotaConfig, BinanceSpotChannelConfig,
 };
 pub use connection::{
     BinanceConnection, BinanceEquityInstrumentCatalog, BinanceFundingAccountRead,
-    BinanceFundingCredentialInspection, BinanceInstrumentCatalog, BinancePrincipalConnection,
+    BinanceFundingCredentialInspection, BinanceFuturesAccountEvents, BinanceFuturesAccountRead,
+    BinanceFuturesCredentialInspection, BinanceFuturesOrderEntry, BinanceFuturesOrderEvents,
+    BinanceFuturesOrderQuery, BinanceFuturesPrincipalConnection, BinanceInstrumentCatalog,
+    BinanceMarginAccountEvents, BinanceMarginAccountRead, BinanceMarginCredentialInspection,
+    BinanceMarginOrderEntry, BinanceMarginOrderEvents, BinanceMarginOrderQuery,
+    BinanceMarginPrincipalConnection, BinanceOptionsAccountEvents, BinanceOptionsAccountRead,
+    BinanceOptionsCredentialInspection, BinanceOptionsOrderEntry, BinanceOptionsOrderEvents,
+    BinanceOptionsOrderQuery, BinanceOptionsPrincipalConnection, BinancePrincipalConnection,
     BinanceSimpleEarn, BinanceSpotAccountEvents, BinanceSpotAccountMarketProfile,
     BinanceSpotAccountRead, BinanceSpotOrderEntry, BinanceSpotOrderEvents, BinanceSpotOrderQuery,
     BinanceTransfer,
 };
+pub use market_data::{
+    futures_websocket_market, options_websocket_market, spot_historical_market,
+    spot_websocket_market, BinanceAsyncMarket, BinanceSpotHistoricalMarket,
+};
+pub use market_snapshot::{derivatives_snapshot, spot_snapshot, BinanceAsyncMarketSnapshot};
 pub use types::{ConnectionDomain, InstrumentType};
 
 pub mod blocking {
@@ -35,19 +49,6 @@ pub mod blocking {
         blocking_spot_market_profile as spot_market_profile,
     };
     pub use super::connection::blocking::*;
-    pub use super::execution::{
-        blocking_equity_order_entry as equity_order_entry,
-        blocking_equity_order_query as equity_order_query,
-        blocking_futures_order_entry as futures_order_entry,
-        blocking_margin_order_entry as margin_order_entry,
-        blocking_options_order_entry as options_order_entry, blocking_order_query as order_query,
-    };
-    pub use super::market_data::{
-        blocking_derivatives_rest_market as derivatives_rest_market,
-        blocking_equity_rest_market as equity_rest_market,
-        blocking_options_websocket_market as options_websocket_market,
-        blocking_spot_historical_market as spot_historical_market,
-        blocking_spot_rest_market as spot_rest_market,
-        blocking_spot_websocket_market as spot_websocket_market,
-    };
+    pub use super::execution::blocking_order_query as order_query;
+    pub use super::market_data::blocking_spot_historical_market as spot_historical_market;
 }
